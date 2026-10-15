@@ -14391,6 +14391,81 @@ pub(super) mod tests {
         assert!(near(starts[2], Vec2::new(10.0, 5.0)), "{starts:?}");
     }
 
+    /// [`armed`] with a gun of no reload firing from gun exits 5 pixels
+    /// to starboard and 10 ahead, on the player's ship and its traffic's.
+    fn armed_with_exits() -> FakePilotCatalog {
+        let gun = WeaponRecord {
+            reload: 0,
+            exit_type: 0,
+            ..blaster()
+        };
+        let mut catalog = FakePilotCatalog {
+            weapons: vec![gun],
+            ..armed()
+        };
+        for hull in &mut catalog.hulls {
+            hull.exits = Some(crate::catalog::ShipExits {
+                points: [[(5, 10); 4], [(0, 0); 4], [(0, 0); 4], [(0, 0); 4]],
+                up_compress: (100, 100),
+                down_compress: (100, 100),
+                frames: 36,
+                ..crate::catalog::ShipExits::default()
+            });
+        }
+        catalog
+    }
+
+    /// Where the newest shot `ship` fired left from, from `centre`.
+    fn newest_start(session: &Session, ship: ShipRef, centre: Vec2) -> Vec2 {
+        let shot = session
+            .shots()
+            .iter()
+            .rfind(|shot| shot.firer == ship)
+            .expect("a shot");
+        shot.position - shot.velocity - centre
+    }
+
+    #[test]
+    fn an_npcs_shots_leave_from_the_exits_of_the_frame_it_was_last_drawn_on() {
+        let catalog = armed_with_exits();
+        let mut session = facing_an_npc(&catalog, 0);
+        let npc = ShipRef::Npc(NpcId(0));
+        let mut starts = Vec::new();
+        for heading in [0.0, 90.0, 90.0] {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.traffic.npcs_mut()[0].state.heading = heading;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let centre = session.npcs()[0].state.position;
+            starts.push(newest_start(&session, npc, centre));
+        }
+        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
+        assert!(near(starts[0], Vec2::new(5.0, -10.0)), "{starts:?}");
+        assert!(
+            near(starts[1], Vec2::new(5.0, -10.0)),
+            "turned since it was drawn: {starts:?}"
+        );
+        assert!(near(starts[2], Vec2::new(10.0, 5.0)), "{starts:?}");
+    }
+
+    #[test]
+    fn a_ship_back_from_landing_fires_from_its_heading_not_the_one_drawn_before() {
+        let catalog = armed_with_exits();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.hold_trigger(FIRE);
+        session.player.heading = 0.0;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.landed = Some(StellarId(128));
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.landed = None;
+        session.player.heading = 90.0;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let start = newest_start(&session, ShipRef::Player, session.player.position);
+        assert!(
+            (start - Vec2::new(10.0, 5.0)).length() < 1e-3,
+            "on this tick's frame: {start:?}"
+        );
+    }
+
     #[test]
     fn the_rulebook_says_which_compression_the_players_exits_take() {
         // A gun behind the nose, with the up compression halving y and the

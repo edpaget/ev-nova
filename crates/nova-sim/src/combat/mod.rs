@@ -805,8 +805,10 @@ impl Combat {
     /// - A negative `Inaccuracy` flies the shot out from its ship's heading
     ///   by as many degrees, to the side of its exit's x, facing as aimed
     ///   (@0x3ee10-0x3eec0); a shot from an exit on the centre line, or
-    ///   from none, flies as aimed. A bomb or rocket keeps its launch
-    ///   velocity (weapons-fidelity phase 10).
+    ///   from none, flies as aimed, and so does point defence. A bomb or
+    ///   rocket keeps its launch velocity, as
+    ///   [`projectile::launch_velocity`] gives it whatever the heading
+    ///   (the gate on 5 and 6 is weapons-fidelity phase 10's).
     /// - A beam's exit is kept, and it starts there every tick
     ///   ([`Beam::follow`]).
     fn launch(
@@ -882,10 +884,7 @@ impl Combat {
                 source: Source::Ship(ties),
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
-            let launched_as_aimed =
-                matches!(weapon.guidance, Guidance::FreefallBomb | Guidance::Rocket);
-            if weapon.broadside > 0 && side_of_exit != 0.0 && quarry.is_none() && !launched_as_aimed
-            {
+            if weapon.broadside > 0 && side_of_exit != 0.0 && quarry.is_none() {
                 let out = normalized(from.heading + side_of_exit * weapon.broadside as f32).trunc();
                 shot.velocity = projectile::launch_velocity(&weapon, &from, out);
             }
@@ -6222,6 +6221,55 @@ mod tests {
             close_to(velocities[2], Vec2::new(1.0, -8.0)),
             "on the centre line, ahead: {velocities:?}"
         );
+    }
+
+    #[test]
+    fn a_broadside_bomb_or_rocket_keeps_its_launch_velocity() {
+        let fired = |guidance, inaccuracy| {
+            let mut combat = Combat::default();
+            let record = WeaponRecord {
+                guidance,
+                inaccuracy,
+                ..gun()
+            };
+            let mut ships = [Ship {
+                state: ShipState {
+                    position: Vec2::ZERO,
+                    velocity: Vec2::new(1.0, 2.0),
+                    heading: 0.0,
+                },
+                ..Ship::at(1, 0.0, 0.0)
+                    .armed(record)
+                    .of(exits_at(0, [(3, 10); 4]))
+            }];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let shot = combat.shots().last().expect("a shot");
+            (shot.position, shot.velocity, shot.heading)
+        };
+        for guidance in [5, 6] {
+            assert_eq!(fired(guidance, -90), fired(guidance, 0), "{guidance}");
+        }
+    }
+
+    #[test]
+    fn point_defence_never_fires_broadside() {
+        let mut combat = Combat::default();
+        let [defender, attacker] = defended();
+        let broadside = WeaponRecord {
+            inaccuracy: -90,
+            ..exit_defence()
+        };
+        let mut ships = [defender.armed(broadside), attacker];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shot = combat
+            .shots()
+            .iter()
+            .find(|shot| shot.weapon.guidance == Guidance::PointDefence)
+            .expect("a point-defence shot");
+        let bearing = aim::bearing(start(shot), Vec2::new(150.0, 100.0));
+        assert!((shot.heading - bearing).abs() < 1e-3, "{shot:?} {bearing}");
+        let along = crate::flight::facing(bearing) * 10.0;
+        assert!(close_to(shot.velocity, along), "not sideways: {shot:?}");
     }
 
     /// A beam weapon of `guidance` firing from its ship's beam exits for
