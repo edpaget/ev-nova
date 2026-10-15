@@ -3619,7 +3619,7 @@ impl<
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
         let after = self.interface_now();
-        let (loaded, _) = self.redraw_at_interface_loads(before.as_ref());
+        let loaded = self.redraw_at_interface_loads(before.as_ref());
         self.catch_up();
         self.retake_radar();
         self.retake_nav();
@@ -3730,12 +3730,13 @@ impl<
     /// button's check passed, as the loop then runs no pass and falls
     /// through to the draw (`_DoQuantityDialog` @0x5c1aa, @0x5c2fc-0x5c2ff).
     fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>, passed: bool) {
-        let (_, redrew) = self.redraw_at_interface_loads(before);
-        if !redrew {
-            self.retake_radar();
-            if passed {
-                self.draw_marked_nav();
-            }
+        self.redraw_at_interface_loads(before);
+        // After a whole-bar redraw, both are what it drew: it took the
+        // radar, and its nav consumed the shipyard's mark, as
+        // `_RedrawStatus` marks and draws every area.
+        self.retake_radar();
+        if passed {
+            self.draw_marked_nav();
         }
     }
 
@@ -3743,7 +3744,7 @@ impl<
     /// docked since its order or purchase began
     /// ([`Session::take_interface_loads`]), given the `ïntf` loaded before
     /// it (`before`, [`FlightView::interface_now`]). Gives the `ïntf`
-    /// loaded after them, and whether any of them redrew.
+    /// loaded after them.
     ///
     /// Each operator's `_LoadIntfResource` (`_EvalSetExp` @0x156c7) asks
     /// for its ship's `ïntf` and compares it with the one loaded at that
@@ -3762,7 +3763,7 @@ impl<
     fn redraw_at_interface_loads(
         &mut self,
         before: Option<&Result<i16, String>>,
-    ) -> (Option<Result<i16, String>>, bool) {
+    ) -> Option<Result<i16, String>> {
         let loads = self
             .session
             .as_mut()
@@ -3777,13 +3778,12 @@ impl<
                 last = Some(load);
             }
         }
-        let Some(load) = last else {
-            return (loaded, false);
-        };
-        self.redraw_status();
-        self.nav_scene = Some((load.nav, self.nav_display(load.nav)));
-        self.reserves_scene = Some(load.reserves);
-        (loaded, true)
+        if let Some(load) = last {
+            self.redraw_status();
+            self.nav_scene = Some((load.nav, self.nav_display(load.nav)));
+            self.reserves_scene = Some(load.reserves);
+        }
+        loaded
     }
 
     /// Assigns the ship captured, as [`Session::assign`] does, and says
@@ -13108,6 +13108,12 @@ mod tests {
                 "{what}: let go"
             );
             assert_eq!(view.nav_shown(), flashing("Proxima"), "{what}: held");
+            view.tick(Duration::from_millis(1));
+            assert_eq!(
+                view.nav_shown(),
+                flashing("Proxima"),
+                "{what}: a frame within the tick"
+            );
             view.tick(TICK);
             assert_eq!(
                 view.nav_shown(),
