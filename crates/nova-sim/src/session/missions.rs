@@ -1587,14 +1587,15 @@ impl TagNames for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{MissionRecord, StellarId, SystemId};
+    use crate::catalog::{LandingSite, MissionRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
     use crate::geometry::Vec2;
     use crate::mission::{ROLLED, Stop};
     use crate::pilot::Pilot;
     use crate::testkit::{
-        Draws, FakePilotCatalog, catalog, jump, land_now, mission, planet, swapped, with_variants,
+        Draws, FakePilotCatalog, catalog, govt, jump, land_now, mission, planet, swapped,
+        with_variants,
     };
 
     /// [`catalog`] with stellar 150 in system 132, two jumps from 130, 131
@@ -1746,6 +1747,46 @@ mod tests {
                 table_then(&[asked]),
                 "{distance:?}, {colocated:?}: 150, and by the other reading 160 \
                  too while 133, shadowed by 130 by the engine, owns it"
+            );
+        }
+    }
+
+    #[test]
+    fn each_reading_of_the_mission_ally_index_reaches_the_world() {
+        let mut catalog = offering();
+        // The pirates' 131 in 132, two jumps out: not allied with the
+        // Federation, but system 131, at its index, is the Federation's.
+        catalog.govts = vec![govt(FED.0), govt(PIRATES.0)];
+        catalog.star_map[1].govt = Some(FED);
+        catalog.sites[2].1.push(LandingSite {
+            govt: Some(PIRATES),
+            ..planet(131, 0.0, 0.0)
+        });
+        let mut ally = mission(130);
+        ally.travel_stel = 15000;
+        catalog.missions = vec![ally];
+        let bible = Rulebook::default().with_override(RuleKey::MissionAllyIndex, RuleSource::Bible);
+        for (rules, offered) in [(Rulebook::default(), true), (bible, false)] {
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+            let _ = session.settle_script(&catalog, &mut Draws::arriving(&[0]));
+            let destinations: Vec<_> = session
+                .mission_offers(Venue::Computer)
+                .iter()
+                .map(|offer| offer.destination)
+                .collect();
+            let expected = if offered {
+                vec![Some(Stop {
+                    stellar: StellarId(131),
+                    system: Some(SystemId(132)),
+                })]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                destinations, expected,
+                "by the engine the pirates' 131 by the Federation's system at its index; \
+                 by the other reading no ally, so no offer"
             );
         }
     }
