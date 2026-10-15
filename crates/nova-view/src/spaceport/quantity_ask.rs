@@ -414,4 +414,17 @@ mod tests {
         assert_eq!(ask.input(&up, &mut sounds), None, "the click was abandoned");
         assert!(ask.is_open());
     }
+
+    /// The original's `_DoQuantityDialog` (@0x56fa5) runs with the Toolbox's
+    /// standard filter, which maps Return and Escape to items silently.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut ask = opened(Direction::Buy);
+            let mut sounds = Vec::new();
+            ask.input(&key(k, true), &mut sounds);
+            ask.input(&key(k, false), &mut sounds);
+            assert_eq!(sounds, [], "{k:?}");
+        }
+    }
 }

@@ -329,4 +329,16 @@ mod tests {
         screen.input(&key(Key::Enter, true, false));
         assert_eq!(screen.take_sounds(), []);
     }
+
+    /// The engine's placeholder screen has no counterpart in the original;
+    /// Return and Escape are pinned silent like the original's filters.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut screen = bar();
+            screen.input(&key(k, true, false));
+            screen.input(&key(k, false, false));
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
+    }
 }

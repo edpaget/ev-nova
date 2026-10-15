@@ -677,4 +677,21 @@ mod tests {
             "{debug}"
         );
     }
+
+    /// `_OpenPilotFile` @0x76644 opens the system's open panel, whose keys
+    /// play no sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [Key::Up, Key::Down, Key::Enter, Key::Escape] {
+            let mut pilots = list(&["Ada", "Bob"]);
+            pilots.input(&key(Key::Down, false));
+            pilots.input(&key(k, false));
+            pilots.input(&Input::Key {
+                key: k,
+                pressed: false,
+                repeat: false,
+            });
+            assert_eq!(pilots.take_sounds(), [], "{k:?}");
+        }
+    }
 }

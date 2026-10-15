@@ -2143,6 +2143,24 @@ mod tests {
         assert_eq!(broken.take_sounds(), []);
     }
 
+    /// `_PortFilter` @0x4f041 maps Return, Enter and Escape to Leave
+    /// (@0x4f1e3-0x4f204) and the letters to their services (@0x4f209-0x4f257),
+    /// all with no click.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [Key::Enter, Key::Escape, MISSION_INFO_KEY, PLAYER_INFO_KEY] {
+            let mut view = earth();
+            view.take_sounds();
+            view.input(&key(k));
+            view.input(&Input::Key {
+                key: k,
+                pressed: false,
+                repeat: false,
+            });
+            assert_eq!(view.take_sounds(), [], "{k:?}");
+        }
+    }
+
     // Recharging.
 
     use nova_sim::RechargeRefusal;

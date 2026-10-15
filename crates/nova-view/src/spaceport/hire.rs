@@ -1296,4 +1296,27 @@ mod tests {
             assert!(debug.contains(part), "{part}: {debug}");
         }
     }
+
+    /// The original's hire mode of `_DoShipyardDialog` maps keys in `_ShipyardFilter` @0x60449 to items with no click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut screen = screen();
+        for k in [
+            Key::Right,
+            Key::Down,
+            Key::Left,
+            Key::Up,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+        }
+        assert_eq!(screen.take_sounds(), [], "keys make no click");
+    }
 }

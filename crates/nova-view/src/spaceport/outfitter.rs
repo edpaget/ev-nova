@@ -4230,4 +4230,27 @@ mod tests {
         screen.input(&button(false));
         assert!(screen.alert_dialog().is_some(), "Done was not clicked");
     }
+
+    /// The original's `_OutfitFilter` @0x58039 maps keys to items with no click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut screen = screen();
+        for k in [
+            Key::Right,
+            Key::Down,
+            Key::Left,
+            Key::Up,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+        }
+        assert_eq!(screen.take_sounds(), [], "keys make no click");
+    }
 }

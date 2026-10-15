@@ -1476,4 +1476,24 @@ mod tests {
         assert_eq!(MISSION_INFO_KEY, Key::Char('i'));
         assert!(!HIRE_KEYS.contains(&MISSION_INFO_KEY));
     }
+
+    /// `_BarFilter` @0x47a4b maps its keys to items with no click.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let keys = [Key::Enter, Key::Escape, MISSION_INFO_KEY]
+            .into_iter()
+            .chain(HIRE_KEYS)
+            .chain(NEWS_KEYS);
+        for k in keys {
+            let mut screen = bar();
+            screen.take_sounds();
+            screen.input(&key(k, false));
+            screen.input(&Input::Key {
+                key: k,
+                pressed: false,
+                repeat: false,
+            });
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
+    }
 }

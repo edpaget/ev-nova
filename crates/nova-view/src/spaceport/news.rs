@@ -489,4 +489,26 @@ mod tests {
         screen.input(&key(Key::Enter, false));
         assert!(screen.closed());
     }
+
+    /// `_NewsDialogFilter` @0x48160 maps Return and Escape to item 1 with no
+    /// click; `_DoNewsDialog` plays `_beepSnd[2]` as it closes.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut screen = open();
+            screen.take_sounds();
+            screen.input(&key(k, false));
+            screen.input(&Input::Key {
+                key: k,
+                pressed: false,
+                repeat: false,
+            });
+            assert_eq!(
+                screen.take_sounds(),
+                [Sound::Ui(UiSound::NewsClosed)],
+                "{k:?}"
+            );
+            assert!(screen.closed());
+        }
+    }
 }

@@ -3873,4 +3873,27 @@ mod tests {
             "the wait goes on once it closes"
         );
     }
+
+    /// The original's `_ShipyardFilter` @0x60449 maps keys to items with no click sound; the arrows also cover `grid`.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut screen = screen();
+        for k in [
+            Key::Right,
+            Key::Down,
+            Key::Left,
+            Key::Up,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+        }
+        assert_eq!(screen.take_sounds(), [], "keys make no click");
+    }
 }

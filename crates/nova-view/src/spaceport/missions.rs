@@ -1239,4 +1239,38 @@ mod tests {
             }
         }
     }
+
+    fn press_and_release(key: Key) -> [Input; 2] {
+        [true, false].map(|pressed| Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        })
+    }
+
+    /// The original's `_MissionFilter` (@0x9f7a9) maps Tab, the arrows,
+    /// Return and Escape to items without a click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original_on_the_computer() {
+        let mut screen = screen();
+        for k in [Key::Tab, Key::Up, Key::Down, Key::Enter, Key::Escape] {
+            for input in press_and_release(k) {
+                screen.input(&input);
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
+    }
+
+    /// The original's `_MissionInfoFilter` (@0x9d6e5) maps Return and Escape
+    /// to Done without a click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original_on_the_info_screen() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            for input in press_and_release(k) {
+                screen.input(&input);
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
+    }
 }

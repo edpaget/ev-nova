@@ -865,4 +865,21 @@ mod tests {
             Some("no DLOG 1016")
         );
     }
+
+    /// The original's `_SingleMissionFilter` (@0x98d9a) maps Return, Escape
+    /// and the labels' first letters to items without a click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [Key::Enter, Key::Escape, Key::Char('n'), Key::Char('i')] {
+            let mut dialog = offer();
+            for pressed in [true, false] {
+                dialog.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(dialog.take_sounds(), [], "{k:?}");
+        }
+    }
 }
