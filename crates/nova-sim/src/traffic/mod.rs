@@ -792,7 +792,7 @@ impl Traffic {
                 aggression: ship.aggression,
                 inspected: None,
                 booty: ship.booty,
-                boarded: false,
+                boarded: ship.boarded,
                 info_types: ship.info_types,
                 spared: false,
                 assisting: 0,
@@ -2557,6 +2557,7 @@ mod tests {
                 formation: None,
             }),
             derelict: false,
+            boarded: false,
             cloaked: false,
             aux: None,
         }
@@ -2634,6 +2635,22 @@ mod tests {
             assert_eq!(npcs[1].condition, Condition::Intact);
             assert_eq!(npcs[1].reserves, npcs[1].stats.full());
         }
+    }
+
+    #[test]
+    fn a_ship_set_up_boarded_is_added_boarded() {
+        let mut traffic = Traffic::new();
+        traffic.enter_with(table(0), World::new(&[]), Vec::new(), &mut Draws::of(&[]));
+        traffic.bring_in(vec![
+            NewShip {
+                derelict: true,
+                boarded: true,
+                ..mission_ship(-1, 0.0)
+            },
+            mission_ship(-1, 1.0),
+        ]);
+        let boarded: Vec<bool> = traffic.npcs().iter().map(|npc| npc.boarded).collect();
+        assert_eq!(boarded, [true, false]);
     }
 
     // Cloaks.

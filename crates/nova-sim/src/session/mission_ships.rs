@@ -552,6 +552,7 @@ impl Session {
             let record = self.lifecycle_record(active.mission);
             let state = &active.ships;
             let left = state.left;
+            let expired = active.days_left == Some(0);
             if !self.ships_here(state.system)
                 || left <= 0
                 || state.appear >= 0
@@ -573,6 +574,7 @@ impl Session {
                 behav: ShipBehav::from_code(record.ships.behav),
                 nav: &nav,
                 preset,
+                expired,
             };
             ships.extend(spawn::mission_ships(table, &spawn, self.gate(), chance));
         }
@@ -735,6 +737,8 @@ impl Session {
             behav: ShipBehav::from_code(record.ships.behav),
             nav: &nav,
             preset,
+            // Only the setup reads the time left (@0x42fe1-0x42ffa).
+            expired: false,
         };
         let ships = spawn::arriving_mission_ships(
             self.traffic.table(),
@@ -818,6 +822,8 @@ impl Session {
             behav: ShipBehav::from_code(record.ships.behav),
             nav: &[],
             preset: None,
+            // Only the setup reads the time left (@0x42fe1-0x42ffa).
+            expired: false,
         };
         let Some(ship) = spawn::swapped_mission_ship(
             self.traffic.table(),
@@ -4161,6 +4167,84 @@ pub(super) mod tests {
         assert_eq!(ships_of(&session).disabled, 0);
         assert_eq!(session.take_messages(), []);
         assert_eq!(failed(&session), None);
+    }
+
+    /// [`goal_catalog`]'s rescue mission 140, of `CanAbort` `can_abort`,
+    /// accepted with `days_left` and failed or not, then taken off from:
+    /// the system set up.
+    fn timed_rescue(can_abort: i16, days_left: u32, failed: bool) -> Session {
+        let mut catalog = goal_catalog(5, 0);
+        catalog.missions[0].can_abort = can_abort;
+        catalog.missions[0].time_limit = 10;
+        let mut session = accepted(&catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.days_left = Some(days_left);
+            active.failed = failed.then_some(FailedBy::Quick);
+        }
+        take_off_unaborted(&mut session, &catalog);
+        session
+    }
+
+    fn boarded(session: &Session) -> Vec<bool> {
+        session.npcs().iter().map(|npc| npc.boarded).collect()
+    }
+
+    #[test]
+    fn a_timed_rescue_mission_out_of_time_sets_up_its_ships_boarded_and_unheld() {
+        let mut session = timed_rescue(0, 0, true);
+        assert_eq!(marked(&session), [0, 0]);
+        assert_eq!(boarded(&session), [true; 2]);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2], "cut armour");
+        assert!(
+            session
+                .npcs()
+                .iter()
+                .all(|npc| !session.mission_ship_held(npc))
+        );
+        assert!(board_first(&mut session).0.is_err(), "boarded already");
+        full_armour(&mut session);
+        fight(&mut session, 1);
+        assert_eq!(conditions(&session), [Condition::Intact; 2], "not held");
+    }
+
+    #[test]
+    fn a_timed_rescue_mission_with_days_left_sets_up_its_ships_held() {
+        let mut session = timed_rescue(0, 5, false);
+        assert_eq!(boarded(&session), [false; 2]);
+        assert!(
+            session
+                .npcs()
+                .iter()
+                .all(|npc| session.mission_ship_held(npc))
+        );
+        full_armour(&mut session);
+        fight(&mut session, 30);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2]);
+    }
+
+    #[test]
+    fn an_abortable_rescue_mission_expiring_as_it_takes_off_sets_up_its_ships_then_fails() {
+        // The original sets the system up before its objectives check
+        // fails the mission, so the ships come in boarded.
+        let session = timed_rescue(1, 0, false);
+        assert_eq!(boarded(&session), [true; 2]);
+        assert!(session.pilot().missions().get(0).is_none(), "failed, ended");
+    }
+
+    #[test]
+    fn an_abortable_rescue_mission_expiring_on_its_jump_sets_up_its_ships_then_fails() {
+        let mut catalog = goal_catalog(5, 0);
+        catalog.missions[0].ships.syst = 131;
+        catalog.missions[0].time_limit = 10;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(marked(&session), Vec::<u8>::new());
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.days_left = Some(1);
+        }
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(boarded(&session), [true; 2]);
+        assert!(session.pilot().missions().get(0).is_none(), "failed, ended");
     }
 
     #[test]

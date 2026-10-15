@@ -135,8 +135,10 @@
 //!   then to its nav slot's stellar for -1 to -16. A rescue goal's ship
 //!   (`ShipGoal` 5) first draws a heading `Rand(360)`, after its own
 //!   draws, and starts still and derelict: shields 0 and its armour cut
-//!   just below where it is disabled (@0x42f35-0x42fdc). The other two
-//!   paths give it no such placement.
+//!   just below where it is disabled (@0x42f35-0x42fdc); of a mission
+//!   whose time has run out, it starts boarded too (@0x42fe1-0x42ffa,
+//!   [`MissionSpawn::expired`]). The other two paths give it no such
+//!   placement.
 //! - **On the appear timer** (`_EnterMoreShips` @0x43757-0x43ad9): every
 //!   tick in flight a slot whose ships are in the system with any to come
 //!   counts its timer down, and at 0 they come in by hyperspace, uncloaked,
@@ -344,6 +346,9 @@ pub struct NewShip {
     /// Whether it starts cloaking (`_DoShipCloak`): a `ShipStart` 2
     /// mission's ship set up in the system does ([`mission_ships`]).
     pub cloaked: bool,
+    /// Whether it starts boarded (+0xb9): a rescue ship of an expired
+    /// mission set up in the system does ([`mission_ships`]).
+    pub boarded: bool,
 }
 
 /// The persons' side of a system's spawning: their world, and the names
@@ -428,6 +433,7 @@ impl<'a> PersonDraw<'a> {
             person: Some(id),
             mission: None,
             derelict: false,
+            boarded: false,
             cloaked: false,
             aux: None,
         })
@@ -492,6 +498,7 @@ pub fn initial(
                 person: None,
                 mission: None,
                 derelict: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             });
@@ -629,6 +636,7 @@ fn hyper_ship(
             person: None,
             mission: None,
             derelict: false,
+            boarded: false,
             cloaked: false,
             aux: None,
         });
@@ -667,6 +675,11 @@ pub struct MissionSpawn<'a> {
     /// [`uniform_type`](crate::mission::SpecialShips::uniform_type)),
     /// drawing none; none to draw one for each.
     pub preset: Option<ShipId>,
+    /// Whether its time has run out: its days left 0 (the slot's +0x48 in
+    /// -31999..=0, which only 0 reaches, @0x42fe1-0x42ffa). Only the setup
+    /// reads it ([`mission_ships`]), so a rescue ship set up then starts
+    /// boarded.
+    pub expired: bool,
 }
 
 /// One of `spawn`'s ships as `_MissionDudeSpawn` (@0x3cd3b) brings it in:
@@ -763,6 +776,7 @@ fn specific_dude_ship(
         person: None,
         mission: None,
         derelict: false,
+        boarded: false,
         cloaked: false,
         aux: None,
     })
@@ -775,7 +789,17 @@ fn specific_dude_ship(
 /// ([`ESCORTED_SETUP_SPREAD`], @0x42ed8-0x42f33); for a rescue goal
 /// (`ShipGoal` 5) then
 /// facing a heading `Rand(360)`, still, and set up derelict
-/// ([`NewShip::derelict`]: shields 0, armour cut, @0x42f35-0x42fdc);
+/// ([`NewShip::derelict`]: shields 0, armour cut, @0x42f35-0x42fdc),
+/// and boarded when `spawn` has [`expired`](MissionSpawn::expired)
+/// ([`NewShip::boarded`]). The original's check (@0x42fe1-0x42ffa,
+/// `w + 0x7cff` unsigned `<= 0x7cff`) is a range -31999..=0 on the slot's
+/// +0x48, its `TimeLimit` days left: set to -32000 at load for no limit
+/// (@0xa0f40-0xa0f47) and counted down daily only while above 0
+/// (@0xb590-0xb5b6), it is in range only at 0, the time run out. The
+/// setup never reads the failed flag, so an unabortable mission failed
+/// by its deadline sets its rescue ships up boarded, never held disabled
+/// and never boardable; an abortable one does so only as it arrives or
+/// takes off on its last day, and then fails;
 /// with a `ShipStart` of -1 to -16 then moved to that nav slot's stellar,
 /// unless the slot is empty (@0x4300a-0x43091); with `ShipStart` 2,
 /// cloaking ([`NewShip::cloaked`], `_DoShipCloak` @0x43114-0x43121). The
@@ -807,6 +831,7 @@ pub fn mission_ships(
                 ship.state.heading = chance.below(DEGREES) as f32;
                 ship.state.velocity = Vec2::ZERO;
                 ship.derelict = true;
+                ship.boarded = spawn.expired;
             }
             Some(ship)
         })
@@ -1021,6 +1046,7 @@ pub fn fleet(
         person: None,
         mission: None,
         derelict: false,
+        boarded: false,
         cloaked: false,
         aux: None,
     });
@@ -1059,6 +1085,7 @@ pub fn fleet(
                 person: None,
                 mission: None,
                 derelict: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             });
@@ -1465,6 +1492,7 @@ mod tests {
                 person: None,
                 mission: None,
                 derelict: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             }]
@@ -2594,6 +2622,7 @@ mod tests {
                 person: Some(PersonId(510)),
                 mission: None,
                 derelict: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             }]
@@ -2980,6 +3009,7 @@ mod tests {
             behav: ShipBehav::AttackPlayer,
             nav: &NAV,
             preset: None,
+            expired: false,
         }
     }
 
@@ -3021,6 +3051,7 @@ mod tests {
                     formation: None,
                 }),
                 derelict: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             }]
@@ -3199,6 +3230,49 @@ mod tests {
         MissionSpawn {
             goal,
             ..mission_spawn(count, start)
+        }
+    }
+
+    /// Whether each of `spawn`'s ships set up starts boarded.
+    fn boarded_at_setup(spawn: &MissionSpawn) -> Vec<bool> {
+        mission_ships(
+            &with_mission_dude(),
+            spawn,
+            mission_gate(),
+            &mut Draws::of(&[0; 40]),
+        )
+        .iter()
+        .map(|ship| ship.boarded)
+        .collect()
+    }
+
+    #[test]
+    fn a_rescue_ship_of_an_expired_mission_is_set_up_boarded() {
+        for expired in [false, true] {
+            let spawn = MissionSpawn {
+                expired,
+                ..goal_spawn(2, 0, ShipGoal::Rescue)
+            };
+            assert_eq!(boarded_at_setup(&spawn), [expired; 2], "{expired}");
+        }
+    }
+
+    #[test]
+    fn only_a_rescue_ship_starts_boarded_when_expired() {
+        for goal in [
+            ShipGoal::None,
+            ShipGoal::Destroy,
+            ShipGoal::Disable,
+            ShipGoal::Board,
+            ShipGoal::Escort,
+            ShipGoal::Observe,
+            ShipGoal::ChaseOff,
+        ] {
+            let spawn = MissionSpawn {
+                expired: true,
+                ..goal_spawn(2, 0, goal)
+            };
+            assert_eq!(boarded_at_setup(&spawn), [false; 2], "{goal:?}");
         }
     }
 
@@ -3607,6 +3681,7 @@ mod tests {
                     formation: None,
                 }),
                 derelict: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             })
