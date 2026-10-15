@@ -6601,6 +6601,76 @@ pub(super) mod tests {
         assert_eq!(screen.showing(), Showing::Spaceport);
     }
 
+    /// [`data`] with the status bar ([`barred`]), its planet, of tech
+    /// level 1, a shipyard ([`shipbuying_data`]) and an outfitter selling
+    /// nothing, as no `oütf` exists. Ship 129 carries nothing, is listed
+    /// only while `!b7` (`Flags3` 0x0100), and its `OnPurchase` `M129 b7` moves the pilot to
+    /// Beta Prime and empties the shipyard.
+    fn empty_shops_after_a_move_data() -> Rc<GameData> {
+        let mut built = barred(game_data_fork(true, false, true, 100, b"", b"", None)).build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        built.put_u16(stellar + 0x0C, 1);
+        let ship = built.layout.data_entry(Ship::TYPE, 129) + 4;
+        built.put_u16(ship + 0x4E, 0xFFFF);
+        built.put_u16(ship + 0x56, 0);
+        built.put_u16(ship + 0x726, 0x0100);
+        built.bytes[ship + 0x6C..ship + 0x6F].copy_from_slice(b"!b7");
+        built.bytes[ship + 0x26A..ship + 0x271].copy_from_slice(b"M129 b7");
+        loaded_bytes(built.bytes)
+    }
+
+    /// The stellar named in the status bar's nav area.
+    fn nav_named(screen: &AppScreen) -> Vec<String> {
+        bar_drawn(screen)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } if text.ends_with(" Prime") => Some(text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The shipyard's restore after a landed `M` leaves the nav marked
+    /// but undrawn; an empty shipyard draws nothing after it, while an
+    /// empty outfitter's `_DrawStatus` (@0x5ff09-0x5ff10) draws it.
+    #[test]
+    fn an_empty_outfitter_draws_the_nav_a_shipyard_left_marked_and_an_empty_shipyard_does_not() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard_of(empty_shops_after_a_move_data(), &store);
+        assert_eq!(nav_named(&screen), ["Alpha Prime"], "landed");
+        click_port_item(&mut screen, 9);
+        press_b(&mut screen);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
+        assert_eq!(pilot(&screen).stellar(), Some(nova_sim::StellarId(129)));
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_shipyard().is_none(), "closed");
+        assert_eq!(nav_named(&screen), ["Beta Prime"], "the move held");
+
+        click_port_item(&mut screen, 9);
+        assert!(spaceport(&screen).open_shipyard().is_none(), "empty");
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::shipyard::NO_SHIPS.to_owned())
+        );
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(
+            nav_named(&screen),
+            ["Beta Prime"],
+            "no draw after the shipyard"
+        );
+
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(nav_named(&screen), ["Alpha Prime"], "the restore drawn");
+    }
+
     #[test]
     fn the_outfitter_opens_the_stellars_outfitter() {
         let store = MemoryPilots::new();
