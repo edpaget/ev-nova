@@ -556,8 +556,14 @@ impl Screen for BarScreen {
         }
         // The hire screen is the shipyard dialog in hire mode, whose
         // filters read the key too (`_ShipyardFilter` @0x60947,
-        // `_ShipDescFilter` @0x51164).
-        if self.hire.is_some() && is_mission_info_press(input) {
+        // `_ShipDescFilter` @0x51164). Without its dialog there is no
+        // filter to read it, as in the shipyard.
+        if self
+            .hire
+            .as_ref()
+            .is_some_and(|hire| hire.dialog().is_some())
+            && is_mission_info_press(input)
+        {
             self.asks.info = true;
             return ScreenAction::None;
         }
@@ -1036,13 +1042,106 @@ mod tests {
         assert_eq!(lines(&screen), "dësc 10029.");
     }
 
+    /// [`hiring`], with stock "Shipyard" (`DLOG` 1004) and plain
+    /// "Shipyard Info" (`DLOG` 1005) laid out.
+    fn laid_hiring(art: &Rc<FakeArt>) -> Hiring {
+        Hiring {
+            template: Ok(DialogTemplate {
+                bounds: rect(100.0, 100.0, 765.0, 323.0),
+                placement: Placement::Center,
+                items: items(&[
+                    (365.0, 289.0, 109.0, 25.0),
+                    (248.0, 440.0, 68.0, 30.0),
+                    (201.0, 380.0, 102.0, 18.0),
+                    (144.0, 438.0, 69.0, 22.0),
+                    (9.0, 8.0, 333.0, 271.0),
+                    (354.0, 10.0, 192.0, 267.0),
+                    (480.0, 289.0, 109.0, 25.0),
+                    (557.0, 8.0, 200.0, 200.0),
+                    (614.0, 214.0, 143.0, 100.0),
+                    (253.0, 289.0, 89.0, 25.0),
+                    (365.0, 431.0, 69.0, 22.0),
+                    (141.0, 288.0, 25.0, 25.0),
+                    (171.0, 288.0, 25.0, 25.0),
+                ]),
+            }),
+            info: InfoTemplates {
+                plain: Ok(DialogTemplate {
+                    bounds: rect(0.0, 0.0, 250.0, 285.0),
+                    placement: Placement::Center,
+                    items: items(&[
+                        (86.0, 253.0, 74.0, 25.0),
+                        (202.0, 368.0, 68.0, 30.0),
+                        (3.0, 3.0, 240.0, 24.0),
+                        (27.0, 334.0, 55.0, 31.0),
+                        (9.0, 32.0, 234.0, 214.0),
+                    ]),
+                }),
+                picture: Err("no DLOG 1019".to_owned()),
+            },
+            ..hiring(art)
+        }
+    }
+
+    /// Viking's bar with [`laid_hiring`].
+    fn laid_hire_bar() -> BarScreen {
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::new(),
+            graphic: None,
+        });
+        BarScreen::new(
+            Ok((plain_only(template()), Rc::new(MonoMetrics))),
+            StellarId(157),
+            laid_hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        )
+    }
+
     #[test]
     fn the_mission_info_key_asks_from_the_hire_screen_which_stays_open() {
-        let mut screen = bar();
+        let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
         screen.input(&key(MISSION_INFO_KEY, false));
         assert!(screen.take_info_request());
         assert!(screen.hire_screen().is_some(), "still open");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_the_hire_info_panel_which_stays_open() {
+        let mut screen = laid_hire_bar();
+        screen.open_hire(list(2));
+        screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
+        assert!(
+            screen
+                .hire_screen()
+                .and_then(HireScreen::info_panel)
+                .is_some(),
+            "the panel opened"
+        );
+        screen.input(&key(MISSION_INFO_KEY, false));
+        assert!(screen.take_info_request());
+        assert!(
+            screen
+                .hire_screen()
+                .and_then(HireScreen::info_panel)
+                .is_some(),
+            "the panel stays open"
+        );
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_nothing_from_a_hire_screen_without_its_dialog() {
+        let mut screen = bar();
+        screen.open_hire(list(2));
+        assert!(
+            screen
+                .hire_screen()
+                .is_some_and(|hire| hire.problem().is_some())
+        );
+        screen.input(&key(MISSION_INFO_KEY, false));
+        assert!(!screen.take_info_request());
     }
 
     #[test]
