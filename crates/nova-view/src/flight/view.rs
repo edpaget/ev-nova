@@ -247,11 +247,11 @@
 //!   centred on the current system, with the session's course and mode-3
 //!   selection, in a 256 x 256 frame at (558, 150) bordered in `cölr`
 //!   `FloatingMap`, drawn after the double-time icon and before the escort
-//!   menu. While it is up, faded out or not, a left click in its frame
-//!   outside a jump is its own: on the current system's centre it selects
-//!   mode 3 with nothing, on a link's box mode 3 with that link, each
-//!   with `snd ` 152 ([`Session::select_on_floating_map`]), and anything
-//!   else picks nothing. `-` zooms it out a step and `=` or the keypad's
+//!   menu. While it is up, faded out or not, a left click in its frame is
+//!   its own: on the current system's centre it selects mode 3 with
+//!   nothing, on a link's box mode 3 with that link, each with `snd ` 152
+//!   ([`Session::select_on_floating_map`]), except during a jump, and
+//!   anything else picks nothing. `-` zooms it out a step and `=` or the keypad's
 //!   `+` in ([`ZOOM_OUT_KEY`], [`ZOOM_IN_KEY`], [`ZOOM_IN_KEYPAD_KEY`]),
 //!   with `snd ` 150, during a jump too, but only while no key the flight
 //!   holds is down. A hit or a zoom shows it again.
@@ -4707,13 +4707,16 @@ impl<C> FlightView<C> {
 
     /// A left click at `at`, if the floating map takes it, as
     /// `_HandlePlayer` does (@0x6a130-0x6a762): while the map is up, faded
-    /// out or not, outside a jump, inside its frame. A hit on the current
-    /// system's centre or a link's box selects through the session
+    /// out or not, inside its frame. A hit on the current system's centre
+    /// or a link's box selects through the session
     /// ([`Session::select_on_floating_map`]) and shows the map again
     /// (@0x6a735); a miss is swallowed (@0x6a342). Whether it took it.
-    fn click_floating_map(&mut self, at: Point, jumping: bool) -> bool {
+    /// During a jump the original passes the click on (@0x6a145), where a
+    /// click in space selects nothing either; here the session refuses the
+    /// hit, so the click does nothing and the map isn't shown again.
+    fn click_floating_map(&mut self, at: Point) -> bool {
         let frame = floating::frame(VIEW_SIZE);
-        if jumping || !self.floating.is_up() || !floating::contains(frame, at) {
+        if !self.floating.is_up() || !floating::contains(frame, at) {
             return false;
         }
         let Ok(session) = &mut self.session else {
@@ -5234,7 +5237,7 @@ impl<
             at,
         } = *input
             && self.takes(PlayerCommand::Nav)
-            && !self.click_floating_map(at, jumping)
+            && !self.click_floating_map(at)
         {
             self.click_in_space(at);
         }
