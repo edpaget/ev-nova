@@ -107,8 +107,11 @@
 //!   [`Session`](crate::Session) refuses up front with
 //!   [`LandingRefusal::Disabled`]:
 //!   rdm:phase/player-death/phase-16-handle-player-left-out-gates.
-//! - The refusals' `snd ` 153 (@0x67e8f, @0x676aa, @0x676fe):
-//!   rdm:phase/audio-fidelity/phase-4-audio-refusal-beep.
+//! - The cloak refusal (`_ShipIsCloaked` @0x66a8e, STR# 2002 #73),
+//!   which beeps `snd ` 153 at the shared tail (@0x67e8f): the engine
+//!   has no player cloak (rdm:task/cloaking-device).
+//! - The fee refusal (@0x669b4-0x66a80), which is silent
+//!   (rdm:task/landing-fee).
 //! - The per-axis 0.75 speed gate (@0x66c3c-0x66c66):
 //!   rdm:phase/stellar-fidelity/phase-6-per-axis-landing-speed.
 //! - The player's AI wait (+0x4c, tested @0x66c2f and zeroed @0x66b6d):
@@ -243,6 +246,32 @@ pub enum LandingRefusal {
         /// The ship's speed, in pixels a tick.
         speed: f32,
     },
+}
+
+impl LandingRefusal {
+    /// Whether `_HandlePlayerDockRequest` beeps `_beepSnd[3]` (`snd ` 153)
+    /// for this refusal: a stellar that can't be landed on (wrong
+    /// government or inactive, @0x66977-0x669ae, `PlaySound` @0x67e8f,
+    /// before `_IsDisabled`, so a disabled ship's beeps too), out of
+    /// reach (@0x66cfd, @0x676aa), or pressed again before the approach
+    /// clears or moving too fast (@0x66c23-0x66c66, @0x676fe). The
+    /// others are silent of it: [`Self::Jumping`] and [`Self::NoStellars`]
+    /// never reach the dock request (`_HandlePlayer` @0x6a8cb, @0x6a90f),
+    /// [`Self::Disabled`] goes to its bare epilogue (0x67eef), and
+    /// [`Self::Denied`] plays `_beepSnd[1]` instead (@0x67ec6).
+    ///
+    /// A [`Self::NotLandable`] from a press with no target, the nearest
+    /// stellar standing in, is the engine's alone: the original's
+    /// `_FindNearestStellar` gives -1 and makes no dock request
+    /// (@0x6a94c), so [`Session::land`](crate::Session::land) leaves it
+    /// silent.
+    #[must_use]
+    pub fn beeps(&self) -> bool {
+        matches!(
+            self,
+            Self::NotLandable { .. } | Self::TooFar { .. } | Self::TooFast { .. }
+        )
+    }
 }
 
 /// Half the larger side of `site`'s sprite's frame, which is what the
@@ -2140,5 +2169,35 @@ mod tests {
     fn an_uninhabited_stellar_offers_nothing() {
         assert_eq!(services(StellarFlags::UNINHABITED), []);
         assert_eq!(services(0xFF), []);
+    }
+
+    #[test]
+    fn only_the_dock_requests_not_landable_too_far_and_too_fast_beep() {
+        let (stellar, station) = (StellarId(128), false);
+        let beeping = [
+            LandingRefusal::NotLandable { stellar, station },
+            LandingRefusal::TooFar { stellar, station },
+            LandingRefusal::TooFast {
+                stellar,
+                station,
+                speed: 2.0,
+            },
+        ];
+        for refusal in beeping {
+            assert!(refusal.beeps(), "{refusal:?}");
+        }
+        let silent = [
+            LandingRefusal::Jumping,
+            LandingRefusal::Disabled,
+            LandingRefusal::NoStellars,
+            LandingRefusal::Denied {
+                stellar,
+                station,
+                min_status: 10,
+            },
+        ];
+        for refusal in silent {
+            assert!(!refusal.beeps(), "{refusal:?}");
+        }
     }
 }

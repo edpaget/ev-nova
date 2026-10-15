@@ -140,8 +140,9 @@
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending, and a set
 //! operator's message and sound), which the audio side drains with
-//! [`Session::take_sounds`]. A refused landing or
-//! jump emits nothing.
+//! [`Session::take_sounds`]. A refused landing beeps
+//! [`SimSound::Refused`] where the original's dock request does (see
+//! [`LandingRefusal::beeps`]).
 //!
 //! A change of the player's ship, or of the system or stellar it is at,
 //! is told as a [`SessionEvent`], which a view drains with
@@ -3289,7 +3290,28 @@ impl Session {
     /// destroyed ship's press is refused the same way before it selects
     /// anything, as the land key's breakup-timer gate refuses it
     /// (@0x6a8cb).
+    ///
+    /// A refusal from the dock request that [`LandingRefusal::beeps`]
+    /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
+    /// @0x676fe), once a press, a disabled ship's not-landable target
+    /// too. A press with no target and nothing landable makes no dock
+    /// request in the original (`_FindNearestStellar` gives -1,
+    /// @0x6a94c), so its [`LandingRefusal::NotLandable`] is silent.
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
+        let requested = self
+            .nav_target()
+            .is_some_and(|id| self.sites.iter().any(|site| site.id == id));
+        let press = self.land_press();
+        if let Err(refusal) = &press {
+            let untargeted = !requested && matches!(refusal, LandingRefusal::NotLandable { .. });
+            if refusal.beeps() && !untargeted {
+                self.sounds.push(SimSound::Refused);
+            }
+        }
+        press
+    }
+
+    fn land_press(&mut self) -> Result<LandPress, LandingRefusal> {
         if self.jump.is_some() {
             return Err(LandingRefusal::Jumping);
         }
@@ -8092,21 +8114,21 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_refused_landing_emits_nothing() {
+    fn a_refused_landing_beeps_only_from_the_dock_request() {
         let mut session = Session::start(&catalog()).expect("starts");
         for _ in 0..20 {
             session.tick(THRUST);
         }
         session.take_sounds();
         land_now(&mut session).expect_err("refused");
-        assert_eq!(session.take_sounds(), []);
+        assert_eq!(session.take_sounds(), [SimSound::Refused], "@0x676aa");
         let mut jumping = Session::start(&edge_lander()).expect("starts");
         jumping.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut jumping);
         jumping.begin_jump().expect("jumps");
         jumping.take_sounds();
         assert_eq!(jumping.land(), Err(LandingRefusal::Jumping));
-        assert_eq!(jumping.take_sounds(), []);
+        assert_eq!(jumping.take_sounds(), [], "@0x6a8cb");
     }
 
     #[test]
@@ -16875,6 +16897,146 @@ pub(super) mod tests {
             Err(LandingRefusal::NoStellars),
             "the same refusal"
         );
+    }
+
+    // The land key's refusal beep, `_beepSnd[3]` (`snd ` 153), as
+    // `_HandlePlayerDockRequest` plays it.
+
+    /// [`catalog`] with no stellar landable.
+    fn unlandable() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        for site in &mut catalog.sites[0].1 {
+            site.flags = 0;
+        }
+        catalog
+    }
+
+    #[test]
+    fn l_on_an_unlandable_target_beeps() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut session = Session::start(&unlandable()).expect("starts");
+            session.condition = condition;
+            session.select_stellar(StellarPick::Slot(0));
+            let _ = session.take_sounds();
+            assert!(matches!(
+                session.land(),
+                Err(LandingRefusal::NotLandable { .. })
+            ));
+            assert_eq!(
+                session.take_sounds(),
+                [SimSound::Refused],
+                "@0x67e8f, before _IsDisabled: {condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn l_with_no_target_and_nothing_landable_is_silent() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut session = Session::start(&unlandable()).expect("starts");
+            session.condition = condition;
+            let _ = session.take_sounds();
+            assert!(matches!(
+                session.land(),
+                Err(LandingRefusal::NotLandable { .. })
+            ));
+            assert_eq!(
+                session.take_sounds(),
+                [],
+                "_FindNearestStellar gives -1, no dock request (@0x6a94c): {condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn l_too_far_beeps_once() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("requests");
+        let _ = session.take_sounds();
+        assert!(matches!(session.land(), Err(LandingRefusal::TooFar { .. })));
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Refused],
+            "before the approach clears (@0x676fe)"
+        );
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.select_stellar(StellarPick::Slot(1));
+        session.land().expect("requests");
+        session.tick(Controls::default());
+        let _ = session.take_sounds();
+        assert!(matches!(session.land(), Err(LandingRefusal::TooFar { .. })));
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Refused],
+            "out of reach (@0x676aa)"
+        );
+    }
+
+    #[test]
+    fn l_too_fast_beeps() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("requests");
+        session.tick(Controls::default());
+        session.player.velocity.x = 5.0;
+        let _ = session.take_sounds();
+        assert!(matches!(
+            session.land(),
+            Err(LandingRefusal::TooFast { .. })
+        ));
+        assert_eq!(session.take_sounds(), [SimSound::Refused], "@0x676fe");
+    }
+
+    #[test]
+    fn l_denied_sounds_traffic_control_and_no_beep() {
+        let catalog = governed([Some(WANTED), Some(LAWFUL)], None);
+        let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
+        let _ = session.take_sounds();
+        assert!(matches!(session.land(), Err(LandingRefusal::Denied { .. })));
+        let sounds = session.take_sounds();
+        assert!(sounds.contains(&SimSound::TrafficControl), "@0x67ec6");
+        assert!(!sounds.contains(&SimSound::Refused), "{sounds:?}");
+    }
+
+    #[test]
+    fn l_refused_as_disabled_jumping_or_with_no_stellars_is_silent() {
+        let mut session = disabled(&catalog());
+        session.select_stellar(StellarPick::Slot(0));
+        let _ = session.take_sounds();
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.take_sounds(), [], "0x67eef");
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.condition = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        let _ = session.take_sounds();
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.take_sounds(), [], "@0x6a8cb");
+        let empty = FakePilotCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        };
+        let mut session = Session::start(&empty).expect("starts");
+        let _ = session.take_sounds();
+        assert_eq!(session.land(), Err(LandingRefusal::NoStellars));
+        assert_eq!(session.take_sounds(), [], "@0x6a90f");
+    }
+
+    #[test]
+    fn l_that_requests_or_lands_does_not_beep() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("requests");
+        assert!(!session.take_sounds().contains(&SimSound::Refused));
+        session.tick(Controls::default());
+        let _ = session.take_sounds();
+        session.land().expect("lands");
+        assert!(!session.take_sounds().contains(&SimSound::Refused));
+        let mut session = Session::start(&gated()).expect("starts");
+        session.land().expect("requests");
+        session.tick(Controls::default());
+        let _ = session.take_sounds();
+        let _ = session.land();
+        assert!(!session.take_sounds().contains(&SimSound::Refused));
     }
 
     #[test]

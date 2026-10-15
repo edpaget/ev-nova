@@ -611,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn an_uninhabited_stellar_answers_every_press_no_response_in_silence() {
+    fn an_uninhabited_stellar_answers_every_press_no_response_and_the_too_far_beep() {
         let catalog = only(uninhabited(128, 2000.0, 0.0, 0));
         let mut session = quiet(Session::start(&catalog).expect("starts"));
         for _ in 0..3 {
@@ -623,7 +623,11 @@ mod tests {
                 })
             );
             assert_eq!(session.take_messages(), [SimMessage::NoResponse]);
-            assert_eq!(session.take_sounds(), []);
+            assert_eq!(
+                session.take_sounds(),
+                [SimSound::Refused],
+                "no traffic control, the too-far beep (@0x676aa)"
+            );
             assert_eq!(session.dock_request(), request(128, CLEARED));
             tick(&mut session);
             assert_eq!(session.take_messages(), [], "no greeting");

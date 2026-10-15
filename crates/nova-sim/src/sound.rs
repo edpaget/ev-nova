@@ -148,7 +148,11 @@ pub enum SimSound {
     /// and every refusal of a hail, with no target too
     /// (`_HandlePlayerCommunication` @0x626cf, @0x6206c, @0x6261c,
     /// @0x6264e, its `PlaySound` argument of 1 or 5 not modelled; see
-    /// [`HailRefusal`](crate::hail::HailRefusal)), and every other refusal
+    /// [`HailRefusal`](crate::hail::HailRefusal)), as do the land key's
+    /// not-landable, too-far and too-fast refusals from the dock request
+    /// (@0x67e8f, @0x676aa, @0x676fe; see
+    /// [`LandingRefusal::beeps`](crate::landing::LandingRefusal::beeps)),
+    /// and every other refusal
     /// that beeps reuses it rather than adding a variant of its own.
     Refused,
 }

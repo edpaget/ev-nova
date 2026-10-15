@@ -7920,7 +7920,7 @@ mod tests {
     }
 
     #[test]
-    fn l_requests_clearance_and_a_second_l_lands() {
+    fn l_requests_clearance_an_early_second_l_beeps_too_far_and_a_later_l_lands() {
         // The Moon (129), in the scene, over the ship.
         let mut view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
         assert_eq!(view.take_landing(), None);
@@ -7933,6 +7933,11 @@ mod tests {
         assert_eq!(view.take_sounds(), [], "no sound for a silent request");
         assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
         assert_eq!(view.take_landing(), None, "no approach yet");
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "too far before the approach clears: _beepSnd[3] (@0x66c23 -> 0x676db, @0x676fe)"
+        );
 
         view.input(&key(LAND, false));
         ticks(&mut view, 1);
