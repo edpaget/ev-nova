@@ -361,13 +361,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
     let flying = harness.frame();
-    assert_eq!(
-        harness.played(),
-        [AudioCommand::StartMusic {
-            volume: level_volume(6)
-        }],
-        "the seeded music volume"
-    );
+    assert_eq!(harness.played(), [], "no music in flight");
 
     harness.command_comma();
     assert_eq!(harness.showing(), Showing::Preferences);
@@ -392,7 +386,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
         solids(&flying),
         solids(&open)
     );
-    assert_eq!(harness.played(), [], "the music plays on");
+    assert_eq!(harness.played(), []);
 
     let music = harness.dialog().music().rect().center();
     harness.click(music);
@@ -409,7 +403,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     assert!(texts(&changed).iter().any(|text| text == "5"));
     harness.press(Key::Enter);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(harness.played(), [AudioCommand::StopMusic]);
+    assert_eq!(harness.played(), [], "saved, with no music to stop");
 
     // Later sounds play at the new effects volume.
     harness.land();
@@ -461,7 +455,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
 }
 
 #[test]
-fn a_failed_save_is_a_warning_and_the_change_still_plays() {
+fn a_failed_save_is_a_warning_and_the_change_still_applies() {
     let store = seeded();
     let mut harness = Harness::new(&store);
     harness.press(Key::Char('f'));
@@ -470,7 +464,8 @@ fn a_failed_save_is_a_warning_and_the_change_still_plays() {
     store.fail_writes(true);
     let music = harness.dialog().music().rect().center();
     harness.click(music);
-    assert_eq!(harness.played(), [AudioCommand::StopMusic]);
+    assert!(!harness.dialog().prefs().sound.music);
+    assert_eq!(harness.played(), [], "no music in flight to stop");
     assert_eq!(
         harness.app.take_warnings(),
         ["nova: cannot save the settings: the disk is full".to_owned()]

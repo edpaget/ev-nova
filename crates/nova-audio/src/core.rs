@@ -1,6 +1,8 @@
 //! The audio core: sound events and the screen shown in, playback
 //! commands out.
 
+use std::time::Duration;
+
 use nova_data::SoundId;
 use nova_view::Showing;
 use nova_view::sound::{SimSound, Sound, UiSound};
@@ -16,12 +18,15 @@ use crate::table::SoundTable;
 /// loop on) and what it has been told (the scene, whether the ship is
 /// thrusting), and sends a command only when what it wants changes.
 ///
-/// - Music plays in menus (the galaxy map, flight's course map and the
-///   spaceport) and in space (flight, and a system opened from the map),
-///   while the music setting is on. The ship browser, the developer's
-///   viewer the app opens on, is silent. The About text and the
-///   Preferences dialog, over another screen, keep the scene below them. Moving between music scenes does
-///   not restart the track.
+/// - Music is the original's one-shot intro track: it plays on the main
+///   menu, and the dialogs over it, while the music setting is on (see
+///   [`has_music`]). It is spent for good, as in the original, once it has
+///   played to its end, or once a pilot enters the game or the About text
+///   opens, which fade it out ([`music_fade`]). Spent music never plays
+///   again in the run.
+/// - Known divergence: the original reads its Intro Music checkbox only
+///   at launch. Here the music setting acts at once: off stops the music,
+///   and on, before the music is spent, starts it again from the top.
 /// - Each event with a `snd ` in the table plays it once, at the effects
 ///   volume, while the sound setting is on. A landing plays the table's
 ///   landing sound, then the stellar's own. A `P` set operator's sound
@@ -45,8 +50,8 @@ pub struct AudioCore<A: Audio> {
     scene: Option<Showing>,
     /// Whether the ship is thrusting, as the events last said.
     thrusting: bool,
-    /// Whether the music has been started and not stopped since.
-    music_on: bool,
+    /// Where the music stands.
+    music: Music,
     /// Whether the engine loop has been started and not stopped since.
     loop_on: bool,
 }
@@ -67,7 +72,7 @@ impl<A: Audio> AudioCore<A> {
             settings: AudioSettings::default(),
             scene: None,
             thrusting: false,
-            music_on: false,
+            music: Music::Stopped,
             loop_on: false,
         }
     }
@@ -77,6 +82,13 @@ impl<A: Audio> AudioCore<A> {
     pub fn update(&mut self, showing: Option<Showing>, sounds: &[Sound]) {
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
+        }
+        // Entering the game (`_EnterGameFromMainScreen` @0x19ec6) and the
+        // About box (`_DoAboutBox` @0x15fbf) cancel the music for good.
+        if showing == Some(Showing::About)
+            || self.scene.is_some_and(|scene| scene != Showing::MainMenu)
+        {
+            self.spend_music();
         }
         // The Preferences dialog, the boarding dialogs, the comm dialogs,
         // a person's offer dialog, the mission dialogs and the player info
@@ -213,16 +225,25 @@ impl<A: Audio> AudioCore<A> {
     /// Starts or stops the music and the engine loop where what is wanted
     /// differs from what was last asked for.
     fn reconcile(&mut self) {
-        let music = self.settings.music && self.scene.is_some_and(has_music);
-        if music != self.music_on {
-            self.music_on = music;
-            self.audio.run(if music {
-                AudioCommand::StartMusic {
-                    volume: self.settings.music_volume,
-                }
-            } else {
-                AudioCommand::StopMusic
-            });
+        if self.music == Music::Playing && self.audio.music_ended() {
+            self.music = Music::Spent;
+        }
+        if self.music != Music::Spent {
+            let wanted = self.settings.music && self.scene.is_some_and(has_music);
+            if wanted != (self.music == Music::Playing) {
+                self.music = if wanted {
+                    Music::Playing
+                } else {
+                    Music::Stopped
+                };
+                self.audio.run(if wanted {
+                    AudioCommand::StartMusic {
+                        volume: self.settings.music_volume,
+                    }
+                } else {
+                    AudioCommand::StopMusic
+                });
+            }
         }
         let engine = self.table.engine.filter(|_| {
             self.settings.sound && self.thrusting && self.scene == Some(Showing::Flight)
@@ -237,6 +258,16 @@ impl<A: Audio> AudioCore<A> {
                 None => AudioCommand::StopLoop,
             });
         }
+    }
+
+    /// Spends the music for good, fading it out if it is playing.
+    fn spend_music(&mut self) {
+        if self.music == Music::Playing {
+            self.audio.run(AudioCommand::FadeOutMusic(music_fade(
+                self.settings.music_volume,
+            )));
+        }
+        self.music = Music::Spent;
     }
 
     /// Turns sound effects on or off. Turning them off stops every effect
@@ -267,7 +298,7 @@ impl<A: Audio> AudioCore<A> {
     /// Sets how loud the music is.
     pub fn set_music_volume(&mut self, volume: Volume) {
         self.settings.music_volume = volume;
-        if self.music_on {
+        if self.music == Music::Playing {
             self.audio.run(AudioCommand::SetMusicVolume(volume));
         }
     }
@@ -307,6 +338,18 @@ impl<A: Audio> AudioCore<A> {
     pub fn audio(&self) -> &A {
         &self.audio
     }
+}
+
+/// Where the music stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Music {
+    /// Not playing, and may start.
+    Stopped,
+    /// Started and not stopped since.
+    Playing,
+    /// Played to its end, or faded out by leaving the main menu or
+    /// opening About: it never plays again.
+    Spent,
 }
 
 /// Within this many pixels of the player, a sound is heard at full volume.
@@ -364,18 +407,42 @@ fn is_overlay(showing: Showing) -> bool {
     )
 }
 
-/// Whether music plays on `scene`: menus and space do; the ship browser,
-/// the developer's viewer, does not.
+/// How long the music fades out over at full volume: 32 ticks.
+/// `_StopIntroMusic(1)` @0x61c82 starts at level x 32 and takes 8 off a
+/// tick until it reaches 0, so the fade lasts level x 4 ticks.
+pub const MUSIC_FADE_AT_FULL: Duration = Duration::from_nanos(1_000_000_000 * 32 / 60);
+
+/// How long the music at `volume` fades out over: [`MUSIC_FADE_AT_FULL`]
+/// scaled by the volume, as the original's fade is by the level.
+#[must_use]
+pub fn music_fade(volume: Volume) -> Duration {
+    MUSIC_FADE_AT_FULL.mul_f32(volume.amplitude())
+}
+
+/// Whether music plays on `scene`: the main menu only, while the music is
+/// not spent; the dialogs over it keep it. The original's intro music
+/// starts once a launch (`_InitEVNova` @0x471ec, `_SpawnIntroMusicThread`
+/// @0x61a5c), plays once and is not looped (`_MusicThread` @0x61e10 ends at
+/// `IsMovieDone` @0x61e3d), and is cancelled for good when a pilot enters
+/// the game (`_EnterGameFromMainScreen` @0x19ec6) or About opens
+/// (`_DoAboutBox` @0x15fbf). Flight, the spaceport, the maps and the system
+/// view never play it.
+///
+/// Known divergence: the original reads its Intro Music checkbox
+/// (`-[EVPrefsDialogController accept:]` @0xcfeae) only at launch; here
+/// turning the setting off stops the music at once, and turning it on
+/// before the music is spent restarts it from the top.
 fn has_music(scene: Showing) -> bool {
     match scene {
-        Showing::MainMenu
-        | Showing::GalaxyMap
+        Showing::MainMenu => true,
+        // The game's screens never play it; the overlays are never the
+        // scene, as they keep the one below.
+        Showing::GalaxyMap
         | Showing::FlightMap
         | Showing::Spaceport
         | Showing::Flight
-        | Showing::System => true,
-        // The overlays are never the scene: they keep the one below.
-        Showing::ShipBrowser
+        | Showing::System
+        | Showing::ShipBrowser
         | Showing::About
         | Showing::Preferences
         | Showing::NewPilot
@@ -1087,52 +1154,32 @@ mod tests {
 
     // Music.
 
-    #[test]
-    fn music_plays_in_menus_and_in_space_without_restarting() {
-        let (mut core, log) = original();
-        core.update(None, &[]);
-        core.update(Some(Showing::ShipBrowser), &[]);
-        assert_eq!(drain(&log), [], "the ship browser is silent");
-        core.update(Some(Showing::GalaxyMap), &[]);
-        assert_eq!(drain(&log), [start_music(1.0)]);
-        for scene in [
-            Showing::System,
-            Showing::Flight,
-            Showing::FlightMap,
-            Showing::Spaceport,
-            Showing::About,
-            Showing::MainMenu,
-            Showing::NewPilot,
-            Showing::OpenPilot,
-            Showing::Note,
-            Showing::GalaxyMap,
-        ] {
-            core.update(Some(scene), &[]);
-            assert_eq!(drain(&log), [], "{scene:?} keeps it playing");
-        }
-        core.update(None, &[]);
-        assert_eq!(drain(&log), []);
-        core.update(Some(Showing::ShipBrowser), &[]);
-        assert_eq!(drain(&log), [AudioCommand::StopMusic]);
-        core.update(Some(Showing::About), &[]);
-        assert_eq!(drain(&log), [], "over the ship browser, still silent");
-        core.update(Some(Showing::Flight), &[]);
-        assert_eq!(drain(&log), [start_music(1.0)], "from the top");
+    fn fade_out(volume: f32) -> AudioCommand {
+        AudioCommand::FadeOutMusic(music_fade(Volume::new(volume)))
+    }
+
+    /// The original table on a mock whose music can be ended: a core, its
+    /// log and the mock's other handle.
+    fn ending() -> (AudioCore<RecordingAudio>, AudioLog, RecordingAudio) {
+        let audio = RecordingAudio::new();
+        let other = audio.clone();
+        let log = audio.log();
+        (AudioCore::new(audio), log, other)
     }
 
     #[test]
-    fn each_music_scene_starts_the_music() {
+    fn music_plays_on_the_main_menu_only() {
         for scene in [
+            Showing::ShipBrowser,
             Showing::GalaxyMap,
             Showing::System,
             Showing::Flight,
             Showing::FlightMap,
             Showing::Spaceport,
-            Showing::MainMenu,
         ] {
             let (mut core, log) = original();
             core.update(Some(scene), &[]);
-            assert_eq!(drain(&log), [start_music(1.0)], "{scene:?}");
+            assert_eq!(drain(&log), [], "{scene:?}");
         }
         for overlay in [
             Showing::About,
@@ -1144,13 +1191,113 @@ mod tests {
             core.update(Some(overlay), &[]);
             assert_eq!(drain(&log), [], "{overlay:?} over nothing");
         }
+        let (mut core, log) = original();
+        core.update(None, &[]);
+        assert_eq!(drain(&log), []);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [start_music(1.0)]);
+    }
+
+    #[test]
+    fn leaving_the_main_menu_fades_the_music_out_for_good() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[]);
+        assert_eq!(drain(&log), [fade_out(1.0)]);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [], "back on the main menu");
+        core.set_music(false);
+        core.set_music(true);
+        assert_eq!(drain(&log), [], "the setting off and on");
+    }
+
+    #[test]
+    fn about_over_the_main_menu_fades_it_out_for_good() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::About), &[]);
+        assert_eq!(drain(&log), [fade_out(1.0)]);
+        core.update(Some(Showing::MainMenu), &[]);
+        core.set_music(false);
+        core.set_music(true);
+        assert_eq!(drain(&log), []);
+    }
+
+    #[test]
+    fn the_menu_dialogs_keep_the_music() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        for overlay in [
+            Showing::Preferences,
+            Showing::NewPilot,
+            Showing::OpenPilot,
+            Showing::Note,
+        ] {
+            core.update(Some(overlay), &[]);
+            core.update(Some(Showing::MainMenu), &[]);
+            assert_eq!(drain(&log), [], "{overlay:?}");
+        }
+    }
+
+    #[test]
+    fn the_fade_scales_with_the_music_volume() {
+        assert_eq!(MUSIC_FADE_AT_FULL, Duration::from_secs(32) / 60);
+        assert_eq!(music_fade(Volume::FULL), MUSIC_FADE_AT_FULL);
+        assert_eq!(music_fade(Volume::new(0.25)), Duration::from_secs(8) / 60);
+        assert_eq!(music_fade(Volume::SILENT), Duration::ZERO);
+        let (mut core, log) = original();
+        core.set_music_volume(Volume::new(0.25));
+        core.update(Some(Showing::MainMenu), &[]);
+        core.update(Some(Showing::Flight), &[]);
+        assert_eq!(drain(&log), [start_music(0.25), fade_out(0.25)]);
+    }
+
+    /// An engine divergence the original lacks: it reads the checkbox only
+    /// at launch.
+    #[test]
+    fn engine_divergence_music_toggled_on_the_main_menu_stops_and_restarts_it() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.set_music(false);
+        assert_eq!(drain(&log), [AudioCommand::StopMusic]);
+        core.set_music(true);
+        assert_eq!(drain(&log), [start_music(1.0)], "from the top");
+    }
+
+    #[test]
+    fn music_played_to_its_end_is_spent() {
+        let (mut core, log, audio) = ending();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        audio.end_music();
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "it stopped on its own");
+        core.set_music(false);
+        core.set_music(true);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [], "the setting off and on starts nothing");
+    }
+
+    #[test]
+    fn music_off_before_its_end_is_not_spent_by_it() {
+        let (mut core, log, audio) = ending();
+        core.update(Some(Showing::MainMenu), &[]);
+        core.set_music(false);
+        drain(&log);
+        audio.end_music();
+        core.set_music(true);
+        assert_eq!(drain(&log), [start_music(1.0)]);
     }
 
     #[test]
     fn the_screen_is_taken_in_before_the_sounds() {
         let (mut core, log) = engine();
         core.update(Some(Showing::Flight), &[THRUST]);
-        assert_eq!(drain(&log), [start_music(1.0), start_loop(200, 1.0)]);
+        assert_eq!(drain(&log), [start_loop(200, 1.0)]);
         core.update(Some(Showing::Spaceport), &[COAST, landed(None)]);
         assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, 1.0)]);
     }
@@ -1160,19 +1307,19 @@ mod tests {
     #[test]
     fn music_off_stops_it_and_keeps_it_stopped() {
         let (mut core, log) = original();
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         drain(&log);
         core.set_music(false);
         assert!(!core.settings().music);
         assert_eq!(drain(&log), [AudioCommand::StopMusic]);
         core.set_music(false);
-        for scene in [Showing::Flight, Showing::ShipBrowser, Showing::Spaceport] {
+        for scene in [Showing::NewPilot, Showing::MainMenu, Showing::Note] {
             core.update(Some(scene), &[]);
         }
         assert_eq!(drain(&log), []);
         core.set_music(true);
         assert!(core.settings().music);
-        assert_eq!(drain(&log), [start_music(1.0)], "in the spaceport");
+        assert_eq!(drain(&log), [start_music(1.0)], "on the main menu");
         core.set_music(true);
         assert_eq!(drain(&log), []);
     }
@@ -1181,10 +1328,10 @@ mod tests {
     fn music_on_away_from_a_music_scene_waits_for_one() {
         let (mut core, log) = original();
         core.set_music(false);
-        core.update(Some(Showing::ShipBrowser), &[]);
+        core.update(None, &[]);
         core.set_music(true);
         assert_eq!(drain(&log), []);
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         assert_eq!(drain(&log), [start_music(1.0)]);
     }
 
@@ -1230,10 +1377,10 @@ mod tests {
         core.update(Some(Showing::Spaceport), &[]);
         assert_eq!(drain(&log), [AudioCommand::StopEffects]);
         let (mut core, log) = engine();
-        core.update(Some(Showing::Flight), &[THRUST]);
+        core.update(Some(Showing::MainMenu), &[]);
         drain(&log);
         core.set_music(false);
-        core.update(Some(Showing::Flight), &[JUMP]);
+        core.update(Some(Showing::MainMenu), &[JUMP]);
         assert_eq!(drain(&log), [AudioCommand::StopMusic, play(128, 1.0)]);
     }
 
@@ -1245,20 +1392,19 @@ mod tests {
         assert_eq!(drain(&log), [], "nothing playing to change");
         assert_eq!(core.settings().effects_volume, Volume::new(0.5));
         assert_eq!(core.settings().music_volume, Volume::new(0.25));
-        core.update(Some(Showing::Flight), &[THRUST, JUMP]);
-        assert_eq!(
-            drain(&log),
-            [start_music(0.25), start_loop(200, 0.5), play(128, 0.5)]
-        );
-        core.set_effects_volume(Volume::new(0.75));
-        assert_eq!(
-            drain(&log),
-            [AudioCommand::SetLoopVolume(Volume::new(0.75))]
-        );
+        core.update(Some(Showing::MainMenu), &[JUMP]);
+        assert_eq!(drain(&log), [start_music(0.25), play(128, 0.5)]);
         core.set_music_volume(Volume::new(0.125));
         assert_eq!(
             drain(&log),
             [AudioCommand::SetMusicVolume(Volume::new(0.125))]
+        );
+        core.update(Some(Showing::Flight), &[THRUST]);
+        assert_eq!(drain(&log), [fade_out(0.125), start_loop(200, 0.5)]);
+        core.set_effects_volume(Volume::new(0.75));
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::SetLoopVolume(Volume::new(0.75))]
         );
         core.update(Some(Showing::Flight), &[ARRIVED]);
         assert_eq!(drain(&log), [play(130, 0.75)]);
@@ -1289,7 +1435,7 @@ mod tests {
         assert_eq!(
             drain(&log),
             [AudioCommand::StopLoop],
-            "the music goes on; the engine stops, as flight is paused"
+            "the engine stops, as flight is paused"
         );
         core.update(Some(Showing::Flight), &[]);
         assert_eq!(drain(&log), [], "the thrust is forgotten on return");
@@ -1304,7 +1450,7 @@ mod tests {
     }
 
     #[test]
-    fn the_boarding_and_comm_dialogs_pause_flight_and_keep_its_music() {
+    fn the_boarding_and_comm_dialogs_pause_flight() {
         for overlay in [
             Showing::Plunder,
             Showing::Assignment,
@@ -1322,7 +1468,7 @@ mod tests {
             assert_eq!(
                 drain(&log),
                 [AudioCommand::StopLoop],
-                "{overlay:?}: the music goes on; the engine stops"
+                "{overlay:?}: the engine stops"
             );
             core.update(Some(Showing::Flight), &[]);
             assert_eq!(drain(&log), [], "{overlay:?}: the thrust is forgotten");
@@ -1348,10 +1494,12 @@ mod tests {
         let mut core = core.with_settings(quiet());
         assert_eq!(core.settings(), quiet());
         assert_eq!(drain(&log), []);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [start_music(0.25)]);
         core.update(Some(Showing::Flight), &[THRUST, JUMP]);
         assert_eq!(
             drain(&log),
-            [start_music(0.25), start_loop(200, 0.5), play(128, 0.5)]
+            [fade_out(0.25), start_loop(200, 0.5), play(128, 0.5)]
         );
         let (core, log) = engine();
         let mut core = core.with_settings(AudioSettings {
@@ -1383,7 +1531,7 @@ mod tests {
     #[test]
     fn applying_music_off_and_on_stops_and_starts_it() {
         let (mut core, log) = original();
-        core.update(Some(Showing::Spaceport), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         drain(&log);
         let off = AudioSettings {
             music: false,
@@ -1404,24 +1552,30 @@ mod tests {
         core.apply(quiet());
         assert_eq!(
             drain(&log),
-            [
-                AudioCommand::SetLoopVolume(Volume::new(0.5)),
-                AudioCommand::SetMusicVolume(Volume::new(0.25)),
-            ]
+            [AudioCommand::SetLoopVolume(Volume::new(0.5))],
+            "no music in flight"
         );
         assert_eq!(core.settings(), quiet());
         core.update(Some(Showing::Flight), &[JUMP]);
         assert_eq!(drain(&log), [play(128, 0.5)]);
+        let (mut core, log) = engine();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.apply(quiet());
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::SetMusicVolume(Volume::new(0.25))]
+        );
     }
 
     #[test]
     fn applying_a_volume_with_nothing_playing_sends_nothing() {
         let (mut core, log) = engine();
-        core.update(Some(Showing::ShipBrowser), &[]);
+        core.update(None, &[]);
         core.apply(quiet());
         assert_eq!(drain(&log), []);
         assert_eq!(core.settings(), quiet());
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         assert_eq!(drain(&log), [start_music(0.25)]);
     }
 
@@ -1429,7 +1583,7 @@ mod tests {
     fn applying_music_on_with_a_new_volume_starts_it_at_that_volume() {
         let (mut core, log) = original();
         core.set_music(false);
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         core.apply(quiet());
         assert_eq!(drain(&log), [start_music(0.25)]);
     }
@@ -1449,7 +1603,7 @@ mod tests {
     #[test]
     fn the_core_plays_through_its_port() {
         let (mut core, _) = original();
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         assert_eq!(*core.audio().log().borrow(), [start_music(1.0)]);
     }
 }

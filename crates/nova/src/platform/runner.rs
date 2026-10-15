@@ -358,7 +358,7 @@ mod tests {
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
         let mut runner = runner.with_audio(core);
         let core = runner.audio.as_mut().expect("kept");
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         assert_eq!(
             *log.borrow(),
             [AudioCommand::StartMusic {

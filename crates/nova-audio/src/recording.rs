@@ -20,6 +20,7 @@ pub type AudioLog = Rc<RefCell<Vec<AudioCommand>>>;
 #[derive(Clone, Debug, Default)]
 pub struct RecordingAudio {
     log: AudioLog,
+    music_ended: Rc<Cell<bool>>,
 }
 
 impl RecordingAudio {
@@ -34,11 +35,24 @@ impl RecordingAudio {
     pub fn log(&self) -> AudioLog {
         Rc::clone(&self.log)
     }
+
+    /// Makes the music last started count as played to its end, for this
+    /// mock and its clones, until music is started again.
+    pub fn end_music(&self) {
+        self.music_ended.set(true);
+    }
 }
 
 impl Audio for RecordingAudio {
     fn run(&mut self, command: AudioCommand) {
+        if matches!(command, AudioCommand::StartMusic { .. }) {
+            self.music_ended.set(false);
+        }
         self.log.borrow_mut().push(command);
+    }
+
+    fn music_ended(&self) -> bool {
+        self.music_ended.get()
     }
 }
 
@@ -130,6 +144,19 @@ mod tests {
         let expected = [AudioCommand::StopEffects, AudioCommand::StopMusic];
         assert_eq!(*before.borrow(), expected);
         assert_eq!(*after.borrow(), expected);
+    }
+
+    #[test]
+    fn the_music_ends_when_told_to_until_it_starts_again() {
+        let mut audio = RecordingAudio::new();
+        let other = audio.clone();
+        assert!(!audio.music_ended());
+        other.end_music();
+        assert!(audio.music_ended());
+        audio.run(AudioCommand::StartMusic {
+            volume: crate::port::Volume::FULL,
+        });
+        assert!(!audio.music_ended());
     }
 
     #[test]

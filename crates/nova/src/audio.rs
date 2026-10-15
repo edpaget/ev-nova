@@ -48,7 +48,7 @@ mod tests {
         let (core, warning) = game_audio::<_, String>(Ok(audio));
         assert_eq!(warning, None);
         let mut core = core.expect("a core");
-        core.update(Some(Showing::GalaxyMap), &[Sound::Sim(SimSound::JumpBegan)]);
+        core.update(Some(Showing::MainMenu), &[Sound::Sim(SimSound::JumpBegan)]);
         assert_eq!(
             *log.borrow(),
             [

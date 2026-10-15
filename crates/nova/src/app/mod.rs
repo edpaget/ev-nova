@@ -1721,10 +1721,10 @@ mod tests {
         volume: Volume::FULL,
     };
 
-    /// An app over a screen on the galaxy map, with audio recorded.
+    /// An app over a screen on the main menu, with audio recorded.
     fn sounding(window: &FakeWindow) -> (App<NoImages, SoundingScreen>, AudioLog) {
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: vec![Sound::Sim(SimSound::JumpBegan)],
         };
         let audio = RecordingAudio::new();
@@ -1766,7 +1766,10 @@ mod tests {
         app.handle(key(Key::Tab, true), &mut window, &mut gpu);
         assert_eq!(
             log.borrow()[3..],
-            [AudioCommand::StopMusic, play(600)],
+            [
+                AudioCommand::FadeOutMusic(nova_audio::music_fade(Volume::FULL)),
+                play(600)
+            ],
             "the screen shown, then its sounds"
         );
     }
@@ -1928,7 +1931,7 @@ mod tests {
         let log = audio.log();
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: Vec::new(),
         };
         let mut app = App::new(
@@ -1963,7 +1966,7 @@ mod tests {
             ..AudioSettings::default()
         });
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: Vec::new(),
         };
         let mut app = App::new(

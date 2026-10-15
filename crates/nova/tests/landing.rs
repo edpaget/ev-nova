@@ -658,20 +658,14 @@ fn play(id: i16) -> AudioCommand {
 }
 
 #[test]
-fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
+fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
     let (mut harness, log) = Harness::sounding(0);
     harness.frame();
     assert_eq!(drain(&log), [], "the ship browser is silent");
 
     harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(
-        drain(&log),
-        [AudioCommand::StartMusic {
-            volume: Volume::FULL
-        }],
-        "music in space"
-    );
+    assert_eq!(drain(&log), [], "no music in space");
     harness.frame();
 
     // Requesting clearance over the planet is silent; the approach's
@@ -681,7 +675,7 @@ fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
     assert_eq!(drain(&log), []);
     harness.approach();
     assert_eq!(drain(&log), [play(151)], "traffic control");
-    // The landing beep, then the planet's own sound; the music plays on.
+    // The landing beep, then the planet's own sound.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     assert_eq!(drain(&log), [play(151), play(LANDING_SOUND)]);
@@ -695,10 +689,10 @@ fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
     harness.frame();
     assert_eq!(drain(&log), []);
 
-    // Back to the ship browser flight was entered from: the music stops.
+    // Back to the ship browser flight was entered from: still silent.
     harness.press_physical(KeyCode::Escape);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
-    assert_eq!(drain(&log), [AudioCommand::StopMusic]);
+    assert_eq!(drain(&log), []);
 }
 
 /// Where flight draws its hover cursor.
