@@ -864,6 +864,7 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
+        SimMessage::NoActiveMissions => NO_ACTIVE_MISSIONS,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
         SimMessage::FleetArrivalQuote(text) => return Some(text.clone()),
@@ -1255,6 +1256,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
         | SimMessage::DeadlineMissed
+        | SimMessage::NoActiveMissions
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
         | SimMessage::FleetArrivalQuote(_)
@@ -2459,16 +2461,22 @@ impl<
     }
 
     /// Presses [`MISSION_INFO_KEY`], as `_HandlePlayer` does
-    /// (@0x70405-0x705a8): with an active mission shown, asks the router
-    /// for the mission info screen, letting go of the flight keys; with
-    /// none, says #354 on the message line.
+    /// (@0x70405-0x705a8), through [`Session::press_mission_info`]: with
+    /// an active mission shown, asks the router for the mission info
+    /// screen, letting go of the flight keys; with none, says the
+    /// session's beep and #354 on the message line. A flight whose session
+    /// never started says #354 alone, with no session to beep.
     fn ask_mission_info(&mut self) {
-        let info = self.mission_info();
-        if info.rows.is_empty() {
+        let Ok(session) = self.session.as_mut() else {
             self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
-        } else {
-            self.pending_mission_info = Some(info);
-            self.held.clear();
+            return;
+        };
+        match session.press_mission_info() {
+            Some(info) => {
+                self.pending_mission_info = Some(info);
+                self.held.clear();
+            }
+            None => self.say_messages(),
         }
     }
 
@@ -17141,6 +17149,17 @@ mod tests {
     }
 
     #[test]
+    fn the_no_active_missions_message_is_str_2002_354() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(&SimMessage::NoActiveMissions, session).as_deref(),
+            Some(NO_ACTIVE_MISSIONS)
+        );
+        assert_eq!(arrival_lead(&SimMessage::NoActiveMissions), None);
+    }
+
+    #[test]
     fn the_deadline_message_is_str_2002_285() {
         let view = flight();
         let session = view.session().expect("flying");
@@ -19179,9 +19198,29 @@ mod tests {
     #[test]
     fn i_with_no_mission_says_you_have_no_active_missions() {
         let mut view = flight();
+        let _ = view.take_sounds();
         tap(&mut view, MISSION_INFO_KEY);
         assert_eq!(view.take_mission_info_request(), None);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "_beepSnd[3], snd 153"
+        );
         assert_lasts(&mut view, NO_ACTIVE_MISSIONS, 240);
+    }
+
+    #[test]
+    fn i_in_a_flight_that_never_started_says_no_active_missions_without_a_beep() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert!(view.session().is_err());
+        let _ = view.take_sounds();
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.take_mission_info_request(), None);
+        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_eq!(view.take_sounds(), [], "no session to beep");
     }
 
     #[test]

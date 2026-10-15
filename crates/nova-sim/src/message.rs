@@ -27,6 +27,10 @@ pub enum SimMessage {
     /// mission whose `Flags` lacks 0x0400 (`_MissionObjectivesCheck`
     /// @0x9ebd0-0x9ec53).
     DeadlineMissed,
+    /// The mission info key was pressed with no active mission whose
+    /// `Flags` lacks 0x0400: "No active missions.", `STR#` 2002 #354
+    /// (`_HandlePlayer` @0x7055c-0x705a8).
+    NoActiveMissions,
     /// A mission failed as one of its special ships was destroyed or
     /// disabled, for a mission whose `Flags` lacks 0x0400
     /// (`_HandleShipDisplay` @0x2db31-0x2dbab, `_DamageShip`
@@ -200,6 +204,8 @@ impl SimMessage {
     ///   (`_DamageShip` @0x3b181, @0x3b3b9, @0x3b0b6, @0x3b353).
     /// - [`DeadlineMissed`](Self::DeadlineMissed): 240
     ///   (`_MissionObjectivesCheck` @0x9ec53).
+    /// - [`NoActiveMissions`](Self::NoActiveMissions): 240
+    ///   (`_HandlePlayer` @0x705a8).
     /// - [`MissionScanned`](Self::MissionScanned),
     ///   [`Smuggling`](Self::Smuggling),
     ///   [`IllegalJunk`](Self::IllegalJunk) and
@@ -237,6 +243,7 @@ impl SimMessage {
             | Self::PassedWormhole(_)
             | Self::MissionFailed
             | Self::DeadlineMissed
+            | Self::NoActiveMissions
             | Self::MissionShipLost
             | Self::ShipDisabled
             | Self::ShipDestroyed
@@ -275,6 +282,7 @@ mod tests {
             (SimMessage::PassedWormhole(SystemId(128)), 240),
             (SimMessage::MissionFailed, 240),
             (SimMessage::DeadlineMissed, 240),
+            (SimMessage::NoActiveMissions, 240),
             (SimMessage::MissionShipLost, 240),
             (SimMessage::ShipDisabled, 240),
             (SimMessage::ShipDestroyed, 240),

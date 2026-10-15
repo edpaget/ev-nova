@@ -268,6 +268,24 @@ impl Session {
         }
     }
 
+    /// The mission info key pressed in flight (`_HandlePlayer`
+    /// @0x7047d-0x705a8): with an active mission whose `Flags` lacks
+    /// 0x0400, failed or not (@0x7047d-0x704b0), the screen opens
+    /// ([`mission_info`](Self::mission_info), @0x704bc-0x70529). With
+    /// none, `None`: the beep `_beepSnd[3]` ([`SimSound::Refused`](crate::SimSound::Refused),
+    /// `snd ` 153, @0x7052e-0x70557) and "No active missions.", `STR#`
+    /// 2002 #354 ([`SimMessage::NoActiveMissions`](crate::SimMessage::NoActiveMissions),
+    /// @0x7055c-0x705a8). The key's own guards are the caller's.
+    pub fn press_mission_info(&mut self) -> Option<MissionInfo> {
+        let info = self.mission_info();
+        if info.rows.is_empty() {
+            self.sounds.push(crate::SimSound::Refused);
+            self.messages.push(crate::SimMessage::NoActiveMissions);
+            return None;
+        }
+        Some(info)
+    }
+
     /// The next offer at venue `loc` (an `AvailLoc` other than the mission
     /// computer's: [`BAR`](crate::mission::screens::BAR),
     /// [`SPACEPORT`], [`TRADE_CENTER`](crate::mission::screens::TRADE_CENTER),
@@ -1273,6 +1291,62 @@ mod tests {
             Session::start(&gone).expect("starts").mission_info().rows,
             []
         );
+    }
+
+    #[test]
+    fn pressing_mission_info_with_no_missions_beeps_and_says_so() {
+        let catalog = screens(vec![to_mars(130)], Vec::new());
+        let mut session = docked(&catalog);
+        let _ = session.take_sounds();
+        let _ = session.take_messages();
+        assert_eq!(session.press_mission_info(), None);
+        assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
+        assert_eq!(
+            session.take_messages(),
+            [crate::SimMessage::NoActiveMissions]
+        );
+    }
+
+    #[test]
+    fn pressing_mission_info_with_only_a_hidden_mission_beeps_and_says_so() {
+        let catalog = screens(
+            vec![MissionRecord {
+                flags: HIDDEN,
+                ..to_mars(130)
+            }],
+            Vec::new(),
+        );
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let _ = session.take_sounds();
+        let _ = session.take_messages();
+        assert_eq!(session.press_mission_info(), None);
+        assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
+        assert_eq!(
+            session.take_messages(),
+            [crate::SimMessage::NoActiveMissions]
+        );
+    }
+
+    #[test]
+    fn pressing_mission_info_with_a_failed_shown_mission_opens_it_silently() {
+        let catalog = screens(vec![to_mars(130)], Vec::new());
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let slot = session.mission_info().rows[0].slot;
+        session
+            .slot_holding(slot, MissionId(130))
+            .expect("held")
+            .failed = Some(crate::mission::FailedBy::Quick);
+        let _ = session.take_sounds();
+        let _ = session.take_messages();
+        assert_eq!(session.press_mission_info(), Some(session.mission_info()));
+        assert_eq!(session.take_sounds(), []);
+        assert_eq!(session.take_messages(), []);
     }
 
     #[test]
