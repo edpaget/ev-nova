@@ -305,6 +305,14 @@ pub fn npc_warp_out_speed(
 /// warp-up's pitch follows w (`_AdjustWarpSoundSpeed`,
 /// rdm:phase/ship-handling-fidelity/phase-8-warp-out), its length will
 /// scale with it.
+///
+/// A jump's arrival halts both ([`SimSound::Halt`] of [`WARP_UP_HALTS`]),
+/// as the original's warp end does (`_HandlePlayer` @0x6c69d-0x6c6d2); a
+/// hypergate or wormhole exit keeps them playing, as the original's do
+/// (@0x63e57, @0x6443d); a relocation's dock ends them for the session
+/// only, raising no halt.
+///
+/// [`SimSound::Halt`]: crate::SimSound::Halt
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WarpUps {
     /// The Mac ticks left of 128 and of 129.

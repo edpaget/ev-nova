@@ -186,7 +186,13 @@ pub(super) enum Reset {
     Explore,
     /// Where the ship last touched down becomes where it is placed.
     Touchdown,
-    /// The ship is docked at the placement's stellar.
+    /// The ship is docked at the placement's stellar. The warp-ups end
+    /// for the session, raising no halt: the relocation has no
+    /// counterpart in the original, and no landing there halts them
+    /// either (every `_warpUpSnd` reference: `_LoadSounds`, `_Bye`,
+    /// `_HandleShipDisplay`, `_PlayGame`, `_SwitchedOut` @0x4f3a3, the
+    /// jump collapse @0x68a42, sabotage @0x695d0, the warp stage
+    /// @0x6b617-0x6c6d2, the cheat key @0x6e4db and the eject @0x6f925).
     Dock,
     /// A held `P` sound is dropped.
     HeldSound,
