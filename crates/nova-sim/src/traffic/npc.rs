@@ -269,10 +269,22 @@ impl Npc {
         self.escort.is_some()
     }
 
+    /// The ship it follows, the original's +0x9a: the player while it
+    /// [escorts the player](Npc::escorts_player), otherwise its
+    /// [`leader`](Npc::leader). The hit rules read it
+    /// ([`sides`](crate::combat::sides)).
+    #[must_use]
+    pub fn leader_ref(&self) -> Option<ShipRef> {
+        if self.escorts_player() {
+            Some(ShipRef::Player)
+        } else {
+            self.leader.map(ShipRef::Npc)
+        }
+    }
+
     /// Its fleet: the player, for the player's escort, hired or a mission
     /// escort; otherwise the lead it escorts, or itself. Ships of one fleet
-    /// never hit each other (`_ShipsShareParent` @0x7926, which follows the
-    /// leader +0x9a), and count each other's missiles friendly.
+    /// count each other's missiles friendly.
     #[must_use]
     pub fn fleet(&self) -> ShipRef {
         if self.escorts_player() {

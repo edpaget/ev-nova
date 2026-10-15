@@ -23,18 +23,21 @@
 //!   says so (`Flags` 0x8000) and otherwise vanishes.
 //! - It hits the first ship ([`Target`]) it passes within the ship's hit
 //!   radius and its weapon's `ProxRadius`, swept from where it was to where
-//!   it is so that a fast shot cannot pass through a ship between ticks. A
-//!   shot cannot hit its firer, a ship of its firer's fleet, or a ship
-//!   breaking up or destroyed; a disabled ship it can. A homing shot hits
-//!   only its target, unless its weapon's proximity fuse is set off by
-//!   other ships (`Flags2` 0x0008), and nothing once lost.
+//!   it is so that a fast shot cannot pass through a ship between ticks.
+//!   Which ships it can hit is [`sides`](super::sides)' rule, the
+//!   original's `_ShotCanHitShip`: never its firer, the ships of its
+//!   firer's government or under its firer's leaders, the escape pod or a
+//!   destroyed ship, among others, but a disabled or breaking-up one; a
+//!   homing shot only its target, unless its weapon's proximity fuse is
+//!   set off by other ships (`Flags2` 0x0008), and nothing once lost.
 
 use super::ShipRef;
 use super::aim::bearing;
 use super::damage::Blast;
 use super::hull::Condition;
+use super::sides::{Sides, Ties};
 use super::weapon::{Guidance, WeaponSpec};
-use crate::catalog::GovtId;
+use crate::catalog::{GovtId, ShipId};
 use crate::flight::{ShipState, facing, heading_of, normalized, shortest_turn};
 use crate::geometry::Vec2;
 
@@ -54,8 +57,13 @@ pub const HOMING_DELAY: u32 = 15;
 pub struct Target {
     /// Which ship.
     pub ship: ShipRef,
-    /// Its fleet: the lead it escorts, or itself.
+    /// Its ship type.
+    pub ship_type: ShipId,
+    /// Its fleet: the lead it escorts, or itself, which point defence
+    /// reads.
     pub fleet: ShipRef,
+    /// Its leader, government and `düde`, which the hit rules read.
+    pub ties: Ties,
     /// Where it is.
     pub position: Vec2,
     /// How it is moving.
@@ -64,14 +72,6 @@ pub struct Target {
     pub radius: f32,
     /// How it is holding up.
     pub condition: Condition,
-}
-
-impl Target {
-    /// Whether a shot fired by `firer` of `fleet` can hit it.
-    #[must_use]
-    pub fn hittable_by(&self, firer: ShipRef, fleet: ShipRef) -> bool {
-        self.ship != firer && self.fleet != fleet && self.condition.hittable()
-    }
 }
 
 /// How far along the segment from `from` to `to`, as a fraction, it first
@@ -99,6 +99,22 @@ pub fn contact(from: Vec2, to: Vec2, centre: Vec2, radius: f32) -> Option<f32> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShotId(pub u32);
 
+/// What launched a shot, as `_ShotCanHitShip` reads its source slot
+/// (+0x2c).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// A ship, its [`Shot::firer`]: here the copy of its ties taken as it
+    /// fired, which the hit rules read once the firer has left the fight
+    /// (see [`sides`](super::sides)).
+    Ship(Ties),
+    /// Something that is not a ship, a source slot above 0x3f such as a
+    /// stellar's: such a shot hits only the ship it is aimed at
+    /// ([`Shot::aimed_at`]), or any ship when it is aimed at none. Its
+    /// [`Shot::firer`] is whatever its launcher put there, which the hit
+    /// rules never read.
+    Other,
+}
+
 /// A shot in flight.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shot {
@@ -108,9 +124,9 @@ pub struct Shot {
     pub firer: ShipRef,
     /// The firer's fleet.
     pub fleet: ShipRef,
-    /// The firer's government, or `None` for an independent ship or the
-    /// player.
-    pub govt: Option<GovtId>,
+    /// What launched it: a ship, with a copy of its ties as it fired, or
+    /// something that is not a ship.
+    pub source: Source,
     /// Where it is.
     pub position: Vec2,
     /// How far it moves each tick.
@@ -141,8 +157,9 @@ pub struct Shot {
 }
 
 impl Shot {
-    /// A shot of `weapon` launched by `firer` of `fleet`, flying `from`
-    /// along `heading`, of no government until it is given one.
+    /// A shot of `weapon` launched by the ship `firer` of `fleet`, flying
+    /// `from` along `heading`, tied to no one until it is given its
+    /// firer's ties.
     #[must_use]
     pub fn launch(
         weapon: WeaponSpec,
@@ -162,7 +179,7 @@ impl Shot {
             weapon,
             firer,
             fleet,
-            govt: None,
+            source: Source::Ship(Ties::default()),
             position: from.position,
             velocity,
             heading,
@@ -204,7 +221,7 @@ impl Shot {
         if let Some(ship) = self.target {
             let target = targets
                 .iter()
-                .find(|target| target.ship == ship && target.condition.hittable());
+                .find(|target| target.ship == ship && target.condition.standing());
             match target {
                 None => {
                     self.target = None;
@@ -224,19 +241,21 @@ impl Shot {
         self.velocity = facing(self.heading) * self.weapon.speed;
     }
 
-    /// Whether it can hit `target`: never its firer, its fleet or a ship
-    /// past hitting, and a homing shot only its own target (or, set off
-    /// by other ships, any other), and nothing once lost.
+    /// Its firer's government as it fired, or `None` for an independent
+    /// ship, the player, or a shot no ship fired.
     #[must_use]
-    pub fn can_hit(&self, target: &Target) -> bool {
-        let guided = match self.weapon.guidance {
-            Guidance::Homing => {
-                !self.lost
-                    && (self.weapon.proximity_by_others() || self.target == Some(target.ship))
-            }
-            _ => true,
-        };
-        guided && target.hittable_by(self.firer, self.fleet)
+    pub fn govt(&self) -> Option<GovtId> {
+        match self.source {
+            Source::Ship(ties) => ties.govt,
+            Source::Other => None,
+        }
+    }
+
+    /// Whether it can hit `target`, among the fight's `sides`
+    /// ([`Sides::shot_can_hit`]).
+    #[must_use]
+    pub fn can_hit(&self, target: &Target, sides: &Sides) -> bool {
+        sides.shot_can_hit(self, target)
     }
 
     /// Whether it has flown its life.
@@ -245,13 +264,14 @@ impl Shot {
         self.age >= self.weapon.lifetime
     }
 
-    /// The first of `targets` it can hit that it met on its way here from
-    /// `was`, if any, and where it met it.
+    /// The first of the ships among `sides` it can hit that it met on its
+    /// way here from `was`, if any, and where it met it.
     #[must_use]
-    pub fn hit(&self, was: Vec2, targets: &[Target]) -> Option<(ShipRef, Vec2)> {
-        targets
+    pub fn hit(&self, was: Vec2, sides: &Sides) -> Option<(ShipRef, Vec2)> {
+        sides
+            .targets
             .iter()
-            .filter(|target| self.can_hit(target))
+            .filter(|target| self.can_hit(target, sides))
             .filter_map(|target| {
                 let reach = target.radius + self.weapon.prox_radius;
                 Some((
@@ -281,8 +301,10 @@ impl Shot {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::WeaponRecord;
-    use crate::testkit::weapon;
+    use crate::catalog::{GovtRecord, WeaponRecord};
+    use crate::combat::sides::PassThrough;
+    use crate::govt::{Governments, NEVER_ATTACKS_PLAYER, PLAYER_SHOTS_PASS};
+    use crate::testkit::{among, govt, weapon};
     use crate::traffic::npc::NpcId;
 
     const FIRER: ShipRef = ShipRef::Npc(NpcId(1));
@@ -477,7 +499,9 @@ mod tests {
     fn target(id: u32, x: f32, y: f32, condition: Condition) -> Target {
         Target {
             ship: ShipRef::Npc(NpcId(id)),
+            ship_type: ShipId(128),
             fleet: ShipRef::Npc(NpcId(id)),
+            ties: Ties::default(),
             position: Vec2::new(x, y),
             velocity: Vec2::ZERO,
             radius: 5.0,
@@ -508,7 +532,7 @@ mod tests {
     fn a_fast_shot_hits_a_ship_it_passes_between_ticks() {
         let shot = passing(0);
         assert!(close(shot.position, Vec2::new(100.0, 0.0)));
-        let hit = |targets: &[Target]| shot.hit(Vec2::ZERO, targets).map(|(ship, _)| ship);
+        let hit = |targets: &[Target]| shot.hit(Vec2::ZERO, &among(targets)).map(|(ship, _)| ship);
         assert_eq!(
             hit(&[target(2, 50.0, 4.0, Condition::Intact)]),
             Some(ShipRef::Npc(NpcId(2)))
@@ -544,7 +568,10 @@ mod tests {
     fn a_proximity_fuse_widens_the_hit() {
         let shot = passing(3);
         let (ship, at) = shot
-            .hit(Vec2::ZERO, &[target(2, 50.0, 7.9, Condition::Intact)])
+            .hit(
+                Vec2::ZERO,
+                &among(&[target(2, 50.0, 7.9, Condition::Intact)]),
+            )
             .expect("a hit");
         assert_eq!(ship, ShipRef::Npc(NpcId(2)));
         assert!(
@@ -552,48 +579,409 @@ mod tests {
             "met on its way: {at:?}"
         );
         assert_eq!(
-            shot.hit(Vec2::ZERO, &[target(2, 50.0, 8.1, Condition::Intact)]),
+            shot.hit(
+                Vec2::ZERO,
+                &among(&[target(2, 50.0, 8.1, Condition::Intact)])
+            ),
             None
         );
     }
 
     #[test]
-    fn a_shot_never_hits_its_firer_or_its_fleet() {
+    fn a_shot_never_hits_its_firer() {
         let shot = passing(0);
         let firer = Target {
             ship: FIRER,
-            fleet: ShipRef::Npc(NpcId(7)),
             ..target(1, 50.0, 0.0, Condition::Intact)
         };
-        let mate = Target {
-            fleet: FIRER,
-            ..target(2, 40.0, 0.0, Condition::Intact)
-        };
-        assert_eq!(shot.hit(Vec2::ZERO, &[firer, mate]), None);
-        let escort_of_the_same_lead = Shot {
-            fleet: ShipRef::Npc(NpcId(9)),
-            ..shot
-        };
-        let other_escort = Target {
-            fleet: ShipRef::Npc(NpcId(9)),
-            ..target(3, 30.0, 0.0, Condition::Intact)
-        };
-        assert_eq!(
-            escort_of_the_same_lead.hit(Vec2::ZERO, &[other_escort]),
-            None
-        );
+        assert_eq!(shot.hit(Vec2::ZERO, &among(&[firer])), None);
         let (ship, at) = shot
-            .hit(Vec2::ZERO, &[other_escort])
-            .expect("another fleet");
+            .hit(
+                Vec2::ZERO,
+                &among(&[firer, target(3, 30.0, 0.0, Condition::Intact)]),
+            )
+            .expect("another ship");
         assert_eq!(ship, ShipRef::Npc(NpcId(3)));
         assert!(close(at, Vec2::new(25.0, 0.0)), "met at its edge: {at:?}");
     }
 
+    // Who a shot may hit (`_ShotCanHitShip`).
+
+    const PLAIN: GovtId = GovtId(140);
+    const NEVER_ATTACKS: GovtId = GovtId(141);
+    const SHOTS_PASS: GovtId = GovtId(142);
+    const OTHER: GovtId = GovtId(143);
+
+    /// Governments 140 and 143 with no flags, 141 that never attacks the
+    /// player (`Flags` 0x0040), and 142 that the player's shots pass
+    /// through (`Flags` 0x0008).
+    fn govts() -> Governments {
+        Governments::new([
+            govt(140),
+            GovtRecord {
+                flags: NEVER_ATTACKS_PLAYER,
+                ..govt(141)
+            },
+            GovtRecord {
+                flags: PLAYER_SHOTS_PASS,
+                ..govt(142)
+            },
+            govt(143),
+        ])
+    }
+
+    fn npc(id: u32) -> ShipRef {
+        ShipRef::Npc(NpcId(id))
+    }
+
+    fn led_by(leader: ShipRef) -> Ties {
+        Ties {
+            leader: Some(leader),
+            ..Ties::default()
+        }
+    }
+
+    fn of(govt: GovtId) -> Ties {
+        Ties {
+            govt: Some(govt),
+            ..Ties::default()
+        }
+    }
+
+    fn dude(booty: u16) -> Ties {
+        Ties {
+            booty: Some(booty),
+            ..Ties::default()
+        }
+    }
+
+    /// `ship`, tied as `ties`, `x` pixels along the shot's path.
+    fn on_path(ship: ShipRef, x: f32, ties: Ties) -> Target {
+        Target {
+            ship,
+            ties,
+            ..target(0, x, 0.0, Condition::Intact)
+        }
+    }
+
+    /// `ship`, tied as `ties`, well off the shot's path.
+    fn aside(ship: ShipRef, ties: Ties) -> Target {
+        Target {
+            ship,
+            ties,
+            ..target(0, 0.0, 500.0, Condition::Intact)
+        }
+    }
+
+    /// The shot from (0, 0) to (100, 0), fired by `firer`, tied as `ties`
+    /// as it fired.
+    fn fired_by(firer: ShipRef, ties: Ties) -> Shot {
+        Shot {
+            firer,
+            source: Source::Ship(ties),
+            ..passing(0)
+        }
+    }
+
+    /// The first of `targets` `shot` hits, among `govts`, as `pass_through`
+    /// says.
+    fn first_by(
+        shot: &Shot,
+        targets: &[Target],
+        govts: &Governments,
+        pass_through: PassThrough,
+    ) -> Option<ShipRef> {
+        let sides = Sides {
+            targets,
+            govts,
+            pass_through,
+        };
+        shot.hit(Vec2::ZERO, &sides).map(|(ship, _)| ship)
+    }
+
+    /// The first of `targets` `shot` hits, by the original's reading.
+    fn first(shot: &Shot, targets: &[Target]) -> Option<ShipRef> {
+        first_by(shot, targets, &govts(), PassThrough::PlayerSide)
+    }
+
     #[test]
-    fn a_disabled_ship_can_be_hit_and_a_dying_or_destroyed_one_cannot() {
+    fn a_shot_passes_through_a_ship_of_its_firers_government() {
+        let shot = fired_by(FIRER, of(PLAIN));
+        let targets = [
+            aside(FIRER, of(PLAIN)),
+            on_path(npc(2), 30.0, of(PLAIN)),
+            on_path(npc(3), 60.0, of(OTHER)),
+        ];
+        assert_eq!(first(&shot, &targets), Some(npc(3)));
+    }
+
+    #[test]
+    fn ships_of_no_government_hit_each_other() {
+        let shot = fired_by(FIRER, Ties::default());
+        let targets = [
+            aside(FIRER, Ties::default()),
+            on_path(npc(2), 30.0, Ties::default()),
+        ];
+        assert_eq!(first(&shot, &targets), Some(npc(2)));
+    }
+
+    #[test]
+    fn a_shot_passes_through_a_ship_under_its_firers_leader_or_root() {
+        // The firer and ship 2 share lead 5; ship 3's leader 6 is led by
+        // 5 too, two levels down.
+        let shot = fired_by(FIRER, led_by(npc(5)));
+        let mut targets = vec![
+            aside(FIRER, led_by(npc(5))),
+            aside(npc(6), led_by(npc(5))),
+            on_path(npc(5), 10.0, Ties::default()),
+            on_path(npc(2), 20.0, led_by(npc(5))),
+            on_path(npc(3), 40.0, led_by(npc(6))),
+            on_path(npc(4), 80.0, Ties::default()),
+        ];
+        assert_eq!(first(&shot, &targets), Some(npc(4)));
+        targets.pop();
+        assert_eq!(first(&shot, &targets), None);
+    }
+
+    #[test]
+    fn player_side_fire_never_hits_an_escorts_fighter() {
+        // Ship 2 is the fighter of escort 3, which is destroyed: the
+        // shared root no longer holds, but the fighter rule still reads
+        // its leader's leader.
+        let escort = Target {
+            condition: Condition::Destroyed,
+            ..aside(npc(3), led_by(ShipRef::Player))
+        };
+        let fighter = on_path(npc(2), 30.0, led_by(npc(3)));
+        let behind = on_path(npc(4), 60.0, Ties::default());
+        let mut targets = vec![
+            aside(ShipRef::Player, Ties::default()),
+            aside(npc(7), led_by(ShipRef::Player)),
+            escort,
+            fighter,
+            behind,
+        ];
+        let from_the_player = fired_by(ShipRef::Player, Ties::default());
+        assert_eq!(first(&from_the_player, &targets), Some(npc(4)));
+        let from_an_escort = fired_by(npc(7), led_by(ShipRef::Player));
+        assert_eq!(first(&from_an_escort, &targets), Some(npc(4)));
+        targets.push(aside(npc(9), Ties::default()));
+        let from_traffic = fired_by(npc(9), Ties::default());
+        assert_eq!(
+            first(&from_traffic, &targets),
+            Some(npc(2)),
+            "not the player's side"
+        );
+    }
+
+    #[test]
+    fn a_player_side_firer_of_a_never_attacks_player_government_hits_nothing() {
+        let ties = Ties {
+            govt: Some(NEVER_ATTACKS),
+            ..led_by(ShipRef::Player)
+        };
+        let targets = [aside(FIRER, ties), on_path(npc(2), 30.0, Ties::default())];
+        assert_eq!(first(&fired_by(FIRER, ties), &targets), None);
+        let plain = Ties {
+            govt: Some(PLAIN),
+            ..ties
+        };
+        let targets = [aside(FIRER, plain), targets[1]];
+        assert_eq!(first(&fired_by(FIRER, plain), &targets), Some(npc(2)));
+        let traffic = [aside(FIRER, of(NEVER_ATTACKS)), targets[1]];
+        assert_eq!(
+            first(&fired_by(FIRER, of(NEVER_ATTACKS)), &traffic),
+            Some(npc(2)),
+            "not the player's side"
+        );
+    }
+
+    #[test]
+    fn player_side_fire_passes_through_a_government_flagged_0x0008() {
+        let targets = [
+            aside(ShipRef::Player, Ties::default()),
+            aside(npc(4), led_by(ShipRef::Player)),
+            aside(npc(5), led_by(npc(4))),
+            aside(FIRER, Ties::default()),
+            on_path(npc(2), 30.0, of(SHOTS_PASS)),
+            on_path(npc(3), 60.0, Ties::default()),
+        ];
+        for firer in [ShipRef::Player, npc(4), npc(5)] {
+            let leader = targets.iter().find(|t| t.ship == firer).map(|t| t.ties);
+            let shot = fired_by(firer, leader.unwrap_or_default());
+            assert_eq!(first(&shot, &targets), Some(npc(3)), "{firer:?}");
+        }
+        let traffic = fired_by(FIRER, Ties::default());
+        assert_eq!(first(&traffic, &targets), Some(npc(2)));
+    }
+
+    #[test]
+    fn the_player_and_its_direct_escorts_pass_through_a_never_attacks_player_ship() {
+        let targets = [
+            aside(ShipRef::Player, Ties::default()),
+            aside(npc(4), led_by(ShipRef::Player)),
+            aside(npc(5), led_by(npc(4))),
+            on_path(npc(2), 30.0, of(NEVER_ATTACKS)),
+            on_path(npc(3), 60.0, Ties::default()),
+        ];
+        let from_the_player = fired_by(ShipRef::Player, Ties::default());
+        assert_eq!(first(&from_the_player, &targets), Some(npc(3)));
+        let from_an_escort = fired_by(npc(4), led_by(ShipRef::Player));
+        assert_eq!(first(&from_an_escort, &targets), Some(npc(3)));
+        let from_its_fighter = fired_by(npc(5), led_by(npc(4)));
+        assert_eq!(
+            first(&from_its_fighter, &targets),
+            Some(npc(2)),
+            "an escort's fighter is no direct escort"
+        );
+    }
+
+    #[test]
+    fn booty_0x0100_ships_and_player_side_fire_pass_through_each_other() {
+        // 6i: player-side fire passes through a ship of such a düde.
+        let targets = [
+            aside(ShipRef::Player, Ties::default()),
+            on_path(npc(2), 30.0, dude(0x0141)),
+            on_path(npc(3), 60.0, dude(0x0041)),
+        ];
+        let from_the_player = fired_by(ShipRef::Player, Ties::default());
+        assert_eq!(first(&from_the_player, &targets), Some(npc(3)));
+        // 6j: such a ship's fire passes through the player and its
+        // escorts.
+        let allied = [
+            aside(FIRER, dude(0x0100)),
+            on_path(ShipRef::Player, 20.0, Ties::default()),
+            on_path(npc(4), 40.0, led_by(ShipRef::Player)),
+            on_path(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(first(&fired_by(FIRER, dude(0x0100)), &allied), Some(npc(3)));
+        // Without a düde of its own, its leader's is read; with one of
+        // Booty 0, it is not.
+        let mut led = allied.to_vec();
+        led[0] = aside(npc(6), dude(0x0100));
+        led.push(aside(FIRER, led_by(npc(6))));
+        let no_dude = fired_by(FIRER, led_by(npc(6)));
+        assert_eq!(first(&no_dude, &led), Some(npc(3)), "the leader's düde");
+        let own = Ties {
+            booty: Some(0),
+            ..led_by(npc(6))
+        };
+        let last = led.len() - 1;
+        led[last] = aside(FIRER, own);
+        let booty_0 = fired_by(FIRER, own);
+        assert_eq!(
+            first(&booty_0, &led),
+            Some(ShipRef::Player),
+            "its own düde of Booty 0"
+        );
+    }
+
+    #[test]
+    fn the_bibles_pass_through_counts_the_player_alone() {
+        let govts = govts();
+        let bible = |shot: &Shot, targets: &[Target]| {
+            first_by(shot, targets, &govts, PassThrough::PlayerOnly)
+        };
+        let escort = led_by(ShipRef::Player);
+        let side = [
+            aside(ShipRef::Player, Ties::default()),
+            aside(npc(4), escort),
+            on_path(npc(2), 20.0, of(SHOTS_PASS)),
+            on_path(npc(3), 40.0, of(NEVER_ATTACKS)),
+            on_path(npc(5), 60.0, dude(0x0100)),
+            on_path(npc(6), 80.0, Ties::default()),
+        ];
+        let from_the_player = fired_by(ShipRef::Player, Ties::default());
+        assert_eq!(bible(&from_the_player, &side), Some(npc(6)), "all three");
+        let from_an_escort = fired_by(npc(4), escort);
+        assert_eq!(
+            bible(&from_an_escort, &side),
+            Some(npc(2)),
+            "not the player"
+        );
+        let never_attacks = Ties {
+            govt: Some(NEVER_ATTACKS),
+            ..escort
+        };
+        let mut odd = side.to_vec();
+        odd[1] = aside(npc(4), never_attacks);
+        assert_eq!(
+            bible(&fired_by(npc(4), never_attacks), &odd),
+            Some(npc(2)),
+            "no 6g"
+        );
+        // A Booty 0x0100 ship's own fire passes through the player, not
+        // its escorts, and its leader's düde is not read.
+        let at = [
+            aside(FIRER, dude(0x0100)),
+            on_path(npc(4), 20.0, escort),
+            on_path(ShipRef::Player, 40.0, Ties::default()),
+        ];
+        assert_eq!(bible(&fired_by(FIRER, dude(0x0100)), &at), Some(npc(4)));
+        assert_eq!(
+            bible(&fired_by(FIRER, dude(0x0100)), &[at[0], at[2]]),
+            None,
+            "passes through the player"
+        );
+        let led = [
+            aside(npc(7), dude(0x0100)),
+            aside(FIRER, led_by(npc(7))),
+            at[2],
+        ];
+        assert_eq!(
+            bible(&fired_by(FIRER, led_by(npc(7))), &led),
+            Some(ShipRef::Player)
+        );
+    }
+
+    #[test]
+    fn a_non_ship_shot_hits_only_its_target() {
+        let shot = Shot {
+            source: Source::Other,
+            aimed_at: Some(npc(3)),
+            ..passing(0)
+        };
+        let targets = [
+            on_path(npc(2), 30.0, Ties::default()),
+            on_path(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(first(&shot, &targets), Some(npc(3)));
+    }
+
+    #[test]
+    fn a_non_ship_shot_with_no_target_may_hit_any_ship() {
+        let shot = Shot {
+            source: Source::Other,
+            aimed_at: None,
+            ..passing(0)
+        };
+        let targets = [
+            on_path(npc(2), 30.0, of(NEVER_ATTACKS)),
+            on_path(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(first(&shot, &targets), Some(npc(2)));
+        assert_eq!(shot.govt(), None);
+    }
+
+    #[test]
+    fn a_shot_passes_through_the_escape_pod_and_every_class_after_it() {
+        let class = |ship, x, class| Target {
+            ship_type: ShipId(class),
+            ..on_path(ship, x, Ties::default())
+        };
+        let targets = [
+            class(npc(2), 20.0, 895),
+            class(npc(3), 40.0, 896),
+            class(npc(4), 60.0, 894),
+        ];
+        assert_eq!(first(&passing(0), &targets), Some(npc(4)));
+    }
+
+    #[test]
+    fn a_shot_hits_a_breaking_up_ship_and_not_a_destroyed_one() {
         let shot = passing(0);
         let hit = |condition| {
-            shot.hit(Vec2::ZERO, &[target(2, 50.0, 0.0, condition)])
+            shot.hit(Vec2::ZERO, &among(&[target(2, 50.0, 0.0, condition)]))
                 .map(|(ship, _)| ship)
         };
         assert_eq!(hit(Condition::Disabled), Some(ShipRef::Npc(NpcId(2))));
@@ -602,9 +990,22 @@ mod tests {
                 ticks_left: 3,
                 starting: false
             }),
-            None
+            Some(ShipRef::Npc(NpcId(2)))
         );
         assert_eq!(hit(Condition::Destroyed), None);
+    }
+
+    #[test]
+    fn the_firers_side_is_read_as_it_is_now_and_kept_once_it_is_gone() {
+        // It fired as a ship of 140, and is of 143 now.
+        let shot = fired_by(FIRER, of(PLAIN));
+        let path = [
+            on_path(npc(2), 30.0, of(OTHER)),
+            on_path(npc(3), 60.0, of(PLAIN)),
+        ];
+        let now = [aside(FIRER, of(OTHER)), path[0], path[1]];
+        assert_eq!(first(&shot, &now), Some(npc(3)), "as it is now");
+        assert_eq!(first(&shot, &path), Some(npc(2)), "as it fired");
     }
 
     // Homing.
@@ -719,13 +1120,14 @@ mod tests {
     fn a_homing_shot_hits_its_target_and_passes_through_any_other() {
         let shot = passing_homing(0, Some(TARGET));
         assert_eq!(
-            shot.hit(Vec2::ZERO, &in_its_path()).map(|(ship, _)| ship),
+            shot.hit(Vec2::ZERO, &among(&in_its_path()))
+                .map(|(ship, _)| ship),
             Some(TARGET)
         );
         let at_three = passing_homing(0, Some(ShipRef::Npc(NpcId(3))));
         assert_eq!(
             at_three
-                .hit(Vec2::ZERO, &in_its_path())
+                .hit(Vec2::ZERO, &among(&in_its_path()))
                 .map(|(ship, _)| ship),
             Some(ShipRef::Npc(NpcId(3)))
         );
@@ -735,13 +1137,14 @@ mod tests {
     fn a_homing_shot_set_off_by_other_ships_hits_the_first_it_meets() {
         let shot = passing_homing(0x0008, Some(TARGET));
         assert_eq!(
-            shot.hit(Vec2::ZERO, &in_its_path()).map(|(ship, _)| ship),
+            shot.hit(Vec2::ZERO, &among(&in_its_path()))
+                .map(|(ship, _)| ship),
             Some(ShipRef::Npc(NpcId(3)))
         );
         let untargeted = passing_homing(0x0008, None);
         assert_eq!(
             untargeted
-                .hit(Vec2::ZERO, &in_its_path())
+                .hit(Vec2::ZERO, &among(&in_its_path()))
                 .map(|(ship, _)| ship),
             Some(ShipRef::Npc(NpcId(3)))
         );
@@ -756,7 +1159,7 @@ mod tests {
         assert_eq!(shot.heading, 90.0);
         assert!(!shot.lost);
         assert_eq!(
-            passing_homing(0, None).hit(Vec2::ZERO, &in_its_path()),
+            passing_homing(0, None).hit(Vec2::ZERO, &among(&in_its_path())),
             None
         );
     }
@@ -791,7 +1194,11 @@ mod tests {
             lost: true,
             ..passing_homing(0x0008, Some(TARGET))
         };
-        assert_eq!(lost.hit(Vec2::ZERO, &in_its_path()), None, "hits nothing");
+        assert_eq!(
+            lost.hit(Vec2::ZERO, &among(&in_its_path())),
+            None,
+            "hits nothing"
+        );
         let disabled = [target(2, 0.0, 1000.0, Condition::Disabled)];
         let mut chasing = homing(missile(0), Some(TARGET));
         for _ in 0..16 {
@@ -838,7 +1245,7 @@ mod tests {
         };
         assert_eq!(
             passing_turret
-                .hit(Vec2::ZERO, &in_its_path())
+                .hit(Vec2::ZERO, &among(&in_its_path()))
                 .map(|(ship, _)| ship),
             Some(ShipRef::Npc(NpcId(3))),
             "any ship it meets, its target or not"

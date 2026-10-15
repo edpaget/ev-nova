@@ -266,10 +266,23 @@ pub enum Condition {
 }
 
 impl Condition {
-    /// Whether shots and beams can hit it: intact or disabled.
+    /// Whether it still stands: intact or disabled, neither breaking up
+    /// nor destroyed. A homing shot loses a target that no longer stands,
+    /// a turreted beam lets go of it, the AI no longer aims at it, and
+    /// only a standing ship regenerates its shields.
     #[must_use]
-    pub fn hittable(self) -> bool {
+    pub fn standing(self) -> bool {
         matches!(self, Self::Intact | Self::Disabled)
+    }
+
+    /// Whether its slot is active: anything but destroyed, breaking up
+    /// included (the original's +0xb8). Shots, beams and blasts reach
+    /// every active ship ([`sides`](super::sides)): `_ShotCanHitShip`,
+    /// `_HandleBeams`' filter and the blast pass test the slot alone, never
+    /// `_IsDying`.
+    #[must_use]
+    pub fn active(self) -> bool {
+        self != Self::Destroyed
     }
 }
 
@@ -617,20 +630,36 @@ mod tests {
     }
 
     #[test]
-    fn intact_and_disabled_ships_can_be_hit_and_dying_or_destroyed_ones_cannot() {
-        assert!(Condition::Intact.hittable());
-        assert!(Condition::Disabled.hittable());
+    fn intact_and_disabled_ships_stand_and_dying_or_destroyed_ones_do_not() {
+        assert!(Condition::Intact.standing());
+        assert!(Condition::Disabled.standing());
         for starting in [false, true] {
             assert!(
                 !Condition::Dying {
                     ticks_left: 3,
                     starting
                 }
-                .hittable()
+                .standing()
             );
         }
-        assert!(!Condition::Destroyed.hittable());
+        assert!(!Condition::Destroyed.standing());
         assert_eq!(Condition::default(), Condition::Intact);
+    }
+
+    #[test]
+    fn every_ship_but_a_destroyed_one_is_active() {
+        assert!(Condition::Intact.active());
+        assert!(Condition::Disabled.active());
+        for starting in [false, true] {
+            assert!(
+                Condition::Dying {
+                    ticks_left: 3,
+                    starting
+                }
+                .active()
+            );
+        }
+        assert!(!Condition::Destroyed.active());
     }
 
     #[test]

@@ -1152,6 +1152,21 @@ impl ControlBits for AllowAll {
     }
 }
 
+/// No governments at all, for [`among`].
+static NO_GOVERNMENTS: crate::govt::Governments = crate::govt::Governments::empty();
+
+/// The fight's sides as `targets` alone make them: no governments, and
+/// the original's pass-through.
+pub(crate) fn among(
+    targets: &[crate::combat::projectile::Target],
+) -> crate::combat::sides::Sides<'_> {
+    crate::combat::sides::Sides {
+        targets,
+        govts: &NO_GOVERNMENTS,
+        pass_through: crate::combat::sides::PassThrough::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

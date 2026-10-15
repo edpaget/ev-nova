@@ -45,6 +45,11 @@ pub const XENOPHOBIC: u16 = 0x0001;
 pub const NOSY: u16 = 0x0002;
 /// `Flags`: its warships always attack the player.
 pub const ALWAYS_ATTACKS_PLAYER: u16 = 0x0004;
+/// `Flags`: the player's shots pass through its ships ("Player's shots
+/// won't hit ships of this govt"); in the original, the whole player
+/// side's (`_ShotCanHitShip` @0x449a8-0x449d0; see
+/// [`sides`](crate::combat::sides)).
+pub const PLAYER_SHOTS_PASS: u16 = 0x0008;
 /// `Flags`: its warships retreat when badly damaged or outnumbered.
 pub const WARSHIPS_RETREAT: u16 = 0x0010;
 /// `Flags`: nobody comes to the help of its ships under attack.

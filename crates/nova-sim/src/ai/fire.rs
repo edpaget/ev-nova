@@ -212,9 +212,12 @@ pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
         .iter()
         .find(|mount| forward(&mount.spec))
         .map_or(0.0, |mount| mount.spec.speed);
+    // The lead reads only where it is and how it moves.
     let target = Target {
         ship: ShipRef::Player,
+        ship_type: crate::catalog::ShipId(0),
         fleet: ShipRef::Player,
+        ties: crate::combat::sides::Ties::default(),
         position: at.position,
         velocity: at.velocity,
         radius: 0.0,

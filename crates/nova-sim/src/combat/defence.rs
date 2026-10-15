@@ -74,7 +74,7 @@ impl Side {
         Self {
             ship: shot.firer,
             fleet: shot.fleet,
-            govt: shot.govt,
+            govt: shot.govt(),
         }
     }
 }
@@ -193,7 +193,8 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtId, WeaponRecord};
     use crate::combat::aim::BLIND_REAR;
-    use crate::combat::projectile::ShotId;
+    use crate::combat::projectile::{ShotId, Source};
+    use crate::combat::sides::Ties;
     use crate::geometry::Vec2;
     use crate::testkit::weapon;
     use crate::traffic::npc::NpcId;
@@ -255,7 +256,10 @@ mod tests {
             id: ShotId(id),
             position: Vec2::new(x, y),
             target,
-            govt: Some(GovtId(140)),
+            source: Source::Ship(Ties {
+                govt: Some(GovtId(140)),
+                ..Ties::default()
+            }),
             ..Shot::launch(spec, ENEMY, ENEMY, &ShipState::default(), 0.0)
         }
     }
@@ -413,7 +417,7 @@ mod tests {
             Shot {
                 firer: ShipRef::Player,
                 fleet: ShipRef::Player,
-                govt: None,
+                source: Source::Ship(Ties::default()),
                 ..missile(2, 0.0, -80.0, Some(DEFENDER))
             },
             missile(3, 0.0, -1000.0, Some(DEFENDER)),

@@ -3,12 +3,13 @@
 //!
 //! The original (`_SpawnBeam` and `_HandleBeams` in the `EV Nova`
 //! executable) keeps a beam for its weapon's `Count` ticks, following its
-//! firer, and every tick damages the nearest hittable ship within its
+//! firer, and every tick damages the nearest ship it may hit within its
 //! `BeamLength` plus the ship's hit radius, inside a cone about its
 //! heading. The simulation keeps that reach and swaps the cone for the
 //! beam's segment against each ship's circle: deterministic, and what the
-//! drawn beam shows. Which ships it can hit is a shot's rule
-//! ([`Target::hittable_by`]).
+//! drawn beam shows. Which ships it may hit is `_HandleBeams`' own filter
+//! ([`Sides::beam_can_hit`]), not a shot's: no government test, and a
+//! breaking-up ship is hit, so a beam stops on a hulk.
 //!
 //! A beam (0) is held along its firer's heading, plus the offset it left
 //! at. A turreted beam (3) is held along the bearing to its target every
@@ -19,6 +20,7 @@
 use super::ShipRef;
 use super::aim::bearing;
 use super::projectile::{Shot, ShotId, Target, contact};
+use super::sides::{Sides, Ties};
 use super::weapon::WeaponSpec;
 use crate::flight::{ShipState, facing, normalized, shortest_turn};
 use crate::geometry::Vec2;
@@ -43,6 +45,9 @@ pub struct Beam {
     pub firer: ShipRef,
     /// The firer's fleet.
     pub fleet: ShipRef,
+    /// A copy of the firer's ties as it fired, which the hit rules read
+    /// should the firer leave the fight (see [`sides`](super::sides)).
+    pub ties: Ties,
     /// How far off the firer's heading it points, in degrees, when it is
     /// held [`Aiming::Ahead`].
     pub offset: f32,
@@ -72,6 +77,7 @@ impl Beam {
             weapon,
             firer,
             fleet,
+            ties: Ties::default(),
             offset: shortest_turn(from.heading, heading),
             aiming,
             start: Vec2::ZERO,
@@ -91,7 +97,7 @@ impl Beam {
             Aiming::Ship(ship) => {
                 let target = targets
                     .iter()
-                    .find(|target| target.ship == ship && target.condition.hittable());
+                    .find(|target| target.ship == ship && target.condition.standing());
                 match target {
                     Some(target) => Some(target.position),
                     None => return false,
@@ -115,16 +121,24 @@ impl Beam {
         self.end = start + facing(heading) * self.weapon.beam_length;
     }
 
-    /// The nearest of `targets` it can hit that it reaches, and where it
-    /// meets it.
+    /// Whether it can hit `target`, among the fight's `sides`
+    /// ([`Sides::beam_can_hit`]).
     #[must_use]
-    pub fn hit(&self, targets: &[Target]) -> Option<(ShipRef, Vec2)> {
+    pub fn can_hit(&self, target: &Target, sides: &Sides) -> bool {
+        sides.beam_can_hit(self, target)
+    }
+
+    /// The nearest of the ships among `sides` it can hit that it reaches,
+    /// and where it meets it.
+    #[must_use]
+    pub fn hit(&self, sides: &Sides) -> Option<(ShipRef, Vec2)> {
         if let Aiming::Shot(_) = self.aiming {
             return None;
         }
-        targets
+        sides
+            .targets
             .iter()
-            .filter(|target| target.hittable_by(self.firer, self.fleet))
+            .filter(|target| self.can_hit(target, sides))
             .filter_map(|target| {
                 let t = contact(self.start, self.end, target.position, target.radius)?;
                 Some((t, target.ship))
@@ -150,9 +164,12 @@ impl Beam {
 mod tests {
     use super::*;
     use crate::catalog::WeaponRecord;
+    use crate::catalog::{GovtId, GovtRecord, ShipId};
     use crate::combat::hull::Condition;
     use crate::combat::projectile::ShotId;
-    use crate::testkit::weapon;
+    use crate::combat::sides::PassThrough;
+    use crate::govt::Governments;
+    use crate::testkit::{among, govt, weapon};
     use crate::traffic::npc::NpcId;
 
     const FIRER: ShipRef = ShipRef::Npc(NpcId(1));
@@ -218,7 +235,9 @@ mod tests {
     fn target(id: u32, x: f32, y: f32) -> Target {
         Target {
             ship: ShipRef::Npc(NpcId(id)),
+            ship_type: ShipId(128),
             fleet: ShipRef::Npc(NpcId(id)),
+            ties: Ties::default(),
             position: Vec2::new(x, y),
             velocity: Vec2::ZERO,
             radius: 8.0,
@@ -237,16 +256,16 @@ mod tests {
             Aiming::Ahead,
         );
         let (ship, point) = beam
-            .hit(&[
+            .hit(&among(&[
                 target(2, 90.0, 5.0),
                 target(3, 50.0, 8.0),
                 target(4, 70.0, 4.0),
-            ])
+            ]))
             .expect("a hit");
         assert_eq!(ship, ShipRef::Npc(NpcId(3)));
         assert!(point.x > 40.0 && point.x < 44.0, "{point:?}");
         assert!((point.y - 5.0).abs() < 1e-3, "on the beam: {point:?}");
-        assert_eq!(beam.hit(&[]), None);
+        assert_eq!(beam.hit(&among(&[])), None);
     }
 
     #[test]
@@ -259,7 +278,7 @@ mod tests {
             90.0,
             Aiming::Ahead,
         );
-        let one = |x, y| beam.hit(&[target(2, x, y)]).map(|(ship, _)| ship);
+        let one = |x, y| beam.hit(&among(&[target(2, x, y)])).map(|(ship, _)| ship);
         assert_eq!(one(107.9, 0.0), Some(ShipRef::Npc(NpcId(2))));
         assert_eq!(one(108.1, 0.0), None, "beyond its length and the radius");
         assert_eq!(one(50.0, 7.9), Some(ShipRef::Npc(NpcId(2))));
@@ -359,7 +378,7 @@ mod tests {
             close(beam.end, Vec2::new(0.0, 100.0)),
             "at shot 5: {beam:?}"
         );
-        assert_eq!(beam.hit(&[target(2, 0.0, 50.0)]), None);
+        assert_eq!(beam.hit(&among(&[target(2, 0.0, 50.0)])), None);
         assert!(
             !beam.follow(&at(0.0, 0.0, 0.0), &[], &shots[..1]),
             "its shot gone"
@@ -381,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn a_beam_never_hits_its_firer_its_fleet_or_the_dying() {
+    fn a_beam_never_hits_its_firer_or_a_destroyed_ship_and_hits_a_disabled_one() {
         let beam = Beam::launch(
             laser(),
             FIRER,
@@ -394,25 +413,254 @@ mod tests {
             ship: FIRER,
             ..target(1, 0.0, 0.0)
         };
-        let mate = Target {
-            fleet: FIRER,
-            ..target(2, 20.0, 0.0)
-        };
-        let dying = Target {
-            condition: Condition::Dying {
-                ticks_left: 1,
-                starting: false,
-            },
+        let destroyed = Target {
+            condition: Condition::Destroyed,
             ..target(3, 30.0, 0.0)
         };
-        assert_eq!(beam.hit(&[firer, mate, dying]), None);
+        assert_eq!(beam.hit(&among(&[firer, destroyed])), None);
         let disabled = Target {
             condition: Condition::Disabled,
             ..target(4, 50.0, 0.0)
         };
         assert_eq!(
-            beam.hit(&[firer, disabled]).map(|(ship, _)| ship),
+            beam.hit(&among(&[firer, disabled])).map(|(ship, _)| ship),
             Some(ShipRef::Npc(NpcId(4)))
+        );
+    }
+
+    // Who a beam may hit (`_HandleBeams`' filter).
+
+    fn npc(id: u32) -> ShipRef {
+        ShipRef::Npc(NpcId(id))
+    }
+
+    fn led_by(leader: ShipRef) -> Ties {
+        Ties {
+            leader: Some(leader),
+            ..Ties::default()
+        }
+    }
+
+    /// `ship`, tied as `ties`, `x` pixels along the beam.
+    fn on_beam(ship: ShipRef, x: f32, ties: Ties) -> Target {
+        Target {
+            ship,
+            ties,
+            ..target(0, x, 0.0)
+        }
+    }
+
+    /// `ship`, tied as `ties`, off the beam.
+    fn aside(ship: ShipRef, ties: Ties) -> Target {
+        Target {
+            ship,
+            ties,
+            ..target(0, 0.0, 500.0)
+        }
+    }
+
+    /// The first of `targets` a beam from the origin along +x fired by
+    /// `firer`, tied as `ties`, hits, among `govts`, as `pass_through`
+    /// says.
+    fn beam_by(
+        firer: ShipRef,
+        ties: Ties,
+        targets: &[Target],
+        govts: &Governments,
+        pass_through: PassThrough,
+    ) -> Option<ShipRef> {
+        let beam = Beam {
+            ties,
+            ..Beam::launch(
+                laser(),
+                firer,
+                firer,
+                &at(0.0, 0.0, 90.0),
+                90.0,
+                Aiming::Ahead,
+            )
+        };
+        let sides = Sides {
+            targets,
+            govts,
+            pass_through,
+        };
+        beam.hit(&sides).map(|(ship, _)| ship)
+    }
+
+    /// As [`beam_by`], by the original's reading and no governments.
+    fn first(firer: ShipRef, ties: Ties, targets: &[Target]) -> Option<ShipRef> {
+        beam_by(
+            firer,
+            ties,
+            targets,
+            &Governments::empty(),
+            PassThrough::PlayerSide,
+        )
+    }
+
+    #[test]
+    fn a_beam_skips_its_firer_its_leader_and_the_ships_it_leads() {
+        let targets = [
+            aside(FIRER, led_by(npc(5))),
+            on_beam(npc(5), 20.0, Ties::default()),
+            on_beam(npc(2), 40.0, led_by(FIRER)),
+            on_beam(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(first(FIRER, led_by(npc(5)), &targets), Some(npc(3)));
+    }
+
+    #[test]
+    fn a_beam_hits_a_sibling_unless_both_are_player_allied() {
+        let siblings = [
+            aside(FIRER, led_by(npc(5))),
+            on_beam(npc(2), 30.0, led_by(npc(5))),
+        ];
+        assert_eq!(first(FIRER, led_by(npc(5)), &siblings), Some(npc(2)));
+        let escorts = [
+            aside(FIRER, led_by(ShipRef::Player)),
+            on_beam(npc(2), 30.0, led_by(ShipRef::Player)),
+            on_beam(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(
+            first(FIRER, led_by(ShipRef::Player), &escorts),
+            Some(npc(3))
+        );
+        assert_eq!(
+            first(ShipRef::Player, Ties::default(), &escorts),
+            Some(npc(3)),
+            "the player's beam passes its escort"
+        );
+        // An escort's fighter is allied, and led: the escort's beam passes
+        // it.
+        let fighter = [
+            aside(npc(7), led_by(ShipRef::Player)),
+            aside(FIRER, led_by(ShipRef::Player)),
+            on_beam(npc(2), 30.0, led_by(npc(7))),
+            on_beam(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(
+            first(FIRER, led_by(ShipRef::Player), &fighter),
+            Some(npc(3))
+        );
+    }
+
+    #[test]
+    fn a_beam_hits_a_ship_of_its_firers_government() {
+        let of_140 = Ties {
+            govt: Some(GovtId(140)),
+            ..Ties::default()
+        };
+        let targets = [aside(FIRER, of_140), on_beam(npc(2), 30.0, of_140)];
+        assert_eq!(first(FIRER, of_140, &targets), Some(npc(2)));
+    }
+
+    #[test]
+    fn a_beam_passes_through_ship_895_and_stops_on_a_later_class() {
+        let class = |ship, x, class| Target {
+            ship_type: ShipId(class),
+            ..on_beam(ship, x, Ties::default())
+        };
+        let targets = [class(npc(2), 30.0, 895), class(npc(3), 60.0, 896)];
+        assert_eq!(first(FIRER, Ties::default(), &targets), Some(npc(3)));
+    }
+
+    #[test]
+    fn a_beam_and_booty_0x0100_pairs() {
+        let untouchable = Ties {
+            booty: Some(0x0100),
+            ..Ties::default()
+        };
+        let player_side = [
+            aside(ShipRef::Player, Ties::default()),
+            on_beam(npc(2), 30.0, untouchable),
+            on_beam(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(
+            first(ShipRef::Player, Ties::default(), &player_side),
+            Some(npc(3))
+        );
+        let at_the_player = [
+            aside(FIRER, untouchable),
+            on_beam(ShipRef::Player, 20.0, Ties::default()),
+            on_beam(npc(4), 40.0, led_by(ShipRef::Player)),
+            on_beam(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(first(FIRER, untouchable, &at_the_player), Some(npc(3)));
+        // Its leader's düde, when it has none of its own.
+        let led = [
+            aside(npc(6), untouchable),
+            aside(FIRER, led_by(npc(6))),
+            on_beam(ShipRef::Player, 20.0, Ties::default()),
+            on_beam(npc(3), 60.0, Ties::default()),
+        ];
+        assert_eq!(first(FIRER, led_by(npc(6)), &led), Some(npc(3)));
+    }
+
+    #[test]
+    fn a_beam_stops_on_a_breaking_up_ship_in_front_of_a_live_one() {
+        let hulk = Target {
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..on_beam(npc(2), 30.0, Ties::default())
+        };
+        let targets = [hulk, on_beam(npc(3), 60.0, Ties::default())];
+        assert_eq!(first(FIRER, Ties::default(), &targets), Some(npc(2)));
+    }
+
+    #[test]
+    fn the_bibles_pass_through_counts_the_player_alone() {
+        let govts = Governments::new([
+            govt(140),
+            GovtRecord {
+                flags: crate::govt::NEVER_ATTACKS_PLAYER,
+                ..govt(141)
+            },
+        ]);
+        let never_attacks = Ties {
+            govt: Some(GovtId(141)),
+            ..Ties::default()
+        };
+        let untouchable = Ties {
+            booty: Some(0x0100),
+            ..Ties::default()
+        };
+        let targets = [
+            aside(ShipRef::Player, Ties::default()),
+            aside(FIRER, led_by(ShipRef::Player)),
+            on_beam(npc(2), 20.0, never_attacks),
+            on_beam(npc(3), 40.0, untouchable),
+            on_beam(npc(4), 60.0, Ties::default()),
+        ];
+        let by = |firer, ties, pass_through| beam_by(firer, ties, &targets, &govts, pass_through);
+        assert_eq!(
+            by(ShipRef::Player, Ties::default(), PassThrough::PlayerSide),
+            Some(npc(2)),
+            "the original's beams test no government"
+        );
+        assert_eq!(
+            by(ShipRef::Player, Ties::default(), PassThrough::PlayerOnly),
+            Some(npc(4)),
+            "the player's weapons can't hit them"
+        );
+        assert_eq!(
+            by(FIRER, led_by(ShipRef::Player), PassThrough::PlayerSide),
+            Some(npc(2)),
+            "an escort's beam passes the düde"
+        );
+        let escorts = [targets[0], targets[1], targets[3], targets[4]];
+        assert_eq!(
+            beam_by(
+                FIRER,
+                led_by(ShipRef::Player),
+                &escorts,
+                &govts,
+                PassThrough::PlayerOnly
+            ),
+            Some(npc(3)),
+            "an escort is not the player"
         );
     }
 }

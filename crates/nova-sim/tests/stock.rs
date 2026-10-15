@@ -1377,6 +1377,8 @@ impl Combatant {
             ship_type: self.ship_type,
             fleet: self.id,
             govt: None,
+            leader: None,
+            booty: None,
             state: self.state,
             hull: self.hull,
             shield_regen: 0.0,
@@ -2217,8 +2219,9 @@ fn npc_of(session: &Session, id: nova_sim::NpcId) -> Option<&nova_sim::Npc> {
     session.npcs().iter().find(|npc| npc.id == id)
 }
 
-/// Whether no NPC but `quarry` is within 80 pixels of the line from the
-/// player to it, so a shot at it hits nothing else on the way.
+/// Whether no NPC but `quarry`, breaking up or not, is within 80 pixels
+/// of the line from the player to it, so a shot at it hits nothing else
+/// on the way.
 fn clear_shot(session: &Session, quarry: &nova_sim::Npc) -> bool {
     let from = session.player().position;
     let line = quarry.state.position - from;
@@ -2226,7 +2229,7 @@ fn clear_shot(session: &Session, quarry: &nova_sim::Npc) -> bool {
     session
         .npcs()
         .iter()
-        .filter(|npc| npc.id != quarry.id && npc.condition.hittable())
+        .filter(|npc| npc.id != quarry.id && npc.condition.active())
         .all(|npc| {
             let off = npc.state.position - from;
             let along = ((off.x * line.x + off.y * line.y) / length).clamp(0.0, length);

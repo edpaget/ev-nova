@@ -27,6 +27,8 @@
 //!   reports once each about game data it does not handle yet.
 //! - [`shockwave`]: what the shockwave of a heavy ship's final explosion
 //!   does to each ship it reaches, and how it pushes it.
+//! - [`sides`]: who a shot or a beam may hit, by the ships' leaders,
+//!   governments and `düde`s.
 //! - [`stellar`]: which shots hit a destroyable stellar, and what they
 //!   take off it.
 //! - [`submunition`]: the shots a shot releases on a hit and at the end
@@ -54,12 +56,15 @@
 //!    rules call hostile is spent on it; a missile hit after its
 //!    durability is used up is shot down.
 //! 6. A point-defence beam hits the missile it is held on the same way.
-//! 7. Hits, blasts and expiries are resolved: a shot that hits a ship
-//!    damages it, explodes and blasts the ships around it, releases its
-//!    sub-munitions at that ship, and is gone; a shot at the end of its
-//!    life detonates (blasting the same way) or vanishes, and releases its
-//!    sub-munitions at its own target; a beam damages the nearest ship
-//!    along it, every tick, until its life is over.
+//! 7. Hits, blasts and expiries are resolved: a shot that hits a ship it
+//!    may hit ([`sides`]) damages it, explodes and blasts the ships around
+//!    it, releases its sub-munitions at that ship, and is gone; a shot at
+//!    the end of its life detonates (blasting the same way) or vanishes,
+//!    and releases its sub-munitions at its own target; a beam damages the
+//!    nearest ship it may hit along it, every tick, until its life is
+//!    over. Shots, beams and blasts reach a ship breaking up as they do
+//!    any other not destroyed; a hit on it is a [`Strike`] that downs
+//!    nothing, and its countdown goes on.
 //!
 //!    7b. Each planet-type shot still in flight, past its `ProxSafety`,
 //!    that met a stellar still standing among those the session hands
@@ -121,6 +126,7 @@ pub mod hull;
 pub mod projectile;
 pub mod report;
 pub mod shockwave;
+pub mod sides;
 pub mod stellar;
 pub mod submunition;
 pub mod weapon;
@@ -135,8 +141,9 @@ use hull::{
     Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
     never_breaks_up,
 };
-use projectile::{Shot, ShotId, Target, contact};
+use projectile::{Shot, ShotId, Source, Target, contact};
 use report::{Reports, SimDiagnostic};
+use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
 use weapon::{Explosion, Guidance};
 
@@ -287,6 +294,13 @@ pub struct Fighter<'a> {
     pub fleet: ShipRef,
     /// Its government, or `None` for an independent ship or the player.
     pub govt: Option<GovtId>,
+    /// The ship it follows (the original's +0x9a): the player for a ship
+    /// that escorts the player, else the lead it escorts or the carrier
+    /// it left; none for the player and a ship led by no one.
+    pub leader: Option<ShipRef>,
+    /// Its `düde`'s `Booty`, or `None` when it has no `düde` (the player
+    /// has none).
+    pub booty: Option<u16>,
     /// Where it is and how it moves.
     pub state: ShipState,
     /// Its hull.
@@ -378,6 +392,8 @@ pub struct Combat {
     next_shot: u32,
     /// What becomes of a breakup that never reaches the explosion band.
     breakup: Breakup,
+    /// Who counts as the player for the pass-through flags.
+    pass_through: PassThrough,
 }
 
 impl Combat {
@@ -399,6 +415,11 @@ impl Combat {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let sides = Sides {
+            targets: &targets,
+            govts,
+            pass_through: self.pass_through,
+        };
         self.fire(fighters, &targets, chance);
         self.defend(fighters, rules.defence, govts, chance);
         for fighter in fighters.iter_mut() {
@@ -428,7 +449,7 @@ impl Combat {
         self.intercept(&was, &mut gone, rules.defence, govts);
         self.hold_on_missiles(&mut gone);
         let first_strike = self.strikes.len();
-        self.resolve(fighters, &targets, &was, &gone, arsenal, chance);
+        self.resolve(fighters, &sides, &was, &gone, arsenal, chance);
         self.strike_stellars(stellars, &from);
         for fighter in fighters.iter_mut() {
             let downed = self.update_condition(fighter, rules.disable);
@@ -510,7 +531,7 @@ impl Combat {
                 if !hurt {
                     continue;
                 }
-                let downed = if condition.hittable() {
+                let downed = if condition.standing() {
                     self.update_condition(fighter, rule)
                 } else {
                     None
@@ -530,6 +551,12 @@ impl Combat {
     /// `breakup` says: by default, [`Breakup::Explodes`].
     pub fn set_breakup(&mut self, breakup: Breakup) {
         self.breakup = breakup;
+    }
+
+    /// Has the pass-through flags count the player as `pass_through`
+    /// says (see [`sides`]): by default, [`PassThrough::PlayerSide`].
+    pub fn set_pass_through(&mut self, pass_through: PassThrough) {
+        self.pass_through = pass_through;
     }
 
     /// The next shot's number.
@@ -577,13 +604,13 @@ impl Combat {
     /// government.
     fn launch(
         &mut self,
-        side: Side,
+        (side, ties): (Side, Ties),
         from: &ShipState,
         launch: Launch,
         quarry: Option<ShotId>,
         aimed_at: Option<ShipRef>,
     ) {
-        let Side { ship, fleet, govt } = side;
+        let Side { ship, fleet, .. } = side;
         self.events.push(CombatEvent::Fired {
             ship,
             weapon: launch.weapon.id,
@@ -604,14 +631,17 @@ impl Combat {
                 (None, Some(target)) => Aiming::Ship(target),
                 (None, None) => Aiming::Ahead,
             };
-            let beam = Beam::launch(launch.weapon, ship, fleet, from, launch.heading, aiming);
+            let beam = Beam {
+                ties,
+                ..Beam::launch(launch.weapon, ship, fleet, from, launch.heading, aiming)
+            };
             self.beams.push(beam);
         } else {
             let shot = Shot {
                 id: self.next_id(),
                 target: launch.target,
                 aimed_at,
-                govt,
+                source: Source::Ship(ties),
                 ..Shot::launch(launch.weapon, ship, fleet, from, launch.heading)
             };
             self.shots.push(shot);
@@ -626,7 +656,7 @@ impl Combat {
             let target = fighter.target.and_then(|ship| {
                 targets
                     .iter()
-                    .find(|target| target.ship == ship && target.condition.hittable())
+                    .find(|target| target.ship == ship && target.condition.standing())
             });
             let launches = fighter.armament.fire(
                 fighter.trigger,
@@ -644,7 +674,8 @@ impl Combat {
                 let ahead =
                     launch.weapon.guidance == Guidance::FrontTurret && launch.target.is_none();
                 let aimed_at = if ahead { None } else { fighter.target };
-                self.launch(fighter.side(), &state, launch, None, aimed_at);
+                let sides = (fighter.side(), fighter.ties());
+                self.launch(sides, &state, launch, None, aimed_at);
             }
         }
     }
@@ -666,6 +697,7 @@ impl Combat {
         {
             let (state, hull) = (fighter.state, fighter.hull);
             let side = fighter.side();
+            let ties = fighter.ties();
             let shots = &self.shots;
             let fired = fighter.armament.fire_point_defence(
                 *fighter.condition,
@@ -680,7 +712,7 @@ impl Combat {
                 },
             );
             if let Some((launch, missile)) = fired {
-                self.launch(side, &state, launch, Some(missile), None);
+                self.launch((side, ties), &state, launch, Some(missile), None);
             }
         }
     }
@@ -765,7 +797,7 @@ impl Combat {
     fn resolve(
         &mut self,
         fighters: &mut [Fighter],
-        targets: &[Target],
+        sides: &Sides,
         was: &[Vec2],
         gone: &[bool],
         arsenal: &Arsenal,
@@ -780,7 +812,7 @@ impl Combat {
             if gone {
                 continue;
             }
-            let (blast, subs) = if let Some((ship, at)) = shot.hit(from, targets) {
+            let (blast, subs) = if let Some((ship, at)) = shot.hit(from, sides) {
                 hits.push((ship, shot.firer, Hit::of(&shot.weapon)));
                 shot.position = at;
                 (Some(shot.blast(Some(ship))), Some(Some(ship)))
@@ -798,7 +830,7 @@ impl Combat {
                         explosion,
                     });
                 }
-                let reached = reached(&blast, targets);
+                let reached = reached(&blast, sides.targets);
                 hits.extend(
                     reached
                         .into_iter()
@@ -811,10 +843,10 @@ impl Combat {
         }
         self.shots = kept;
         for (parent, target) in released {
-            self.release(&parent, target, targets, arsenal, chance);
+            self.release(&parent, target, sides, arsenal, chance);
         }
         for beam in &mut self.beams {
-            if let Some((ship, at)) = beam.hit(targets) {
+            if let Some((ship, at)) = beam.hit(sides) {
                 hits.push((ship, beam.firer, Hit::of(&beam.weapon)));
                 if let Some(explosion) = beam.weapon.explosion {
                     self.events.push(CombatEvent::Exploded { at, explosion });
@@ -823,9 +855,10 @@ impl Combat {
             beam.age();
         }
         self.beams.retain(|beam| !beam.expired());
-        // A shot that hits the escape pod is spent on it all the same:
-        // `_HandleShipHit` turns away only a class above 0x2ff
-        // (@0x36a58), and `_DamageShip` then does nothing to it ([`immune`]).
+        // A shot passes through the escape pod and every class after it
+        // (`_ShotCanHitShip` @0x447b3-0x447d9), and a beam through the pod
+        // itself (@0x30dd2); a blast still reaches it, or a beam a later
+        // class, and `_DamageShip` then does nothing to it ([`immune`]).
         for (ship, by, hit) in hits {
             let fighter = fighters
                 .iter_mut()
@@ -886,7 +919,7 @@ impl Combat {
         &mut self,
         parent: &Shot,
         target: Option<ShipRef>,
-        targets: &[Target],
+        sides: &Sides,
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
     ) {
@@ -897,7 +930,7 @@ impl Combat {
         else {
             return;
         };
-        let shots = submunition::release(parent, sub, target, targets, chance);
+        let shots = submunition::release(parent, sub, target, sides, chance);
         if shots.is_empty() {
             return;
         }
@@ -1126,11 +1159,22 @@ impl Fighter<'_> {
         }
     }
 
+    /// The ship's ties: its leader, government and `düde`.
+    fn ties(&self) -> Ties {
+        Ties {
+            leader: self.leader,
+            govt: self.govt,
+            booty: self.booty,
+        }
+    }
+
     /// The ship as shots and beams see it.
     fn as_target(&self) -> Target {
         Target {
             ship: self.ship,
+            ship_type: self.ship_type,
             fleet: self.fleet,
+            ties: self.ties(),
             position: self.state.position,
             velocity: self.state.velocity,
             radius: self.hull.hit_radius,
@@ -1158,12 +1202,14 @@ fn holds_armour(armor: Gauge) -> bool {
     armor.max > 0.0
 }
 
-/// The ships among `targets` that can still be hit that `blast` reaches.
+/// The ships among `targets` still active, breaking up or not, that
+/// `blast` reaches: `_HandleShot`'s blast pass (@0x35fae-0x36106) tests
+/// the slot alone (@0x3600a), never `_IsDying`.
 fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
     blast.reaches(
         targets
             .iter()
-            .filter(|target| target.condition.hittable())
+            .filter(|target| target.condition.active())
             .map(|target| (target.ship, target.position)),
     )
 }
@@ -1172,7 +1218,7 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
 /// destroyed, and its armour only while it is intact.
 fn regenerate(fighter: &mut Fighter) {
     let condition = *fighter.condition;
-    if condition.hittable() {
+    if condition.standing() {
         recharge(&mut fighter.reserves.shield, fighter.shield_regen);
     }
     if condition == Condition::Intact {
@@ -1205,6 +1251,8 @@ mod tests {
         class: ShipId,
         fleet: ShipRef,
         govt: Option<GovtId>,
+        leader: Option<ShipRef>,
+        booty: Option<u16>,
         target: Option<ShipRef>,
         state: ShipState,
         hull: HullSpec,
@@ -1243,6 +1291,8 @@ mod tests {
                 class: ShipId(128),
                 fleet: ShipRef::Npc(NpcId(id)),
                 govt: None,
+                leader: None,
+                booty: None,
                 target: None,
                 state: ShipState {
                     position: Vec2::new(x, y),
@@ -1287,6 +1337,8 @@ mod tests {
                 ship_type: self.class,
                 fleet: self.fleet,
                 govt: self.govt,
+                leader: self.leader,
+                booty: self.booty,
                 state: self.state,
                 hull: self.hull,
                 shield_regen: self.shield_regen,
@@ -1617,7 +1669,7 @@ mod tests {
         );
         assert_eq!(combat.take_events(), [], "taken");
         assert_eq!(combat.shots().len(), 1);
-        assert_eq!(combat.shots()[0].govt, Some(GovtId(140)), "its firer's");
+        assert_eq!(combat.shots()[0].govt(), Some(GovtId(140)), "its firer's");
         assert!((combat.shots()[0].position.x - 15.0).abs() < 1e-4);
         assert_eq!(combat.beams(), []);
         for _ in 1..13 {
@@ -2479,7 +2531,64 @@ mod tests {
     }
 
     #[test]
-    fn a_blast_hurts_a_disabled_ship_and_spares_a_dying_one() {
+    fn a_ships_shots_pass_through_its_government_to_the_enemy_behind() {
+        let mut combat = Combat::default();
+        let mut shooter = Ship::at(1, 0.0, 0.0).armed(blaster());
+        shooter.govt = Some(GovtId(140));
+        let mut wingman = Ship::at(2, 100.0, 0.0);
+        wingman.govt = Some(GovtId(140));
+        let mut enemy = Ship::at(3, 150.0, 0.0);
+        enemy.govt = Some(GovtId(141));
+        let mut ships = [shooter, wingman, enemy];
+        for _ in 0..12 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+        }
+        assert_eq!(left(&ships[1]), (10.0, 30.0), "passed through");
+        assert_ne!(left(&ships[2]), (10.0, 30.0), "the enemy behind is hit");
+        let struck: Vec<ShipRef> = combat
+            .take_strikes()
+            .iter()
+            .map(|strike| strike.ship)
+            .collect();
+        assert_eq!(struck, [C]);
+    }
+
+    #[test]
+    fn a_shot_on_a_breaking_up_ship_strikes_without_downing_it_and_its_countdown_goes_on() {
+        let mut combat = Combat::default();
+        let mut hulk = Ship::at(2, 100.0, 0.0);
+        hulk.reserves.armor.now = 0.0;
+        hulk.condition = Condition::Dying {
+            ticks_left: 50,
+            starting: false,
+        };
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster()), hulk];
+        let mut strikes = Vec::new();
+        for _ in 0..8 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            strikes.extend(combat.take_strikes());
+        }
+        assert_eq!(strikes.len(), 1, "{strikes:?}");
+        assert_eq!((strikes[0].ship, strikes[0].by), (B, A));
+        assert_eq!(strikes[0].downed, None, "it was down already");
+        assert_eq!(
+            strikes[0].damage, 14.0,
+            "its shield, then its mass on the armour"
+        );
+        assert_eq!(
+            ships[1].condition,
+            Condition::Dying {
+                ticks_left: 42,
+                starting: false
+            },
+            "a tick off each tick, hit or not"
+        );
+    }
+
+    #[test]
+    fn a_blast_hurts_a_breaking_up_ship() {
         let shell = WeaponRecord {
             explod_type: 0,
             blast_radius: 30,
@@ -2505,11 +2614,7 @@ mod tests {
             ships[0].trigger = QUIET;
         }
         assert_eq!(ships[1].reserves.shield.now, 0.0, "hit directly");
-        assert_eq!(
-            ships[2].reserves,
-            Reserves::full(10.0, 30.0, 100.0),
-            "a dying ship is past hitting"
-        );
+        assert_eq!(left(&ships[2]), (0.0, 26.0), "a dying ship is blasted too");
         assert_eq!(
             (ships[3].reserves.shield.now, ships[3].reserves.armor.now),
             (0.0, 1.0),
@@ -4007,18 +4112,21 @@ mod tests {
             ..blaster()
         };
         let after = ShipId(ESCAPE_POD_SHIP.0 + 1);
-        for (ship_type, immune) in [
-            (ESCAPE_POD_SHIP, true),
-            (after, true),
-            (ShipId(ESCAPE_POD_SHIP.0 - 1), false),
+        let hurt = |ship: &Ship| left(ship) != (10.0, 30.0);
+        // A shot passes through the pod and every class after it to the
+        // ship behind, unspent; a beam only through the pod itself.
+        for (ship_type, immune, shot_passes, beam_passes) in [
+            (ESCAPE_POD_SHIP, true, true, true),
+            (after, true, true, false),
+            (ShipId(ESCAPE_POD_SHIP.0 - 1), false, false, false),
         ] {
-            // A shot, then a blast beside it: A fires at B, C beside B.
-            for record in [blaster(), shell, laser()] {
+            // A fires at B, D behind it.
+            for (record, passes) in [(blaster(), shot_passes), (laser(), beam_passes)] {
                 let mut combat = Combat::default();
                 let mut ships = [
                     Ship::at(1, 0.0, 0.0).armed(record),
                     pod(Ship::at(2, 100.0, 0.0), ship_type),
-                    pod(Ship::at(3, 100.0, 25.0), ship_type),
+                    Ship::at(4, 150.0, 0.0),
                 ];
                 for _ in 0..12 {
                     tick(&mut combat, &mut ships, &NovaDisable);
@@ -4026,17 +4134,26 @@ mod tests {
                         ships[0].trigger = QUIET;
                     }
                 }
-                let hurt = |ship: &Ship| left(ship) != (10.0, 30.0);
                 assert_eq!(hurt(&ships[1]), !immune, "{ship_type:?} {record:?}");
-                if record.blast_radius > 0 {
-                    assert_eq!(hurt(&ships[2]), !immune, "blasted, {ship_type:?}");
-                }
-                let struck = combat.take_strikes().iter().any(|strike| strike.ship != A);
+                assert_eq!(hurt(&ships[2]), passes, "behind, {ship_type:?} {record:?}");
+                let struck = combat.take_strikes().iter().any(|strike| strike.ship == B);
                 assert_eq!(struck, !immune, "{ship_type:?} {record:?}");
-                if record.beam_length == 0 {
-                    assert_eq!(combat.shots(), [], "the shot is spent on it");
-                }
             }
+            // A blast still reaches it: A's shell hits D, C beside it.
+            let mut combat = Combat::default();
+            let mut ships = [
+                Ship::at(1, 0.0, 0.0).armed(shell),
+                Ship::at(4, 100.0, 0.0),
+                pod(Ship::at(3, 100.0, 25.0), ship_type),
+            ];
+            for _ in 0..12 {
+                tick(&mut combat, &mut ships, &NovaDisable);
+                ships[0].trigger = QUIET;
+            }
+            assert!(hurt(&ships[1]), "hit directly, {ship_type:?}");
+            assert_eq!(hurt(&ships[2]), !immune, "blasted, {ship_type:?}");
+            let struck = combat.take_strikes().iter().any(|strike| strike.ship == C);
+            assert_eq!(struck, !immune, "blasted, {ship_type:?}");
             // A shockwave: the pod is still pushed.
             let mut combat = Combat::default();
             let mut pushed = pod(holding(1, 40.0, 0.0, 100.0, 300.0, 300.0), ship_type);

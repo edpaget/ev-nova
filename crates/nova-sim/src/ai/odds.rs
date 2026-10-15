@@ -127,7 +127,7 @@ pub fn friend_strength(ship: ShipRef, around: &Surroundings) -> f32 {
                 .iter()
                 .filter(|other| {
                     other.id != id
-                        && other.condition.hittable()
+                        && other.condition.standing()
                         && (other.leader == Some(id) || around.govts.allies(npc.govt, other.govt))
                 })
                 .map(|other| weighed(other.hull.strength, &other.reserves))

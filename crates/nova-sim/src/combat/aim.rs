@@ -179,7 +179,9 @@ mod tests {
     fn target(x: f32, y: f32, vx: f32, vy: f32) -> Target {
         Target {
             ship: TARGET,
+            ship_type: crate::catalog::ShipId(128),
             fleet: TARGET,
+            ties: crate::combat::sides::Ties::default(),
             position: Vec2::new(x, y),
             velocity: Vec2::new(vx, vy),
             radius: 10.0,

@@ -288,7 +288,7 @@ impl<'a> Surroundings<'a> {
             ShipRef::Player => false,
             ShipRef::Npc(id) => self.npc(id).is_some_and(|npc| npc.mode != Mode::Flying),
         };
-        !jumping_in && self.condition_of(ship).is_some_and(Condition::hittable)
+        !jumping_in && self.condition_of(ship).is_some_and(Condition::standing)
     }
 }
 

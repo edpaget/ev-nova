@@ -439,6 +439,7 @@ use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::{Reports, SimDiagnostic};
+use crate::combat::sides::PassThrough;
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Shove, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote};
@@ -523,10 +524,12 @@ impl FightTerms {
     /// reaches its jump distance.
     fn fighter(self, npc: &mut Npc) -> Fighter<'_> {
         let fleet = npc.fleet();
+        let leader = npc.leader_ref();
         let Npc {
             id,
             ship,
             govt,
+            booty,
             stats,
             state,
             hull,
@@ -544,6 +547,8 @@ impl FightTerms {
             ship_type: *ship,
             fleet,
             govt: *govt,
+            leader,
+            booty: *booty,
             state: *state,
             hull: *hull,
             shield_regen: stats.shield_regen,
@@ -1451,6 +1456,9 @@ impl Session {
         ));
         self.combat
             .set_breakup(Breakup::from(rules.source_for(RuleKey::BreakupStall)));
+        self.combat.set_pass_through(PassThrough::from(
+            rules.source_for(RuleKey::PlayerPassThrough),
+        ));
         self.rules = rules;
         self
     }
@@ -2093,6 +2101,8 @@ impl Session {
             ship_type: pilot.ship,
             fleet: ShipRef::Player,
             govt: None,
+            leader: None,
+            booty: None,
             state: self.player,
             hull: self.hull,
             shield_regen: self.stats.shield_regen,
@@ -15953,6 +15963,8 @@ pub(super) mod tests {
             &mut Draws::of(&[6, 6, 0, 0, 750, 650, 90, 2, 6, 6, 0, 0, 850, 650, 90, 2]),
         );
         stop_npcs(&mut session);
+        // Of one government, NPC 0's shots would pass through NPC 1.
+        session.traffic.npcs_mut()[1].govt = None;
         let witness = Witness::default();
         let rules = Rules {
             law: &witness,
@@ -15964,6 +15976,124 @@ pub(super) mod tests {
         }
         assert_eq!(session.npcs().len(), 1, "NPC 0 destroyed NPC 1");
         assert_eq!(witness.seen.take(), []);
+    }
+
+    #[test]
+    fn a_patrols_shot_passes_through_its_wingman_to_the_pirate() {
+        let catalog = FakePilotCatalog {
+            traffic: lawful()
+                .traffic
+                .into_iter()
+                .map(|(system, traffic)| {
+                    (
+                        system,
+                        SystemTraffic {
+                            avg_ships: 2,
+                            persons: Default::default(),
+                            ..traffic
+                        },
+                    )
+                })
+                .collect(),
+            ..lawful()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        // NPC 0 at (0, -100) and its wingman NPC 1 at (100, -100), of one
+        // government, both facing right, at rest; a pirate of none at
+        // (200, -100) beyond.
+        session.populate(
+            &catalog,
+            &mut Draws::of(&[6, 6, 0, 0, 750, 650, 90, 2, 6, 6, 0, 0, 850, 650, 90, 2]),
+        );
+        stop_npcs(&mut session);
+        let wingman = session.npcs()[1].clone();
+        assert_eq!(wingman.govt, session.npcs()[0].govt);
+        assert!(wingman.govt.is_some());
+        let mut pirate = wingman.clone();
+        pirate.govt = None;
+        pirate.state.position.x += 100.0;
+        let pirate = session.traffic.add_npc(pirate);
+        session.traffic.npcs_mut()[0].trigger = FIRE;
+        for _ in 0..12 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        let full = |npc: &Npc| npc.reserves.shield.now == npc.reserves.shield.max;
+        assert!(full(&session.npcs()[1]), "the wingman passed through");
+        let hit = session.npcs().iter().find(|npc| npc.id == pirate);
+        assert!(hit.is_some_and(|npc| !full(npc)), "the pirate hit");
+    }
+
+    #[test]
+    fn the_player_pass_through_rule_reads_a_leaders_dude_by_the_engine_alone() {
+        for (rule, hit) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let catalog = lawful();
+            let mut session = facing_an_npc(&catalog, 180).with_rules(
+                crate::rulebook::Rulebook::default()
+                    .with_override(RuleKey::PlayerPassThrough, rule),
+            );
+            // NPC 0, of no düde, faces the player and fires; its leader, far
+            // off, is of a düde of Booty 0x0100.
+            let mut lead = session.npcs()[0].clone();
+            lead.booty = Some(0x0100);
+            lead.state.position = Vec2::new(900.0, 900.0);
+            let lead = session.traffic.add_npc(lead);
+            let shooter = &mut session.traffic.npcs_mut()[0];
+            shooter.booty = None;
+            shooter.leader = Some(lead);
+            shooter.trigger = FIRE;
+            shooter.target = Some(ShipRef::Player);
+            for _ in 0..12 {
+                session.tick_combat(Rules::default(), &mut NeverFires);
+            }
+            let shield = session.pilot().reserves.shield;
+            assert_eq!(shield.now < shield.max, hit, "{rule:?}");
+        }
+    }
+
+    #[test]
+    fn the_players_hit_on_a_breaking_up_npc_convicts_and_credits_nothing_more() {
+        let catalog = lawful();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let witness = Witness::default();
+        let rules = Rules {
+            law: &witness,
+            ..Rules::default()
+        };
+        let dying = |session: &Session| {
+            session
+                .npcs()
+                .first()
+                .is_some_and(|npc| matches!(npc.condition, Condition::Dying { .. }))
+        };
+        for _ in 0..80 {
+            session.tick_combat(rules, &mut NeverFires);
+            if dying(&session) {
+                break;
+            }
+        }
+        assert!(dying(&session), "broken up");
+        let crimes = witness.seen.take().len();
+        assert!(crimes > 0, "disabling and breaking it up are crimes");
+        let rating = session.pilot().combat_rating();
+        // Its breakup lasts a while: keep firing into the hulk.
+        session.traffic.npcs_mut()[0].condition = Condition::Dying {
+            ticks_left: 60,
+            starting: false,
+        };
+        let mut struck = 0;
+        for _ in 0..20 {
+            session.strikes.clear();
+            session.tick_combat(rules, &mut NeverFires);
+            struck += session
+                .strikes
+                .iter()
+                .filter(|strike| strike.by == ShipRef::Player)
+                .count();
+        }
+        assert!(struck > 0, "the hulk is hit");
+        assert_eq!(witness.seen.take(), [], "no crime");
+        assert_eq!(session.pilot().combat_rating(), rating, "no kill");
     }
 
     #[test]
