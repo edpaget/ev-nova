@@ -1831,8 +1831,17 @@ mod tests {
     /// The original's `_TradeFilter` @0x4e092 maps Tab to `_TradeDialogTabKey`, Up/Down to the selection and Return/Escape to item 1 (@0x4e0dc-0x4e1cf), none with a click sound.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        let mut screen = screen();
-        for k in [Key::Tab, Key::Down, Key::Up, Key::Enter, Key::Escape] {
+        for k in [
+            Key::Tab,
+            Key::Down,
+            Key::Up,
+            BUY_KEY,
+            SELL_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            let mut screen = screen();
             for pressed in [true, false] {
                 screen.input(&Input::Key {
                     key: k,
@@ -1840,7 +1849,7 @@ mod tests {
                     repeat: false,
                 });
             }
+            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
-        assert_eq!(screen.take_sounds(), [], "keys make no click");
     }
 }

@@ -1252,8 +1252,18 @@ mod tests {
     /// Return and Escape to items without a click sound.
     #[test]
     fn keyboard_activation_is_silent_as_the_original_on_the_computer() {
-        let mut screen = screen();
-        for k in [Key::Tab, Key::Up, Key::Down, Key::Enter, Key::Escape] {
+        for k in [
+            Key::Tab,
+            Key::Up,
+            Key::Down,
+            MISSION_INFO_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+            Key::Char('a'),
+        ]
+        .into_iter()
+        .chain(LEAVE_KEYS)
+        {
+            let mut screen = screen();
             for input in press_and_release(k) {
                 screen.input(&input);
             }

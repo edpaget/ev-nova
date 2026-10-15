@@ -3877,15 +3877,18 @@ mod tests {
     /// The original's `_ShipyardFilter` @0x60449 maps keys to items with no click sound; the arrows also cover `grid`.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        let mut screen = screen();
         for k in [
             Key::Right,
             Key::Down,
             Key::Left,
             Key::Up,
+            BUY_KEY,
+            INFO_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
             Key::Enter,
             Key::Escape,
         ] {
+            let mut screen = screen();
             for pressed in [true, false] {
                 screen.input(&Input::Key {
                     key: k,
@@ -3893,7 +3896,7 @@ mod tests {
                     repeat: false,
                 });
             }
+            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
-        assert_eq!(screen.take_sounds(), [], "keys make no click");
     }
 }

@@ -870,7 +870,14 @@ mod tests {
     /// and the labels' first letters to items without a click sound.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for k in [Key::Enter, Key::Escape, Key::Char('n'), Key::Char('i')] {
+        for k in [
+            Key::Enter,
+            Key::Escape,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+        ]
+        .into_iter()
+        .chain(('a'..='z').map(Key::Char))
+        {
             let mut dialog = offer();
             for pressed in [true, false] {
                 dialog.input(&Input::Key {

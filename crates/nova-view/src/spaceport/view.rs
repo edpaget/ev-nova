@@ -2148,7 +2148,10 @@ mod tests {
     /// all with no click.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for k in [Key::Enter, Key::Escape, MISSION_INFO_KEY, PLAYER_INFO_KEY] {
+        for k in [Key::Enter, Key::Escape, MISSION_INFO_KEY, PLAYER_INFO_KEY]
+            .into_iter()
+            .chain(('a'..='z').map(Key::Char))
+        {
             let mut view = earth();
             view.take_sounds();
             view.input(&key(k));
