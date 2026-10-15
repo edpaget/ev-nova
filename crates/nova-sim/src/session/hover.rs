@@ -385,6 +385,38 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_the_players_ship_over_an_npc_targets_the_npc() {
+        let (mut session, ids) = flying(1);
+        let drawn = Drawn::default().player_at(SPACE).with(ids[0], SPACE);
+        assert_eq!(
+            session.click_in_space(SPACE, &drawn),
+            Some(Hover::Ship(ids[0]))
+        );
+        assert_eq!(session.target, Some(ids[0]));
+        assert_eq!(session.take_sounds(), [SimSound::TargetSelected]);
+    }
+
+    #[test]
+    fn a_click_on_the_players_ship_over_the_target_keeps_it_and_tries_the_stellars() {
+        let (mut session, ids) = flying(1);
+        session.target = Some(ids[0]);
+        let drawn = Drawn::default().player_at(SPACE).with(ids[0], SPACE);
+        assert_eq!(session.click_in_space(SPACE, &drawn), None, "no stellar");
+        assert_eq!(session.target, Some(ids[0]), "kept");
+        assert_eq!(session.nav_mode(), crate::NavMode::Off);
+        assert_eq!(session.take_sounds(), []);
+
+        let over = Drawn::default().player_at(OVER_128).with(ids[0], OVER_128);
+        assert_eq!(
+            session.click_in_space(OVER_128, &over),
+            Some(Hover::Stellar(StellarId(128)))
+        );
+        assert_eq!(session.target, Some(ids[0]), "kept");
+        assert_eq!(session.nav_target(), Some(StellarId(128)));
+        assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+    }
+
+    #[test]
     fn of_two_overlapping_ships_the_first_takes_the_click() {
         let (mut session, ids) = flying(2);
         let drawn = Drawn::default().with(ids[1], SPACE).with(ids[0], SPACE);
