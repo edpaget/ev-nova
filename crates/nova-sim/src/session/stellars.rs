@@ -931,11 +931,10 @@ mod tests {
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(catalog, saved).expect("flies");
         assert_eq!(
-            flown.landed(),
+            crate::testkit::resumed_on(&flown),
             Some(StellarId(140)),
-            "{script}: docked there"
+            "{script}: on it"
         );
-        flown.assert_docked_among_shown();
         session
     }
 
@@ -1059,14 +1058,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_saved_docked_at_a_stellar_destroyed_since_resumes_docked_there() {
+    fn a_pilot_saved_docked_at_a_stellar_destroyed_since_resumes_on_it() {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
         land_now(&mut session).expect("lands");
         run(&mut session, "Y128");
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
-        assert_eq!(flown.landed(), Some(StellarId(128)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(128)));
         assert!(shown_destroyed(&flown, 128));
         assert_eq!(destroyed(&flown, 128), Some(left(2)));
     }
@@ -2483,7 +2482,7 @@ mod tests {
         pilot.system = SystemId(131);
         pilot.stellar = Some(StellarId(200));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert_eq!(session.landed(), Some(StellarId(200)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(200)));
         assert_eq!(
             session.system(),
             SystemId(130),

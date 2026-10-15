@@ -1036,6 +1036,15 @@ pub(crate) fn land_now(session: &mut Session) -> Result<StellarId, LandingRefusa
     landed
 }
 
+/// The stellar a session just flown from a save resumed on: asserts it
+/// flies, at rest, nothing about a landing run, and gives the stellar the
+/// pilot last landed on, which the load keeps (see [`Session::load`]).
+pub(crate) fn resumed_on(session: &Session) -> Option<StellarId> {
+    assert_eq!(session.landed(), None, "resumed in flight");
+    assert_eq!(session.player().velocity, Vec2::ZERO, "at rest");
+    session.pilot().stellar()
+}
+
 /// Plots a course to `to`, flies out and jumps, and arrives, no chance
 /// firing on the way.
 pub(crate) fn jump(session: &mut Session, catalog: &FakePilotCatalog, to: i16) -> Option<SystemId> {

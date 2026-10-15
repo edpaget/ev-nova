@@ -765,7 +765,11 @@ mod tests {
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
         let flown = reloaded(&catalog, session.pilot());
-        assert_eq!(flown.landed(), Some(StellarId(128)), "docked again");
+        assert_eq!(
+            crate::testkit::resumed_on(&flown),
+            Some(StellarId(128)),
+            "on it again"
+        );
     }
 
     #[test]
@@ -1154,14 +1158,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_saved_after_a_landed_m_flies_again_docked_at_the_new_stellar() {
+    fn a_pilot_saved_after_a_landed_m_flies_again_on_the_new_stellar() {
         let catalog = moving();
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M131");
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
         assert_eq!(flown.system(), SystemId(131));
-        assert_eq!(flown.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(100.0, 200.0));
     }
 

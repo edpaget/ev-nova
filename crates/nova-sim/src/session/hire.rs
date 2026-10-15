@@ -995,6 +995,7 @@ mod tests {
         pilot.escorts = vec![paid(129, None, false)];
         pilot.stellar = Some(BAR_AT);
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
         assert_eq!(session.fleet, [], "none placed yet");
         for berth in 2..=55 {
             let hulk = crate::testkit::npc(0, ShipStats::default());
@@ -1272,7 +1273,7 @@ mod tests {
         pilot.escorts = payroll();
         pilot.stellar = Some(BAR_AT);
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert_eq!(session.landed(), Some(BAR_AT), "resumed docked");
+        assert_eq!(land_now(&mut session), Ok(BAR_AT), "landed on resuming");
         assert_eq!(session.fleet, [], "none placed yet");
         session
             .take_off(&catalog, &mut NeverFires)
@@ -1289,6 +1290,7 @@ mod tests {
         pilot.escorts = vec![paid(129, None, false), paid(130, None, false)];
         pilot.stellar = Some(BAR_AT);
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
         assert_eq!(session.fleet, [], "none placed yet");
         session.hire(ShipId(129), &mut NeverFires).expect("hired");
         assert_eq!(session.fleet.len(), 3);

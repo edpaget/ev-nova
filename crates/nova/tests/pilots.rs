@@ -158,11 +158,14 @@ fn system() -> Vec<u8> {
     bytes
 }
 
-/// Alpha Prime: a landable planet with a bar at the system's centre,
-/// whose landscape is `PICT` 10004.
+/// Where [`stellar`] is: (50, 50), where a new pilot's ship starts.
+const ALPHA_PRIME_AT: nova_sim::Vec2 = nova_sim::Vec2::new(50.0, 50.0);
+
+/// Alpha Prime: a landable planet with a bar at (50, 50), where a new
+/// pilot's ship starts, whose landscape is `PICT` 10004.
 fn stellar() -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
+    put_i16s(&mut bytes, 0x00, &[50, 50, 4]);
     bytes[0x06..0x0A].copy_from_slice(&0x41_u32.to_be_bytes());
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
     bytes
@@ -411,6 +414,17 @@ impl Harness {
         self.app.screen().showing()
     }
 
+    fn ship(&self) -> nova_sim::ShipState {
+        *self
+            .app
+            .screen()
+            .flight_view()
+            .expect("flying")
+            .session()
+            .expect("a session")
+            .player()
+    }
+
     fn pilot(&self) -> Pilot {
         self.app
             .screen()
@@ -520,13 +534,27 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     assert_eq!(saved(&store, "Ada P"), landed);
     assert_eq!(game.app.take_warnings(), Vec::<String>::new());
 
-    // A new app: Open Pilot lists it and resumes it in the spaceport.
+    // A new app: Open Pilot lists it and resumes it in space over the
+    // stellar it landed on, no spaceport opened.
     let mut game = Harness::opening(&store);
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     assert_eq!(game.showing(), Showing::OpenPilot);
     assert!(texts(&game.frame()).contains(&"Ada P".to_owned()));
     game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert!(game.app.screen().spaceport_view().is_none());
+    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
+    let resumed = game.pilot();
+    assert_eq!(resumed, landed);
+    assert_eq!(resumed.stellar(), Some(StellarId(128)));
+    assert_eq!(resumed.date(), landed.date());
+    assert_eq!(resumed.ship(), landed.ship());
+    assert_eq!(resumed.cash(), landed.cash());
+    game.frame();
+
+    // L, L lands it there.
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(
         game.app
@@ -536,12 +564,6 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
             .stellar(),
         StellarId(128)
     );
-    let resumed = game.pilot();
-    assert_eq!(resumed, landed);
-    assert_eq!(resumed.date(), landed.date());
-    assert_eq!(resumed.ship(), landed.ship());
-    assert_eq!(resumed.cash(), landed.cash());
-    game.frame();
 
     // Take off, back to the menu, and Quit exits.
     game.press(KeyCode::Escape);
@@ -562,6 +584,32 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
         }),
         Control::Exit
     );
+}
+
+#[test]
+fn a_new_pilot_reopened_before_it_lands_resumes_over_the_stellar_its_first_save_names() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.ship().position, nova_sim::Vec2::new(50.0, 50.0));
+    assert_eq!(
+        saved(&store, "Ada").stellar(),
+        Some(StellarId(128)),
+        "the nearest stellar, saved as last landed on"
+    );
+    assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
+
+    let mut game = Harness::opening(&store);
+    let open_pilot = game.menu_button(MenuChoice::OpenPilot);
+    game.click(open_pilot);
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.pilot().stellar(), Some(StellarId(128)));
+    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over it");
 }
 
 #[test]

@@ -174,12 +174,12 @@ fn system() -> Vec<u8> {
     bytes
 }
 
-/// Alpha Prime: a landable planet at the system's centre, whose
-/// landscape is `PICT` 10004, with a bar, a trade center and an outfitter
+/// Alpha Prime: a landable planet at (50, 50), where a new pilot's ship
+/// starts, whose landscape is `PICT` 10004, with a bar, a trade center and an outfitter
 /// of tech level 2.
 fn stellar() -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
+    put_i16s(&mut bytes, 0x00, &[50, 50, 4]);
     bytes[0x06..0x0A].copy_from_slice(&0x2000_1047_u32.to_be_bytes());
     put_i16s(&mut bytes, 0x0C, &[2]);
     put_i16s(&mut bytes, 0x14, &[-1]);
@@ -729,8 +729,9 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     assert!((faster - (base_speed + 6.0)).abs() < 1e-6, "{faster}");
     game.frame();
 
-    // Closing the window saves; a new app opens the pilot, docked where it
-    // last landed, with its outfits and the stats they give.
+    // Closing the window saves; a new app opens the pilot, in space over
+    // the stellar it last landed on, with its outfits and the stats they
+    // give, and it lands there again.
     let flown: Pilot = game.pilot();
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
     assert_eq!(saved(&store, "Ada"), flown);
@@ -738,6 +739,9 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    game.frame();
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(game.pilot().owned(BOOSTER), 2);
     assert_eq!(game.pilot().owned(TANK), 1);

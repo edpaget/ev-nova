@@ -555,6 +555,28 @@ pub fn nearest_landable(position: Vec2, sites: &[LandingSite]) -> Option<Stellar
     nearest_landable_site(position, sites).map(|site| site.id)
 }
 
+/// How near a hypergate or wormhole must be for [`nearest_stellar`] to
+/// count it, squared: `_FindNearestStellar`'s 250000.0 (@0xdd050), 500 px.
+const GATE_NEAR_SQUARED: f32 = 250_000.0;
+
+/// The stellar among `sites`, those shown in the player's system, nearest
+/// `position`, as `_FindNearestStellar` (@0x276c-0x2888) finds it: one
+/// with the can-land flag (`Flags` 0x1 @0x27cd), destroyed or not, and a
+/// hypergate or wormhole (`Flags2` 0x3000 @0x2841) only nearer than 500
+/// px (@0x284a); the earlier in `sites` of any equally near. Being shown
+/// stands for its active byte (+0x44 @0x27c3). `None` when none counts.
+#[must_use]
+pub fn nearest_stellar(position: Vec2, sites: &[LandingSite]) -> Option<StellarId> {
+    let near = |site: &LandingSite| {
+        let offset = site.position - position;
+        offset.x * offset.x + offset.y * offset.y < GATE_NEAR_SQUARED
+    };
+    let counts = |site: &&LandingSite| {
+        has(site, StellarFlags::CAN_LAND) && (GateKind::of(site.flags2).is_none() || near(site))
+    };
+    nearest(position, sites.iter().filter(counts)).map(|site| site.id)
+}
+
 /// The stellar [`nearest_landable`] names, and whether it is a station
 /// (`spöb` `Flags` 0x10), as the tutorial's land hint words it
 /// (`_HandlePlayer` @0x709e8-0x70a31; see [`tutorial`](crate::tutorial)).
@@ -1121,6 +1143,46 @@ mod tests {
     fn with_none_landable_there_is_no_nearest_landable_stellar() {
         assert_eq!(nearest_landable(Vec2::ZERO, &[]), None);
         assert_eq!(nearest_landable(Vec2::ZERO, &[with_flags(0)]), None);
+    }
+
+    #[test]
+    fn the_nearest_stellar_is_the_nearest_with_the_can_land_flag() {
+        let sites = [
+            with_flags(0),
+            LandingSite {
+                destroyed: true,
+                ..site(129, 300.0, 0.0)
+            },
+            site(130, 400.0, 0.0),
+        ];
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites),
+            Some(StellarId(129)),
+            "destroyed or not, by its flag alone"
+        );
+        assert_eq!(nearest_stellar(Vec2::ZERO, &[with_flags(0)]), None);
+        assert_eq!(nearest_stellar(Vec2::ZERO, &[]), None);
+        let tied = [site(131, 0.0, 100.0), site(128, 0.0, -100.0)];
+        assert_eq!(nearest_stellar(Vec2::ZERO, &tied), Some(StellarId(131)));
+    }
+
+    #[test]
+    fn the_nearest_stellar_counts_a_gate_only_within_500_px() {
+        let gate = |id, x, flags2| LandingSite {
+            flags2,
+            ..site(id, x, 0.0)
+        };
+        let far = site(131, 2000.0, 0.0);
+        for flags2 in [crate::gate::HYPERGATE, crate::gate::WORMHOLE] {
+            let near = [far, gate(140, 499.0, flags2)];
+            assert_eq!(nearest_stellar(Vec2::ZERO, &near), Some(StellarId(140)));
+            let at_500 = [far, gate(140, 500.0, flags2)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &at_500),
+                Some(StellarId(131)),
+                "{flags2:#x}: 500 px away is too far"
+            );
+        }
     }
 
     #[test]

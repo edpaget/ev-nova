@@ -738,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_pilot_saved_flies_again_docked_at_the_new_stellar() {
+    fn a_moved_pilot_saved_flies_again_on_the_new_stellar() {
         let catalog = atlas();
         let mut session = landed(&catalog);
         session
@@ -747,9 +747,8 @@ mod tests {
         session.assert_docked_among_shown();
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
-        flown.assert_docked_among_shown();
         assert_eq!(flown.system(), SystemId(131));
-        assert_eq!(flown.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(50.0, 60.0));
     }
 

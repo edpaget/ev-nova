@@ -2731,9 +2731,7 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
                 .with_behaviour(escorts_only())
                 .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source))
         });
-        game.open_pilot_to(Showing::Spaceport);
-        game.tap(Key::Escape);
-        assert_eq!(game.showing(), Showing::Flight, "took off");
+        game.open_pilot_to(Showing::Flight);
         game.frame();
         game.frame();
         assert_eq!(game.escorts().len(), 1, "{text}");
@@ -3107,7 +3105,7 @@ fn a_pirate_carrier_launches_fighters_that_take_the_players_shield_down() {
 }
 
 #[test]
-fn a_fighter_out_is_saved_on_landing_and_flies_again_after_take_off() {
+fn a_fighter_out_is_saved_on_landing_and_flies_again_after_reopening() {
     let store = MemoryPilots::new();
     let mut game = carrying(&store, &[], |screen| screen);
     game.launch();
@@ -3120,9 +3118,7 @@ fn a_fighter_out_is_saved_on_landing_and_flies_again_after_take_off() {
     assert_eq!(saved.escorts().len(), 1);
     assert!(saved.escorts()[0].carried);
     let mut game = refly(&store, &[], |screen| screen);
-    game.open_pilot_to(Showing::Spaceport);
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Flight, "took off");
+    game.open_pilot_to(Showing::Flight);
     game.frame();
     game.frame();
     let fighters = game.escorts();
@@ -3168,8 +3164,7 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     let mut game = refly(&store, &[], |screen| {
         screen.with_rules(Rulebook::default().with_override(RuleKey::FighterRecall, source))
     });
-    game.open_pilot_to(Showing::Spaceport);
-    game.tap(Key::Escape);
+    game.open_pilot_to(Showing::Flight);
     game.frame();
     game.frame();
     assert_eq!(game.fighters_out(), 0, "no fighter out");
