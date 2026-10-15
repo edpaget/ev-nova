@@ -336,10 +336,11 @@ impl Walk<'_> {
         let penalty = |govt: Option<GovtId>| f32::from(govts.penalty(govt, self.crime));
         let (owner, victim) = (self.map.govt(system), self.victim);
         match (owner, victim) {
-            (Some(_), _) if owner == victim => -penalty(victim),
             (Some(_), None) if govts.xenophobic(owner) => ENEMY_SHARE * penalty(owner),
             (Some(_), None) if govts.flag(owner, NOSY) => -ENEMY_SHARE * penalty(owner),
             (Some(_), Some(_)) if govts.enemies(victim, owner) => ENEMY_SHARE * penalty(owner),
+            // The victim's own system too (@0x992e): a government is its
+            // own ally, and never its own enemy.
             (Some(_), Some(_)) if govts.allies(victim, owner) => -penalty(victim),
             (Some(_), Some(_)) if self.law.crime_gains == RuleSource::Engine => {
                 ENEMY_SHARE * penalty(owner)
@@ -620,11 +621,12 @@ mod tests {
             .with(1, 1, &[3], Some(VICTIM))
             .with(2, 1, &[4], Some(VICTIM))
             .with(3, 3, &[], Some(VICTIM))
-            .with(4, 4, &[], Some(VICTIM));
+            .with(4, 4, &[1], Some(VICTIM));
         assert_walk(
             &walk(ENGINE, Some(VICTIM), 2, &map, &alone(10)),
             &[(1, -10.0), (2, -10.0), (4, -6.5)],
-            "a crime in 2 changes its place, head first, and follows 2's links, not 1's",
+            "a crime in 2 changes its place, head first, and follows 2's links, not 1's; \
+             4's link back to the head finds the place walked",
         );
         let map = FakeMap::default()
             .with(1, 1, &[6], Some(VICTIM))
