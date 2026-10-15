@@ -278,11 +278,21 @@
 //!   more: its `_screenFaded` holds only while a jump fades out, and
 //!   nothing sets its `_fadePending` (only `_ResetPlayer` writes it, a 0,
 //!   @0x1d7c3).
-//! - I ([`MISSION_INFO_KEY`], a press), outside the map and a jump, asks
-//!   the router for the mission info screen over the paused flight
+//! - I ([`MISSION_INFO_KEY`], a press), outside the map, asks the router
+//!   for the mission info screen over the paused flight
 //!   ([`FlightView::take_mission_info_request`]), letting go of the
 //!   flight keys, when the session shows an active mission there; with
-//!   none it says "You have no active missions." (`STR#` 2002 #354).
+//!   none it says "You have no active missions." (`STR#` 2002 #354) after
+//!   the shared refusal beep
+//!   ([`SimSound::Refused`](nova_sim::SimSound::Refused), @0x70557). The
+//!   session decides ([`Session::press_mission_info`]), and refuses it in
+//!   silence during a jump, its pre-jump stage included (+0x50,
+//!   @0x70424), in the escape pod (+0xc908, @0x7042e), while the ship
+//!   breaks up (`_IsDying` @0x70439, +0x3c @0x7044b), once it has
+//!   exploded, and for
+//!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+//!   take-off or a gate's exit (`_frameCounter`, @0x7045e). A disabled
+//!   ship takes it.
 //! - The player's escorts fly beside it (see [`Session`]), their ship
 //!   types' sprite sheets read with the traffic's. F, D, V and C (presses)
 //!   command them ([`Session::command_escorts`]): attack the player's
@@ -401,8 +411,8 @@ use nova_sim::{
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, ControlBits, Hailed, HireList,
     HireRefusal, HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo,
-    MissionText, News, NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent,
-    StellarIff, TagNames, VenueOffer, ship_layer::SlotSprites,
+    MissionInfoPress, MissionText, News, NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo,
+    SessionEvent, StellarIff, TagNames, VenueOffer, ship_layer::SlotSprites,
 };
 use nova_sim::{DrawnBox, DrawnShips};
 use nova_sim::{PlayerCommand, PlayerFate};
@@ -2067,16 +2077,26 @@ impl<
     }
 
     /// Presses [`MISSION_INFO_KEY`], as `_HandlePlayer` does
-    /// (@0x70405-0x705a8): with an active mission shown, asks the router
-    /// for the mission info screen, letting go of the flight keys; with
-    /// none, says #354 on the message line.
+    /// (@0x70405-0x705a8), the session deciding
+    /// ([`Session::press_mission_info`]): with an active mission shown,
+    /// asks the router for the mission info screen, letting go of the
+    /// flight keys; with none, says #354 on the message line after the
+    /// session's refusal beep; refused, nothing. A failed session has no
+    /// missions and no beep to give, so it says #354 alone.
     fn ask_mission_info(&mut self) {
-        let info = self.mission_info();
-        if info.rows.is_empty() {
-            self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
-        } else {
-            self.pending_mission_info = Some(info);
-            self.held.clear();
+        let press = match &mut self.session {
+            Ok(session) => session.press_mission_info(),
+            Err(_) => MissionInfoPress::NoActiveMissions,
+        };
+        match press {
+            MissionInfoPress::Refused => {}
+            MissionInfoPress::NoActiveMissions => {
+                self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
+            }
+            MissionInfoPress::Opens(info) => {
+                self.pending_mission_info = Some(info);
+                self.held.clear();
+            }
         }
     }
 
@@ -7786,6 +7806,11 @@ mod tests {
         }
         tap(&mut view, MISSION_INFO_KEY);
         assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS), "after 15 ticks");
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "no active missions, with the beep (@0x70557)"
+        );
         tap(&mut view, PLAYER_INFO_KEY);
         assert!(view.take_player_info_request(), "after 15 ticks");
         tap(&mut view, MAP_KEY);
@@ -11618,7 +11643,9 @@ mod tests {
     fn mission_info_and_landing_do_nothing_while_the_player_breaks_up() {
         let mut view = breaking_up();
         let nav = nav_target(&view);
+        let _ = view.take_sounds();
         tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.take_sounds(), [], "silently (@0x70445, @0x7044f)");
         tap(&mut view, LAND_KEY);
         assert!(view.take_mission_info_request().is_none());
         assert_eq!(view.take_landing(), None);
@@ -16864,9 +16891,58 @@ mod tests {
     #[test]
     fn i_with_no_mission_says_you_have_no_active_missions() {
         let mut view = flight();
+        let _ = view.take_sounds();
         tap(&mut view, MISSION_INFO_KEY);
         assert_eq!(view.take_mission_info_request(), None);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "_beepSnd[3] (@0x70557)"
+        );
         assert_lasts(&mut view, NO_ACTIVE_MISSIONS, 240);
+    }
+
+    /// Taps I in `view`, its sounds taken first: nothing is asked for,
+    /// nothing said and nothing sounded.
+    fn i_does_nothing_and_says_nothing(view: &mut View, why: &str) {
+        let _ = view.take_sounds();
+        let message = view.message().map(str::to_owned);
+        tap(view, MISSION_INFO_KEY);
+        assert_eq!(view.take_mission_info_request(), None, "{why}");
+        assert_eq!(view.message(), message.as_deref(), "{why}");
+        assert_eq!(view.take_sounds(), [], "{why}");
+    }
+
+    #[test]
+    fn i_during_a_jump_does_nothing_and_says_nothing() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        i_does_nothing_and_says_nothing(&mut view, "turning to jump (@0x70424)");
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        i_does_nothing_and_says_nothing(&mut view, "streaking (@0x70424)");
+    }
+
+    #[test]
+    fn i_in_the_escape_pod_does_nothing_and_says_nothing() {
+        let mut pod = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
+        assert!(until_ejected(&mut pod).0);
+        i_does_nothing_and_says_nothing(&mut pod, "in the pod (@0x7042e)");
+    }
+
+    #[test]
+    fn i_while_disabled_is_taken() {
+        let mut view = disabled_player();
+        let _ = view.take_sounds();
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.take_mission_info_request(), None);
+        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Refused)]);
     }
 
     #[test]
@@ -16876,7 +16952,9 @@ mod tests {
         view.take_offer().expect("offered");
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
         view.input(&key(Key::Up, true));
+        let _ = view.take_sounds();
         tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.take_sounds(), [], "no beep from flight");
         let info = view.take_mission_info_request().expect("asked");
         assert_eq!(info, view.mission_info());
         assert_eq!(view.take_mission_info_request(), None, "once");
