@@ -145,7 +145,7 @@ impl AuxShips {
 ///   (@0x99307-0x99336).
 /// - 128-2175: that system, or the visible system standing for it at its
 ///   place (`_FindActiveCoLocatedSystem`, @0x99338-0x99361).
-/// - 5000-9998: system `code - 4872` (5128 is system 128), or any system
+/// - 5000-9998: system `code - 4872` (5000 is system 128; the Bible's 5128 is wrong), or any system
 ///   its raw Con slots list ([`StarMap::con_slots`]), with no stand-in and
 ///   no visibility test (@0x99363-0x993ac). A system the map doesn't hold
 ///   lists none; the original reads past its table for codes of 7048 and
