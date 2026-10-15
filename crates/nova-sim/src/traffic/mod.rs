@@ -136,8 +136,9 @@ use table::{SpawnPerson, SpawnTable};
 /// NPCs: `_HyperSpawnFleet`'s lead and escorts (@0x41ce9, @0x421a5), the
 /// `düde` ships (`_RandomShipSpawn` @0x43297, @0x42990), the auxiliary
 /// ships (`_SpecificDudeSpawn` from `_EnterMoreShips` @0x435a8), the
-/// persons (`_SpawnPerson` @0x40cba) and the fighters (`_LaunchFighter`
-/// @0x3d648). See [`Traffic::free_berth`].
+/// persons (`_SpawnPerson` @0x40cba), the fighters (`_LaunchFighter`
+/// @0x3d648), the mission ships (`_MissionDudeSpawn` @0x3cd50) and the
+/// hired escorts (`_SpawnEscort` @0x3fe73). See [`Traffic::free_berth`].
 pub const SPAWN_RESERVE: u32 = 8;
 
 /// The ship-table slots the old ship of a "Use As My Ship" capture leaves
@@ -380,10 +381,12 @@ impl Traffic {
     /// Enters a system as [`Traffic::enter_in`] does, with `missions`, the
     /// active missions' special ships set up there, first: as
     /// `_SetupShipsInSystem` sets them up before the system's own passes
-    /// (@0x42dc4-0x43194), none of which they use up. The system's own
-    /// ships each take a slot below the world's spawn reserve, those with
-    /// none not coming ([`Traffic::free_berth`]); the mission ships are
-    /// not capped (`_MissionDudeSpawn`'s -1 is not modelled). The scans
+    /// (@0x42dc4-0x43194), none of which they use up. Every ship, the
+    /// mission ships first, takes a slot below the world's spawn reserve,
+    /// those with none not coming ([`Traffic::free_berth`]): a mission
+    /// ship's `_MissionDudeSpawn` passes 8 (@0x3cd50) and, on its -1,
+    /// `_SetupShipsInSystem` goes on to the next ship (@0x43128), no
+    /// count changed. The scans
     /// not yet taken are dropped: the original scans at once, so none
     /// outlives its system.
     pub fn enter_with(
@@ -399,7 +402,7 @@ impl Traffic {
         self.departed.clear();
         self.scans.clear();
         self.quotes.clear();
-        self.add(missions, world.persons.grudges, None);
+        self.add(missions, world.persons.grudges, Some(world.spawn_reserve));
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
         let ships = spawn::initial(
@@ -413,17 +416,18 @@ impl Traffic {
     }
 
     /// Brings `ships` into the system as they are, numbered after every
-    /// other NPC, with no ship-table cap: the mission ships whose appear
-    /// timer ran out.
+    /// other NPC, with no ship-table cap.
     pub fn bring_in(&mut self, ships: Vec<NewShip>) {
         self.add(ships, &BTreeSet::new(), None);
     }
 
-    /// Brings `ships` into the system as [`Traffic::bring_in`] does, each
-    /// leaving `reserve` slots of the ship table free
+    /// Brings `ships` into the system as they are, numbered after every
+    /// other NPC, each leaving `reserve` slots of the ship table free
     /// ([`Traffic::free_berth`]), and gives how many came: one that finds
     /// no slot does not come. The auxiliary ships' spawn
-    /// (`_SpecificDudeSpawn` from `_EnterMoreShips`, reserve 8 @0x435a8).
+    /// (`_SpecificDudeSpawn` from `_EnterMoreShips`, reserve 8 @0x435a8),
+    /// and the mission ships' whose appear timer ran out or that a hail
+    /// swaps in (`_MissionDudeSpawn`, reserve 8 @0x3cd50).
     pub fn bring_in_within(&mut self, ships: Vec<NewShip>, reserve: u32) -> usize {
         self.add(ships, &BTreeSet::new(), Some(reserve))
     }
@@ -988,10 +992,19 @@ impl Traffic {
     /// block it, and a free slot above it cannot be taken.
     #[must_use]
     pub fn free_berth(&self, reserve: u32) -> Option<u32> {
+        self.free_berth_skipping(reserve, &BTreeSet::new())
+    }
+
+    /// The berth [`Traffic::free_berth`] gives with `skip` held too: the
+    /// first free one that `skip` does not hold, when it is below the
+    /// bound `reserve` leaves. A hire passes its loaded escorts not placed
+    /// yet, whose slots the original's table already holds.
+    #[must_use]
+    pub fn free_berth_skipping(&self, reserve: u32, skip: &BTreeSet<u32>) -> Option<u32> {
         let bound = u32::try_from(crate::board::MAX_SHIPS_IN_SYSTEM)
             .unwrap_or(u32::MAX)
             .saturating_sub(reserve);
-        Some(self.next_berth()).filter(|&berth| berth < bound)
+        Some(self.next_berth_skipping(skip)).filter(|&berth| berth < bound)
     }
 
     /// Takes NPC `id` out of the system, if it is there.
@@ -2044,7 +2057,10 @@ mod tests {
         assert_eq!(berths(&traffic), [1, 3, 2, 4]);
         traffic.remove(NpcId(0));
         traffic.table = table(0);
-        traffic.bring_in(vec![mission_ship(-1, 0.0), mission_ship(-1, 1.0)]);
+        traffic.bring_in_within(
+            vec![mission_ship(-1, 0.0), mission_ship(-1, 1.0)],
+            SPAWN_RESERVE,
+        );
         assert_eq!(berths(&traffic), [3, 2, 4, 1, 5], "brought in alike");
     }
 
@@ -3596,7 +3612,10 @@ mod tests {
             vec![mission_ship(0, 0.0)],
             &mut Draws::of(&[]),
         );
-        traffic.bring_in(vec![mission_ship(0, 9.0), mission_ship(1, 9.0)]);
+        traffic.bring_in_within(
+            vec![mission_ship(0, 9.0), mission_ship(1, 9.0)],
+            SPAWN_RESERVE,
+        );
         let npcs = traffic.npcs();
         for npc in &npcs[..2] {
             assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
@@ -3613,13 +3632,16 @@ mod tests {
         for (table, share) in [(table(0), 0.33_f32), (tough, 0.1)] {
             let mut traffic = Traffic::new();
             traffic.enter_with(table, World::new(&[]), Vec::new(), &mut Draws::of(&[]));
-            traffic.bring_in(vec![
-                NewShip {
-                    derelict: true,
-                    ..mission_ship(-1, 0.0)
-                },
-                mission_ship(-1, 1.0),
-            ]);
+            traffic.bring_in_within(
+                vec![
+                    NewShip {
+                        derelict: true,
+                        ..mission_ship(-1, 0.0)
+                    },
+                    mission_ship(-1, 1.0),
+                ],
+                SPAWN_RESERVE,
+            );
             let npcs = traffic.npcs();
             assert_eq!(npcs[0].condition, Condition::Disabled);
             assert_eq!(npcs[0].reserves.shield.now, 0.0);
@@ -3775,7 +3797,7 @@ mod tests {
     fn a_cloaked_ship_attacking_another_npc_measures_from_it() {
         for (x, kept) in [(1300.0, true), (1100.0, false)] {
             let mut traffic = with_mission_ship(ZEPHYR, false, 1000.0);
-            traffic.bring_in(vec![mission_ship(-1, x)]);
+            traffic.bring_in_within(vec![mission_ship(-1, x)], SPAWN_RESERVE);
             traffic.npcs[0].cloak = Cloak {
                 fade: FADE_FULL,
                 direction: 0,
@@ -4050,13 +4072,16 @@ mod tests {
     fn an_npc_carries_the_cargo_its_ship_comes_with() {
         let mut traffic = Traffic::new();
         traffic.enter(table(0), &mut Draws::of(&[]));
-        traffic.bring_in(vec![
-            NewShip {
-                cargo: Some((crate::market::Good::Commodity(2), 9)),
-                ..mission_ship(0, 0.0)
-            },
-            mission_ship(0, 0.0),
-        ]);
+        traffic.bring_in_within(
+            vec![
+                NewShip {
+                    cargo: Some((crate::market::Good::Commodity(2), 9)),
+                    ..mission_ship(0, 0.0)
+                },
+                mission_ship(0, 0.0),
+            ],
+            SPAWN_RESERVE,
+        );
         assert_eq!(
             traffic
                 .npcs()
@@ -4076,9 +4101,9 @@ mod tests {
         };
         let mut traffic = Traffic::new();
         traffic.enter(table(0), &mut Draws::of(&[]));
-        traffic.bring_in(vec![quoted(999)]);
+        traffic.bring_in_within(vec![quoted(999)], SPAWN_RESERVE);
         assert!(traffic.take_quotes().is_empty(), "ship 999 has no record");
-        traffic.bring_in(vec![quoted(200)]);
+        traffic.bring_in_within(vec![quoted(200)], SPAWN_RESERVE);
         assert_eq!(traffic.take_quotes(), [7600]);
     }
 
@@ -4087,10 +4112,13 @@ mod tests {
         let quoted = || {
             let mut traffic = Traffic::new();
             traffic.enter(table(0), &mut Draws::of(&[]));
-            traffic.bring_in(vec![NewShip {
-                quote: Some(7600),
-                ..mission_ship(0, 0.0)
-            }]);
+            traffic.bring_in_within(
+                vec![NewShip {
+                    quote: Some(7600),
+                    ..mission_ship(0, 0.0)
+                }],
+                SPAWN_RESERVE,
+            );
             traffic
         };
         let mut entered = quoted();
@@ -4475,18 +4503,51 @@ mod tests {
     }
 
     #[test]
-    fn mission_ships_are_not_capped() {
-        let mut traffic = at_berths(1..=55);
-        traffic.bring_in(vec![mission_ship(-1, 0.0)]);
-        assert_eq!(traffic.npcs().last().map(|npc| npc.berth), Some(56));
-        let mut traffic = Traffic::new();
-        traffic.enter_with(
-            table(0),
-            World::new(&[]),
-            vec![mission_ship(-1, 0.0); 60],
-            &mut Draws::of(&[]),
+    fn free_berth_skipping_skips_the_held_berths_and_stops_below_the_reserve() {
+        let traffic = at_berths(1..=53);
+        assert_eq!(
+            traffic.free_berth_skipping(SPAWN_RESERVE, &BTreeSet::from([54])),
+            Some(55)
         );
-        assert_eq!(traffic.npcs().len(), 60, "set up whole");
+        assert_eq!(
+            traffic.free_berth_skipping(SPAWN_RESERVE, &BTreeSet::from([54, 55])),
+            None
+        );
+        assert_eq!(
+            at_berths(1..=62).free_berth_skipping(0, &BTreeSet::from([63])),
+            None
+        );
+    }
+
+    #[test]
+    fn mission_ships_set_up_find_no_slot_once_55_berths_are_held() {
+        let set_up = |spawn_reserve| {
+            let mut traffic = Traffic::new();
+            traffic.reserve((1..=55).collect());
+            traffic.enter_with(
+                table(0),
+                World {
+                    spawn_reserve,
+                    ..World::new(&[])
+                },
+                vec![mission_ship(-1, 0.0)],
+                &mut Draws::of(&[]),
+            );
+            traffic
+        };
+        assert_eq!(set_up(SPAWN_RESERVE).npcs(), [], "no slot");
+        let bible = set_up(0);
+        let npcs = bible.npcs();
+        assert_eq!(npcs.len(), 1);
+        assert!(npcs[0].mission.is_some());
+        assert_eq!(npcs[0].berth, 56);
+    }
+
+    #[test]
+    fn mission_ships_brought_in_find_no_slot_once_55_berths_are_held() {
+        let mut traffic = at_berths(1..=55);
+        let came = traffic.bring_in_within(vec![mission_ship(-1, 0.0)], SPAWN_RESERVE);
+        assert_eq!((came, traffic.npcs().len()), (0, 55));
     }
 
     /// [`armed`] of 0 to fire after 30 ticks, fleet 382 quoted with
