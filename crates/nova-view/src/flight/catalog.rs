@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::rc::Rc;
 
+use nova_sim::asteroid::KINDS;
 pub use nova_sim::{Blink, BoomId, GovtId, ShipId, SoundId, WeaponId};
 
 use crate::color::Color;
@@ -254,6 +255,9 @@ pub trait CombatLooks {
     /// The sheet of cargo box graphic `graphic`, `spïn` 500 + `graphic`,
     /// or why it cannot be read.
     fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String>;
+    /// The master sheet of asteroid type `kind`, `spïn` 800 + `kind`, or
+    /// why it cannot be read.
+    fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String>;
     /// The mouse cursor's sheet, `spïn` 650 (`_InitSprites`
     /// @0x2147c-0x215eb), or why it cannot be read.
     fn cursor_sheet(&self) -> Result<EffectSheet, String>;
@@ -279,6 +283,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
         (**self).box_sheet(graphic)
+    }
+
+    fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
+        (**self).asteroid_sheet(kind)
     }
 
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
@@ -308,6 +316,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
         (**self).box_sheet(graphic)
     }
 
+    fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
+        (**self).asteroid_sheet(kind)
+    }
+
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
         (**self).cursor_sheet()
     }
@@ -323,7 +335,8 @@ pub const LAST_BOOM: i16 = 191;
 /// (rdm:phase/cargo-and-scanning/phase-5-scoopable-cargo-boxes).
 pub const BOX_GRAPHICS: [u16; 1] = [0];
 
-/// The weapons', explosions' and cargo boxes' looks, read once.
+/// The weapons', explosions', cargo boxes' and asteroids' looks, read
+/// once.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Looks {
     /// Each weapon's look, or why it cannot be read.
@@ -333,14 +346,16 @@ pub struct Looks {
     /// Each cargo box graphic a box can have: its sheet, or why it cannot
     /// be read.
     pub boxes: BTreeMap<u16, Result<EffectSheet, String>>,
+    /// Each asteroid type's master sheet, or why it cannot be read.
+    pub asteroids: BTreeMap<u8, Result<EffectSheet, String>>,
     /// The mouse cursor's sheet, or why it cannot be read; `None` when it
     /// was not read.
     pub cursor: Option<Result<EffectSheet, String>>,
 }
 
 impl Looks {
-    /// The looks of `weapons` and of every explosion type, read from
-    /// `catalog`.
+    /// The looks of `weapons`, of every explosion type, of the cargo
+    /// boxes and of every asteroid type, read from `catalog`.
     pub fn read(catalog: &impl CombatLooks, weapons: impl IntoIterator<Item = WeaponId>) -> Self {
         Self {
             weapons: weapons
@@ -354,6 +369,9 @@ impl Looks {
                 .into_iter()
                 .map(|graphic| (graphic, catalog.box_sheet(graphic)))
                 .collect(),
+            asteroids: (0..KINDS as u8)
+                .map(|kind| (kind, catalog.asteroid_sheet(kind)))
+                .collect(),
             cursor: Some(catalog.cursor_sheet()),
         }
     }
@@ -362,6 +380,12 @@ impl Looks {
     #[must_use]
     pub fn box_sheet(&self, graphic: u16) -> Option<&EffectSheet> {
         self.boxes.get(&graphic)?.as_ref().ok()
+    }
+
+    /// Asteroid type `kind`'s master sheet, if it was read.
+    #[must_use]
+    pub fn asteroid_sheet(&self, kind: u8) -> Option<&EffectSheet> {
+        self.asteroids.get(&kind)?.as_ref().ok()
     }
 
     /// The mouse cursor's sheet, if it was read.
@@ -386,7 +410,9 @@ impl Looks {
     /// at all, as the catalog says, and a sheet that could not, after its
     /// `wëap`, `bööm` or cargo box graphic ("wëap 140: no spïn 3005");
     /// the weapons' by ID, then the explosions', then the boxes', then the
-    /// cursor's ("cursor: no spïn 650").
+    /// cursor's ("cursor: no spïn 650"). An asteroid type's sheet is left
+    /// out: a scenario may lack the types no system holds, and an asteroid
+    /// whose sheet was not read draws as a crossed box.
     #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let weapons = self.weapons.iter().filter_map(|(id, look)| match look {
@@ -555,6 +581,13 @@ mod tests {
             })
         }
 
+        fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
+            Ok(EffectSheet {
+                image_id: 800 + i16::from(kind),
+                frames: NonZeroU16::MIN,
+            })
+        }
+
         fn cursor_sheet(&self) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
                 image_id: 650,
@@ -564,10 +597,10 @@ mod tests {
     }
 
     /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130,
-    /// govt 131 and cargo box graphic 2.
+    /// govt 131, cargo box graphic 2 and asteroid type 3.
     fn looks(catalog: impl CombatLooks) -> String {
         format!(
-            "{:?} {:?} {:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?} {:?} {:?}",
             catalog.weapon_look(WeaponId(128)).map(|look| look.name),
             catalog
                 .boom_look(BoomId(129))
@@ -575,6 +608,7 @@ mod tests {
             catalog.target_card(ShipId(130)).subtitle,
             catalog.target_code(GovtId(131)),
             catalog.box_sheet(2).map(|sheet| sheet.image_id),
+            catalog.asteroid_sheet(3).map(|sheet| sheet.image_id),
         )
     }
 
@@ -619,13 +653,25 @@ mod tests {
             }),
             "the cursor's"
         );
+        let asteroids: Vec<_> = looks.asteroids.keys().copied().collect();
+        assert_eq!(asteroids, (0..16).collect::<Vec<u8>>(), "every type's");
+        assert_eq!(
+            looks.asteroid_sheet(15),
+            Some(&EffectSheet {
+                image_id: 815,
+                frames: NonZeroU16::MIN
+            })
+        );
+        assert_eq!(looks.asteroid_sheet(16), None);
         assert_eq!(looks.problems(), Vec::<String>::new());
         let unread = Looks {
             weapons: BTreeMap::from([(WeaponId(1), Err("no".to_owned()))]),
             booms: BTreeMap::from([(BoomId(1), Err("no".to_owned()))]),
             boxes: BTreeMap::from([(0, Err("no".to_owned()))]),
+            asteroids: BTreeMap::from([(0, Err("no".to_owned()))]),
             cursor: Some(Err("no".to_owned())),
         };
+        assert_eq!(unread.asteroid_sheet(0), None);
         assert_eq!(unread.weapon(WeaponId(1)), None);
         assert_eq!(unread.boom(BoomId(1)), None);
         assert_eq!(unread.box_sheet(0), None);
@@ -635,7 +681,7 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131") Ok(502)"#;
+        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131") Ok(502) Ok(803)"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);
@@ -682,6 +728,10 @@ mod tests {
 
         fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
             Err(format!("no spïn {}", 500 + graphic))
+        }
+
+        fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
+            Err(format!("no spïn {}", 800 + u16::from(kind)))
         }
 
         fn cursor_sheet(&self) -> Result<EffectSheet, String> {

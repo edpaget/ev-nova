@@ -58,6 +58,7 @@
 //! ([`FlightView::with_effects_chance`]), never on the simulation's. The
 //! beams live before the fight's step are passed along, so a looped
 //! weapon is heard once a beam. The fight is drawn over the stellars:
+//! the asteroid field ([`asteroids`], smoothed as the cargo boxes are),
 //! the cargo boxes a jettison left ([`boxes`], smoothed as the shots
 //! are), beams that go under the ships, then the ships, then the shots
 //! (each smoothed as the ships are) and the other beams, then the
@@ -420,6 +421,12 @@
 //!   fight and the answer to its hits, [`Session::answer_strikes`]),
 //!   shown in the message line for
 //!   [`HAIL_QUOTE_TICKS`], the last one said winning.
+//! - Each step's last session work is the asteroid field's
+//!   ([`Session::tick_asteroids`]): a spawn at the field's edge and the
+//!   field stepped, on the flight's chance. Before any step, and so
+//!   before the first frame is drawn, a session started or loaded in
+//!   flight places its field as its rules say
+//!   ([`Session::settle_asteroid_field`]).
 //! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
 //!   message line and closes the escort menu.
 //! - While the player's ship breaks up, M, L and I do nothing, saying
@@ -489,6 +496,7 @@ use nova_sim::{DrawnBox, DrawnShips};
 use nova_sim::{PlayerCommand, PlayerFate};
 
 use super::alert;
+use super::asteroids::{self, AsteroidShown};
 use super::boxes::{self, BoxShown};
 use super::brackets;
 use super::cadence::{Drawn, HudCadence, retake_target};
@@ -2875,6 +2883,9 @@ impl<
                         session.answer_strikes(&*self.behaviour);
                         session.tick_quotes(&self.catalog, &mut self.chance);
                         quotes.extend(session.take_quotes());
+                        // The pass's last session work, as the second
+                        // pass's ([`Session::tick_again`]).
+                        session.tick_asteroids(&mut self.chance);
                     }
                     let player = point(session.player().position);
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
@@ -4899,6 +4910,29 @@ impl<C> FlightView<C> {
             .collect()
     }
 
+    /// The asteroids in the field, each where it is drawn: `alpha` of the
+    /// way from where it was a step ago, as the cargo boxes are, at its
+    /// whole frame.
+    fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
+        let Ok(session) = &self.session else {
+            return Vec::new();
+        };
+        let behind = 1.0 - self.alpha;
+        session
+            .asteroids()
+            .map(|asteroid| AsteroidShown {
+                at: camera.world_to_screen(Point::new(
+                    asteroid.velocity.x.mul_add(-behind, asteroid.position.x),
+                    asteroid.velocity.y.mul_add(-behind, asteroid.position.y),
+                )),
+                // Its whole part; a frame below 0, which the single wrap
+                // can leave, shows the first.
+                frame: asteroid.frame as u16,
+                kind: asteroid.kind,
+            })
+            .collect()
+    }
+
     /// The beams being fired, each moved with its firer as it is drawn.
     fn shown_beams(&self, camera: &Camera) -> Vec<BeamShown> {
         let Ok(session) = &self.session else {
@@ -5239,6 +5273,9 @@ impl<
     /// the radar when it is due ([`FlightView::advance_hud`]), still
     /// before the frame is drawn.
     fn tick(&mut self, dt: Duration) {
+        if let Ok(session) = &mut self.session {
+            session.settle_asteroid_field(&mut self.chance);
+        }
         self.catch_up();
         if let Some(effect) = &mut self.fade_in {
             effect.advance(dt);
@@ -5312,6 +5349,7 @@ impl<
             hud::draw_message(list, message, metrics);
         }
         scene::draw_stellars(list, scene, &camera, self.elapsed);
+        asteroids::draw_asteroids(list, &self.shown_asteroids(&camera), &self.looks);
         boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
         let beams = self.shown_beams(&camera);
         weapons::draw_beams(list, &beams, &self.looks, true);
@@ -6316,6 +6354,14 @@ mod tests {
                 0 => self.box_sheet.clone(),
                 other => Err(format!("no spïn {}", 500 + other)),
             }
+        }
+
+        /// Type `kind`'s sheet: `rlëD` 1800 + `kind`, of 36 frames.
+        fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
+            Ok(EffectSheet {
+                image_id: 1800 + i16::from(kind),
+                frames: NonZeroU16::new(36).expect("non-zero"),
+            })
         }
 
         fn cursor_sheet(&self) -> Result<EffectSheet, String> {
@@ -16853,7 +16899,11 @@ mod tests {
     /// `Flags` `flags`, and bought the other 6 tons full of food when
     /// `food`, then took off.
     fn carrying(flags: u16, food: bool) -> View {
-        let mut errands = trading();
+        carrying_in(trading(), Rulebook::default(), flags, food)
+    }
+
+    /// [`carrying`], from `errands` under `rules`.
+    fn carrying_in(mut errands: FakeCatalog, rules: Rulebook, flags: u16, food: bool) -> View {
         errands.missions = vec![MissionRecord {
             cargo_type: 0,
             cargo_qty: 4,
@@ -16861,7 +16911,7 @@ mod tests {
             flags,
             ..errand(130)
         }];
-        let mut view = FlightView::new(errands);
+        let mut view = FlightView::new(errands).with_rules(rules);
         land_now(&mut view);
         view.settle_script();
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
@@ -16991,6 +17041,99 @@ mod tests {
             [Sound::Sim(SimSound::CargoJettisoned)],
             "snd 154"
         );
+    }
+
+    /// `base` with asteroid type 0, its sheet `rlëD` 1800, and system 130
+    /// holding 3 of it.
+    fn rocky(base: FakeCatalog) -> FakeCatalog {
+        FakeCatalog {
+            asteroid_types: vec![nova_sim::AsteroidTypeRecord {
+                kind: 0,
+                strength: 50,
+                spin_rate: 100,
+                frames: 36,
+                frame_size: Some((40, 40)),
+            }],
+            asteroid_fields: vec![nova_sim::AsteroidFieldRecord {
+                system: SystemId(130),
+                count: 3,
+                types: 0x0001,
+            }],
+            ..base
+        }
+    }
+
+    /// The rules with `key` read as the other reading.
+    fn other_reading(key: RuleKey) -> Rulebook {
+        Rulebook::default().with_override(key, RuleSource::Bible)
+    }
+
+    fn asteroid_count(view: &View) -> usize {
+        view.session().expect("flying").asteroids().count()
+    }
+
+    #[test]
+    fn each_step_spawns_an_asteroid_at_the_edge_until_the_systems_count() {
+        // Just off screen, so none is culled as it spawns.
+        let mut view = FlightView::new(rocky(catalog()))
+            .with_rules(other_reading(RuleKey::AsteroidRespawnRing));
+        assert_eq!(asteroid_count(&view), 0);
+        for count in [1, 2, 3, 3] {
+            ticks(&mut view, 1);
+            assert_eq!(asteroid_count(&view), count);
+        }
+    }
+
+    #[test]
+    fn a_flight_started_in_flight_shows_its_placed_field_before_any_step() {
+        let mut view = FlightView::new(rocky(catalog()))
+            .with_rules(other_reading(RuleKey::AsteroidEntryField));
+        view.tick(Duration::ZERO);
+        assert_eq!(asteroid_count(&view), 3, "placed, no step run");
+        let list = drawn(&view);
+        let asteroids = sprites(&list)
+            .into_iter()
+            .filter(|(image, _)| image.id == 1800)
+            .count();
+        assert_eq!(asteroids, 3);
+        let mut engine = FlightView::new(rocky(catalog()));
+        engine.tick(Duration::ZERO);
+        assert_eq!(asteroid_count(&engine), 0, "by the engine");
+    }
+
+    #[test]
+    fn an_asteroid_is_its_types_frame_drawn_where_it_is_over_the_stellars_and_under_the_boxes() {
+        let rules = other_reading(RuleKey::AsteroidRespawnRing);
+        let mut view = carrying_in(rocky(trading()), rules, 0, true);
+        ticks(&mut view, 2);
+        command_tap(&mut view, JETTISON_KEY, false);
+        view.alpha = 0.25;
+        let session = view.session().expect("flying");
+        let made: Vec<_> = session.asteroids().copied().collect();
+        assert!(!made.is_empty());
+        let camera = view.camera();
+        let expected: Vec<_> = made
+            .iter()
+            .map(|asteroid| {
+                (
+                    ImageKey::sprite(1800, asteroid.frame as u16),
+                    camera.world_to_screen(Point::new(
+                        asteroid.velocity.x.mul_add(-0.75, asteroid.position.x),
+                        asteroid.velocity.y.mul_add(-0.75, asteroid.position.y),
+                    )),
+                )
+            })
+            .collect();
+        let list = drawn(&view);
+        let drawn_asteroids: Vec<_> = sprites(&list)
+            .into_iter()
+            .filter(|(image, _)| image.id == 1800)
+            .collect();
+        assert_eq!(drawn_asteroids, expected);
+        let stellar = first(&list, sprite_of(1128));
+        let asteroid = first(&list, sprite_of(1800));
+        let cargo_box = first(&list, sprite_of(500));
+        assert!(stellar < asteroid && asteroid < cargo_box, "{list:?}");
     }
 
     #[test]

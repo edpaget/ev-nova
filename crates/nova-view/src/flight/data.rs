@@ -17,6 +17,7 @@ use nova_data::sound::decode_snd;
 use nova_data::{GameData, LayerError, LayerSprite};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
+use nova_sim::data::FIRST_ASTEROID_SPIN;
 use nova_sim::data::ship_blink;
 
 use super::catalog::{
@@ -209,6 +210,10 @@ impl CombatLooks for GameData {
     fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
         let graphic = i16::try_from(graphic).unwrap_or(i16::MAX);
         effect_sheet(self, FIRST_BOX_SPIN.saturating_add(graphic))
+    }
+
+    fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
+        effect_sheet(self, FIRST_ASTEROID_SPIN.saturating_add(i16::from(kind)))
     }
 
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
@@ -855,6 +860,19 @@ mod tests {
         assert_eq!(data.box_sheet(0), Ok(sheet_of(600, 36)));
         assert_eq!(data.box_sheet(2), Ok(sheet_of(602, 12)));
         assert_eq!(data.box_sheet(1), Err("no spïn 501".to_owned()));
+    }
+
+    #[test]
+    fn an_asteroids_sheet_is_spin_800_and_its_type() {
+        let data = named_store(&[
+            (Spin::TYPE, 800, None, spin(1800)),
+            (RLED, 1800, None, sheet(36)),
+            (Spin::TYPE, 815, None, spin(1815)),
+            (RLED, 1815, None, sheet(10)),
+        ]);
+        assert_eq!(data.asteroid_sheet(0), Ok(sheet_of(1800, 36)));
+        assert_eq!(data.asteroid_sheet(15), Ok(sheet_of(1815, 10)));
+        assert_eq!(data.asteroid_sheet(4), Err("no spïn 804".to_owned()));
     }
 
     #[test]

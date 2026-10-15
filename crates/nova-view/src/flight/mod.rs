@@ -1,6 +1,7 @@
 //! The flight screen: the player's ship flying in its starting system.
 //!
 //! - [`alert`]: the Red Alert icon, drawn at the playfield's top-right.
+//! - [`asteroids`]: drawing the asteroid field.
 //! - [`boxes`]: drawing the cargo boxes a jettison leaves.
 //! - [`brackets`]: the corner brackets round the nav target and the ship
 //!   target, from the original's `cïcn` art.
@@ -33,6 +34,7 @@
 //! - [`weapons`]: drawing shots and beams.
 
 pub mod alert;
+pub mod asteroids;
 pub mod boxes;
 pub mod brackets;
 pub mod cadence;
