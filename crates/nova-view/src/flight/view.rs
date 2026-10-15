@@ -3551,8 +3551,15 @@ impl<
     /// whole-bar `_RedrawStatus` (@0x739bd) runs only for an ID other
     /// than the one loaded (`_currentIntf`, @0x73663-0x73672); otherwise
     /// they wait for the shipyard to close ([`FlightView::refresh_status`]).
-    /// A refused purchase redraws nothing.
+    ///
+    /// Before all that, the whole bar is redrawn as the name prompt
+    /// closes on OK (`_RefreshSAT` @0x5eb73, right after
+    /// `_EVTextInputDialog` returns @0x5eb6c and before the purchase
+    /// @0x5ebc0), whatever the purchase then does. The app checks every
+    /// refusal before the prompt opens ([`FlightView::ship_naming`]), so
+    /// no refusal follows it there.
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
+        self.redraw_status();
         let before = self.interface_now();
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
@@ -4644,8 +4651,10 @@ impl<C> FlightView<C> {
     }
 
     /// Declines to buy a ship of class `ship`, as [`Session::decline_ship`]
-    /// does; nothing for a session that failed.
+    /// does; nothing for a session that failed. The whole bar is redrawn
+    /// as the name prompt closes on Cancel (`_RefreshSAT` @0x5eb73).
     pub fn decline_ship(&mut self, ship: ShipId) {
+        self.redraw_status();
         if let Ok(session) = &mut self.session {
             session.decline_ship(ship);
         }
@@ -12153,7 +12162,10 @@ mod tests {
         assert_eq!(view.nav_shown(), stale_nav, "held");
         assert_eq!(*view.target_shown(), Some(stale_target.clone()), "held");
         assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
-        assert_eq!(view.nav_shown(), stale_nav, "a refusal redraws nothing");
+        assert_eq!(view.nav_shown(), view.nav_now(), "the prompt's close");
+        stale(&mut view);
+        assert_eq!(view.nav_shown(), stale_nav, "held again");
+        assert_eq!(*view.target_shown(), Some(stale_target.clone()), "held");
         view.buy_ship(ShipId(129), "Kestrel").expect("bought");
         assert_eq!(view.nav_shown(), view.nav_now(), "redrawn");
         assert_ne!(view.nav_shown(), stale_nav);
@@ -12258,8 +12270,14 @@ mod tests {
     #[test]
     fn by_the_engine_a_landed_ms_stellar_shows_at_the_ports_next_nav_redraw() {
         type Step = fn(&mut View);
-        let redraws: [(&str, Step); 4] = [
+        let redraws: [(&str, Step); 6] = [
             ("a shop closing", FlightView::refresh_status),
+            ("a name prompt's Cancel", |view| {
+                view.decline_ship(ShipId(129));
+            }),
+            ("a refused purchase, after its prompt's close", |view| {
+                assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
+            }),
             ("a mission text", |view| {
                 run_set(view, "S131");
                 assert_eq!(port_nav(view), naming("Earth"), "queued, not shown");
@@ -12273,7 +12291,7 @@ mod tests {
                 assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
             }),
         ];
-        let held: [(&str, Step); 4] = [
+        let held: [(&str, Step); 3] = [
             ("a trade", |view| {
                 assert_eq!(view.trade(BUY_FOOD), Ok(10));
             }),
@@ -12283,9 +12301,6 @@ mod tests {
             }),
             ("an outfitter order keeping the ïntf", |view| {
                 assert_eq!(view.outfit(BUY_PLAIN_TANK), Ok(()));
-            }),
-            ("a refused purchase", |view| {
-                assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
             }),
         ];
         for (steps, shown) in [(&redraws[..], "Proxima"), (&held[..], "Earth")] {
@@ -12705,6 +12720,22 @@ mod tests {
         assert_eq!(view.reserves_shown().fuel.max, 250.0, "the old ship's");
         view.refresh_status();
         assert_eq!(view.reserves_shown().fuel.max, 350.0, "the shipyard closed");
+    }
+
+    #[test]
+    fn a_purchase_redraws_the_whole_bar_before_it_buys() {
+        let mut view = FlightView::new(shipbuying());
+        land_now(&mut view);
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        assert_eq!(view.reserves_shown().fuel.now, 250.0, "held");
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
+        let shown = view.reserves_shown().fuel;
+        assert_eq!(
+            (shown.now, shown.max),
+            (100.0, 250.0),
+            "the prompt's close, before the purchase"
+        );
     }
 
     #[test]
