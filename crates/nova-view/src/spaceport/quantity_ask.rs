@@ -7,7 +7,8 @@
 //! ([`MAX_LOT_KEY`]), which is held to ask for a count, both while the
 //! dialog is open and, through [`QuantityAsk::follow_alt`], while it is
 //! not. A count above 0 confirmed there is given back with what it
-//! counts; 0 or Cancel closes it with nothing.
+//! counts; 0 or Cancel closes it with nothing ([`QuantityAsk::input`]),
+//! or with a count of 0 ([`QuantityAsk::answer`]).
 
 use std::rc::Rc;
 
@@ -122,13 +123,19 @@ impl<T> QuantityAsk<T> {
     /// `n` above 0 confirmed there; a count of 0 (Cancel included) closes
     /// it and gives `None`.
     pub fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> Option<(T, u32)> {
+        self.answer(input, sounds).filter(|&(_, count)| count > 0)
+    }
+
+    /// [`QuantityAsk::input`], but a count of 0 (Cancel included) closes
+    /// the dialog and gives `(payload, 0)`, as `_DoQuantityDialog` gives
+    /// its caller 0 (@0x56fae, @0x57138), for a caller whose order still
+    /// does something on none.
+    pub fn answer(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> Option<(T, u32)> {
         if !self.is_open() {
             return None;
         }
         self.follow_alt(input);
-        self.host
-            .input(input, sounds)
-            .filter(|&(_, count)| count > 0)
+        self.host.input(input, sounds)
     }
 
     /// Draws the open dialog: call it last, over the screen.
@@ -311,6 +318,40 @@ mod tests {
         let mut ask = opened(Direction::Buy);
         assert_eq!(click(&mut ask, CANCEL_ITEM), None);
         assert!(!ask.is_open());
+    }
+
+    #[test]
+    fn answer_gives_a_count_of_0_or_cancel_as_0_and_closes_it() {
+        let mut closed = ask();
+        assert_eq!(closed.answer(&key(Key::Enter, true), &mut Vec::new()), None);
+        let mut ask = opened(Direction::Buy);
+        ask.answer(&Input::Text('0'), &mut Vec::new());
+        assert_eq!(
+            ask.answer(&key(Key::Enter, true), &mut Vec::new()),
+            Some(("row", 0))
+        );
+        assert!(!ask.is_open());
+        let mut ask = opened(Direction::Sell);
+        let at = ask
+            .dialog()
+            .expect("open")
+            .dialog()
+            .item_bounds(CANCEL_ITEM)
+            .expect("Cancel")
+            .center();
+        let press = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        assert_eq!(ask.answer(&press(true), &mut Vec::new()), None);
+        assert_eq!(ask.answer(&press(false), &mut Vec::new()), Some(("row", 0)));
+        assert!(!ask.is_open());
+        let mut ask = opened(Direction::Buy);
+        assert_eq!(
+            ask.answer(&key(Key::Enter, true), &mut Vec::new()),
+            Some(("row", 7))
+        );
     }
 
     #[test]

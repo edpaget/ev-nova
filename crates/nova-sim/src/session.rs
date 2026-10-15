@@ -4028,7 +4028,7 @@ impl Session {
                 // The buy loop's reset, once after the loop (@0x5c305),
                 // whenever Buy passed its own check: a Cancel's count of
                 // none and a loop stopped by a refusal included.
-                if self.buy_button_passed(order, count, &run, chance, asked) {
+                if self.buy_button_passed(order, count, &run, chance) {
                     self.reset_precalced();
                 }
                 // The buy loop rebuilds the list once, after the loop
@@ -4053,22 +4053,36 @@ impl Session {
     /// Whether a buy order's button passed its own check
     /// (`_CanBuyOutfitItem`, [`Outfitter::can`]), so the buy loop's reset
     /// runs after it (@0x5c305): for a `count` of none, asked of the
-    /// outfitter now; otherwise unless `run` was refused at its first
-    /// pass, whose check is the button's.
+    /// outfitter now ([`outfit_button_passes`](Self::outfit_button_passes));
+    /// otherwise unless `run` was refused at its first pass, whose check
+    /// is the button's.
     fn buy_button_passed(
         &mut self,
         order: OutfitOrder,
         count: u32,
         run: &OrderRun<OutfitRefusal>,
         chance: &mut dyn Chance,
-        asked: Option<OutfitId>,
     ) -> bool {
         if count == 0 {
-            return self
-                .outfitter_with(chance, asked)
-                .is_some_and(|outfitter| outfitter.can(order).is_ok());
+            return self.outfit_button_passes(order, chance);
         }
         run.stopped.as_ref().is_none_or(|stopped| stopped.pass > 0)
+    }
+
+    /// Whether `order`'s Buy or Sell button passes its own check now
+    /// ([`Outfitter::can`]: `_CanBuyOutfitItem` @0x5c087-0x5c0a2 for a
+    /// buy, the Sell flag @0x5c5d5-0x5c5dd for a sale), the outfitter
+    /// carrying the outfit a relisting selected when `order` names it
+    /// ([`outfit_order`](Self::outfit_order)'s `after`); false with no
+    /// outfitter. It draws any roll not drawn yet and changes nothing
+    /// else. An order of none (the quantity dialog's Cancel) runs what
+    /// follows its loop only when this passed.
+    pub fn outfit_button_passes(&mut self, order: OutfitOrder, chance: &mut dyn Chance) -> bool {
+        let asked = self
+            .outfit_reselected
+            .filter(|&reselected| reselected == order.outfit);
+        self.outfitter_with(chance, asked)
+            .is_some_and(|outfitter| outfitter.can(order).is_ok())
     }
 
     /// The listing before an order's first pass, when
@@ -11250,6 +11264,23 @@ pub(super) mod tests {
             session.outfit_counted(sell(SPEED), 3, &mut NeverFires),
             Err(OutfitRefusal::NoneOwned)
         );
+        assert_eq!(session.pilot(), &before);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn an_order_buttons_check_is_the_outfitters_and_changes_nothing() {
+        let catalog = outfitting();
+        let mut flying = Session::start(&catalog).expect("starts");
+        assert!(
+            !flying.outfit_button_passes(buy(SPEED), &mut NeverFires),
+            "no outfitter in flight"
+        );
+        let mut session = outfitted(&catalog);
+        let before = session.pilot().clone();
+        assert!(session.outfit_button_passes(buy(SPEED), &mut NeverFires));
+        assert!(!session.outfit_button_passes(sell(SPEED), &mut NeverFires));
+        assert!(!session.outfit_button_passes(buy(OutfitId(999)), &mut NeverFires));
         assert_eq!(session.pilot(), &before);
         assert!(!session.take_save_due());
     }

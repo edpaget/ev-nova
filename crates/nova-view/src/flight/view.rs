@@ -3615,10 +3615,26 @@ impl<
     /// it (`FlightView::after_outfit_order`).
     pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
         let before = self.interface_now();
+        // An order of none runs no pass, so its button's own check is
+        // asked of the outfitter as the dialog's Cancel left it.
+        let cancel_passed = count == 0 && self.outfit_button_passes(order);
         let run = self.run_outfit_order(order, count);
-        let passed = run.run.done > 0 || run.run.stopped.is_none();
+        let passed = if count == 0 {
+            cancel_passed
+        } else {
+            run.run.done > 0
+        };
         self.after_outfit_order(before.as_ref(), passed);
         run
+    }
+
+    /// Whether `order`'s button passes its own check
+    /// ([`Session::outfit_button_passes`]), on the flight's chance; a
+    /// session that failed has no outfitter.
+    fn outfit_button_passes(&mut self, order: OutfitOrder) -> bool {
+        self.session
+            .as_mut()
+            .is_ok_and(|session| session.outfit_button_passes(order, &mut self.chance))
     }
 
     /// [`FlightView::outfit_order`]'s run.
@@ -3642,7 +3658,8 @@ impl<
     /// Redraws the bar after an outfitter order, given the `ïntf` the
     /// ship flew under before it ([`FlightView::interface_now`]) and
     /// whether it passed its button's own check (`passed`): any of it
-    /// went through, or a count of none, a Cancel's, asked for nothing.
+    /// went through, or a count of none, a Cancel's, whose button's check
+    /// passed ([`Session::outfit_button_passes`]).
     ///
     /// The order's `OnPurchase` (`_EvalMissionBitSetString` @0x5c2cb) or
     /// `OnSell` (@0x5cff6) runs inside it. When its `C`, `E` or `H`
@@ -12371,7 +12388,7 @@ mod tests {
             }),
             ("a shop closing", FlightView::shop_closed),
         ];
-        let refused: [(&str, Step); 5] = [
+        let refused: [(&str, Step); 7] = [
             ("a refused trade", |view| {
                 let order = Order {
                     row: 99,
@@ -12390,6 +12407,16 @@ mod tests {
             }),
             ("a refused outfitter run", |view| {
                 assert_eq!(view.outfit_order(UNKNOWN_OUTFIT, 1).run.done, 0);
+            }),
+            ("a Cancel whose Buy fails its check", |view| {
+                assert_eq!(view.outfit_order(UNKNOWN_OUTFIT, 0).run.done, 0);
+            }),
+            ("a Cancel whose Sell fails its check", |view| {
+                let sell = OutfitOrder {
+                    direction: Direction::Sell,
+                    ..BUY_PLAIN_TANK
+                };
+                assert_eq!(view.outfit_order(sell, 0).run.done, 0);
             }),
         ];
         for (steps, shown) in [(&draws[..], "Earth"), (&refused[..], "Proxima")] {

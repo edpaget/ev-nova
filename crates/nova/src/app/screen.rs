@@ -2232,7 +2232,10 @@ impl AppScreen {
             if let Some(order) = trade {
                 let _ = flight.trade(order);
             }
-            // A plain click's count of 1 is exactly one order. A sale
+            // A plain click's count of 1 is exactly one order; the
+            // quantity dialog's Cancel orders none, which still runs what
+            // follows the original's loop once its button's check passed:
+            // the buy's reset and either's status draw. A sale
             // refused in the sell loop shows its words over the
             // outfitter, at whatever pass it is refused; the sales before
             // it stand. Any other refusal changes nothing. Then the

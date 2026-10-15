@@ -27,6 +27,10 @@
 //! Dock. A run whose `OnAccept` moves the player instead: under its
 //! `BriefText` the bar names the Dock, and the computer's close restores
 //! the nav it opened with, naming the Pad.
+//! At a Pad with an outfitter and a shipyard, buying the "Racer", whose
+//! `OnPurchase` moves the player, names the Dock; the shipyard's close
+//! restores the Pad but leaves the bar naming the Dock, until a Cancel
+//! of an Option-Buy in the outfitter draws it: the Pad.
 //!
 //! The bar: a quarter second after the bar opens, the offer dialog shows
 //! the bar job's text, filled, and "I'm in". Return accepts it, and its
@@ -81,6 +85,7 @@ use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
+use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -104,6 +109,7 @@ use nova_view::spaceport::missions::{
 };
 use nova_view::spaceport::{OfferDialog, SpaceportView};
 use nova_view::text::fixture::MonoMetrics;
+use nova_view::ui::quantity::CANCEL_ITEM;
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -563,10 +569,56 @@ fn trade_dialog() -> [(ResType, i16, Vec<u8>); 2] {
     )
 }
 
+/// "Outfit" (`DLOG` 1002), with its items as stock has them.
+fn outfit_dialog() -> [(ResType, i16, Vec<u8>); 2] {
+    dialog(
+        1002,
+        (765, 321),
+        &[
+            ((500, 289, 99, 25), true),
+            ((248, 440, 68, 30), false),
+            ((251, 291, 29, 21), false),
+            ((394, 289, 99, 25), false),
+            ((9, 8, 333, 271), true),
+            ((354, 10, 192, 267), false),
+            ((288, 289, 99, 25), true),
+            ((557, 8, 200, 200), false),
+            ((618, 214, 135, 100), false),
+            ((148, 288, 25, 25), true),
+            ((178, 288, 25, 25), true),
+            ((170, 449, 32, 32), false),
+            ((356, 422, 68, 30), false),
+        ],
+    )
+}
+
+/// "Shipyard" (`DLOG` 1004), with its items as stock has them.
+fn shipyard_dialog() -> [(ResType, i16, Vec<u8>); 2] {
+    dialog(
+        1004,
+        (765, 323),
+        &[
+            ((365, 289, 109, 25), true),
+            ((248, 440, 68, 30), false),
+            ((251, 491, 29, 21), false),
+            ((394, 489, 99, 25), false),
+            ((9, 8, 333, 271), true),
+            ((354, 10, 192, 267), false),
+            ((480, 289, 109, 25), true),
+            ((557, 8, 200, 200), false),
+            ((614, 214, 143, 100), false),
+            ((253, 289, 89, 25), true),
+            ((170, 449, 32, 32), false),
+            ((141, 288, 25, 25), true),
+            ((171, 288, 25, 25), true),
+        ],
+    )
+}
+
 /// The interface file: stock "Spaceport" (`DLOG` 1000), "Trade" (1001),
-/// the mission computer (1006), the mission info screen (1012), "Bar"
-/// (1013), the offer dialog (1016) and "Desc Dialog" (3003), each with its
-/// items as stock has them.
+/// "Outfit" (1002), "Shipyard" (1004), the mission computer (1006), the
+/// mission info screen (1012), "Bar" (1013), the offer dialog (1016) and
+/// "Desc Dialog" (3003), each with its items as stock has them.
 fn interface() -> InterfaceData {
     let spaceport = dialog(
         1000,
@@ -589,15 +641,20 @@ fn interface() -> InterfaceData {
             ((605, 548, 32, 32), false),
         ],
     );
-    let fork = [spaceport, trade_dialog()]
-        .into_iter()
-        .chain(mission_dialogs())
-        .flatten()
-        .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
-            fork.resource(ty, id, None, &bytes)
-        })
-        .build()
-        .bytes;
+    let fork = [
+        spaceport,
+        trade_dialog(),
+        outfit_dialog(),
+        shipyard_dialog(),
+    ]
+    .into_iter()
+    .chain(mission_dialogs())
+    .flatten()
+    .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
+        fork.resource(ty, id, None, &bytes)
+    })
+    .build()
+    .bytes;
     InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
@@ -1165,6 +1222,116 @@ fn the_mission_computers_close_redraws_the_port_bars_nav() {
     let bar = port_bar_texts(&game);
     assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
     assert!(texts(&game.frame()).contains(&"Dock".to_owned()));
+}
+
+/// The Pad with an outfitter and a shipyard too (`Flags` 0x4D), of tech
+/// level 1.
+fn shopping_pad() -> Vec<u8> {
+    let mut bytes = flagged_pad(0x4D);
+    put_i16s(&mut bytes, 0x0C, &[1]);
+    bytes
+}
+
+/// The "Racer" (129), for sale every day at 1,000 credits, whose
+/// `OnPurchase` moves the player to Beta (`M129`); and a fuel pod (128),
+/// massless, at 100 credits, up to 10.
+fn shop_goods() -> ForkBuilder {
+    let mut racer = ship();
+    racer[0x30..0x34].copy_from_slice(&1000_i32.to_be_bytes());
+    put_i16s(&mut racer, 0x388, &[100]);
+    let on_purchase = b"M129\0";
+    racer[0x26A..0x26A + on_purchase.len()].copy_from_slice(on_purchase);
+    let mut pod = vec![0; Outfit::SIZE.expect("fixed")];
+    put_i16s(&mut pod, 0x00, &[10, 0, 1, 0, 0, 10]);
+    pod[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+    put_i16s(&mut pod, 0x3F0, &[100, -1]);
+    beta()
+        .resource(Ship::TYPE, 129, Some(b"Racer"), &racer)
+        .resource(ShipAnim::TYPE, 129, None, &ship_anim(2000))
+        .resource(Outfit::TYPE, 128, Some(b"Fuel Pod"), &pod)
+}
+
+/// [`game_data`] at the [`shopping_pad`], with the [`shop_goods`].
+fn shopping_data() -> Rc<GameData> {
+    game_data_around(
+        &timed(mission(128, 200, 201)),
+        bar_job(),
+        &shopping_pad(),
+        shop_goods(),
+    )
+}
+
+/// The Outfitter's item.
+const OUTFITTER: usize = 8;
+/// The Shipyard's item.
+const SHIPYARD: usize = 9;
+
+#[test]
+fn an_outfitter_cancel_draws_the_nav_the_shipyards_close_restored() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), shopping_data());
+    game.frame();
+    game.land();
+
+    // The Racer's OnPurchase moves the player to Beta's Dock; the
+    // purchase draws it, and the shipyard's close restores the Pad but
+    // draws the bar as the purchase left it.
+    game.click_port(SHIPYARD);
+    let cell = game
+        .spaceport()
+        .open_shipyard()
+        .and_then(|shipyard| shipyard.cell_bounds(0))
+        .expect("the Racer's cell")
+        .center();
+    game.click(cell);
+    game.tap(Key::Char('b'));
+    assert!(
+        game.spaceport()
+            .open_shipyard()
+            .and_then(|shipyard| shipyard.naming())
+            .is_some(),
+        "the name prompt"
+    );
+    game.tap(Key::Enter);
+    assert_eq!(game.session().ship(), nova_sim::ShipId(129), "bought");
+    game.tap(Key::Escape);
+    assert!(game.spaceport().open_shipyard().is_none(), "closed");
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "the close's: {bar:?}");
+
+    // Option-B asks how many fuel pods; Cancel buys none, and the buy's
+    // draw shows the Pad.
+    game.click_port(OUTFITTER);
+    let cell = game
+        .spaceport()
+        .open_outfitter()
+        .and_then(|outfitter| outfitter.cell_bounds(0))
+        .expect("the pod's cell")
+        .center();
+    game.click(cell);
+    let cash = game.session().pilot().cash();
+    game.key(Key::Alt, true);
+    game.tap(Key::Char('b'));
+    game.key(Key::Alt, false);
+    let cancel = game
+        .spaceport()
+        .open_outfitter()
+        .and_then(|outfitter| outfitter.quantity())
+        .and_then(|asking| asking.dialog().item_bounds(CANCEL_ITEM))
+        .expect("the quantity dialog's Cancel")
+        .center();
+    game.click(cancel);
+    let outfitter = game.spaceport().open_outfitter().expect("still open");
+    assert!(outfitter.quantity().is_none(), "cancelled");
+    assert_eq!(game.session().pilot().owned(nova_sim::OutfitId(128)), 0);
+    assert_eq!(game.session().pilot().cash(), cash, "nothing bought");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
+    assert!(!bar.contains(&"Dock".to_owned()), "{bar:?}");
 }
 
 #[test]

@@ -77,8 +77,11 @@
 //! ([`QuantityDialog`], `DLOG` 1003, or its fallback; `_DoQuantityDialog`
 //! @0x56d5b) opens over the outfitter at that count, OK titled "Buy" or
 //! "Sell" and asking "Enter quantity:". It takes every input while it is
-//! open; a count above 0 confirmed there is the order, and 0 or Cancel
-//! orders nothing. B or S opening it types nothing into it. Otherwise, by
+//! open; the count confirmed there is the order, 0 or Cancel an order of
+//! none, which moves nothing but still runs what the original runs after
+//! its loop once the button's check passed (@0x5c2fc-0x5c2ff to the buy's
+//! reset and `_DrawStatus`, the sell's likewise). B or S opening it types
+//! nothing into it. Otherwise, by
 //! the other reading too, a click moves one. Shift, Command and Control
 //! change nothing: the original tests Option alone (`testb $0x8` on the
 //! event's modifiers). The screen only records the order and its count
@@ -695,7 +698,8 @@ impl OutfitterScreen {
     }
 
     /// The order asked for since it was last taken, and how many it
-    /// moves (1 for a plain click), once.
+    /// moves (1 for a plain click, 0 for the quantity dialog's Cancel or
+    /// a count of 0), once.
     pub fn take_order(&mut self) -> Option<(OutfitOrder, u32)> {
         self.order.take()
     }
@@ -1065,7 +1069,7 @@ impl Screen for OutfitterScreen {
             return ScreenAction::None;
         }
         if self.quantity.is_open() {
-            if let Some(counted) = self.quantity.input(input, &mut self.sounds) {
+            if let Some(counted) = self.quantity.answer(input, &mut self.sounds) {
                 self.order = Some(counted);
             }
             return ScreenAction::None;
@@ -3510,17 +3514,17 @@ mod tests {
     }
 
     #[test]
-    fn cancel_or_0_records_nothing_and_closes_the_dialog() {
+    fn cancel_or_0_records_an_order_of_none_and_closes_the_dialog() {
         let mut screen = counting_screen();
         alt_click(&mut screen, SELL_ITEM);
         let cancel = quantity_item(&screen, 4);
         click(&mut screen, cancel);
-        assert_eq!(screen.take_order(), None);
+        assert_eq!(screen.take_order(), Some(counted(128, Direction::Sell, 0)));
         assert!(screen.quantity().is_none(), "closed");
-        alt_click(&mut screen, SELL_ITEM);
+        alt_click(&mut screen, BUY_ITEM);
         typed(&mut screen, "0");
         press(&mut screen, Key::Enter);
-        assert_eq!(screen.take_order(), None);
+        assert_eq!(screen.take_order(), Some(counted(128, Direction::Buy, 0)));
         assert!(screen.quantity().is_none(), "closed");
         assert!(!screen.closed());
     }
