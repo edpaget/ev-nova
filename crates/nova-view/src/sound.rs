@@ -37,6 +37,14 @@ pub enum UiSound {
     /// The bar's news dialog closed: `_DoNewsDialog` plays `_beepSnd[2]`
     /// as it closes (@0x4814e).
     NewsClosed,
+    /// The mission info screen opened: `_DoMissionInfoDialog` plays
+    /// `_beepSnd[1]` (`snd ` 151) as it opens (@0x9e1d5), before its
+    /// dialog is loaded.
+    MissionInfoOpened,
+    /// The mission info screen closed: `_DoMissionInfoDialog` plays
+    /// `_beepSnd[2]` (`snd ` 152) as it closes (@0x9e791), after its
+    /// `_RefreshSAT`; without its dialog it returns before it (@0x9e20b).
+    MissionInfoClosed,
     /// A zoom key zoomed the floating map: `_HandlePlayer` plays
     /// `_beepSnd[0]` (@0x7103a, @0x710bc).
     FloatingMapZoomed,

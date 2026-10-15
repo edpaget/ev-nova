@@ -48,9 +48,11 @@ pub struct SoundTable {
     pub scan_failed: Option<SoundId>,
     /// Plays as a scan catches the player smuggling.
     pub smuggling: Option<SoundId>,
-    /// Plays as the bar's news dialog opens.
+    /// Plays as the bar's news dialog opens, and the mission info
+    /// screen, the same `_beepSnd[1]`.
     pub news_open: Option<SoundId>,
-    /// Plays as the bar's news dialog closes.
+    /// Plays as the bar's news dialog closes, and the mission info
+    /// screen, the same `_beepSnd[2]`.
     pub news_close: Option<SoundId>,
     /// Plays as a zoom key zooms the floating map.
     pub floating_map_zoom: Option<SoundId>,
@@ -142,9 +144,11 @@ impl SoundTable {
     ///   (@0x7ea3e-0x7ea5d, @0x7ee76-0x7ee95, @0x7f337-0x7f356), at
     ///   priority 1.
     /// - `news_open`: 151, `_beepSnd[1]`, which `_DoNewsDialog` plays as
-    ///   it opens (`PlaySound` @0x47f36).
+    ///   it opens (`PlaySound` @0x47f36), and `_DoMissionInfoDialog` too
+    ///   (@0x9e1d5).
     /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
-    ///   it closes (@0x4814e).
+    ///   it closes (@0x4814e), and `_DoMissionInfoDialog` too
+    ///   (@0x9e791).
     /// - `floating_map_zoom`: 150, `_beepSnd[0]`, which `_HandlePlayer`
     ///   plays as `-` or `=` zooms the floating map (@0x7103a, @0x710bc).
     /// - `nav_selected`: 150, `_beepSnd[0]`, which `_HandlePlayer` plays

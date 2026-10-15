@@ -1298,7 +1298,9 @@ impl SpaceportView {
             .info
             .clone()
             .map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.info = Some(MissionInfoScreen::new(layout, info, port.style));
+        let mut screen = MissionInfoScreen::new(layout, info, port.style);
+        self.sounds.extend(screen.take_sounds());
+        self.info = Some(screen);
     }
 
     /// The mission info screen open, if it is.
@@ -1318,6 +1320,7 @@ impl SpaceportView {
     pub fn set_mission_info(&mut self, info: MissionInfo) {
         if let Some(screen) = &mut self.info {
             screen.set_info(info);
+            self.sounds.extend(screen.take_sounds());
             if screen.closed() {
                 self.close_mission_info();
             }
@@ -4861,6 +4864,14 @@ mod tests {
             assert!(view.take_status_refresh(), "{what}");
             assert!(!view.take_status_refresh(), "{what}: once");
         }
+    }
+
+    #[test]
+    fn mission_infos_beeps_come_out_as_it_opens_and_as_an_abort_closes_it() {
+        let mut view = in_mission_info(1);
+        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::MissionInfoOpened)]);
+        view.set_mission_info(actives(0));
+        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::MissionInfoClosed)]);
     }
 
     #[test]

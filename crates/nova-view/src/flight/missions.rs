@@ -42,6 +42,9 @@ pub struct FlightMissionDialogs {
     info: Option<MissionInfoScreen>,
     /// The sounds since they were last taken.
     sounds: Vec<Sound>,
+    /// Whether the mission info screen closed laid out since this was
+    /// last taken.
+    info_closed: bool,
 }
 
 impl std::fmt::Debug for FlightMissionDialogs {
@@ -73,6 +76,7 @@ impl FlightMissionDialogs {
             texts: VecDeque::new(),
             info: None,
             sounds: Vec::new(),
+            info_closed: false,
         }
     }
 
@@ -110,7 +114,9 @@ impl FlightMissionDialogs {
             .info_template
             .clone()
             .map(|template| (template, Rc::clone(&self.metrics)));
-        self.info = Some(MissionInfoScreen::new(layout, info, self.style));
+        let mut screen = MissionInfoScreen::new(layout, info, self.style);
+        self.sounds.extend(screen.take_sounds());
+        self.info = Some(screen);
     }
 
     /// After an abort, the mission info screen shows `info`, closing once
@@ -118,9 +124,31 @@ impl FlightMissionDialogs {
     pub fn set_info(&mut self, info: MissionInfo) {
         if let Some(screen) = &mut self.info {
             screen.set_info(info);
+            self.sounds.extend(screen.take_sounds());
             if screen.closed() {
-                self.info = None;
+                self.close_info();
             }
+        }
+    }
+
+    /// Whether the mission info screen has closed since this was last
+    /// asked, once each time it closes laid out: whoever flies the ship
+    /// redraws the whole status bar, as `_DoMissionInfoDialog` ends in
+    /// `_RefreshSAT` (@0x9e769) in flight as in port. Without its dialog
+    /// the original never shows it and redraws nothing (@0x9e20b).
+    pub fn take_info_closed(&mut self) -> bool {
+        std::mem::take(&mut self.info_closed)
+    }
+
+    /// Closes the mission info screen, noting its close when it was laid
+    /// out ([`FlightMissionDialogs::take_info_closed`]).
+    fn close_info(&mut self) {
+        if self
+            .info
+            .take()
+            .is_some_and(|info| info.problem().is_none())
+        {
+            self.info_closed = true;
         }
     }
 
@@ -163,7 +191,7 @@ impl Screen for FlightMissionDialogs {
             info.input(input);
             self.sounds.extend(info.take_sounds());
             if info.closed() {
-                self.info = None;
+                self.close_info();
             }
         }
         ScreenAction::None
@@ -385,7 +413,11 @@ mod tests {
         click(&mut dialogs, abort);
         assert_eq!(
             dialogs.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
+            [
+                Sound::Ui(UiSound::MissionInfoOpened),
+                Sound::Ui(UiSound::ButtonDown),
+                Sound::Ui(UiSound::ButtonUp)
+            ]
         );
         assert_eq!(dialogs.take_abort(), Some(2));
         assert_eq!(dialogs.take_abort(), None, "once");
@@ -394,6 +426,51 @@ mod tests {
         dialogs.set_info(none());
         assert!(dialogs.info().is_none());
         assert!(!dialogs.is_open());
+    }
+
+    #[test]
+    fn the_info_screens_beeps_come_out_as_it_opens_and_as_an_abort_closes_it() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        assert_eq!(
+            dialogs.take_sounds(),
+            [Sound::Ui(UiSound::MissionInfoOpened)]
+        );
+        dialogs.set_info(none());
+        assert!(dialogs.info().is_none());
+        assert_eq!(
+            dialogs.take_sounds(),
+            [Sound::Ui(UiSound::MissionInfoClosed)]
+        );
+    }
+
+    #[test]
+    fn the_info_screens_close_is_told_once_when_it_was_laid_out() {
+        let mut dialogs = dialogs();
+        assert!(!dialogs.take_info_closed(), "nothing open");
+        dialogs.open_info(info());
+        assert!(!dialogs.take_info_closed(), "opening");
+        dialogs.input(&key(Key::Down));
+        assert!(!dialogs.take_info_closed(), "still open");
+        dialogs.input(&key(Key::Enter));
+        assert!(dialogs.take_info_closed(), "Done (@0x9e769)");
+        assert!(!dialogs.take_info_closed(), "once");
+        dialogs.open_info(info());
+        dialogs.set_info(none());
+        assert!(dialogs.take_info_closed(), "an abort leaving nothing");
+        let mut bare = FlightMissionDialogs::new(
+            Ok(text_template()),
+            Err("no DLOG 1012".to_owned()),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        );
+        bare.open_info(info());
+        bare.input(&key(Key::Escape));
+        assert!(bare.info().is_none());
+        assert!(!bare.take_info_closed(), "without its dialog (@0x9e20b)");
+        bare.open_info(info());
+        bare.set_info(none());
+        assert!(!bare.take_info_closed(), "without its dialog, by an abort");
     }
 
     #[test]

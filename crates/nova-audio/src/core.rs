@@ -160,8 +160,12 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
-                Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
-                Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
+                Sound::Ui(UiSound::NewsOpened | UiSound::MissionInfoOpened) => {
+                    self.play(self.table.news_open);
+                }
+                Sound::Ui(UiSound::NewsClosed | UiSound::MissionInfoClosed) => {
+                    self.play(self.table.news_close);
+                }
                 Sound::Ui(UiSound::FloatingMapZoomed) => {
                     self.play(self.table.floating_map_zoom);
                 }
@@ -788,6 +792,35 @@ mod tests {
             &[
                 Sound::Ui(UiSound::NewsClosed),
                 Sound::Ui(UiSound::NewsOpened),
+            ],
+        );
+        assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
+    }
+
+    #[test]
+    fn the_mission_info_screen_beeps_the_news_sounds_as_it_opens_and_closes() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::MissionInfoOpened),
+                Sound::Ui(UiSound::MissionInfoClosed),
+            ],
+        );
+        assert_eq!(drain(&log), [play(151, 1.0), play(152, 1.0)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            news_open: Some(SoundId(300)),
+            news_close: Some(SoundId(301)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::MissionInfoClosed),
+                Sound::Ui(UiSound::MissionInfoOpened),
             ],
         );
         assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");

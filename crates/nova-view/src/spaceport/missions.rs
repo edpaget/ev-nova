@@ -56,7 +56,7 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
@@ -471,7 +471,7 @@ impl MissionInfoScreen {
             },
             abort: None,
             closed: false,
-            sounds: Vec::new(),
+            sounds: vec![Sound::Ui(UiSound::MissionInfoOpened)],
         };
         screen.set_info(info);
         screen
@@ -519,7 +519,7 @@ impl MissionInfoScreen {
         let kept = self.selected_row().map(|row| row.slot);
         self.info = info;
         if self.info.rows.is_empty() {
-            self.closed = true;
+            self.close();
         }
         let Ok(laid) = &mut self.laid else {
             return;
@@ -568,9 +568,18 @@ impl MissionInfoScreen {
     /// selected slot. Anything else does nothing.
     fn activate(&mut self, item: usize) {
         match item {
-            INFO_DONE_ITEM => self.closed = true,
+            INFO_DONE_ITEM => self.close(),
             ABORT_ITEM => self.abort = self.selected_row().map(|row| row.slot),
             _ => {}
+        }
+    }
+
+    /// Closes it, beeping `_beepSnd[2]` (@0x9e791) the first time when it
+    /// was laid out; without its dialog the original returns before it
+    /// (@0x9e20b).
+    fn close(&mut self) {
+        if !std::mem::replace(&mut self.closed, true) && self.laid.is_ok() {
+            self.sounds.push(Sound::Ui(UiSound::MissionInfoClosed));
         }
     }
 }
@@ -1214,10 +1223,49 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_abort(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), [OPENED, DOWN]);
         click_info(&mut screen, ABORT_ITEM);
         assert_eq!(screen.take_sounds(), [DOWN, UP]);
         assert_eq!(screen.take_abort(), Some(0));
+    }
+
+    const OPENED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoOpened);
+    const CLOSED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoClosed);
+
+    #[test]
+    fn mission_info_beeps_as_it_opens_and_as_it_closes_laid_out() {
+        let mut screen = info_screen();
+        assert_eq!(screen.take_sounds(), [OPENED], "_beepSnd[1] @0x9e1d5");
+        click_info(&mut screen, INFO_DONE_ITEM);
+        assert_eq!(
+            screen.take_sounds(),
+            [DOWN, UP, CLOSED],
+            "_beepSnd[2] @0x9e791, after the button"
+        );
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [], "closed once");
+        for close in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            screen.take_sounds();
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds().last(), Some(&CLOSED), "{close:?}");
+        }
+        let mut screen = info_screen();
+        screen.take_sounds();
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [CLOSED], "an abort leaving nothing");
+        let mut bare =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
+        assert_eq!(bare.take_sounds(), [OPENED], "before GetNewDialog");
+        bare.input(&key(Key::Escape));
+        assert!(bare.closed());
+        assert_eq!(bare.take_sounds(), [], "@0x9e20b skips the close's");
     }
 
     #[test]
