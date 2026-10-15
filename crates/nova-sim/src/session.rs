@@ -12878,12 +12878,13 @@ pub(super) mod tests {
         let mut catalog = shipbuying();
         catalog.ship_records[1].on_purchase = crate::control::Script::parse("H128");
         let mut session = outfitted(&catalog);
+        run_expr(&mut session, "C128");
         session.pilot.reserves.fuel.now = 10.0;
         session
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
         let loads = session.take_interface_loads();
-        assert_eq!(loads.len(), 1);
+        assert_eq!(loads.len(), 1, "the purchase's alone: it cleared the C");
         assert!(
             loads[0].reserves.fuel.now < session.reserves().fuel.now,
             "{:?} before the fill",
