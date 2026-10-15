@@ -2423,6 +2423,39 @@ mod tests {
     }
 
     #[test]
+    fn an_npcs_point_defence_of_a_negative_odd_ammo_type_fires_and_leaves_its_own_slot_whole() {
+        let pick = Some((0.0, ShotId(1)));
+        for ammo_type in [-500, -2] {
+            let mut odd = mounted(
+                WeaponRecord {
+                    ammo_type,
+                    ..defence(161, 9, 0, 0)
+                },
+                1,
+            );
+            let mut supplies = Supplies::none();
+            supplies.shooter = NPC;
+            supplies.rounds = slots(&[(161, 2)]);
+            assert!(
+                defend(
+                    &mut odd,
+                    &mut supplies,
+                    &mut NeverFires,
+                    pick,
+                    &mut Vec::new()
+                )
+                .is_some(),
+                "AmmoType {ammo_type} fires"
+            );
+            assert_eq!(
+                supplies.rounds,
+                slots(&[(161, 2)]),
+                "AmmoType {ammo_type} spends nothing"
+            );
+        }
+    }
+
+    #[test]
     fn a_bay_of_any_ammo_type_reads_its_own_rounds() {
         let odd_bay = mounted(
             WeaponRecord {
