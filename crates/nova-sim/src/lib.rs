@@ -442,5 +442,5 @@ pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
-pub use traffic::{Traffic, World};
+pub use traffic::{Leave, Traffic, World};
 pub use wares::{ShownTons, TonUnit};

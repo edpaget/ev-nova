@@ -72,6 +72,12 @@
 //! The fight ([`combat`](crate::combat)) damages them, and its session
 //! takes out each one destroyed ([`Traffic::remove`]).
 //!
+//! Going on into another system ([`Traffic::retarget`]) takes along only
+//! the NPCs it is told to keep. The others are dropped, or held in the
+//! ship table, out of the system, until the end of the next tick
+//! ([`Leave`]), their berths and their persons' names still taken; those
+//! held in the system it goes on into come back as they were.
+//!
 //! The AI timer is the original's (`_AIDispatch`): an NPC decides on the
 //! ticks where `tick % interval == id % interval`, so decisions are
 //! staggered across NPCs. The original's interval is 1 at full speed and
@@ -92,7 +98,7 @@ use crate::ai::interceptor::within_reach;
 use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId};
+use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::cloak::{self, Cloak};
 use crate::combat::armament::Trigger;
@@ -233,6 +239,38 @@ pub struct Traffic {
     quotes: Vec<i16>,
     /// The escort-strength timer, kept across systems.
     strength_timer: StrengthTimer,
+    /// The ships an in-flight move left behind ([`Leave::Held`]), by the
+    /// system they are in, each in the order they appeared: still in the
+    /// ship table until the end of the next tick ([`Traffic::tick_in`]),
+    /// holding their berths and their persons, but not in the system:
+    /// not ticked, not drawn, and not among [`Traffic::npcs`].
+    left_behind: BTreeMap<SystemId, Vec<LeftShip>>,
+}
+
+/// What becomes of the ships [`Traffic::retarget`] does not take along.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Leave {
+    /// They stay behind in `from`, in the ship table, until the end of
+    /// the next tick. Those left behind in `to` before then come back as
+    /// they were.
+    Held {
+        /// The system left.
+        from: SystemId,
+        /// The system entered.
+        to: SystemId,
+    },
+    /// They are dropped at once, their berths freed.
+    Dropped,
+}
+
+/// A ship an in-flight move left behind ([`Leave::Held`]).
+#[derive(Clone, Debug, PartialEq)]
+struct LeftShip {
+    /// The ship, as it was left.
+    npc: Npc,
+    /// The name of its person, if any, as the system it was left in gave
+    /// it: the system entered may not list that person.
+    person: Option<String>,
 }
 
 impl Default for Traffic {
@@ -262,6 +300,7 @@ impl Traffic {
             scans: Vec::new(),
             quotes: Vec::new(),
             strength_timer: StrengthTimer::default(),
+            left_behind: BTreeMap::new(),
         }
     }
 
@@ -312,6 +351,7 @@ impl Traffic {
     ) {
         self.table = table;
         self.npcs.clear();
+        self.left_behind.clear();
         self.departed.clear();
         self.scans.clear();
         self.quotes.clear();
@@ -348,12 +388,47 @@ impl Traffic {
 
     /// Goes on in another system whose traffic is drawn from `table`,
     /// taking along only the NPCs in `keep`, as they are: the others stay
-    /// behind, and nothing of the new system's initial population comes,
-    /// only its arrivals over time. The NPCs' numbering goes on. The
-    /// scans not yet taken are dropped, as entering a system drops them.
-    pub fn retarget(&mut self, table: SpawnTable, keep: &BTreeSet<NpcId>) {
-        self.table = table;
-        self.npcs.retain(|npc| keep.contains(&npc.id));
+    /// behind as `leave` says, and nothing of the new system's initial
+    /// population comes, only its arrivals over time. The NPCs' numbering
+    /// goes on. The scans not yet taken are dropped, as entering a system
+    /// drops them.
+    ///
+    /// `_EvalSetExp`'s `M` and `N` (@0x15807-0x1583e, @0x1590b-0x1593d)
+    /// move only the active ships whose leader is the player; every other
+    /// ship keeps its system and stays in the ship table until that
+    /// frame's `_HandleShipDisplay` frees it, unshown, uncounted and
+    /// nothing given back (@0x2ded6-0x2dee7). [`Leave::Held`] keeps them
+    /// so until the end of the next tick; one left behind in the system
+    /// entered comes back as it was, in the order it appeared.
+    /// [`Leave::Dropped`] drops them at once.
+    pub fn retarget(&mut self, table: SpawnTable, keep: &BTreeSet<NpcId>, leave: Leave) {
+        match leave {
+            Leave::Held { from, to } => {
+                let (kept, left): (Vec<Npc>, Vec<Npc>) = std::mem::take(&mut self.npcs)
+                    .into_iter()
+                    .partition(|npc| keep.contains(&npc.id));
+                let left: Vec<LeftShip> = left
+                    .into_iter()
+                    .map(|npc| LeftShip {
+                        person: self.person_name(&npc),
+                        npc,
+                    })
+                    .collect();
+                self.npcs = kept;
+                self.left_behind.entry(from).or_default().extend(left);
+                self.table = table;
+                if let Some(back) = self.left_behind.remove(&to) {
+                    // Numbers only grow, so their order is the order the
+                    // ships appeared in.
+                    self.npcs.extend(back.into_iter().map(|left| left.npc));
+                    self.npcs.sort_by_key(|npc| npc.id);
+                }
+            }
+            Leave::Dropped => {
+                self.table = table;
+                self.npcs.retain(|npc| keep.contains(&npc.id));
+            }
+        }
         self.departed.clear();
         self.scans.clear();
         self.quotes.clear();
@@ -442,6 +517,15 @@ impl Traffic {
             .collect();
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
+        // The display pass (`_DoPlayGameWork` @0x444ad) follows the
+        // frame's arrivals pass (step 1) and frees each ship left behind
+        // (`_HandleShipDisplay` @0x2ded6-0x2dee7). The original frees them
+        // after the frame's AI and ship handling too, whose scans test the
+        // system; here none of those steps sees a ship left behind. The
+        // engine's move settles after the frame's traffic tick, so its one
+        // arrivals pass is the next tick's: the lag of a settled script,
+        // crossing no boundary, as a ship left behind is never drawn.
+        self.left_behind.clear();
         self.ticks += 1;
     }
 
@@ -723,6 +807,18 @@ impl Traffic {
         self.npcs.len() - self.player_led().count()
     }
 
+    /// How many slots of the ship table the traffic takes: its NPCs and
+    /// the ships an in-flight move left behind ([`Leave::Held`]), which
+    /// stay active in the ship table until the display pass frees them.
+    #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the ship-table caps count it next")
+    )]
+    pub(crate) fn berths_taken(&self) -> usize {
+        self.npcs.len() + self.left_behind.values().map(Vec::len).sum::<usize>()
+    }
+
     /// Adds `npc` to the system, numbered as the next NPC, and gives its
     /// number.
     pub(crate) fn add_npc(&mut self, npc: Npc) -> NpcId {
@@ -753,13 +849,23 @@ impl Traffic {
         self.next_berth_skipping(&BTreeSet::new())
     }
 
-    /// The first berth from 1 that no NPC in the system holds, none is
-    /// reserved for, and `skip` does not hold.
+    /// The first berth from 1 that no NPC in the system holds, no ship
+    /// left behind holds ([`Leave::Held`]), none is reserved for, and
+    /// `skip` does not hold: `_GenericRandomShipSpawn` (@0x3c8b1-0x3c90b)
+    /// takes the first slot whose active flag is clear, with no test of
+    /// the system.
     pub(crate) fn next_berth_skipping(&self, skip: &BTreeSet<u32>) -> u32 {
+        let held: BTreeSet<u32> = self
+            .left_behind
+            .values()
+            .flatten()
+            .map(|left| left.npc.berth)
+            .collect();
         (1..=u32::MAX)
             .find(|berth| {
                 !self.reserved.contains(berth)
                     && !skip.contains(berth)
+                    && !held.contains(berth)
                     && self.npcs.iter().all(|npc| npc.berth != *berth)
             })
             .unwrap_or(u32::MAX)
@@ -831,13 +937,29 @@ impl Traffic {
         self.table.persons.get(&id)
     }
 
-    /// The names of the persons in the system.
+    /// The names of the persons in the ship table: those in the system
+    /// and those an in-flight move left behind ([`Leave::Held`]), as
+    /// `_SpawnPerson`'s check (@0x40bb5-0x40c48) strikes out a person
+    /// whose name a person ship active in any slot has, with no test of
+    /// the system.
     fn person_names(&self) -> BTreeSet<String> {
         self.npcs
             .iter()
-            .filter_map(|npc| self.person(npc.person?.id))
-            .map(|person| person.record.name.clone())
+            .filter_map(|npc| self.person_name(npc))
+            .chain(
+                self.left_behind
+                    .values()
+                    .flatten()
+                    .filter_map(|left| left.person.clone()),
+            )
             .collect()
+    }
+
+    /// The name of `npc`'s person, if any, as the system's traffic gives
+    /// it.
+    fn person_name(&self, npc: &Npc) -> Option<String> {
+        self.person(npc.person?.id)
+            .map(|person| person.record.name.clone())
     }
 
     /// Adds `ships`, numbering each and pointing each escort at its lead; a
@@ -2510,7 +2632,11 @@ mod tests {
         assert_eq!(entered.take_scans(), []);
         let mut left = scanned();
         let kept = left.npcs()[0].id;
-        left.retarget(SpawnTable::default(), &BTreeSet::from([kept]));
+        left.retarget(
+            SpawnTable::default(),
+            &BTreeSet::from([kept]),
+            Leave::Dropped,
+        );
         assert_eq!(left.take_scans(), [], "even the scanner kept");
         assert_eq!(scanned().take_scans(), [NpcId(0)], "queued");
     }
@@ -3314,7 +3440,7 @@ mod tests {
     fn the_timer_fires_in_a_system_at_avg_ships_and_after_the_arrival_roll() {
         // An empty system of AvgShips 1, so the arrival is rolled.
         let mut traffic = armed(0, 0);
-        traffic.retarget(strong(1), &BTreeSet::new());
+        traffic.retarget(strong(1), &BTreeSet::new(), Leave::Dropped);
         ticked(&mut traffic, &escorted(60), 30);
         let mut chance = Draws::of(&[]);
         traffic.tick_in(&Keep, escorted(60), &[], &mut chance);
@@ -3326,7 +3452,7 @@ mod tests {
         assert_eq!(traffic.npcs().len(), 1);
         // Now at its AvgShips: no arrival roll, and the timer still runs.
         let mut traffic = armed(0, 0);
-        traffic.retarget(strong(1), &BTreeSet::new());
+        traffic.retarget(strong(1), &BTreeSet::new(), Leave::Dropped);
         traffic.add_npc(crate::testkit::npc(0, ShipStats::new(FAST, &[])));
         ticked(&mut traffic, &escorted(60), 30);
         let mut chance = Draws::of(&[]);
@@ -3462,7 +3588,7 @@ mod tests {
         entered.enter(table(0), &mut Draws::of(&[]));
         assert!(entered.take_quotes().is_empty());
         let mut left = quoted();
-        left.retarget(table(0), &BTreeSet::new());
+        left.retarget(table(0), &BTreeSet::new(), Leave::Dropped);
         assert!(left.take_quotes().is_empty());
         assert_eq!(quoted().take_quotes(), [7600], "queued");
     }
@@ -3481,7 +3607,7 @@ mod tests {
         ticked(&mut traffic, &escorted(60), 10);
         traffic.enter(strong(0), &mut Draws::of(&[]));
         ticked(&mut traffic, &escorted(60), 20);
-        traffic.retarget(strong(0), &BTreeSet::new());
+        traffic.retarget(strong(0), &BTreeSet::new(), Leave::Dropped);
         assert_eq!(traffic.npcs(), []);
         ticked(&mut traffic, &escorted(60), 1);
         assert_eq!(traffic.npcs().len(), 1, "on the 31st tick in all");
@@ -3494,7 +3620,7 @@ mod tests {
         // An empty system of AvgShips 1, so the arrival is rolled; the
         // timer at 0.
         let mut traffic = armed(0, 0);
-        traffic.retarget(strong(1), &BTreeSet::new());
+        traffic.retarget(strong(1), &BTreeSet::new(), Leave::Dropped);
         ticked(&mut traffic, &escorted(60), 30);
         assert_eq!(traffic.npcs(), []);
         let mut chance = Draws::of(&[0, 6, 6, 0, 0, 90]);
@@ -3537,5 +3663,176 @@ mod tests {
             [(ShipId(200), Some(GovtId(131)), AiType::Interceptor)],
             "fired on the tick after the pass"
         );
+    }
+
+    // The ships an in-flight move leaves behind.
+
+    const OLD: SystemId = SystemId(130);
+    const NEW: SystemId = SystemId(131);
+
+    /// Leaves `OLD` for `NEW`.
+    const AWAY: Leave = Leave::Held { from: OLD, to: NEW };
+
+    /// Comes back to `OLD` from `NEW`.
+    const BACK: Leave = Leave::Held { from: NEW, to: OLD };
+
+    /// A ship to add.
+    fn ship() -> Npc {
+        crate::testkit::npc(0, ShipStats::new(FAST, &[]))
+    }
+
+    /// Traffic in `OLD` of [`table`] of 0, holding three NPCs at berths
+    /// 1, 2 and 3, numbered 0, 1 and 2.
+    fn three_here() -> Traffic {
+        let mut traffic = Traffic::new();
+        traffic.enter(table(0), &mut Draws::of(&[]));
+        for _ in 0..3 {
+            traffic.add_npc(ship());
+        }
+        traffic
+    }
+
+    /// The numbers of `traffic`'s NPCs, in `Vec` order.
+    fn ids(traffic: &Traffic) -> Vec<NpcId> {
+        traffic.npcs().iter().map(|npc| npc.id).collect()
+    }
+
+    #[test]
+    fn a_ship_left_behind_holds_its_berth_until_the_next_tick_ends() {
+        let mut traffic = three_here();
+        traffic.retarget(table(0), &BTreeSet::from([NpcId(1)]), AWAY);
+        assert_eq!(berths(&traffic), [2], "the kept one");
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [2, 4], "past those left behind");
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [2, 4, 1], "freed by the tick's end");
+    }
+
+    #[test]
+    fn an_arrival_in_the_next_tick_takes_a_berth_past_those_left_behind() {
+        let mut traffic = three_here();
+        traffic.retarget(table(1), &BTreeSet::new(), AWAY);
+        tick_arrival(&mut traffic);
+        assert_eq!(berths(&traffic), [4]);
+    }
+
+    /// [`peopled`] of `avg_ships`, its Ace listed as person 511.
+    fn ace_as_511(avg_ships: u32) -> SpawnTable {
+        let mut table = peopled(avg_ships);
+        let mut ace = table.persons.remove(&PersonId(510)).expect("Ace");
+        ace.record.id = PersonId(511);
+        table.persons.insert(PersonId(511), ace);
+        table
+    }
+
+    #[test]
+    fn a_person_left_behind_cannot_arrive_in_the_next_pass() {
+        // Ace, set up in the old system as person 510.
+        let mut traffic = entered(&World::new(&[]), &[0, 382, 750, 750, 0]);
+        assert_eq!(traffic.npcs().len(), 1);
+        // The new system lists no 510, but an Ace as 511.
+        traffic.retarget(ace_as_511(1), &BTreeSet::new(), AWAY);
+        let mut chance = Draws::of(&[0, 0]);
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut chance);
+        assert_eq!(
+            chance.asked,
+            [500, 7],
+            "Ace is still in the ship table: no draw of 1022"
+        );
+        assert_eq!(traffic.npcs(), []);
+        let mut chance = Draws::of(&[0, 0, 383]);
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut chance);
+        assert_eq!(&chance.asked[..3], [500, 7, 1022], "free to come");
+        assert_eq!(
+            traffic.npcs()[0].person.map(|person| person.id),
+            Some(PersonId(511))
+        );
+    }
+
+    #[test]
+    fn the_ships_left_behind_are_not_in_the_system() {
+        let mut traffic = three_here();
+        traffic.retarget(table(3), &BTreeSet::from([NpcId(2)]), AWAY);
+        assert_eq!(ids(&traffic), [NpcId(2)]);
+        assert_eq!(traffic.strangers(), 1, "the kept one alone");
+    }
+
+    #[test]
+    fn a_move_back_before_the_next_tick_brings_them_back_as_they_were() {
+        let mut traffic = three_here();
+        traffic.npcs[0].state.velocity = Vec2::new(3.0, -1.0);
+        traffic.npcs[2].goal = Goal::Attack(ShipRef::Player);
+        let before = traffic.npcs().to_vec();
+        traffic.retarget(table(0), &BTreeSet::from([NpcId(1)]), AWAY);
+        traffic.retarget(table(0), &BTreeSet::from([NpcId(1)]), BACK);
+        assert_eq!(traffic.npcs(), before, "the kept one in its place");
+        assert_eq!(traffic.berths_taken(), 3, "none held twice");
+
+        let mut traffic = three_here();
+        traffic.retarget(table(0), &BTreeSet::from([NpcId(1)]), AWAY);
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        traffic.retarget(table(0), &BTreeSet::from([NpcId(1)]), BACK);
+        assert_eq!(ids(&traffic), [NpcId(1)], "after a tick, none");
+    }
+
+    #[test]
+    fn a_move_on_restores_only_the_ships_left_in_the_system_entered() {
+        let mut traffic = three_here();
+        traffic.retarget(table(0), &BTreeSet::from([NpcId(1)]), AWAY);
+        traffic.retarget(
+            table(0),
+            &BTreeSet::new(),
+            Leave::Held {
+                from: NEW,
+                to: SystemId(132),
+            },
+        );
+        assert_eq!(traffic.npcs(), [], "none were left in 132");
+        assert_eq!(traffic.berths_taken(), 3, "all three held");
+        traffic.retarget(
+            table(0),
+            &BTreeSet::new(),
+            Leave::Held {
+                from: SystemId(132),
+                to: NEW,
+            },
+        );
+        assert_eq!(ids(&traffic), [NpcId(1)], "the one left in 131");
+    }
+
+    #[test]
+    fn entering_a_system_drops_the_ships_left_behind() {
+        let mut traffic = three_here();
+        traffic.retarget(table(0), &BTreeSet::new(), AWAY);
+        traffic.enter(table(0), &mut Draws::of(&[]));
+        assert_eq!(traffic.berths_taken(), 0);
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [1], "the berths free");
+        traffic.retarget(table(0), &BTreeSet::new(), BACK);
+        assert_eq!(traffic.npcs(), [], "none come back");
+    }
+
+    #[test]
+    fn a_ship_dropped_at_the_move_frees_its_berth_at_once() {
+        let mut traffic = three_here();
+        traffic.retarget(table(0), &BTreeSet::from([NpcId(1)]), Leave::Dropped);
+        assert_eq!(traffic.berths_taken(), 1);
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [2, 1]);
+        traffic.retarget(table(0), &BTreeSet::new(), BACK);
+        assert_eq!(traffic.npcs(), [], "nothing held to come back");
+    }
+
+    #[test]
+    fn the_berths_taken_count_the_ships_left_behind() {
+        let mut traffic = three_here();
+        assert_eq!(traffic.berths_taken(), 3);
+        traffic.retarget(table(0), &BTreeSet::from([NpcId(0)]), AWAY);
+        assert_eq!(traffic.berths_taken(), 3, "one here, two held");
+        traffic.add_npc(ship());
+        assert_eq!(traffic.berths_taken(), 4);
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.berths_taken(), 2, "the held ones freed");
     }
 }

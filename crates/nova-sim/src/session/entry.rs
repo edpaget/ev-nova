@@ -68,7 +68,7 @@ use crate::sound::SimSound;
 #[cfg(doc)]
 use crate::story::OverlaidGalaxy;
 use crate::story::{Entrance, StoryEvent};
-use crate::traffic::Traffic;
+use crate::traffic::{Leave, Traffic};
 
 /// How the player enters a system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -760,7 +760,7 @@ impl Session {
                 // (@0x15807-0x1583e, @0x1590b-0x1593d) carries.
                 let led: BTreeSet<_> = self.player_led().map(|npc| npc.id).collect();
                 self.give_back_aux_ships(&led);
-                self.traffic.retarget(table, &led);
+                self.traffic.retarget(table, &led, Leave::Dropped);
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
