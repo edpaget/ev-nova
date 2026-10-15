@@ -1147,6 +1147,15 @@ pub struct WeaponRecord {
     /// Its `ProxSafety`: the ticks a shot of it flies before its fuse is
     /// armed.
     pub prox_safety: i16,
+    /// Its `HitParticles`: how many particles a hit throws off.
+    pub hit_particles: i16,
+    /// Its `HitPartLife`: the hit particles' least life, in ticks.
+    pub hit_part_life: i16,
+    /// Its `HitPartVel`: the hit particles' speed, in hundredths of a
+    /// pixel a tick.
+    pub hit_part_vel: i16,
+    /// Its `HitPartColor`, `00RRGGBB`.
+    pub hit_part_color: u32,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`
@@ -1299,8 +1308,8 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
 }
 
 /// One asteroid type, `röid` 128 + `kind`, with its master sprite's
-/// frames and frame size (see [`asteroid`](crate::asteroid)).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// frames and frame size (see [`asteroid`](crate::asteroid)), raw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AsteroidTypeRecord {
     /// Its type, 0-15: `röid` 128 + `kind`, bit `kind` of a system's
     /// `AstTypes`.
@@ -1314,6 +1323,46 @@ pub struct AsteroidTypeRecord {
     pub frames: u16,
     /// Its master sprite's frame width and height, when the sheet reads.
     pub frame_size: Option<(u32, u32)>,
+    /// Its `YieldType`, raw: 0-6 a commodity, 1000-1127 a `jünk`.
+    pub yield_type: i16,
+    /// Its `YieldQty`, raw: the boxes it drops on average.
+    pub yield_qty: i16,
+    /// Its `PartCount`: the particles it throws off as it is destroyed.
+    pub part_count: i16,
+    /// Its `PartColor`, `00RRGGBB`.
+    pub part_color: u32,
+    /// Its `FragType1` and `FragType2`, raw: a `röid` ID (or a kind
+    /// 0-15), -1 for none.
+    pub frag_types: [i16; 2],
+    /// Its `FragCount`: the fragments it breaks into on average.
+    pub frag_count: i16,
+    /// Its `ExplodeType`, encoded: -1 for none.
+    pub explode_type: i16,
+    /// Its `Mass`: what a shot's `Impact` pushes against.
+    pub mass: i16,
+}
+
+/// A record of kind 0 with nothing set: no strength, spin, frames or
+/// sprite, no particles or mass, and -1 (none) for its `YieldType`,
+/// `FragType`s and `ExplodeType`.
+impl Default for AsteroidTypeRecord {
+    fn default() -> Self {
+        Self {
+            kind: 0,
+            strength: 0,
+            spin_rate: 0,
+            frames: 0,
+            frame_size: None,
+            yield_type: -1,
+            yield_qty: 0,
+            part_count: 0,
+            part_color: 0,
+            frag_types: [-1, -1],
+            frag_count: 0,
+            explode_type: -1,
+            mass: 0,
+        }
+    }
 }
 
 /// One `sÿst`'s asteroid field: its `Asteroids` and `AstTypes`, raw.
@@ -2418,6 +2467,7 @@ mod tests {
                 spin_rate: 120,
                 frames: 36,
                 frame_size: Some((48, 40)),
+                ..AsteroidTypeRecord::default()
             }]
         }
 

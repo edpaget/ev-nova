@@ -422,6 +422,10 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         sub_limit: 0,
         max_ammo: 0,
         prox_safety: 0,
+        hit_particles: 0,
+        hit_part_life: 0,
+        hit_part_vel: 0,
+        hit_part_color: 0,
     }
 }
 

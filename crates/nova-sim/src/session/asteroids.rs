@@ -204,6 +204,7 @@ mod tests {
             spin_rate: 100 + 10 * i16::from(kind),
             frames: 36,
             frame_size: Some((40, 30)),
+            ..AsteroidTypeRecord::default()
         }
     }
 

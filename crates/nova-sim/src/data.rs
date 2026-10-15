@@ -917,6 +917,10 @@ impl CombatCatalog for GameData {
                     sub_limit: record.sub_limit,
                     max_ammo: record.max_ammo,
                     prox_safety: record.prox_safety,
+                    hit_particles: record.hit_particles,
+                    hit_part_life: record.hit_part_life,
+                    hit_part_vel: record.hit_part_vel,
+                    hit_part_color: record.hit_part_color,
                 })
             })
             .collect()
@@ -1000,6 +1004,15 @@ impl AsteroidCatalog for GameData {
                     spin_rate: roid.spin_rate,
                     frames: spin_frame_count(self, spin_id),
                     frame_size,
+                    yield_type: roid.yield_type,
+                    yield_qty: roid.yield_qty,
+                    part_count: roid.part_count,
+                    part_color: roid.part_color,
+                    frag_types: [roid.frag_type1, roid.frag_type2]
+                        .map(|frag| frag.map_or(-1, |id| id.0)),
+                    frag_count: roid.frag_count,
+                    explode_type: roid.explode_type,
+                    mass: roid.mass,
                 })
             })
             .collect()
@@ -2399,10 +2412,12 @@ mod tests {
         assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
     }
 
-    /// A `röid` of this `Strength` and `SpinRate`.
+    /// A `röid` of this `Strength` and `SpinRate`, with no yield, no
+    /// fragments and no explosion (-1 each) and nothing else.
     fn roid(strength: i16, spin_rate: i16) -> Vec<u8> {
         let mut bytes = vec![0; Roid::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x00, &[strength, spin_rate]);
+        put_i16s(&mut bytes, 0x00, &[strength, spin_rate, -1]);
+        put_i16s(&mut bytes, 0x0E, &[-1, -1, 0, -1]);
         bytes
     }
 
@@ -2434,6 +2449,7 @@ mod tests {
                     spin_rate: 120,
                     frames: 36,
                     frame_size: Some((48, 40)),
+                    ..AsteroidTypeRecord::default()
                 },
                 AsteroidTypeRecord {
                     kind: 4,
@@ -2441,6 +2457,7 @@ mod tests {
                     spin_rate: -40,
                     frames: 6,
                     frame_size: None,
+                    ..AsteroidTypeRecord::default()
                 },
             ]
         );
@@ -2457,6 +2474,34 @@ mod tests {
                 spin_rate: 100,
                 frames: 0,
                 frame_size: None,
+                ..AsteroidTypeRecord::default()
+            }]
+        );
+    }
+
+    #[test]
+    fn an_asteroid_type_carries_its_yield_particles_fragments_explosion_and_mass_raw() {
+        let mut bytes = roid(40, 150);
+        put_i16s(&mut bytes, 0x04, &[1003, 6, 9]);
+        bytes[0x0A..0x0E].copy_from_slice(&0x00AB_CDEF_u32.to_be_bytes());
+        put_i16s(&mut bytes, 0x0E, &[129, -1, 3, 1002, 75]);
+        let data = store(&[(Roid::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.asteroid_types(),
+            [AsteroidTypeRecord {
+                kind: 0,
+                strength: 40,
+                spin_rate: 150,
+                frames: 0,
+                frame_size: None,
+                yield_type: 1003,
+                yield_qty: 6,
+                part_count: 9,
+                part_color: 0x00AB_CDEF,
+                frag_types: [129, -1],
+                frag_count: 3,
+                explode_type: 1002,
+                mass: 75,
             }]
         );
     }
@@ -3314,6 +3359,8 @@ mod tests {
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
         put_i16s(&mut bytes, 0x68, &[4, 70, 6]);
+        put_i16s(&mut bytes, 0x4C, &[12, 45, 300]);
+        bytes[0x52..0x56].copy_from_slice(&0x0012_3456_u32.to_be_bytes());
         bytes
     }
 
@@ -3354,6 +3401,10 @@ mod tests {
             sub_limit: 2,
             max_ammo: 6,
             prox_safety: 8,
+            hit_particles: 12,
+            hit_part_life: 45,
+            hit_part_vel: 300,
+            hit_part_color: 0x0012_3456,
         };
         assert_eq!(
             data.weapons(),

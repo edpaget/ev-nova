@@ -12681,6 +12681,10 @@ mod tests {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            hit_particles: 0,
+            hit_part_life: 0,
+            hit_part_vel: 0,
+            hit_part_color: 0,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -12811,6 +12815,10 @@ mod tests {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            hit_particles: 0,
+            hit_part_life: 0,
+            hit_part_vel: 0,
+            hit_part_color: 0,
         }
     }
 
@@ -17055,6 +17063,7 @@ mod tests {
                 spin_rate: 100,
                 frames: 36,
                 frame_size: Some((40, 40)),
+                ..nova_sim::AsteroidTypeRecord::default()
             }],
             asteroid_fields: vec![nova_sim::AsteroidFieldRecord {
                 system: SystemId(130),

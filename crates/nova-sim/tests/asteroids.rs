@@ -39,6 +39,7 @@ impl AsteroidCatalog for Pilot {
             spin_rate: 150,
             frames: 36,
             frame_size: Some((48, 48)),
+            ..AsteroidTypeRecord::default()
         }]
     }
 

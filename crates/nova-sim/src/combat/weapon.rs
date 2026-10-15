@@ -225,6 +225,23 @@ impl Explosion {
     }
 }
 
+/// The particles a weapon's hit on an asteroid throws off (see
+/// [`asteroid_hit`](super::asteroid_hit)): its `HitParticles`,
+/// `HitPartVel`, `HitPartLife` and `HitPartColor`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HitParticles {
+    /// How many, its `HitParticles`, above none.
+    pub count: u32,
+    /// Their speed, in pixels a tick: its `HitPartVel` × 0.01, as
+    /// `_LoadObjectData` sets the weapon's runtime +0x54 (@0x79934-0x7994d,
+    /// the double 0.01 @0xdd098).
+    pub speed: f32,
+    /// Their least life, in ticks: its `HitPartLife`, none below none.
+    pub life: u32,
+    /// Their colour, `00RRGGBB`: its `HitPartColor`.
+    pub color: u32,
+}
+
 /// A weapon, in the simulation's units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WeaponSpec {
@@ -284,6 +301,12 @@ pub struct WeaponSpec {
     /// The weapon whose rounds the secondary weapon line counts for it,
     /// if it counts any ([`line_count`]).
     pub line_count: Option<WeaponId>,
+    /// Its `Impact`: how hard a hit pushes an asteroid, against its
+    /// `Mass` (see [`asteroid_hit`](super::asteroid_hit)).
+    pub impact: f32,
+    /// The particles its hit on an asteroid throws off; none without a
+    /// `HitParticles` above none.
+    pub hit_particles: Option<HitParticles>,
 }
 
 /// The weapon whose rounds the status bar's secondary weapon line counts
@@ -351,6 +374,21 @@ pub const FIRES_CLOAKED: u16 = 0x4000;
 pub const HIDES_COUNT: u16 = 0x0040;
 /// `GuidedTurn` is in tenths of a degree.
 pub const GUIDED_TURN_PER_DEGREE: f32 = 10.0;
+/// `Seeker`: its shots pass through asteroids, whatever its guidance
+/// (`_AsteroidCollisionHandler` @0x36a00, `_CheckShotProximities`
+/// @0x37566-0x37575).
+pub const IGNORES_ASTEROIDS: u16 = 0x0001;
+/// `Flags2`: its proximity fuse ignores asteroids, as the Bible says; no
+/// code of the original reads it (see
+/// [`RuleKey::FuseIgnoresAsteroids`](crate::RuleKey::FuseIgnoresAsteroids)).
+pub const FUSE_IGNORES_ASTEROIDS: u16 = 0x0004;
+/// `Flags2`: ten times its mass damage to asteroids (@0x368e5-0x36909).
+pub const MINING: u16 = 0x8000;
+/// What [`MINING`] multiplies the mass damage to an asteroid by.
+pub const MINING_FACTOR: i32 = 10;
+/// What `HitPartVel` is multiplied by for pixels a tick (the double
+/// @0xdd098).
+pub const HIT_PART_VEL_SCALE: f64 = 0.01;
 
 impl WeaponSpec {
     /// The weapon `record` describes (see the module docs).
@@ -394,6 +432,44 @@ impl WeaponSpec {
             max_ammo: count(record.max_ammo),
             prox_safety: count(record.prox_safety),
             line_count: line_count(record),
+            impact: f32::from(record.impact),
+            hit_particles: (record.hit_particles > 0).then(|| HitParticles {
+                count: count(record.hit_particles),
+                // A hundredth of an `i16`: well within an `f32`.
+                #[allow(clippy::cast_possible_truncation)]
+                speed: (f64::from(record.hit_part_vel) * HIT_PART_VEL_SCALE) as f32,
+                life: count(record.hit_part_life),
+                color: record.hit_part_color,
+            }),
+        }
+    }
+
+    /// Whether its shots pass through asteroids ([`IGNORES_ASTEROIDS`]),
+    /// whatever its guidance.
+    #[must_use]
+    pub fn ignores_asteroids(&self) -> bool {
+        self.seeker & IGNORES_ASTEROIDS != 0
+    }
+
+    /// Whether the Bible's reading spares asteroids from its proximity
+    /// fuse ([`FUSE_IGNORES_ASTEROIDS`]).
+    #[must_use]
+    pub fn fuse_spares_asteroids(&self) -> bool {
+        self.flags2 & FUSE_IGNORES_ASTEROIDS != 0
+    }
+
+    /// What a hit of it takes off an asteroid's strength: its `MassDmg`,
+    /// or ten times it under [`MINING`] (@0x368e5-0x36909). Its
+    /// `EnergyDmg` takes nothing.
+    #[must_use]
+    pub fn asteroid_damage(&self) -> i32 {
+        // Read from an `i16`: whole, and well within an `i32`.
+        #[allow(clippy::cast_possible_truncation)]
+        let mass = self.mass_damage as i32;
+        if self.flags2 & MINING != 0 {
+            mass * MINING_FACTOR
+        } else {
+            mass
         }
     }
 
@@ -562,6 +638,98 @@ mod tests {
                 planet,
                 "{flags2:#x}"
             );
+        }
+    }
+
+    #[test]
+    fn a_weapon_keeps_its_impact() {
+        for impact in [25, 0, -40] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                impact,
+                ..light_blaster()
+            });
+            assert_eq!(spec.impact, f32::from(impact), "{impact}");
+        }
+    }
+
+    #[test]
+    fn hit_particles_take_the_count_a_hundredth_of_the_velocity_the_life_and_colour() {
+        let spec = WeaponSpec::new(&WeaponRecord {
+            hit_particles: 6,
+            hit_part_vel: 250,
+            hit_part_life: 40,
+            hit_part_color: 0x00FF_8000,
+            ..light_blaster()
+        });
+        assert_eq!(
+            spec.hit_particles,
+            Some(HitParticles {
+                count: 6,
+                speed: (250.0_f64 * 0.01) as f32,
+                life: 40,
+                color: 0x00FF_8000,
+            })
+        );
+        for count in [0, -2] {
+            let none = WeaponSpec::new(&WeaponRecord {
+                hit_particles: count,
+                hit_part_vel: 250,
+                hit_part_life: 40,
+                ..light_blaster()
+            });
+            assert_eq!(none.hit_particles, None, "{count}");
+        }
+        let short_lived = WeaponSpec::new(&WeaponRecord {
+            hit_particles: 1,
+            hit_part_life: -5,
+            ..light_blaster()
+        });
+        assert_eq!(short_lived.hit_particles.map(|p| p.life), Some(0));
+    }
+
+    #[test]
+    fn seeker_0x0001_ignores_asteroids_on_any_guidance() {
+        for guidance in [-1, 1, 4, 6, 9] {
+            for (seeker, ignores) in [(0x0001, true), (0xffff, true), (0, false), (!0x0001, false)]
+            {
+                let spec = WeaponSpec::new(&WeaponRecord {
+                    guidance,
+                    seeker,
+                    ..light_blaster()
+                });
+                assert_eq!(spec.ignores_asteroids(), ignores, "{guidance} {seeker:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn flags2_0x0004_spares_asteroids_from_the_fuse() {
+        for (flags2, spares) in [(0x0004, true), (0xffff, true), (0, false), (!0x0004, false)] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                flags2,
+                ..light_blaster()
+            });
+            assert_eq!(spec.fuse_spares_asteroids(), spares, "{flags2:#x}");
+        }
+    }
+
+    #[test]
+    fn asteroid_damage_is_mass_damage_or_ten_times_it_under_flags2_0x8000() {
+        for (mass_dmg, flags2, damage) in [
+            (7, 0, 7),
+            (7, 0x8000, 70),
+            (7, 0xffff, 70),
+            (7, !0x8000, 7),
+            (-3, 0x8000, -30),
+            (i16::MAX, 0x8000, 327_670),
+        ] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                mass_dmg,
+                energy_dmg: 100,
+                flags2,
+                ..light_blaster()
+            });
+            assert_eq!(spec.asteroid_damage(), damage, "{mass_dmg} {flags2:#x}");
         }
     }
 

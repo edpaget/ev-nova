@@ -71,6 +71,7 @@
 use crate::catalog::AsteroidTypeRecord;
 use crate::chance::Chance;
 use crate::cloak::Area;
+use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
 
 /// The most asteroids in a field at once: `_asteroidData`'s 16 slots.
@@ -123,20 +124,68 @@ pub struct AsteroidType {
     /// Its master sprite's frame width and height: none when the sheet
     /// does not read.
     pub size: (f32, f32),
+    /// The boxes it drops on average as it is destroyed: its `YieldQty`,
+    /// none below none.
+    pub yield_qty: u16,
+    /// What its boxes hold: its `YieldType`, a commodity 0-6 or a `jünk`
+    /// 1000-1127; none for any other, or when its `YieldQty` is below
+    /// none.
+    pub yield_type: Option<i16>,
+    /// The kinds it breaks into: its `FragType1` and `FragType2`, each
+    /// none unless it names `röid` 128-143 or a kind 0-15.
+    pub fragments: [Option<u8>; 2],
+    /// The fragments it breaks into on average: its `FragCount`.
+    pub frag_count: i16,
+    /// The particles it throws off as it is destroyed: its `PartCount`.
+    pub part_count: i16,
+    /// Their colour, `00RRGGBB`: its `PartColor`.
+    pub part_color: u32,
+    /// What a shot's `Impact` pushes against: its `Mass`.
+    pub mass: i16,
+    /// Its explosion as it is destroyed: its `ExplodeType`, if any.
+    pub explosion: Option<Explosion>,
 }
 
+/// The highest commodity a `YieldType` may name (@0x7dd37-0x7dd7a).
+const LAST_COMMODITY_YIELD: i16 = 6;
+
+/// The `jünk` a `YieldType` may name: 1000-1127 (@0x7dd37-0x7dd7a).
+const JUNK_YIELDS: std::ops::RangeInclusive<i16> = 1000..=1127;
+
+/// The first `röid`: a `FragType` of 128-143 names its kind as an ID
+/// (@0x7de2e-0x7de4c).
+const FIRST_ROID: i16 = 128;
+
 impl AsteroidType {
-    /// A type with no `röid`: strength 1, no spin, no frames, no size.
+    /// A type with no `röid`: strength 1, no spin, no frames, no size, and
+    /// nothing to yield, break into or explode in.
     pub const MISSING: Self = Self {
         strength: 1,
         spin: 0.0,
         frames: 0,
         size: (0.0, 0.0),
+        yield_qty: 0,
+        yield_type: None,
+        fragments: [None, None],
+        frag_count: 0,
+        part_count: 0,
+        part_color: 0,
+        mass: 0,
+        explosion: None,
     };
 
-    /// The type `record` reads as (`_LoadObjectData` @0x7dcaa-0x7dec3).
+    /// The type `record` reads as (`_LoadObjectData` @0x7dcaa-0x7deda):
+    /// its strength at least 1; its `YieldType` kept only for 0-6 and
+    /// 1000-1127, and both it and its `YieldQty` dropped when the
+    /// quantity is below none (@0x7dd37-0x7dd7a); each `FragType` of
+    /// 128-143 or 0-15 as its kind (@0x7de2e-0x7de4c).
     #[must_use]
     pub fn from_record(record: &AsteroidTypeRecord) -> Self {
+        let kept = record.yield_type;
+        let yield_type = ((0..=LAST_COMMODITY_YIELD).contains(&kept)
+            || JUNK_YIELDS.contains(&kept))
+        .then_some(kept)
+        .filter(|_| record.yield_qty >= 0);
         Self {
             strength: record.strength.max(1),
             spin: f32::from(record.spin_rate) * 0.01,
@@ -144,6 +193,14 @@ impl AsteroidType {
             size: record
                 .frame_size
                 .map_or((0.0, 0.0), |(width, height)| (width as f32, height as f32)),
+            yield_qty: u16::try_from(record.yield_qty).unwrap_or(0),
+            yield_type,
+            fragments: record.frag_types.map(fragment_kind),
+            frag_count: record.frag_count,
+            part_count: record.part_count,
+            part_color: record.part_color,
+            mass: record.mass,
+            explosion: Explosion::decode(record.explode_type),
         }
     }
 
@@ -356,6 +413,19 @@ impl Asteroids {
     }
 }
 
+/// The kind a `FragType` of `raw` names: `röid` 128-143, or a kind
+/// 0-15 as it is; none for any other (@0x7de2e-0x7de4c).
+fn fragment_kind(raw: i16) -> Option<u8> {
+    let kind = if raw >= FIRST_ROID {
+        raw - FIRST_ROID
+    } else {
+        raw
+    };
+    u8::try_from(kind)
+        .ok()
+        .filter(|&kind| usize::from(kind) < KINDS)
+}
+
 /// `kind`'s type in `types`: the missing type past the last.
 fn type_of(types: &[AsteroidType; KINDS], kind: u8) -> AsteroidType {
     types
@@ -512,6 +582,7 @@ mod tests {
             spin: (100.0 + 10.0 * kind as f32) * 0.01,
             frames: 36,
             size: (40.0, 30.0),
+            ..AsteroidType::MISSING
         })
     }
 
@@ -538,6 +609,7 @@ mod tests {
                 spin_rate: 120,
                 frames: 36,
                 frame_size: Some((48, 40)),
+                ..AsteroidTypeRecord::default()
             };
             assert_eq!(
                 AsteroidType::from_record(&record),
@@ -547,6 +619,7 @@ mod tests {
                     spin: 120.0 * 0.01,
                     frames: 36,
                     size: (48.0, 40.0),
+                    ..AsteroidType::MISSING
                 },
                 "{strength}"
             );
@@ -564,8 +637,106 @@ mod tests {
                 spin: -50.0 * 0.01,
                 frames: 0,
                 size: (0.0, 0.0),
+                ..AsteroidType::MISSING
             }
         );
+    }
+
+    /// A type read from a record of `YieldType` `yield_type` and
+    /// `YieldQty` `yield_qty`.
+    fn yielding(yield_type: i16, yield_qty: i16) -> AsteroidType {
+        AsteroidType::from_record(&AsteroidTypeRecord {
+            yield_type,
+            yield_qty,
+            ..AsteroidTypeRecord::default()
+        })
+    }
+
+    #[test]
+    fn a_type_keeps_a_yield_type_of_0_to_6_or_1000_to_1127_and_none_else() {
+        for (raw, kept) in [
+            (0, Some(0)),
+            (6, Some(6)),
+            (7, None),
+            (999, None),
+            (1000, Some(1000)),
+            (1127, Some(1127)),
+            (1128, None),
+            (-1, None),
+        ] {
+            let made = yielding(raw, 3);
+            assert_eq!((made.yield_type, made.yield_qty), (kept, 3), "{raw}");
+        }
+        assert_eq!(
+            yielding(4, 0).yield_type,
+            Some(4),
+            "kept at a YieldQty of 0"
+        );
+    }
+
+    #[test]
+    fn a_negative_yield_qty_is_none_and_drops_the_yield_type() {
+        let made = yielding(4, -3);
+        assert_eq!((made.yield_type, made.yield_qty), (None, 0));
+    }
+
+    #[test]
+    fn a_fragment_type_of_128_to_143_or_0_to_15_names_its_kind() {
+        for (raw, kind) in [
+            (128, Some(0)),
+            (130, Some(2)),
+            (143, Some(15)),
+            (0, Some(0)),
+            (5, Some(5)),
+            (15, Some(15)),
+            (16, None),
+            (127, None),
+            (144, None),
+            (200, None),
+            (-1, None),
+        ] {
+            let made = AsteroidType::from_record(&AsteroidTypeRecord {
+                frag_types: [raw, -1],
+                ..AsteroidTypeRecord::default()
+            });
+            assert_eq!(made.fragments, [kind, None], "{raw}");
+            let made = AsteroidType::from_record(&AsteroidTypeRecord {
+                frag_types: [-1, raw],
+                ..AsteroidTypeRecord::default()
+            });
+            assert_eq!(made.fragments, [None, kind], "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_type_keeps_its_fragment_count_particles_mass_and_explosion() {
+        let made = AsteroidType::from_record(&AsteroidTypeRecord {
+            frag_count: 4,
+            part_count: 12,
+            part_color: 0x00AB_CDEF,
+            mass: 50,
+            explode_type: 1003,
+            ..AsteroidTypeRecord::default()
+        });
+        assert_eq!((made.frag_count, made.part_count), (4, 12));
+        assert_eq!((made.part_color, made.mass), (0x00AB_CDEF, 50));
+        assert_eq!(made.explosion, Explosion::decode(1003));
+        assert!(made.explosion.is_some());
+        let quiet = AsteroidType::from_record(&AsteroidTypeRecord::default());
+        assert_eq!(
+            quiet.explosion, None,
+            "a record's default ExplodeType is -1"
+        );
+        assert_eq!(quiet.fragments, [None, None], "and its FragTypes");
+    }
+
+    #[test]
+    fn the_missing_type_yields_breaks_into_and_explodes_into_nothing() {
+        let missing = AsteroidType::MISSING;
+        assert_eq!((missing.yield_qty, missing.yield_type), (0, None));
+        assert_eq!(missing.fragments, [None, None]);
+        assert_eq!((missing.frag_count, missing.part_count), (0, 0));
+        assert_eq!((missing.mass, missing.explosion), (0, None));
     }
 
     #[test]
@@ -576,6 +747,7 @@ mod tests {
             spin_rate: 100,
             frames: 4,
             frame_size: Some((10, 10)),
+            ..AsteroidTypeRecord::default()
         };
         let table = AsteroidType::table(&[record(4), record(0), record(16), record(200)]);
         assert_eq!(table[0], AsteroidType::from_record(&record(0)));
