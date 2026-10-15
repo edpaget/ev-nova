@@ -374,10 +374,12 @@ mod tests {
     const PIRATES: GovtId = GovtId(130);
     const XENO: GovtId = GovtId(131);
     const WRECKS: GovtId = GovtId(132);
+    const XENO_FRIENDS: GovtId = GovtId(133);
 
     /// The Federation (class 1, allied with 13, at war with 9), the
     /// Civvies (classes 1 and 13), the pirates (class 9), a xenophobe
-    /// (class 4) and a derelict government (class 5).
+    /// (class 4), a derelict government (class 5) and the
+    /// xenophobe's ally (class 6, allied with 4).
     fn govts() -> Governments {
         Governments::new([
             GovtRecord {
@@ -404,6 +406,11 @@ mod tests {
                 flags: DERELICT,
                 ..govt(132)
             },
+            GovtRecord {
+                classes: [6, -1, -1, -1],
+                allies: [4, -1, -1, -1],
+                ..govt(133)
+            },
         ])
     }
 
@@ -416,7 +423,7 @@ mod tests {
 
     /// 130 (the Federation's) and 131 at one place, 131 hidden; 132 the
     /// Civvies', 133 the pirates', 134 independent, 135 the xenophobe's,
-    /// 136 the derelicts', 140 independent, each apart. 130's Con lists
+    /// 136 the derelicts', 137 the xenophobe's ally's, 140 independent, each apart. 130's Con lists
     /// 131, 131's 132 and 140, 140's 133.
     fn map() -> StarMap {
         StarMap::with_hidden(
@@ -428,6 +435,7 @@ mod tests {
                 system(134, (300.0, 0.0), &[], None),
                 system(135, (400.0, 0.0), &[], Some(XENO)),
                 system(136, (500.0, 0.0), &[], Some(WRECKS)),
+                system(137, (550.0, 0.0), &[], Some(XENO_FRIENDS)),
                 system(140, (600.0, 0.0), &[133], None),
             ],
             &BTreeSet::from([SystemId(131)]),
@@ -538,6 +546,17 @@ mod tests {
         assert!(!govts.enemies(Some(WRECKS), Some(XENO)), "not by enemies");
         assert!(allows(25_003, 136));
         assert!(!allows(25_000, 136), "the Federation is no xenophobe");
+    }
+
+    #[test]
+    fn a_xenophobe_s_25000_code_refuses_its_ally() {
+        let govts = govts();
+        assert!(
+            !govts.enemies(Some(XENO_FRIENDS), Some(XENO)),
+            "not by enemies"
+        );
+        assert!(govts.allies(Some(XENO_FRIENDS), Some(XENO)));
+        assert!(!allows(25_003, 137));
     }
 
     #[test]
