@@ -919,8 +919,37 @@ impl AppScreen {
                 Showing::FlightMap
             }
             Side::Flight => Showing::Flight,
+            Side::Spaceport if self.port_map_open() => Showing::FlightMap,
             Side::Spaceport => Showing::Spaceport,
         }
+    }
+
+    /// The input to flight's course map open over the spaceport, taking
+    /// it all, and true; false, taking nothing, with no map open there. An
+    /// Escape press closes it ([`FlightView::close_map`]), as in flight,
+    /// and anything else goes to it ([`FlightView::port_map_input`]).
+    fn port_map_input(&mut self, input: &Input) -> bool {
+        if !self.port_map_open() {
+            return false;
+        }
+        let flight = self.flight.as_mut().expect(ENTERED);
+        let escape = Input::Key {
+            key: Key::Escape,
+            pressed: true,
+            repeat: false,
+        };
+        if *input == escape {
+            flight.close_map();
+        } else {
+            flight.port_map_input(input);
+        }
+        true
+    }
+
+    /// Whether flight's course map is open over the spaceport: the bar's
+    /// map ([`FlightView::open_bar_map`]).
+    fn port_map_open(&self) -> bool {
+        self.side == Side::Spaceport && self.flight.as_ref().is_some_and(FlightView::map_open)
     }
 
     /// The ship browser, shown or not.
@@ -959,22 +988,32 @@ impl AppScreen {
         &self.galaxy
     }
 
+    /// The screen of the side shown: flight's while its course map is
+    /// open over the spaceport ([`AppScreen::port_map_open`]), so the
+    /// spaceport neither ticks nor draws beneath it, paused as under any
+    /// modal dialog. The bar's offer wait pausing under it too is ours'
+    /// existing reading
+    /// (rdm:phase/missions-fidelity/phase-15-offer-timer-under-nested-dialogs).
     fn shown(&self) -> &dyn Screen {
         match self.side {
             Side::MainMenu => &self.menu.as_ref().expect(MENU).screen,
             Side::Ships => &self.ships,
             Side::Galaxy => &self.galaxy,
             Side::Flight => self.flight.as_ref().expect(ENTERED),
+            Side::Spaceport if self.port_map_open() => self.flight.as_ref().expect(ENTERED),
             Side::Spaceport => self.spaceport.as_ref().expect(LANDED),
         }
     }
 
+    /// The screen of the side shown, as [`AppScreen::shown`] gives it.
     fn shown_mut(&mut self) -> &mut dyn Screen {
+        let port_map = self.port_map_open();
         match self.side {
             Side::MainMenu => &mut self.menu.as_mut().expect(MENU).screen,
             Side::Ships => &mut self.ships,
             Side::Galaxy => &mut self.galaxy,
             Side::Flight => self.flight.as_mut().expect(ENTERED),
+            Side::Spaceport if port_map => self.flight.as_mut().expect(ENTERED),
             Side::Spaceport => self.spaceport.as_mut().expect(LANDED),
         }
     }
@@ -2186,9 +2225,19 @@ impl AppScreen {
     /// bar when a closing the original ends in `_RefreshSAT` came
     /// (`refresh_status_bar`). Mission BBS and Hire Escort are answered
     /// with the port dialogs' openings (`open_port_dialogs`).
+    ///
+    /// The bar's map key opens flight's course map over the spaceport
+    /// ([`FlightView::open_bar_map`]). While it is open it takes every
+    /// input: an Escape press closes it ([`FlightView::close_map`]), as in
+    /// flight, and anything else goes to it ([`FlightView::port_map_input`],
+    /// where M closes it too).
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
+        if self.port_map_input(input) {
+            return ScreenAction::None;
+        }
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
+        open_bar_map(spaceport, self.flight.as_mut().expect(ENTERED));
         // A new opening clears what lasts one, and the outfitter it opened
         // on was the cached one: it shows the flight's afresh.
         if spaceport.take_outfitter_opened() {
@@ -2527,6 +2576,17 @@ impl AppScreen {
     }
 }
 
+/// Opens `flight`'s course map over `spaceport` when the bar's map key
+/// asked for it (`_BarFilter` item 8, `_DoSystemMap` @0x492b2), the
+/// spaceport letting go of its gesture and keys as it is covered.
+fn open_bar_map(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_map_request() {
+        spaceport.cancel_pointer();
+        spaceport.release_keys();
+        flight.open_bar_map();
+    }
+}
+
 /// Answers `spaceport`'s Mission BBS with `flight`'s mission computer and
 /// the bar's Hire Escort with the ships for hire, then tells `flight` of
 /// the port dialog that has opened ([`FlightView::open_port_dialog`]),
@@ -2703,7 +2763,7 @@ impl Screen for AppScreen {
     /// the original's port dialog leaves it beside the dialog and its shops
     /// cover its left edge (`_DoPortDialog` @0x5fbca).
     fn draw(&self, list: &mut DrawList) {
-        if self.side == Side::Spaceport {
+        if self.side == Side::Spaceport && !self.port_map_open() {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
         }
         self.shown().draw(list);
@@ -6814,6 +6874,76 @@ pub(super) mod tests {
         assert!(spaceport(&screen).open_bar().is_none(), "left the bar");
         click_port_item(&mut screen, 7);
         assert_eq!(food_shown(&screen), Some(3), "the shops shown afresh");
+    }
+
+    /// [`data`] with system 128 linked to 129, landed at Alpha Prime's
+    /// bar, the bar open.
+    fn in_the_bar() -> AppScreen {
+        let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
+        let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
+        built.put_u16(alpha + 0x04, 129);
+        let mut screen = AppScreen::new(loaded_bytes(built.bytes))
+            .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
+        land(&mut screen);
+        click_port_item(&mut screen, 10);
+        assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
+        screen
+    }
+
+    #[test]
+    fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
+        let mut screen = in_the_bar();
+        let nav = |screen: &AppScreen| {
+            flight(screen)
+                .session()
+                .ok()
+                .map(nova_sim::Session::nav_mode)
+        };
+        let landed = Some(nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128))));
+        assert_eq!(nav(&screen), landed);
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::FlightMap);
+        assert!(spaceport(&screen).open_bar().is_some(), "the bar beneath");
+        let mut list = DrawList::new();
+        flight(&screen).course_map().draw(&mut list);
+        assert_eq!(
+            drawn(&screen).iter().cloned().collect::<Vec<_>>(),
+            list.iter().cloned().collect::<Vec<_>>(),
+            "the map drawn alone"
+        );
+        screen.input(&key(MAP, false));
+        let map = flight(&screen).course_map();
+        let beta = map
+            .view()
+            .world_to_screen(map.model().system(SystemId(129)).expect("Beta").position());
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: beta,
+            });
+        }
+        assert_eq!(
+            nav(&screen),
+            Some(nova_sim::NavMode::Hyperspace(Some(SystemId(129)))),
+            "plotted and cued"
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert!(spaceport(&screen).open_bar().is_some(), "still in the bar");
+        assert_eq!(nav(&screen), landed, "the bar's nav put back");
+        assert_eq!(
+            flight(&screen)
+                .session()
+                .map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(129)]),
+            "the course kept"
+        );
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::FlightMap, "again");
+        screen.input(&key(MAP, false));
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::Spaceport, "M closes it too");
     }
 
     #[test]
