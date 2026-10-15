@@ -1341,6 +1341,31 @@ fn the_spaceports_mission_infos_selected_quick_brief_is_loaded_through_flight() 
 }
 
 #[test]
+fn the_spaceports_mission_info_loads_the_quick_brief_of_the_slot_selected() {
+    // The only mission is in slot 1: the text loaded is that slot's.
+    let mut run = mission(128, 200, 201);
+    put_i16s(&mut run, 0x36, &[205]);
+    let data = game_data_built(&run, bar_job(), "Take this to <DST>.", |fork| {
+        fork.resource(ResType::new(*b"l33t"), 128, None, &[])
+            .resource(Desc::TYPE, 205, None, &desc(&"a".repeat(24)))
+    });
+    let store = MemoryPilots::new();
+    let pilot = holding(&ada(), &[(1, 128, None, None)]);
+    let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
+    game.frame();
+    game.land();
+    game.tap(Key::Char('i'));
+    let info = game.spaceport().mission_info().expect("open");
+    let shown = info
+        .dialog()
+        .and_then(|dialog| dialog.text(INFO_TEXT_ITEM))
+        .expect("the text item")
+        .lines()
+        .concat();
+    assert_eq!(shown, "4".repeat(24), "slot 1's, loaded");
+}
+
+#[test]
 fn the_trade_centers_i_opens_mission_info_over_it_and_loads_the_quick_brief_through_flight() {
     // A l33t resource turns the leet mode on, and the chance replaces
     // every letter drawn: only a loaded text draws.
@@ -1518,6 +1543,30 @@ fn in_flight_mission_infos_selected_quick_brief_is_loaded_through_flight() {
         .lines()
         .concat();
     assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
+}
+
+#[test]
+fn in_flight_mission_info_loads_the_quick_brief_of_the_slot_selected() {
+    // The only mission is in slot 1: the text loaded is that slot's.
+    let mut run = mission(128, 200, 201);
+    put_i16s(&mut run, 0x36, &[205]);
+    let data = game_data_built(&run, bar_job(), "Take this to <DST>.", |fork| {
+        fork.resource(ResType::new(*b"l33t"), 128, None, &[])
+            .resource(Desc::TYPE, 205, None, &desc(&"a".repeat(24)))
+    });
+    let store = MemoryPilots::new();
+    let pilot = holding(&ada(), &[(1, 128, None, None)]);
+    let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
+    game.frame();
+    game.tap(Key::Char('i'));
+    let info = game.app.screen().flight_mission_info().expect("open");
+    let shown = info
+        .dialog()
+        .and_then(|dialog| dialog.text(INFO_TEXT_ITEM))
+        .expect("the text item")
+        .lines()
+        .concat();
+    assert_eq!(shown, "4".repeat(24), "slot 1's, loaded");
 }
 
 #[test]
