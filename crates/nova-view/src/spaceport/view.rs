@@ -1190,6 +1190,7 @@ impl SpaceportView {
             self.sounds.extend(screen.take_sounds());
             if screen.closed() {
                 self.info = None;
+                self.release_keys();
             }
         }
     }
@@ -1394,6 +1395,7 @@ impl Screen for SpaceportView {
             self.sounds.extend(info.take_sounds());
             if info.closed() {
                 self.info = None;
+                self.release_keys();
             }
             return ScreenAction::None;
         }
@@ -4178,6 +4180,30 @@ mod tests {
             assert!(open(&view), "{shop}: and the shop is back");
             view.input(&key(MISSION_INFO_KEY));
             assert!(view.take_mission_info_request(), "{shop}: takes keys again");
+        }
+    }
+
+    #[test]
+    fn closing_the_mission_info_over_a_shop_lets_go_of_held_keys() {
+        for close_by_abort in [false, true] {
+            let mut view = shopping_at(7);
+            view.input(&key(Key::Alt));
+            view.input(&key(MISSION_INFO_KEY));
+            assert!(view.take_mission_info_request());
+            view.open_mission_info(actives(1));
+            assert!(view.mission_info().is_some());
+            if close_by_abort {
+                view.set_mission_info(actives(0));
+            } else {
+                view.input(&key(Key::Escape));
+            }
+            assert!(view.mission_info().is_none(), "closed");
+            view.input(&key(Key::Char('b')));
+            assert_eq!(
+                view.take_trade().map(|order| order.lot),
+                Some(Lot::Click),
+                "Alt let go (abort: {close_by_abort}), no quantity dialog"
+            );
         }
     }
 
