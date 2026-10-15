@@ -60,4 +60,13 @@ pub enum SimSound {
     /// `_beepSnd[4]`, `snd ` 154 (`_HyperSpawnFleet` @0x42698-0x426bb),
     /// even when the line is empty.
     FleetArrivalQuote,
+    /// A hail went unanswered, whatever the refusal, with no target too:
+    /// `_beepSnd[3]`, `snd ` 153 (`_HandlePlayerCommunication` @0x626cf,
+    /// @0x6206c, @0x6261c, @0x6264e; see
+    /// [`HailRefusal`](crate::hail::HailRefusal)).
+    HailRefused,
+    /// A person's mission was offered on its hail, in place of the comm
+    /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
+    /// @0x62232-0x6223d).
+    HailOffer,
 }

@@ -146,11 +146,14 @@ impl Session {
     /// any other target opens the comm dialog ([`Session::hail`]), with
     /// `options` listed and the replies read from `catalog`. A person who
     /// may join opens the comm dialog when `options` list a way to join
-    /// for it ([`HailOptions::lists_join`]). Any hail under way ends.
+    /// for it ([`HailOptions::lists_join`]). Any hail under way ends. An
+    /// offer beeps [`SimSound::HailOffer`](crate::SimSound::HailOffer)
+    /// (@0x62232-0x6223d).
     ///
     /// # Errors
     ///
-    /// [`Session::hail`]'s refusals, first, drawing nothing.
+    /// [`Session::hail`]'s refusals, first, drawing nothing and beeping
+    /// once.
     pub fn open_hail(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
@@ -158,12 +161,17 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<Hailed, HailRefusal> {
         self.talk = None;
+        // Beeps here once: once answering, it answers in `hail` too.
+        self.beep_unanswered()?;
         let npc = self.answering()?;
         let offered = self
             .person_offering(npc, OfferedBy::Hail)
             .filter(|_| !self.joins_instead(npc, options));
         match offered {
-            Some(offering) => Ok(Hailed::Offer(self.offer_from_ship(offering, chance))),
+            Some(offering) => {
+                self.sounds.push(crate::SimSound::HailOffer);
+                Ok(Hailed::Offer(self.offer_from_ship(offering, chance)))
+            }
             None => self.hail(catalog, options, chance).map(Hailed::Comm),
         }
     }
@@ -671,6 +679,20 @@ mod tests {
             hail(&mut session, &catalog),
             (Err(HailRefusal::NoResponse), vec![]),
             "disabled, still jumping in (@0x62610-0x62644)"
+        );
+    }
+
+    #[test]
+    fn an_offer_on_the_hail_beeps() {
+        let catalog = talking();
+        let mut session = targeting_ace(&catalog);
+        session.take_sounds();
+        let (hailed, _) = hail(&mut session, &catalog);
+        assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
+        assert_eq!(
+            session.take_sounds(),
+            [crate::SimSound::HailOffer],
+            "_beepSnd[4] (@0x62232-0x6223d)"
         );
     }
 

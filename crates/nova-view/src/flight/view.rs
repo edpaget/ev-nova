@@ -12157,6 +12157,22 @@ mod tests {
     }
 
     #[test]
+    fn a_hail_refused_beeps_through_the_view() {
+        let mut view = hailable(false);
+        view.take_sounds();
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::HailRefused)]);
+        let mut alone = flight();
+        alone.take_sounds();
+        tap(&mut alone, HAIL_KEY);
+        assert_eq!(
+            alone.take_sounds(),
+            [Sound::Sim(SimSound::HailRefused)],
+            "no target"
+        );
+    }
+
+    #[test]
     fn a_hail_dialog_keeps_the_message() {
         let mut view = hailable(true);
         view.say_for(MISSION_FAILED, 240);

@@ -77,6 +77,7 @@ use crate::mission::ships::ShipBehav;
 use crate::person::{COMM_QUOTES, offers_to_join};
 use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
+use crate::sound::SimSound;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
 /// A hail under way: the NPC hailed, the conversation, what it last
@@ -124,7 +125,8 @@ impl Session {
     /// or breaking up; [`HailRefusal::InHyperspace`] for a target still
     /// jumping in, unless it is disabled; and [`HailRefusal::NoResponse`]
     /// for a disabled or mute one, a mute one still jumping in being in
-    /// hyperspace (@0x62089-0x6209c, @0x62610-0x62676).
+    /// hyperspace (@0x62089-0x6209c, @0x62610-0x62676). Each beeps
+    /// [`SimSound::HailRefused`].
     pub fn hail(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
@@ -132,6 +134,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<HailView, HailRefusal> {
         self.talk = None;
+        self.beep_unanswered()?;
         let npc = self.answering()?;
         let dispositions = self.dispositions(npc);
         let escort = npc.escort.is_some();
@@ -168,6 +171,21 @@ impl Session {
             release: false,
         });
         self.hailing(catalog, options).ok_or(HailRefusal::NoTarget)
+    }
+
+    /// [`Session::answering`]'s refusal, if any, beeping
+    /// [`SimSound::HailRefused`] once with it, as every refusal of
+    /// `_HandlePlayerCommunication` plays `_beepSnd[3]` (@0x626cf,
+    /// @0x6206c, @0x6261c, @0x6264e).
+    pub(super) fn beep_unanswered(&mut self) -> Result<(), HailRefusal> {
+        let refused = self.answering().err();
+        match refused {
+            Some(refusal) => {
+                self.sounds.push(SimSound::HailRefused);
+                Err(refusal)
+            }
+            None => Ok(()),
+        }
     }
 
     /// The player's target, when it answers a hail, drawing nothing:
@@ -929,6 +947,64 @@ mod tests {
             Err(HailRefusal::InHyperspace),
             "the government is read after the hyperspace state"
         );
+    }
+
+    /// Hails through the comm key, its conversation in variant 0.
+    fn open_hail_with(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+    ) -> Result<super::super::Hailed, HailRefusal> {
+        session.open_hail(
+            catalog,
+            &HailOptions::default(),
+            &mut Draws::of(&opening(0)),
+        )
+    }
+
+    #[test]
+    fn every_refusal_beeps_once() {
+        let catalog = hailable();
+        let mut untargeted = Box::new(targeting(&catalog));
+        untargeted.target = None;
+        let mut disabled = Box::new(targeting(&catalog));
+        npc(&mut disabled).condition = Condition::Disabled;
+        let mut arriving = Box::new(targeting(&catalog));
+        npc(&mut arriving).mode = Mode::JumpingIn { tick: 0 };
+        let mut jumping = Box::new(targeting(&catalog));
+        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        for mut session in [untargeted, disabled, arriving, jumping] {
+            session.take_sounds();
+            let hailed = open_hail_with(&mut session, &catalog);
+            assert!(hailed.is_err(), "{hailed:?}");
+            assert_eq!(
+                session.take_sounds(),
+                [crate::SimSound::HailRefused],
+                "_beepSnd[3]"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refusal_through_hail_beeps_too() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.target = None;
+        session.take_sounds();
+        assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_err());
+        assert_eq!(session.take_sounds(), [crate::SimSound::HailRefused]);
+    }
+
+    #[test]
+    fn an_answered_hail_makes_no_sound() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.take_sounds();
+        let hailed = open_hail_with(&mut session, &catalog);
+        assert!(
+            matches!(hailed, Ok(super::super::Hailed::Comm(_))),
+            "{hailed:?}"
+        );
+        assert_eq!(session.take_sounds(), []);
     }
 
     #[test]

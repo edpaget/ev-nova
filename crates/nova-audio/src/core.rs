@@ -137,6 +137,8 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
                 Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
                 Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
+                Sound::Sim(SimSound::HailRefused) => self.play(self.table.hail_refused),
+                Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
@@ -473,6 +475,19 @@ mod tests {
             &[Sound::Sim(SimSound::FleetArrivalQuote)],
         );
         assert_eq!(drain(&log), [play(154, 1.0)]);
+    }
+
+    #[test]
+    fn a_hail_refused_and_an_offer_on_a_hail_beep() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::HailRefused),
+                Sound::Sim(SimSound::HailOffer),
+            ],
+        );
+        assert_eq!(drain(&log), [play(153, 1.0), play(154, 1.0)]);
     }
 
     #[test]

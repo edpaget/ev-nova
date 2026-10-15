@@ -56,6 +56,10 @@ pub struct SoundTable {
     pub player_info_refused: Option<SoundId>,
     /// Plays as an announced fleet arrives with its arrival quote.
     pub fleet_quote: Option<SoundId>,
+    /// Plays as a hail goes unanswered.
+    pub hail_refused: Option<SoundId>,
+    /// Plays as a person offers its mission on its hail.
+    pub hail_offer: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -123,6 +127,13 @@ impl SoundTable {
     /// - `fleet_quote`: 154, `_beepSnd[4]`, which `_HyperSpawnFleet` plays
     ///   as an announced fleet with a `Quote` arrives, even when its line
     ///   is empty (@0x42698-0x426bb).
+    /// - `hail_refused`: 153, `_beepSnd[3]`, which
+    ///   `_HandlePlayerCommunication` plays with every refusal of a hail,
+    ///   with no target too (@0x626cf, @0x6206c, @0x6261c, @0x6264e). Its
+    ///   `PlaySound` argument of 1 or 5 is not modelled.
+    /// - `hail_offer`: 154, `_beepSnd[4]`, which
+    ///   `_HandlePlayerCommunication` plays as a person offers its mission
+    ///   on its hail (@0x62232-0x6223d).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -146,6 +157,8 @@ impl SoundTable {
         news_close: Some(SoundId(152)),
         player_info_refused: Some(SoundId(153)),
         fleet_quote: Some(SoundId(154)),
+        hail_refused: Some(SoundId(153)),
+        hail_offer: Some(SoundId(154)),
     };
 }
 
@@ -178,5 +191,7 @@ mod tests {
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.player_info_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.fleet_quote, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.hail_refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.hail_offer, Some(SoundId(154)), "_beepSnd[4]");
     }
 }
