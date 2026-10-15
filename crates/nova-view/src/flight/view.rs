@@ -5245,8 +5245,10 @@ impl<
         ScreenAction::None
     }
 
-    /// First catches the screen up with what the session has told since
-    /// (see the module docs), map open or not. Then runs the simulation's
+    /// First settles the asteroid field of a session started or loaded in
+    /// flight ([`Session::settle_asteroid_field`]), so the first frame
+    /// drawn shows it, and catches the screen up with what the session
+    /// has told since (see the module docs), map open or not. Then runs the simulation's
     /// steps for `dt` with the keys held ([`FlightView::run_steps`]), and
     /// advances the stellars' animations, each hypergate drawing the frame
     /// the session stepped it to ([`show_gate_frames`]). While the map is
