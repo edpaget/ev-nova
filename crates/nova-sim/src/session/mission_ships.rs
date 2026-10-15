@@ -760,8 +760,11 @@ impl Session {
     /// ([`spawn::swapped_mission_ship`]); the person's NPC is taken out,
     /// every other NPC letting it go; the ship raises [`Fate::Arrived`];
     /// and it becomes the player's target when the person was, its
-    /// brackets settled (@0x62538; see the `brackets` module). No count
-    /// of the slot changes. Nothing when the NPC is no longer here, the
+    /// brackets settled (@0x62538; see the `brackets` module). The
+    /// original also marks the target panel for redraw
+    /// (`_statusRedraw[6]`, @0x62543); ours gets that from the ship's
+    /// fresh `NpcId`, on which `nova_view::flight::cadence::retake_target`
+    /// redraws the panel at once. No count of the slot changes. Nothing when the NPC is no longer here, the
     /// slot no longer holds a mission of a `düde`, or the ship cannot be
     /// spawned. Of a `ShipBehav` 1 mission it joins the player's
     /// formation as it comes ([`Session::mission_ships_came`]); of
@@ -4548,6 +4551,11 @@ pub(super) mod tests {
         assert_eq!(ship.ship, ShipId(129), "flying Ace's type");
         assert_eq!(ship.govt, Some(GovtId(131)), "the düde's");
         assert_eq!(session.target, Some(ship.id), "now the target");
+        // A new target, not Ace's id reused: the original marks the target
+        // panel for redraw (`_statusRedraw[6]`, @0x62543), and ours redraws
+        // it at once on the target's `NpcId` changing
+        // (`nova_view::flight::cadence::retake_target`).
+        assert_ne!(ship.id, NpcId(0), "a new target");
         assert!(!session.pilot().gone(PersonId(600)), "not gone for good");
     }
 
@@ -4969,6 +4977,29 @@ pub(super) mod tests {
         let brackets = session.target_brackets().expect("bracketed");
         assert_eq!(Some(brackets.npc), session.target);
         assert_eq!(brackets.expand, 0.0);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn the_swap_settles_the_brackets_even_with_the_ship_on_screen() {
+        // @0x62538 writes 0 with no on-screen test, unlike the pick tail's
+        // 256 for a target on screen (@0x6a5c9).
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace(&catalog);
+        session.target_fly_in.start();
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, &catalog);
+        let ship = session.target().expect("targeted").clone();
+        assert!(
+            session.npc_in_play_area(&ship, crate::brackets::sprite_in_area),
+            "on screen"
+        );
+        assert_eq!(session.target_brackets().expect("bracketed").expand, 0.0);
+        session.tick(crate::Controls::default());
+        assert_eq!(session.target_brackets().expect("bracketed").expand, 0.0);
     }
 
     #[test]
