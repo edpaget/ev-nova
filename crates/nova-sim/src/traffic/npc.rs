@@ -508,6 +508,29 @@ impl Npc {
         matches!(self.mode, Mode::Emerging { .. })
     }
 
+    /// Makes it come out of `gate`, waiting there `ticks_left` ticks
+    /// (`_AIMakeShipEmergeFromHyperGate` @0x89518): goal 0x15 and
+    /// sub-goal 0 ([`Mode::Emerging`], @0x89532-0x8953b), its travel
+    /// stellar the gate ([`Npc::emerges_from`], @0x8954a), no target
+    /// (+0x70 = -1, @0x89544), and its trigger released.
+    ///
+    /// The original holds no trigger from one frame to the next: each
+    /// frame `_LowLevelAIHandler` clears the fire flag +0xba (@0x851f6)
+    /// for an `_AIFire*` call to set again. A waiting ship's fire step is
+    /// skipped (`_HandleShip` @0x34a54-0x34a72), and its burst runs under
+    /// goal 8, sub-goal 0xa, which fires nothing (@0x8dd61-0x8dd93,
+    /// @0x8f3c8-0x8f3d9). No decision is due until it flies, so the
+    /// released trigger holds through both.
+    ///
+    /// The caller places it, gives it its heading and decides
+    /// [`Npc::led_out`].
+    pub fn emerge_from_gate(&mut self, gate: StellarId, ticks_left: u32) {
+        self.mode = Mode::Emerging { ticks_left };
+        self.emerges_from = Some(gate);
+        self.target = None;
+        self.trigger = Trigger::default();
+    }
+
     /// Whether it holds `gate`'s sprite open (`_HandleStellarSprites`
     /// @0x2e884-0x2e8d7): coming out of it, waiting or bursting
     /// (`_AIShipIsEmergingFromHypergate` @0x7e2e8, goal 0x15, with its
@@ -1092,6 +1115,33 @@ mod tests {
             ..ship(Mode::Emerging { ticks_left: 3 }, Condition::Intact)
         };
         assert!(!unmarked.holds_gate_open(gate));
+    }
+
+    #[test]
+    fn a_ship_made_to_emerge_from_a_gate_waits_there_with_no_target_and_its_trigger_released() {
+        let state = ShipState {
+            position: Vec2::new(10.0, -20.0),
+            velocity: Vec2::new(1.0, 2.0),
+            heading: 45.0,
+        };
+        let mut npc = Npc {
+            mode: Mode::Flying,
+            state,
+            trigger: Trigger {
+                primary: true,
+                ..Trigger::default()
+            },
+            target: Some(ShipRef::Player),
+            led_out: true,
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        npc.emerge_from_gate(StellarId(310), 40);
+        assert_eq!(npc.mode, Mode::Emerging { ticks_left: 40 });
+        assert_eq!(npc.emerges_from, Some(StellarId(310)));
+        assert_eq!(npc.target, None);
+        assert_eq!(npc.trigger, Trigger::default());
+        assert_eq!(npc.state, state, "the caller places it");
+        assert!(npc.led_out, "the caller decides it");
     }
 
     #[test]
