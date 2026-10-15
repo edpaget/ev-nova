@@ -121,7 +121,7 @@ use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::mission::ships::ShipBehav;
-use crate::person::{PersonWorld, derelict_armor};
+use crate::person::{self, PersonWorld, derelict_armor};
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
 use npc::{AiType, Mode, Npc, NpcId, NpcPerson};
@@ -278,6 +278,10 @@ pub struct Traffic {
     /// The `STR#`s of the arrival quotes of the fleets added since the
     /// quotes were last taken, in order ([`NewShip::quote`]).
     quotes: Vec<i16>,
+    /// The NPCs whose persons' hail quotes `_AIMakeShipAttackPlayer` says
+    /// at once, since they were last taken, in order
+    /// ([`Traffic::take_attack_quotes`]).
+    attack_quotes: Vec<NpcId>,
     /// The escort-strength timer, kept across systems.
     strength_timer: StrengthTimer,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
@@ -341,6 +345,7 @@ impl Traffic {
             departed: Vec::new(),
             scans: Vec::new(),
             quotes: Vec::new(),
+            attack_quotes: Vec::new(),
             strength_timer: StrengthTimer::default(),
             left_behind: BTreeMap::new(),
         }
@@ -402,6 +407,7 @@ impl Traffic {
         self.departed.clear();
         self.scans.clear();
         self.quotes.clear();
+        self.attack_quotes.clear();
         self.add(missions, world.persons.grudges, Some(world.spawn_reserve));
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
@@ -484,6 +490,7 @@ impl Traffic {
         self.departed.clear();
         self.scans.clear();
         self.quotes.clear();
+        self.attack_quotes.clear();
     }
 
     /// Advances the traffic one tick among `sites` alone, NPCs deciding
@@ -822,6 +829,14 @@ impl Traffic {
     ///   +0x50 is below -900 (@0x8fcf5-0x8fd18), and nothing reads the
     ///   goal 4 before it does.
     ///
+    /// Each strike of the player's on a ship that answers it (taking a
+    /// target) asks, once the target is set, whether the ship's person
+    /// says its hail quote at once ([`Traffic::turn_with_quote`]), the
+    /// strikes taken in turn, as `_DamageShip` calls
+    /// `_AIMakeShipAttackPlayer` for each (@0x3bcf6, @0x3be69). A flying
+    /// ship then already targets the player, so only a ship whose wait
+    /// runs says it, once a hit.
+    ///
     /// The strikes are the fight's since the last tick, so a ship the
     /// player hit in its gate is held, and seen, on the next traffic tick
     /// after the hit: one frame after the original shows it. That lag is
@@ -848,15 +863,30 @@ impl Traffic {
                     .collect()
             })
             .collect();
-        for (npc, reactions) in self.npcs.iter_mut().zip(reactions) {
+        let player_dying = world.player.is_some_and(|player| {
+            matches!(
+                player.condition,
+                Condition::Dying { .. } | Condition::Destroyed
+            )
+        });
+        for (at, reactions) in reactions.into_iter().enumerate() {
             for (reaction, strike) in reactions.into_iter().zip(strikes) {
-                let mut attacks_player = false;
+                let id = self.npcs[at].id;
+                let on_itself = reaction.target.is_some() && strike.ship == ShipRef::Npc(id);
+                let attacks_player = on_itself && strike.by == ShipRef::Player;
                 if let Some(target) = reaction.target {
-                    npc.target = Some(target);
-                    if strike.ship == ShipRef::Npc(npc.id) {
-                        autopilot::cut_wait(npc);
-                        attacks_player = strike.by == ShipRef::Player;
-                    }
+                    self.npcs[at].target = Some(target);
+                }
+                if attacks_player {
+                    // `_DamageShip` sets the target (+0x70 @0x3bcf6) before
+                    // it calls `_AIMakeShipAttackPlayer` (@0x3be69), whose
+                    // gate reads the ship as this hit and those before it
+                    // left it (@0x89c53).
+                    self.turn_with_quote(id, player_dying);
+                }
+                let npc = &mut self.npcs[at];
+                if on_itself {
+                    autopilot::cut_wait(npc);
                 }
                 npc.provoked += reaction.provoked;
                 match npc.mode {
@@ -871,6 +901,29 @@ impl Traffic {
                     }
                 }
             }
+        }
+    }
+
+    /// NPC `id` turns on the player: its person's hail quote is queued
+    /// ([`Traffic::take_attack_quotes`]) when `_AIMakeShipAttackPlayer`'s
+    /// gate lets it through (@0x89c50-0x89c9b, [`person::turns_with_quote`],
+    /// the player `player_dying` or not), as the NPCs are now: it did not
+    /// already threaten the player ([`person::already_threatens`]). The
+    /// gate is asked before the turn sets anything. An NPC not in the
+    /// system queues nothing.
+    ///
+    /// The player's answered hit asks it ([`Traffic::react`]), as
+    /// `_DamageShip` does (@0x3be69), and so does the session for a
+    /// declined bribe (`_DoCommDialog` @0x9621f). The original's other
+    /// callers turn their ships through the per-type AIs' decisions, which
+    /// say their quotes through `_HandleShip`'s path instead.
+    pub fn turn_with_quote(&mut self, id: NpcId, player_dying: bool) {
+        let Some(npc) = self.npcs.iter().find(|npc| npc.id == id) else {
+            return;
+        };
+        let threatened = person::already_threatens(npc, &self.npcs);
+        if person::turns_with_quote(npc, threatened, player_dying) {
+            self.attack_quotes.push(id);
         }
     }
 
@@ -1053,6 +1106,15 @@ impl Traffic {
     /// or leaving for another system drops those not taken.
     pub fn take_quotes(&mut self) -> Vec<i16> {
         std::mem::take(&mut self.quotes)
+    }
+
+    /// The NPCs whose persons say their hail quotes at once, turning on
+    /// the player as `_AIMakeShipAttackPlayer` has it
+    /// ([`Traffic::turn_with_quote`]), since they were last taken, in
+    /// order, an NPC once for each time; taking them empties the list.
+    /// Entering or going on into another system drops them.
+    pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
+        std::mem::take(&mut self.attack_quotes)
     }
 
     /// The ship types the system's traffic can spawn, by ascending ID.
@@ -2599,6 +2661,137 @@ mod tests {
             "not its turn"
         );
         assert_eq!(traffic.npcs()[0].target, Some(ShipRef::Player));
+    }
+
+    /// `count` NPCs at rest, deciding only on tick 0 (so never again),
+    /// NPC 0 flown by a person of `QUOTE_ON_ATTACK`.
+    fn quoting_traffic(count: u32) -> Traffic {
+        let mut traffic = populated(count, 1000);
+        traffic.ticks = 1;
+        traffic.npcs[0].person = Some(NpcPerson {
+            id: PersonId(151),
+            flags: crate::person::QUOTE_ON_ATTACK,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: 8,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: false,
+            quoted: false,
+            quoted_at: None,
+        });
+        traffic
+    }
+
+    #[test]
+    fn the_players_answered_hit_queues_its_persons_quote() {
+        // `_DamageShip` calls `_AIMakeShipAttackPlayer` for the player's
+        // hit once the reaction's gates pass (@0x3bd7e-0x3be69), which
+        // says the quote (@0x89ce1) of a ship whose wait runs: no threat.
+        let fighting = Fighting::deciding(Goal::Idle);
+        for mode in [
+            Mode::Emerging { ticks_left: 60 },
+            Mode::Coasting { ticks_left: 30 },
+        ] {
+            let mut traffic = quoting_traffic(1);
+            traffic.npcs[0].mode = mode;
+            traffic.tick_in(
+                &fighting,
+                World::new(&[]),
+                &[struck(0, 1.0)],
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(traffic.take_attack_quotes(), [NpcId(0)], "{mode:?}");
+            assert_eq!(traffic.take_attack_quotes(), [], "taken");
+        }
+        let waiting = || {
+            let mut traffic = quoting_traffic(2);
+            traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+            traffic
+        };
+        let mut traffic = waiting();
+        traffic.tick_in(
+            &fighting,
+            World::new(&[]),
+            &[struck_by(0, 1, 1.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(traffic.take_attack_quotes(), [], "an NPC's hit");
+        let mut traffic = waiting();
+        traffic.tick_in(
+            &Keep,
+            World::new(&[]),
+            &[struck(0, 1.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(traffic.take_attack_quotes(), [], "no target taken");
+        let mut traffic = waiting();
+        let world = World {
+            arrival_hits: RuleSource::Bible,
+            ..World::new(&[])
+        };
+        traffic.tick_in(&fighting, world, &[struck(0, 1.0)], &mut Draws::of(&[]));
+        assert_eq!(traffic.take_attack_quotes(), [], "not answered in its gate");
+        let mut traffic = waiting();
+        let dying = World {
+            player: Some(PlayerSide {
+                condition: Condition::Dying { ticks_left: 5 },
+                ..player_at(0.0, -300.0)
+            }),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&fighting, dying, &[struck(0, 1.0)], &mut Draws::of(&[]));
+        assert_eq!(traffic.take_attack_quotes(), [], "the player dying");
+    }
+
+    #[test]
+    fn a_held_ship_quotes_on_each_hit_a_flying_one_never() {
+        // `_DamageShip` sets the target (+0x70 @0x3bcf6) before it calls
+        // `_AIMakeShipAttackPlayer` (@0x3be69): a flying ship then targets
+        // the player and is a threat (`_ExtendedIsThreatToPlayer`
+        // @0x81be1-0x81c28), so its quote is `_HandleShip`'s to say. A
+        // ship whose wait runs is none, so each hit in its hold says it.
+        let fighting = Fighting::deciding(Goal::Idle);
+        let twice = [struck(0, 1.0), struck(0, 1.0)];
+        let mut traffic = quoting_traffic(1);
+        traffic.tick_in(&fighting, World::new(&[]), &twice, &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[0].target, Some(ShipRef::Player));
+        assert_eq!(traffic.take_attack_quotes(), [], "flying");
+        let mut traffic = quoting_traffic(1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.tick_in(&fighting, World::new(&[]), &twice, &mut Draws::of(&[]));
+        assert!(matches!(traffic.npcs[0].mode, Mode::HeldAtGate { .. }));
+        assert_eq!(traffic.take_attack_quotes(), [NpcId(0), NpcId(0)]);
+        traffic.tick_in(
+            &fighting,
+            World::new(&[]),
+            &[struck(0, 1.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(traffic.take_attack_quotes(), [NpcId(0)], "held, again");
+    }
+
+    #[test]
+    fn entering_another_system_drops_the_queued_quotes() {
+        let queued = || {
+            let mut traffic = quoting_traffic(1);
+            traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+            traffic.tick_in(
+                &Fighting::deciding(Goal::Idle),
+                World::new(&[]),
+                &[struck(0, 1.0)],
+                &mut Draws::of(&[]),
+            );
+            traffic
+        };
+        let mut entered = queued();
+        entered.enter(table(0), &mut Draws::of(&[]));
+        assert_eq!(entered.take_attack_quotes(), []);
+        let mut left = queued();
+        left.retarget(table(0), &BTreeSet::new(), Leave::Dropped);
+        assert_eq!(left.take_attack_quotes(), []);
+        assert_eq!(queued().take_attack_quotes(), [NpcId(0)], "queued");
     }
 
     /// Who reacts to a strike on NPC 0, by `arrival_hits`, among a flying

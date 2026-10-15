@@ -103,7 +103,7 @@ use crate::rank::RankNames;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::text_tags::{self, NoNames, TagContext};
-use crate::traffic::npc::{Npc, NpcPerson};
+use crate::traffic::npc::{Mode, Npc, NpcPerson};
 use crate::traffic::table::ShipKind;
 
 /// `Flags`: it holds a grudge once the player hits it.
@@ -318,6 +318,55 @@ pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView, npcs: &[N
         (true, false) => Eligible::Yes,
         (true, true) => Eligible::Now,
     }
+}
+
+/// Whether `npc`, turning on the player, says its person's hail quote at
+/// once, as `_AIMakeShipAttackPlayer` gates it (@0x89c50-0x89c9b): it was
+/// not `threatened` already (`_ExtendedIsThreatToPlayer` @0x89c53, asked
+/// before the goal changes; see [`already_threatens`]), it flies a person
+/// (+0xc8d0, @0x89c60) of `Flags` 0x0010 (@0x89c8a), it is no mission's
+/// special ship (+0xc8d2, @0x89c71), it is not disabled (`_IsDisabled`
+/// @0x89c94, which reads its armour, so a ship breaking up is disabled
+/// too), and the player is not `player_dying` (`_IsDying` @0x89ca7). A
+/// person escorting the player is not the person: the original's joined
+/// ship is a mission ship.
+///
+/// It reads none of [`quote_eligible`]'s filters: not the `HailQuote`,
+/// "once", the grudge, liking, mission or leaving flags, the player's
+/// `InherentAI`, nor whether the person is gone for good; and it draws
+/// nothing.
+#[must_use]
+pub fn turns_with_quote(npc: &Npc, threatened: bool, player_dying: bool) -> bool {
+    !threatened
+        && !player_dying
+        && npc.condition == Condition::Intact
+        && npc.mission.is_none()
+        && npc.escort.is_none()
+        && npc
+            .person
+            .is_some_and(|person| person.flags & QUOTE_ON_ATTACK != 0)
+}
+
+/// Whether `npc`, among `npcs`, already threatens the player for
+/// [`turns_with_quote`]'s gate (`_ExtendedIsThreatToPlayer` @0x81b70): it
+/// [threatens the player](Npc::threatens_player_among), or it is flying,
+/// intact and targets the player: the original's target clause (target 0,
+/// no wait, @0x81be1-0x81c28), which [`Npc::threatens_player_among`] reads
+/// from the goal's quarry. `_DamageShip` sets its victim's target to the
+/// player (+0x70 @0x3bcf6) before it calls `_AIMakeShipAttackPlayer`
+/// (@0x3be69), so a flying ship the player hits is already a threat and
+/// says its quote through `_HandleShip`'s path instead
+/// ([`quote_eligible`]'s [`Eligible::Now`]). A ship whose wait runs (in
+/// its gate, held at it, coasting) is never a threat (@0x81bed), so it
+/// says its quote on each hit. The goals the original's clause leaves out
+/// (5, 7, 9, 0xa-0xc, 0xf, 0x12) and its visibility test (@0x81bc6) are
+/// not read.
+#[must_use]
+pub fn already_threatens(npc: &Npc, npcs: &[Npc]) -> bool {
+    npc.threatens_player_among(npcs)
+        || (npc.mode == Mode::Flying
+            && npc.condition == Condition::Intact
+            && npc.target == Some(crate::combat::ShipRef::Player))
 }
 
 impl NpcPerson {
@@ -1554,6 +1603,119 @@ mod tests {
         }
         assert_eq!([QUOTE_ODDS, HAIL_QUOTES as u32], [140, 7101]);
         assert_eq!([QUOTE_SHOWN_TICKS, QUOTE_GAP_TICKS], [420, 1350]);
+    }
+
+    /// A flying person of `QUOTE_ON_ATTACK` (and `more`), idle.
+    fn turning(more: u16) -> Npc {
+        Npc {
+            person: Some(quoting(QUOTE_ON_ATTACK | more)),
+            ..npc_of(Condition::Intact, IDLE)
+        }
+    }
+
+    #[test]
+    fn a_ship_turning_on_the_player_says_its_quote_as_ai_make_ship_attack_player_gates_it() {
+        assert!(turns_with_quote(&turning(0), false, false));
+        let no_flag = Npc {
+            person: Some(quoting(0)),
+            ..turning(0)
+        };
+        let marked = Npc {
+            mission: Some(crate::traffic::npc::MissionMark {
+                slot: 0,
+                behav: crate::mission::ships::ShipBehav::AttackPlayer,
+                formation: None,
+                order: None,
+            }),
+            ..turning(0)
+        };
+        let nobody = Npc {
+            person: None,
+            ..turning(0)
+        };
+        let escort = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..turning(0)
+        };
+        for (npc, why) in [
+            (&no_flag, "no 0x0010"),
+            (&marked, "a mission's special ship"),
+            (&nobody, "no person"),
+            (&escort, "the player's escort is not the person"),
+        ] {
+            assert!(!turns_with_quote(npc, false, false), "{why}");
+        }
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying { ticks_left: 2 },
+            Condition::Destroyed,
+        ] {
+            let npc = Npc {
+                condition,
+                ..turning(0)
+            };
+            assert!(!turns_with_quote(&npc, false, false), "{condition:?}");
+        }
+        assert!(!turns_with_quote(&turning(0), true, false), "a threat");
+        assert!(
+            !turns_with_quote(&turning(0), false, true),
+            "the player dying"
+        );
+        // The gate reads none of `_HandleShip`'s filters.
+        let quoted = Npc {
+            person: Some(NpcPerson {
+                quoted: true,
+                hail_quote: 0,
+                ..quoting(QUOTE_ON_ATTACK | QUOTE_ONCE)
+            }),
+            ..turning(0)
+        };
+        assert!(turns_with_quote(&quoted, false, false), "once, said");
+        for more in [QUOTE_IF_GRUDGE, QUOTE_IF_LIKED, NOT_TO_WARSHIP] {
+            assert!(turns_with_quote(&turning(more), false, false), "{more:#x}");
+        }
+    }
+
+    #[test]
+    fn a_flying_ship_targeting_the_player_already_threatens_but_one_held_or_coasting_never_does() {
+        let attacking = npc_of(Condition::Intact, ATTACKING);
+        assert!(already_threatens(&attacking, &[]), "goal 4, target 0");
+        let targeting = Npc {
+            target: Some(ShipRef::Player),
+            ..npc_of(Condition::Intact, IDLE)
+        };
+        assert!(
+            already_threatens(&targeting, &[]),
+            "the hit's target, set before `_AIMakeShipAttackPlayer`"
+        );
+        for mode in [
+            Mode::HeldAtGate { ticks_left: 20 },
+            Mode::Coasting { ticks_left: 30 },
+            Mode::Emerging { ticks_left: 60 },
+        ] {
+            for npc in [&attacking, &targeting] {
+                let waiting = Npc {
+                    mode,
+                    ..npc.clone()
+                };
+                assert!(!already_threatens(&waiting, &[]), "{mode:?}");
+            }
+        }
+        let disabled = Npc {
+            condition: Condition::Disabled,
+            ..targeting.clone()
+        };
+        assert!(!already_threatens(&disabled, &[]));
+        let idle = npc_of(Condition::Intact, IDLE);
+        assert!(!already_threatens(&idle, &[]));
+        let elsewhere = Npc {
+            target: Some(ShipRef::Npc(crate::traffic::npc::NpcId(5))),
+            ..idle
+        };
+        assert!(!already_threatens(&elsewhere, &[]));
     }
 
     /// Person 128 of `flags`, its mission's special ships `ship`.
