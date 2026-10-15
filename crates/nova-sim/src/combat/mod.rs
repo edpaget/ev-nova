@@ -64,8 +64,10 @@
 //! 6. A point-defence beam hits the missile it is held on the same way.
 //! 7. The tick's missile locks land, then hits, blasts and expiries are
 //!    resolved: a shot that hits a ship it
-//!    may hit ([`sides`]) damages it, explodes and blasts the ships around
-//!    it, releases its sub-munitions at that ship, and is gone; a shot at
+//!    may hit ([`sides`]) damages it, less a point of mass and of energy
+//!    for each decay step it has taken
+//!    ([`DecayStep`](projectile::DecayStep)), explodes and blasts the
+//!    ships around it with its weapon's whole damage, releases its sub-munitions at that ship, and is gone; a shot at
 //!    the end of its life detonates (blasting the same way) or vanishes,
 //!    and releases its sub-munitions at its own target; a beam damages the
 //!    nearest ship it may hit along it, every tick, until its life is
@@ -155,7 +157,7 @@ use hull::{
     Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
     never_breaks_up,
 };
-use projectile::{Jam, Shot, ShotId, Source, Target, contact};
+use projectile::{DecayStep, Jam, Shot, ShotId, Source, Target, contact};
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
@@ -445,6 +447,8 @@ pub struct Combat {
     breakup: Breakup,
     /// Who counts as the player for the pass-through flags.
     pass_through: PassThrough,
+    /// How often a decaying shot takes a step.
+    decay: DecayStep,
 }
 
 impl Combat {
@@ -622,6 +626,12 @@ impl Combat {
     /// says (see [`sides`]): by default, [`PassThrough::PlayerSide`].
     pub fn set_pass_through(&mut self, pass_through: PassThrough) {
         self.pass_through = pass_through;
+    }
+
+    /// Has a decaying shot take a step as `step` says: by default,
+    /// [`DecayStep::EveryDecayPlusOne`].
+    pub fn set_decay(&mut self, step: DecayStep) {
+        self.decay = step;
     }
 
     /// The next shot's number.
@@ -887,7 +897,7 @@ impl Combat {
                 hits.push(Landed {
                     ship,
                     by: shot.firer,
-                    hit,
+                    hit: hit.decayed(shot.decay_steps(self.decay)),
                     direct: true,
                     intended: shot.aimed_at == Some(ship),
                     lock: false,
@@ -3642,6 +3652,90 @@ mod tests {
         assert!(strikes[0].lock);
         assert_eq!(strikes[0].downed, None);
         assert_ne!(ships[1].condition, Condition::Intact, "downed all the same");
+    }
+
+    // Decay (`_HandleShot` @0x35eb2-0x35efc, `_HandleShipHit`
+    // @0x36add-0x36afd).
+
+    /// A slug 10 pixels a tick for 50 ticks, doing 10 mass and 7 energy
+    /// damage, losing a point of each every 2 ticks, with `flags`.
+    fn slug(flags: u16) -> WeaponRecord {
+        WeaponRecord {
+            reload: 1000,
+            count: 50,
+            speed: 1000,
+            mass_dmg: 10,
+            energy_dmg: 7,
+            decay: 1,
+            flags,
+            ..weapon(156)
+        }
+    }
+
+    /// The reserves B, 95 pixels ahead, and C, at (`cx`, `cy`), are left
+    /// with once A's one shot of `record` is spent, its decay as `step`
+    /// says.
+    fn after_slug(record: WeaponRecord, step: DecayStep, (cx, cy): (f32, f32)) -> [Reserves; 2] {
+        let mut combat = Combat::default();
+        combat.set_decay(step);
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(record),
+            Ship::at(2, 95.0, 0.0),
+            Ship::at(3, cx, cy),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        while !combat.shots().is_empty() {
+            tick(&mut combat, &mut ships, &NovaDisable);
+        }
+        [ships[1].reserves, ships[2].reserves]
+    }
+
+    const FAR_OFF: (f32, f32) = (0.0, 900.0);
+
+    #[test]
+    fn a_decayed_shots_direct_hit_takes_its_steps_off_mass_and_energy_each_floored_at_none() {
+        // It meets B on its 8th tick: 4 steps by the original, 8 by the
+        // Bible.
+        let [armour, _] = after_slug(slug(0x0020), DecayStep::EveryDecayPlusOne, FAR_OFF);
+        assert_eq!(
+            (armour.shield.now, armour.armor.now),
+            (10.0, 24.0),
+            "10 - 4"
+        );
+        let [bible, _] = after_slug(slug(0x0020), DecayStep::EveryDecay, FAR_OFF);
+        assert_eq!(bible.armor.now, 28.0, "10 - 8");
+        let [shield, _] = after_slug(slug(0), DecayStep::EveryDecayPlusOne, FAR_OFF);
+        assert_eq!((shield.shield.now, shield.armor.now), (7.0, 30.0), "7 - 4");
+        let [gone, _] = after_slug(slug(0), DecayStep::EveryDecay, FAR_OFF);
+        assert_eq!(gone.shield.now, 10.0, "7 - 8, floored at none");
+        let steady = WeaponRecord {
+            decay: 0,
+            ..slug(0x0020)
+        };
+        let [whole, _] = after_slug(steady, DecayStep::EveryDecayPlusOne, FAR_OFF);
+        assert_eq!(whole.armor.now, 20.0, "no decay");
+    }
+
+    #[test]
+    fn a_decayed_shots_blasts_take_the_full_damage() {
+        let shell = WeaponRecord {
+            explod_type: 0,
+            blast_radius: 30,
+            ..slug(0x0020)
+        };
+        let [hit, blasted] = after_slug(shell, DecayStep::EveryDecayPlusOne, (95.0, 20.0));
+        assert_eq!(hit.armor.now, 24.0, "the direct hit decayed");
+        assert_eq!(blasted.armor.now, 20.0, "the blast whole");
+        // Spent at (60, 0) on its 6th tick, 3 steps on.
+        let flak = WeaponRecord {
+            count: 6,
+            flags: 0x8020,
+            ..shell
+        };
+        let [missed, detonated] = after_slug(flak, DecayStep::EveryDecayPlusOne, (60.0, 25.0));
+        assert_eq!(missed.armor.now, 30.0, "out of its reach");
+        assert_eq!(detonated.armor.now, 20.0, "the expiry blast whole");
     }
 
     /// The Quad Light Blaster Turret: point defence firing every 5 ticks,

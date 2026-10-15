@@ -437,7 +437,7 @@ use crate::combat::armament::{
 };
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
-use crate::combat::projectile::Shot;
+use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
 use crate::combat::weapon::Ammo;
@@ -1459,6 +1459,8 @@ impl Session {
         self.combat.set_pass_through(PassThrough::from(
             rules.source_for(RuleKey::PlayerPassThrough),
         ));
+        self.combat
+            .set_decay(DecayStep::from(rules.source_for(RuleKey::ShotDecay)));
         self.rules = rules;
         self
     }
@@ -16063,6 +16065,37 @@ pub(super) mod tests {
             let shield = session.pilot().reserves.shield;
             assert_eq!(shield.now < shield.max, hit, "{rule:?}");
         }
+    }
+
+    #[test]
+    fn the_shot_decay_rule_sets_how_often_a_decaying_shot_loses_its_damage() {
+        // The blaster loses a point every 2 ticks by the engine, every
+        // tick by the Bible; it meets the NPC 100 pixels off on its 5th.
+        let mut catalog = armed();
+        catalog.weapons[0].decay = 1;
+        let shield_taken = |rules: crate::rulebook::Rulebook| {
+            let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
+            let full = session.npcs()[0].reserves.shield.now;
+            session.hold_trigger(FIRE);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.hold_trigger(Trigger::default());
+            for _ in 0..10 {
+                session.tick_combat(Rules::default(), &mut NeverFires);
+            }
+            full - session.npcs()[0].reserves.shield.now
+        };
+        let by = |source| {
+            shield_taken(
+                crate::rulebook::Rulebook::default().with_override(RuleKey::ShotDecay, source),
+            )
+        };
+        assert_eq!(
+            shield_taken(crate::rulebook::Rulebook::default()),
+            8.0,
+            "10 - 2"
+        );
+        assert_eq!(by(RuleSource::Engine), 8.0);
+        assert_eq!(by(RuleSource::Bible), 5.0, "10 - 5");
     }
 
     #[test]

@@ -281,6 +281,11 @@ pub struct WeaponSpec {
     /// The ticks a shot of it flies before it can hit a stellar: its
     /// `ProxSafety`, none when that is below none.
     pub prox_safety: u32,
+    /// Its `Decay`, none when that is at or below none: a shot of it loses
+    /// a point of mass and of energy damage from its direct hit for each
+    /// `Decay` + 1 ticks it has flown, by the original's reading
+    /// ([`DecayStep`](super::projectile::DecayStep)).
+    pub decay: u32,
     /// The weapon whose rounds the secondary weapon line counts for it,
     /// if it counts any ([`line_count`]).
     pub line_count: Option<WeaponId>,
@@ -397,6 +402,7 @@ impl WeaponSpec {
             carried,
             max_ammo: count(record.max_ammo),
             prox_safety: count(record.prox_safety),
+            decay: count(record.decay),
             line_count: line_count(record),
         }
     }
@@ -542,6 +548,17 @@ mod tests {
     #[test]
     fn the_light_blasters_range_is_195_pixels() {
         assert_eq!(WeaponSpec::new(&light_blaster()).range(), 195.0);
+    }
+
+    #[test]
+    fn a_weapons_decay_is_its_decay_none_at_or_below_none() {
+        for (raw, ticks) in [(4, 4), (1, 1), (0, 0), (-3, 0)] {
+            let record = WeaponRecord {
+                decay: raw,
+                ..light_blaster()
+            };
+            assert_eq!(WeaponSpec::new(&record).decay, ticks, "{raw}");
+        }
     }
 
     #[test]

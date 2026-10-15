@@ -95,6 +95,27 @@ impl Hit {
     }
 }
 
+impl Hit {
+    /// The hit with `steps` of decay taken off its mass and its energy,
+    /// each floored at none, as `_HandleShipHit` takes a shot's steps off
+    /// its direct hit (@0x36add-0x36afd); with no steps, the hit as it is.
+    #[must_use]
+    pub fn decayed(self, steps: u32) -> Self {
+        if steps == 0 {
+            return self;
+        }
+        // Steps are ticks of a shot's life, far within an `f32`'s whole
+        // numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let steps = steps as f32;
+        Self {
+            mass: (self.mass - steps).max(0.0),
+            energy: (self.energy - steps).max(0.0),
+            ..self
+        }
+    }
+}
+
 /// Takes `hit` off `reserves` with neither of its floors (see the module
 /// docs): what [`take`] does to a hit that may kill and disable.
 pub fn apply(reserves: &mut Reserves, hit: Hit) {
@@ -224,6 +245,41 @@ mod tests {
         };
         take(&mut reserves, hit, &hull, &NovaDisable, was_disabled);
         (reserves.shield.now, reserves.armor.now)
+    }
+
+    #[test]
+    fn a_decayed_hit_loses_its_steps_off_mass_and_energy_each_floored_at_none() {
+        let hit = Hit {
+            mass: 10.0,
+            energy: 3.0,
+            passes_shields: true,
+            cant_kill: true,
+            cant_disable: false,
+        };
+        assert_eq!(
+            hit.decayed(4),
+            Hit {
+                mass: 6.0,
+                energy: 0.0,
+                ..hit
+            }
+        );
+        assert_eq!(hit.decayed(0), hit);
+        let negative = Hit {
+            mass: -2.0,
+            energy: -1.0,
+            ..hit
+        };
+        assert_eq!(negative.decayed(0), negative, "no step, no floor");
+        assert_eq!(
+            negative.decayed(1),
+            Hit {
+                mass: 0.0,
+                energy: 0.0,
+                ..hit
+            },
+            "a step floors even what it did not take"
+        );
     }
 
     #[test]

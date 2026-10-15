@@ -43,6 +43,7 @@ use super::weapon::{Guidance, WeaponSpec};
 use crate::catalog::{GovtId, ShipId};
 use crate::flight::{ShipState, facing, heading_of, normalized, shortest_turn};
 use crate::geometry::Vec2;
+use crate::rulebook::RuleSource;
 
 /// A freefall bomb's share of its firer's velocity at launch.
 pub const BOMB_LAUNCH: f32 = 0.8;
@@ -111,6 +112,31 @@ pub enum Jam {
     Clear,
     /// Lost, its ship gone (998, `_HandleShot` @0x3561b).
     Lost,
+}
+
+/// How often a decaying shot loses a point of its direct hit's mass and
+/// energy damage, as the rulebook's
+/// [`RuleKey::ShotDecay`](crate::RuleKey::ShotDecay) says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecayStep {
+    /// The original's: every `Decay` + 1 ticks, as `_HandleShot` adds a
+    /// tick to the shot's count (+0x18) and takes a step (+0x32) only
+    /// once the count is above `Decay`, starting again from none
+    /// (@0x35eb2-0x35efc).
+    #[default]
+    EveryDecayPlusOne,
+    /// The Bible's: "every time this number of frames goes by", every
+    /// `Decay` ticks.
+    EveryDecay,
+}
+
+impl From<RuleSource> for DecayStep {
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::EveryDecayPlusOne,
+            RuleSource::Bible => Self::EveryDecay,
+        }
+    }
 }
 
 /// A shot's number in its fight, never reused.
@@ -313,6 +339,21 @@ impl Shot {
     #[must_use]
     pub fn expired(&self) -> bool {
         self.age >= self.weapon.lifetime
+    }
+
+    /// The decay steps it has taken in the ticks it has flown, a step as
+    /// `step` says: none for a weapon of no `Decay`. A sub-munition counts
+    /// from its release, by its own weapon's `Decay`. Every tick of a
+    /// shot's flight reaches the count (`_HandleShot` @0x35eb2), so it is
+    /// read from its age.
+    #[must_use]
+    pub fn decay_steps(&self, step: DecayStep) -> u32 {
+        let decay = self.weapon.decay;
+        match step {
+            _ if decay == 0 => 0,
+            DecayStep::EveryDecayPlusOne => self.age / (decay + 1),
+            DecayStep::EveryDecay => self.age / decay,
+        }
     }
 
     /// Whether the tick it has just flown took it past [`LOCK_AGE`], as
@@ -1420,6 +1461,37 @@ mod tests {
                 .map(|(ship, _)| ship),
             Some(ShipRef::Npc(NpcId(3))),
             "any ship it meets, its target or not"
+        );
+    }
+
+    #[test]
+    fn a_shot_takes_a_decay_step_every_decay_plus_one_ticks_and_by_the_bible_every_decay_ticks() {
+        let decaying = WeaponSpec {
+            decay: 2,
+            ..spec(-1, 100, 20)
+        };
+        let mut shot = Shot::launch(decaying, FIRER, FIRER, &state(0.0, 0.0, 0.0, 0.0, 0.0), 0.0);
+        let mut original = Vec::new();
+        let mut bible = Vec::new();
+        for _ in 1..=9 {
+            shot.step(&[]);
+            original.push(shot.decay_steps(DecayStep::EveryDecayPlusOne));
+            bible.push(shot.decay_steps(DecayStep::EveryDecay));
+        }
+        assert_eq!(original, [0, 0, 1, 1, 1, 2, 2, 2, 3]);
+        assert_eq!(bible, [0, 1, 1, 2, 2, 3, 3, 4, 4]);
+        let steady = Shot {
+            age: 9,
+            ..Shot::launch(spec(-1, 100, 20), FIRER, FIRER, &ShipState::default(), 0.0)
+        };
+        for step in [DecayStep::EveryDecayPlusOne, DecayStep::EveryDecay] {
+            assert_eq!(steady.decay_steps(step), 0, "no decay: {step:?}");
+        }
+        assert_eq!(DecayStep::default(), DecayStep::EveryDecayPlusOne);
+        assert_eq!(DecayStep::from(RuleSource::Bible), DecayStep::EveryDecay);
+        assert_eq!(
+            DecayStep::from(RuleSource::Engine),
+            DecayStep::EveryDecayPlusOne
         );
     }
 
