@@ -563,6 +563,17 @@ mod tests {
             }],
             "the graphic stretched into item 2 (@0x51dc7-0x51e28)"
         );
+        let plain = [FRAME.top, FRAME.middle, FRAME.bottom];
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Picture { image, .. }
+                    | DrawCommand::StretchedPicture { image, .. }
+                    | DrawCommand::TiledPicture { image, .. }
+                    if plain.contains(image)
+            )),
+            "no plain three-slice frame under the picture variant: {commands:?}"
+        );
     }
 
     #[test]
