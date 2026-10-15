@@ -331,7 +331,8 @@
 //!   as the session's rule set says ([`FlightView::with_rules`]), and
 //!   each step a person may
 //!   say its hail quote ([`Session::tick_quotes`], right after the
-//!   traffic's tick), shown in the message line for
+//!   fight and the answer to its hits, [`Session::answer_strikes`]),
+//!   shown in the message line for
 //!   [`HAIL_QUOTE_TICKS`], the last one said winning.
 //! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
 //!   message line and closes the escort menu.
@@ -4079,6 +4080,11 @@ impl<
     /// menu times out on every step the map is shut, the streak's
     /// included.
     ///
+    /// Each step runs the session's tick, the traffic's, the assistance's
+    /// and the fight's, then has the NPCs answer the fight's hits
+    /// ([`Session::answer_strikes`]) and the persons say their quotes, so
+    /// a ship hit in its gate is drawn on the frame of the hit.
+    ///
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
     /// before the frame is drawn.
@@ -4124,8 +4130,6 @@ impl<
                     .collect();
                 session.tick(controls);
                 session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                session.tick_quotes(&self.catalog, &mut self.chance);
-                quotes.extend(session.take_quotes());
                 session.tick_assistance(&*self.disable_rule);
                 notes.extend(session.take_comm());
                 let rules = Rules {
@@ -4134,6 +4138,12 @@ impl<
                     law: &*self.law,
                 };
                 session.tick_combat(rules, &mut self.chance);
+                // The hit is answered, and the quote block runs, before the
+                // frame is drawn, as `_HandleShot` answers it (@0x44385)
+                // before `_HandleShip` and the display pass.
+                session.answer_strikes(&*self.behaviour);
+                session.tick_quotes(&self.catalog, &mut self.chance);
+                quotes.extend(session.take_quotes());
                 let player = point(session.player().position);
                 let dying = dying(session, &self.sheet, &self.npc_sheets);
                 let chance = &mut self.effects_chance;
@@ -9626,6 +9636,81 @@ mod tests {
         ticks(&mut view, 8);
         assert_eq!(mode(&view), Mode::LeavingGate { tick: 0 });
         assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE]);
+    }
+
+    /// Idles, and answers a hit on itself by taking its attacker.
+    #[derive(Debug)]
+    struct Answering;
+
+    impl Behaviour for Answering {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            Goal::Idle
+        }
+
+        fn react(
+            &self,
+            npc: &nova_sim::Npc,
+            strike: &nova_sim::Strike,
+            _around: &nova_sim::Surroundings,
+        ) -> nova_sim::Reaction {
+            if strike.ship == nova_sim::ShipRef::Npc(npc.id) {
+                nova_sim::Reaction {
+                    target: Some(strike.by),
+                    provoked: strike.damage,
+                    goal: None,
+                }
+            } else {
+                nova_sim::Reaction::default()
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_is_drawn_on_the_frame_of_the_hit() {
+        // The original answers the hit inside `_HandleShot` (@0x44385),
+        // before the display pass draws the frame.
+        let mut catalog = armed(1, &[BLASTER]);
+        for weapon in &mut catalog.weapons {
+            weapon.energy_dmg = 5;
+        }
+        catalog.sites.push(LandingSite {
+            flags2: nova_sim::gate::HYPERGATE,
+            exit_angle: 90,
+            ..site(141, (0.0, -100.0), StellarFlags::CAN_LAND)
+        });
+        // Setup brings nobody; then an arrival comes out of the gate, the
+        // third of the stellars, straight ahead of the player.
+        let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Answering));
+        ticks(&mut view, 2);
+        let npc = |view: &View| view.session().expect("flying").npcs()[0].clone();
+        assert!(matches!(npc(&view).mode, Mode::Emerging { .. }));
+        let left = |npc: &nova_sim::Npc| npc.reserves.shield.now + npc.reserves.armor.now;
+        let mut shield = left(&npc(&view));
+        view.input(&key(FIRE_KEY, true));
+        for _ in 0..60 {
+            view.tick(TICK);
+            let hit = npc(&view);
+            if left(&hit) < shield {
+                assert!(
+                    matches!(hit.mode, Mode::HeldAtGate { .. }),
+                    "{:?}",
+                    hit.mode
+                );
+                assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE], "seen");
+                return;
+            }
+            assert!(matches!(hit.mode, Mode::Emerging { .. }), "{:?}", hit.mode);
+            shield = left(&hit);
+        }
+        panic!("never hit");
     }
 
     /// `catalog` with hypergate 141 at (200, 100) in Sol, of 6 frames
