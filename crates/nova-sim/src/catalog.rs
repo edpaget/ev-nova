@@ -1359,7 +1359,9 @@ pub trait PilotCatalog {
     /// Each system's first stellar that can be read, the first of its
     /// [`PilotCatalog::landing_sites`], by ascending system ID; a system
     /// with none is left out. A landed `M` selects it (see the `nav`
-    /// module of [`Session`](crate::Session)). By default it is read
+    /// module of [`Session`](crate::Session)): the original's first
+    /// `NavDefs` slot that isn't −1, as its loader clears the slot of a
+    /// `spöb` that didn't load (@0x780f8-0x7817f). By default it is read
     /// through [`PilotCatalog::star_map`] and the landing sites of each
     /// system that exists; a catalog that reads sprites for its landing
     /// sites reads it without them.

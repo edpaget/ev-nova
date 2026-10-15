@@ -63,7 +63,10 @@
 //!   having selected first.
 //! - The take-off's tail ([`Session::take_off`], `_HandlePlayerDockRequest`
 //!   @0x674d2-0x674d8): the selection let go, the mode kept, then the
-//!   cue.
+//!   cue. The take-off notes the nav as it begins
+//!   ([`Session::take_takeoff_nav`]), as the original's take-off redraw
+//!   (@0x633a0) draws it before the deselect; the flight view holds it
+//!   for a tick.
 //! - A hyperspace arrival (@0x6be25-0x6be2b, @0x6c4cd): off, then, after
 //!   the course's step, the cue, so mode 3 comes back while hops remain
 //!   (the `entry` module's table).
@@ -118,13 +121,30 @@
 //! (@0x68712-0x68718, @0x6f41b-0x6f421). Mode 4, the hypergate map's, is
 //! never drawn.
 //!
-//! Of the landed `M`, filed as
-//! rdm:phase/hud-fidelity/phase-36-landed-m-n-left-out-branches-and-ordering:
-//! the original's first stellar is the first nav slot that isn't −1,
-//! readable or not (@0x15756-0x157f5), where ours takes the first that
-//! can be read, as the move places the ship there; and a system ID in
-//! range with no `sÿst` (@0x15715-0x1571d) is written, where ours writes
-//! nothing. Off and mode 3 while docked: the original lands in mode 2
+//! Of the landed `M`:
+//!
+//! - **The first stellar.** The original selects the first of the
+//!   system's 16 `NavDefs` slots that isn't −1 (@0x15756-0x157f5), which
+//!   is the first naming a `spöb` that loaded, so ours' first stellar
+//!   that can be read is the original's. The loader (`_LoadObjectData`)
+//!   sets a slot to −1 for an ID outside 128-2175 (@0x78199-0x781a3),
+//!   and for one whose `spöb` didn't load (its +0x45 clear,
+//!   @0x780f8-0x7817f). A missing `spöb` clears +0x45 (@0x779bd-0x779c6),
+//!   and `_FlipSpob` refuses a record of 0x45d bytes or fewer
+//!   (@0xa6047-0xa6051), ours' 1118-byte bound on a `spöb`. An ID past
+//!   the last `spöb` reads a +0x45 the loader never writes (its pass
+//!   stops at the last, @0x779cb-0x779d9) from memory `NewPtr` didn't
+//!   clear (@0x1b7cd-0x1b7d4): not modelled.
+//! - **A system with no `sÿst`.** For an ID in range with no `sÿst`
+//!   (@0x15715-0x1571d), the original writes +0x74 and scans 16
+//!   `NavDefs` words the loader never writes for a missing `sÿst`: it
+//!   writes only +0x8, the links, +0x1eb, +0x1ed (@0x77a7e-0x77aaf) and
+//!   +0xec (@0x7837e-0x7838c), and visits no ID past the last `sÿst`
+//!   (@0x78393-0x783a1), in a table from `NewPtr` (@0x1b7f9-0x1b800).
+//!   That reads uninitialised memory, so it can't be modelled; ours
+//!   writes nothing, as its move skips the system.
+//!
+//! Off and mode 3 while docked: the original lands in mode 2
 //! only (@0x6a8ed-0x6a932). In Off, a pilot resumed docked
 //! (`_ResetPlayer` @0x1d4cd-0x1d4d5), a landed `M`'s +0x6c shows nowhere
 //! ("Nav System Off") and the take-off lets go of it (@0x674d2), so ours,
@@ -167,6 +187,15 @@ impl Session {
             }
             mode => mode,
         }
+    }
+
+    /// The nav mode and selection as the last take-off began, before
+    /// the stay's days and its deselect, or `None` once taken: what the
+    /// original's take-off redraw (`_PlayerLandOnStellar` @0x633a0) draws,
+    /// as its deselect (@0x674d2) comes later in the same dock request
+    /// (see the flight view's `took_off`).
+    pub fn take_takeoff_nav(&mut self) -> Option<NavMode> {
+        self.takeoff_nav.take()
     }
 
     /// The system the galaxy map selects as it opens, as `_DoSystemMap`
@@ -217,6 +246,9 @@ impl Session {
     /// table). The original lets go of it in flight at the operator too
     /// (@0x157e3, @0x158fd); ours' settling comes later in the same input
     /// or tick, before any frame is drawn, so the player never sees it.
+    /// Why the first stellar that can be read and a system that doesn't
+    /// exist are the original's, as far as it can be modelled, is in the
+    /// module docs.
     pub(super) fn select_for_landed_move(&mut self, system: SystemId, first: bool) {
         if self.landed.is_none() || !self.galaxy.exists(system) {
             return;
@@ -974,6 +1006,20 @@ mod tests {
             NavMode::Stellar(None),
             "the take-off lets go of it"
         );
+    }
+
+    #[test]
+    fn the_take_off_notes_the_nav_held_before_its_deselect() {
+        let (catalog, mut session) = landed();
+        assert_eq!(session.take_takeoff_nav(), None, "no take-off yet");
+        run(&mut session, "M131");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
+        assert_eq!(session.nav_mode(), NavMode::Stellar(None), "let go");
+        assert_eq!(session.take_takeoff_nav(), Some(stellar(140)), "as held");
+        assert_eq!(session.take_takeoff_nav(), None, "taken");
+        session.take_off(&catalog, &mut NeverFires);
+        assert_eq!(session.take_takeoff_nav(), None, "not landed");
     }
 
     #[test]

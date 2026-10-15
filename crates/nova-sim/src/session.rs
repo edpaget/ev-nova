@@ -404,7 +404,7 @@ mod target_panel;
 mod tutorial;
 
 pub use hooks::HookRules;
-pub use ship_change::ShipChangeRules;
+pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
 pub use edit::RelocateRefusal;
@@ -1088,6 +1088,15 @@ pub struct Session {
     /// was queued: what its dialog's redraw shows (see the
     /// `mission_screens` module); never saved.
     text_nav: Option<NavMode>,
+    /// The `C`, `E` and `H` run while docked since the last outfit order
+    /// or ship purchase began, in order (see the `ship_change` module's
+    /// [`InterfaceLoad`]); never saved.
+    interface_loads: Vec<InterfaceLoad>,
+    /// The nav mode as the last take-off began, before its deselect: what
+    /// the original's take-off redraw shows (`_PlayerLandOnStellar`
+    /// @0x633a0), until taken ([`Session::take_takeoff_nav`]); never
+    /// saved.
+    takeoff_nav: Option<NavMode>,
     /// The outside offers whose accept was refused, passed over until
     /// another venue is entered (see the `mission_screens` module); never
     /// saved, as the original saves none of it.
@@ -1430,6 +1439,8 @@ impl Session {
             shown_texts: Vec::new(),
             texts_queued: 0,
             text_nav: None,
+            interface_loads: Vec::new(),
+            takeoff_nav: None,
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),
@@ -3614,6 +3625,10 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
         let stellar = self.landed.take()?;
+        // The take-off's whole-bar redraw (`_PlayerLandOnStellar`
+        // @0x633a0), before the stay's days (@0x63440) and the deselect
+        // (@0x674d2); see the flight view's `took_off`.
+        self.takeoff_nav = Some(self.nav_mode());
         let stay = std::mem::take(&mut self.stay);
         self.bar_news = None;
         let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
@@ -3664,6 +3679,9 @@ impl Session {
         // Its tail: the dock request dropped (@0x6374a-0x63759; see the
         // `clearance` module), the nav selection let go, the mode kept,
         // then the course cued (@0x674d2-0x674d8; see the `nav` module).
+        // The original's bar is redrawn before this with the selection
+        // still held (@0x633a0), noted as `takeoff_nav` above; see the
+        // flight view's `took_off`.
         self.dock = None;
         self.deselect();
         self.cue_course();
@@ -4000,6 +4018,9 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> OutfitRun {
+        // The bar's loads are this order's alone (see
+        // [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
         let follows = self.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
         // An order of another outfit names another cell: the selection
         // moved, so the relisting's selection is let go.
@@ -4410,6 +4431,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<ShipPurchase, ShipRefusal> {
         let (shipyard, record) = self.buyable(ship, chance)?;
+        self.interface_loads.clear();
         let quote = Quote {
             price: shipyard.row(ship).map_or(0, |row| row.price),
             trade_in: shipyard.trade_in,
@@ -12792,6 +12814,91 @@ pub(super) mod tests {
         assert_eq!(
             session.take_events(),
             [SessionEvent::ShipChanged, SessionEvent::ShipChanged]
+        );
+    }
+
+    /// A disable rule that has every ship disabled, so a ship change's
+    /// armour bump raises the armour to its most.
+    #[derive(Debug)]
+    struct AlwaysDisabled;
+
+    impl crate::combat::hull::DisableRule for AlwaysDisabled {
+        fn disabled(&self, _armor: Gauge, _hull: &crate::combat::hull::HullSpec) -> bool {
+            true
+        }
+    }
+
+    fn run_expr(session: &mut Session, text: &str) {
+        let expr = crate::control::SetExpr::parse(text).expect("parses");
+        session.run_set(&expr, &mut NeverFires);
+    }
+
+    #[test]
+    fn docked_ship_changes_are_noted_as_each_ran_and_cleared_as_an_order_begins() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].inherent_govt = Some(GovtId(150));
+        let tank = catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == TANK)
+            .expect("the tank");
+        tank.on_purchase = crate::control::Script::parse("H129 H128");
+        let mut session = outfitted(&catalog).with_disable_rule(Rc::new(AlwaysDisabled));
+        let selected = NavMode::Stellar(Some(StellarId(140)));
+        session.nav = selected;
+        session.pilot.reserves.armor.now = 1.0;
+        assert_eq!(session.outfit(buy(TANK), &mut NeverFires), Ok(()));
+        let loads = session.take_interface_loads();
+        let governments: Vec<_> = loads.iter().map(|load| load.government).collect();
+        assert_eq!(
+            governments,
+            [Some(GovtId(150)), None],
+            "each class's, in order"
+        );
+        for load in &loads {
+            assert_eq!(load.nav, selected, "as it was");
+            assert_eq!(load.reserves.armor.now, load.reserves.armor.max, "bumped");
+        }
+        assert_ne!(
+            loads[0].reserves.fuel.max, loads[1].reserves.fuel.max,
+            "each at its own operator: 129 carries a tank"
+        );
+        assert_eq!(session.take_interface_loads(), [], "taken");
+        run_expr(&mut session, "H129");
+        assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
+        assert_eq!(session.take_interface_loads(), [], "the order cleared it");
+        let mut flying = Session::start(&catalog).expect("starts");
+        run_expr(&mut flying, "H129");
+        assert_eq!(flying.ship(), NEW);
+        assert_eq!(flying.take_interface_loads(), [], "in flight");
+    }
+
+    #[test]
+    fn a_purchases_on_purchase_change_is_noted_before_the_fill() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].on_purchase = crate::control::Script::parse("H128");
+        let mut session = outfitted(&catalog);
+        session.pilot.reserves.fuel.now = 10.0;
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        let loads = session.take_interface_loads();
+        assert_eq!(loads.len(), 1);
+        assert!(
+            loads[0].reserves.fuel.now < session.reserves().fuel.now,
+            "{:?} before the fill",
+            loads[0].reserves
+        );
+        run_expr(&mut session, "H129");
+        assert!(
+            session
+                .buy_ship(ShipId(999), "Kestrel", &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(
+            session.take_interface_loads().len(),
+            1,
+            "a refusal clears nothing"
         );
     }
 
