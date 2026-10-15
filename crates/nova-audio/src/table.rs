@@ -52,6 +52,8 @@ pub struct SoundTable {
     pub news_open: Option<SoundId>,
     /// Plays as the bar's news dialog closes.
     pub news_close: Option<SoundId>,
+    /// Plays as a zoom key zooms the floating map.
+    pub floating_map_zoom: Option<SoundId>,
     /// Plays as a nav key is taken: Nav Off, Hyperspace Mode, a stellar
     /// key or a click on a stellar.
     pub nav_selected: Option<SoundId>,
@@ -143,6 +145,8 @@ impl SoundTable {
     ///   it opens (`PlaySound` @0x47f36).
     /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
     ///   it closes (@0x4814e).
+    /// - `floating_map_zoom`: 150, `_beepSnd[0]`, which `_HandlePlayer`
+    ///   plays as `-` or `=` zooms the floating map (@0x7103a, @0x710bc).
     /// - `nav_selected`: 150, `_beepSnd[0]`, which `_HandlePlayer` plays
     ///   on every press of Nav Off and Hyperspace Mode (@0x69b19), as a
     ///   stellar key finds a stellar (@0x69ebc), and as a click selects one
@@ -211,6 +215,7 @@ impl SoundTable {
         smuggling: Some(SoundId(154)),
         news_open: Some(SoundId(151)),
         news_close: Some(SoundId(152)),
+        floating_map_zoom: Some(SoundId(150)),
         nav_selected: Some(SoundId(150)),
         hyper_selected: Some(SoundId(152)),
         target_cleared: Some(SoundId(150)),
@@ -253,6 +258,7 @@ mod tests {
         assert_eq!(table.smuggling, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.floating_map_zoom, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.nav_selected, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.hyper_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.target_cleared, Some(SoundId(150)), "_beepSnd[0]");

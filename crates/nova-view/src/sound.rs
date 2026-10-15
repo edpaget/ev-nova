@@ -37,6 +37,9 @@ pub enum UiSound {
     /// The bar's news dialog closed: `_DoNewsDialog` plays `_beepSnd[2]`
     /// as it closes (@0x4814e).
     NewsClosed,
+    /// A zoom key zoomed the floating map: `_HandlePlayer` plays
+    /// `_beepSnd[0]` (@0x7103a, @0x710bc).
+    FloatingMapZoomed,
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

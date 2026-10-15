@@ -472,9 +472,9 @@ use nova_sim::{
     NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot,
     PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey,
     RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal,
-    ShipState, Shipyard, SimMessage, SimSound, StartError, StellarId, StellarPick, Steps, SystemId,
-    Take, Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2,
-    flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take,
+    Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
+    flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
@@ -1921,11 +1921,9 @@ pub struct FlightView<C> {
     /// The escort menu, shut or open.
     escort_menu: EscortMenu,
     /// The interface's beeps not yet taken ([`Screen::take_sounds`]): the
-    /// escort menu's, and the player info key refused during a jump.
+    /// escort menu's, the floating map's zooms, and the player info key
+    /// refused during a jump.
     ui_sounds: Vec<UiSound>,
-    /// The session's sounds the screen raises itself, not yet taken: the
-    /// floating map's zooms ([`SimSound::NavSelected`]).
-    view_sounds: Vec<SimSound>,
     /// The floating map shown while H or `\` is held (see the
     /// [`floating`](super::floating) module).
     floating: FloatingMap,
@@ -2185,7 +2183,6 @@ impl<
             metrics: None,
             escort_menu: EscortMenu::default(),
             ui_sounds: Vec::new(),
-            view_sounds: Vec::new(),
             floating: FloatingMap::new(),
             escort_colors,
             hud_cadence: HudCadence::default(),
@@ -4751,8 +4748,8 @@ impl<C> FlightView<C> {
     /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
     /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. One
     /// that changes the scale shows the map again and raises
-    /// [`SimSound::NavSelected`] (`_beepSnd[0]`, @0x7103a, @0x710bc); one
-    /// at a limit does nothing.
+    /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
+    /// one at a limit does nothing.
     fn zoom_floating_map(&mut self, key: Key) {
         if !self.floating.is_up() || !self.held.is_empty() {
             return;
@@ -4764,7 +4761,7 @@ impl<C> FlightView<C> {
         };
         if moved {
             self.show_floating_map();
-            self.view_sounds.push(SimSound::NavSelected);
+            self.ui_sounds.push(UiSound::FloatingMapZoomed);
         }
     }
 
@@ -5459,16 +5456,15 @@ impl<
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),
-    /// then those the screen raises in the session's terms (the floating
-    /// map's zooms), then the interface's (the player info refused), then
-    /// the fight's. The course map has no buttons that sound.
+    /// then the interface's (the escort menu's, the floating map's zooms,
+    /// the player info refused), then the fight's. The course map has no
+    /// buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
             .session
             .as_mut()
             .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
             .unwrap_or_default();
-        sounds.extend(self.view_sounds.drain(..).map(Sound::Sim));
         sounds.extend(self.ui_sounds.drain(..).map(Sound::Ui));
         sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
         sounds
@@ -22276,7 +22272,7 @@ mod tests {
         assert_eq!(floating_dots(&view), [near_at(16.0 / 9.0), FRAME_CENTRE]);
         tap(&mut view, ZOOM_OUT_KEY);
         assert_eq!(floating_dots(&view), [near_at(4.0 / 3.0), FRAME_CENTRE]);
-        assert_eq!(sims(&mut view), [SimSound::NavSelected]);
+        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::FloatingMapZoomed)]);
         assert_eq!(ZOOM_OUT_KEY, Key::Char('-'));
     }
 
@@ -22288,7 +22284,11 @@ mod tests {
             view.take_sounds();
             tap(&mut view, k);
             assert_eq!(floating_dots(&view)[0], near_at(64.0 / 27.0), "{k:?}");
-            assert_eq!(sims(&mut view), [SimSound::NavSelected], "{k:?}");
+            assert_eq!(
+                view.take_sounds(),
+                [Sound::Ui(UiSound::FloatingMapZoomed)],
+                "{k:?}"
+            );
         }
         assert_eq!(ZOOM_IN_KEY, Key::Char('='));
         assert_eq!(ZOOM_IN_KEYPAD_KEY, Key::Char('+'));
@@ -22366,7 +22366,11 @@ mod tests {
             view.input(&key(HYPER_SELECT_KEY, false));
             view.take_sounds();
             tap(&mut view, ZOOM_OUT_KEY);
-            assert_eq!(sims(&mut view), [SimSound::NavSelected], "{stage}");
+            assert!(
+                view.take_sounds()
+                    .contains(&Sound::Ui(UiSound::FloatingMapZoomed)),
+                "{stage}"
+            );
             assert_eq!(view.floating.zoom(), 4, "{stage}");
         }
         let mut view = exploded();
@@ -22374,7 +22378,11 @@ mod tests {
         view.take_sounds();
         tap(&mut view, ZOOM_OUT_KEY);
         assert_eq!(view.floating.zoom(), floating::START_ZOOM);
-        assert!(!sims(&mut view).contains(&SimSound::NavSelected));
+        assert!(
+            !view
+                .take_sounds()
+                .contains(&Sound::Ui(UiSound::FloatingMapZoomed))
+        );
     }
 
     #[test]
