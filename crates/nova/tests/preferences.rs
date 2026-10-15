@@ -497,9 +497,18 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     harness.press(Key::Enter);
     assert_eq!(harness.showing(), Showing::MainMenu);
     harness.frame();
+    let click = |id| AudioCommand::Play {
+        sound: SoundId(id),
+        volume: level_volume(4),
+    };
     assert_eq!(
         harness.played(),
-        [AudioCommand::SetMusicVolume(level_volume(5))]
+        [
+            click(600),
+            click(601),
+            AudioCommand::SetMusicVolume(level_volume(5))
+        ],
+        "P's keyed click, at the seeded effects level, then the new music level"
     );
 
     // The Music checkbox off stops it.
@@ -510,7 +519,10 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     harness.press(Key::Enter);
     assert_eq!(harness.showing(), Showing::MainMenu);
     harness.frame();
-    assert_eq!(harness.played(), [AudioCommand::StopMusic]);
+    assert_eq!(
+        harness.played(),
+        [click(600), click(601), AudioCommand::StopMusic]
+    );
 }
 
 #[test]
