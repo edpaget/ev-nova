@@ -90,7 +90,7 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 
 use crate::ai::Goal;
-use crate::catalog::{GovtId, PersonId, PersonRecord, StringPatch, SystemId, WeaponId};
+use crate::catalog::{self, GovtId, PersonId, PersonRecord, StringPatch, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::Condition;
@@ -209,36 +209,25 @@ pub const HAIL_QUOTE_PATCHES: i16 = 4999;
 /// The `STR ` that patches hail quote `hail_quote`
 /// (`_LoadPluginString(0x1387 + HailQuote)` @0x445b8-0x445c6), or none when
 /// the sum does not fit in 16 bits: the engine keeps wider numbers and
-/// looks up no `STR ` for it, as [`buoy::patch_id`](crate::buoy::patch_id)
-/// does.
+/// looks up no `STR ` for it ([`catalog::patch_id`]).
 #[must_use]
 pub fn hail_quote_patch_id(hail_quote: i16) -> Option<i16> {
-    hail_quote.checked_add(HAIL_QUOTE_PATCHES)
+    catalog::patch_id(hail_quote, HAIL_QUOTE_PATCHES)
 }
 
 /// The words of hail quote `hail_quote`, as `_ShowPersonHailQuote` reads
 /// them (@0x445b8-0x445e1): its `STR ` `patch`
 /// ([`hail_quote_patch_id`]), from any open file, base data or plug-in,
 /// when there is one; else line `hail_quote` of `lines` (`STR#` 7101,
-/// `GetIndString` @0x445e1), or an empty line for one it does not hold.
+/// `GetIndString` @0x445e1), or an empty line for one it does not hold
+/// ([`catalog::patched_string`]).
 ///
-/// `_LoadPluginString` (@0x71a8e-0x71af4) answers that the `STR ` exists
-/// even when it is empty, skipping the copy (@0x71ac5), so the original
-/// shows whatever its shared buffer (0x3b5570) last held; the engine
-/// shows an empty line for an empty or unreadable `STR `, as a buoy's
-/// does ([`buoy::buoy_text`](crate::buoy::buoy_text)).
+/// An empty or unreadable `STR ` leaves the shared buffer (0x3b5570) as
+/// it last was in the original; the engine shows an empty line for it
+/// (see [`StringPatch::shown`]).
 #[must_use]
 pub fn hail_quote_text(hail_quote: i16, patch: StringPatch, lines: &[String]) -> String {
-    match patch {
-        StringPatch::Text(text) => text,
-        StringPatch::Empty | StringPatch::Unreadable => String::new(),
-        StringPatch::Absent => usize::try_from(hail_quote)
-            .ok()
-            .and_then(|line| line.checked_sub(1))
-            .and_then(|at| lines.get(at))
-            .cloned()
-            .unwrap_or_default(),
-    }
+    catalog::patched_string(hail_quote, patch, lines).unwrap_or_default()
 }
 
 /// What a rank tag reads with no rank to name and no string lists wired:
