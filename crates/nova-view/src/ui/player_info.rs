@@ -1668,6 +1668,30 @@ mod tests {
         assert_eq!(screen.take_sounds(), Vec::<Sound>::new());
     }
 
+    /// A key that closes the screen or answers its question plays nothing
+    /// in the original: `_PlayerInfoFilter` @0x53ae9 calls no sound
+    /// routine, and neither does `_MyModalDialog` @0x59954.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for closing in [Key::Enter, Key::Escape, PLAYER_INFO_KEY] {
+            let mut screen = screen();
+            assert_eq!(screen.take_sounds(), Vec::<Sound>::new());
+            screen.input(&press(closing));
+            assert!(screen.closed(), "{closing:?}");
+            assert_eq!(screen.take_sounds(), Vec::<Sound>::new(), "{closing:?}");
+        }
+        let mut screen = asking();
+        assert_eq!(screen.take_sounds(), Vec::<Sound>::new());
+        screen.input(&press(Key::Enter));
+        assert!(screen.take_jettison(), "Return answers the question");
+        assert_eq!(screen.take_sounds(), Vec::<Sound>::new(), "Return");
+        let mut screen = asking();
+        screen.input(&press(Key::Tab));
+        screen.input(&press(Key::Space));
+        assert!(!screen.confirm_open(), "Space on the focused button");
+        assert_eq!(screen.take_sounds(), Vec::<Sound>::new(), "Space");
+    }
+
     #[test]
     fn without_its_template_it_says_why_and_escape_closes_it() {
         let mut screen = PlayerInfoScreen::new(

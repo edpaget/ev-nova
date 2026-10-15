@@ -951,6 +951,31 @@ mod tests {
         }
     }
 
+    /// A key that presses a button plays nothing in the original:
+    /// `_CommFilter` @0x908ed and `_PlanetCommFilter` @0x911a9 call no
+    /// sound routine, and neither does `_MyModalDialog` @0x59954.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for (pressed, press) in [
+            (Key::Enter, CommPress::Close),
+            (Key::Escape, CommPress::Close),
+            (Key::Char('e'), CommPress::Close),
+            (Key::Char('g'), CommPress::Option(0)),
+            (Key::Char('r'), CommPress::Option(1)),
+        ] {
+            let mut dialog = dialog(&view());
+            assert_eq!(dialog.take_sounds(), []);
+            dialog.input(&key(pressed));
+            assert_eq!(dialog.take_press(), Some(press), "{pressed:?}");
+            assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
+        }
+        let mut dialog = dialog(&view());
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert!(dialog.take_press().is_some(), "Space on the focused button");
+        assert_eq!(dialog.take_sounds(), [], "Space");
+    }
+
     #[test]
     fn an_options_hotkey_either_case_presses_the_first_with_it() {
         let both = HailView {
@@ -1312,6 +1337,33 @@ mod tests {
             assert_eq!(dialog.take_choice(), Some(choice), "{item}");
             assert_eq!(dialog.take_choice(), None, "once");
         }
+    }
+
+    /// A key that chooses plays nothing in the original: `_CommFilter`
+    /// @0x908ed calls no sound routine, and neither does `_MyModalDialog`
+    /// @0x59954.
+    #[test]
+    fn haggle_keyboard_activation_is_silent_as_the_original() {
+        for (input, choice) in [
+            (key(Key::Enter), Some(Haggle::Accept)),
+            (key(Key::Char('a')), Some(Haggle::Accept)),
+            (key(Key::Char('l')), Some(Haggle::LowerPrice)),
+            (key(Key::Escape), None),
+        ] {
+            let mut dialog = haggle(3000);
+            assert_eq!(dialog.take_sounds(), []);
+            dialog.input(&input);
+            assert_eq!(dialog.take_choice(), choice, "{input:?}");
+            assert_eq!(dialog.take_sounds(), [], "{input:?}");
+        }
+        let mut dialog = haggle(3000);
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert!(
+            dialog.take_choice().is_some(),
+            "Space on the focused button"
+        );
+        assert_eq!(dialog.take_sounds(), [], "Space");
     }
 
     #[test]

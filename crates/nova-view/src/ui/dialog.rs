@@ -1483,6 +1483,24 @@ mod tests {
         assert_eq!(dialog.take_sound(), None, "Return");
     }
 
+    /// A key that activates a button plays nothing in the original:
+    /// `_TextDialogFilter` maps Return, Enter and Escape straight to an
+    /// item (@0x51fca-0x51fef) with no hilite, flash or sound, and the
+    /// Toolbox's standard filter only flashes the button.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = dialog(&yes_no(), &[]).with_cancel(Some(5));
+        assert_eq!(dialog.take_sound(), None);
+        assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.take_sound(), None, "Return");
+        assert_eq!(dialog.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
+        assert_eq!(dialog.take_sound(), None, "Escape");
+        assert_eq!(dialog.input(&key(Key::Tab)), None);
+        assert_eq!(dialog.take_sound(), None, "Tab");
+        assert_eq!(dialog.input(&key(Key::Space)), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.take_sound(), None, "Space");
+    }
+
     #[test]
     fn cancelling_a_press_keeps_its_sound_and_makes_none() {
         let mut dialog = dialog(&yes_no(), &[]);

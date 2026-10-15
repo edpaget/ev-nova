@@ -310,9 +310,25 @@ mod tests {
         assert_eq!(note.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
         note.input(&button(false));
         assert_eq!(note.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
-        let mut note = self::note(&template());
-        note.input(&key(Key::Enter));
-        assert_eq!(note.take_sounds(), []);
+    }
+
+    /// A key that activates OK plays nothing in the original:
+    /// `_EVNoteAlert` @0x55710 passes a NULL filter, and the Toolbox's
+    /// standard filter only flashes the button.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for input in [key(Key::Enter), key(Key::Escape)] {
+            let mut note = note(&template());
+            assert_eq!(note.take_sounds(), []);
+            note.input(&input);
+            assert!(note.closed(), "{input:?}");
+            assert_eq!(note.take_sounds(), [], "{input:?}");
+        }
+        let mut note = note(&template());
+        note.input(&key(Key::Tab));
+        note.input(&key(Key::Space));
+        assert!(note.closed(), "Space on OK");
+        assert_eq!(note.take_sounds(), [], "Space");
     }
 
     #[test]

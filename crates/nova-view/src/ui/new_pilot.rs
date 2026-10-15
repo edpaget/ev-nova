@@ -626,6 +626,22 @@ mod tests {
         assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
     }
 
+    /// Return and Escape play nothing in the original:
+    /// `_DoNewPilotNameDialog` runs `ModalDialog` (@0x16956) with the
+    /// standard filter, which only flashes the button.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = dialog();
+        typed(&mut dialog, "Ada");
+        assert_eq!(dialog.take_sounds(), []);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), Some(created("Ada", Gender::Male)));
+        assert_eq!(dialog.take_sounds(), [], "Return");
+        dialog.input(&key(Key::Escape));
+        assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
+        assert_eq!(dialog.take_sounds(), [], "Escape");
+    }
+
     #[test]
     fn space_types_a_space_and_activates_nothing() {
         let mut dialog = dialog();

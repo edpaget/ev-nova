@@ -357,6 +357,20 @@ mod tests {
         );
     }
 
+    /// Return and Escape play nothing in the original:
+    /// `_EVTextInputDialog` (`ModalDialog` @0x5544d) passes a NULL filter,
+    /// and the Toolbox's standard filter only flashes the button.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = dialog();
+        assert_eq!(dialog.take_sounds(), []);
+        dialog.input(&key(Key::Enter));
+        assert!(dialog.take_outcome().is_some(), "Return confirms");
+        assert_eq!(dialog.take_sounds(), [], "Return");
+        dialog.input(&key(Key::Escape));
+        assert_eq!(dialog.take_sounds(), [], "Escape");
+    }
+
     #[test]
     fn ok_confirms_and_cancel_declines_as_clicked() {
         let mut dialog = dialog();

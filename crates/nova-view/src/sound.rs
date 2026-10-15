@@ -11,16 +11,33 @@
 //! - [`SoundPrefs`]: the player's sound preferences as the Preferences
 //!   dialog shows them, part of the [`Prefs`](crate::Prefs) a screen
 //!   reports through [`Screen::take_prefs`](crate::Screen::take_prefs).
+//!
+//! **A key that activates a button makes no sound.** Return, Enter,
+//! Escape, Space on a focused button, or a dialog's own letter keys raise
+//! neither [`UiSound::ButtonDown`] nor [`UiSound::ButtonUp`], as in the
+//! original: `_TextDialogFilter` maps Return, Enter and Escape straight
+//! to an item (@0x51fca-0x51fef) with no hilite, flash or sound;
+//! `_CommFilter`, `_PlanetCommFilter`, `_PlunderFilter`, `_ShipDescFilter`,
+//! `_PlayerInfoFilter` and `_MyModalDialog` call no sound routine; the
+//! dialogs run with the Toolbox's standard filter (`_DoNewPilotNameDialog`,
+//! `_DoQuantityDialog`, `_EVTextInputDialog`, `_EVNoteAlert`) only flash
+//! the button; and the Cocoa Preferences' `accept:` @0xcfe3a and
+//! `cancel:` @0xcff7c play nothing. The original's button clicks, snd 600
+//! and 601, belong to its main screen alone: `_TrackMainScreenButtons`
+//! @0x195b9 plays them under the pointer, and `_PlayMainScreenClickSound`
+//! @0x177af plays both, one after the other, for `_MainScreenKey`'s keys.
 
 pub use nova_sim::{SimSound, SoundId};
 
 /// A sound the interface makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiSound {
-    /// A button was pressed: the pointer went down on it.
+    /// A button was pressed: the pointer went down on it. A key that
+    /// activates a button never raises it (see the module docs).
     ButtonDown,
     /// A pressed button popped back up: the pointer was let go, on the
-    /// button or off it.
+    /// button or off it. A key that activates a button never raises it
+    /// (see the module docs).
     ButtonUp,
     /// The interface refused what was asked of it: the original's
     /// `SysBeep`.

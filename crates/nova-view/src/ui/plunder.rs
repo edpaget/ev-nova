@@ -648,6 +648,25 @@ mod tests {
         }
     }
 
+    /// A key that presses a button plays nothing in the original:
+    /// `_PlunderFilter` @0x92f20 calls no sound routine, and neither does
+    /// `_MyModalDialog` @0x59954.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for pressed in [Key::Enter, Key::Escape] {
+            let mut dialog = dialog(loaded());
+            assert_eq!(dialog.take_sounds(), []);
+            dialog.input(&key(pressed));
+            assert_eq!(dialog.take_take(), Some(Take::Abort), "{pressed:?}");
+            assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
+        }
+        let mut dialog = dialog(loaded());
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert!(dialog.take_take().is_some(), "Space on the focused button");
+        assert_eq!(dialog.take_sounds(), [], "Space");
+    }
+
     #[test]
     fn a_button_is_greyed_while_its_value_is_not_on_board() {
         let empty = PlunderView {
@@ -846,6 +865,27 @@ mod tests {
         let at = center(dialog.dialog(), QUESTION_ITEM);
         click(&mut dialog, at);
         assert_eq!(dialog.take_choice(), None, "only a button chooses");
+    }
+
+    /// Keys play nothing in the original: `_DoCapturedShipAssignmentDialog`
+    /// runs `_MyModalDialog` @0x59954, which calls no sound routine. Its
+    /// `_beepSnd` plays (@0x5b56b, @0x5b66b) follow the choice, not the
+    /// input that made it, and are the caller's.
+    #[test]
+    fn assignment_keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = assignment();
+        assert_eq!(dialog.take_sounds(), []);
+        for pressed in [Key::Enter, Key::Escape] {
+            dialog.input(&key(pressed));
+            assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
+        }
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert!(
+            dialog.take_choice().is_some(),
+            "Space on the focused button"
+        );
+        assert_eq!(dialog.take_sounds(), [], "Space");
     }
 
     #[test]

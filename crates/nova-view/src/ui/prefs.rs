@@ -1127,6 +1127,28 @@ mod tests {
         assert_eq!(dialog.take_sounds(), []);
     }
 
+    /// OK and Cancel taken from the keyboard play nothing in the
+    /// original: the Cocoa controller's `accept:` @0xcfe3a and `cancel:`
+    /// @0xcff7c play no sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for input in [key(Key::Enter), key(Key::Escape)] {
+            let mut dialog = prefs();
+            assert_eq!(dialog.take_sounds(), []);
+            dialog.input(&input);
+            assert!(dialog.closed(), "{input:?}");
+            assert_eq!(dialog.take_sounds(), [], "{input:?}");
+        }
+        let mut dialog = prefs();
+        for _ in 0..6 {
+            dialog.input(&key(Key::Tab));
+        }
+        assert_eq!(dialog.take_sounds(), [], "Tab to OK");
+        dialog.input(&key(Key::Space));
+        assert!(dialog.closed(), "Space on OK");
+        assert_eq!(dialog.take_sounds(), [], "Space on OK");
+    }
+
     #[test]
     fn it_never_quits_and_nothing_moves_on_its_own() {
         let mut dialog = prefs();

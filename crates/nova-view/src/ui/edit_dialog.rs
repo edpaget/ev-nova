@@ -434,6 +434,21 @@ mod tests {
         assert!(policy.asked.borrow().is_empty());
     }
 
+    /// Return and Escape play nothing in the original:
+    /// `_EVTextInputDialog` (`ModalDialog` @0x5544d) passes a NULL filter,
+    /// and the Toolbox's standard filter only flashes the button. Space
+    /// types into the field, so it activates nothing here.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = dialog_with(Scripted::answering(&[Some("first")]));
+        assert_eq!(dialog.take_sounds(), []);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), Some("first".to_owned()));
+        assert_eq!(dialog.take_sounds(), [], "Return");
+        dialog.input(&key(Key::Escape));
+        assert_eq!(dialog.take_sounds(), [], "Escape");
+    }
+
     #[test]
     fn typing_space_and_backspace_reach_the_field() {
         let mut dialog = dialog();
