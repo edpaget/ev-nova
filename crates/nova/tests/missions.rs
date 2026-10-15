@@ -1142,6 +1142,37 @@ fn an_offer_that_cannot_be_refused_with_no_text_is_accepted_without_a_dialog() {
 }
 
 #[test]
+fn the_spaceports_mission_infos_selected_quick_brief_is_loaded_through_flight() {
+    // A l33t resource turns the leet mode on, and the chance replaces
+    // every letter drawn: only a loaded text draws.
+    let mut run = mission(128, 200, 201);
+    put_i16s(&mut run, 0x36, &[205]);
+    let data = game_data_built(&run, bar_job(), "Take this to <DST>.", |fork| {
+        fork.resource(ResType::new(*b"l33t"), 128, None, &[])
+            .resource(Desc::TYPE, 205, None, &desc(&"a".repeat(24)))
+    });
+    let store = MemoryPilots::new();
+    let pilot = holding(&ada(), &[(0, 128, None, None)]);
+    let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
+    game.frame();
+    game.land();
+    game.tap(Key::Char('i'));
+    let info = game.spaceport().mission_info().expect("open");
+    assert_eq!(
+        info.info().rows[0].text,
+        "a".repeat(24),
+        "the view draws nothing"
+    );
+    let shown = info
+        .dialog()
+        .and_then(|dialog| dialog.text(INFO_TEXT_ITEM))
+        .expect("the text item")
+        .lines()
+        .concat();
+    assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
+}
+
+#[test]
 fn mission_info_lists_the_active_missions_and_aborts_only_where_allowed() {
     let store = MemoryPilots::new();
     let mut game = Game::with_pilot(&store, &ada());
