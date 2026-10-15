@@ -1186,6 +1186,73 @@ mod tests {
         assert_eq!(said, ["Bee: Prepare to die, Stock!"], "tick 420");
     }
 
+    /// [`quoting`] with Ace of `flags`, AI type `ai_type`, flying for
+    /// government 140 of `Flags` 0x0004 (it always attacks the player),
+    /// already quoted and holding no grudge; Bee flies no person.
+    fn hunted_by_ace(flags: u16, ai_type: i16) -> (FakePilotCatalog, Session) {
+        let mut catalog = quoters([flags, 0]);
+        catalog.persons[0].govt = Some(crate::catalog::GovtId(140));
+        catalog.persons[0].ai_type = ai_type;
+        catalog.govts = vec![crate::catalog::GovtRecord {
+            flags: crate::govt::ALWAYS_ATTACKS_PLAYER,
+            ..crate::testkit::govt(140)
+        }];
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        session.traffic.npcs_mut()[1].person = None;
+        let ace = session.traffic.npcs_mut()[0].person.as_mut().expect("Ace");
+        ace.quoted = true;
+        assert!(!ace.grudge);
+        session.take_sounds();
+        (catalog, session)
+    }
+
+    #[test]
+    fn a_person_a_warships_or_interceptors_decision_turns_on_the_player_says_its_quote_at_once_unfiltered()
+     {
+        // `_WarshipAI` @0x8b7da and `_InterceptorAI` @0x8cb8f call
+        // `_AIMakeShipAttackPlayer` for the 0x0004 word, whose gate reads
+        // none of `_HandleShip`'s filters.
+        use crate::person::{NOT_TO_WARSHIP, QUOTE_IF_GRUDGE};
+        let flags = QUOTE_ON_ATTACK | QUOTE_ONCE | NOT_TO_WARSHIP | QUOTE_IF_GRUDGE;
+        for ai_type in [3, 4] {
+            let (catalog, mut session) = hunted_by_ace(flags, ai_type);
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            assert_eq!(
+                session.npcs()[0].goal,
+                crate::ai::Goal::Attack(ShipRef::Player),
+                "{ai_type}"
+            );
+            let (said, asked) = quote_tick(&catalog, &mut session, &[]);
+            assert_eq!(said, ["Ace: Prepare to die, Stock!"], "{ai_type}");
+            assert_eq!(asked, Vec::<u32>::new(), "{ai_type}: no Rand(140)");
+            assert_eq!(session.take_sounds(), [SimSound::HailQuote], "{ai_type}");
+        }
+        // The high-level handler's mission hunt (@0x8d6b7) fails +0xc8d2
+        // (@0x89c71).
+        let (catalog, mut session) = hunted_by_ace(flags, 3);
+        // Slot 0 holds a mission, so the mark is kept (@0x8fbcd-0x8fc96).
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 3));
+        session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        });
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        assert!(session.npcs()[0].mission.is_some(), "still marked");
+        assert_eq!(
+            session.npcs()[0].goal,
+            crate::ai::Goal::Attack(ShipRef::Player)
+        );
+        assert_eq!(quote_tick(&catalog, &mut session, &[]), (vec![], vec![]));
+        assert_eq!(session.take_sounds(), [], "a mission's ship");
+    }
+
     #[test]
     fn every_hail_quote_said_beeps_snd_154() {
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
