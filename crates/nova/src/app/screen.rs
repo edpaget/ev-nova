@@ -7,7 +7,12 @@
 //! or a built-in one), refusing a name already saved, then creates the
 //! pilot from the first `chär`, saves it and flies it. Open Pilot lists
 //! the saved pilots and flies the one chosen, from the spaceport of the
-//! stellar it last landed on when it is docked. Quit quits. Escape in
+//! stellar it last landed on when it is docked. A pilot whose load had to
+//! fall back for data the save references and the game data lacks
+//! ([`nova_sim::Session::load`], under the router's rules) is flown only
+//! once the note `STR#` 140 #52 over the menu is dismissed; its flight,
+//! built behind the note, doesn't tick meanwhile, and quitting with the
+//! note open saves the repaired pilot. Quit quits. Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
 //! Each flight put away leaves its ship slots' draw-layer history, which
 //! every later flight of the run starts from, as the original's sprite
@@ -256,6 +261,7 @@ use nova_view::text::TextMetrics;
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
+use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog};
 use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
@@ -350,6 +356,9 @@ pub struct AppScreen {
     new_pilot: Option<NewPilotDialog>,
     /// The saved pilots' list, while it is open over the main menu.
     open_pilot: Option<PilotList>,
+    /// The note that an opened pilot's load fell back (`STR#` 140 #52),
+    /// while it is open over the main menu, its flight built behind it.
+    load_note: Option<NoteDialog>,
     /// The warnings since they were last taken.
     warnings: Vec<String>,
     /// What each flight rolls each day's events and its traffic on.
@@ -459,6 +468,7 @@ impl AppScreen {
             menu: None,
             new_pilot: None,
             open_pilot: None,
+            load_note: None,
             warnings: Vec::new(),
             chance: SharedChance::default(),
             effects_chance: SharedChance::default(),
@@ -756,6 +766,13 @@ impl AppScreen {
         self.open_pilot.as_ref()
     }
 
+    /// The note that an opened pilot's load fell back, while it is open
+    /// over the main menu.
+    #[must_use]
+    pub fn load_note(&self) -> Option<&NoteDialog> {
+        self.load_note.as_ref()
+    }
+
     /// Changes the pilot with `change` while the ship is landed, as a
     /// spaceport screen does, and says whether it did; the pilot is saved
     /// after the next input or tick.
@@ -876,6 +893,9 @@ impl AppScreen {
         }
         if self.open_pilot.is_some() {
             return Showing::OpenPilot;
+        }
+        if self.load_note.is_some() {
+            return Showing::Note;
         }
         match self.side {
             Side::MainMenu => Showing::MainMenu,
@@ -1037,7 +1057,8 @@ impl AppScreen {
     }
 
     /// The overlay open over the side shown, if any: the About dialog, the
-    /// Preferences dialog, the New Pilot dialog or the saved pilots' list.
+    /// Preferences dialog, the New Pilot dialog, the saved pilots' list or
+    /// the load's note.
     fn overlay_mut(&mut self) -> Option<&mut dyn Screen> {
         if let Some(about) = &mut self.about {
             return Some(about);
@@ -1069,7 +1090,10 @@ impl AppScreen {
         if let Some(dialog) = &mut self.new_pilot {
             return Some(dialog);
         }
-        self.open_pilot.as_mut().map(|list| list as &mut dyn Screen)
+        if let Some(list) = &mut self.open_pilot {
+            return Some(list);
+        }
+        self.load_note.as_mut().map(|note| note as &mut dyn Screen)
     }
 
     /// The About dialog's input; it closes once Done is activated.
@@ -1580,11 +1604,32 @@ impl AppScreen {
     /// goes back to the menu. A pilot docked at a stellar resumes in its
     /// spaceport.
     fn start_flight(&mut self, pilot: Pilot) {
+        self.build_flight(pilot, false);
+        self.enter_built_flight();
+    }
+
+    /// Builds `pilot`'s flight in place of any flight, without showing
+    /// it: one `loaded` from a save reads its load's fallbacks from the
+    /// router's rules ([`FlightView::loaded`]), a new one is flown as it
+    /// is.
+    fn build_flight(&mut self, pilot: Pilot, loaded: bool) {
         self.spaceport = None;
         self.put_away_flight();
-        let mut flight = self.flight(|data| FlightView::with_pilot(data, pilot));
-        let landing = flight.take_landing();
+        let rules = self.rules;
+        let flight = self.flight(|data| {
+            if loaded {
+                FlightView::loaded(data, pilot, rules)
+            } else {
+                FlightView::with_pilot(data, pilot)
+            }
+        });
         self.flight = Some(flight);
+    }
+
+    /// Shows the flight just built, from the main menu, which Escape goes
+    /// back to: its spaceport when the pilot resumed docked.
+    fn enter_built_flight(&mut self) {
+        let landing = self.flight.as_mut().and_then(FlightView::take_landing);
         self.return_to = Side::MainMenu;
         self.switch_to(Side::Flight);
         if let Some(stellar) = landing {
@@ -1989,7 +2034,13 @@ impl AppScreen {
 
     /// The saved pilots' list's input: the pilot chosen is opened and
     /// flown; one that cannot be opened says why in the list, and in a
-    /// warning.
+    /// warning. One whose load fell back ([`FlightView::load_repaired`])
+    /// has its flight built, faced and kept behind the note `STR#` 140 #52
+    /// over the main menu, as `_MainScreenChoice` shows it through
+    /// `_EVNoteAlert` over the main screen (@0x1a817-0x1a85b), so the note
+    /// is seen before any flight frame; flight shows once it is dismissed
+    /// ([`AppScreen::load_note_input`]). Without dialogs, or with no
+    /// note to build, the note is a warning and flight shows at once.
     fn open_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let list = self.open_pilot.as_mut().expect("open");
         list.input(input);
@@ -2005,11 +2056,24 @@ impl AppScreen {
                 match opened {
                     Ok(pilot) => {
                         self.close_pilot_list();
-                        self.start_flight(pilot);
+                        self.build_flight(pilot, true);
                         // The load's heading, before any frame is drawn.
                         if let Some(flight) = &mut self.flight {
                             flight.resume();
                         }
+                        if self.flight.as_ref().is_some_and(FlightView::load_repaired) {
+                            match self.load_note_dialog() {
+                                Some(note) => {
+                                    let menu = self.shown_mut();
+                                    menu.cancel_pointer();
+                                    menu.release_keys();
+                                    self.load_note = Some(note);
+                                    return ScreenAction::None;
+                                }
+                                None => self.warnings.push(LOAD_FALLBACK_NOTE.to_owned()),
+                            }
+                        }
+                        self.enter_built_flight();
                     }
                     Err(error) => {
                         self.open_pilot.as_mut().expect("open").show_error(&error);
@@ -2018,6 +2082,33 @@ impl AppScreen {
                 }
             }
             None => {}
+        }
+        ScreenAction::None
+    }
+
+    /// The note `STR#` 140 #52 in the note alert (`DLOG` 3000), if the
+    /// router has dialogs and the alert can be built.
+    fn load_note_dialog(&self) -> Option<NoteDialog> {
+        let dialogs = self.dialogs.as_ref()?;
+        let template = dialogs.resources.dialog_template(NOTE_DIALOG).ok()?;
+        Some(NoteDialog::new(
+            &template,
+            LOAD_FALLBACK_NOTE,
+            self.data.button_style(),
+            Rc::clone(&dialogs.metrics),
+        ))
+    }
+
+    /// The load's note's input, all of it: once OK is activated, the note
+    /// closes, keeping its sounds, and the flight built behind it shows.
+    fn load_note_input(&mut self, input: &Input) -> ScreenAction {
+        let note = self.load_note.as_mut().expect("open");
+        note.input(input);
+        if note.closed() {
+            if let Some(mut note) = self.load_note.take() {
+                self.sounds.extend(note.take_sounds());
+            }
+            self.enter_built_flight();
         }
         ScreenAction::None
     }
@@ -2319,6 +2410,9 @@ impl AppScreen {
         if self.open_pilot.is_some() {
             return self.open_pilot_input(input);
         }
+        if self.load_note.is_some() {
+            return self.load_note_input(input);
+        }
         // A ship's name is typed into its prompt, P and all.
         if self
             .spaceport
@@ -2455,7 +2549,9 @@ impl Screen for AppScreen {
     /// it. Its New Pilot opens the New Pilot dialog and Open Pilot the
     /// saved pilots' list over it; while either is open, every event goes
     /// to it first, so typing a name never opens a dialog. Choosing a
-    /// pilot flies it, and Escape in flight goes back to the menu, saving
+    /// pilot flies it; one whose load fell back first shows its note over
+    /// the menu, which takes every event until Return, Escape or OK
+    /// dismisses it and flight shows. Escape in flight goes back to the menu, saving
     /// the pilot and putting it away. Quit, or Escape, quits. I and P work
     /// on the menu, and Tab goes to the ship browser; on the ship browser
     /// and the galaxy map, Escape goes back to the menu instead of
@@ -2494,7 +2590,7 @@ impl Screen for AppScreen {
 
     /// The side shown, then the hint (not over flight, which has its own
     /// help line, or the spaceport), then the overlay open: the New Pilot
-    /// dialog or the saved pilots' list, then the About dialog or the
+    /// dialog, the saved pilots' list or the load's note, then the About dialog or the
     /// Preferences dialog; then the fade back from black after a death,
     /// over everything.
     fn draw(&self, list: &mut DrawList) {
@@ -2514,6 +2610,9 @@ impl Screen for AppScreen {
         }
         if let Some(pilots) = &self.open_pilot {
             pilots.draw(list);
+        }
+        if let Some(note) = &self.load_note {
+            note.draw(list);
         }
         if let Some(dialog) = &self.plunder {
             dialog.draw(list);
@@ -2575,6 +2674,7 @@ impl Screen for AppScreen {
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.open_pilot.as_mut().map(|list| list as &mut dyn Screen),
+            self.load_note.as_mut().map(|note| note as &mut dyn Screen),
             self.about.as_mut().map(|about| about as &mut dyn Screen),
             self.preferences
                 .as_mut()
@@ -3715,7 +3815,8 @@ pub(super) mod tests {
 
     /// Dialog templates by ID: "Desc Dialog" (3003), 200 x 100 at (0, 0),
     /// with Done (1) and a 100 x 36 text box (3): three lines of the About
-    /// text show; and "Spaceport" (1000), [`spaceport_template`].
+    /// text show; the note alert (3000), 200 x 100, with OK (1) and a
+    /// text box (3); and "Spaceport" (1000), [`spaceport_template`].
     struct Dialogs;
 
     impl DialogResources for Dialogs {
@@ -3739,6 +3840,17 @@ pub(super) mod tests {
             }
             if id == YES_NO_DIALOG {
                 return Ok(yes_no_template());
+            }
+            if id == NOTE_DIALOG {
+                return Ok(DialogTemplate {
+                    bounds: Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
+                    placement: Placement::Fixed,
+                    items: vec![
+                        item(100.0, 70.0, 70.0, 20.0, ItemSpec::User),
+                        item(10.0, 150.0, 20.0, 20.0, ItemSpec::Picture(1431)),
+                        item(10.0, 10.0, 180.0, 50.0, ItemSpec::User),
+                    ],
+                });
             }
             if id != DESC_DIALOG {
                 return Err(format!("no DLOG {id}"));
@@ -5375,6 +5487,200 @@ pub(super) mod tests {
         assert_eq!(*pilot(&screen), landed);
         assert!(screen.pilot_list().is_none());
         assert_eq!(screen.take_sounds(), [], "no landing sound");
+    }
+
+    // The note on a load that fell back.
+
+    use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG};
+
+    /// Rewrites `key`'s save in `store` with `change` over its JSON.
+    fn rewrite_save(
+        store: &MemoryPilots,
+        key: &str,
+        change: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+    ) {
+        let mut save: serde_json::Value =
+            serde_json::from_str(&store.text(key).expect("saved")).expect("JSON");
+        let fields = save.as_object_mut().expect("an object");
+        assert!(fields.contains_key("stellar") && fields.contains_key("system"));
+        change(fields);
+        store.put(key, &save.to_string());
+    }
+
+    /// Ada, created over `store` and landed on stellar 128 in system 128,
+    /// saved as if last landed on stellar 999 in system 129: a stellar no
+    /// system lists.
+    fn save_unlisted_ada(store: &MemoryPilots) {
+        let mut screen = menu_with_dialogs(store);
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(pilot(&screen).stellar(), Some(nova_sim::StellarId(128)));
+        assert_eq!(screen.quit_and_reopen(store), Showing::MainMenu);
+        rewrite_save(store, "Ada", |fields| {
+            fields.insert("stellar".into(), 999.into());
+            fields.insert("system".into(), 129.into());
+        });
+    }
+
+    /// Opens the first saved pilot from the main menu's list.
+    fn open_first(screen: &mut AppScreen) {
+        choose(screen, MenuChoice::OpenPilot);
+        assert_eq!(screen.showing(), Showing::OpenPilot);
+        screen.input(&key(Key::Enter, true));
+    }
+
+    fn flown_system(screen: &AppScreen) -> nova_sim::SystemId {
+        flight(screen).session().expect("flying").system()
+    }
+
+    fn undocked(screen: &AppScreen) -> bool {
+        flight(screen).session().expect("flying").landed().is_none()
+    }
+
+    #[test]
+    fn an_opened_pilot_whose_stellar_no_system_lists_shows_the_note_over_the_menu_then_flies() {
+        let store = MemoryPilots::new();
+        save_unlisted_ada(&store);
+        let mut screen = menu_with_dialogs(&store);
+        open_first(&mut screen);
+        assert_eq!(screen.showing(), Showing::Note);
+        assert_eq!(screen.now_showing(), Some(Showing::Note));
+        assert!(screen.pilot_list().is_none());
+        assert_eq!(
+            screen.load_note().map(NoteDialog::text),
+            Some(LOAD_FALLBACK_NOTE)
+        );
+        assert!(screen.flight_view().is_some(), "built behind the note");
+        assert_eq!(flown_system(&screen), nova_sim::SystemId(129));
+        assert!(undocked(&screen));
+        let mut note = DrawList::new();
+        screen.load_note().expect("open").draw(&mut note);
+        let all = drawn(&screen);
+        assert_eq!(
+            all.iter().skip(all.len() - note.len()).collect::<Vec<_>>(),
+            note.iter().collect::<Vec<_>>(),
+            "the note is drawn last, over the menu"
+        );
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.load_note().is_none());
+        assert_eq!(flown_system(&screen), nova_sim::SystemId(129));
+        // Back on the menu and open again: the repaired save loads plainly.
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        open_first(&mut screen);
+        assert_eq!(screen.showing(), Showing::Flight, "the note shows once");
+    }
+
+    #[test]
+    fn under_the_engines_reading_the_noted_pilot_flies_in_the_lowest_system() {
+        let store = MemoryPilots::new();
+        save_unlisted_ada(&store);
+        let mut screen = menu_with_dialogs(&store).with_rules(
+            Rulebook::default().with_override(RuleKey::UnlistedStellar, RuleSource::Engine),
+        );
+        open_first(&mut screen);
+        assert_eq!(screen.showing(), Showing::Note);
+        assert_eq!(flown_system(&screen), nova_sim::SystemId(128));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(flown_system(&screen), nova_sim::SystemId(128));
+        assert!(undocked(&screen));
+    }
+
+    #[test]
+    fn a_normal_open_never_shows_the_note() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
+        let mut screen = menu_with_dialogs(&store);
+        open_first(&mut screen);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert!(screen.load_note().is_none());
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        create(&mut screen, "Bob");
+        assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
+        let mut screen = menu_with_dialogs(&store);
+        open_first(&mut screen);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.load_note().is_none());
+    }
+
+    #[test]
+    fn a_pilot_whose_saved_system_is_gone_notes_and_flies_in_the_lowest_that_exists() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        create(&mut screen, "Ada");
+        assert_eq!(pilot(&screen).stellar(), None, "never landed");
+        assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
+        rewrite_save(&store, "Ada", |fields| {
+            fields.insert("system".into(), 300.into());
+        });
+        let mut screen = menu_with_dialogs(&store);
+        open_first(&mut screen);
+        assert_eq!(screen.showing(), Showing::Note);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(flown_system(&screen), nova_sim::SystemId(128));
+        assert!(undocked(&screen));
+    }
+
+    #[test]
+    fn without_dialogs_a_repaired_open_warns_and_flies() {
+        let store = MemoryPilots::new();
+        save_unlisted_ada(&store);
+        let mut screen = menu(&store);
+        screen.take_warnings();
+        open_first(&mut screen);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.load_note().is_none());
+        assert_eq!(screen.take_warnings(), [LOAD_FALLBACK_NOTE]);
+    }
+
+    #[test]
+    fn the_note_takes_every_event() {
+        let store = MemoryPilots::new();
+        save_unlisted_ada(&store);
+        let mut screen = menu_with_dialogs(&store);
+        open_first(&mut screen);
+        for pressed in [true, false] {
+            for typed in [Key::Char('f'), Key::Tab, Key::Char('i'), Key::Char('l')] {
+                assert_eq!(screen.input(&key(typed, pressed)), ScreenAction::None);
+            }
+        }
+        assert_eq!(screen.showing(), Showing::Note);
+        screen.tick(TICK);
+        screen.release_keys();
+        screen.cancel_pointer();
+        assert_eq!(screen.showing(), Showing::Note);
+        let ok = screen
+            .load_note()
+            .expect("open")
+            .dialog()
+            .item_bounds(nova_view::ui::note::OK_ITEM)
+            .expect("OK")
+            .center();
+        screen.take_sounds();
+        let click = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: ok,
+        };
+        screen.input(&click(true));
+        assert_eq!(
+            screen.take_sounds(),
+            [Sound::Ui(nova_view::sound::UiSound::ButtonDown)]
+        );
+        screen.input(&click(false));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(
+            screen.take_sounds(),
+            [Sound::Ui(nova_view::sound::UiSound::ButtonUp)],
+            "OK's sound, kept as the note closes"
+        );
     }
 
     /// Never fires, and draws the last outcome: a heading of 359.

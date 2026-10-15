@@ -325,7 +325,7 @@ pub fn distance_gain(offset: (i32, i32)) -> f32 {
 
 /// Whether `showing` is shown over another screen, keeping the scene
 /// below it: the About text, the Preferences dialog, the new pilot's name
-/// entry and the saved pilots' list over the main menu, and the plunder,
+/// entry, the saved pilots' list and a note over the main menu, and the plunder,
 /// assignment, comm, haggle and offer dialogs, the mission texts and the
 /// mission info screen over flight.
 fn is_overlay(showing: Showing) -> bool {
@@ -335,6 +335,7 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::Preferences
             | Showing::NewPilot
             | Showing::OpenPilot
+            | Showing::Note
             | Showing::Plunder
             | Showing::Assignment
             | Showing::Comm
@@ -362,6 +363,7 @@ fn has_music(scene: Showing) -> bool {
         | Showing::Preferences
         | Showing::NewPilot
         | Showing::OpenPilot
+        | Showing::Note
         | Showing::Plunder
         | Showing::Assignment
         | Showing::Comm
@@ -975,6 +977,7 @@ mod tests {
             Showing::MainMenu,
             Showing::NewPilot,
             Showing::OpenPilot,
+            Showing::Note,
             Showing::GalaxyMap,
         ] {
             core.update(Some(scene), &[]);
@@ -1004,7 +1007,12 @@ mod tests {
             core.update(Some(scene), &[]);
             assert_eq!(drain(&log), [start_music(1.0)], "{scene:?}");
         }
-        for overlay in [Showing::About, Showing::NewPilot, Showing::OpenPilot] {
+        for overlay in [
+            Showing::About,
+            Showing::NewPilot,
+            Showing::OpenPilot,
+            Showing::Note,
+        ] {
             let (mut core, log) = original();
             core.update(Some(overlay), &[]);
             assert_eq!(drain(&log), [], "{overlay:?} over nothing");
