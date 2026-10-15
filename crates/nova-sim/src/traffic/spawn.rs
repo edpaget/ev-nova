@@ -212,7 +212,7 @@ use std::collections::BTreeSet;
 
 use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId};
 use crate::chance::Chance;
-use crate::control::Gate;
+use crate::control::{Gate, Test};
 use crate::flight::{ShipState, facing, heading_of};
 use crate::gate::exit_heading;
 use crate::geometry::Vec2;
@@ -225,7 +225,7 @@ use crate::traffic::emerge::{
     EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, emerge_stellar,
 };
 use crate::traffic::npc::{AiType, MissionMark};
-use crate::traffic::table::{ShipKind, SpawnDude, SpawnPerson, SpawnTable, pick};
+use crate::traffic::table::{ShipKind, SpawnDude, SpawnPerson, SpawnTable, dude_ship_type, pick};
 
 /// `Rand(7) == 0`: a person, rather than anything else, by the engine
 /// (see [`person`](crate::person)).
@@ -717,18 +717,19 @@ fn specific_dude_ship(
     let x = spread(SPAWN_SPREAD, chance);
     let y = spread(SPAWN_SPREAD, chance);
     let dude = table.dude_records.get(&dude)?;
-    let ship = if let Some(ship) = preset {
-        ship
-    } else {
-        let appearing: Vec<(ShipId, u32)> = dude
-            .ships
-            .iter()
-            .copied()
-            .filter(|(ship, _)| appears(table, *ship, gate))
-            .collect();
-        match fallback {
-            Fallback::AllShips => pick(&appearing, chance).or_else(|| pick(&dude.ships, chance))?,
-            Fallback::Fails => pick(&appearing, chance)?,
+    let ship = match (preset, fallback) {
+        (Some(ship), _) => ship,
+        (None, Fallback::AllShips) => {
+            dude_ship_type(dude, |ship| appear_on(table, ship), gate, chance)?
+        }
+        (None, Fallback::Fails) => {
+            let appearing: Vec<(ShipId, u32)> = dude
+                .ships
+                .iter()
+                .copied()
+                .filter(|(ship, _)| appears(table, *ship, gate))
+                .collect();
+            pick(&appearing, chance)?
         }
     };
     let inherent_ai = table.ships.get(&ship).map_or(0, |kind| kind.inherent_ai);
@@ -1208,10 +1209,12 @@ fn spread(spread: u32, chance: &mut (impl Chance + ?Sized)) -> f32 {
 /// Whether ship type `ship` may appear by `gate`: its `AppearOn` holds,
 /// or it has no record (and so spawns nothing).
 fn appears(table: &SpawnTable, ship: ShipId, gate: Gate) -> bool {
-    table
-        .ships
-        .get(&ship)
-        .is_none_or(|kind| gate.allows(&kind.appear_on))
+    appear_on(table, ship).is_none_or(|test| gate.allows(test))
+}
+
+/// Ship type `ship`'s `AppearOn` in `table`: none when it has no record.
+fn appear_on(table: &SpawnTable, ship: ShipId) -> Option<&Test> {
+    table.ships.get(&ship).map(|kind| &kind.appear_on)
 }
 
 /// Whether a ship of `kind` can come by hyperspace: it has fuel capacity.

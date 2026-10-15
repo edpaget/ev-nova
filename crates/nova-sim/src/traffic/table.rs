@@ -23,14 +23,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    DudeId, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId, ShipRecord,
-    SystemId, TrafficCatalog, WeaponId,
+    DudeId, DudeRecord, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId,
+    ShipRecord, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::cloak::CloakGear;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::{Condition, HullSpec};
-use crate::control::Test;
+use crate::control::{Gate, Test};
 use crate::escort::EscortClass;
 use crate::govt::Governments;
 use crate::outfitter::outfit_mods;
@@ -182,6 +182,45 @@ pub struct SpawnDude {
     pub booty: u16,
     /// Its `InfoTypes` flags.
     pub info_types: u16,
+}
+
+impl From<&DudeRecord> for SpawnDude {
+    /// `dude` as the traffic spawns from it: a negative `Probability` is
+    /// none.
+    fn from(dude: &DudeRecord) -> Self {
+        Self {
+            ai_type: dude.ai_type,
+            govt: dude.govt,
+            ships: dude
+                .ships
+                .iter()
+                .map(|&(ship, prob)| (ship, u32::try_from(prob).unwrap_or(0)))
+                .collect(),
+            booty: dude.booty,
+            info_types: dude.info_types,
+        }
+    }
+}
+
+/// A ship type of `dude`, as `_MissionDudeSpawn` (@0x3cdf5-0x3ce36) and
+/// `_LoadCurrentMissionData` (@0xa0b9f-0xa0bfe) draw one through
+/// `_SelectShipFieldFromDude`, with 0, then 1: by `Probability` among
+/// the types whose `AppearOn` (`appear_on`, none for a type with no
+/// `shïp` record, which appears) holds by `gate`, or, with none, among
+/// them all. None, drawing nothing, for a `düde` of no weight.
+pub fn dude_ship_type<'t>(
+    dude: &SpawnDude,
+    appear_on: impl Fn(ShipId) -> Option<&'t Test>,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<ShipId> {
+    let appearing: Vec<(ShipId, u32)> = dude
+        .ships
+        .iter()
+        .copied()
+        .filter(|&(ship, _)| appear_on(ship).is_none_or(|test| gate.allows(test)))
+        .collect();
+    pick(&appearing, chance).or_else(|| pick(&dude.ships, chance))
 }
 
 /// A ship type the traffic can spawn: how it performs, with its default
@@ -406,19 +445,7 @@ impl SpawnTable {
 /// `düde` `id` as the traffic spawns from it, read from `catalog`: none
 /// when it has no record.
 fn spawn_dude(catalog: &(impl TrafficCatalog + ?Sized), id: DudeId) -> Option<SpawnDude> {
-    let dude = catalog.dude(id)?;
-    let ships = dude
-        .ships
-        .iter()
-        .map(|&(ship, prob)| (ship, u32::try_from(prob).unwrap_or(0)))
-        .collect();
-    Some(SpawnDude {
-        ai_type: dude.ai_type,
-        govt: dude.govt,
-        ships,
-        booty: dude.booty,
-        info_types: dude.info_types,
-    })
+    catalog.dude(id).as_ref().map(SpawnDude::from)
 }
 
 /// Each of `ships` whose ID is `wanted`, as the traffic flies it.
@@ -712,6 +739,68 @@ mod tests {
         assert_eq!(pick::<char>(&[], &mut chance), None);
         assert_eq!(pick(&[('a', 0), ('b', 0)], &mut chance), None);
         assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn the_uniform_draw_takes_an_appearing_type_by_probability_else_any_and_none_for_an_empty_dude()
+    {
+        let record = DudeRecord {
+            ai_type: 0,
+            govt: None,
+            // 200 is gated off, 201 appears, 202's negative weight is none,
+            // 203 has no `shïp` record.
+            ships: vec![
+                (ShipId(200), 50),
+                (ShipId(201), 30),
+                (ShipId(202), -5),
+                (ShipId(203), 20),
+            ],
+            booty: 0,
+            info_types: 0,
+        };
+        let dude = SpawnDude::from(&record);
+        assert_eq!(
+            dude.ships,
+            [
+                (ShipId(200), 50),
+                (ShipId(201), 30),
+                (ShipId(202), 0),
+                (ShipId(203), 20)
+            ],
+            "a negative probability is none"
+        );
+        let gated = Test::parse("b3");
+        let open = Test::default();
+        let appear_on = |ship: ShipId| match ship.0 {
+            200 => Some(&gated),
+            201 | 202 => Some(&open),
+            _ => None,
+        };
+        for (draw, expected) in [(0, 201), (29, 201), (30, 203), (49, 203)] {
+            let mut chance = Draws::of(&[draw]);
+            assert_eq!(
+                dude_ship_type(&dude, appear_on, Gate::FRESH, &mut chance),
+                Some(ShipId(expected)),
+                "{draw}: among the appearing, a type of no record appearing"
+            );
+            assert_eq!(chance.asked, [50]);
+        }
+
+        let all_gated = |_: ShipId| Some(&gated);
+        let mut chance = Draws::of(&[60]);
+        assert_eq!(
+            dude_ship_type(&dude, all_gated, Gate::FRESH, &mut chance),
+            Some(ShipId(201)),
+            "with none appearing, among them all"
+        );
+        assert_eq!(chance.asked, [100]);
+
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            dude_ship_type(&SpawnDude::default(), appear_on, Gate::FRESH, &mut chance),
+            None
+        );
+        assert!(chance.asked.is_empty(), "an empty düde draws nothing");
     }
 
     #[test]
