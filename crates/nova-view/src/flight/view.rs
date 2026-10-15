@@ -16946,6 +16946,19 @@ mod tests {
     }
 
     #[test]
+    fn i_in_a_flight_that_never_started_says_no_active_missions_without_a_beep() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        let _ = view.take_sounds();
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_eq!(view.take_mission_info_request(), None, "no screen opens");
+        assert_eq!(view.take_sounds(), [], "no session to beep");
+    }
+
+    #[test]
     fn i_with_an_active_mission_asks_for_the_info_screen_once() {
         let mut view = targeting_ace(offering(0, Some("Help?"), false));
         tap(&mut view, HAIL_KEY);
