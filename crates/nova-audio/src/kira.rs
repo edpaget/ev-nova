@@ -1065,6 +1065,17 @@ mod tests {
     }
 
     #[test]
+    fn restarted_music_counts_as_ended_when_it_plays_out() {
+        let (mut audio, _) = adapter(Some(silent_mp3(40)));
+        run(&mut audio, start_music(1.0));
+        run(&mut audio, AudioCommand::StopMusic);
+        run(&mut audio, start_music(1.0));
+        process_until_the_music_stops(&mut audio);
+        assert_eq!(audio.music_state(), Some(PlaybackState::Stopped));
+        assert!(audio.music_ended(), "the restart played to its end");
+    }
+
+    #[test]
     fn fading_the_music_out_stops_it_once_the_fade_is_over() {
         let (mut audio, _) = adapter(Some(silent_mp3(400)));
         run(&mut audio, start_music(1.0));
