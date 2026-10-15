@@ -338,6 +338,18 @@ pub const fn assists(
     }
 }
 
+/// Whether a plain board of a special ship of a mission of `goal`, off
+/// the assist path ([`assists`]) and the `PickupMode` 2 pickup, counts it
+/// boarded, the plain-board rule
+/// ([`RuleKey::PlainBoardCounts`](crate::RuleKey::PlainBoardCounts)) read
+/// as `source`: never by the engine, as `_HandlePlayerBoardAttempt`
+/// counts only those two paths (@0x653a7, @0x65575-0x65762); by the other
+/// reading, for a board or rescue goal.
+#[must_use]
+pub const fn plain_board_counts(goal: ShipGoal, source: RuleSource) -> bool {
+    matches!(source, RuleSource::Bible) && matches!(goal, ShipGoal::Board | ShipGoal::Rescue)
+}
+
 /// Whether a special ship of a mission of `goal`, its goals met
 /// (`goals_met`, +2) or not, the ship `boarded` (+0xb9) or not, is held
 /// disabled at any armour, as `_IsDisabled` reads it (@0x2d24-0x2d69): a
@@ -932,6 +944,24 @@ mod tests {
         }
         for goal in [ShipGoal::Destroy, ShipGoal::Escort, ShipGoal::None] {
             assert_eq!(assists(goal, AUTO_ABORT, -1, 1), None, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_no_plain_board_counts() {
+        for goal in ALL_GOALS {
+            assert!(!plain_board_counts(goal, RuleSource::Engine), "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_plain_board_of_a_board_or_rescue_goal_counts() {
+        for goal in ALL_GOALS {
+            assert_eq!(
+                plain_board_counts(goal, RuleSource::Bible),
+                matches!(goal, ShipGoal::Board | ShipGoal::Rescue),
+                "{goal:?}"
+            );
         }
     }
 

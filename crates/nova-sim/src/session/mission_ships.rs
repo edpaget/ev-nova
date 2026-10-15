@@ -177,7 +177,7 @@ use crate::mission::ships::{
 use crate::mission::{
     ActiveMission, AssistLine, Departure, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem,
     SpecialShips, assists, check_goals, departure, fails_on_destroyed, fails_on_disabled,
-    goals_met_moment, held_disabled, met_before,
+    goals_met_moment, held_disabled, met_before, plain_board_counts,
 };
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::session::mission_screens::MissionTextKind;
@@ -1040,7 +1040,9 @@ impl Session {
     /// ([`BoardRefusal::CantBoard`], @0x65fdb), its dialog shown and
     /// nothing else changed. Any other takes the assist path
     /// ([`assists`]), on which its slot counts it boarded and the comm
-    /// line is said. Then it is marked boarded (@0x65f43), with no
+    /// line is said. Off both paths, a board counts only by the other
+    /// reading of [`RuleKey::PlainBoardCounts`] ([`plain_board_counts`]),
+    /// with no comm line. Then it is marked boarded (@0x65f43), with no
     /// `BoardPenalty`, person's offer or plunder. A ship of a failed
     /// mission is boarded for plunder, but still with no `BoardPenalty`
     /// (the slap @0x6582b passes its mark; see [`Session::board`]):
@@ -1070,20 +1072,18 @@ impl Session {
                     MissionBoardLine::Retrieved { cargo },
                 ))));
             }
-            let assist = assists(
-                ShipGoal::from_code(record.ships.goal),
-                record.flags,
-                record.pickup_mode,
-                active.ships.left,
-            );
+            let goal = ShipGoal::from_code(record.ships.goal);
+            let assist = assists(goal, record.flags, record.pickup_mode, active.ships.left);
             if let Some(assist) = assist {
                 line = Some(match assist {
                     AssistLine::Boarded => MissionBoardLine::Boarded,
                     AssistLine::Refuelled => MissionBoardLine::Refuelled { ship: npc.ship },
                 });
-                if let Some(active) = self.slot_holding(mark.slot, record.id) {
-                    active.ships.boarded = active.ships.boarded.saturating_add(1);
-                }
+            }
+            let counts = assist.is_some()
+                || plain_board_counts(goal, self.rules.source_for(RuleKey::PlainBoardCounts));
+            if counts && let Some(active) = self.slot_holding(mark.slot, record.id) {
+                active.ships.boarded = active.ships.boarded.saturating_add(1);
             }
         }
         self.mark_boarded(npc.id);
@@ -4072,7 +4072,8 @@ pub(super) mod tests {
         {
             let mut catalog = rescuing(goal, count, flags);
             catalog.missions[0].pickup_mode = pickup;
-            let mut session = in_flight_with(&catalog, count);
+            let mut session =
+                in_flight_with(&catalog, count).with_rules(plain_board(crate::RuleSource::Engine));
             let (boarding, crimes) = board_first(&mut session);
             assert_eq!(
                 boarding,
@@ -4085,6 +4086,38 @@ pub(super) mod tests {
             assert_eq!(ships_of(&session).boarded, 0, "{goal}");
             settle(&mut session, &catalog);
             assert!(!goals_met(&session), "{goal}");
+        }
+    }
+
+    /// The rulebook with [`RuleKey::PlainBoardCounts`] read as `source`.
+    fn plain_board(source: crate::RuleSource) -> crate::Rulebook {
+        crate::Rulebook::default().with_override(RuleKey::PlainBoardCounts, source)
+    }
+
+    #[test]
+    fn by_the_other_reading_any_board_of_a_board_or_rescue_ship_counts() {
+        for (goal, count, flags, boarded) in [(5, 2, 0x0001, 1), (2, 1, 0, 1), (0, 1, 0x0001, 0)] {
+            let catalog = rescuing(goal, count, flags);
+            let mut session =
+                in_flight_with(&catalog, count).with_rules(plain_board(crate::RuleSource::Bible));
+            let _ = shown(&mut session);
+            let (boarding, crimes) = board_first(&mut session);
+            assert_eq!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(None)),
+                "{goal}"
+            );
+            assert_eq!(crimes, [], "{goal}");
+            assert!(session.npcs()[0].boarded, "{goal}");
+            assert_eq!(ships_of(&session).boarded, boarded, "{goal}");
+            settle(&mut session, &catalog);
+            let met = goal == 2;
+            assert_eq!(goals_met(&session), met, "{goal}");
+            assert_eq!(
+                shown(&mut session).contains(&ship_done("Rover done.")),
+                met,
+                "{goal}"
+            );
         }
     }
 
