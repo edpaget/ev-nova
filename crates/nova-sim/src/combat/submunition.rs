@@ -1,12 +1,17 @@
-//! Sub-munitions: the shots a shot releases when it hits a ship or comes
-//! to the end of its life.
+//! Sub-munitions: the shots a shot releases when its proximity fuse sets
+//! it off by a ship or it comes to the end of its life.
 //!
 //! The values are the original's (`_SpawnShotSubmunitions`, called from
 //! `_HandleShot` and `_HandleShipHit` in the `EV Nova` executable):
 //!
-//! - A shot releases its weapon's [`Submunitions`] on a hit, aimed at the
-//!   ship it hit, and at the end of its life, aimed at its own target,
-//!   unless its weapon releases none then (`Flags2` 0x0020). It releases
+//! - A shot releases its weapon's [`Submunitions`] on a proximity hit
+//!   ([`Fuse::Proximity`](super::projectile::Fuse::Proximity)), aimed at
+//!   the ship it hit, and at the end of its life, aimed at the ship its
+//!   damage is aimed at ([`Shot::aimed_at`], none once it is lost),
+//!   unless its weapon releases none then (`Flags2` 0x0020). A shot that
+//!   touches a ship releases none: the sprite collision passes call
+//!   `_HandleShipHit` with `spawnSubs` 0 (@0x37095), the proximity pass
+//!   with 1 (@0x37678). It releases
 //!   them only while its generation is below the `SubLimit`, when there is
 //!   one.
 //! - Each of the `SubCount` shots starts where its parent is, a

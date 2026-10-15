@@ -23,11 +23,14 @@
 //!   and hits no ship for the rest of its life (`_HandleShot`
 //!   @0x355e0-0x35621). A homing one then flies straight.
 //! - A shot lives its weapon's `Count` ticks, then detonates if its weapon
-//!   says so (`Flags` 0x8000) and otherwise vanishes.
-//! - It hits the first ship ([`Target`]) it passes within the ship's hit
-//!   radius and its weapon's `ProxRadius`, swept from where it was to where
-//!   it is so that a fast shot cannot pass through a ship between ticks.
-//!   Which ships it can hit is [`sides`](super::sides)' rule, the
+//!   says so (`Flags` 0x8000) and otherwise vanishes, a lost one too.
+//! - It hits the first ship ([`Target`]) it touches, within the ship's hit
+//!   radius, or else, with a proximity fuse, the first it passes within
+//!   that and its weapon's `ProxRadius` ([`Fuse`]), swept from where it was
+//!   to where it is so that a fast shot cannot pass through a ship between
+//!   ticks; `ProxSafety` holds a touch until its age reaches it and the
+//!   fuse until its age is past it ([`Shot::hit`]). Its last move is never
+//!   tested. Which ships it can hit is [`sides`](super::sides)' rule, the
 //!   original's `_ShotCanHitShip`: never its firer, the ships of its
 //!   firer's government or under its firer's leaders, the escape pod or a
 //!   destroyed ship, among others, but a disabled or breaking-up one; a
@@ -100,6 +103,30 @@ pub fn contact(from: Vec2, to: Vec2, centre: Vec2, radius: f32) -> Option<f32> {
     // range.
     let t = (-b - discriminant.sqrt()) / (2.0 * a);
     (0.0..=1.0).contains(&t).then_some(t)
+}
+
+/// How a shot met a ship.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fuse {
+    /// It touched the ship: the original's sprite collision passes, which
+    /// release no sub-munitions (`_ShipCollisionHandler` passes
+    /// `spawnSubs` 0, @0x37095).
+    Contact,
+    /// It came within its proximity fuse's reach of the ship:
+    /// `_CheckShotProximities`, which releases its sub-munitions
+    /// (`spawnSubs` 1, @0x37678).
+    Proximity,
+}
+
+/// Where and how a shot met the ship it hits ([`Shot::hit`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Meeting {
+    /// The ship.
+    pub ship: ShipRef,
+    /// Where on its move it met it.
+    pub at: Vec2,
+    /// How.
+    pub fuse: Fuse,
 }
 
 /// How a shot is jammed off its ship: the original's shot +0x30, which
@@ -246,7 +273,7 @@ impl Shot {
 
     /// Flies the shot one tick, a homing one steering at its target among
     /// `targets`, and gives where it was. First, a shot whose ship has
-    /// gone is lost ([`Shot::lose_a_gone_ship`]).
+    /// gone from `targets` is lost (see the module docs).
     pub fn step(&mut self, targets: &[Target]) -> Vec2 {
         self.lose_a_gone_ship(targets);
         match self.weapon.guidance {
@@ -374,22 +401,51 @@ impl Shot {
     }
 
     /// The first of the ships among `sides` it can hit that it met on its
-    /// way here from `was`, if any, and where it met it.
+    /// way here from `was`, if any, where it met it, and how: by contact
+    /// within the ship's hit radius, the original's sprite collision
+    /// passes (`_ShipCollisionHandler` @0x36f87-0x370a6), or else, with a
+    /// proximity fuse, within the radius and its weapon's `ProxRadius`
+    /// (`_CheckShotProximities` @0x37553-0x3768a), which runs after them,
+    /// so a contact anywhere on the move is the hit. `ProxSafety` arms
+    /// each: contact once its age has reached it (@0x37066-0x37086),
+    /// proximity once its age is past it (@0x3720e-0x3721e).
+    ///
+    /// Each pass here takes the ship met first along the move; the
+    /// original's contact pass goes in sprite-collision order and its
+    /// proximity pass takes the first active ship in slot order at the
+    /// shot's end point, which crosses no boundary within the contact pass
+    /// and is weapons-fidelity phase 16's for the proximity pass.
     #[must_use]
-    pub fn hit(&self, was: Vec2, sides: &Sides) -> Option<(ShipRef, Vec2)> {
-        sides
-            .targets
-            .iter()
-            .filter(|target| self.can_hit(target, sides))
-            .filter_map(|target| {
-                let reach = target.radius + self.weapon.prox_radius;
-                Some((
-                    contact(was, self.position, target.position, reach)?,
-                    target.ship,
-                ))
-            })
-            .min_by(|(a, _), (b, _)| a.total_cmp(b))
-            .map(|(t, ship)| (ship, was + (self.position - was) * t))
+    pub fn hit(&self, was: Vec2, sides: &Sides) -> Option<Meeting> {
+        let first = |fuse: Fuse, prox: f32| {
+            sides
+                .targets
+                .iter()
+                .filter(|target| self.can_hit(target, sides))
+                .filter_map(|target| {
+                    let reach = target.radius + prox;
+                    Some((
+                        contact(was, self.position, target.position, reach)?,
+                        target.ship,
+                    ))
+                })
+                .min_by(|(a, _), (b, _)| a.total_cmp(b))
+                .map(|(t, ship)| Meeting {
+                    ship,
+                    at: was + (self.position - was) * t,
+                    fuse,
+                })
+        };
+        let safety = self.weapon.prox_safety;
+        let prox = self.weapon.prox_radius;
+        let touched = (self.age >= safety)
+            .then(|| first(Fuse::Contact, 0.0))
+            .flatten();
+        touched.or_else(|| {
+            (self.age > safety && prox > 0.0)
+                .then(|| first(Fuse::Proximity, prox))
+                .flatten()
+        })
     }
 
     /// Its blast where it is, hitting `direct` (or nothing, as it
@@ -654,7 +710,7 @@ mod tests {
     fn a_fast_shot_hits_a_ship_it_passes_between_ticks() {
         let shot = passing(0);
         assert!(close(shot.position, Vec2::new(100.0, 0.0)));
-        let hit = |targets: &[Target]| shot.hit(Vec2::ZERO, &among(targets)).map(|(ship, _)| ship);
+        let hit = |targets: &[Target]| shot.hit(Vec2::ZERO, &among(targets)).map(|met| met.ship);
         assert_eq!(
             hit(&[target(2, 50.0, 4.0, Condition::Intact)]),
             Some(ShipRef::Npc(NpcId(2)))
@@ -689,7 +745,7 @@ mod tests {
     #[test]
     fn a_proximity_fuse_widens_the_hit() {
         let shot = passing(3);
-        let (ship, at) = shot
+        let Meeting { ship, at, .. } = shot
             .hit(
                 Vec2::ZERO,
                 &among(&[target(2, 50.0, 7.9, Condition::Intact)]),
@@ -710,6 +766,71 @@ mod tests {
     }
 
     #[test]
+    fn a_shot_within_a_ships_radius_hits_it_by_contact_and_within_its_reach_by_proximity() {
+        let shot = passing(3);
+        let met = |y| {
+            shot.hit(Vec2::ZERO, &among(&[target(2, 50.0, y, Condition::Intact)]))
+                .map(|met| met.fuse)
+        };
+        assert_eq!(met(4.0), Some(Fuse::Contact));
+        assert_eq!(met(7.9), Some(Fuse::Proximity));
+        assert_eq!(met(8.1), None);
+        let no_fuse = passing(0);
+        let on = no_fuse.hit(
+            Vec2::ZERO,
+            &among(&[target(2, 50.0, 4.0, Condition::Intact)]),
+        );
+        assert_eq!(on.map(|met| met.fuse), Some(Fuse::Contact));
+    }
+
+    #[test]
+    fn a_contact_anywhere_on_the_move_comes_before_a_nearer_proximity_meeting() {
+        // Ship 3 is within the fuse's reach early on; ship 2 sits on the
+        // path further along.
+        let shot = passing(3);
+        let targets = [
+            target(3, 20.0, 7.0, Condition::Intact),
+            target(2, 80.0, 0.0, Condition::Intact),
+        ];
+        let met = shot.hit(Vec2::ZERO, &among(&targets)).expect("a hit");
+        assert_eq!(
+            (met.ship, met.fuse),
+            (ShipRef::Npc(NpcId(2)), Fuse::Contact)
+        );
+        assert!(close(met.at, Vec2::new(75.0, 0.0)), "{met:?}");
+        let alone = shot.hit(Vec2::ZERO, &among(&targets[..1])).expect("a hit");
+        assert_eq!(
+            (alone.ship, alone.fuse),
+            (ShipRef::Npc(NpcId(3)), Fuse::Proximity)
+        );
+    }
+
+    #[test]
+    fn prox_safety_holds_contact_hits_until_the_age_reaches_it_and_proximity_hits_until_it_is_past()
+    {
+        let aged = |age, prox| {
+            let mut shot = passing(prox);
+            shot.weapon.prox_safety = 5;
+            shot.age = age;
+            shot
+        };
+        let on_path = [target(2, 50.0, 0.0, Condition::Intact)];
+        let beside = [target(2, 50.0, 7.0, Condition::Intact)];
+        let fuse = |shot: Shot, targets: &[Target]| {
+            shot.hit(Vec2::ZERO, &among(targets)).map(|met| met.fuse)
+        };
+        assert_eq!(fuse(aged(4, 0), &on_path), None, "contact at 4");
+        assert_eq!(fuse(aged(5, 0), &on_path), Some(Fuse::Contact));
+        assert_eq!(fuse(aged(5, 3), &beside), None, "proximity at 5");
+        assert_eq!(fuse(aged(6, 3), &beside), Some(Fuse::Proximity));
+        assert_eq!(
+            fuse(aged(4, 3), &[on_path[0], beside[0]]),
+            None,
+            "neither armed"
+        );
+    }
+
+    #[test]
     fn a_shot_never_hits_its_firer() {
         let shot = passing(0);
         let firer = Target {
@@ -717,7 +838,7 @@ mod tests {
             ..target(1, 50.0, 0.0, Condition::Intact)
         };
         assert_eq!(shot.hit(Vec2::ZERO, &among(&[firer])), None);
-        let (ship, at) = shot
+        let Meeting { ship, at, .. } = shot
             .hit(
                 Vec2::ZERO,
                 &among(&[firer, target(3, 30.0, 0.0, Condition::Intact)]),
@@ -818,7 +939,7 @@ mod tests {
             govts,
             pass_through,
         };
-        shot.hit(Vec2::ZERO, &sides).map(|(ship, _)| ship)
+        shot.hit(Vec2::ZERO, &sides).map(|met| met.ship)
     }
 
     /// The first of `targets` `shot` hits, by the original's reading.
@@ -1104,7 +1225,7 @@ mod tests {
         let shot = passing(0);
         let hit = |condition| {
             shot.hit(Vec2::ZERO, &among(&[target(2, 50.0, 0.0, condition)]))
-                .map(|(ship, _)| ship)
+                .map(|met| met.ship)
         };
         assert_eq!(hit(Condition::Disabled), Some(ShipRef::Npc(NpcId(2))));
         assert_eq!(
@@ -1243,14 +1364,14 @@ mod tests {
         let shot = passing_homing(0, Some(TARGET));
         assert_eq!(
             shot.hit(Vec2::ZERO, &among(&in_its_path()))
-                .map(|(ship, _)| ship),
+                .map(|met| met.ship),
             Some(TARGET)
         );
         let at_three = passing_homing(0, Some(ShipRef::Npc(NpcId(3))));
         assert_eq!(
             at_three
                 .hit(Vec2::ZERO, &among(&in_its_path()))
-                .map(|(ship, _)| ship),
+                .map(|met| met.ship),
             Some(ShipRef::Npc(NpcId(3)))
         );
     }
@@ -1260,14 +1381,14 @@ mod tests {
         let shot = passing_homing(0x0008, Some(TARGET));
         assert_eq!(
             shot.hit(Vec2::ZERO, &among(&in_its_path()))
-                .map(|(ship, _)| ship),
+                .map(|met| met.ship),
             Some(ShipRef::Npc(NpcId(3)))
         );
         let untargeted = passing_homing(0x0008, None);
         assert_eq!(
             untargeted
                 .hit(Vec2::ZERO, &among(&in_its_path()))
-                .map(|(ship, _)| ship),
+                .map(|met| met.ship),
             Some(ShipRef::Npc(NpcId(3)))
         );
     }
@@ -1360,8 +1481,7 @@ mod tests {
             assert_eq!(kept.jam, Jam::Clear, "{guidance}");
             assert_eq!(kept.aimed_at, Some(TARGET), "{guidance}");
             assert_eq!(
-                kept.hit(was, &among(&[behind, aimed]))
-                    .map(|(ship, _)| ship),
+                kept.hit(was, &among(&[behind, aimed])).map(|met| met.ship),
                 Some(ShipRef::Npc(NpcId(3))),
                 "{guidance}: aimed at a ship still there"
             );
@@ -1458,7 +1578,7 @@ mod tests {
         assert_eq!(
             passing_turret
                 .hit(Vec2::ZERO, &among(&in_its_path()))
-                .map(|(ship, _)| ship),
+                .map(|met| met.ship),
             Some(ShipRef::Npc(NpcId(3))),
             "any ship it meets, its target or not"
         );

@@ -278,8 +278,10 @@ pub struct WeaponSpec {
     /// Its `MaxAmmo`: the rounds each launcher holds at most; none for no
     /// limit of its own.
     pub max_ammo: u32,
-    /// The ticks a shot of it flies before it can hit a stellar: its
-    /// `ProxSafety`, none when that is below none.
+    /// Its `ProxSafety`, none when that is below none: a shot of it hits
+    /// no ship by contact until it has flown this many ticks, and none by
+    /// its proximity fuse, nor a stellar, until it has flown more
+    /// ([`Shot::hit`](super::projectile::Shot::hit)).
     pub prox_safety: u32,
     /// Its `Decay`, none when that is at or below none: a shot of it loses
     /// a point of mass and of energy damage from its direct hit for each

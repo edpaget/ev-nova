@@ -73,8 +73,10 @@
 //! left it ends the walk (the original reads its stale slot), and a walk
 //! stops after one pass over the ships, should leaders form a loop.
 //!
-//! Left out, each with its owner: a shot past its life (@0x447c2),
-//! weapons-fidelity phase 3; the nag ship (@0x44803), as
+//! A shot on the move that spends it is not tested at all (@0x447c2): its
+//! end of life takes it ([`Combat`](super::Combat)'s step 7).
+//!
+//! Left out, each with its owner: the nag ship (@0x44803), as
 //! there is none; two defence ships of one stellar (6c, @0x44893) and a
 //! non-ship shot's +0x8c clause (@0x44a81), task `planet-domination`; the
 //! turret miss (6d, @0x448ad), weapons-fidelity phase 10; a miner's shots
