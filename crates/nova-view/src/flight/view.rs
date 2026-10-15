@@ -2049,6 +2049,10 @@ pub struct FlightView<C> {
     /// showed it for, which it shows until the next under
     /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
     nav_scene: Option<(NavMode, NavDisplay)>,
+    /// The tick the take-off held the nav area's snapshot from before its
+    /// deselect ([`FlightView::took_off`]), which it shows until the
+    /// first tick past it; `None` when none is held.
+    nav_flash: Option<u128>,
     /// Whether the nav area is marked to redraw at the port's next
     /// `_DrawStatus`, as the shipyard's restore leaves it
     /// (`_statusRedraw[0]` @0x5f8fe; see [`FlightView::close_port_dialog`]).
@@ -2309,6 +2313,7 @@ impl<
             hud_cadence: HudCadence::default(),
             radar_scene: None,
             nav_scene: None,
+            nav_flash: None,
             nav_marked: false,
             nav_texts: 0,
             target_scene: None,
@@ -3330,24 +3335,63 @@ impl<
     /// message, goes without; a message from before the landing would be
     /// further from what the player sees than none.
     ///
-    /// The bar is redrawn once the take-off has let go of the nav
-    /// selection. The original redraws it after the port closes with the
-    /// selection still held (`_PlayerLandOnStellar` @0x633a0), so a landed
-    /// `M`'s stellar can show there for a fraction of a second before the
-    /// deselect (@0x674d2) and the redraws after it (@0x6765d, @0x67669)
-    /// draw it away: filed as
-    /// rdm:phase/hud-fidelity/phase-36-landed-m-n-left-out-branches-and-ordering.
+    /// The whole bar is redrawn once the take-off has let go of the nav
+    /// selection. Under [`RuleKey::HudCadence`]'s engine reading, the nav
+    /// area then shows the nav as the take-off began
+    /// ([`Session::take_takeoff_nav`]) until the first tick past it
+    /// ([`FlightView::advance_hud`]), when that differs from the nav now,
+    /// as after a landed `M`: built by operator decision on 2026-10-15.
+    ///
+    /// The original redraws the whole bar after the port closes
+    /// (`_PlayerLandOnStellar` @0x63399-0x633a0, `_RedrawStatus(1)`) with
+    /// +0x6c still the landed selection, and flushes it at once
+    /// (`QDFlushPortBuffer` @0x4cd4d-0x4cd71, unless
+    /// `_useLegacyRenderingPipeline`). The deselect (@0x674d2) and the
+    /// redraws after it (`_RefreshSAT` @0x6765d, `_RedrawStatus(1)`
+    /// @0x67662-0x67669) come inside the same `_HandlePlayerDockRequest`
+    /// call (@0x66f29 → @0x67669). No game frame passes between the two
+    /// redraws: the flash lasts from one flush to the next, at least one
+    /// display refresh, under one of ours' 30 Hz ticks. Ours holds it for
+    /// one presented frame of ours, up to 1/30 s. Stock reaches it after
+    /// the seven finales' `M472 Q25048` ("Our Spiel").
+    ///
+    /// Only a set expression run in that window could hold the bar
+    /// longer, by starting a mission whose text shows (`S` →
+    /// `_DoMissionAccept` @0x15407, its texts @0xa1bb2, @0xa1f0e,
+    /// @0xa1fb5): a `crön`'s `OnStart` or `OnEnd` (@0xb58b), a `spöb`'s
+    /// `OnRegen` (@0xb6ee), a `nëbu`'s `OnExplore` (@0x634da), or an
+    /// auto-aborting mission's `OnAbort` (@0x4317e → @0x99c3e). No stock
+    /// one does. Ours runs the stay's days inside the take-off, so a text
+    /// they queue is newer than the take-off's held nav: the count of
+    /// texts noted at the port's last nav redraw is kept, and
+    /// [`FlightView::take_mission_texts`] draws that text's nav, noted
+    /// before the deselect, while the flash lasts.
     fn took_off(&mut self) -> (Said, Said) {
-        let (pay, messages) = self
+        let (pay, messages, held) = self
             .session
             .as_mut()
-            .map(|session| (session.take_pay_notes(), session.take_messages()))
+            .map(|session| {
+                (
+                    session.take_pay_notes(),
+                    session.take_messages(),
+                    session.take_takeoff_nav(),
+                )
+            })
             .unwrap_or_default();
+        let nav_texts = self.nav_texts;
         self.catch_up();
         self.place_ship();
         self.read_npc_sheets();
         self.message = None;
         self.redraw_status();
+        if let Some(held) = held
+            && self.hud_waits()
+            && held != self.nav_mode()
+        {
+            self.nav_scene = Some((held, self.nav_display(held)));
+            self.nav_flash = Some(ticks(self.elapsed));
+            self.nav_texts = nav_texts;
+        }
         let (greeting, rest): (Vec<_>, Vec<_>) = messages
             .into_iter()
             .partition(|message| matches!(message, SimMessage::TookOff { .. }));
@@ -3545,15 +3589,23 @@ impl<
     ///
     /// A purchase redraws the radar, the nav area and the target panel,
     /// as the original's does inside the purchase (`_DrawStatus`
-    /// @0x5f0b1, after marking nav and the target @0x5f03a-0x5f04a), so a
-    /// ship whose default outfits carry IFF shows it at once, and the nav
-    /// area shows what the ship's `OnPurchase` (@0x5f00d) wrote, a landed
-    /// `M` or `N`'s selection, as it runs first. The gauges
-    /// are redrawn too only when the new ship asks for another `ïntf`
-    /// than the old (`hud::interface_for`), as `_LoadIntfResource`'s
-    /// whole-bar `_RedrawStatus` (@0x739bd) runs only for an ID other
-    /// than the one loaded (`_currentIntf`, @0x73663-0x73672); otherwise
-    /// they wait for the shipyard to close ([`FlightView::refresh_status`]).
+    /// @0x5f0b1, after marking nav, target, weapons and cargo,
+    /// `_statusRedraw[0]`, `[6]`, `[3]` and `[2]`, @0x5f03a-0x5f04a), so a ship whose default outfits carry IFF
+    /// shows it at once, and the nav area shows what the ship's
+    /// `OnPurchase` (@0x5f00d) wrote, a landed `M` or `N`'s selection,
+    /// whatever its operators' order, as it runs first.
+    ///
+    /// The gauges (`[1]`, `[4]`) are not marked. A `C`, `E` or `H` in the old
+    /// class's `OnRetire` or the new one's `OnPurchase` that puts the
+    /// ship under another `ïntf` redraws the whole bar at that operator
+    /// (`FlightView::redraw_at_interface_loads`), so the gauges show as
+    /// they stood there, before the purchase's fill (@0x5f04e-0x5f09d).
+    /// Then the purchase's own `_LoadIntfResource` (@0x5f0ac) redraws the
+    /// gauges only when the ship's `ïntf` is still another than the one
+    /// loaded (`hud::interface_for`), as its whole-bar `_RedrawStatus`
+    /// (@0x739bd) runs only for an ID other than the one loaded
+    /// (`_currentIntf`, @0x73663-0x73672); otherwise they wait for the
+    /// shipyard to close ([`FlightView::refresh_status`]).
     ///
     /// Before all that, the whole bar is redrawn as the name prompt
     /// closes on OK (`_RefreshSAT` @0x5eb73, right after
@@ -3567,11 +3619,12 @@ impl<
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
         let after = self.interface_now();
+        let (loaded, _) = self.redraw_at_interface_loads(before.as_ref());
         self.catch_up();
         self.retake_radar();
         self.retake_nav();
         self.retake_target();
-        if after != before {
+        if after != loaded {
             self.retake_reserves();
         }
         Ok(bought)
@@ -3642,11 +3695,29 @@ impl<
     /// no ship, so it redraws only the radar. The redraw runs inside the
     /// order's call, before any frame is drawn.
     ///
-    /// Ours redraws after the whole script. The original redraws at the
-    /// `C`, `E` or `H` itself, so an `M` or `N` after it in the same
-    /// script (@0x156c7 → @0x739bd, then @0x156f2-0x15705) is not in that
-    /// redraw, where ours shows it: filed as
-    /// rdm:phase/hud-fidelity/phase-36-landed-m-n-left-out-branches-and-ordering.
+    /// The redraw is at the `C`, `E` or `H` itself, as the original's is
+    /// ([`FlightView::redraw_at_interface_loads`]): the nav and gauges
+    /// show as they stood at the last operator that changed the `ïntf`,
+    /// so an `M` or `N` after it in the same script (@0x156c7 → @0x739bd,
+    /// then @0x156f2-0x15705) shows only at the port's next nav redraw,
+    /// and one before it shows at once. An `ïntf` changed and changed
+    /// back within one order still redraws, though the one after the
+    /// order is the one before it.
+    ///
+    /// Left out: the same redraw at a `C`, `E` or `H` in the other
+    /// scripts run while docked: a mission's `OnAccept` (@0xa1da2),
+    /// `OnRefuse`, `OnSuccess` (@0xa04f8), `OnFailure` and `OnAbort`, and
+    /// the bar's and the other hooks. Ours redraws after the whole script
+    /// at its own points ([`FlightView::accept_mission`],
+    /// [`FlightView::refuse_mission`],
+    /// [`FlightView::take_mission_texts`]). Where a text dialog follows
+    /// before the dialog's own redraw, the original shows the bar as it
+    /// was before the script, or as its last such operator left it: the
+    /// `BriefText` @0xa1f0e before `_RefreshSAT` @0xa1f13, for one. Stock
+    /// reaches it: `mïsn` 197 and 320's `OnAccept`s, `H381 … G207` and
+    /// `H382 … G209`, change the shield's most after the `H`, under
+    /// `BriefText` 5422 and 5367. Filed as
+    /// rdm:phase/hud-fidelity/phase-39-cee-e-h-redraw-in-docked-scripts.
     ///
     /// The buy's and the sell's own `_DrawStatus` (@0x5c5a1, @0x5d328)
     /// draw the nav too when the shipyard's restore marked it
@@ -3659,14 +3730,60 @@ impl<
     /// button's check passed, as the loop then runs no pass and falls
     /// through to the draw (`_DoQuantityDialog` @0x5c1aa, @0x5c2fc-0x5c2ff).
     fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>, passed: bool) {
-        if self.interface_now().as_ref() == before {
+        let (_, redrew) = self.redraw_at_interface_loads(before);
+        if !redrew {
             self.retake_radar();
             if passed {
                 self.draw_marked_nav();
             }
-        } else {
-            self.redraw_status();
         }
+    }
+
+    /// Redraws the whole bar at the `C`, `E` and `H` the session ran while
+    /// docked since its order or purchase began
+    /// ([`Session::take_interface_loads`]), given the `ïntf` loaded before
+    /// it (`before`, [`FlightView::interface_now`]). Gives the `ïntf`
+    /// loaded after them, and whether any of them redrew.
+    ///
+    /// Each operator's `_LoadIntfResource` (`_EvalSetExp` @0x156c7) asks
+    /// for its ship's `ïntf` and compares it with the one loaded at that
+    /// moment (`_currentIntf`, @0x73663-0x73672): the same returns at once,
+    /// and another is loaded and redraws the whole bar (`_RedrawStatus(1)`
+    /// @0x739b6-0x739bd). So two changes in one script redraw twice, the
+    /// last staying, and a change and a change back redraw though the
+    /// `ïntf` after the script is the one before it. Each redraw draws the
+    /// nav and the gauges as they stood at its operator: `M` and `N` mark
+    /// nothing (@0x15705, @0x157e3, @0x158fd), and an outfitter order's own
+    /// draw and reset mark only the cargo (@0x5c598-0x5c5a1,
+    /// @0xc82e-0xc833), so an `M`, `N`, `G` or `D` after the last redraw
+    /// shows only at the port's next redraw of its area. The radar and the
+    /// target panel are taken as they are after the script, which no
+    /// operator in it changes but the ship's own IFF.
+    fn redraw_at_interface_loads(
+        &mut self,
+        before: Option<&Result<i16, String>>,
+    ) -> (Option<Result<i16, String>>, bool) {
+        let loads = self
+            .session
+            .as_mut()
+            .map(Session::take_interface_loads)
+            .unwrap_or_default();
+        let mut loaded = before.cloned();
+        let mut last = None;
+        for load in loads {
+            let interface = hud::interface_for(&self.catalog, load.government);
+            if loaded.as_ref() != Some(&interface) {
+                loaded = Some(interface);
+                last = Some(load);
+            }
+        }
+        let Some(load) = last else {
+            return (loaded, false);
+        };
+        self.redraw_status();
+        self.nav_scene = Some((load.nav, self.nav_display(load.nav)));
+        self.reserves_scene = Some(load.reserves);
+        (loaded, true)
     }
 
     /// Assigns the ship captured, as [`Session::assign`] does, and says
@@ -3869,11 +3986,11 @@ impl<C> FlightView<C> {
     ///
     /// In port the original redraws the bar at other points too, each
     /// taken here in part: the radar alone after an outfitter order, and
-    /// everything after one whose `OnPurchase` or `OnSell` puts the ship
-    /// under another `ïntf` (`_LoadIntfResource` @0x156c7 → @0x739bd,
-    /// [`FlightView::outfit`]), the radar, nav and target on a ship
-    /// purchase and everything on one under another `ïntf`
-    /// ([`FlightView::buy_ship`]), the fuel gauge on a recharge
+    /// everything at each `C`, `E` or `H` of its `OnPurchase` or `OnSell`
+    /// that puts the ship under another `ïntf` (`_LoadIntfResource`
+    /// @0x156c7 → @0x739bd, [`FlightView::redraw_at_interface_loads`]),
+    /// the radar, nav and target on a ship purchase and everything on one
+    /// under another `ïntf` ([`FlightView::buy_ship`]), the fuel gauge on a recharge
     /// ([`FlightView::recharge`]), everything as the shipyard's name
     /// prompt closes ([`FlightView::buy_ship`],
     /// [`FlightView::decline_ship`]), and everything as a dialog closes
@@ -3896,10 +4013,10 @@ impl<C> FlightView<C> {
     /// only the cargo area, which ours draws live, and `_DrawStatus`
     /// redraws the radar on its 15-tick timer, nearly always run out in
     /// port. A refused order changes no gear, so the radar redrawn is the
-    /// same. An order whose `OnPurchase` (@0x5c2cb) or `OnSell` (@0x5cff6)
-    /// changes the `ïntf` redraws the whole bar instead (`_EvalSetExp`
-    /// @0x156c7 → `_RedrawStatus(1)` @0x739bd,
-    /// [`FlightView::after_outfit_order`]).
+    /// same. An order whose script, `OnPurchase` (@0x5c2cb) or `OnSell`
+    /// (@0x5cff6), changes the `ïntf` redraws the whole bar instead, as at
+    /// its last change (`_EvalSetExp` @0x156c7 → `_RedrawStatus(1)`
+    /// @0x739bd, [`FlightView::after_outfit_order`]).
     fn retake_radar(&mut self) {
         self.radar_scene = Some(self.radar_now());
     }
@@ -4032,7 +4149,9 @@ impl<C> FlightView<C> {
     /// redrawing at once (`_statusRedraw[0]`, e.g. @0x69b39, @0x69efa,
     /// @0x6a919, @0xe34d, @0x1379b). This is settled before the frame is
     /// drawn, and [`FlightView::nav_shown`] shows a changed mode at once
-    /// anyway, so no boundary is crossed. The target panel's is taken
+    /// anyway, so no boundary is crossed. While the take-off's held nav
+    /// lasts ([`FlightView::took_off`]) the area is not taken; the first
+    /// tick past it ends it. The target panel's is taken
     /// afresh as [`retake_target`] says: on a change of target, on its
     /// 45-tick redraw, and on a radar refresh once its shield or ship type
     /// has changed. The crossing test may settle the 45-tick redraw a
@@ -4052,7 +4171,8 @@ impl<C> FlightView<C> {
         if refresh.radar {
             self.retake_radar();
         }
-        if refresh.nav || !self.nav_mode_shown() {
+        self.nav_flash = self.nav_flash.filter(|&held| u128::from(now) <= held);
+        if self.nav_flash.is_none() && (refresh.nav || !self.nav_mode_shown()) {
             self.retake_nav();
         }
         let shown = self.target_scene.as_ref().and_then(|(drawn, _)| *drawn);
@@ -4083,7 +4203,8 @@ impl<C> FlightView<C> {
     /// nav redraws ours models retake the snapshot
     /// ([`FlightView::redraw_status`]: landing, a docked start, a shop
     /// closing, an accept or refusal, mission texts, and an outfitter order
-    /// that changes the `ïntf`; a ship purchase, [`FlightView::buy_ship`];
+    /// whose script changes the `ïntf`, as at its last change; a ship
+    /// purchase, [`FlightView::buy_ship`];
     /// a port dialog's close, [`FlightView::close_port_dialog`]; and the
     /// other closings [`FlightView::refresh_status`] lists). A
     /// landed `M` or `N`'s write (`_EvalSetExp` @0x156f2-0x15705,
@@ -4096,14 +4217,19 @@ impl<C> FlightView<C> {
     /// `_DrawStatus` also draws nav when it lands on `TickCount() % 30 ==
     /// 0` (@0x4c88a-0x4c8b6), recorded and not built (see the `cadence`
     /// module). A write held in port shows at the next redraw ours
-    /// models, or the take-off lets go of it.
+    /// models, or the take-off lets go of it. The take-off's own held nav
+    /// shows in flight whatever the mode, until the first tick past it
+    /// ([`FlightView::took_off`]).
     fn nav_shown(&self) -> NavDisplay {
         let docked = self
             .session
             .as_ref()
             .is_ok_and(|session| session.landed().is_some());
         match &self.nav_scene {
-            Some((_, shown)) if self.hud_waits() && (docked || self.nav_mode_shown()) => {
+            Some((_, shown))
+                if self.hud_waits()
+                    && (docked || self.nav_flash.is_some() || self.nav_mode_shown()) =>
+            {
                 shown.clone()
             }
             _ => self.nav_now(),
@@ -4635,9 +4761,16 @@ impl<C> FlightView<C> {
     /// [`FlightView::accept_mission`]'s redraw, and a `RefuseText`, queued
     /// before `OnRefuse` (@0xa2ec9 → @0xa2f41) and before
     /// [`FlightView::refuse_mission`]'s redraw (the mission dialog's
-    /// `_RefreshSAT` @0xa40c8-0xa40d7), each leave that redraw shown. In
-    /// flight a nav mode other than the session's shows live anyway
-    /// ([`FlightView::nav_shown`]), so this matters only while docked.
+    /// `_RefreshSAT` @0xa40c8-0xa40d7), each leave that redraw shown. The
+    /// original shows the `BriefText` before its redraw, over a bar that
+    /// doesn't show `OnAccept`'s writes (@0xa1da2 → @0xa1f0e →
+    /// @0xa1f13), where ours' accept redraw shows them: left out with the
+    /// docked scripts' `C`, `E` and `H` redraws (see
+    /// [`FlightView::after_outfit_order`]). In flight a nav mode other
+    /// than the session's shows live anyway ([`FlightView::nav_shown`]),
+    /// so this matters only while docked, and while the take-off's held
+    /// nav lasts, under which a text queued in the take-off's days shows
+    /// ([`FlightView::took_off`]).
     pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
         let Ok(session) = &mut self.session else {
             return Vec::new();
@@ -6288,6 +6421,8 @@ mod tests {
         visibility: Vec<nova_sim::catalog::SystemVisibility>,
         /// The session's `spöb` and `sÿst` names: none, by default.
         place_names: nova_sim::catalog::PlaceNames,
+        /// The `crön`s: none, by default.
+        crons: Vec<nova_sim::catalog::CronRecord>,
     }
 
     /// No strings unless a test sets them.
@@ -6413,6 +6548,7 @@ mod tests {
             mission_texts: Vec::new(),
             visibility: Vec::new(),
             place_names: nova_sim::catalog::PlaceNames::default(),
+            crons: Vec::new(),
         }
     }
 
@@ -6645,7 +6781,7 @@ mod tests {
         }
 
         fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
-            Vec::new()
+            self.crons.clone()
         }
 
         fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
@@ -12887,6 +13023,150 @@ mod tests {
             view.buy_ship(ShipId(129), "Kestrel").expect("bought");
             assert_eq!(retaken(&view), redrawn, "ïntf {interface}");
         }
+    }
+
+    #[test]
+    fn an_outfit_orders_m_after_its_h_waits_for_the_next_nav_redraw_and_before_it_shows_at_once() {
+        for (script, shown) in [("H130 M131", "Earth"), ("M131 H130", "Proxima")] {
+            let mut catalog = port();
+            catalog.outfits[0].on_purchase = nova_sim::Script::parse(script);
+            let mut view = docked_at_earth(catalog, RuleSource::Engine);
+            assert_eq!(view.outfit(BUY_TANK), Ok(()));
+            assert_eq!(
+                view.session().map(Session::nav_mode),
+                Ok(NavMode::Stellar(Some(StellarId(140)))),
+                "{script}: written"
+            );
+            assert_eq!(port_nav(&view), naming(shown), "{script}");
+            view.refresh_status();
+            assert_eq!(
+                port_nav(&view),
+                naming("Proxima"),
+                "{script}: the next nav redraw"
+            );
+        }
+    }
+
+    #[test]
+    fn an_outfit_order_changing_the_intf_and_back_redraws_the_bar_as_at_the_last_change() {
+        let mut catalog = port();
+        catalog.outfits[0].on_purchase = nova_sim::Script::parse("M131 H130 H129 G201");
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
+        assert_eq!(port_nav(&view), naming("Proxima"), "redrawn at the H");
+        assert_eq!(
+            view.reserves_shown().fuel.max,
+            view.reserves().fuel.max - 100.0,
+            "the gauges as at H129, before G201's tank"
+        );
+    }
+
+    #[test]
+    fn a_ship_purchases_on_purchase_intf_change_shows_the_gauges_before_the_fill() {
+        let mut catalog = port();
+        assert_eq!(catalog.ships[0].id, ShipId(129));
+        catalog.ships[0].on_purchase = nova_sim::Script::parse("H130");
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
+        let (shown, now) = (view.reserves_shown().fuel, view.reserves().fuel);
+        assert_eq!(shown.max, now.max, "ship 130's, under its ïntf");
+        assert!(shown.now < shown.max, "{shown:?}: not yet filled");
+        assert_eq!(now.now, now.max, "the fill");
+        assert_eq!(view.nav_shown(), view.nav_now(), "the purchase's own draw");
+    }
+
+    // The take-off's redraw before its deselect.
+
+    /// The nav area naming `name` in mode 2, as flight shows it.
+    fn flashing(name: &str) -> NavDisplay {
+        NavDisplay::Stellar(Some(name.to_owned()))
+    }
+
+    #[test]
+    fn the_take_off_after_a_landed_m_names_its_stellar_for_one_frame() {
+        type TakeOff = fn(&mut View);
+        let take_offs: [(&str, TakeOff); 2] = [
+            ("the take-off", |view| {
+                run_set(view, "M131");
+                view.settle_script();
+                assert_eq!(view.take_off(), Some(StellarId(128)));
+            }),
+            ("a Q", |view| {
+                run_set(view, "M131 Q25048");
+                assert_eq!(view.settle_script(), Some(StellarId(128)));
+            }),
+        ];
+        for (what, take_off) in take_offs {
+            let mut view = told(docked_at_earth(port(), RuleSource::Engine));
+            take_off(&mut view);
+            assert_eq!(
+                view.session().map(Session::nav_mode),
+                Ok(NavMode::Stellar(None)),
+                "{what}: let go"
+            );
+            assert_eq!(view.nav_shown(), flashing("Proxima"), "{what}: held");
+            view.tick(TICK);
+            assert_eq!(
+                view.nav_shown(),
+                NavDisplay::Stellar(None),
+                "{what}: a tick on"
+            );
+            let mut view = told(docked_at_earth(port(), RuleSource::Bible));
+            take_off(&mut view);
+            assert_eq!(
+                view.nav_shown(),
+                NavDisplay::Stellar(None),
+                "{what}: by the bible"
+            );
+        }
+    }
+
+    #[test]
+    fn a_take_off_with_nothing_let_go_holds_nothing() {
+        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        run_set(&mut view, "M132");
+        view.settle_script();
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.nav_shown(), NavDisplay::Stellar(None));
+        assert_eq!(view.nav_flash, None, "no flash to end");
+    }
+
+    #[test]
+    fn a_text_queued_in_the_take_offs_days_shows_over_its_held_nav() {
+        let mut catalog = port();
+        catalog.crons = vec![nova_sim::catalog::CronRecord {
+            id: nova_sim::catalog::CronId(128),
+            first_day: 0,
+            first_month: 0,
+            first_year: 0,
+            last_day: 0,
+            last_month: 0,
+            last_year: 0,
+            random: 100,
+            duration: 0,
+            pre_holdoff: 0,
+            post_holdoff: 0,
+            flags: 0,
+            enable_on: Test::default(),
+            on_start: nova_sim::Script::parse("S131"),
+            on_end: nova_sim::Script::default(),
+            contribute: 0,
+            require: 0,
+            news_govt: [-1; 4],
+            govt_news: [-1; 4],
+            ind_news: -1,
+        }];
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        run_set(&mut view, "M131");
+        view.settle_script();
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.take_mission_texts().len(), 1, "the cron's mission");
+        assert_eq!(view.nav_shown(), flashing("Proxima"), "under its text");
+        view.tick(TICK);
+        assert_eq!(view.nav_shown(), NavDisplay::Stellar(None));
     }
 
     #[test]
