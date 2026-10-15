@@ -15,10 +15,12 @@
 //! - A beam is drawn from its start to its end as lines in `BeamColor`
 //!   ([`beam_strokes`]): its core at offsets 0, ±1, up to one short of
 //!   ±`BeamWidth` along the minor axis, at alpha (32 - 16|i|)/32, and with a
-//!   `Falloff`, its corona in `CoronaColor` at offsets ±(`BeamWidth` + j),
-//!   from alpha 16/32 down by `Falloff`/32 a line while above 2/32. A
+//!   `Falloff` as the original loads it (16 for none) plus the ticks it has
+//!   faded, its corona in `CoronaColor` at offsets ±(`BeamWidth` + j),
+//!   from alpha 16/32 down by that falloff/32 a line while above 2/32. A
 //!   lightning beam (`LiDensity`) is drawn as its plain core, a
-//!   placeholder for the original's random zig-zag.
+//!   placeholder for the original's random zig-zag, fading by its fade
+//!   over 32 ticks.
 //! - A beam whose weapon sets `Flags2` 0x2000 is drawn under the ships,
 //!   and every other beam over them.
 
@@ -88,10 +90,21 @@ pub fn shot_frame(heading: f32, age: u32, frames: NonZeroU16, look: &WeaponLook)
 }
 
 /// The lines that draw a beam from `start` to `end` of a weapon that
-/// looks as `look` says, each with its colour, in drawing order: the
-/// corona, then the core out to in.
+/// looks as `look` says, `fade` ticks into its fade
+/// ([`Beam::fade`](nova_sim::combat::beam::Beam::fade)), each with its
+/// colour, in drawing order: the corona, then the core out to in. The
+/// corona falls off by `Falloff` + `fade` and is drawn when that is above
+/// none (`_DrawBeam` @0xc3e00), so a fading beam grows one. A lightning
+/// beam has no corona, and its placeholder core is drawn at
+/// (32 − `fade`)/32 of its alpha, none below none (`_BeamDrawCallback`
+/// @0x37c75-0x37d62).
 #[must_use]
-pub fn beam_strokes(start: Point, end: Point, look: &WeaponLook) -> Vec<(Point, Point, Color)> {
+pub fn beam_strokes(
+    start: Point,
+    end: Point,
+    look: &WeaponLook,
+    fade: u32,
+) -> Vec<(Point, Point, Color)> {
     // A mostly vertical beam widens along x, any other along y.
     let along_x = (end.x - start.x).abs() < (end.y - start.y).abs();
     let line = |offset: i32, color: u32, alpha: i32| {
@@ -104,25 +117,33 @@ pub fn beam_strokes(start: Point, end: Point, look: &WeaponLook) -> Vec<(Point, 
         )
     };
     let width = i32::from(look.beam_width.max(1));
+    let fade = i32::try_from(fade).unwrap_or(i32::MAX);
+    let lightning = look.li_density > 0;
     let mut strokes = Vec::new();
-    if look.falloff > 0 {
+    let falloff = i32::from(look.falloff).saturating_add(fade);
+    if !lightning && falloff > 0 {
         // From the start down by the falloff a line, while above the end.
-        let fading = (CORONA_END + 1..=CORONA_START)
-            .rev()
-            .step_by(usize::from(look.falloff.unsigned_abs()));
+        let step = usize::try_from(falloff).unwrap_or(usize::MAX);
+        let fading = (CORONA_END + 1..=CORONA_START).rev().step_by(step);
         for (out, alpha) in (width..).zip(fading) {
             strokes.push(line(-out, look.corona_color, alpha));
             strokes.push(line(out, look.corona_color, alpha));
         }
     }
+    let shown = if lightning {
+        ALPHA_STEPS.saturating_sub(fade).max(0)
+    } else {
+        ALPHA_STEPS
+    };
+    let core = |alpha: i32| alpha * shown / ALPHA_STEPS;
     for out in (1..width).rev() {
         let alpha = ALPHA_STEPS - CORE_FALLOFF * out;
         if alpha > 0 {
-            strokes.push(line(-out, look.beam_color, alpha));
-            strokes.push(line(out, look.beam_color, alpha));
+            strokes.push(line(-out, look.beam_color, core(alpha)));
+            strokes.push(line(out, look.beam_color, core(alpha)));
         }
     }
-    strokes.push(line(0, look.beam_color, ALPHA_STEPS));
+    strokes.push(line(0, look.beam_color, core(ALPHA_STEPS)));
     strokes
 }
 
@@ -179,7 +200,8 @@ pub fn translucent() -> Color {
     Color::rgba(255, 255, 255, (TRANSLUCENT_ALPHA * 255.0) as u8)
 }
 
-/// A beam to draw: from where to where on screen, and its weapon.
+/// A beam to draw: from where to where on screen, its weapon, and how
+/// far it has faded.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BeamShown {
     /// Where it starts, on screen.
@@ -188,6 +210,9 @@ pub struct BeamShown {
     pub end: Point,
     /// Its weapon.
     pub weapon: WeaponId,
+    /// The ticks it has faded at the end of its life, as the session
+    /// counts them ([`Beam::fade`](nova_sim::combat::beam::Beam::fade)).
+    pub fade: u32,
 }
 
 /// Draws those of `beams` drawn `under` the ships (`Flags2` 0x2000), or
@@ -197,7 +222,7 @@ pub fn draw_beams(list: &mut DrawList, beams: &[BeamShown], looks: &Looks, under
     for beam in beams {
         match looks.weapon(beam.weapon) {
             Some(look) if (look.flags2 & BEAM_UNDER_SHIPS != 0) == under => {
-                for (from, to, color) in beam_strokes(beam.start, beam.end, look) {
+                for (from, to, color) in beam_strokes(beam.start, beam.end, look, beam.fade) {
                     list.line(from, to, 1.0, color);
                 }
             }
@@ -320,14 +345,14 @@ mod tests {
     fn a_beam_one_wide_is_one_opaque_line_in_its_colour() {
         let from = at(10.0, 20.0);
         let to = at(110.0, 30.0);
-        assert_eq!(beam_strokes(from, to, &beam(1, 0)), [(from, to, BEAM)]);
-        assert_eq!(beam_strokes(from, to, &beam(0, 0)), [(from, to, BEAM)]);
+        assert_eq!(beam_strokes(from, to, &beam(1, 0), 0), [(from, to, BEAM)]);
+        assert_eq!(beam_strokes(from, to, &beam(0, 0), 0), [(from, to, BEAM)]);
     }
 
     #[test]
     fn a_beam_two_wide_adds_half_alpha_lines_along_its_minor_axis() {
         // Mostly horizontal: offsets go down y.
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 10.0), &beam(2, 0));
+        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 10.0), &beam(2, 0), 0);
         assert_eq!(
             strokes,
             [
@@ -337,7 +362,7 @@ mod tests {
             ]
         );
         // Mostly vertical: offsets go along x.
-        let strokes = beam_strokes(at(0.0, 0.0), at(10.0, -100.0), &beam(2, 0));
+        let strokes = beam_strokes(at(0.0, 0.0), at(10.0, -100.0), &beam(2, 0), 0);
         assert_eq!(
             strokes,
             [
@@ -350,7 +375,7 @@ mod tests {
 
     /// Which axis `beam` widens along: x or y.
     fn widens(from: Point, to: Point) -> char {
-        let strokes = beam_strokes(from, to, &beam(2, 0));
+        let strokes = beam_strokes(from, to, &beam(2, 0), 0);
         if strokes[0].0.x == from.x { 'y' } else { 'x' }
     }
 
@@ -364,20 +389,20 @@ mod tests {
     #[test]
     fn a_corona_line_at_two_32nds_is_left_out() {
         // 16, 9, then 2: not above 2.
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 7));
+        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 7), 0);
         let alphas: Vec<u8> = strokes.iter().map(|(_, _, color)| color.a).collect();
         assert_eq!(alphas, [127, 127, 71, 71, 255]);
     }
 
     #[test]
     fn a_wide_beams_outer_core_lines_vanish() {
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(4, 0));
+        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(4, 0), 0);
         assert_eq!(strokes.len(), 3, "±2 and ±3 are clear: {strokes:?}");
     }
 
     #[test]
     fn a_falloff_adds_a_corona_fading_by_it_a_line() {
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 8));
+        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 8), 0);
         assert_eq!(
             strokes,
             [
@@ -388,15 +413,55 @@ mod tests {
                 (at(0.0, 0.0), at(100.0, 0.0), BEAM),
             ]
         );
-        let slow = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(2, 4));
+        let slow = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(2, 4), 0);
         let alphas: Vec<u8> = slow.iter().map(|(_, _, color)| color.a).collect();
         // Corona at ±2 to ±5 (16, 12, 8 and 4 32nds: 4 is above 2), then
         // the core.
         assert_eq!(alphas, [127, 127, 95, 95, 63, 63, 31, 31, 127, 127, 255]);
         assert_eq!(slow[0].0, at(0.0, -2.0));
         assert_eq!(slow[6].0, at(0.0, -5.0));
-        let none = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 0));
+        let none = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 0), 0);
         assert_eq!(none.len(), 1, "no falloff, no corona");
+    }
+
+    #[test]
+    fn a_fading_beam_draws_its_corona_at_falloff_plus_its_fade() {
+        let alphas = |look: &WeaponLook, fade| -> Vec<u8> {
+            beam_strokes(at(0.0, 0.0), at(100.0, 0.0), look, fade)
+                .iter()
+                .map(|(_, _, color)| color.a)
+                .collect()
+        };
+        assert_eq!(alphas(&beam(1, 8), 0), [127, 127, 63, 63, 255]);
+        // Falloff 12: 16, then 4 32nds.
+        assert_eq!(alphas(&beam(1, 8), 4), [127, 127, 31, 31, 255]);
+        assert_eq!(alphas(&beam(1, 8), 9), [127, 127, 255], "16 only");
+        // None of its own: 16, 13, 10, 7 and 4 32nds by its fade of 3.
+        assert_eq!(
+            alphas(&beam(1, 0), 3),
+            [127, 127, 103, 103, 79, 79, 55, 55, 31, 31, 255]
+        );
+        assert_eq!(alphas(&beam(1, 0), 0), [255], "nor any fade");
+    }
+
+    #[test]
+    fn a_fading_lightning_beam_draws_at_32_less_its_fade() {
+        let lightning = |beam_width| WeaponLook {
+            li_density: 3,
+            falloff: 8,
+            ..beam(beam_width, 8)
+        };
+        let alphas = |look: &WeaponLook, fade| -> Vec<u8> {
+            beam_strokes(at(0.0, 0.0), at(100.0, 0.0), look, fade)
+                .iter()
+                .map(|(_, _, color)| color.a)
+                .collect()
+        };
+        assert_eq!(alphas(&lightning(1), 0), [255], "no corona");
+        assert_eq!(alphas(&lightning(1), 16), [127]);
+        assert_eq!(alphas(&lightning(2), 16), [63, 63, 127]);
+        assert_eq!(alphas(&lightning(1), 32), [0]);
+        assert_eq!(alphas(&lightning(1), 40), [0], "never below none");
     }
 
     fn looks(weapons: &[(i16, WeaponLook)]) -> Looks {
@@ -498,6 +563,7 @@ mod tests {
             start: at(0.0, 0.0),
             end: at(50.0, 0.0),
             weapon: WeaponId(weapon),
+            fade: 0,
         };
         let beams = [shown(146), shown(147), shown(148)];
         let lines = |under| {

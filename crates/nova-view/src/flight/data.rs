@@ -17,6 +17,7 @@ use nova_data::sound::decode_snd;
 use nova_data::{GameData, LayerError, LayerSprite};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
+use nova_sim::combat::weapon::loaded_falloff;
 use nova_sim::data::ship_blink;
 
 use super::catalog::{
@@ -168,7 +169,8 @@ impl CombatLooks for GameData {
             flags2: weapon.flags2.bits(),
             flags3: weapon.flags3.bits(),
             beam_width: weapon.beam_width,
-            falloff: weapon.falloff,
+            falloff: loaded_falloff(weapon.beam_length, weapon.falloff, weapon.li_density),
+            li_density: weapon.li_density,
             beam_color: weapon.beam_color,
             corona_color: weapon.corona_color,
             prox_safety: weapon.prox_safety,
@@ -727,12 +729,29 @@ mod tests {
                 flags3: 0x0002,
                 beam_width: 3,
                 falloff: 8,
+                li_density: 0,
                 beam_color: 0x00FF_8000,
                 corona_color: 0x0000_80FF,
                 prox_safety: 6,
                 sound_ticks: None,
             })
         );
+    }
+
+    #[test]
+    fn a_beams_look_takes_its_falloff_as_the_original_loads_it() {
+        let beam = |falloff, li_density| {
+            let mut bytes = weapon(-1, -1);
+            put_i16(&mut bytes, 0x30, 300);
+            put_i16(&mut bytes, 0x34, falloff);
+            put_i16(&mut bytes, 0x6E, li_density);
+            let data = named_store(&[(Weapon::TYPE, 146, Some("Laser"), bytes)]);
+            let look = data.weapon_look(WeaponId(146)).expect("reads");
+            (look.falloff, look.li_density)
+        };
+        assert_eq!(beam(8, 0), (8, 0));
+        assert_eq!(beam(0, 0), (16, 0), "none loads 16");
+        assert_eq!(beam(8, 3), (0, 3), "a lightning beam has none");
     }
 
     /// A `snd ` of `frames` 8-bit mono frames at 22,050 Hz.

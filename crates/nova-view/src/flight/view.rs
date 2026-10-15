@@ -4182,6 +4182,7 @@ impl<C> FlightView<C> {
                     start: shown(beam.start),
                     end: shown(beam.end),
                     weapon: beam.weapon.id,
+                    fade: beam.fade,
                 }
             })
             .collect()
@@ -11124,6 +11125,35 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_beams_fade_is_shown_as_the_session_counts_it() {
+        let mut catalog = armed(0, &[OVER]);
+        for weapon in &mut catalog.weapons {
+            if weapon.id == OVER {
+                *weapon = nova_sim::WeaponRecord {
+                    count: 1,
+                    reload: 100,
+                    decay: 1,
+                    falloff: 10,
+                    ..*weapon
+                };
+            }
+        }
+        let mut view = fighting(catalog, &[]);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        ticks(&mut view, 2);
+        let fade = view.session().expect("flying").beams()[0].fade;
+        assert!(fade > 0, "fading");
+        let shown: Vec<u32> = view
+            .shown_beams(&view.camera())
+            .iter()
+            .map(|beam| beam.fade)
+            .collect();
+        assert_eq!(shown, [fade]);
     }
 
     #[test]

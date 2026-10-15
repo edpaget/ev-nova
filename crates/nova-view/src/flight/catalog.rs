@@ -204,8 +204,13 @@ pub struct WeaponLook {
     pub flags3: u16,
     /// `BeamWidth`: a beam's width, and a spinning shot's ticks a frame.
     pub beam_width: i16,
-    /// `Falloff`: how fast a beam's corona fades; none for no corona.
+    /// `Falloff` as the original loads it
+    /// ([`loaded_falloff`](nova_sim::combat::weapon::loaded_falloff)): how
+    /// fast a beam's corona fades, 16 for a beam that says none, and none
+    /// for a lightning beam.
     pub falloff: i16,
+    /// `LiDensity`: above none for a lightning beam.
+    pub li_density: i16,
     /// `BeamColor`, `00RRGGBB`.
     pub beam_color: u32,
     /// `CoronaColor`, `00RRGGBB`.
