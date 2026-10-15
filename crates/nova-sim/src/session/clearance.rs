@@ -89,10 +89,7 @@ impl Session {
     /// 2 with the brackets' fly-in, the request after it, and what it
     /// said, and gives its outcome.
     pub(super) fn apply_press(&mut self, press: DockPress) -> Result<LandOutcome, LandingRefusal> {
-        if let Some(stellar) = press.selected {
-            self.nav = NavMode::Stellar(Some(stellar));
-            self.nav_fly_in.start();
-        }
+        self.select_pressed(press.selected);
         self.dock = press.dock;
         match press.said {
             Some(DockSaid::NoResponse) => self.messages.push(SimMessage::NoResponse),
@@ -110,6 +107,15 @@ impl Session {
             self.sounds.push(SimSound::TrafficControl);
         }
         press.outcome
+    }
+
+    /// Selects the stellar the land key `selected`, if it selected one, in
+    /// mode 2 with the brackets' fly-in (@0x6a8ed-0x6a932).
+    pub(super) fn select_pressed(&mut self, selected: Option<crate::catalog::StellarId>) {
+        if let Some(stellar) = selected {
+            self.nav = NavMode::Stellar(Some(stellar));
+            self.nav_fly_in.start();
+        }
     }
 
     /// How the request's line and the greeting word `stellar`, one of the

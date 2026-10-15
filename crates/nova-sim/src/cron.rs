@@ -397,6 +397,23 @@ impl CronState {
     pub fn active(self) -> bool {
         self.days >= 0 || self.holdoff >= 0
     }
+
+    /// Whether crön `record`, held with these counters, has started: its
+    /// `OnStart` has run since it was last inactive. Only a pre-holdoff
+    /// is before the start, and the pass writes one as `days` the crön's
+    /// `Duration` and `holdoff` above 0, counting the holdoff alone down.
+    /// Every other state follows an `OnStart`, by either reading of
+    /// [`RuleKey::CronPostHoldoff`] or [`RuleKey::CronZeroDurationHoldoff`]:
+    /// running (`holdoff` 0 or below), the intended post-holdoff (`days`
+    /// -1), and the engine's end loading `PreHoldoff` into the holdoff,
+    /// which leaves `days` at 0 or below, never the `Duration` of a crön
+    /// that ran a day or more, and -1 for one of `Duration` 0. So the
+    /// counters answer it without the rules. A save made under a
+    /// different `Duration` for the crön can mislead it.
+    #[must_use]
+    pub fn started(self, record: &CronRecord) -> bool {
+        self.holdoff <= 0 || self.days != record.duration
+    }
 }
 
 /// Whether a crön with counters `state` contributes its `Contribute`
@@ -1473,6 +1490,63 @@ mod tests {
             assert_eq!(day.day(&records), log, "holds {second}");
             assert_eq!(day.of(128), None, "it still ends");
         }
+    }
+
+    /// Passes `days` days over `record`, always eligible, by `rules`,
+    /// and checks [`CronState::started`] after each against what the
+    /// pass did: whether `OnStart` has run since the crön was last
+    /// inactive.
+    fn started_matches_the_pass(record: &CronRecord, rules: Rulebook, days: usize) {
+        let records = [record.clone()];
+        let mut day = MockDay::eligible(128).with_rules(rules);
+        let mut ran = false;
+        for n in 1..=days {
+            if day.state(CronId(128)).is_none() {
+                ran = false;
+            }
+            ran |= day.day(&records).contains(&Started(128));
+            if let Some(state) = day.state(CronId(128)) {
+                assert_eq!(
+                    state.started(record),
+                    ran,
+                    "day {n}, {state:?}, {record:?}, {rules:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_cron_has_started_once_its_on_start_ran_by_every_reading_of_its_ends() {
+        let sources = [RuleSource::Bible, RuleSource::Engine];
+        for zero in sources {
+            for post in sources {
+                for duration in [0, 1, 3] {
+                    for pre_holdoff in [-1, 0, 2] {
+                        for post_holdoff in [0, 2] {
+                            started_matches_the_pass(
+                                &timed(128, duration, pre_holdoff, post_holdoff),
+                                holdoffs(zero, post),
+                                14,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_cron_in_its_pre_holdoff_has_not_started_and_one_past_it_has() {
+        let record = timed(128, 3, 2, 2);
+        let state = |days, holdoff| CronState { days, holdoff };
+        assert!(!state(3, 2).started(&record), "its pre-holdoff");
+        assert!(!state(3, 1).started(&record), "its pre-holdoff");
+        assert!(state(3, 0).started(&record), "running");
+        assert!(state(1, 0).started(&record), "running");
+        assert!(state(-1, 2).started(&record), "its post-holdoff");
+        assert!(state(0, 2).started(&record), "the engine's end");
+        assert!(state(-3, 0).started(&record), "the engine's endless run");
+        assert!(!state(0, 2).started(&timed(128, 0, 2, 0)), "Duration 0");
     }
 
     #[test]

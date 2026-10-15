@@ -574,8 +574,22 @@ impl Harness {
         map.view().world_to_screen(system.position())
     }
 
-    /// Plots a course to Beta on flight's map: M, a click, M.
+    /// Runs frames until the map key is taken: a take-off refuses it for
+    /// [`nova_sim::TAKEOFF_GRACE_TICKS`].
+    fn past_the_takeoff_grace(&mut self) {
+        for _ in 0..100 {
+            if self.session().takes(nova_sim::PlayerCommand::Map) {
+                return;
+            }
+            self.frame();
+        }
+        panic!("the map was never taken");
+    }
+
+    /// Plots a course to Beta on flight's map: M, a click, M, once the
+    /// take-off grace is over.
     fn plot_beta(&mut self) {
+        self.past_the_takeoff_grace();
         self.press(KeyCode::KeyM);
         let beta = self.on_map(129);
         self.click(beta);

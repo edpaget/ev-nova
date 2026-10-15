@@ -58,8 +58,10 @@ pub enum SimMessage {
         /// `ship_name` (ship +0x76 → `shïp` +0x6c, @0x7e7d7-0x7e7ec).
         scanner: ShipId,
         /// The drawn ship name of the mission whose cargo the scan found,
-        /// when not empty, which names the scanner in place of its class,
-        /// whichever ship it is (the found slot's +0x70, @0x7e7ce).
+        /// when not empty, which names the scanner in place of its class:
+        /// by the engine, whichever ship it is (the found slot's +0x70,
+        /// @0x7e7ce); see
+        /// [`RuleKey::SmugglingShipName`](crate::RuleKey::SmugglingShipName).
         ship_name: Option<String>,
         /// The credits fined: none for no fine.
         fine: i64,
@@ -137,6 +139,36 @@ pub enum SimMessage {
         /// How the greeting words it.
         kind: DockKind,
     },
+    /// The player ejected into an escape ship: "Escaping in" (`STR#` 2002
+    /// #52), a space, the ship's shipyard long name and a full stop
+    /// (`_HandlePlayer` @0x6f588-0x6f635).
+    EscapingIn {
+        /// The escape ship's class.
+        ship: ShipId,
+    },
+    /// A sabotage kill outfit went off aboard the player's ship
+    /// (`_HandlePlayer` @0x693c8-0x6969d): "Your" (`STR#` 2002 #39), the
+    /// outfit's `LCName` and "has exploded!" (#40) for one, its
+    /// `LCPlural` and "have exploded!" (#41) for more; "A bomb has
+    /// exploded onboard your ship!" (#38) with no outfit named.
+    Sabotaged {
+        /// The outfit named, and whether the player owns exactly one
+        /// (see [`kill_notice`](crate::sabotage::kill_notice)).
+        outfit: Option<(OutfitId, bool)>,
+    },
+    /// A sabotage bomb outfit went off aboard the player's ship
+    /// (`_HandlePlayer` @0x69701-0x698b0), in the same words as
+    /// [`Sabotaged`](Self::Sabotaged) names an outfit, whatever its names.
+    BombExploded {
+        /// The bomb outfit.
+        outfit: OutfitId,
+        /// Whether the player owned exactly one.
+        one: bool,
+    },
+    /// A disabled or dying player's pre-jump collapsed: "Ship disabled -
+    /// hyperspace field collapsed." (`STR#` 2002 #35, `_HandlePlayer`
+    /// `_GetIndString` @0x68a04).
+    JumpCollapsed,
 }
 
 impl SimMessage {
@@ -178,14 +210,22 @@ impl SimMessage {
     ///   @0x67c46, @0x66bcd).
     /// - [`DockCleared`](Self::DockCleared): 250
     ///   (`_HandlePlayerDockApproach` @0x64e8e).
+    /// - [`EscapingIn`](Self::EscapingIn): 512 (`_HandlePlayer`
+    ///   @0x6f62a).
+    /// - [`Sabotaged`](Self::Sabotaged): 360 (`_HandlePlayer` @0x6969d).
+    /// - [`BombExploded`](Self::BombExploded): 400 (`_HandlePlayer`
+    ///   @0x698b0).
+    /// - [`JumpCollapsed`](Self::JumpCollapsed): 250 (`_HandlePlayer`
+    ///   @0x68a3d, 0xfa pushed @0x68a32).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
-            Self::ExitedHypergate(_) => 360,
+            Self::ExitedHypergate(_) | Self::Sabotaged { .. } => 360,
             Self::MissionScanned
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
-            | Self::IllegalOutfit { .. } => 400,
+            | Self::IllegalOutfit { .. }
+            | Self::BombExploded { .. } => 400,
             Self::Arrived(_)
             | Self::PassedWormhole(_)
             | Self::MissionFailed
@@ -199,11 +239,12 @@ impl SimMessage {
             | Self::TookOff { .. } => 240,
             Self::EscortRepaired
             | Self::FighterRepaired
+            | Self::JumpCollapsed
             | Self::DockRequested { .. }
             | Self::NoResponse
             | Self::DockCleared { .. } => 250,
             Self::Buoy(_) => 480,
-            Self::Tutorial(_) => 512,
+            Self::Tutorial(_) | Self::EscapingIn { .. } => 512,
         }
     }
 }
@@ -236,6 +277,22 @@ mod tests {
             (smuggling, 400),
             (SimMessage::EscortRepaired, 250),
             (SimMessage::FighterRepaired, 250),
+            (SimMessage::JumpCollapsed, 250),
+            (SimMessage::EscapingIn { ship: ShipId(144) }, 512),
+            (SimMessage::Sabotaged { outfit: None }, 360),
+            (
+                SimMessage::BombExploded {
+                    outfit: OutfitId(262),
+                    one: true,
+                },
+                400,
+            ),
+            (
+                SimMessage::Sabotaged {
+                    outfit: Some((OutfitId(261), false)),
+                },
+                360,
+            ),
             (
                 SimMessage::TookOff {
                     stellar: StellarId(128),

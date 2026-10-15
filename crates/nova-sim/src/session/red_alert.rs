@@ -1,8 +1,11 @@
 //! The session's Red Alert (see [`red_alert`](crate::red_alert)): each
 //! flight tick checks the threat on a due frame, unless the player is
 //! destroyed (the death path returns before the check, @0x68838-0x6888c),
-//! sounding [`SimSound::RedAlert`] on a new threat, and steps the icon on
-//! every tick. Landing and hyperspace arrival clear the icon.
+//! sounding [`SimSound::RedAlert`] on a new threat unless the escape pod
+//! is counting down (+0xc908 > 0, @0x68cd3-0x68cdb), and steps the icon on
+//! every tick. A dying player out of the pod still hears it: the gate is
+//! the pod countdown, and `_IsPlayerThreatened` (@0x82442) has no dying
+//! test. Landing and hyperspace arrival clear the icon.
 //!
 //! In double time the check runs on both passes, on the same frame
 //! (`_HandlePlayer` @0x68c79), but the blink steps on the advance pass
@@ -56,12 +59,11 @@ impl Session {
     /// time's passes (see the module docs).
     pub(super) fn red_alert_check(&mut self, frame: i16) {
         if self.condition != Condition::Destroyed && alert_check_due(frame) {
-            let dying = matches!(self.condition, Condition::Dying { .. });
             let blinks = self.sound_quiet
                 || self.rules.source_for(RuleKey::AlertBlink) != RuleSource::Engine;
             if self
                 .red_alert
-                .check(self.player_threatened(), dying, blinks)
+                .check(self.player_threatened(), self.pod.is_some(), blinks)
             {
                 self.sounds.push(SimSound::RedAlert);
             }
@@ -275,12 +277,12 @@ mod tests {
     }
 
     #[test]
-    fn a_dying_player_hears_no_alert_and_the_threat_is_spent() {
+    fn the_red_alert_is_silent_while_the_pod_counts_down() {
         let mut session = threatened(&catalog());
-        session.condition = Condition::Dying { ticks_left: 500 };
+        session.pod = Some(crate::POD_TICKS);
         assert_eq!(alerts_over(&mut session, 60), 0);
         assert_eq!(session.red_alert_icon(), None);
-        session.condition = Condition::Intact;
+        session.pod = None;
         assert_eq!(alerts_over(&mut session, 120), 0, "the edge is spent");
     }
 
@@ -378,6 +380,17 @@ mod tests {
         let blink = session.red_alert;
         again(&mut session);
         assert_eq!(session.red_alert, blink);
+    }
+
+    #[test]
+    fn a_dying_player_out_of_the_pod_hears_the_red_alert() {
+        let mut session = threatened(&catalog());
+        session.condition = Condition::Dying {
+            ticks_left: 500,
+            starting: false,
+        };
+        assert_eq!(alerts_over(&mut session, 60), 1);
+        assert_eq!(session.red_alert_icon(), Some(AlertIcon::Red));
     }
 
     #[test]

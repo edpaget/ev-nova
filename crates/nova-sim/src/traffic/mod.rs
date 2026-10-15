@@ -348,6 +348,20 @@ impl Traffic {
         strikes: &[Strike],
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.tick_holding(behaviour, world, strikes, &BTreeSet::new(), chance);
+    }
+
+    /// Advances the traffic one tick as [`Traffic::tick_in`] does, but for
+    /// the NPCs in `still`, which decide, aim and cloak as the others do
+    /// and keep their place: none of them moves, lands or jumps out.
+    pub fn tick_holding(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        world: World,
+        strikes: &[Strike],
+        still: &BTreeSet<NpcId>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         let mut draw = PersonDraw {
             world: world.persons,
             here: self.person_names(),
@@ -405,7 +419,7 @@ impl Traffic {
                 npc.target = target;
             }
         }
-        self.fly(&world, true);
+        self.fly(&world, true, still);
         self.ticks += 1;
     }
 
@@ -415,15 +429,18 @@ impl Traffic {
     /// cloak thinks, as `_AIHandleCloaking` is the AI's. Nothing else
     /// runs, as the arrivals (`_EnterMoreShips`), the escort-strength
     /// timer, the answers to strikes and the decisions (`_AIDispatch`)
-    /// are the advance pass's alone, and the AI timer does not move.
+    /// are the advance pass's alone, and the AI timer does not move. No
+    /// NPC is held still, as the second pass stands still once the jump
+    /// that holds them has begun.
     pub fn move_in(&mut self, world: World) {
-        self.fly(&world, false);
+        self.fly(&world, false, &BTreeSet::new());
     }
 
     /// Steps 5 to 7 of a tick in `world` (see the module docs): every
     /// NPC's cloak, thinking when `think`, then the autopilot, a flight
-    /// step and the departures.
-    fn fly(&mut self, world: &World, think: bool) {
+    /// step and the departures, but for the NPCs in `still`, which keep
+    /// their place.
+    fn fly(&mut self, world: &World, think: bool, still: &BTreeSet<NpcId>) {
         let states: Vec<(NpcId, ShipState)> =
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
@@ -447,6 +464,9 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
+                if still.contains(&npc.id) {
+                    return Outcome::Flying;
+                }
                 autopilot::fly(npc, world.sites, other.as_ref(), speeds)
             })
             .collect();
@@ -552,9 +572,12 @@ impl Traffic {
         self.add(fleet, world.persons.grudges);
     }
 
-    /// Each flying, intact NPC answers each of `strikes` in `world`, as
-    /// `behaviour` says, all against the NPCs as they were before.
+    /// Each flying, intact NPC answers each of `strikes` in `world` that
+    /// provokes ([`Strike::provokes`]: not a death shockwave, which skips
+    /// `_DamageShip`'s reaction block @0x3b44d), as `behaviour` says, all
+    /// against the NPCs as they were before.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
+        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.provokes).collect();
         if strikes.is_empty() {
             return;
         }
@@ -735,7 +758,8 @@ impl Traffic {
     /// Adds `ships`, numbering each and pointing each escort at its lead; a
     /// person flies its fitted ship, holding a grudge when `grudges` say;
     /// a ship set up derelict ([`NewShip::derelict`]) starts disabled, its
-    /// shield gone and its armour cut ([`derelict_armor`]).
+    /// shield gone and its armour cut ([`derelict_armor`]); a ship set up
+    /// held ([`NewShip::held`]) starts holding ([`Goal::Hold`]).
     fn add(&mut self, ships: Vec<NewShip>, grudges: &BTreeSet<PersonId>) {
         let first = self.next_id;
         for ship in ships {
@@ -750,7 +774,7 @@ impl Traffic {
             let mut condition = person.map_or(Condition::Intact, |person| person.condition);
             if ship.derelict {
                 reserves.shield.now = 0.0;
-                reserves.armor.now = derelict_armor(kind.stats.armor, kind.hull.tough);
+                reserves.armor.now = derelict_armor(kind.base_armor, kind.hull.tough);
                 condition = Condition::Disabled;
             }
             let traits = person
@@ -784,6 +808,8 @@ impl Traffic {
                 },
                 goal: if hunts {
                     Goal::Attack(ShipRef::Player)
+                } else if ship.held {
+                    Goal::Hold
                 } else {
                     Goal::Idle
                 },
@@ -797,7 +823,7 @@ impl Traffic {
                 aggression: ship.aggression,
                 inspected: None,
                 booty: ship.booty,
-                boarded: false,
+                boarded: ship.boarded,
                 info_types: ship.info_types,
                 spared: false,
                 assisting: 0,
@@ -929,6 +955,7 @@ mod tests {
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
                     self_repair: false,
+                    base_armor: 45.0,
                 },
             )]),
             ..SpawnTable::default()
@@ -1135,6 +1162,44 @@ mod tests {
             traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
             assert_eq!(behaviour.take(), [NpcId(0), NpcId(1), NpcId(2)]);
         }
+    }
+
+    #[test]
+    fn the_npcs_held_still_decide_and_keep_their_place_while_the_rest_fly() {
+        let mut traffic = populated(3, 1);
+        for npc in &mut traffic.npcs {
+            npc.state.velocity = Vec2::new(1.0, 0.0);
+            npc.goal = Goal::JumpOut;
+        }
+        let before: Vec<ShipState> = traffic.npcs().iter().map(|npc| npc.state).collect();
+        let behaviour = Recording::deciding(Goal::JumpOut);
+        let still = BTreeSet::from([NpcId(0), NpcId(2)]);
+        let sites = [];
+        for _ in 0..3 {
+            traffic.tick_holding(
+                &behaviour,
+                World::new(&sites),
+                &[],
+                &still,
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(
+                behaviour.take(),
+                [NpcId(0), NpcId(1), NpcId(2)],
+                "all decide"
+            );
+        }
+        let after: Vec<ShipState> = traffic.npcs().iter().map(|npc| npc.state).collect();
+        assert_eq!((after[0], after[2]), (before[0], before[2]), "held still");
+        assert_ne!(after[1], before[1], "flies");
+        traffic.tick_holding(
+            &behaviour,
+            World::new(&sites),
+            &[],
+            &BTreeSet::new(),
+            &mut Draws::of(&[]),
+        );
+        assert_ne!(traffic.npcs()[0].state, before[0], "let go");
     }
 
     #[test]
@@ -1434,9 +1499,19 @@ mod tests {
         assert_eq!(behaviour.take(), [], "no decisions");
         assert_eq!(traffic.departed(), []);
         assert_eq!(traffic.npcs().len(), 2);
-        assert_eq!(traffic.npcs()[0].state.position, Vec2::new(1.0, 0.0));
+        // Each tick slows the drift by the drag before it moves.
+        let mut expected = Vec2::ZERO;
+        let mut velocity = Vec2::new(0.25, 0.0);
+        for _ in 0..4 {
+            velocity = velocity * crate::flight::DISABLED_DRAG;
+            expected = expected + velocity;
+        }
+        assert_eq!(traffic.npcs()[0].state.position, expected);
         assert_eq!(traffic.npcs()[1].goal, Goal::JumpOut);
-        traffic.npcs_mut()[0].condition = Condition::Dying { ticks_left: 2 };
+        traffic.npcs_mut()[0].condition = Condition::Dying {
+            ticks_left: 2,
+            starting: false,
+        };
         traffic.tick(&behaviour, &sites, &mut Draws::of(&[]));
         assert_eq!(behaviour.take(), []);
     }
@@ -1847,6 +1922,7 @@ mod tests {
             by: ShipRef::Player,
             damage,
             downed: None,
+            provokes: true,
         }
     }
 
@@ -1873,6 +1949,34 @@ mod tests {
         );
         assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
         assert_eq!(traffic.npcs()[1].provoked, 4.0, "kept while it fights");
+    }
+
+    #[test]
+    fn a_strike_that_provokes_nothing_is_answered_by_no_one() {
+        let mut traffic = populated(2, 1);
+        let fighting = Fighting::deciding(Goal::Idle);
+        let shockwave = Strike {
+            provokes: false,
+            ..struck(1, 4.0)
+        };
+        traffic.tick_in(
+            &fighting,
+            World::new(&[]),
+            &[shockwave, struck(0, 2.0)],
+            &mut Draws::of(&[]),
+        );
+        let reacted: Vec<String> = fighting
+            .log
+            .borrow()
+            .iter()
+            .filter(|line| line.starts_with("react"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            reacted,
+            ["react 0 Npc(NpcId(0))", "react 1 Npc(NpcId(0))"],
+            "only the attack is answered"
+        );
     }
 
     #[test]
@@ -2097,6 +2201,19 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(reacted, ["react 0 Npc(NpcId(0))"]);
+    }
+
+    #[test]
+    fn a_disabled_npc_drags_once_per_traffic_tick() {
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].condition = Condition::Disabled;
+        traffic.npcs[1].state.velocity = Vec2::new(1.0, -2.0);
+        let idle = Fighting::deciding(Goal::Idle);
+        traffic.tick_in(&idle, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs()[1].state.velocity,
+            Vec2::new(1.0, -2.0) * crate::flight::DISABLED_DRAG
+        );
     }
 
     #[test]
@@ -2584,6 +2701,8 @@ mod tests {
                 formation: None,
             }),
             derelict: false,
+            held: false,
+            boarded: false,
             cloaked: false,
             aux: None,
         }
@@ -2661,6 +2780,37 @@ mod tests {
             assert_eq!(npcs[1].condition, Condition::Intact);
             assert_eq!(npcs[1].reserves, npcs[1].stats.full());
         }
+    }
+
+    #[test]
+    fn a_ship_set_up_boarded_is_added_boarded() {
+        let mut traffic = Traffic::new();
+        traffic.enter_with(table(0), World::new(&[]), Vec::new(), &mut Draws::of(&[]));
+        traffic.bring_in(vec![
+            NewShip {
+                derelict: true,
+                boarded: true,
+                ..mission_ship(-1, 0.0)
+            },
+            mission_ship(-1, 1.0),
+        ]);
+        let boarded: Vec<bool> = traffic.npcs().iter().map(|npc| npc.boarded).collect();
+        assert_eq!(boarded, [true, false]);
+    }
+
+    #[test]
+    fn a_held_ship_is_brought_in_holding() {
+        let mut traffic = Traffic::new();
+        traffic.enter_with(table(0), World::new(&[]), Vec::new(), &mut Draws::of(&[]));
+        traffic.bring_in(vec![
+            NewShip {
+                held: true,
+                ..mission_ship(-1, 0.0)
+            },
+            mission_ship(-1, 1.0),
+        ]);
+        let goals: Vec<Goal> = traffic.npcs().iter().map(|npc| npc.goal).collect();
+        assert_eq!(goals, [Goal::Hold, Goal::Idle]);
     }
 
     // Cloaks.

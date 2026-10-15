@@ -38,9 +38,13 @@
 //!   and boxes among them (@0x444d2-0x44513). So here the player's part of
 //!   [`Session::tick`] runs again on that frame, then the traffic's
 //!   motion ([`Traffic::move_in`](crate::traffic::Traffic::move_in)) with
-//!   its departures, fighters docking and targets lost, then the fight
-//!   ([`GamePass::Again`]) with all that follows from its hits. A due frame
-//!   therefore steps the junk and the hints twice, as the original does.
+//!   its departures, fighters docking and targets lost, then
+//!   `_HandlePlayer`'s sabotage clock and eject check (see the `sabotage`
+//!   and `eject` modules), then the fight ([`GamePass::Again`]) with all
+//!   that follows from its hits. A due frame therefore steps the junk and
+//!   the hints twice, as the original does, and the sabotage clock, the
+//!   escape pod's countdown, the breakup's countdown and its klaxon run
+//!   on both passes too.
 //! - On the advance pass alone (`arg == 0` jumps from @0x4402a to
 //!   @0x44350): `_HandleStatus`, `_MissionHandler`, `_HandleVoiceSound`,
 //!   `_HandleComm`, `_CalculateTargetedDamage`, `_EnterMoreShips` (the
@@ -83,7 +87,10 @@ impl Session {
     /// caller runs it after the advance pass's calls ([`Session::tick`]
     /// to [`Session::tick_combat`]) while [`Session::double_time`] is on.
     /// Landed, or once a jump has begun, it does nothing, as the advance
-    /// pass's calls stand still; a jump that begins on it stops it there.
+    /// pass's calls stand still; a jump that begins on it stops it there,
+    /// and so does the escape pod's countdown running out on it, the
+    /// rescue then due ([`Session::rescue_if_due`], which its caller asks
+    /// after this pass as after the advance pass's tick).
     pub fn tick_again(
         &mut self,
         controls: Controls,
@@ -94,10 +101,11 @@ impl Session {
             return;
         }
         self.fly_player(self.pass_frame, controls, GamePass::Again);
-        if self.jumping().is_some() {
+        if self.jumping().is_some() || self.rescue_due {
             return;
         }
         self.move_traffic_again();
+        self.before_fight(rules, &mut &mut *chance);
         self.fight(GamePass::Again, rules, chance);
     }
 

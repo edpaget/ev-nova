@@ -7,8 +7,9 @@
 //! finds a threat after one that found none goes on (@0x68cc9-0x68cce),
 //! so the alert is edge-triggered and re-arms only on a check that finds
 //! no threat; a threat that comes and goes between two checks is never
-//! seen. While the player is dying (its countdown +0xc908 above 0,
-//! @0x68cd3-0x68cdb) nothing more happens, and the edge is spent. Else
+//! seen. While the player is in the escape pod (its countdown +0xc908
+//! above 0, @0x68cd3-0x68cdb) nothing more happens, and the edge is spent.
+//! A dying player out of the pod is not held back. Else
 //! `snd ` 370 plays (@0x68cdd-0x68cff), and, only when the player's
 //! `Volume` preference is 1 or less (@0x68d04-0x68d15; see
 //! [`RuleKey::AlertBlink`](crate::RuleKey::AlertBlink)), the blink starts
@@ -102,11 +103,11 @@ pub struct RedAlert {
 impl RedAlert {
     /// One threat check, on a due frame ([`alert_check_due`]): whether the
     /// player is `threatened` now. It alerts, giving `true`, only when the
-    /// last check found no threat and the player is not `dying`; and then
-    /// starts the blink when it `blinks`.
-    pub fn check(&mut self, threatened: bool, dying: bool, blinks: bool) -> bool {
+    /// last check found no threat and the escape pod is not counting down
+    /// (`pod_running`); and then starts the blink when it `blinks`.
+    pub fn check(&mut self, threatened: bool, pod_running: bool, blinks: bool) -> bool {
         let prev = std::mem::replace(&mut self.threatened, threatened);
-        if !threatened || prev || dying {
+        if !threatened || prev || pod_running {
             return false;
         }
         if blinks {
@@ -245,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dying_player_hears_no_alert_and_the_threat_is_spent() {
+    fn a_running_pod_gives_no_alert_and_the_threat_is_spent() {
         let mut alert = RedAlert::default();
         assert!(!alert.check(true, true, true));
         assert_eq!(alert.steps, 0);

@@ -8,6 +8,8 @@
 //!   and the target's blink on the radar.
 //! - [`catalog`]: the [`ShipSprites`] port, the player ship's sprite
 //!   sheet, and the [`StatusBars`] port, the `ïntf` status bar layouts.
+//! - [`cursor`]: the mouse cursor sprite, animating over what the player
+//!   can target.
 //! - [`data`]: the ports' adapters over `nova_data`'s `GameData`.
 //! - [`effects`]: the fight's explosions, debris and sounds, from the
 //!   session's combat events.
@@ -35,6 +37,7 @@ pub mod boxes;
 pub mod brackets;
 pub mod cadence;
 pub mod catalog;
+pub mod cursor;
 pub mod data;
 pub mod effects;
 pub mod escorts;

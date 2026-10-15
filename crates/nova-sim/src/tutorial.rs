@@ -12,8 +12,9 @@
 //! - A take-off from a pilot at 2 or below sets −1, and above 2 greets
 //!   instead ([`Tutorial::take_off`], `_PlayerLandOnStellar`
 //!   @0x635e8-0x63745).
-//! - The jump beginning (`_HandlePlayer` @0x6b603) and the hyperspace
-//!   arrival (@0x6c002) set [`Tutorial::SEASONED`] ([`Tutorial::jumped`]).
+//! - The jump's warp stage beginning, as the ship stops braking
+//!   (`_HandlePlayer` @0x6b603), and the hyperspace arrival (@0x6c002) set
+//!   [`Tutorial::SEASONED`] ([`Tutorial::jumped`]).
 //! - The hint block moves it through −2, 0, 1 and 2 ([`Tutorial::check`]).
 //!
 //! A newbie is a pilot whose flag is 2 or below ([`Tutorial::is_newbie`],

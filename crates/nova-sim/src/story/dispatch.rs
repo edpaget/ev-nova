@@ -163,9 +163,33 @@ pub(crate) fn settle(stage: &mut dyn Stage, reentry: Reentry) -> u32 {
 /// subscription runs, so one whose subscriptions all hold back costs
 /// nothing, as one with none does; one the budget refuses is dropped,
 /// none of its subscriptions run.
+///
+/// A `Landed` event walks live instead of over a snapshot: after each
+/// subscription is considered it asks [`Stage::matching`] again and takes
+/// the first id that sorts after the last one considered. One registered
+/// mid-dispatch runs in this dispatch when it sorts after the cursor and
+/// waits for the next landing when it doesn't. This mirrors
+/// `_MissionLandCheck` (@0xa19f7-0xa1aec) reading each slot's active flag
+/// as it reaches that slot. Other events keep the snapshot: their loops
+/// in the original haven't been read for this.
 fn dispatch(stage: &mut dyn Stage, event: &StoryEvent, reentry: Reentry, budget: &mut Budget) {
     let mut spent = false;
-    for id in stage.matching(event) {
+    let live = matches!(event, StoryEvent::Landed { .. });
+    let mut snapshot = stage.matching(event).into_iter();
+    let mut cursor: Option<SubscriptionId> = None;
+    loop {
+        let next = if live {
+            stage
+                .matching(event)
+                .into_iter()
+                .find(|&id| cursor.is_none_or(|last| id > last))
+        } else {
+            snapshot.next()
+        };
+        let Some(id) = next else {
+            return;
+        };
+        cursor = Some(id);
         let Some(sub) = stage.subscription(id) else {
             continue;
         };
@@ -664,7 +688,34 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_skips_one_unregistered_and_one_registered_waits_for_the_next_event() {
+    fn other_events_keep_the_snapshot_and_a_registration_waits_for_the_next_event() {
+        let any = EventFilter::Any(StoryEventKind::Explored);
+        let e1 = StoryEvent::Explored {
+            system: SystemId(131),
+        };
+        for reentry in [Reentry::Nested, Reentry::Queued] {
+            let mut play = Play::default();
+            play.sub(1, any, "", "b1").sub(3, any, "", "b3");
+            play.effect_unregisters.insert(id(1, 0), id(3, 0));
+            play.effect_registers.insert(
+                id(1, 0),
+                Subscription::new(id(2, 0), any, Script::parse("b2")),
+            );
+            play.settle(reentry, &[e1]);
+            assert_eq!(play.log, played(&["effect 1", "b1"]), "{reentry:?}");
+            play.log.clear();
+            play.effect_registers.clear();
+            play.settle(reentry, &[e1]);
+            assert_eq!(
+                play.log,
+                played(&["effect 1", "b1", "effect 2", "b2"]),
+                "{reentry:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_landing_runs_a_subscription_registered_mid_dispatch_that_sorts_after_the_one_running() {
         let any = EventFilter::Any(StoryEventKind::Landed);
         for reentry in [Reentry::Nested, Reentry::Queued] {
             let mut play = Play::default();
@@ -675,13 +726,36 @@ mod tests {
                 Subscription::new(id(2, 0), any, Script::parse("b2")),
             );
             play.settle(reentry, &[E1]);
-            assert_eq!(play.log, played(&["effect 1", "b1"]), "{reentry:?}");
+            assert_eq!(
+                play.log,
+                played(&["effect 1", "b1", "effect 2", "b2"]),
+                "{reentry:?}: 2 runs, 3 dropped out"
+            );
+        }
+    }
+
+    #[test]
+    fn a_landing_leaves_one_registered_mid_dispatch_that_sorts_before_for_the_next_landing() {
+        let any = EventFilter::Any(StoryEventKind::Landed);
+        for reentry in [Reentry::Nested, Reentry::Queued] {
+            let mut play = Play::default();
+            play.sub(2, any, "", "b2").sub(3, any, "", "b3");
+            play.effect_registers.insert(
+                id(2, 0),
+                Subscription::new(id(1, 0), any, Script::parse("b1")),
+            );
+            play.settle(reentry, &[E1]);
+            assert_eq!(
+                play.log,
+                played(&["effect 2", "b2", "effect 3", "b3"]),
+                "{reentry:?}"
+            );
             play.log.clear();
             play.effect_registers.clear();
             play.settle(reentry, &[E1]);
             assert_eq!(
                 play.log,
-                played(&["effect 1", "b1", "effect 2", "b2"]),
+                played(&["effect 1", "b1", "effect 2", "b2", "effect 3", "b3"]),
                 "{reentry:?}"
             );
         }

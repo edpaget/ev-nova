@@ -1363,6 +1363,9 @@ impl Combatant {
             condition: &mut self.condition,
             held_disabled: false,
             cloaked: false,
+            class_speed: 0.0,
+            top_speed: 0.0,
+            jumping: false,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
         }

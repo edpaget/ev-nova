@@ -26,7 +26,9 @@
 //!   it attacks the player.
 //! - **Release**: the player's escort leaves the fleet once the channel
 //!   closes ([`Session::hang_up`]), as the original's dialog does when it
-//!   closes (@0x96852): its AI type its `InherentAI`, of no government
+//!   closes (@0x96852), having taken its share of the fleet's cargo and
+//!   reset as it went (see the `escorts` module): its AI type its
+//!   `InherentAI`, of no government
 //!   still, it leaves the system (`_AIMakeShipLeave`), jumping out with a
 //!   jump's fuel, or else deciding as its idle block does. A save is due.
 //!   The player's escort is hailed whatever its ship type's government
@@ -824,14 +826,21 @@ mod tests {
         let mut landed = Box::new(targeting(&catalog));
         landed.landed = Some(StellarId(128));
         let mut jumping = Box::new(targeting(&catalog));
-        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        jumping.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
         let mut braking = Box::new(targeting(&catalog));
         braking.jump = Some(crate::session::Jump::PreJump {
             to: SystemId(131),
             bearing: None,
+            warp: None,
         });
         let mut dying = Box::new(targeting(&catalog));
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let mut destroyed = Box::new(targeting(&catalog));
         destroyed.condition = Condition::Destroyed;
         for mut session in [untargeted, landed, jumping, braking, dying, destroyed] {
@@ -1160,6 +1169,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 5.0,
             downed: None,
+            provokes: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert_eq!(npc.goal, Goal::Flee(ShipRef::Player), "hit, it flees");
@@ -1746,7 +1756,10 @@ mod tests {
         let mut landed = helped(&catalog, Help::Refuel, 0.0);
         landed.landed = Some(StellarId(128));
         let mut jumping = helped(&catalog, Help::Refuel, 0.0);
-        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        jumping.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
         let mut disabled = helped(&catalog, Help::Refuel, 0.0);
         npc(&mut disabled).condition = Condition::Disabled;
         // One at a time: three sessions make too large an array.
@@ -1773,6 +1786,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 5.0,
             downed: None,
+            provokes: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert!(!matches!(npc.goal, Goal::Assist(_)), "{:?}", npc.goal);
@@ -1935,6 +1949,62 @@ mod tests {
         assert_eq!(released.target, None);
         assert_eq!(released.govt, None);
         assert!(session.take_save_due());
+    }
+
+    /// Releases the escort [`escorting`] leads, by `source` of
+    /// `ReleaseCargoShare`, holding 30 food and 8 tons of mission cargo,
+    /// its latches cleared.
+    fn released(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+        use crate::market::Good;
+        let mut session = escorting(catalog).with_rules(
+            crate::rulebook::Rulebook::default()
+                .with_override(crate::rulebook::RuleKey::ReleaseCargoShare, source),
+        );
+        session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 8));
+        crate::session::precalced::tests::convicted(&mut session);
+        hail(&mut session, catalog);
+        session.answer(0, catalog, &HailOptions::default(), &mut Draws::of(&[]));
+        session.hang_up();
+        session
+    }
+
+    #[test]
+    fn a_released_trader_takes_its_share_and_resets_still_in_the_fleet() {
+        use crate::market::Good;
+        use crate::scan::Latches;
+        let catalog = hailable();
+        for source in RuleSource::ALL {
+            let session = released(&catalog, source);
+            assert_eq!(session.pilot().escorts(), [], "{source:?}");
+            assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}: @0x96864");
+            assert_eq!(
+                session.pilot().held(Good::Commodity(0)),
+                15,
+                "{source:?}: 20 of 40, then no trim with it still in the fleet"
+            );
+        }
+    }
+
+    #[test]
+    fn a_released_warship_takes_a_share_by_the_engine_and_none_by_the_other_reading() {
+        use crate::market::Good;
+        use crate::scan::Latches;
+        let mut catalog = hailable();
+        catalog.ship_records[0].inherent_ai = 4;
+        let session = released(&catalog, RuleSource::Engine);
+        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(
+            session.pilot().held(Good::Commodity(0)),
+            0,
+            "its 20 over the player's 20: everything"
+        );
+        let session = released(&catalog, RuleSource::Bible);
+        assert_ne!(session.scan_latches, Latches::ARMED, "no call");
+        assert_eq!(session.pilot().held(Good::Commodity(0)), 30);
     }
 
     #[test]

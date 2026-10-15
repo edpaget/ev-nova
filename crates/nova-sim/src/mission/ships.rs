@@ -3,7 +3,7 @@
 //! state its slot keeps of them ([`SpecialShips`]). How they spawn is the
 //! [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships".
 
-use crate::catalog::{CommCatalog, GovtId, MissionShip, ShipId, SystemId};
+use crate::catalog::{CommCatalog, DudeId, GovtId, MissionShip, ShipId, SystemId};
 use crate::chance::Chance;
 use crate::gate::GateKind;
 use crate::govt::{
@@ -76,6 +76,23 @@ pub struct SpecialShips {
     pub disabled: i16,
     /// How many of a chase-off goal's have left the system (+0x30).
     pub chased_off: i16,
+    /// The one ship type they all fly under [`UNIFORM_SHIP_TYPE`]
+    /// (+0x56): drawn from their `düde` at accept, or, for a slot that
+    /// has none (a save from before it was kept, or a `düde` that could
+    /// not be read then), at their next spawn, and a swapped person's
+    /// type ([`swapped_ship_type`]). None without the flag. The original
+    /// keeps the `düde`'s field index, the engine the type: the two
+    /// differ only if the `düde` changed between accept and spawn, which
+    /// the engine does not model.
+    pub uniform_type: Option<ShipId>,
+    /// Whether the moment its goals were met has come: set as its
+    /// `ShipDoneText` is shown and its `OnShipDone` runs, under either
+    /// reading of [`RuleKey::ShipDoneOnce`](crate::RuleKey::ShipDoneOnce),
+    /// and never cleared. Under that rule's other reading a later moment
+    /// shows and runs nothing. The original keeps no such flag. Goals met
+    /// with no moment, as an escort goal's at its return
+    /// ([`met_at_return`](super::goals::met_at_return)), leave it clear.
+    pub ship_done: bool,
 }
 
 impl Default for SpecialShips {
@@ -91,6 +108,8 @@ impl Default for SpecialShips {
             boarded: 0,
             disabled: 0,
             chased_off: 0,
+            uniform_type: None,
+            ship_done: false,
         }
     }
 }
@@ -280,18 +299,23 @@ fn follows_through(kind: GateKind, flags2: u16, chance: &mut dyn Chance) -> bool
     }
 }
 
-/// `Flags`: the mission's ships all fly one ship type
-/// (`_MissionDudeSpawn` @0x3cda7; the type kept for later setups is
-/// rdm:phase/mission-ships-fidelity/phase-1-uniform-ship-type). A person
-/// swapped for the mission's ship hands it its own type through it.
+/// `Flags`: the mission's ships all fly one ship type, drawn at accept
+/// (`_LoadCurrentMissionData` @0xa0b9f-0xa0bfe) and kept on the slot
+/// ([`SpecialShips::uniform_type`]), which every spawn reads
+/// (`_MissionDudeSpawn` @0x3cdea-0x3ce36). A person swapped for the
+/// mission's ship hands it its own type through it, and it becomes the
+/// slot's (@0x3cd7e).
 pub const UNIFORM_SHIP_TYPE: u16 = 0x0800;
 
 /// The ship type a person flying `person_ship`, swapped for the ship of a
 /// mission of `Flags` `flags` whose `düde` lists `dude_ships`, gives that
 /// ship (`_MissionDudeSpawn` @0x3cd90-0x3cdd3): its own type under
-/// [`UNIFORM_SHIP_TYPE`] when the `düde` lists it; else none, and the
-/// type is drawn from the `düde` as for any mission ship. The swap's one
-/// ship left is the other half of the original's test (@0x3cdad).
+/// [`UNIFORM_SHIP_TYPE`] when the `düde` lists it, which the slot then
+/// keeps as its type for later setups (@0x3cd7e); else none, and the
+/// ship flies the slot's type under the flag (its value from accept), or
+/// one drawn from the `düde` as for any mission ship without it. The
+/// swap's one ship left is the other half of the original's test
+/// (@0x3cdad).
 #[must_use]
 pub fn swapped_ship_type(flags: u16, dude_ships: &[ShipId], person_ship: ShipId) -> Option<ShipId> {
     (flags & UNIFORM_SHIP_TYPE != 0 && dude_ships.contains(&person_ship)).then_some(person_ship)
@@ -325,13 +349,22 @@ impl SpecialShips {
     /// their `ShipCount`, and they have all arrived but for a `ShipStart`
     /// of 1 (@0xa0b39-0xa0b46, @0xa1468-0xa147d). None have been
     /// destroyed, boarded, disabled or chased off (@0xa1c35-0xa1c59).
+    /// For a mission of `Flags` `flags` with [`UNIFORM_SHIP_TYPE`] and a
+    /// `ShipDude`, the one type they all fly is `draw_type` of that
+    /// `düde` (@0xa0b9f-0xa0bfe), else none.
     pub fn at_accept(
         ships: &MissionShip,
+        flags: u16,
         facts: &ShipFacts,
         (map, govts): (&StarMap, &Governments),
         strings: &dyn CommCatalog,
+        draw_type: &mut dyn FnMut(DudeId, &mut dyn Chance) -> Option<ShipId>,
         chance: &mut dyn Chance,
     ) -> Self {
+        let uniform_type = ships
+            .dude
+            .filter(|_| flags & UNIFORM_SHIP_TYPE != 0)
+            .and_then(|dude| draw_type(dude, &mut *chance));
         let start = ShipStart::from_code(ships.start);
         let appear = if start.timed() {
             appear_timer(ships, chance)
@@ -356,6 +389,8 @@ impl SpecialShips {
             boarded: 0,
             disabled: 0,
             chased_off: 0,
+            uniform_type,
+            ship_done: false,
         }
     }
 }
@@ -434,19 +469,29 @@ const FOLLOWS_PLAYER: i16 = -6;
 ///   for -3 and -4 with no stellar (@0xa0fec-0xa1010, @0xa1066-0xa106d),
 ///   left out as it changes no state.
 /// - -6: wherever the player is.
-/// - 128-9998: that system.
+/// - 128-2175: that system.
+/// - 2176-9998: nowhere. The original stores `code - 128` (@0xa10ea-0xa10ff),
+///   an index of 0x800 or more that `_FindActiveCoLocatedSystem` (@0x4be8)
+///   never resolves, so the ships never meet the player, even where a
+///   plug-in `sÿst` holds that ID.
 /// - -2 and 9999-31999: one visible system not at the player's place
 ///   (not together with it), of the code's kind, drawn
-///   (`_SelectMissionSystem` @0x9b993); nowhere when there is none. The
-///   original redraws `Rand(2048)` until it hits one, which comes to one
-///   draw over them by ascending ID; where it would draw forever, this is
-///   nowhere.
-/// - -5: one of the systems the player's system links to, drawn
-///   (@0x9ba70-0x9bac7); nowhere with none.
+///   (`_SelectMissionSystem` @0x9b993). The original redraws `Rand(2048)`
+///   until it hits one, which comes to one draw over them by ascending ID.
+/// - -5: one of the player's system's Con slots, drawn, each resolved to
+///   the visible system standing for it ([`StarMap::usable_con_slots`]):
+///   a system listed twice is twice as likely, and a slot naming the
+///   player's own system counts (@0x9ba70-0x9bac7).
 /// - 32000 and above: the player's system, as `_SelectMissionSystem`
 ///   gives back its second argument for a code it does not read
 ///   (@0x9c012).
 /// - Any other code: nowhere.
+///
+/// Two deliberate divergences: where the original redraws forever, this
+/// is nowhere, drawing nothing. That is -5 with no usable Con slot
+/// (@0x9ba84-0x9bac3), and 15000-19999 when only the government's own
+/// systems qualify, which its counting pass counts but its draw pass
+/// rejects (@0x9bc71-0x9bd02). Copying a hang isn't fidelity.
 pub fn select_ship_system(
     code: i16,
     facts: &ShipFacts,
@@ -461,8 +506,9 @@ pub fn select_ship_system(
         -3 => return at(facts.destination.or(facts.return_to)),
         -4 => return at(facts.return_to),
         FOLLOWS_PLAYER => return ShipSystem::FollowsPlayer,
-        -5 => return drawn(map.listed_links(facts.player_system), chance),
-        128..=9998 => return ShipSystem::At(SystemId(code)),
+        -5 => return drawn(&map.usable_con_slots(facts.player_system), chance),
+        128..=2175 => return ShipSystem::At(SystemId(code)),
+        2176..=9998 => return ShipSystem::Nowhere,
         -2 => Kind::Any,
         _ => match GovtCode::of(code) {
             Some(code) => Kind::Relation(code),
@@ -626,7 +672,7 @@ mod tests {
         assert_eq!(resolved(-4, &[]), (at(134), none.clone()), "the return's");
         assert_eq!(resolved(-6, &[]), (ShipSystem::FollowsPlayer, none.clone()));
         assert_eq!(resolved(128, &[]), (at(128), none.clone()));
-        assert_eq!(resolved(9998, &[]), (at(9998), none.clone()), "unbounded");
+        assert_eq!(resolved(2175, &[]), (at(2175), none.clone()));
         for code in [32_000, i16::MAX] {
             assert_eq!(resolved(code, &[]), (at(130), none.clone()), "{code}");
         }
@@ -700,6 +746,71 @@ mod tests {
             resolved_with(-5, &alone, &[]),
             (ShipSystem::Nowhere, vec![])
         );
+    }
+
+    /// What -5 resolves to with the player in 140, drawing `draws`, over
+    /// a map where 140's Con lists `con`: 141 visible, 142 hidden at
+    /// 141's place, 143 hidden alone, 140 the player's own.
+    fn minus_5_from(con: &[i16], draws: &[u32]) -> (ShipSystem, Vec<u32>) {
+        let map = StarMap::with_hidden(
+            vec![
+                system(140, (0.0, 0.0), con, Some(FED)),
+                system(141, (100.0, 0.0), &[], None),
+                system(142, (100.0, 0.0), &[], None),
+                system(143, (200.0, 0.0), &[], None),
+                system(144, (300.0, 0.0), &[], None),
+            ],
+            &[SystemId(142), SystemId(143)].into(),
+            CoLocated::Lowest,
+        );
+        let facts = ShipFacts {
+            player_system: SystemId(140),
+            ..facts()
+        };
+        let mut chance = Draws::of(draws);
+        let resolved = select_ship_system(-5, &facts, &map, &govts(), &mut chance);
+        (resolved, chance.asked)
+    }
+
+    #[test]
+    fn minus_5_weights_a_system_by_how_many_con_slots_list_it() {
+        let con = [141, 144, 141];
+        assert_eq!(minus_5_from(&con, &[0]), (at(141), vec![3]));
+        assert_eq!(minus_5_from(&con, &[1]), (at(144), vec![3]));
+        assert_eq!(minus_5_from(&con, &[2]), (at(141), vec![3]));
+    }
+
+    #[test]
+    fn minus_5_may_draw_the_players_own_system_when_its_con_lists_it() {
+        assert_eq!(minus_5_from(&[144, 140], &[1]), (at(140), vec![2]));
+    }
+
+    #[test]
+    fn minus_5_resolves_a_slot_to_its_stand_in_and_skips_a_slot_with_no_visible_system() {
+        // 142 stands as 141; 143 has none visible; 999 is held by no record.
+        let con = [143, 142, 999, 144];
+        assert_eq!(minus_5_from(&con, &[0]), (at(141), vec![2]));
+        assert_eq!(minus_5_from(&con, &[1]), (at(144), vec![2]));
+    }
+
+    #[test]
+    fn minus_5_with_no_usable_slot_is_nowhere() {
+        assert_eq!(
+            minus_5_from(&[143, 999], &[]),
+            (ShipSystem::Nowhere, vec![])
+        );
+    }
+
+    #[test]
+    fn codes_2176_to_9998_put_the_ships_nowhere_drawing_nothing() {
+        let map = StarMap::new(vec![system(2176, (0.0, 0.0), &[], None)]);
+        for code in [2176, 5000, 9998] {
+            let mut chance = Draws::of(&[]);
+            let resolved = select_ship_system(code, &facts(), &map, &govts(), &mut chance);
+            assert_eq!(resolved, ShipSystem::Nowhere, "{code}");
+            assert!(chance.asked.is_empty(), "{code}");
+        }
+        assert_eq!(resolved(2175, &[]).0, at(2175));
     }
 
     /// Every system `code` may draw, in order, with nothing drawn when
@@ -866,10 +977,63 @@ mod tests {
     }
 
     fn accepted(ships: &MissionShip, draws: &[u32]) -> (SpecialShips, Vec<u32>) {
+        let (accepted, asked, _) = accepted_flagged(ships, 0, draws);
+        (accepted, asked)
+    }
+
+    /// The ships of a mission of `Flags` `flags`, accepted, drawing on
+    /// `draws`, a ship type of 201 drawn from any `düde`: with the draws
+    /// asked and the `düde`s the type was drawn from.
+    fn accepted_flagged(
+        ships: &MissionShip,
+        flags: u16,
+        draws: &[u32],
+    ) -> (SpecialShips, Vec<u32>, Vec<DudeId>) {
         let mut chance = Draws::of(draws);
-        let accepted =
-            SpecialShips::at_accept(ships, &facts(), (&map(), &govts()), &Strings, &mut chance);
-        (accepted, chance.asked)
+        let mut asked = Vec::new();
+        let mut draw = |dude: DudeId, _: &mut dyn Chance| {
+            asked.push(dude);
+            Some(ShipId(201))
+        };
+        let accepted = SpecialShips::at_accept(
+            ships,
+            flags,
+            &facts(),
+            (&map(), &govts()),
+            &Strings,
+            &mut draw,
+            &mut chance,
+        );
+        (accepted, chance.asked, asked)
+    }
+
+    #[test]
+    fn a_0x0800_missions_ships_take_one_type_drawn_at_accept() {
+        let ships = MissionShip {
+            dude: Some(DudeId(150)),
+            ..shipping(0)
+        };
+        let (accepted, _, drawn_from) = accepted_flagged(&ships, 0x0800 | 0x0001, &[1, 2, 0]);
+        assert_eq!(accepted.uniform_type, Some(ShipId(201)));
+        assert_eq!(drawn_from, [DudeId(150)], "once, from its düde");
+    }
+
+    #[test]
+    fn a_mission_without_0x0800_draws_no_type_at_accept() {
+        let ships = MissionShip {
+            dude: Some(DudeId(150)),
+            ..shipping(0)
+        };
+        let (accepted, _, drawn_from) = accepted_flagged(&ships, 0xf7ff, &[1, 2, 0]);
+        assert_eq!(accepted.uniform_type, None);
+        assert!(drawn_from.is_empty());
+    }
+
+    #[test]
+    fn a_0x0800_mission_with_no_dude_draws_none() {
+        let (accepted, _, drawn_from) = accepted_flagged(&shipping(0), 0x0800, &[1, 2, 0]);
+        assert_eq!(accepted.uniform_type, None);
+        assert!(drawn_from.is_empty());
     }
 
     #[test]
@@ -890,6 +1054,8 @@ mod tests {
                     boarded: 0,
                     disabled: 0,
                     chased_off: 0,
+                    uniform_type: None,
+                    ship_done: false,
                 },
                 "{start}"
             );

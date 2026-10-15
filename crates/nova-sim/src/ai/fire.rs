@@ -975,7 +975,12 @@ mod tests {
         let untargetable = |player: &mut PlayerSide| player.untargetable = true;
         assert!(asks_at_player(&npc, 0.0, -100.0, untargetable));
         assert!(trigger_at_npc(&npc, 0.0, -100.0, cloaked).point_defence);
-        let dying = |other: &mut Npc| other.condition = Condition::Dying { ticks_left: 3 };
+        let dying = |other: &mut Npc| {
+            other.condition = Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            }
+        };
         assert!(trigger_at_npc(&npc, 0.0, -100.0, dying).point_defence);
         let arriving = |other: &mut Npc| {
             other.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
@@ -1539,7 +1544,10 @@ mod tests {
         arriving.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[arriving]));
         let mut wreck = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
-        wreck.condition = Condition::Dying { ticks_left: 3 };
+        wreck.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[wreck]));
     }
 

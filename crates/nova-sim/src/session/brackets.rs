@@ -114,10 +114,11 @@ mod tests {
     use crate::catalog::StellarId;
     use crate::cloak::Area;
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::flight::Controls;
     use crate::geometry::Vec2;
-    use crate::landing::LandOutcome;
+    use crate::landing::{LandOutcome, LandingRefusal};
     use crate::market;
     use crate::session::tests::{hub, three_stellars};
     use crate::session::{LandPress, StellarPick};
@@ -216,6 +217,16 @@ mod tests {
             Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
         ));
         assert_eq!(nav_expand(&session), 196.0);
+        assert_eq!(nav_over(&mut session, 5), FLIGHT);
+    }
+
+    #[test]
+    fn a_disabled_players_land_key_selecting_a_stellar_flies_it_in() {
+        let mut session = session(&three_stellars());
+        session.condition = Condition::Disabled;
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.nav_target(), Some(StellarId(128)));
+        assert_eq!(nav_expand(&session), 196.0, "@0x6a8fb-0x6a932");
         assert_eq!(nav_over(&mut session, 5), FLIGHT);
     }
 

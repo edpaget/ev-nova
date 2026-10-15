@@ -42,7 +42,7 @@
 use crate::catalog::{LandingSite, StellarId};
 use crate::gate::HYPERGATE;
 use crate::geometry::Vec2;
-use crate::landing::{Standing, StellarFlags, passes_min_status};
+use crate::landing::{Standing, StellarFlags, open_by_record};
 
 /// The counter of a request made within [`NEAR`] of the stellar
 /// (@0x67a2c), and the least the approach counts up from (@0x648e2).
@@ -127,7 +127,7 @@ pub fn near(offset: Vec2) -> bool {
 #[must_use]
 pub fn approach_clears(site: &LandingSite, standing: Standing, permission: i16) -> bool {
     site.govt.is_none()
-        || passes_min_status(standing.record, site.min_status)
+        || open_by_record(site.min_status, standing.record)
         || site.flags2 & crate::market::DOMINATED != 0
         || permission > REQUESTED_NEAR
         || standing.mission_stellar

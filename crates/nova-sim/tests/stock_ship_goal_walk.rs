@@ -738,7 +738,10 @@ fn probed(script: &Script, bit: Bit) -> Script {
             .map(|tree| tree.ops.clone())
             .unwrap_or_default(),
     );
-    Script::from(Arc::new(Ok(SetExpr { ops })))
+    Script::from(Arc::new(Ok(SetExpr {
+        ops,
+        has_text: true,
+    })))
 }
 
 /// `Ok` when, of the probed hooks, exactly `want` have run in `session`;

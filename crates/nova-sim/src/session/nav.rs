@@ -23,8 +23,11 @@
 //!
 //! **Setters** (mode / selection):
 //!
-//! - Flight start, a new or a loaded pilot (`_ResetPlayer` @0x1d4cd-0x1d4d5):
-//!   off. The mode is not saved.
+//! - Flight start, a new or a loaded pilot, and the escape pod's rescue
+//!   (`_ResetPlayer` @0x1d4cd-0x1d4d5): off. The mode is not saved.
+//! - The eject (@0x6f41b) and a destroyed player's every tick (the dead
+//!   branch, @0x68718): the selection let go, the mode kept, as each
+//!   writes +0x6c alone.
 //! - Nav Off, backquote ([`Session::nav_off`], @0x69a94-0x69b63): off,
 //!   the course kept, with [`SimSound::NavSelected`] on every press
 //!   (@0x69b19).

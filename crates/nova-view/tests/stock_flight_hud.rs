@@ -3,7 +3,7 @@
 //! 767 background against the right edge, a Fed Destroyer shows the
 //! Federation's `ïntf` 130, and every stock `ïntf` reads; and
 //! the combat looks: every weapon the simulation flies, every explosion
-//! type, every cargo box graphic and a ship's target card read, and
+//! type, every cargo box graphic, the cursor and a ship's target card read, and
 //! every looped weapon sound's length; a boarding grant's message reads
 //! the strings it is built from; the cargo area's strings and area read; and the radar draws the
 //! stock stations, hypergates and wormholes as squares. Skips, passing,
@@ -194,6 +194,19 @@ fn every_cargo_box_graphic_reads_its_spin() {
 }
 
 #[test]
+fn the_cursors_sheet_is_spin_650s() {
+    let Some(data) = open() else {
+        return;
+    };
+    let sheet = data.cursor_sheet().expect("spïn 650 reads");
+    assert_eq!(
+        (sheet.image_id, sheet.frames.get()),
+        (8080, 9),
+        "rlëD 8080, 9 frames"
+    );
+}
+
+#[test]
 fn the_looks_the_flight_reads_have_no_problems() {
     let Some(data) = open() else {
         return;
@@ -283,6 +296,33 @@ fn the_dock_requests_and_the_approachs_words_read_their_stock_strings() {
             WELCOME_TO,
         ]
     );
+}
+
+/// The sabotage notices are built from `STR#` 2002 #38-#41, as the stock
+/// strings read.
+#[test]
+fn the_sabotage_notices_read_their_stock_strings() {
+    use nova_view::flight::view::{BOMB_EXPLODED_ONBOARD, HAS_EXPLODED, HAVE_EXPLODED, YOUR};
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(
+        [&strings[37], &strings[38], &strings[39], &strings[40]],
+        [BOMB_EXPLODED_ONBOARD, YOUR, HAS_EXPLODED, HAVE_EXPLODED]
+    );
+}
+
+/// A disabled player's jump collapse says `STR#` 2002 #35, as the stock
+/// string reads.
+#[test]
+fn the_jump_collapse_notice_reads_its_stock_string() {
+    use nova_view::flight::view::JUMP_COLLAPSED;
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(strings[34], JUMP_COLLAPSED);
 }
 
 /// A scan's notices are built from `STR#` 2002 #375-#380, as the stock

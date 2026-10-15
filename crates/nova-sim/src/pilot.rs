@@ -156,6 +156,11 @@ pub struct Pilot {
     /// box (the original's flag at 0x3b5158). A pilot that does not flies
     /// half as fast again (see [`top_speed`](crate::top_speed)).
     pub(crate) strict_play: bool,
+    /// The system the player last jumped from (the original's player
+    /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
+    /// from. None until the pilot's first jump, and kept as a raw ID, so
+    /// one with no record still loads.
+    pub(crate) jumped_from: Option<SystemId>,
     /// The ship's paint; `None` when unpainted.
     pub(crate) paint: Option<Rgb15>,
     /// The once-only story subscriptions that have fired, by their stable
@@ -275,6 +280,7 @@ impl Pilot {
             bits: ControlBitSet::new(),
             gender: Gender::default(),
             strict_play: false,
+            jumped_from: None,
             paint: None,
             story_fired: BTreeSet::new(),
             galaxy: GalaxyOverlay::default(),
@@ -924,6 +930,12 @@ mod tests {
     fn a_new_pilot_does_not_play_strict() {
         let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         assert!(!pilot.strict_play());
+    }
+
+    #[test]
+    fn a_new_pilot_has_jumped_from_no_system() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.jumped_from, None);
     }
 
     #[test]

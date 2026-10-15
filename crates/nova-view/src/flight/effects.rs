@@ -145,8 +145,11 @@ pub struct Dying {
     pub sprite_width: f32,
     /// Its `Explode1`, if any.
     pub explosion: Option<Blast>,
-    /// The ticks before it is destroyed.
+    /// Its death timer: the original's countdown, exploding at 2 or
+    /// below.
     pub ticks_left: u32,
+    /// Whether the timer was set on this tick, the breakup's first.
+    pub starting: bool,
 }
 
 /// The fight's explosions, debris and sounds.
@@ -283,8 +286,8 @@ impl Effects {
     }
 
     /// Advances the explosions and debris a step, and the looped sounds
-    /// playing, then sets off the explosions of the ships `dying`, heard
-    /// from `player`.
+    /// playing, then sets off the explosions of the ships `dying`, but
+    /// for those on their breakup's first tick, heard from `player`.
     pub fn step(&mut self, dying: &[Dying], player: Point, looks: &Looks, chance: &mut dyn Chance) {
         self.playing.retain(|_, left| {
             *left = left.saturating_sub(1);
@@ -307,7 +310,9 @@ impl Effects {
             piece.life = piece.life.saturating_sub(1);
             piece.life > 0
         });
-        for ship in dying {
+        // The original never reaches its puff branch (0x2dd01) on the
+        // frame it sets the timer: both its paths jump past it to 0x2def0.
+        for ship in dying.iter().filter(|ship| !ship.starting) {
             let Some(explosion) = ship.explosion.filter(|_| ship.ticks_left > 2) else {
                 continue;
             };
@@ -473,6 +478,7 @@ mod tests {
                 ),
             ]),
             boxes: BTreeMap::new(),
+            cursor: None,
         }
     }
 
@@ -736,7 +742,23 @@ mod tests {
             sprite_width: 48.0,
             explosion: Some(blast(130, false)),
             ticks_left,
+            starting: false,
         }
+    }
+
+    #[test]
+    fn a_ship_on_its_breakups_first_tick_rolls_no_puff() {
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        let starting = Dying {
+            starting: true,
+            ..dying(30)
+        };
+        effects.step(&[starting], PLAYER, &looks(), &mut chance);
+        assert!(chance.asked.is_empty(), "{:?}", chance.asked);
+        assert_eq!(effects.explosions(), []);
+        effects.step(&[dying(30)], PLAYER, &looks(), &mut chance);
+        assert_eq!(chance.asked, [2], "from the tick after");
     }
 
     #[test]

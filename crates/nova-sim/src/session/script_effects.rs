@@ -264,9 +264,7 @@ impl Session {
     /// matches (see the [`story`](crate::story) module's "Dispatch").
     /// Once nothing is left, the ship goals of each mission accepted in
     /// flight are checked, and what that runs settles in turn (see the
-    /// `mission_ships` module). Then, when a take-off, a gate exit or a
-    /// jump's arrival made it due, the blessing table is refreshed again
-    /// (see the `ranks` module). Last, by the other reading of
+    /// `mission_ships` module). Last, by the other reading of
     /// [`RuleKey::VisibilityRefresh`], when a set expression changed the
     /// pilot since the last settling, the galaxy is refreshed (see the `story` module's
     /// "Visibility and governments"); an idle settling evaluates nothing.
@@ -285,7 +283,6 @@ impl Session {
             self.settle_story(catalog, &mut &mut *chance, &mut settled);
             let due = std::mem::take(&mut self.goal_checks_due);
             if due.is_empty() {
-                self.settle_blessing();
                 if std::mem::take(&mut self.galaxy_stale)
                     && self.rules.source_for(RuleKey::VisibilityRefresh) == RuleSource::Bible
                 {

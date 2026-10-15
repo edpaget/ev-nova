@@ -44,6 +44,9 @@ pub enum Showing {
     NewPilot,
     /// The list of saved pilots, over the main menu.
     OpenPilot,
+    /// A note over the main menu, such as the warning that an opened
+    /// pilot's load had to fall back, before its flight shows.
+    Note,
     /// The plunder dialog, over flight, which it pauses.
     Plunder,
     /// The captured-ship assignment dialog, over flight, which it pauses.
@@ -141,6 +144,12 @@ pub trait Screen {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         Vec::new()
     }
+    /// Whether the system's pointer is hidden over the window, the screen
+    /// drawing its own in its place (flight's cursor sprite). `false` by
+    /// default.
+    fn hides_pointer(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +226,12 @@ mod tests {
         assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_prefs(), None);
         assert_eq!(screen.now_showing(), None);
+    }
+
+    #[test]
+    fn a_screen_leaves_the_system_pointer_shown_by_default() {
+        let screen: &dyn Screen = &Counter::default();
+        assert!(!screen.hides_pointer());
     }
 
     #[test]

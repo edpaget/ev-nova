@@ -254,6 +254,9 @@ pub trait CombatLooks {
     /// The sheet of cargo box graphic `graphic`, `spïn` 500 + `graphic`,
     /// or why it cannot be read.
     fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String>;
+    /// The mouse cursor's sheet, `spïn` 650 (`_InitSprites`
+    /// @0x2147c-0x215eb), or why it cannot be read.
+    fn cursor_sheet(&self) -> Result<EffectSheet, String>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -276,6 +279,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
         (**self).box_sheet(graphic)
+    }
+
+    fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+        (**self).cursor_sheet()
     }
 }
 
@@ -300,6 +307,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
     fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
         (**self).box_sheet(graphic)
     }
+
+    fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+        (**self).cursor_sheet()
+    }
 }
 
 /// The first explosion type, `bööm` 128.
@@ -322,6 +333,9 @@ pub struct Looks {
     /// Each cargo box graphic a box can have: its sheet, or why it cannot
     /// be read.
     pub boxes: BTreeMap<u16, Result<EffectSheet, String>>,
+    /// The mouse cursor's sheet, or why it cannot be read; `None` when it
+    /// was not read.
+    pub cursor: Option<Result<EffectSheet, String>>,
 }
 
 impl Looks {
@@ -340,6 +354,7 @@ impl Looks {
                 .into_iter()
                 .map(|graphic| (graphic, catalog.box_sheet(graphic)))
                 .collect(),
+            cursor: Some(catalog.cursor_sheet()),
         }
     }
 
@@ -347,6 +362,12 @@ impl Looks {
     #[must_use]
     pub fn box_sheet(&self, graphic: u16) -> Option<&EffectSheet> {
         self.boxes.get(&graphic)?.as_ref().ok()
+    }
+
+    /// The mouse cursor's sheet, if it was read.
+    #[must_use]
+    pub fn cursor_sheet(&self) -> Option<&EffectSheet> {
+        self.cursor.as_ref()?.as_ref().ok()
     }
 
     /// Weapon `id`'s look, if it was read.
@@ -364,7 +385,8 @@ impl Looks {
     /// What could not be read, a line each: a look that could not be read
     /// at all, as the catalog says, and a sheet that could not, after its
     /// `wëap`, `bööm` or cargo box graphic ("wëap 140: no spïn 3005");
-    /// the weapons' by ID, then the explosions', then the boxes'.
+    /// the weapons' by ID, then the explosions', then the boxes', then the
+    /// cursor's ("cursor: no spïn 650").
     #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let weapons = self.weapons.iter().filter_map(|(id, look)| match look {
@@ -387,7 +409,11 @@ impl Looks {
                 .err()
                 .map(|reason| format!("cargo box {graphic}: {reason}"))
         });
-        weapons.chain(booms).chain(boxes).collect()
+        let cursor = match &self.cursor {
+            Some(Err(reason)) => Some(format!("cursor: {reason}")),
+            _ => None,
+        };
+        weapons.chain(booms).chain(boxes).chain(cursor).collect()
     }
 }
 
@@ -528,6 +554,13 @@ mod tests {
                 frames: NonZeroU16::MIN,
             })
         }
+
+        fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+            Ok(EffectSheet {
+                image_id: 650,
+                frames: NonZeroU16::MIN,
+            })
+        }
     }
 
     /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130,
@@ -578,15 +611,26 @@ mod tests {
             None,
             "only the jettisoned box's is read"
         );
+        assert_eq!(
+            looks.cursor_sheet(),
+            Some(&EffectSheet {
+                image_id: 650,
+                frames: NonZeroU16::MIN
+            }),
+            "the cursor's"
+        );
         assert_eq!(looks.problems(), Vec::<String>::new());
         let unread = Looks {
             weapons: BTreeMap::from([(WeaponId(1), Err("no".to_owned()))]),
             booms: BTreeMap::from([(BoomId(1), Err("no".to_owned()))]),
             boxes: BTreeMap::from([(0, Err("no".to_owned()))]),
+            cursor: Some(Err("no".to_owned())),
         };
         assert_eq!(unread.weapon(WeaponId(1)), None);
         assert_eq!(unread.boom(BoomId(1)), None);
         assert_eq!(unread.box_sheet(0), None);
+        assert_eq!(unread.cursor_sheet(), None);
+        assert_eq!(Looks::default().cursor_sheet(), None, "not read");
     }
 
     #[test]
@@ -639,6 +683,10 @@ mod tests {
         fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
             Err(format!("no spïn {}", 500 + graphic))
         }
+
+        fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+            Err("no spïn 650".to_owned())
+        }
     }
 
     #[test]
@@ -661,6 +709,7 @@ mod tests {
                 "bööm 128: no spïn 400",
                 "bööm 129: too short",
                 "cargo box 0: no spïn 500",
+                "cursor: no spïn 650",
             ]
         );
     }

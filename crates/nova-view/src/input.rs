@@ -81,6 +81,8 @@ pub enum Input {
     Text(char),
     /// The pointer moved to a point in the logical space.
     PointerMoved(Point),
+    /// The pointer left the window.
+    PointerLeft,
     /// A mouse button went down or up with the pointer at `at`.
     PointerButton {
         /// The button.

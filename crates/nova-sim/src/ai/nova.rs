@@ -295,6 +295,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
+            provokes: true,
         };
         for (npc, mark) in npcs.iter().zip(&marks) {
             let ship = mark.ship();
@@ -364,6 +365,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
+            provokes: true,
         };
         for npc in &npcs {
             assert_eq!(
@@ -569,6 +571,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
+            provokes: true,
         };
         [&npcs[1], &npcs[2]].map(|npc| ai.react(npc, &hit, &around).goal)
     }
@@ -668,6 +671,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 1.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 7.0);
         assert_eq!(
@@ -724,6 +728,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 1.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 9.0);
         assert!(mark.asked.borrow().is_empty(), "not its type's");
@@ -740,7 +745,13 @@ mod tests {
             Goal::Attack(mark.ship())
         );
         assert_eq!(ai.target(&npcs[0], &disabled), Some(mark.ship()));
-        let dying = with_player(&npcs, Condition::Dying { ticks_left: 3 });
+        let dying = with_player(
+            &npcs,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        );
         assert_eq!(
             ai.decide(&npcs[0], &dying, &mut Draws::of(&[])),
             Goal::Attack(mark.ship()),
@@ -770,7 +781,13 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             "with destroying weapons it goes on"
         );
-        let dying = with_player(&armed, Condition::Dying { ticks_left: 3 });
+        let dying = with_player(
+            &armed,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        );
         assert_eq!(
             ai.decide(&armed[0], &dying, &mut Draws::of(&[])),
             Goal::Attack(ShipRef::Player),

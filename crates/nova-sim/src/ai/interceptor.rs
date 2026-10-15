@@ -87,6 +87,11 @@ impl Behaviour for Interceptor {
         {
             return Goal::Inspect(ship);
         }
+        if npc.goal == Goal::Hold {
+            // The patrol and inspect block needs goal 1 or below, or 0x14
+            // (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship holds.
+            return idle(npc, around, chance);
+        }
         inspect(npc, around, chance).unwrap_or_else(|| idle(npc, around, chance))
     }
 
@@ -224,6 +229,16 @@ mod tests {
     }
 
     #[test]
+    fn a_held_interceptor_inspects_nothing() {
+        let mut held = police();
+        held.goal = Goal::Hold;
+        let npcs = [held, ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0)];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[]);
+        assert_eq!(goal, Goal::Hold);
+        assert!(asked.is_empty(), "no pick");
+    }
+
+    #[test]
     fn idle_it_inspects_a_ship_picked_at_random_among_the_others() {
         let mut other_cop = ship(3, POLICE, AiType::Interceptor, 10.0, 0.0);
         other_cop.goal = Goal::Idle;
@@ -341,6 +356,7 @@ mod tests {
             by: P,
             damage: 3.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(
             Interceptor::default()

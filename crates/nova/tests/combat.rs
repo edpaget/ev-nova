@@ -1328,7 +1328,7 @@ fn interface_of(resources: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
     InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
-/// The traffic's setup draws first (the trader 100 above the player,
+/// The load's heading (0, facing up), then the traffic's setup draws (the trader 100 above the player,
 /// facing down), then, for the capture, a self-destruct roll that misses
 /// (99) and a capture roll that succeeds (0) on the draws of 100, and 1 on
 /// every draw of 10 (so the capture's 1 in 10 misses); otherwise the last
@@ -1367,7 +1367,7 @@ impl Boarder {
     /// rolled on a [`BoardChance`], its NPCs idling.
     fn opening(store: &MemoryPilots) -> Self {
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
-            setup: [6, 6, 0, 0, 750, 650, 180, 0].into(),
+            setup: [0, 6, 6, 0, 0, 750, 650, 180, 0].into(),
             of_100: [99, 0].into(),
         }));
         Self::opening_over(
@@ -1588,7 +1588,7 @@ fn boarded_with(
         .save(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"))
         .expect("saved");
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
-        setup: [6, 6, 0, 0, 750, 650, 180, 0].into(),
+        setup: [0, 6, 6, 0, 0, 750, 650, 180, 0].into(),
         of_100: [99, 0].into(),
     }));
     let mut game = Boarder::opening_over(data, interface, store, SharedChance::new(chance), router);
@@ -1959,7 +1959,7 @@ fn hailer(store: &MemoryPilots, dude: (i16, i16, i16), fuel: f32) -> Boarder {
     PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
         .save(&pilot)
         .expect("saved");
-    let (_, chance) = scripted(&[6, 6, 0, 0, 750, 650, 180, 0]);
+    let (_, chance) = scripted(&[0, 6, 6, 0, 0, 750, 650, 180, 0]);
     let mut game = Boarder::opening_over(data, hailing_interface(), store, chance, |screen| screen);
     game.open_pilot();
     // The first frame runs no step; the second's sets the system up.
@@ -2389,9 +2389,9 @@ fn reopened(
     router: impl FnOnce(AppScreen) -> AppScreen,
 ) -> Boarder {
     let setup: &[u32] = if alpha_dudes.is_empty() {
-        &[]
+        &[0]
     } else {
-        &[6, 6, 0, 0, 750, 450, 180, 0]
+        &[0, 6, 6, 0, 0, 750, 450, 180, 0]
     };
     let (_, chance) = scripted(setup);
     Boarder::opening_over(
@@ -2905,9 +2905,9 @@ fn refly(
     router: impl FnOnce(AppScreen) -> AppScreen,
 ) -> Boarder {
     let setup: &[u32] = if alpha_dudes.is_empty() {
-        &[]
+        &[0]
     } else {
-        &[6, 6, 0, 0, 750, 450, 180, 0]
+        &[0, 6, 6, 0, 0, 750, 450, 180, 0]
     };
     let (_, chance) = scripted(setup);
     Boarder::opening_over(

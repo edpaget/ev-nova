@@ -93,6 +93,28 @@ mod tests {
     }
 
     #[test]
+    fn a_provoked_held_wimpy_trader_flees() {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = Goal::Hold;
+        let calm = [trader.clone()];
+        let around_calm = around(&sites, &calm, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().decide(&calm[0], &around_calm, &mut Draws::of(&[])),
+            Goal::Hold
+        );
+        trader.provoked = 10.0;
+        trader.target = Some(n(2));
+        let npcs = [trader, ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Flee(n(2))
+        );
+    }
+
+    #[test]
     fn once_its_attacker_is_gone_it_decides_again() {
         let govts = govts(0, 0);
         let sites = sites();
@@ -146,6 +168,7 @@ mod tests {
             by: n(2),
             damage: 7.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(
             WimpyTrader::default().react(&npcs[0], &strike, &around),

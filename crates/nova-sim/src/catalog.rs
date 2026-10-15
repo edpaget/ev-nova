@@ -17,6 +17,7 @@ use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::warp::SoundLength;
 
 /// A new pilot's start, from the first `chär`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -374,6 +375,10 @@ pub struct ShipRecord {
     /// Its `OnRetire` set expression, parsed: run when the player trades
     /// one in or leaves it for a captured ship.
     pub on_retire: Script,
+    /// Its `Flags`, raw: 0x8000 marks a fighter the player can escape in
+    /// (see [`escape`](crate::escape)), and its jump-speed bits give its
+    /// warp factor ([`warp_factor`](crate::warp::warp_factor)).
+    pub flags: u16,
     /// Its `Flags3`.
     pub flags3: u16,
     /// Its `DispWeight`: higher shows nearer the top.
@@ -1099,6 +1104,9 @@ pub struct HullRecord {
     /// Its `KeyCarried`: the ship a weapon of `Flags2` 0x0080 needs
     /// aboard, raw; none for -1.
     pub key_carried: Option<ShipId>,
+    /// Its `Cost`, raw: -1 hides a ship of the type (see
+    /// [`HullSpec::hidden`](crate::combat::hull::HullSpec::hidden)).
+    pub cost: i32,
 }
 
 /// A government's penalties for crimes against its ships, raw from its
@@ -1333,6 +1341,21 @@ pub trait PilotCatalog {
     fn ranks(&self) -> Vec<RankRecord>;
     /// Every `nëbu` 128-159 that can be read, by ascending ID.
     fn nebulae(&self) -> Vec<NebulaRecord>;
+    /// The length of the warp-up sound, `snd ` 128, which the warp's
+    /// clock reads its duration from
+    /// ([`sound_duration`](crate::warp::sound_duration)); none when there
+    /// is none or it cannot be read, as by default.
+    fn warp_sound(&self) -> Option<SoundLength> {
+        None
+    }
+    /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
+    /// of `Flags` 0x0800 draws its ships' one type from at accept (see
+    /// [`SpecialShips::uniform_type`](crate::mission::SpecialShips::uniform_type)).
+    /// None when it cannot be read, as by default: the type is then drawn
+    /// at the ships' first spawn.
+    fn mission_dude(&self, _id: DudeId) -> Option<DudeRecord> {
+        None
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1443,6 +1466,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn nebulae(&self) -> Vec<NebulaRecord> {
         (**self).nebulae()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        (**self).warp_sound()
+    }
+
+    fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+        (**self).mission_dude(id)
     }
 }
 
@@ -1555,6 +1586,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn nebulae(&self) -> Vec<NebulaRecord> {
         (**self).nebulae()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        (**self).warp_sound()
+    }
+
+    fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+        (**self).mission_dude(id)
     }
 }
 
@@ -1870,6 +1909,25 @@ mod tests {
         fn nebulae(&self) -> Vec<NebulaRecord> {
             vec![crate::testkit::nebula(141, (0, 0, 300, 10), "", "")]
         }
+
+        /// A second at 22050 Hz.
+        fn warp_sound(&self) -> Option<SoundLength> {
+            Some(SoundLength {
+                frames: 22_050,
+                rate: 22_050,
+            })
+        }
+
+        /// Düde 150 flies ship 128.
+        fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+            (id == DudeId(150)).then(|| DudeRecord {
+                ai_type: 2,
+                govt: None,
+                ships: vec![(ShipId(128), 40)],
+                booty: 0,
+                info_types: 0,
+            })
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1908,6 +1966,8 @@ mod tests {
             format!("{:?}", catalog.nebulae()),
             format!("{:?}", catalog.string_patch(1000)),
             format!("{:?}", catalog.buoy_strings()),
+            format!("{:?}", catalog.warp_sound()),
+            format!("{:?}", catalog.mission_dude(DudeId(150))),
         ]
     }
 
@@ -1961,6 +2021,11 @@ mod tests {
         assert!(direct[28].contains("width: 300"), "{direct:?}");
         assert_eq!(direct[29], r#"Text("Patched buoy")"#);
         assert_eq!(direct[30], r#"["First buoy", "Second buoy"]"#);
+        assert_eq!(
+            direct[31], "Some(SoundLength { frames: 22050, rate: 22050 })",
+            "forwarded, not a default"
+        );
+        assert!(direct[32].contains("ShipId(128), 40"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

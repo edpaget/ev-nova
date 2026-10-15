@@ -254,7 +254,10 @@ mod tests {
             leader: Some(NpcId(1)),
             ..npc(2, ShipStats::default())
         };
-        let dying = Condition::Dying { ticks_left: 10 };
+        let dying = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
         for condition in [Condition::Disabled, dying] {
             for ship in [hired(), attacking(hired()), attacking(idle.clone())] {
                 assert_eq!(

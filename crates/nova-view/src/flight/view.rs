@@ -89,7 +89,16 @@
 //! relocation, is laid out; and a move to another stellar of the system
 //! shown draws the ship there.
 //!
-//! The HUD is drawn over everything but a jump's fade: the status bar against the
+//! Once the player's ship has exploded, the scene runs on without it
+//! through the session's hold ([`nova_sim::HOLD_TICKS`]). On the step the
+//! hold expires flight stops stepping, whatever the frame's length, and
+//! the expiry is held for the router ([`FlightView::take_hold_expired`]),
+//! which begins the fade when it is ready ([`FlightView::begin_fade`]):
+//! the scene, frozen, fades to black over [`DEATH_FADE_FOR`], HUD
+//! included, as the original's synchronous `_FadeScreenOut` does, and then
+//! the game is over ([`FlightView::game_over`]).
+//!
+//! The HUD is drawn over everything but a jump's fade and the death's: the status bar against the
 //! right edge, its radar showing the stellars and ships around the ship
 //! as drawn, its bars the session's shield, armour and fuel, and its nav
 //! area the session's nav mode and selection. Without a status bar it
@@ -317,12 +326,14 @@
 //!   ([`FlightView::take_player_info_request`], with
 //!   [`FlightView::player_info`]), letting go of the flight keys, as
 //!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
-//!   stage included, it is refused with `_beepSnd[3]`
-//!   ([`UiSound::PlayerInfoRefused`], @0x7039a-0x703bd). Its Jettison
-//!   jettisons everything ([`FlightView::jettison_all`]). The original
-//!   also refuses it for 15 frames after a take-off and while the ship
-//!   is dying, which the engine does not model
-//!   (crons-news-ranks-fidelity phase 27, player-death phase 4).
+//!   stage included, while the ship breaks up, and for
+//!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+//!   take-off or a gate's exit, the session refuses it with the shared
+//!   refusal beep ([`Session::press_player_info`],
+//!   [`SimSound::Refused`](nova_sim::SimSound::Refused), @0x7039a-0x703bd);
+//!   once the ship has exploded, and in the escape pod, it does nothing
+//!   and says nothing, as no key handler runs there. Its Jettison
+//!   jettisons everything ([`FlightView::jettison_all`]).
 //!   `_DoPlayerInfoDialog`'s own gate (@0x5a013-0x5a064) refuses nothing
 //!   more: its `_screenFaded` holds only while a jump fades out, and
 //!   nothing sets its `_fadePending` (only `_ResetPlayer` writes it, a 0,
@@ -392,6 +403,14 @@
 //!   [`HAIL_QUOTE_TICKS`], the last one said winning.
 //! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
 //!   message line and closes the escort menu.
+//! - While the player's ship breaks up, M, L and I do nothing, saying
+//!   nothing, as `_HandlePlayer`'s breakup-timer gates refuse them
+//!   (0x6a7b3, 0x6a8cb, 0x7044b); every other key is taken, and the
+//!   session's own refusals (a hail, a boarding, a jump) answer as they
+//!   do for a disabled ship. Once it has exploded no key is taken, as the
+//!   original's dead branch (0x6870d-0x6888c) skips every handler. The
+//!   screen asks the session which commands it takes
+//!   ([`Session::takes`]).
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 //!
@@ -419,6 +438,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::Drawn as ShipDrawn;
 use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
@@ -443,14 +463,17 @@ use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
     NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent, StellarIff, TagNames,
-    TutorialHint, VenueOffer,
+    TutorialHint, VenueOffer, ship_layer::SlotSprites,
 };
+use nova_sim::{DrawnBox, DrawnShips};
+use nova_sim::{PlayerCommand, PlayerFate};
 
 use super::alert;
 use super::boxes::{self, BoxShown};
 use super::brackets;
 use super::cadence::{Drawn, HudCadence, retake_target};
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
+use super::cursor::HoverCursor;
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
@@ -464,6 +487,7 @@ use super::target::{self, Tag, TargetPanel};
 use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
+use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::spaceport::bar::MISSION_INFO_KEY;
 use crate::system::camera::{Camera, VIEW_SIZE};
@@ -514,8 +538,8 @@ pub struct FlightOverlays {
 /// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
 /// the abandoned fighters on arrival (@0x6c46d). It is also the time of
 /// the messages the original does not have ([`TAKE_OFF_FIRST`],
-/// [`JUMP_DISABLED`], [`IN_HYPERSPACE`], [`LAND_DISABLED`], [`REPELLED`],
-/// [`NO_STELLARS`] on L) and of the defection notice, which the original
+/// [`JUMP_DISABLED`], [`IN_HYPERSPACE`], [`REPELLED`], [`NO_STELLARS`] on
+/// L) and of the defection notice, which the original
 /// shows in a dialog (`_DoEscortPayment` @0x40301).
 pub const MESSAGE_TICKS: u16 = 240;
 /// A person's hail quote: 420 (0x1a4, `_ShowPersonHailQuote` @0x4464d).
@@ -563,7 +587,9 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
 /// or too fast, [`LANDING_TICKS`] denied or not landable, and
-/// [`MESSAGE_TICKS`] for the engine's own refusals.
+/// [`MESSAGE_TICKS`] for the engine's own refusals. A disabled ship's
+/// refusal shows no message ([`refusal_message`]), so its time is never
+/// used.
 #[must_use]
 pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
     match refusal {
@@ -588,9 +614,10 @@ pub fn assigned_ticks(assigned: Assigned) -> u16 {
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
-/// Command, which the jettison key needs, and the land key, which holds
-/// the dock approach back while it is down.
-const FLIGHT_KEYS: [Key; 10] = [
+/// Command, which the jettison and eject keys need, the eject key, which
+/// works only held with Command, and the land key, which holds the dock
+/// approach back while it is down.
+const FLIGHT_KEYS: [Key; 11] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -601,6 +628,7 @@ const FLIGHT_KEYS: [Key; 10] = [
     Key::Shift,
     Key::Command,
     LAND_KEY,
+    EJECT_KEY,
 ];
 
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
@@ -640,6 +668,10 @@ pub const HAIL_KEY: Key = Key::Char('y');
 /// during a jump too: `_JettisonCargo` (0x3dffd-0x3e3c4) reads no jump
 /// state.
 pub const JETTISON_KEY: Key = Key::Char('k');
+/// The eject key: the original's default for key-preference slot 0x22
+/// (`ejectKey`), keycode 0x07, X, which ejects only held together with
+/// Command (`_HandlePlayer` @0x6f29e-0x6f2c1; see the session's eject).
+pub const EJECT_KEY: Key = Key::Char('x');
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
 pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');
@@ -673,6 +705,34 @@ pub const ESCORT_REPAIRED: &str = "Escort repaired.";
 /// `STR#` 2002 #128: a disabled former fighter did (`_HandleShip`
 /// @0x33b3b).
 pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
+/// `STR#` 2002 #52: the player ejected into an escape ship, whose long
+/// name follows (`_HandlePlayer` @0x6f595-0x6f5a8).
+pub const ESCAPING_IN: &str = "Escaping in";
+/// `STR#` 2002 #38: a sabotage kill outfit went off with none named
+/// (`_HandlePlayer` @0x69645-0x6965e).
+pub const BOMB_EXPLODED_ONBOARD: &str = "A bomb has exploded onboard your ship!";
+/// `STR#` 2002 #35: a disabled player's pre-jump collapsed
+/// (`_HandlePlayer` `_GetIndString` @0x68a04).
+pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
+/// `STR#` 2002 #39: what comes before a sabotage outfit that went off.
+pub const YOUR: &str = "Your";
+/// `STR#` 2002 #40: what follows one sabotage outfit that went off.
+pub const HAS_EXPLODED: &str = "has exploded!";
+/// `STR#` 2002 #41: what follows several.
+pub const HAVE_EXPLODED: &str = "have exploded!";
+
+/// What the message line says as sabotage outfits go off, as
+/// `_HandlePlayer` builds it (@0x6940b-0x69578, @0x69701-0x69871): "Your",
+/// a space, `lc_name` and "has exploded!" for `one`, else `lc_plural`
+/// and "have exploded!".
+#[must_use]
+pub fn exploded_message(one: bool, lc_name: &str, lc_plural: &str) -> String {
+    if one {
+        format!("{YOUR} {lc_name} {HAS_EXPLODED}")
+    } else {
+        format!("{YOUR} {lc_plural} {HAVE_EXPLODED}")
+    }
+}
 
 /// `STR#` 2002 #286: a scan found a mission's cargo and failed it.
 pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
@@ -797,6 +857,21 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
+        SimMessage::JumpCollapsed => JUMP_COLLAPSED,
+        SimMessage::EscapingIn { ship } => {
+            // "Escaping in", a space, the long name and a full stop
+            // (@0x6f5ad-0x6f5f3).
+            let name = session.ship_long_name(*ship).unwrap_or_default();
+            return Some(format!("{ESCAPING_IN} {name}."));
+        }
+        SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
+        SimMessage::Sabotaged {
+            outfit: Some((outfit, one)),
+        }
+        | SimMessage::BombExploded { outfit, one } => {
+            let (lc_name, lc_plural) = session.outfit_names(*outfit).unwrap_or_default();
+            return Some(exploded_message(*one, lc_name, lc_plural));
+        }
         SimMessage::Smuggling {
             scanner,
             ship_name,
@@ -1172,6 +1247,10 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::DeadlineMissed
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
+        | SimMessage::JumpCollapsed
+        | SimMessage::EscapingIn { .. }
+        | SimMessage::Sabotaged { .. }
+        | SimMessage::BombExploded { .. }
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. }
@@ -1238,9 +1317,6 @@ pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
 /// `STR#` 2002 #54 ("Unable to send hail - target ship is entering
 /// hyperspace.").
 pub const IN_HYPERSPACE: &str = "Unable to land - your ship is in hyperspace.";
-/// Not the original's, whose disabled ship takes no keys: worded as
-/// [`IN_HYPERSPACE`] is.
-pub const LAND_DISABLED: &str = "Unable to land - your ship is disabled.";
 
 /// `STR#` 2002 #76.
 pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
@@ -1403,15 +1479,17 @@ pub fn approach_greeting(
 }
 
 /// What the player is told when `refusal` stops a landing: the original's
-/// words for it, for a station or a planet.
+/// words for it, for a station or a planet; nothing for a disabled ship,
+/// which `_HandlePlayerDockRequest` refuses silently (`_IsDisabled`
+/// @0x66af7, the bare epilogue 0x67eef).
 #[must_use]
-pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
+pub fn refusal_message(refusal: &LandingRefusal) -> Option<&'static str> {
     let pick = |station: bool, at_station, on_planet| {
         if station { at_station } else { on_planet }
     };
-    match *refusal {
+    let text = match *refusal {
         LandingRefusal::Jumping => IN_HYPERSPACE,
-        LandingRefusal::Disabled => LAND_DISABLED,
+        LandingRefusal::Disabled => return None,
         LandingRefusal::NoStellars => NO_STELLARS,
         LandingRefusal::TooFar { station, .. } => pick(station, TOO_FAR_STATION, TOO_FAR_PLANET),
         LandingRefusal::NotLandable { station, .. } => {
@@ -1419,7 +1497,8 @@ pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
         }
         LandingRefusal::Denied { station, .. } => pick(station, DOCKING_DENIED, LANDING_DENIED),
         LandingRefusal::TooFast { station, .. } => pick(station, TOO_FAST_STATION, TOO_FAST_PLANET),
-    }
+    };
+    Some(text)
 }
 
 /// Where a ship is drawn `alpha` of the way from `from` to `to`.
@@ -1755,6 +1834,9 @@ pub struct FlightView<C> {
     /// The rest of an arrival's effect, once the ship has arrived: the
     /// fade-in from white, or the white flash. Flight goes on under it.
     fade_in: Option<JumpEffect>,
+    /// The fade to black after the player's death, once begun
+    /// ([`FlightView::begin_fade`]).
+    death_fade: Option<ScreenFade>,
     /// Whether jumps play their white fades, as the Hyperspace Effects
     /// preference says.
     hyperspace_effects: bool,
@@ -1830,6 +1912,8 @@ pub struct FlightView<C> {
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
     /// chance ([`radar::static_frame`]); `None` without.
     radar_static: Option<i16>,
+    /// The mouse cursor sprite (see the `cursor` module).
+    cursor: HoverCursor,
 }
 
 /// A message on the message line.
@@ -1925,6 +2009,14 @@ impl<
         Self::flying(catalog, session)
     }
 
+    /// `pilot`'s flight as [`FlightView::with_pilot`] builds it, its load's
+    /// fallbacks reading `rules` ([`Session::load`]): for a pilot opened
+    /// from a save, whose repair [`FlightView::load_repaired`] reports.
+    pub fn loaded(catalog: C, pilot: Pilot, rules: Rulebook) -> Self {
+        let session = Session::load(&catalog, pilot, &rules);
+        Self::flying(catalog, session)
+    }
+
     /// Begins a new pilot's game as [`Session::begin`] does, on the
     /// flight's chance, and shows on the course map any system it
     /// explored: for a pilot just created, before its first save. A
@@ -1933,6 +2025,16 @@ impl<
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
             self.map.show_explored(session.pilot().explored());
+        }
+    }
+
+    /// Resumes a pilot opened from a save as [`Session::face_on_load`]
+    /// does, on the flight's chance: its ship faces a drawn heading, as
+    /// `_LoadPilotData` faces every pilot it loads (@0x7535b-0x75372). A
+    /// session that failed resumes nothing.
+    pub fn resume(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.face_on_load(&mut self.chance);
         }
     }
 
@@ -1998,6 +2100,7 @@ impl<
             map_open: false,
             jump: None,
             fade_in: None,
+            death_fade: None,
             hyperspace_effects: true,
             sound_prefs: SoundPrefs::default(),
             alert_width,
@@ -2048,6 +2151,7 @@ impl<
             target_scene: None,
             reserves_scene: None,
             radar_static: None,
+            cursor: HoverCursor::default(),
         }
     }
 
@@ -2063,6 +2167,29 @@ impl<
         };
         view.show_destroyed();
         view
+    }
+
+    /// The flight with its ship slots' draw layers and cloned frames
+    /// starting from `slot_sprites`, the history an earlier flight of the
+    /// same run left ([`Session::with_slot_sprites`]).
+    #[must_use]
+    pub fn with_slot_sprites(self, slot_sprites: SlotSprites) -> Self {
+        let mut view = Self {
+            session: self
+                .session
+                .map(|session| session.with_slot_sprites(slot_sprites)),
+            ..self
+        };
+        view.read_npc_sheets();
+        view
+    }
+
+    /// The ship slots' draw-layer and cloned-frame history as the flight
+    /// leaves it ([`Session::slot_sprites`]), or `None` when its session
+    /// never started.
+    #[must_use]
+    pub fn slot_sprites(&self) -> Option<&SlotSprites> {
+        self.session.as_ref().ok().map(Session::slot_sprites)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
@@ -2229,28 +2356,54 @@ impl<
     }
 
     /// What the player info screen shows, as [`Session::player_info`]
-    /// gives it from the screen's catalog; `None` for a session that
-    /// failed.
+    /// gives it from the screen's catalog, changing nothing; `None` for a
+    /// session that failed. An opening of the screen is
+    /// [`FlightView::open_player_info`].
     #[must_use]
     pub fn player_info(&self) -> Option<PlayerInfo> {
         let session = self.session.as_ref().ok()?;
         Some(session.player_info(&self.catalog))
     }
 
-    /// Presses [`PLAYER_INFO_KEY`] outside a jump: asks the router for the
-    /// player info screen, letting go of the flight keys
-    /// (`_HandlePlayer` @0x702bf-0x703c9).
+    /// The player info dialog opens, as [`Session::open_player_info`] has
+    /// it: the session resets first, so the screen it gives shows the
+    /// cargo trimmed; none in a jump or while the ship breaks up, when
+    /// nothing opens, or for a session that failed. The router opens the
+    /// screen on it, from flight and from the spaceport alike.
+    pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
+        let session = self.session.as_mut().ok()?;
+        session.open_player_info(&self.catalog)
+    }
+
+    /// Presses [`PLAYER_INFO_KEY`] outside a jump, its [`PlayerCommand`]
+    /// taken: when the session takes the press too
+    /// ([`Session::press_player_info`]), asks the router for the player
+    /// info screen, letting go of the flight keys (`_HandlePlayer`
+    /// @0x702bf-0x703c9); when it refuses, with its beep, nothing more.
     fn ask_player_info(&mut self) -> ScreenAction {
-        self.pending_player_info = true;
-        self.held.clear();
+        if self.press_player_info() {
+            self.pending_player_info = true;
+            self.held.clear();
+        }
         ScreenAction::None
     }
 
-    /// A press of [`PLAYER_INFO_KEY`] during a jump: outside the map,
-    /// refused with `_beepSnd[3]` (@0x7039a-0x703bd).
+    /// Whether the session takes a press of [`PLAYER_INFO_KEY`]
+    /// ([`Session::press_player_info`], which beeps a refusal); a failed
+    /// session takes it, and the router opens nothing for it.
+    fn press_player_info(&mut self) -> bool {
+        match &mut self.session {
+            Ok(session) => session.press_player_info(),
+            Err(_) => true,
+        }
+    }
+
+    /// A press of [`PLAYER_INFO_KEY`] during a jump: outside the map, the
+    /// session refuses it with its beep ([`Session::press_player_info`],
+    /// @0x702f7, @0x7039a-0x703bd), when the player's fate takes it.
     fn refuse_player_info(&mut self) -> ScreenAction {
-        if !self.map_open {
-            self.ui_sounds.push(UiSound::PlayerInfoRefused);
+        if !self.map_open && self.takes(PlayerCommand::PlayerInfo) {
+            let _ = self.press_player_info();
         }
         ScreenAction::None
     }
@@ -2318,7 +2471,9 @@ impl<
     }
 
     /// Reads the sheet of each ship type the traffic can spawn that has
-    /// not been read yet.
+    /// not been read yet, and of each type a ship here is boxed by
+    /// ([`Session::framed_types`]), such as the stale frames of a hidden
+    /// ship's slot.
     fn read_npc_sheets(&mut self) {
         let Ok(session) = &self.session else {
             return;
@@ -2330,6 +2485,11 @@ impl<
             self.cards
                 .entry(ship)
                 .or_insert_with(|| self.catalog.target_card(ship));
+        }
+        for ship in session.framed_types() {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
         }
         for govt in session.npcs().iter().filter_map(|npc| npc.govt) {
             self.codes
@@ -2422,10 +2582,103 @@ impl<
     }
 
     /// Covers the screen in the arrival's fade-in, then in the jump's
-    /// fade-out, as far as each shows.
+    /// fade-out, then in the death's fade to black, as far as each shows.
     fn draw_fades(&self, list: &mut DrawList) {
         for effect in [&self.fade_in, &self.jump].into_iter().flatten() {
             effect.draw_fade(list);
+        }
+        if let Some(fade) = &self.death_fade {
+            fade.draw(list);
+        }
+    }
+
+    /// Whether the hold after the player's explosion has run out
+    /// ([`Session::hold_expired`]): flight steps no more.
+    fn hold_expired(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::hold_expired)
+    }
+
+    /// Whether the hold after the player's explosion ran out since this
+    /// was last asked, as [`Session::take_hold_expired`] says: the seam
+    /// where the router may show its dialogs over the stopped flight
+    /// before it begins the fade. True once.
+    pub fn take_hold_expired(&mut self) -> bool {
+        self.session.as_mut().is_ok_and(Session::take_hold_expired)
+    }
+
+    /// The escape pod's rescue's `dësc`, once, after the rescue
+    /// ([`Session::take_rescue_desc`]): the router shows it over flight.
+    pub fn take_rescue_desc(&mut self) -> Option<i16> {
+        self.session
+            .as_mut()
+            .ok()
+            .and_then(Session::take_rescue_desc)
+    }
+
+    /// Whether any flight key is held down.
+    #[must_use]
+    pub fn holds_keys(&self) -> bool {
+        !self.held.is_empty()
+    }
+
+    /// The `dësc` IDs a sabotaged player sees as it dies
+    /// ([`Session::sabotage_death_descs`]); none without a session.
+    #[must_use]
+    pub fn sabotage_death_descs(&self) -> Vec<i16> {
+        self.session
+            .as_ref()
+            .map_or_else(|_| Vec::new(), Session::sabotage_death_descs)
+    }
+
+    /// Begins the fade to black after the hold has expired, over
+    /// [`DEATH_FADE_FOR`]; nothing before then ([`Session::begin_fade`]).
+    pub fn begin_fade(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        session.begin_fade();
+        if session.player_fate() == PlayerFate::Fading && self.death_fade.is_none() {
+            self.death_fade = Some(ScreenFade::to_black(DEATH_FADE_FOR));
+        }
+    }
+
+    /// Whether the death's fade is over and play has ended: the router
+    /// returns to the main screen.
+    #[must_use]
+    pub fn game_over(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_ok_and(|session| session.player_fate() == PlayerFate::GameOver)
+    }
+
+    /// Whether the pilot may be saved now, as [`Session::may_save`] says:
+    /// not while the player is dying or dead, nor without a session.
+    #[must_use]
+    pub fn may_save(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::may_save)
+    }
+
+    /// Whether ending play now deletes the pilot, as
+    /// [`Session::deletes_pilot_on_ending_play`] says: a strict-play pilot
+    /// dying outside the escape pod. Never without a session.
+    #[must_use]
+    pub fn deletes_pilot_on_ending_play(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_ok_and(Session::deletes_pilot_on_ending_play)
+    }
+
+    /// Moves the death's fade on by `dt`, and ends play once it is over;
+    /// nothing else moves.
+    fn advance_death_fade(&mut self, dt: Duration) {
+        let Some(fade) = &mut self.death_fade else {
+            return;
+        };
+        fade.advance(dt);
+        if fade.done()
+            && let Ok(session) = &mut self.session
+        {
+            session.end_play();
         }
     }
 
@@ -2489,6 +2742,104 @@ impl<
                 }
             }
         }
+    }
+
+    /// Runs up to `steps` of the session's steps, each only while
+    /// `go_on` holds of the session before it: the ship's tick under the
+    /// keys held, the traffic's, the quotes', the assistance's and the
+    /// fight's, then the effects; in double time, the second pass
+    /// ([`Session::tick_again`]) and the effects again. Then says the comm
+    /// notes, quotes and messages they raised, and reads the sheets of a
+    /// system the session populated afresh. Flight and the warp's lead-in
+    /// under the streak both step this way. The eject chord, the land key
+    /// and double time are held as the keys say, and a pass whose ship
+    /// tick brings the escape pod's rescue ends the stepping there, the
+    /// view laid out afresh where the rescue put the ship.
+    fn run_steps(&mut self, steps: u32, go_on: fn(&Session) -> bool) {
+        let controls = self.controls();
+        let fire = (
+            self.held.contains(&FIRE_KEY),
+            self.held.contains(&SECONDARY_KEY),
+        );
+        let eject = self.takes(PlayerCommand::Eject)
+            && self.held.contains(&Key::Command)
+            && self.held.contains(&EJECT_KEY);
+        let mut notes = Vec::new();
+        let mut quotes = Vec::new();
+        let mut rescued = false;
+        if let Ok(session) = &mut self.session {
+            session.set_play_area(play_area());
+            session.hold_fire(fire.0, fire.1);
+            session.hold_eject(eject);
+            session.set_double_time_key(self.double_time);
+            session.set_land_key(self.held.contains(&LAND_KEY));
+            'steps: for _ in 0..steps {
+                if !go_on(session) {
+                    break;
+                }
+                self.previous = *session.player();
+                self.npc_previous = session
+                    .npcs()
+                    .iter()
+                    .map(|npc| (npc.id, npc.state))
+                    .collect();
+                let rules = Rules {
+                    disable: &*self.disable_rule,
+                    defence: &*self.defence_rule,
+                    law: &*self.law,
+                };
+                for again in [false, true] {
+                    if again && !session.double_time() {
+                        break;
+                    }
+                    if again {
+                        session.tick_again(controls, rules, &mut self.chance);
+                    } else {
+                        session.tick(controls);
+                    }
+                    // The rescue settles on the pass the pod's countdown
+                    // runs out, and stops the stepping so its dësc opens
+                    // before the next: the original's `_HandlePlayer` runs
+                    // it in place of the rest of that pass's player
+                    // handling (@0x68ddd).
+                    if session.rescue_if_due(&self.catalog, &mut self.chance) {
+                        self.previous = *session.player();
+                        rescued = true;
+                        break 'steps;
+                    }
+                    if !again {
+                        session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
+                        session.tick_quotes(&self.catalog, &mut self.chance);
+                        quotes.extend(session.take_quotes());
+                        session.tick_assistance(&*self.disable_rule);
+                        notes.extend(session.take_comm());
+                        session.tick_combat(rules, &mut self.chance);
+                    }
+                    let player = point(session.player().position);
+                    let dying = dying(session, &self.sheet, &self.npc_sheets);
+                    let chance = &mut self.effects_chance;
+                    self.effects.step(&dying, player, &self.looks, chance);
+                    let scene = Scene { player };
+                    for event in session.take_combat_events() {
+                        self.effects.apply(&event, &scene, &self.looks, chance);
+                    }
+                }
+            }
+        }
+        for note in &notes {
+            self.say_for(comm_message(note), MESSAGE_TICKS);
+        }
+        for quote in quotes {
+            self.say_for(quote.text, HAIL_QUOTE_TICKS);
+        }
+        if rescued {
+            // Laid out in the system the rescue took the pod to, from where
+            // it put the ship, before the frame is drawn.
+            self.catch_up();
+        }
+        self.say_messages();
+        // The session may have populated its system afresh.
+        self.read_npc_sheets();
     }
 
     /// Starts the jump's streak, from the current system towards the next,
@@ -2895,8 +3246,10 @@ impl<
                     }
                     _ => None,
                 }
-                .unwrap_or_else(|| refusal_message(&refusal).to_owned());
-                self.say_for(text, landing_refusal_ticks(&refusal));
+                .or_else(|| refusal_message(&refusal).map(str::to_owned));
+                if let Some(text) = text {
+                    self.say_for(text, landing_refusal_ticks(&refusal));
+                }
             }
         }
     }
@@ -3423,6 +3776,12 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// Where the hover cursor is drawn, or `None` while it isn't.
+    #[must_use]
+    pub fn cursor_at(&self) -> Option<Point> {
+        self.cursor.shown_at()
+    }
+
     /// Whether the course map is shown.
     #[must_use]
     pub fn map_open(&self) -> bool {
@@ -3643,6 +4002,14 @@ impl<C> FlightView<C> {
         self.session.as_ref().map_err(String::as_str)
     }
 
+    /// Whether the pilot's load had to fall back for data the save
+    /// references and the catalog lacks ([`Session::load_repaired`]):
+    /// false for a session that failed.
+    #[must_use]
+    pub fn load_repaired(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::load_repaired)
+    }
+
     /// The pilot flying, if the flight started.
     #[must_use]
     pub fn pilot(&self) -> Option<&Pilot> {
@@ -3685,6 +4052,22 @@ impl<C> FlightView<C> {
     pub fn open_outfitter(&mut self) {
         if let Ok(session) = &mut self.session {
             session.open_outfitter();
+        }
+    }
+
+    /// The outfitter closes, as [`Session::close_outfitter`] has it; a
+    /// session that failed has none.
+    pub fn close_outfitter(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.close_outfitter();
+        }
+    }
+
+    /// The bar's hire screen closes, as [`Session::close_hire`] has it; a
+    /// session that failed has no bar.
+    pub fn close_hire(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.close_hire();
         }
     }
 
@@ -3952,6 +4335,71 @@ impl<C> FlightView<C> {
             .collect()
     }
 
+    /// Runs the cursor's `steps` flight steps (see the `cursor` module),
+    /// hovering as the pointer is over something targetable now
+    /// ([`FlightView::hovering`]), once the session's steps have run and
+    /// the ships are where the frame draws them. A key pressed since the
+    /// last step, or a flight key held, fades it. While the jump's streak
+    /// and fade-out hold flight no step runs, and the cursor holds, which
+    /// no player sees under the streak.
+    fn step_cursor(&mut self, steps: u32) {
+        if steps == 0 {
+            return;
+        }
+        let frames = self.looks.cursor_sheet().map(|sheet| sheet.frames);
+        let hovering = self.hovering();
+        let held = !self.held.is_empty();
+        for _ in 0..steps {
+            self.cursor.step(hovering, frames, held);
+        }
+    }
+
+    /// Tracks a flight key `input` presses or lets go of as held.
+    fn track_held(&mut self, input: &Input) {
+        if let Input::Key { key, pressed, .. } = *input
+            && FLIGHT_KEYS.contains(&key)
+        {
+            if pressed {
+                self.held.insert(key);
+            } else {
+                self.held.remove(&key);
+            }
+        }
+    }
+
+    /// What `input` tells the cursor: a pointer move or button press shows
+    /// it where the pointer is, and the pointer leaving the window hides
+    /// it; a key pressed fades it at the next flight step (none runs while
+    /// the map is open, and the M that opened it has faded it already).
+    fn cursor_input(&mut self, input: &Input) {
+        match *input {
+            Input::PointerMoved(at)
+            | Input::PointerButton {
+                pressed: true, at, ..
+            } => {
+                self.cursor.pointer(at);
+            }
+            Input::PointerLeft => self.cursor.left(),
+            Input::Key { pressed: true, .. } => self.cursor.key(),
+            _ => {}
+        }
+    }
+
+    /// Whether the pointer, while the cursor shows, is over something the
+    /// player can target ([`Session::hover`]), the ships boxed where they
+    /// are drawn ([`ViewShips`]).
+    fn hovering(&self) -> bool {
+        let (Ok(session), Some(at)) = (&self.session, self.cursor.shown_at()) else {
+            return false;
+        };
+        let world = self.camera().screen_to_world(at);
+        let ships = ViewShips {
+            view: self,
+            session,
+        };
+        session.hover(Vec2::new(world.x, world.y), &ships).is_some()
+    }
+
     /// Draws the ships, bottom first, in their layers as
     /// [`Session::draw_order`] gives them (see [`nova_sim::ship_layer`]):
     /// the disabled, then the ships the player leads, then the rest, each
@@ -3962,13 +4410,15 @@ impl<C> FlightView<C> {
     fn draw_ships(&self, list: &mut DrawList, camera: &Camera) {
         let player = camera.world_to_screen(self.shown_position());
         let Ok(session) = &self.session else {
-            self.draw_ship(list, player);
+            self.draw_ship(list, player, ShipDrawn::Full);
             return;
         };
         let npcs = self.shown_npcs();
         for ship in session.draw_order() {
             match ship {
-                ShipRef::Player => self.draw_ship(list, player),
+                ShipRef::Player => {
+                    self.draw_ship(list, player, session.player_fate().row().drawn);
+                }
                 ShipRef::Npc(id) => {
                     if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
                         self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
@@ -4067,6 +4517,42 @@ impl<C> FlightView<C> {
             turn,
             reverse: holding(Key::Down),
         }
+    }
+
+    /// Whether the session takes `command` now ([`Session::takes`]); a
+    /// screen whose session failed to start takes every one, as it has
+    /// nothing to refuse them with.
+    fn takes(&self, command: PlayerCommand) -> bool {
+        self.session
+            .as_ref()
+            .map_or(true, |session| session.takes(command))
+    }
+
+    /// The [`PlayerCommand`] a press of `key` sends, as [`Screen::input`]
+    /// dispatches it; `None` for a key that is no command.
+    fn command_of(&self, key: Key) -> Option<PlayerCommand> {
+        let command = match key {
+            LAND_KEY => PlayerCommand::Land,
+            BOARD_KEY => PlayerCommand::Board,
+            HAIL_KEY => PlayerCommand::Hail,
+            MAP_KEY => PlayerCommand::Map,
+            JUMP_KEY => PlayerCommand::Jump,
+            JETTISON_KEY => PlayerCommand::Jettison,
+            EJECT_KEY => PlayerCommand::Eject,
+            MISSION_INFO_KEY => PlayerCommand::MissionInfo,
+            PLAYER_INFO_KEY => PlayerCommand::PlayerInfo,
+            HYPER_SELECT_KEY => PlayerCommand::SelectSystem,
+            HYPERSPACE_MODE_KEY => PlayerCommand::Nav,
+            TARGET_KEY | NEAREST_KEY => PlayerCommand::Target,
+            MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY | ESCORT_HOLD_KEY
+            | ESCORT_RECALL_KEY => PlayerCommand::Escort,
+            _ if self.escort_menu.is_open() && GROUP_KEYS.contains(&key) => PlayerCommand::Escort,
+            SELECT_KEY => PlayerCommand::SelectWeapon,
+            NEAREST_STELLAR_KEY | NAV_OFF_KEY => PlayerCommand::Nav,
+            _ if STELLAR_SLOT_KEYS.iter().any(|keys| keys.contains(&key)) => PlayerCommand::Nav,
+            _ => return None,
+        };
+        Some(command)
     }
 
     /// A press of `key`, if it works the stellar navigation target. 1-4,
@@ -4379,10 +4865,7 @@ impl<C> FlightView<C> {
             && let Some(npc) = session.target()
         {
             let (at, _) = self.shown_npc(npc);
-            let sprite = match self.npc_sheets.get(&npc.ship) {
-                Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
-                _ => (PLACEHOLDER_SIZE as u32, PLACEHOLDER_SIZE as u32),
-            };
+            let sprite = drawn_size(self.npc_sheets.get(&npc.ship));
             let at = camera.world_to_screen(at);
             brackets::draw_ship(list, at, Some(sprite), target.expand, target.standing);
         }
@@ -4417,11 +4900,21 @@ impl<C> FlightView<C> {
         target::draw_secondary(list, &bar.layout, origin, line.as_deref(), metrics);
     }
 
-    fn draw_ship(&self, list: &mut DrawList, at: Point) {
+    /// Draws the player's ship at `at`, as much of it as `drawn` says
+    /// (see [`nova_sim::player_fate`]): its sprite, engine glow and
+    /// running lights, or, when its sheet cannot be read, a crossed box
+    /// and the reason. The box stands in for the sprite and a missing
+    /// sheet has no glow or lights, so only a ship drawn in full has one.
+    fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
+        if drawn == ShipDrawn::Hidden {
+            return;
+        }
         match &self.sheet {
             Ok(sheet) => {
                 let frame = rotation_frame(self.shown_heading(), sheet.rotations);
-                list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                if drawn == ShipDrawn::Full {
+                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                }
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
                 let base = self.session.as_ref().map_or(0, Session::engine_glow);
                 let glow = sheet
@@ -4434,6 +4927,7 @@ impl<C> FlightView<C> {
                     list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
                 }
             }
+            Err(_) if drawn != ShipDrawn::Full => {}
             Err(reason) => {
                 crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
                 let below = Point::new(
@@ -4508,13 +5002,24 @@ impl<
 > Screen for FlightView<C>
 {
     /// Never quits: Escape is the router's. While a jump is under way,
-    /// the pre-jump stage included, P is refused, and a press goes on only
-    /// when [`FlightView::taken_during_jump`] takes it; a click in space
-    /// selects nothing then, as [`Session::select_stellar`] refuses during
-    /// a jump (@0x6a145, @0x6a5ef). The flight keys are still tracked as
-    /// held, so one held at arrival acts on the next tick, as the original
-    /// reads them live (see the module docs).
+    /// the pre-jump stage included, P is refused with its beep, and a press
+    /// goes on only when [`FlightView::taken_during_jump`] takes it; a
+    /// click in space selects nothing then, as [`Session::select_stellar`]
+    /// refuses during a jump (@0x6a145, @0x6a5ef). Otherwise, and of the
+    /// keys taken during a jump, each key's [`PlayerCommand`] is asked of
+    /// the session ([`Session::takes`]) and a refused one does nothing,
+    /// saying nothing: while the player's ship breaks up the map, landing
+    /// and mission info (`_HandlePlayer`'s breakup-timer gates at 0x6a7b3,
+    /// 0x6a8cb and 0x7044b), and once it has exploded every command (the
+    /// dead branch, 0x6870d-0x6888c); and for
+    /// [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+    /// take-off the map and mission info (`_frameCounter` below 0,
+    /// @0x6a7de, @0x7045e). The session refuses some taken commands
+    /// itself, P with its beep among them. The flight keys are still
+    /// tracked as held, so one held at arrival acts on the next tick, as
+    /// the original reads them live (see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        self.cursor_input(input);
         let press = match *input {
             Input::Key {
                 key,
@@ -4540,6 +5045,7 @@ impl<
             pressed: true,
             at,
         } = *input
+            && self.takes(PlayerCommand::Nav)
         {
             self.click_in_space(at);
         }
@@ -4550,6 +5056,10 @@ impl<
         } else {
             press
         };
+        let press = press.filter(|&key| {
+            self.command_of(key)
+                .is_none_or(|command| self.takes(command))
+        });
         match press {
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
@@ -4605,31 +5115,26 @@ impl<
             Some(key) => self.nav_key(key),
             None => {}
         }
-        if let Input::Key { key, pressed, .. } = *input
-            && FLIGHT_KEYS.contains(&key)
-        {
-            if pressed {
-                self.held.insert(key);
-            } else {
-                self.held.remove(&key);
-            }
-        }
+        self.track_held(input);
         ScreenAction::None
     }
 
     /// First catches the screen up with what the session has told since
     /// (see the module docs), map open or not. Then runs the simulation's
-    /// steps for `dt` with the keys held, and advances the stellars'
-    /// animations. While the map is open nothing moves. During
-    /// the pre-jump stage the session flies on, and the streak starts on
-    /// the step the session begins the jump, which is the last step run.
-    /// While the stars streak and the old system fades out only the
-    /// jump's effect moves, and the ship arrives when the effect says.
-    /// From then on the session flies again while the rest of the effect,
-    /// the fade-in or the white flash, plays over it; that plays on with
-    /// the map open too, as the original's display fade does. The escort
-    /// menu times out on every step the map is shut, the streak's
-    /// included.
+    /// steps for `dt` with the keys held ([`FlightView::run_steps`]), and
+    /// advances the stellars' animations. While the map is open nothing
+    /// moves. During the pre-jump stage the session flies on, and the
+    /// streak starts on the step the session begins the jump, which is the
+    /// last step run. While the stars streak and the old system fades out
+    /// the jump's effect moves, and the session runs its steps only while
+    /// its warp is in its lead-in ([`Session::in_warp_lead_in`]): the
+    /// ship stays where it is, but the traffic flies on and the scans are
+    /// taken, as the original still scans a warping player then. The ship
+    /// arrives when the effect says, after the last step. From then on
+    /// the session flies again while the rest of the effect, the fade-in
+    /// or the white flash, plays over it; that plays on with the map open
+    /// too, as the original's display fade does. The escort menu times out
+    /// on every step the map is shut, the streak's included.
     ///
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
@@ -4645,9 +5150,21 @@ impl<
         if self.map_open {
             return;
         }
-        if let Some(effect) = &mut self.jump {
-            self.elapsed += dt;
-            if effect.advance(dt) {
+        if self.hold_expired() {
+            self.advance_death_fade(dt);
+            return;
+        }
+        self.elapsed += dt;
+        if self.jump.is_some() {
+            let leading_in = self.session.as_ref().is_ok_and(Session::in_warp_lead_in);
+            if leading_in {
+                let Steps { steps, alpha } = self.clock.advance(dt);
+                self.run_steps(steps, Session::in_warp_lead_in);
+                self.alpha = alpha;
+            }
+            if let Some(effect) = &mut self.jump
+                && effect.advance(dt)
+            {
                 self.arrive();
                 self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
@@ -4655,71 +5172,13 @@ impl<
             self.advance_hud();
             return;
         }
-        self.elapsed += dt;
         let Steps { steps, alpha } = self.clock.advance(dt);
-        let controls = self.controls();
-        let fire = (
-            self.held.contains(&FIRE_KEY),
-            self.held.contains(&SECONDARY_KEY),
-        );
-        let mut notes = Vec::new();
-        let mut quotes = Vec::new();
-        if let Ok(session) = &mut self.session {
-            session.set_play_area(play_area());
-            session.hold_fire(fire.0, fire.1);
-            session.set_double_time_key(self.double_time);
-            session.set_land_key(self.held.contains(&LAND_KEY));
-            for _ in 0..steps {
-                self.previous = *session.player();
-                self.npc_previous = session
-                    .npcs()
-                    .iter()
-                    .map(|npc| (npc.id, npc.state))
-                    .collect();
-                let rules = Rules {
-                    disable: &*self.disable_rule,
-                    defence: &*self.defence_rule,
-                    law: &*self.law,
-                };
-                for again in [false, true] {
-                    if !again {
-                        session.tick(controls);
-                        session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                        session.tick_quotes(&self.catalog, &mut self.chance);
-                        quotes.extend(session.take_quotes());
-                        session.tick_assistance(&*self.disable_rule);
-                        notes.extend(session.take_comm());
-                        session.tick_combat(rules, &mut self.chance);
-                    } else if session.double_time() {
-                        session.tick_again(controls, rules, &mut self.chance);
-                    } else {
-                        break;
-                    }
-                    let player = point(session.player().position);
-                    let dying = dying(session, &self.sheet, &self.npc_sheets);
-                    let chance = &mut self.effects_chance;
-                    self.effects.step(&dying, player, &self.looks, chance);
-                    let scene = Scene { player };
-                    for event in session.take_combat_events() {
-                        self.effects.apply(&event, &scene, &self.looks, chance);
-                    }
-                }
-                if session.jumping().is_some() {
-                    break;
-                }
-            }
-        }
-        for note in &notes {
-            self.say_for(comm_message(note), MESSAGE_TICKS);
-        }
-        for quote in quotes {
-            self.say_for(quote.text, HAIL_QUOTE_TICKS);
-        }
-        self.say_messages();
-        // The session may have populated its system afresh.
-        self.read_npc_sheets();
+        self.run_steps(steps, |session| {
+            session.jumping().is_none() && !session.hold_expired()
+        });
         self.update_escort_menu();
         self.alpha = alpha;
+        self.step_cursor(steps);
         self.start_streak_if_jumping();
         self.advance_hud();
     }
@@ -4782,12 +5241,18 @@ impl<
             Ok(bar) => self.draw_bar(list, bar),
             Err(reason) => hud::draw_unavailable(list, reason),
         }
+        self.cursor.draw(list, &self.looks);
         self.draw_fades(list);
     }
 
-    /// Abandons any gesture on the course map.
+    /// Abandons any gesture on the course map, and forgets where the
+    /// pointer was: flight stops getting pointer moves while it is hidden
+    /// or covered, so the cursor sprite is not drawn (and nothing is
+    /// hovered) at that stale point until the next move, which the app
+    /// sends when flight shows again.
     fn cancel_pointer(&mut self) {
         self.map.cancel_pointer();
+        self.cursor.left();
     }
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
@@ -4811,6 +5276,14 @@ impl<
         sounds
     }
 
+    /// Flight hides the system's pointer over the window for its cursor
+    /// sprite (`_HandleMouse` @0x38007-0x38017 hides it inside the
+    /// window), unless the map is open, the flight never started or the
+    /// cursor's sheet could not be read.
+    fn hides_pointer(&self) -> bool {
+        !self.map_open && self.session.is_ok() && self.looks.cursor_sheet().is_some()
+    }
+
     /// What could not be read of the looks, then the session's
     /// diagnostics, each once.
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
@@ -4821,6 +5294,74 @@ impl<
         }
         diagnostics
     }
+}
+
+/// The ships where the flight draws them, for the hover test: the
+/// session's [`DrawnShips`] port. Every NPC is drawn, by its sheet or as
+/// its crossed box, so each has a box, even one its cloak hides from the
+/// player: [`Session::hover`] asks the cloak itself. Each box is the size
+/// of a frame of the sheet its slot's sprite holds
+/// ([`Session::framed_by`]): a shown ship's own type's. A hidden ship
+/// ([`Session::is_hidden`]: its type's `Cost` is -1) is boxed where it
+/// would be drawn, as the original still positions its hidden sprite
+/// (`_HandleShipDisplay` @0x2cd17) and `_HandleMouse` skips only a slot
+/// with no sprite (@0x38171), by the frames its slot last cloned, as
+/// `_SWCloneFramesFromMaster` (@0x2b824) is skipped for it: often the
+/// previous ship's at that slot ([`nova_sim::RuleKey::HiddenShipHoverBox`]
+/// chooses).
+struct ViewShips<'a, C> {
+    /// The flight, which says where each ship is drawn.
+    view: &'a FlightView<C>,
+    /// The flight's session.
+    session: &'a Session,
+}
+
+impl<C> DrawnShips for ViewShips<'_, C> {
+    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
+        let npc = self.session.npcs().iter().find(|npc| npc.id == id)?;
+        let (at, _) = self.view.shown_npc(npc);
+        let framed = self.session.framed_by(ShipRef::Npc(id))?;
+        let sheet = self.view.npc_sheets.get(&framed);
+        Some(drawn_box(at, drawn_size(sheet)))
+    }
+
+    fn player(&self) -> Option<DrawnBox> {
+        let framed = self.session.framed_by(ShipRef::Player);
+        let size = if framed == Some(self.session.ship()) {
+            match &self.view.sheet {
+                Ok(sheet) => (sheet.frame_width, sheet.frame_height),
+                Err(_) => placeholder_size(),
+            }
+        } else {
+            drawn_size(framed.and_then(|ship| self.view.npc_sheets.get(&ship)))
+        };
+        Some(drawn_box(self.view.shown_position(), size))
+    }
+}
+
+/// A ship's box drawn at `at` (in system coordinates) of `size`.
+fn drawn_box(at: Point, (width, height): (u32, u32)) -> DrawnBox {
+    DrawnBox {
+        centre: Vec2::new(at.x, at.y),
+        width,
+        height,
+    }
+}
+
+/// The frame size of an NPC drawn by `sheet`, the one read for its ship
+/// type if any: its crossed box's when the sheet could not be read.
+fn drawn_size(sheet: Option<&Result<ShipSheet, String>>) -> (u32, u32) {
+    match sheet {
+        Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
+        _ => placeholder_size(),
+    }
+}
+
+/// The crossed box's size, as a frame's.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn placeholder_size() -> (u32, u32) {
+    let side = PLACEHOLDER_SIZE as u32;
+    (side, side)
 }
 
 /// The simulation's `v` as a view point.
@@ -4840,11 +5381,15 @@ fn dying(
         _ => PLACEHOLDER_SIZE,
     };
     let breaking = |condition, at: Vec2, sprite_width, explosion| match condition {
-        Condition::Dying { ticks_left } => Some(Dying {
+        Condition::Dying {
+            ticks_left,
+            starting,
+        } => Some(Dying {
             at: point(at),
             sprite_width,
             explosion,
             ticks_left,
+            starting,
         }),
         _ => None,
     };
@@ -4965,6 +5510,8 @@ mod tests {
     /// Centauri (131) at (600, 0), which holds Proxima at its centre;
     /// Barnard (132) at (0, 600) is linked to nothing, unless `onward`.
     /// Records the systems read.
+    // Each flag adds a system or a link of its own, read on its own.
+    #[allow(clippy::struct_excessive_bools)]
     struct FakeCatalog {
         character: Result<CharacterStart, StartError>,
         fields: ShipFields,
@@ -5024,6 +5571,8 @@ mod tests {
         /// The jettisoned cargo box's sheet: `rlëD` 500 of 36 frames, by
         /// default.
         box_sheet: Result<EffectSheet, String>,
+        /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
+        cursor_sheet: Result<EffectSheet, String>,
         /// The string lists: none, by default.
         strings: Vec<(i16, Vec<String>)>,
         /// The persons: none, by default.
@@ -5045,6 +5594,9 @@ mod tests {
         /// with no links and Proxima Reborn (141) at its centre: not by
         /// default.
         reborn: bool,
+        /// Whether system 128 exists, the escape pod's rescue's fallback,
+        /// with no links and no stellars: not by default.
+        home: bool,
         /// The stellars that can be destroyed and regenerated: none, by
         /// default.
         lives: Vec<nova_sim::StellarLife>,
@@ -5141,12 +5693,17 @@ mod tests {
                 image_id: 500,
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
+            cursor_sheet: Ok(EffectSheet {
+                image_id: 651,
+                frames: NonZeroU16::new(8).expect("non-zero"),
+            }),
             strings: Vec::new(),
             persons: Vec::new(),
             defaults: Vec::new(),
             onward: false,
             fan: false,
             reborn: false,
+            home: false,
             sol_navs: Vec::new(),
             sol_interference: 0,
             alpha_buoy: -1,
@@ -5245,6 +5802,7 @@ mod tests {
             matches!(id.0, 130 | 131)
                 || (id.0 == 132 && self.onward)
                 || (id.0 == 133 && self.reborn)
+                || (id.0 == 128 && self.home)
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -5253,6 +5811,7 @@ mod tests {
                 131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
                 132 if self.onward => Vec::new(),
                 133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
+                128 if self.home => Vec::new(),
                 other => panic!("asked for sÿst {other}'s sites"),
             }
         }
@@ -5283,6 +5842,9 @@ mod tests {
             ];
             if self.reborn {
                 systems.push(star(133, (600.0, 0.0), &[]));
+            }
+            if self.home {
+                systems.push(star(128, (-600.0, 0.0), &[]));
             }
             systems
         }
@@ -5488,6 +6050,7 @@ mod tests {
                     "Alpha Reborn",
                     vec![stellar(141, "Proxima Reborn", (0, 0), 1)],
                 ),
+                128 if self.home => ("Home", Vec::new()),
                 other => panic!("asked for sÿst {other}"),
             };
             SystemContents {
@@ -5536,11 +6099,13 @@ mod tests {
     impl ShipSprites for FakeCatalog {
         /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
         /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101 and lights
-        /// `rlëD` 2201; ship 130's cannot be read.
+        /// `rlëD` 2201; ship 130's cannot be read, nor can the escape
+        /// pod's, 895.
         fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
             self.sheets_asked.borrow_mut().push(id);
             match id.0 {
                 128 => self.sheet.clone(),
+                895 => Err("no shän 895".to_owned()),
                 129 => Ok(ShipSheet {
                     image_id: 2001,
                     rotations: NonZeroU16::new(72).expect("non-zero"),
@@ -5549,6 +6114,12 @@ mod tests {
                     ..sheet()
                 }),
                 130 => Err("no shän 130".to_owned()),
+                131 => Ok(ShipSheet {
+                    image_id: 2002,
+                    frame_width: 100,
+                    frame_height: 100,
+                    ..sheet()
+                }),
                 other => panic!("asked for shïp {other}'s sheet"),
             }
         }
@@ -5594,6 +6165,10 @@ mod tests {
                 0 => self.box_sheet.clone(),
                 other => Err(format!("no spïn {}", 500 + other)),
             }
+        }
+
+        fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+            self.cursor_sheet.clone()
         }
     }
 
@@ -7738,7 +8313,6 @@ mod tests {
         let stellar = StellarId(128);
         let landing = [
             (LandingRefusal::Jumping, 240),
-            (LandingRefusal::Disabled, 240),
             (LandingRefusal::NoStellars, 240),
             (
                 LandingRefusal::TooFar {
@@ -7854,7 +8428,6 @@ mod tests {
         let stellar = StellarId(128);
         let cases = [
             (LandingRefusal::Jumping, IN_HYPERSPACE),
-            (LandingRefusal::Disabled, LAND_DISABLED),
             (LandingRefusal::NoStellars, NO_STELLARS),
             (
                 LandingRefusal::TooFar {
@@ -7918,8 +8491,13 @@ mod tests {
             ),
         ];
         for (refusal, text) in cases {
-            assert_eq!(refusal_message(&refusal), text, "{refusal:?}");
+            assert_eq!(refusal_message(&refusal), Some(text), "{refusal:?}");
         }
+        assert_eq!(
+            refusal_message(&LandingRefusal::Disabled),
+            None,
+            "silent (@0x66af7, 0x67eef)"
+        );
         assert_eq!(
             [
                 NO_STELLARS,
@@ -8108,6 +8686,36 @@ mod tests {
         assert_eq!(view.take_sounds(), [], "taken");
         view.take_off();
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TookOff)]);
+    }
+
+    #[test]
+    fn m_i_and_p_are_refused_for_15_ticks_after_a_take_off() {
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        let _ = view.take_sounds();
+        for tick in 0..15 {
+            tap(&mut view, MAP_KEY);
+            assert!(!view.map_open(), "after {tick} ticks");
+            tap(&mut view, MISSION_INFO_KEY);
+            assert_eq!(view.take_mission_info_request(), None, "after {tick} ticks");
+            assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS), "silently");
+            tap(&mut view, PLAYER_INFO_KEY);
+            assert!(!view.take_player_info_request(), "after {tick} ticks");
+            assert_eq!(
+                view.take_sounds(),
+                [Sound::Sim(SimSound::Refused)],
+                "after {tick} ticks"
+            );
+            ticks(&mut view, 1);
+        }
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS), "after 15 ticks");
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(view.take_player_info_request(), "after 15 ticks");
+        tap(&mut view, MAP_KEY);
+        assert!(view.map_open(), "after 15 ticks");
     }
 
     #[test]
@@ -8598,11 +9206,8 @@ mod tests {
         assert_eq!(jump_refusal_message(&JumpRefusal::Landed), TAKE_OFF_FIRST);
         assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), JUMP_DISABLED);
         assert_eq!(
-            [LAND_DISABLED, JUMP_DISABLED],
-            [
-                "Unable to land - your ship is disabled.",
-                "Can't initiate hyperspace jump - your ship is disabled."
-            ]
+            JUMP_DISABLED,
+            "Can't initiate hyperspace jump - your ship is disabled."
         );
         assert_eq!(
             [NO_DESTINATION, TOO_CLOSE, NO_FUEL, TAKE_OFF_FIRST],
@@ -8872,6 +9477,14 @@ mod tests {
             onward: true,
             ..catalog()
         }
+    }
+
+    #[test]
+    fn the_sabotage_death_descs_come_from_the_pilots_outfits() {
+        let mut sabotaged = multi_jumping();
+        sabotaged.outfits[0].mods[0] = (nova_sim::SABOTAGE_KILL, 5000);
+        assert_eq!(FlightView::new(sabotaged).sabotage_death_descs(), [5000]);
+        assert_eq!(flight().sabotage_death_descs(), Vec::<i16>::new());
     }
 
     #[test]
@@ -9218,6 +9831,8 @@ mod tests {
         assert!(view.trade(BUY_FOOD).is_ok());
         view.take_off().expect("takes off");
         assert!(cargo_aboard(&view) > 0);
+        // Past the take-off grace, so the map opens for the course.
+        ticks(&mut view, nova_sim::TAKEOFF_GRACE_TICKS);
         view.message = None;
         view
     }
@@ -9733,17 +10348,56 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_whose_system_is_gone_cannot_fly() {
-        let mut pilot = docked_pilot("Ada");
+    fn a_pilot_whose_system_is_gone_flies_in_the_lowest_that_exists() {
+        // In flight: a docked pilot resumes in its stellar's system.
+        let mut pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         pilot.explore(SystemId(132));
         let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 132");
         let moved = nova_sim::save::decode(&text).expect("a pilot");
         let view = FlightView::with_pilot(catalog(), moved);
-        assert_eq!(
-            view.session().err(),
-            Some("the pilot's system, sÿst 132, does not exist")
-        );
-        assert_eq!(view.pilot(), None);
+        let session = view.session().expect("flies");
+        assert_eq!(session.system(), SystemId(130));
+        assert!(session.load_repaired());
+    }
+
+    /// [`docked_pilot`] Ada with her stellar rewritten to 999, which no
+    /// system lists.
+    fn unlisted_pilot() -> Pilot {
+        let text = nova_sim::save::encode(&docked_pilot("Ada"))
+            .replace("\"stellar\": 128", "\"stellar\": 999");
+        let pilot = nova_sim::save::decode(&text).expect("a pilot");
+        assert_eq!(pilot.stellar(), Some(StellarId(999)));
+        pilot
+    }
+
+    #[test]
+    fn a_loaded_flight_reports_a_repaired_load() {
+        let view = FlightView::loaded(catalog(), unlisted_pilot(), Rulebook::default());
+        assert!(view.load_repaired());
+        assert_eq!(view.pilot().and_then(Pilot::stellar), None);
+        let docked = FlightView::loaded(catalog(), docked_pilot("Ada"), Rulebook::default());
+        assert!(!docked.load_repaired());
+        assert!(!FlightView::with_pilot(catalog(), docked_pilot("Ada")).load_repaired());
+        let failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert!(!failed.load_repaired(), "a failed session repaired nothing");
+    }
+
+    #[test]
+    fn a_loaded_flight_reads_the_rules_it_is_given() {
+        let mut pilot = unlisted_pilot();
+        pilot.explore(SystemId(131));
+        let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 131");
+        let moved = nova_sim::save::decode(&text).expect("a pilot");
+        let kept = FlightView::loaded(catalog(), moved.clone(), Rulebook::default());
+        assert_eq!(kept.session().map(Session::system), Ok(SystemId(131)));
+        let engine =
+            Rulebook::default().with_override(RuleKey::UnlistedStellar, RuleSource::Engine);
+        let lowest = FlightView::loaded(catalog(), moved, engine);
+        assert_eq!(lowest.session().map(Session::system), Ok(SystemId(130)));
+        assert!(lowest.load_repaired());
     }
 
     #[test]
@@ -10270,6 +10924,7 @@ mod tests {
                 require: 0,
                 availability: nova_sim::Test::default(),
                 appear_on: nova_sim::Test::default(),
+                flags: 0,
                 flags3: 0,
                 disp_weight: 0,
                 max_gun: 0,
@@ -10865,6 +11520,39 @@ mod tests {
         broken.begin();
         assert_eq!(broken.pilot(), None);
     }
+
+    #[test]
+    fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
+        let (script, chance) = scripted(&[123]);
+        let mut view = FlightView::with_pilot(catalog(), docked_pilot("Ada")).with_chance(chance);
+        assert_eq!(player(&view).heading, 0.0, "flying alone faces up");
+        view.resume();
+        assert_eq!(player(&view).heading, 123.0);
+        assert_eq!(script.borrow().asked, [360]);
+    }
+
+    #[test]
+    fn beginning_a_new_pilot_leaves_it_facing_up() {
+        let (_, chance) = scripted(&[123]);
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        let mut view = FlightView::with_pilot(catalog, pilot).with_chance(chance);
+        view.begin();
+        assert_eq!(player(&view).heading, 0.0);
+    }
+
+    #[test]
+    fn a_failed_flight_resumes_nothing() {
+        let (script, chance) = scripted(&[123]);
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        let mut broken = FlightView::new(broken).with_chance(chance);
+        broken.resume();
+        assert_eq!(broken.pilot(), None);
+        assert!(script.borrow().asked.is_empty(), "nothing drawn");
+    }
     // Traffic.
 
     use std::collections::VecDeque;
@@ -10943,6 +11631,7 @@ mod tests {
             require: 0,
             availability: nova_sim::Test::default(),
             appear_on: nova_sim::Test::default(),
+            flags: 0,
             flags3: 0,
             disp_weight: 0,
             max_gun: 0,
@@ -11296,6 +11985,68 @@ mod tests {
         );
     }
 
+    /// Turns east at rest, then drifts out slowly that way until far
+    /// enough to jump: facing Alpha Centauri and slow enough, J streaks at
+    /// once.
+    fn ready_to_jump(view: &mut View) {
+        view.input(&key(Key::Right, true));
+        ticks(view, 30);
+        view.input(&key(Key::Right, false));
+        view.input(&key(Key::Up, true));
+        ticks(view, 10);
+        view.input(&key(Key::Up, false));
+        for _ in 0..2000 {
+            if player(view).position.length() >= MIN_JUMP_DISTANCE {
+                break;
+            }
+            view.tick(TICK);
+        }
+        assert_eq!(player(view).heading, 90.0);
+    }
+
+    #[test]
+    fn the_traffic_flies_under_the_streak_through_the_warps_lead_in_then_stands_still() {
+        // The traffic follows the ship out, then makes for planet 128 at
+        // the centre as the ship jumps.
+        let catalog = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..trafficked(&[130], 2, 129, 1)
+        };
+        let jumped = Rc::new(std::cell::Cell::new(false));
+        let landing = Goal::Land(StellarId(128));
+        let mut view = FlightView::new(catalog)
+            .with_behaviour(Rc::new(InspectingUntil(Rc::clone(&jumped), landing)));
+        plot(&mut view, 131);
+        ready_to_jump(&mut view);
+        jumped.set(true);
+        view.input(&key(JUMP, true));
+        assert!(view.jump_effect().is_some(), "streaking on J");
+        let leaving = player(&view);
+        let start = npc_states(&view);
+        assert_eq!(start.len(), 2);
+        // The lead-in lasts 36 ticks (`nova_sim::warp`): 1.2 s.
+        view.tick(ms(500));
+        let session = view.session().expect("flying");
+        assert!(session.in_warp_lead_in());
+        assert_ne!(
+            npc_states(&view),
+            start,
+            "the traffic flies on under the streak"
+        );
+        assert_eq!(player(&view), leaving, "the ship stays where it is");
+        view.tick(ms(800));
+        let session = view.session().expect("flying");
+        assert!(!session.in_warp_lead_in(), "past the lead-in");
+        assert_eq!(session.system(), SystemId(130), "not yet arrived");
+        let past = npc_states(&view);
+        view.tick(ms(150));
+        assert_eq!(npc_states(&view), past, "the traffic stands still");
+        assert_eq!(view.session().expect("flying").system(), SystemId(130));
+        // The arrival keeps the effect's time: past 1.5 s.
+        view.tick(ms(100));
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    }
+
     #[test]
     fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
         let catalog = FakeCatalog {
@@ -11528,6 +12279,7 @@ mod tests {
             height: None,
             strength: 0,
             key_carried: None,
+            cost: 0,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
@@ -11590,7 +12342,7 @@ mod tests {
 
     use std::num::NonZeroU16 as Frames;
 
-    use nova_sim::{BoomId, Condition, WeaponId};
+    use nova_sim::{BoomId, Condition, PlayerFate, WeaponId};
 
     use crate::flight::brackets::{self, Standing};
     use crate::flight::catalog::EffectSheet;
@@ -11665,6 +12417,7 @@ mod tests {
             height: None,
             strength: 0,
             key_carried: None,
+            cost: 0,
         }
     }
 
@@ -11900,6 +12653,19 @@ mod tests {
         ticks(&mut view, 1);
         assert_eq!(shots_of(&view, ROCKET), 2, "let go");
         assert_eq!((FIRE_KEY, SECONDARY_KEY), (Key::Space, Key::Control));
+    }
+
+    #[test]
+    fn the_flight_keys_are_held_until_let_go_or_released() {
+        let mut view = flight();
+        assert!(!view.holds_keys());
+        view.input(&key(Key::Up, true));
+        assert!(view.holds_keys());
+        view.input(&key(Key::Up, false));
+        assert!(!view.holds_keys(), "let go");
+        view.input(&key(Key::Up, true));
+        view.release_keys();
+        assert!(!view.holds_keys(), "released");
     }
 
     #[test]
@@ -12237,7 +13003,7 @@ mod tests {
             view.tick(TICK);
             let session = view.session().expect("flying");
             if let Some(npc) = session.npcs().first()
-                && let Condition::Dying { ticks_left } = npc.condition
+                && let Condition::Dying { ticks_left, .. } = npc.condition
                 && ticks_left < 19
                 && !view.effects().explosions().is_empty()
             {
@@ -12259,7 +13025,8 @@ mod tests {
     fn the_players_ship_breaking_up_goes_off_about_where_it_is() {
         // The NPC, straight above the player and facing it, fires a
         // blaster that kills at a hit; the player's ship, 80 pixels wide
-        // (the NPC's 40), takes 30 ticks to break up.
+        // (the NPC's 40), of DeathDelay 30, breaks up for 88 ticks: three
+        // times it, less 2.
         let mut catalog = armed(1, &[]);
         catalog.sheet = Ok(ShipSheet {
             frame_width: 80,
@@ -12273,10 +13040,10 @@ mod tests {
         catalog.hulls[1] = hull_of(129, &[BLASTER]);
         let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
         let mut breaking = None;
-        for _ in 0..40 {
+        for _ in 0..120 {
             view.tick(TICK);
             let session = view.session().expect("flying");
-            if let Condition::Dying { ticks_left } = session.player_condition()
+            if let Condition::Dying { ticks_left, .. } = session.player_condition()
                 && ticks_left < 19
                 && !view.effects().explosions().is_empty()
             {
@@ -12332,6 +13099,671 @@ mod tests {
         let (condition, line) = downed_line(1);
         assert_eq!(condition, Condition::Disabled);
         assert_eq!(line.as_deref(), Some("Ship disabled."));
+    }
+
+    /// [`armed`] where the NPC, straight above the player and facing it,
+    /// fires a blaster that kills at a hit, and the player's ship breaks
+    /// up in `death_delay` ticks, then explodes as `bööm` 128 (`rlëD` 400).
+    fn killed_in(death_delay: i16) -> FakeCatalog {
+        let mut catalog = armed(1, &[]);
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        catalog.hulls[0].death_delay = death_delay;
+        catalog.hulls[1] = hull_of(129, &[BLASTER]);
+        catalog
+    }
+
+    /// [`killed_in`] (the player's `DeathDelay` `death_delay`) where the
+    /// player starts with each of `outfits` (188, `ModType` 11, the escape
+    /// pod; 187, `ModType` 20, auto-eject), with records of its ship and
+    /// of the pod.
+    fn ejecting_in(death_delay: i16, outfits: &[i16]) -> FakeCatalog {
+        let mut catalog = killed_in(death_delay);
+        let fitted = |id, mod_type| OutfitRecord {
+            mods: [(mod_type, 0), (0, 0), (0, 0), (0, 0)],
+            ..holding(id, WeaponId(128))
+        };
+        catalog.outfits.extend([fitted(188, 11), fitted(187, 20)]);
+        catalog.defaults = outfits.iter().map(|&id| (OutfitId(id), 1)).collect();
+        catalog.ships.extend([ship_class(128), ship_class(895)]);
+        catalog
+    }
+
+    /// `shïp` `id`'s record, of [`FIELDS`].
+    fn ship_class(id: i16) -> ShipRecord {
+        ShipRecord {
+            id: ShipId(id),
+            name: format!("Ship {id}"),
+            short_name: format!("Ship {id}"),
+            long_name: String::new(),
+            fields: FIELDS,
+            defaults: Vec::new(),
+            cost: 900,
+            tech_level: 1,
+            buy_random: 100,
+            hire_random: 0,
+            require: 0,
+            availability: nova_sim::Test::default(),
+            appear_on: nova_sim::Test::default(),
+            flags: 0,
+            flags3: 0,
+            disp_weight: 0,
+            max_gun: 0,
+            max_tur: 0,
+            length: 0,
+            crew: 0,
+            inherent_ai: 1,
+            comm_name: String::new(),
+            inherent_govt: None,
+            combat_govt: None,
+            escort_type: -1,
+            on_capture: nova_sim::Script::default(),
+            on_purchase: nova_sim::Script::default(),
+            on_retire: nova_sim::Script::default(),
+        }
+    }
+
+    /// `catalog`'s view under its NPC's fire, holding each of `keys`.
+    fn ejecting_view(catalog: FakeCatalog, keys: &[Key]) -> View {
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        for &held in keys {
+            view.input(&key(held, true));
+        }
+        view
+    }
+
+    /// Ticks `view` until the player is in the escape pod, or for 60
+    /// ticks: whether it got there, and whether it was seen breaking up.
+    fn until_ejected(view: &mut View) -> (bool, bool) {
+        let mut broke_up = false;
+        for _ in 0..60 {
+            view.tick(TICK);
+            match view.session().expect("flying").player_fate() {
+                PlayerFate::Ejected { .. } => return (true, broke_up),
+                PlayerFate::BreakingUp { .. } => broke_up = true,
+                _ => {}
+            }
+        }
+        (false, broke_up)
+    }
+
+    #[test]
+    fn command_and_x_together_hold_the_eject() {
+        assert_eq!(EJECT_KEY, Key::Char('x'));
+        let mut view = ejecting_view(ejecting_in(100, &[188]), &[Key::Command, EJECT_KEY]);
+        assert_eq!(
+            until_ejected(&mut view),
+            (true, false),
+            "before any breakup"
+        );
+    }
+
+    #[test]
+    fn command_alone_or_x_alone_does_not() {
+        for keys in [Key::Command, EJECT_KEY] {
+            let keys = [keys];
+            let mut view = ejecting_view(ejecting_in(100, &[188]), &keys);
+            assert_eq!(until_ejected(&mut view), (false, true), "{keys:?}");
+        }
+    }
+
+    #[test]
+    fn an_ejected_player_takes_no_key() {
+        let mut view = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
+        assert!(until_ejected(&mut view).0);
+        view.input(&key(MAP_KEY, true));
+        assert!(!view.map_open, "no map");
+        view.input(&key(MAP_KEY, false));
+        view.input(&key(LAND_KEY, true));
+        let session = view.session().expect("flying");
+        assert_eq!(session.nav_target(), None, "no landing request");
+        assert!(!session.takes(PlayerCommand::Land));
+    }
+
+    #[test]
+    fn the_pod_is_rescued_after_350_ticks_and_the_rescue_stops_stepping_with_its_desc() {
+        let mut catalog = ejecting_in(100, &[188, 187]);
+        catalog.home = true;
+        let mut view = ejecting_view(catalog, &[]);
+        assert!(until_ejected(&mut view).0);
+        assert_eq!(view.take_rescue_desc(), None);
+        let mut ticks = 0;
+        let desc = loop {
+            ticks += 1;
+            view.tick(TICK);
+            if let Some(desc) = view.take_rescue_desc() {
+                break desc;
+            }
+            assert!(ticks <= nova_sim::POD_TICKS, "no rescue");
+        };
+        assert_eq!(desc, 13999);
+        assert_eq!(ticks, nova_sim::POD_TICKS);
+        assert_eq!(view.take_rescue_desc(), None, "once");
+        let session = view.session().expect("flying");
+        assert_eq!(session.ship(), ShipId(128));
+        assert_eq!(session.system(), SystemId(128));
+        assert_eq!(session.player().position, Vec2::new(50.0, 50.0));
+        assert_eq!(
+            view.previous.position,
+            Vec2::new(50.0, 50.0),
+            "laid out where the rescue put it: nothing else stepped"
+        );
+    }
+
+    #[test]
+    fn a_first_tick_eject_rolls_no_puff_for_the_player() {
+        let mut view = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
+        assert_eq!(until_ejected(&mut view), (true, false));
+        let session = view.session().expect("flying");
+        let breaking = super::dying(session, &view.sheet, &view.npc_sheets);
+        assert_eq!(breaking.len(), 1, "the hulk alone");
+        assert_eq!((breaking[0].ticks_left, breaking[0].starting), (100, true));
+    }
+
+    /// Steps `view` until the player's ship explodes, calling
+    /// `breaking_up` on each frame before that while it breaks up, and
+    /// returns with the view on the explosion's tick.
+    fn until_the_player_explodes(view: &mut View, breaking_up: impl Fn(&View)) {
+        let mut broke_up = false;
+        for _ in 0..60 {
+            view.tick(TICK);
+            match view.session().expect("flying").player_fate() {
+                PlayerFate::BreakingUp { .. } => {
+                    breaking_up(view);
+                    broke_up = true;
+                }
+                PlayerFate::Exploded => {
+                    assert!(broke_up, "it broke up first");
+                    return;
+                }
+                PlayerFate::Flying | PlayerFate::Disabled => {}
+                fate @ (PlayerFate::Holding { .. }
+                | PlayerFate::Fading
+                | PlayerFate::GameOver
+                | PlayerFate::Ejected { .. }) => {
+                    panic!("past the explosion's tick unseen: {fate:?}")
+                }
+            }
+        }
+        panic!("the player's ship never exploded");
+    }
+
+    /// The player's layers drawn, by `rlëD`: its ship 2000, glow 2100
+    /// and lights 2200 (the NPC's are 2001, 2101 and 2201).
+    fn player_layers(view: &View) -> Vec<i16> {
+        ship_sprites(view)
+            .iter()
+            .map(|(image, _)| image.id)
+            .filter(|id| [2000, 2100, 2200].contains(id))
+            .collect()
+    }
+
+    #[test]
+    fn the_players_ship_is_drawn_whole_while_breaking_up_then_loses_its_sprite_then_vanishes() {
+        // A breakup of one tick, so the engine glow built up by the
+        // thrust held from the start has not faded by the explosion: a
+        // breaking-up ship takes no controls.
+        let mut catalog = killed_in(1);
+        catalog.sheet = blinking(Blink::STEADY).sheet;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        // Thrusting with the NPC holding fire, so the glow builds up.
+        view.input(&key(Key::Up, true));
+        for _ in 0..10 {
+            view.tick(TICK);
+        }
+        let mut view = view.with_behaviour(Rc::new(Firing));
+        until_the_player_explodes(&mut view, |view| {
+            let ids = player_layers(view);
+            assert!(ids.contains(&2000), "the ship: {ids:?}");
+            assert!(ids.contains(&2200), "its lights: {ids:?}");
+        });
+        // At a base of 6 or more the flicker (`glow_level`'s roll of 6,
+        // less 4) cannot hide the glow.
+        let glow = view.session().expect("flying").engine_glow();
+        assert!(glow >= 6, "the glow is still lit as it explodes: {glow}");
+        assert_eq!(
+            player_layers(&view),
+            [2100, 2200],
+            "its glow and lights, but no ship, on the explosion's tick"
+        );
+        // The explosion, `bööm` 128's 3 frames, draws over its 3 ticks.
+        for after in 0..5 {
+            if after < 3 {
+                assert!(!view.effects().explosions().is_empty(), "tick {after}");
+                let list = drawn(&view);
+                assert!(
+                    list.iter().any(sprite_of(400)),
+                    "the explosion is drawn on tick {after}: {list:?}"
+                );
+            }
+            view.tick(TICK);
+            assert!(
+                matches!(fate_of(&view), PlayerFate::Holding { .. }),
+                "{:?}",
+                fate_of(&view)
+            );
+            assert_eq!(player_layers(&view), [0_i16; 0], "nothing of it after");
+        }
+    }
+
+    #[test]
+    fn the_explosion_tick_sounds_the_klaxon_then_halts_it_before_the_explosion() {
+        // DeathDelay 2: a timer of 6, so 3 ticks of klaxon, then the
+        // explosion's.
+        let mut view =
+            fighting(killed_in(2), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        let klaxon = Sound::Sim(SimSound::Klaxon);
+        let mut breaking_up = Vec::new();
+        for _ in 0..60 {
+            view.tick(TICK);
+            let sounds = view.take_sounds();
+            match view.session().expect("flying").player_fate() {
+                PlayerFate::BreakingUp { .. } => {
+                    breaking_up.push(sounds.iter().filter(|&&sound| sound == klaxon).count());
+                }
+                PlayerFate::Exploded => {
+                    assert_eq!(breaking_up, [0, 1, 1, 1], "none as it starts");
+                    let first_combat = sounds
+                        .iter()
+                        .position(|sound| matches!(sound, Sound::Combat(_)));
+                    let klaxons: Vec<usize> = (0..sounds.len())
+                        .filter(|&at| sounds[at] == klaxon)
+                        .collect();
+                    assert!(first_combat.is_some(), "the explosion sounds: {sounds:?}");
+                    assert_eq!(klaxons.len(), 1, "{sounds:?}");
+                    let halt = Sound::Sim(SimSound::Halt(&nova_sim::PLAYER_EXPLOSION_HALTS));
+                    let halts: Vec<usize> =
+                        (0..sounds.len()).filter(|&at| sounds[at] == halt).collect();
+                    assert_eq!(halts, [klaxons[0] + 1], "halted next: {sounds:?}");
+                    assert!(halts[0] < first_combat.unwrap_or(0), "{sounds:?}");
+                    return;
+                }
+                PlayerFate::Flying | PlayerFate::Disabled => {}
+                fate @ (PlayerFate::Holding { .. }
+                | PlayerFate::Fading
+                | PlayerFate::GameOver
+                | PlayerFate::Ejected { .. }) => {
+                    panic!("past the explosion's tick unseen: {fate:?}")
+                }
+            }
+        }
+        panic!("the player's ship never exploded");
+    }
+
+    /// A flight under fire from [`killed_in`]`(30)`'s NPC, stepped until
+    /// the player's ship breaks up: a breakup of 90 ticks, so it is still
+    /// breaking up for the test.
+    fn breaking_up() -> View {
+        let mut view =
+            fighting(killed_in(30), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        for _ in 0..60 {
+            view.tick(TICK);
+            if matches!(fate_of(&view), PlayerFate::BreakingUp { .. }) {
+                return view;
+            }
+        }
+        panic!("the player's ship never broke up");
+    }
+
+    fn fate_of(view: &View) -> PlayerFate {
+        view.session().expect("flying").player_fate()
+    }
+
+    fn breakup_ticks_left(view: &View) -> u32 {
+        match fate_of(view) {
+            PlayerFate::BreakingUp { ticks_left, .. } => ticks_left,
+            fate => panic!("not breaking up: {fate:?}"),
+        }
+    }
+
+    #[test]
+    fn the_map_does_not_open_while_the_player_breaks_up() {
+        let mut view = breaking_up();
+        let before = breakup_ticks_left(&view);
+        tap(&mut view, MAP_KEY);
+        assert!(!view.map_open());
+        view.tick(TICK);
+        assert!(
+            breakup_ticks_left(&view) < before,
+            "the flight goes on, unpaused"
+        );
+    }
+
+    #[test]
+    fn mission_info_and_landing_do_nothing_while_the_player_breaks_up() {
+        let mut view = breaking_up();
+        let nav = nav_target(&view);
+        tap(&mut view, MISSION_INFO_KEY);
+        tap(&mut view, LAND_KEY);
+        assert!(view.take_mission_info_request().is_none());
+        assert_eq!(view.take_landing(), None);
+        assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_eq!(nav_target(&view), nav);
+    }
+
+    #[test]
+    fn targeting_and_escort_keys_still_work_while_the_player_breaks_up() {
+        let mut view = breaking_up();
+        assert_eq!(target_of(&view), None);
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(0)));
+        tap(&mut view, MENU_KEY);
+        assert_eq!(
+            view.message(),
+            Some(NO_ESCORTS),
+            "the escort menu's key is taken"
+        );
+    }
+
+    /// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the
+    /// player's explosion and one tick past it.
+    fn exploded() -> View {
+        let mut view =
+            fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        until_the_player_explodes(&mut view, |_| {});
+        view.tick(TICK);
+        view
+    }
+
+    #[test]
+    fn an_exploded_player_takes_no_command() {
+        let mut view = exploded();
+        let target = target_of(&view);
+        let nav = nav_target(&view);
+        for k in [MAP_KEY, TARGET_KEY, LAND_KEY, MISSION_INFO_KEY, MENU_KEY] {
+            tap(&mut view, k);
+        }
+        assert!(!view.map_open());
+        assert_eq!(target_of(&view), target);
+        assert_eq!(nav_target(&view), nav);
+        assert!(view.take_mission_info_request().is_none());
+        assert_eq!(view.take_landing(), None);
+        assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_ne!(view.message(), Some(NO_ESCORTS));
+    }
+
+    /// Where `view` draws [`catalog`]'s stellar 129, checked to be in the
+    /// space a click picks from, clear of the status panel.
+    fn stellar_129_on_screen(view: &View) -> Point {
+        let drawn = on_screen(view, (300.0, -200.0));
+        assert!(
+            (0.0..VIEW_SIZE.0 - STATUS_BAR_WIDTH).contains(&drawn.x)
+                && (0.0..VIEW_SIZE.1).contains(&drawn.y),
+            "{drawn:?} is in space"
+        );
+        drawn
+    }
+
+    #[test]
+    fn a_click_still_picks_a_stellar_while_the_player_breaks_up() {
+        let mut view = breaking_up();
+        assert_eq!(nav_target(&view), None);
+        let stellar = stellar_129_on_screen(&view);
+        click(&mut view, stellar);
+        assert_eq!(nav_target(&view), Some(StellarId(129)));
+    }
+
+    #[test]
+    fn a_click_picks_no_stellar_once_the_player_has_exploded() {
+        let mut view = exploded();
+        let nav = nav_target(&view);
+        assert_ne!(nav, Some(StellarId(129)));
+        let stellar = stellar_129_on_screen(&view);
+        click(&mut view, stellar);
+        assert_eq!(nav_target(&view), nav);
+    }
+
+    /// Home (`Key::Other` on this platform) has no binding, so it does
+    /// nothing in every state, including the dead one the original reads it
+    /// in (0x6884c, `_ResetPlayer(1)`, left out). This pins the unbound key,
+    /// not the dead-state lockout, which `an_exploded_player_takes_no_command`
+    /// and `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
+    #[test]
+    fn home_is_unbound_whether_flying_or_exploded() {
+        let mut flying =
+            fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        assert!(matches!(fate_of(&flying), PlayerFate::Flying));
+        assert_eq!(flying.input(&key(Key::Other, true)), ScreenAction::None);
+        assert_eq!(flying.input(&key(Key::Other, false)), ScreenAction::None);
+
+        let mut view = exploded();
+        let pilot = view.pilot().cloned();
+        assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
+        assert_eq!(view.input(&key(Key::Other, false)), ScreenAction::None);
+        assert!(matches!(fate_of(&view), PlayerFate::Holding { .. }));
+        assert!(view.take_mission_info_request().is_none());
+        assert_eq!(view.take_landing(), None);
+        assert!(view.take_hail().is_none());
+        assert!(view.take_boarding().is_none());
+        assert_eq!(view.pilot().cloned(), pilot);
+    }
+
+    /// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the
+    /// player's explosion's tick.
+    fn at_the_explosion() -> View {
+        let mut view =
+            fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        until_the_player_explodes(&mut view, |_| {});
+        view
+    }
+
+    /// The shots in flight in `view`'s session.
+    fn shots_in(view: &View) -> Vec<nova_sim::combat::projectile::Shot> {
+        view.session().expect("flying").shots().to_vec()
+    }
+
+    /// The alpha of the black covering the whole screen, if the last
+    /// thing `view` draws is one.
+    fn black_over(view: &View) -> Option<u8> {
+        match drawn(view).iter().last() {
+            Some(DrawCommand::Line { width, color, .. })
+                if *width == VIEW_SIZE.1 && (color.r, color.g, color.b) == (0, 0, 0) =>
+            {
+                Some(color.a)
+            }
+            _ => None,
+        }
+    }
+
+    /// [`at_the_explosion`], stepped one tick at a time through the hold
+    /// to its expiry, which the view reports.
+    fn held_to_expiry() -> View {
+        let mut view = at_the_explosion();
+        for _ in 0..=nova_sim::HOLD_TICKS {
+            view.tick(TICK);
+        }
+        assert!(view.take_hold_expired());
+        view
+    }
+
+    #[test]
+    fn after_the_explosion_the_scene_runs_on_without_the_ship_until_the_hold_expires() {
+        let mut view = at_the_explosion();
+        let mut shots_moved = 0;
+        for tick in 1..=nova_sim::HOLD_TICKS {
+            let before = shots_in(&view);
+            view.tick(TICK);
+            assert_eq!(player_layers(&view), [0_i16; 0], "dead tick {tick}");
+            assert!(
+                ship_sprites(&view)
+                    .iter()
+                    .any(|(image, _)| image.id == 2001),
+                "the NPC is drawn on dead tick {tick}"
+            );
+            assert!(!view.take_hold_expired(), "dead tick {tick}");
+            if shots_in(&view) != before {
+                shots_moved += 1;
+            }
+        }
+        assert_eq!(shots_moved, nova_sim::HOLD_TICKS, "the fight runs on");
+        assert_eq!(
+            fate_of(&view),
+            PlayerFate::Holding { ticks_left: 0 },
+            "no ticks left, but not expired"
+        );
+        assert!(!view.game_over());
+        let before = shots_in(&view);
+        view.tick(TICK);
+        assert_ne!(shots_in(&view), before, "the 243rd step runs");
+        assert!(view.take_hold_expired(), "and the hold expires on it");
+        assert!(!view.take_hold_expired(), "once");
+    }
+
+    #[test]
+    fn a_long_frame_stops_stepping_on_the_hold_expirys_step() {
+        let stepped = held_to_expiry();
+        let mut view = at_the_explosion();
+        for _ in 0..nova_sim::HOLD_TICKS - 2 {
+            view.tick(TICK);
+        }
+        view.tick(TICK * 8);
+        assert!(view.take_hold_expired());
+        assert_eq!(shots_in(&view), shots_in(&stepped), "no step after it");
+        assert_eq!(
+            view.session().expect("flying").npcs(),
+            stepped.session().expect("flying").npcs()
+        );
+    }
+
+    #[test]
+    fn at_hold_expiry_flight_stops_and_nothing_fades_until_the_fade_begins() {
+        let mut view = held_to_expiry();
+        let shots = shots_in(&view);
+        for _ in 0..30 {
+            view.tick(TICK);
+            assert_eq!(shots_in(&view), shots, "nothing moves");
+            assert_eq!(black_over(&view), None, "nothing fades");
+            assert_eq!(fate_of(&view), PlayerFate::Holding { ticks_left: 0 });
+            assert!(!view.game_over());
+        }
+        view.begin_fade();
+        assert_eq!(fate_of(&view), PlayerFate::Fading);
+    }
+
+    #[test]
+    fn the_death_fade_goes_to_black_over_a_second_then_the_game_is_over() {
+        let mut view = held_to_expiry();
+        view.begin_fade();
+        let shots = shots_in(&view);
+        view.tick(Duration::from_millis(500));
+        assert_eq!(black_over(&view), Some(128), "half way, over the HUD");
+        assert!(!view.game_over());
+        assert_eq!(shots_in(&view), shots, "the scene is frozen under it");
+        view.tick(Duration::from_millis(499));
+        assert!(!view.game_over());
+        assert_eq!(fate_of(&view), PlayerFate::Fading);
+        view.tick(Duration::from_millis(1));
+        assert_eq!(black_over(&view), Some(255));
+        assert!(view.game_over());
+        assert_eq!(fate_of(&view), PlayerFate::GameOver);
+        assert_eq!(shots_in(&view), shots);
+    }
+
+    #[test]
+    fn beginning_the_fade_before_the_hold_expires_does_nothing() {
+        let mut view = at_the_explosion();
+        view.tick(TICK);
+        view.begin_fade();
+        view.tick(Duration::from_millis(1500));
+        assert_eq!(black_over(&view), None);
+        assert!(!view.game_over());
+        assert!(matches!(fate_of(&view), PlayerFate::Holding { .. }));
+        while !view.take_hold_expired() {
+            view.tick(TICK);
+        }
+        view.tick(Duration::from_millis(1500));
+        assert_eq!(black_over(&view), None, "nor once the hold expires");
+        assert!(!view.game_over());
+    }
+
+    #[test]
+    fn only_a_living_pilot_may_be_saved() {
+        let flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        assert!(flying.may_save());
+        assert!(!at_the_explosion().may_save());
+        let mut failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..killed_in(1)
+        });
+        assert!(failed.session().is_err());
+        assert!(!failed.may_save(), "no session, no pilot to save");
+        assert!(!failed.take_hold_expired());
+        assert!(!failed.game_over());
+        failed.begin_fade();
+        failed.tick(Duration::from_secs(2));
+        assert!(!failed.game_over());
+    }
+
+    #[test]
+    fn only_a_strict_pilot_ending_play_dying_is_deleted() {
+        let strict = |catalog: FakeCatalog| {
+            let pilot = Pilot::new(&catalog, "Ada")
+                .expect("starts")
+                .with_strict_play(true);
+            let (_, chance) = scripted(&placed(750, 650, 180));
+            let mut view = FlightView::with_pilot(catalog, pilot)
+                .with_chance(chance)
+                .with_behaviour(Rc::new(Firing));
+            view.tick(TICK);
+            view
+        };
+        let mut view = strict(killed_in(1));
+        assert!(!view.deletes_pilot_on_ending_play(), "flying");
+        until_the_player_explodes(&mut view, |_| {});
+        assert!(view.deletes_pilot_on_ending_play(), "exploded");
+        assert!(
+            !at_the_explosion().deletes_pilot_on_ending_play(),
+            "not a strict pilot"
+        );
+        let failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..killed_in(1)
+        });
+        assert!(
+            !failed.deletes_pilot_on_ending_play(),
+            "no session, no pilot to delete"
+        );
+    }
+
+    /// Whether `list` draws `run` as one unbroken run of commands.
+    fn draws_run(list: &DrawList, run: &DrawList) -> bool {
+        let commands: Vec<_> = list.iter().cloned().collect();
+        let expected: Vec<_> = run.iter().cloned().collect();
+        commands
+            .windows(expected.len())
+            .any(|window| window == expected)
+    }
+
+    fn sprite_unavailable(list: &DrawList) -> bool {
+        list.iter().any(
+            |c| matches!(c, DrawCommand::Text { text, .. } if text.starts_with("Sprite unavailable")),
+        )
+    }
+
+    #[test]
+    fn an_exploded_player_without_a_sheet_draws_no_placeholder() {
+        let mut catalog = killed_in(5);
+        catalog.sheet = Err("no shän 128 for shïp 128".to_owned());
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        let placeholder = |view: &View| {
+            let mut boxed = DrawList::new();
+            let at = view.camera().world_to_screen(view.shown_position());
+            crossed_box(&mut boxed, at, PLACEHOLDER_SIZE, PLACEHOLDER);
+            boxed
+        };
+        until_the_player_explodes(&mut view, |view| {
+            let list = drawn(view);
+            assert!(sprite_unavailable(&list), "while breaking up");
+            assert!(draws_run(&list, &placeholder(view)), "{list:?}");
+        });
+        // The explosion's tick, then the ones after.
+        for _ in 0..3 {
+            let list = drawn(&view);
+            assert!(!sprite_unavailable(&list), "{list:?}");
+            assert!(!draws_run(&list, &placeholder(&view)), "{list:?}");
+            view.tick(TICK);
+        }
     }
 
     #[test]
@@ -13887,6 +15319,49 @@ mod tests {
     }
 
     #[test]
+    fn each_key_asks_the_session_for_its_command() {
+        let mut view = fighters_out();
+        let commands = [
+            (LAND_KEY, PlayerCommand::Land),
+            (BOARD_KEY, PlayerCommand::Board),
+            (HAIL_KEY, PlayerCommand::Hail),
+            (MAP_KEY, PlayerCommand::Map),
+            (JUMP_KEY, PlayerCommand::Jump),
+            (JETTISON_KEY, PlayerCommand::Jettison),
+            (EJECT_KEY, PlayerCommand::Eject),
+            (MISSION_INFO_KEY, PlayerCommand::MissionInfo),
+            (HYPER_SELECT_KEY, PlayerCommand::SelectSystem),
+            (HYPERSPACE_MODE_KEY, PlayerCommand::Nav),
+            (TARGET_KEY, PlayerCommand::Target),
+            (NEAREST_KEY, PlayerCommand::Target),
+            (MENU_KEY, PlayerCommand::Escort),
+            (MENU_CLOSE_KEY, PlayerCommand::Escort),
+            (ESCORT_ATTACK_KEY, PlayerCommand::Escort),
+            (ESCORT_DEFEND_KEY, PlayerCommand::Escort),
+            (ESCORT_HOLD_KEY, PlayerCommand::Escort),
+            (ESCORT_RECALL_KEY, PlayerCommand::Escort),
+            (SELECT_KEY, PlayerCommand::SelectWeapon),
+            (NEAREST_STELLAR_KEY, PlayerCommand::Nav),
+            (NAV_OFF_KEY, PlayerCommand::Nav),
+            (Key::Function(1), PlayerCommand::Nav),
+        ];
+        for (k, command) in commands {
+            assert_eq!(view.command_of(k), Some(command), "{k:?}");
+        }
+        for k in [FIRE_KEY, Key::Up, Key::Char('z'), Key::Other] {
+            assert_eq!(view.command_of(k), None, "{k:?}");
+        }
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Nav));
+        assert_eq!(view.command_of(GROUP_KEYS[4]), None, "5 is no stellar slot");
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Escort));
+        assert_eq!(view.command_of(GROUP_KEYS[4]), Some(PlayerCommand::Escort));
+        assert_eq!(view.command_of(Key::Char('z')), None);
+    }
+
+    #[test]
     fn option_c_sends_the_fighters_home_and_c_alone_back_to_formation() {
         let mut view = fighters_out();
         option(&mut view, ESCORT_RECALL_KEY);
@@ -15050,6 +16525,7 @@ mod tests {
     #[test]
     fn a_jump_clears_the_cargo_boxes() {
         let mut view = carrying(0, true);
+        ticks(&mut view, nova_sim::TAKEOFF_GRACE_TICKS);
         plot(&mut view, 131);
         fly_out(&mut view);
         jump_now(&mut view);
@@ -15129,6 +16605,114 @@ mod tests {
         for message in [SimMessage::EscortRepaired, SimMessage::FighterRepaired] {
             assert_eq!(arrival_lead(&message), None, "{message:?}");
         }
+    }
+
+    /// A flight whose one outfit is called "bomb", "bombs".
+    fn with_a_bomb() -> FlightView<FakeCatalog> {
+        FlightView::new(FakeCatalog {
+            outfits: vec![OutfitRecord {
+                lc_name: "bomb".to_owned(),
+                lc_plural: "bombs".to_owned(),
+                ..multi_jumping().outfits[0].clone()
+            }],
+            ..catalog()
+        })
+    }
+
+    #[test]
+    fn a_sabotage_notice_names_the_outfit_for_its_count() {
+        assert_eq!(
+            (YOUR, HAS_EXPLODED, HAVE_EXPLODED),
+            ("Your", "has exploded!", "have exploded!")
+        );
+        let view = with_a_bomb();
+        let session = view.session().expect("flying");
+        let sabotaged = |one| SimMessage::Sabotaged {
+            outfit: Some((OutfitId(275), one)),
+        };
+        assert_eq!(
+            sim_message_text(&sabotaged(true), session).as_deref(),
+            Some("Your bomb has exploded!")
+        );
+        assert_eq!(
+            sim_message_text(&sabotaged(false), session).as_deref(),
+            Some("Your bombs have exploded!")
+        );
+        assert_eq!(arrival_lead(&sabotaged(true)), None);
+    }
+
+    #[test]
+    fn a_bomb_notice_names_the_outfit_with_no_empty_name_check() {
+        let view = with_a_bomb();
+        let session = view.session().expect("flying");
+        let exploded = |outfit, one| SimMessage::BombExploded {
+            outfit: OutfitId(outfit),
+            one,
+        };
+        assert_eq!(
+            sim_message_text(&exploded(275, true), session).as_deref(),
+            Some("Your bomb has exploded!")
+        );
+        assert_eq!(
+            sim_message_text(&exploded(275, false), session).as_deref(),
+            Some("Your bombs have exploded!")
+        );
+        assert_eq!(
+            sim_message_text(&exploded(999, true), session).as_deref(),
+            Some("Your  has exploded!"),
+            "an empty name is spelled out as it is"
+        );
+        assert_eq!(arrival_lead(&exploded(275, true)), None);
+    }
+
+    #[test]
+    fn a_sabotage_notice_without_an_outfit_says_a_bomb_exploded() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        let message = SimMessage::Sabotaged { outfit: None };
+        assert_eq!(
+            sim_message_text(&message, session).as_deref(),
+            Some("A bomb has exploded onboard your ship!")
+        );
+        assert_eq!(
+            BOMB_EXPLODED_ONBOARD,
+            "A bomb has exploded onboard your ship!"
+        );
+    }
+
+    #[test]
+    fn a_collapsed_jump_says_the_hyperspace_field_collapsed() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(&SimMessage::JumpCollapsed, session).as_deref(),
+            Some("Ship disabled - hyperspace field collapsed.")
+        );
+        assert_eq!(
+            JUMP_COLLAPSED,
+            "Ship disabled - hyperspace field collapsed."
+        );
+        assert_eq!(arrival_lead(&SimMessage::JumpCollapsed), None);
+    }
+
+    #[test]
+    fn the_escape_ship_says_escaping_in_its_long_name() {
+        assert_eq!(ESCAPING_IN, "Escaping in");
+        let mut catalog = shipbuying();
+        catalog.ships[0].long_name = "Federation Viper".to_owned();
+        let view = FlightView::new(catalog);
+        let session = view.session().expect("flying");
+        let escaping = |ship| SimMessage::EscapingIn { ship: ShipId(ship) };
+        assert_eq!(
+            sim_message_text(&escaping(129), session).as_deref(),
+            Some("Escaping in Federation Viper.")
+        );
+        assert_eq!(
+            sim_message_text(&escaping(999), session).as_deref(),
+            Some("Escaping in ."),
+            "a class with no record has no long name"
+        );
+        assert_eq!(arrival_lead(&escaping(129)), None);
     }
 
     #[test]
@@ -15300,7 +16884,7 @@ mod tests {
             "goals_met": true,
             "aboard": true,
             "failed": null,
-            "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0},
+            "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0, "uniform_type": null, "ship_done": false},
             "aux": {"countdown": 0, "arrived": 0, "left": 0},
         }]);
         let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
@@ -15310,6 +16894,50 @@ mod tests {
         FlightView::with_pilot(catalog, pilot)
             .with_chance(chance)
             .with_behaviour(Rc::new(Inspector::default()))
+    }
+
+    /// Inspects the player until its flag is set; then it has looked the
+    /// player over, and goes on to its goal.
+    #[derive(Debug)]
+    struct InspectingUntil(Rc<std::cell::Cell<bool>>, Goal);
+
+    impl Behaviour for InspectingUntil {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            if self.0.get() {
+                self.1
+            } else {
+                Goal::Inspect(ShipRef::Player)
+            }
+        }
+    }
+
+    #[test]
+    fn a_scan_in_the_warps_lead_in_is_said_under_the_streak() {
+        let done = Rc::new(std::cell::Cell::new(false));
+        let mut view = smuggling(0, 500)
+            .with_behaviour(Rc::new(InspectingUntil(Rc::clone(&done), Goal::Idle)));
+        plot(&mut view, 131);
+        ready_to_jump(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.jump_effect().is_some(), "streaking on J");
+        assert_eq!(view.pilot().expect("flying").cash(), 1200, "not yet");
+        done.set(true);
+        view.tick(TICK);
+        assert_eq!(view.pilot().expect("flying").cash(), 700, "convicted");
+        assert_eq!(
+            view.message(),
+            Some(
+                "Ship 129:  Kestrel, your attempt to smuggle illegal cargo through this \
+                 system has been detected. You have been fined 500 credits."
+            ),
+            "said under the streak"
+        );
+        assert!(view.jump_effect().is_some());
     }
 
     #[test]
@@ -17268,7 +18896,7 @@ mod tests {
         assert!(!view.take_player_info_request());
         assert_eq!(
             view.take_sounds(),
-            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            [Sound::Sim(SimSound::Refused)],
             "turning to jump"
         );
         let mut view = flight();
@@ -17286,9 +18914,85 @@ mod tests {
         assert!(!view.take_player_info_request());
         assert_eq!(
             view.take_sounds(),
-            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            [Sound::Sim(SimSound::Refused)],
             "streaking"
         );
+    }
+
+    #[test]
+    fn p_while_the_player_breaks_up_beeps_and_asks_nothing() {
+        let mut view = breaking_up();
+        let _ = view.take_sounds();
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Refused)]);
+    }
+
+    #[test]
+    fn p_once_the_player_has_exploded_or_ejected_does_nothing_and_says_nothing() {
+        let mut holding = exploded();
+        assert!(matches!(fate_of(&holding), PlayerFate::Holding { .. }));
+        let mut pod = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
+        assert!(until_ejected(&mut pod).0);
+        for (why, view) in [("holding", &mut holding), ("in the pod", &mut pod)] {
+            let _ = view.take_sounds();
+            tap(view, PLAYER_INFO_KEY);
+            assert!(!view.take_player_info_request(), "{why}");
+            assert_eq!(view.take_sounds(), [], "{why}");
+        }
+    }
+
+    #[test]
+    fn p_while_disabled_asks_for_the_player_info_in_silence() {
+        let mut view = disabled_player();
+        let _ = view.take_sounds();
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(view.take_player_info_request());
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn l_while_disabled_selects_a_stellar_and_then_says_nothing_and_does_not_land() {
+        let mut view = disabled_player();
+        assert_eq!(nav_target(&view), None);
+        tap(&mut view, LAND_KEY);
+        let selected = nav_target(&view);
+        assert!(selected.is_some(), "the nearest selected (@0x6a901)");
+        assert_eq!(view.message(), None, "no clearance reply");
+        tap(&mut view, LAND_KEY);
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(view.message(), None, "refused silently (@0x66af7)");
+        assert_eq!(nav_target(&view), selected, "kept");
+    }
+
+    /// A flight under fire from an NPC whose every hit disables, stepped
+    /// until the player's ship is disabled.
+    fn disabled_player() -> View {
+        let mut catalog = armed(1, &[]);
+        catalog.hulls[1] = hull_of(129, &[BLASTER]);
+        let mut view = fighting(catalog, &placed(750, 650, 180))
+            .with_behaviour(Rc::new(Firing))
+            .with_disable_rule(Rc::new(Disabling));
+        for _ in 0..40 {
+            if fate_of(&view) == PlayerFate::Disabled {
+                return view;
+            }
+            view.tick(TICK);
+        }
+        panic!("the player's ship was never disabled");
+    }
+
+    #[test]
+    fn opening_the_player_info_gives_the_screen_unless_in_a_jump() {
+        let mut view = flight();
+        assert_eq!(view.open_player_info(), view.player_info(), "flying");
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        assert!(view.player_info().is_some(), "the getter reads it");
+        assert_eq!(view.open_player_info(), None, "no opening (@0x5a02a)");
     }
 
     #[test]
@@ -19644,5 +21348,338 @@ mod tests {
         ticks(&mut view, 3);
         assert_eq!(player(&view), start());
         assert!(!view.double_time(), "the app toggles it, not flight");
+    }
+
+    // The hover cursor (`_HandleMouse`).
+
+    /// The cursor sprites in `list`: frame and centre.
+    fn cursor_sprites(list: &DrawList) -> Vec<(u16, Point)> {
+        sprites(list)
+            .into_iter()
+            .filter(|(image, _)| image.id == 651)
+            .map(|(image, at)| (image.frame, at))
+            .collect()
+    }
+
+    /// A flight with one still NPC, drawn after a tick, and its id.
+    fn flight_with_npc(catalog: FakeCatalog) -> (View, NpcId) {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let id = npc_ids(&view)[0];
+        (view, id)
+    }
+
+    /// A point on screen over nothing at all.
+    const NOWHERE: Point = Point::new(40.0, 400.0);
+
+    #[test]
+    fn the_cursor_animates_over_an_npc_and_rests_off_it() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        view.input(&Input::PointerMoved(over));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, over)]);
+        ticks(&mut view, 2);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(1, over)]);
+        view.input(&Input::PointerMoved(NOWHERE));
+        ticks(&mut view, 1);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+        ticks(&mut view, 4);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)], "rests");
+    }
+
+    #[test]
+    fn a_button_press_shows_the_cursor_where_it_is() {
+        let mut view = flight();
+        assert_eq!(cursor_sprites(&drawn(&view)), [], "no pointer yet");
+        view.input(&Input::PointerButton {
+            button: MouseButton::Right,
+            pressed: true,
+            at: NOWHERE,
+        });
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+    }
+
+    #[test]
+    fn the_cursor_draws_over_the_hud_and_under_the_jump_fade() {
+        let cursor_at = |list: &DrawList| {
+            list.iter()
+                .position(
+                    |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 651),
+                )
+                .expect("drawn")
+        };
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        let list = drawn(&view);
+        let cursor = cursor_at(&list);
+        assert!(cursor > hud_at(&list), "over the HUD");
+        assert_eq!(cursor, list.len() - 1, "last, with no fade");
+
+        let mut view = fading_in_on_course_to_barnard();
+        view.input(&Input::PointerMoved(NOWHERE));
+        let list = drawn(&view);
+        let (at_fade, _) = fade(&list).expect("fading in");
+        assert!(cursor_at(&list) < at_fade, "under the fade");
+    }
+
+    #[test]
+    fn a_cloaked_npc_is_hovered_only_with_a_scanner_that_targets_cloaked_ships() {
+        let cloaking = |scanned: bool| {
+            let mut scanner = radar_outfits();
+            let mut mods = [(0, 0); 4];
+            mods[1] = (nova_sim::cloak::MOD_SCANNER, nova_sim::cloak::SCAN_TARGET);
+            scanner[0].mods = mods;
+            let catalog = FakeCatalog {
+                outfits: scanner,
+                defaults: if scanned {
+                    vec![(OutfitId(300), 1)]
+                } else {
+                    Vec::new()
+                },
+                ..trafficked(&[130], 1, 129, 3)
+            };
+            let (mut view, id) = flight_with_npc(catalog);
+            let session = view.session.as_mut().expect("flying");
+            nova_sim::fixture::cloak(session, id, CLOAKED);
+            let session = view.session().expect("flying");
+            assert!(!session.scanner().on_screen, "cannot see it");
+            assert_eq!(session.scanner().targets, scanned);
+            let over = npc_on_screen(&view, id);
+            view.input(&Input::PointerMoved(over));
+            ticks(&mut view, 2);
+            let frames: Vec<u16> = cursor_sprites(&drawn(&view))
+                .into_iter()
+                .map(|(frame, _)| frame)
+                .collect();
+            frames
+        };
+        assert_eq!(cloaking(false), [0], "rests");
+        assert_eq!(
+            cloaking(true),
+            [1],
+            "animates over the ship it does not draw"
+        );
+    }
+
+    #[test]
+    fn the_players_own_ship_is_hovered_only_while_it_holds_a_target() {
+        let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let frame = |view: &mut View| {
+            view.input(&Input::PointerMoved(VIEW_CENTER));
+            ticks(view, 2);
+            cursor_sprites(&drawn(view))
+        };
+        assert_eq!(frame(&mut view), [(0, VIEW_CENTER)], "no target");
+        view.input(&key(TARGET_KEY, true));
+        view.input(&key(TARGET_KEY, false));
+        assert!(view.session().expect("flying").target().is_some());
+        assert_eq!(frame(&mut view), [(1, VIEW_CENTER)], "a target");
+    }
+
+    #[test]
+    fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        let near = |list: &DrawList| {
+            list.iter().any(|command| match *command {
+                DrawCommand::Sprite { center, image, .. } => {
+                    image.id != 651
+                        && (center.x - over.x).abs() < 0.01
+                        && (center.y - over.y).abs() < 0.01
+                }
+                _ => false,
+            })
+        };
+        assert!(near(&drawn(&view)), "drawn while shown");
+        nova_sim::fixture::hide(view.session.as_mut().expect("flying"), id);
+        assert!(view.session().expect("flying").is_hidden(ShipRef::Npc(id)));
+        assert!(!near(&drawn(&view)), "not drawn hidden");
+        view.input(&Input::PointerMoved(over));
+        ticks(&mut view, 2);
+        assert_eq!(
+            cursor_sprites(&drawn(&view)),
+            [(1, over)],
+            "animates over where it would be drawn"
+        );
+    }
+
+    /// [`SlotSprites`] whose `slot` last cloned `shïp` 131's 100-pixel
+    /// frames, as a flight that showed one there leaves it.
+    fn cloned_131(slot: nova_sim::ship_layer::Slot) -> SlotSprites {
+        let mut sprites = SlotSprites::default();
+        sprites.frames.clone_frames(slot, ShipId(131));
+        sprites
+    }
+
+    /// Whether the pointer at `over` hovers a ship in `view`, after the
+    /// two ticks the cursor takes to animate.
+    fn hovers(view: &mut View, over: Point) -> bool {
+        view.input(&Input::PointerMoved(over));
+        ticks(view, 2);
+        cursor_sprites(&drawn(view))
+            .first()
+            .is_some_and(|&(frame, _)| frame == 1)
+    }
+
+    #[test]
+    fn a_hidden_ship_is_hovered_by_the_box_its_berth_last_drew() {
+        let engine = Rulebook::default;
+        let hover = |rules: Rulebook, off: f32| {
+            let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+            let session = view.session.as_mut().expect("flying");
+            nova_sim::fixture::hide(session, id);
+            let berth = session
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("there")
+                .berth;
+            let mut view = view
+                .with_rules(rules)
+                .with_slot_sprites(cloned_131(nova_sim::ship_layer::Slot::Berth(berth)));
+            let carried = sheets(&view).contains(&ShipId(131));
+            assert_eq!(
+                carried,
+                rules == engine(),
+                "read as the history is carried in"
+            );
+            let over = npc_on_screen(&view, id);
+            hovers(&mut view, Point::new(over.x, over.y + off))
+        };
+        assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
+        assert!(!hover(engine(), 60.0), "outside it");
+        let own = || {
+            Rulebook::default().with_override(
+                nova_sim::RuleKey::HiddenShipHoverBox,
+                nova_sim::RuleSource::Bible,
+            )
+        };
+        assert!(hover(own(), 30.0), "inside its own 40-pixel frame's margin");
+        assert!(!hover(own(), 40.0), "boxed by its own 40-pixel frame");
+    }
+
+    #[test]
+    fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
+        let hover = |rules: Rulebook, off: f32| {
+            let catalog = FakeCatalog {
+                hulls: vec![nova_sim::HullRecord {
+                    cost: -1,
+                    ..hull_of(128, &[])
+                }],
+                ..trafficked(&[130], 1, 129, 3)
+            };
+            let (view, _) = flight_with_npc(catalog);
+            let mut view = view
+                .with_rules(rules)
+                .with_slot_sprites(cloned_131(nova_sim::ship_layer::Slot::Player));
+            assert!(view.session().expect("flying").is_hidden(ShipRef::Player));
+            view.input(&key(TARGET_KEY, true));
+            view.input(&key(TARGET_KEY, false));
+            assert!(view.session().expect("flying").target().is_some());
+            hovers(&mut view, Point::new(VIEW_CENTER.x, VIEW_CENTER.y + off))
+        };
+        let engine = Rulebook::default;
+        assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
+        assert!(!hover(engine(), 60.0));
+        let own = || {
+            Rulebook::default().with_override(
+                nova_sim::RuleKey::HiddenShipHoverBox,
+                nova_sim::RuleSource::Bible,
+            )
+        };
+        assert!(hover(own(), 30.0));
+        assert!(!hover(own(), 40.0), "boxed by its own sheet");
+    }
+
+    #[test]
+    fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
+        let mut sprites = SlotSprites::default();
+        sprites.layers.put(
+            nova_sim::ship_layer::Slot::Berth(2),
+            nova_sim::ship_layer::ShipLayer::Led,
+        );
+        sprites
+            .frames
+            .clone_frames(nova_sim::ship_layer::Slot::Berth(2), ShipId(140));
+        let view = flight().with_slot_sprites(sprites.clone());
+        assert_eq!(view.session().expect("flying").slot_sprites(), &sprites);
+        assert_eq!(view.slot_sprites(), Some(&sprites));
+        let failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        })
+        .with_slot_sprites(sprites);
+        assert_eq!(failed.slot_sprites(), None);
+    }
+
+    #[test]
+    fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+        assert_eq!(view.cursor_at(), Some(NOWHERE));
+        view.cancel_pointer();
+        assert_eq!(cursor_sprites(&drawn(&view)), [], "not at the old point");
+        assert_eq!(view.cursor_at(), None);
+        let other = Point::new(60.0, 420.0);
+        view.input(&Input::PointerMoved(other));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, other)]);
+        assert_eq!(view.cursor_at(), Some(other));
+    }
+
+    #[test]
+    fn the_cursor_is_hidden_once_the_pointer_leaves_the_window() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&Input::PointerLeft);
+        assert_eq!(cursor_sprites(&drawn(&view)), []);
+    }
+
+    #[test]
+    fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(Key::Char('z'), true));
+        ticks(&mut view, 1);
+        let tint = |view: &View| {
+            drawn(view).iter().find_map(|command| match *command {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
+        };
+        assert_eq!(tint(&view), Some(247), "31 of 32");
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 2);
+        assert_eq!(tint(&view), Some(231), "held: 29 of 32");
+    }
+
+    #[test]
+    fn the_cursor_is_not_drawn_while_the_map_is_open() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(MAP_KEY, true));
+        assert!(view.map_open());
+        assert_eq!(cursor_sprites(&drawn(&view)), []);
+    }
+
+    #[test]
+    fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() {
+        let mut view = flight();
+        assert!(view.hides_pointer());
+        view.input(&key(MAP_KEY, true));
+        assert!(!view.hides_pointer(), "the map");
+        let no_cursor = FakeCatalog {
+            cursor_sheet: Err("no spïn 650".to_owned()),
+            ..catalog()
+        };
+        assert!(!FlightView::new(no_cursor).hides_pointer());
+        let failed = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        assert!(!FlightView::new(failed).hides_pointer());
     }
 }

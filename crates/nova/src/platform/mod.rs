@@ -37,6 +37,7 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
         WinitEvent::CursorMoved { position, .. } => WindowEvent::PointerMoved {
             px: (position.x, position.y),
         },
+        WinitEvent::CursorLeft { .. } => WindowEvent::PointerLeft,
         WinitEvent::MouseInput { state, button, .. } => WindowEvent::PointerButton {
             button: map_button(*button),
             pressed: state.is_pressed(),
@@ -138,10 +139,13 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
         // Either Command (Super, the Windows key, off a Mac): what flight's
-        // jettison key needs held.
+        // jettison and eject keys need held.
         PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
         // Flight's jettison key, by position: K on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
+        // Flight's eject key, by position: X on a US-layout keyboard, the
+        // original's default (keycode 0x07).
+        PhysicalKey::Code(KeyCode::KeyX) => Key::Char('x'),
         // Double time's key: each press toggles it, an accepted difference
         // from the original's following the lock state. winit 0.30.13
         // sends no Caps Lock key on macOS (its `key_to_modifier` maps Alt,
@@ -237,6 +241,7 @@ mod tests {
             (KeyCode::ShiftRight, Key::Shift),
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::KeyK, Key::Char('k')),
+            (KeyCode::KeyX, Key::Char('x')),
             (KeyCode::SuperLeft, Key::Command),
             (KeyCode::SuperRight, Key::Command),
             (KeyCode::CapsLock, Key::CapsLock),
@@ -266,7 +271,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 32] = [
+    const GAME_CHARACTER_KEYS: [Key; 33] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -281,6 +286,7 @@ mod tests {
         nova_view::flight::view::HYPERSPACE_MODE_KEY,
         nova_view::flight::view::NAV_OFF_KEY,
         nova_view::flight::view::JETTISON_KEY,
+        nova_view::flight::view::EJECT_KEY,
         nova_view::flight::view::STELLAR_SLOT_KEYS[0][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[1][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[2][0],
@@ -318,6 +324,7 @@ mod tests {
             'r' => KeyCode::KeyR,
             's' => KeyCode::KeyS,
             'w' => KeyCode::KeyW,
+            'x' => KeyCode::KeyX,
             '1' => KeyCode::Digit1,
             '2' => KeyCode::Digit2,
             '3' => KeyCode::Digit3,
@@ -492,6 +499,10 @@ mod tests {
             translate(&moved, &Window),
             Some(WindowEvent::PointerMoved { px: (12.5, 40.0) })
         );
+        let left = WinitEvent::CursorLeft {
+            device_id: DeviceId::dummy(),
+        };
+        assert_eq!(translate(&left, &Window), Some(WindowEvent::PointerLeft));
         let pressed = WinitEvent::MouseInput {
             device_id: DeviceId::dummy(),
             state: ElementState::Pressed,

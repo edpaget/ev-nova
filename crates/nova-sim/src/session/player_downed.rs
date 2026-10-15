@@ -273,8 +273,8 @@ mod tests {
         assert!(matches!(session.condition, Condition::Dying { .. }));
         assert_eq!(
             tick(&mut session, &catalog, 10.0),
-            (vec![], vec![]),
-            "still"
+            (vec![SimSound::Klaxon], vec![]),
+            "still: the klaxon alone"
         );
         assert!(matches!(session.condition, Condition::Dying { .. }));
     }
@@ -298,9 +298,14 @@ mod tests {
         let mut catalog = shooting(vec![], 1);
         catalog.hulls[0].death_delay = 0;
         let mut session = under_fire(&catalog, 0.5, Condition::Disabled);
+        let halt = SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS);
         assert_eq!(
             hit(&mut session, &catalog, 10.0),
-            (vec![SimSound::ShipDowned], vec![SimMessage::ShipDestroyed])
+            (
+                vec![SimSound::ShipDowned, halt],
+                vec![SimMessage::ShipDestroyed]
+            ),
+            "the explosion's halt after the line's beep"
         );
         assert_eq!(session.condition, Condition::Destroyed);
         catalog.weapons[0].mass_dmg = 20;
@@ -308,7 +313,7 @@ mod tests {
         assert_eq!(
             hit(&mut session, &catalog, 10.0),
             (
-                vec![SimSound::ShipDowned, SimSound::ShipDowned],
+                vec![SimSound::ShipDowned, SimSound::ShipDowned, halt],
                 vec![SimMessage::ShipDisabled, SimMessage::ShipDestroyed]
             )
         );
@@ -363,7 +368,11 @@ mod tests {
             "0.4 truncated to none"
         );
         assert_eq!(armor(&session), 0.0);
-        assert_eq!(session.condition, Condition::Dying { ticks_left: 1 });
+        assert!(
+            matches!(session.condition, Condition::Dying { starting: true, .. }),
+            "{:?}",
+            session.condition
+        );
         assert!(session.take_combat_events().iter().any(|event| matches!(
             event,
             CombatEvent::BreakingUp {

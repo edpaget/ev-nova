@@ -17,17 +17,26 @@
 //! - Its `Flags` 0x1000, 0x2000 and 0x4000 ([`BLIND_SPOTS`]) blind its
 //!   turrets in front, to the sides and to the rear, as a weapon's own do
 //!   (`_TurretBlindSpot`, which reads them from the `shïp`).
-//! - Once its armour is gone it breaks up for its `DeathDelay` ticks
-//!   (its `Explode1` going off), then is destroyed (its `Explode2`). A
+//! - Once its armour is gone it breaks up (its `Explode1` going off),
+//!   counting down a timer of its `DeathDelay`, three times it for the
+//!   player ([`PLAYER_BREAKUP_FACTOR`]), to [`EXPLOSION_BAND`], then is
+//!   destroyed (its `Explode2`); see [`Breakup`] for a timer that never
+//!   rises above 0. A
 //!   ship of [`DEATH_SIZE_MASS`] tons or more dies in an explosion sized
 //!   by its mass ([`HullSpec::death_size`], `_HandleShipDisplay`
 //!   @0x2d7ef-0x2dee7), which scatters the `Explode2`'s extra explosions
-//!   when it has them; the Bible's huge explosion for a `DeathDelay` of 60
-//!   or more is not what the executable does.
+//!   when it has them and reaches as far as its shockwave (see
+//!   [`shockwave`](super::shockwave)); the Bible's huge explosion for a
+//!   `DeathDelay` of 60 or more is not what the executable does.
 //! - Its `Flags` 0x0400 ([`PLANET_TYPE`]) makes it a planet-type ship: an
 //!   NPC's missile flies at it only from a planet-type weapon, and at any
 //!   other ship only from any other weapon (`_AIFireMissile`
-//!   @0x812b4-0x812fb, see [`fire`](crate::ai::fire)).
+//!   @0x812b4-0x812fb, see [`fire`](crate::ai::fire)). It dies in an
+//!   explosion of no size and makes no shockwave (`_HandleShipDisplay`
+//!   tests the flag @0x2d90d), and no shockwave pushes it (`_DamageShip`
+//!   @0x3aacb). The original's explosion size for one is a stale stack
+//!   value (copied @0x2d900 from a local only 0x2d968 writes); the engine
+//!   reads it as none.
 //! - Its `KeyCarried` ([`HullSpec::key_carried`]) is the ship a weapon of
 //!   `Flags2` 0x0080 needs aboard (`_WeaponHasAmmo` @0xba07-0xba85, see
 //!   [`Armament::has_ammo`](super::armament::Armament::has_ammo)); none
@@ -39,6 +48,32 @@ use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{HullRecord, ShipId};
 use crate::reserves::Gauge;
+use crate::rulebook::RuleSource;
+
+/// The escape pod's ship class, `shïp` 895 "Escape Pod": the original's
+/// class index 0x2ff (the ID less 128), which `_EnterGameFromMainScreen`
+/// tests (@0x1a4c5) to spare a strict pilot who ejected in it. Only the
+/// pod branch of the player's eject sets it (@0x6f64a). It never breaks
+/// up (`_HandleShipDisplay` @0x2d803), and it and every class after it
+/// are never damaged ([`immune`]).
+pub const ESCAPE_POD_SHIP: ShipId = ShipId(895);
+
+/// Whether ships of class `ship` take no damage: the [`ESCAPE_POD_SHIP`]
+/// and every class after it, as `_DamageShip`'s prologue returns at once
+/// for a class index above 0x2fe (`cmpw $0x2fe, 0x76` @0x3a87c-0x3a882),
+/// before any of its damage, convictions or kill credits.
+#[must_use]
+pub fn immune(ship: ShipId) -> bool {
+    ship >= ESCAPE_POD_SHIP
+}
+
+/// Whether ships of class `ship` never break up: the [`ESCAPE_POD_SHIP`]
+/// alone, as `_HandleShipDisplay` skips its dying block for class 0x2ff
+/// (@0x2d803).
+#[must_use]
+pub fn never_breaks_up(ship: ShipId) -> bool {
+    ship == ESCAPE_POD_SHIP
+}
 
 /// The hit radius of a ship type without a `shän`, in pixels: a
 /// placeholder.
@@ -68,6 +103,8 @@ pub const TOUGH_DISABLE_PERCENT: f64 = 10.0;
 pub const BLIND_SPOTS: u16 = 0x7000;
 /// The `shïp` `Flags` bit of a planet-type ship.
 pub const PLANET_TYPE: u16 = 0x0400;
+/// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
+pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
 pub const DEATH_SIZE_MASS: f32 = 100.0;
 /// The death explosion's size per ton (the double @0xdd588).
@@ -114,11 +151,17 @@ pub struct HullSpec {
     /// without a sprite. Whether it is on screen reads it with the width
     /// (see [`cloak::on_screen`](crate::cloak::on_screen)).
     pub sprite_height: Option<f32>,
-    /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`].
+    /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`]: it
+    /// dies with no shockwave and no shockwave pushes it.
     pub planet_type: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
+    /// Whether it is hidden: its `Cost` is -1, and `_HandleShipDisplay`
+    /// hides a ship of such a type and leaves its slot's layer as it was
+    /// (@0x2b7f3 → @0x2cc6b; see
+    /// [`ship_layer`](crate::ship_layer)).
+    pub hidden: bool,
 }
 
 impl Default for HullSpec {
@@ -141,6 +184,7 @@ impl Default for HullSpec {
             sprite_height: None,
             planet_type: false,
             key_carried: None,
+            hidden: false,
         }
     }
 }
@@ -168,15 +212,18 @@ impl HullSpec {
             sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
             planet_type: record.flags & PLANET_TYPE != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
+            hidden: record.cost == HIDDEN_COST,
         }
     }
 
     /// The size of the explosion it dies in: `trunc(mass x 0.075 + 50)`
     /// for a ship of [`DEATH_SIZE_MASS`] tons or more, and none for a
-    /// lighter one.
+    /// lighter one or a planet-type one ([`HullSpec::planet_type`]). It is
+    /// also the reach of the shockwave the explosion makes (see
+    /// [`shockwave`](super::shockwave)).
     #[must_use]
     pub fn death_size(&self) -> f32 {
-        if self.mass >= DEATH_SIZE_MASS {
+        if self.mass >= DEATH_SIZE_MASS && !self.planet_type {
             self.mass
                 .mul_add(DEATH_SIZE_PER_TON, DEATH_SIZE_BASE)
                 .trunc()
@@ -195,10 +242,24 @@ pub enum Condition {
     /// Disabled: it drifts, and cannot fire, land or jump. Further damage
     /// can still destroy it.
     Disabled,
-    /// Its armour is gone, and it breaks up, for this many more ticks.
+    /// Its armour is gone, and it breaks up, counting down the original's
+    /// death timer (field 0x3c) to its final explosion (see
+    /// [`Combat`](super::Combat)'s step 9).
     Dying {
-        /// The ticks before it is destroyed.
+        /// The death timer: its `DeathDelay`, times
+        /// [`PLAYER_BREAKUP_FACTOR`] for the player, as set on the
+        /// breakup's first tick, less a tick for each tick since. The ship
+        /// explodes on the tick it comes down to [`EXPLOSION_BAND`] or
+        /// below.
         ticks_left: u32,
+        /// Whether the timer was set on this tick: the original's "dying,
+        /// timer not yet set" frame, on which `_HandleShipDisplay` sets it
+        /// (@0x2d834-0x2d850) and does nothing else. False from the next
+        /// tick on; under [`Breakup::Stalls`], true again on every tick
+        /// the timer is set again. Phase 9's eject reads it, as
+        /// `_HandlePlayer` (@0x6f248-0x6f286) runs before
+        /// `_HandleShipDisplay` sets the timer.
+        starting: bool,
     },
     /// Destroyed.
     Destroyed,
@@ -209,6 +270,42 @@ impl Condition {
     #[must_use]
     pub fn hittable(self) -> bool {
         matches!(self, Self::Intact | Self::Disabled)
+    }
+}
+
+/// What the player's `DeathDelay` is multiplied by as its breakup starts
+/// (the 3.0 @0xdd664, applied @0x2d848 when +0x86 is 0, the player).
+pub const PLAYER_BREAKUP_FACTOR: u32 = 3;
+/// The death timer at or below which a breaking-up ship makes its final
+/// explosion (the 2.0 @0xdd074, tested @0x2d85a).
+pub const EXPLOSION_BAND: u32 = 2;
+
+/// What becomes of a breakup whose death timer never rises above 0 by
+/// the time `_HandleShipDisplay` checks it: a `DeathDelay` of 0 or less
+/// for any ship, or of 1 for an NPC, whose timer `_HandleShip` takes back
+/// to 0 before the check. No stock ship has one (the lowest stock
+/// `DeathDelay` is 3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Breakup {
+    /// The ship explodes: on its breakup tick with no `DeathDelay`, on the
+    /// tick after with 1. The default, and the other reading.
+    #[default]
+    Explodes,
+    /// The original's: `_HandleShipDisplay` sets a timer that is not above
+    /// 0 again every frame (@0x2d80d-0x2d83d), and the decrements skip one
+    /// that is not (@0x6d7eb, @0x35088), so the ship breaks up for good.
+    /// For the player, the game never ends.
+    Stalls,
+}
+
+impl From<RuleSource> for Breakup {
+    /// The engine's reading [`Breakup::Stalls`]; the other
+    /// [`Breakup::Explodes`].
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Stalls,
+            RuleSource::Bible => Self::Explodes,
+        }
     }
 }
 
@@ -427,6 +524,20 @@ mod tests {
     }
 
     #[test]
+    fn a_hull_is_hidden_when_its_cost_is_minus_one() {
+        let hidden = HullSpec::new(&HullRecord {
+            cost: -1,
+            ..hull(141)
+        });
+        assert!(hidden.hidden);
+        for cost in [0, -2, 5000] {
+            let shown = HullSpec::new(&HullRecord { cost, ..hull(141) });
+            assert!(!shown.hidden, "cost {cost}");
+        }
+        assert!(!HullSpec::default().hidden);
+    }
+
+    #[test]
     fn a_hulls_key_carried_ship_is_none_below_128() {
         let carrier = |key| {
             HullSpec::new(&HullRecord {
@@ -491,11 +602,42 @@ mod tests {
     }
 
     #[test]
+    fn a_planet_type_ship_dies_in_an_explosion_of_no_size() {
+        let planet = HullSpec {
+            mass: 400.0,
+            planet_type: true,
+            ..HullSpec::default()
+        };
+        assert_eq!(planet.death_size(), 0.0);
+        let ordinary = HullSpec {
+            planet_type: false,
+            ..planet
+        };
+        assert_eq!(ordinary.death_size(), 80.0);
+    }
+
+    #[test]
     fn intact_and_disabled_ships_can_be_hit_and_dying_or_destroyed_ones_cannot() {
         assert!(Condition::Intact.hittable());
         assert!(Condition::Disabled.hittable());
-        assert!(!Condition::Dying { ticks_left: 3 }.hittable());
+        for starting in [false, true] {
+            assert!(
+                !Condition::Dying {
+                    ticks_left: 3,
+                    starting
+                }
+                .hittable()
+            );
+        }
         assert!(!Condition::Destroyed.hittable());
         assert_eq!(Condition::default(), Condition::Intact);
+    }
+
+    #[test]
+    fn the_engine_reading_stalls_and_the_other_explodes() {
+        assert_eq!(Breakup::from(RuleSource::Engine), Breakup::Stalls);
+        assert_eq!(Breakup::from(RuleSource::Bible), Breakup::Explodes);
+        assert_eq!(Breakup::default(), Breakup::Explodes);
+        assert_eq!((PLAYER_BREAKUP_FACTOR, EXPLOSION_BAND), (3, 2));
     }
 }

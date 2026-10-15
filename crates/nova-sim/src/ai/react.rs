@@ -229,6 +229,7 @@ mod tests {
             by,
             damage: 12.0,
             downed: None,
+            provokes: true,
         }
     }
 

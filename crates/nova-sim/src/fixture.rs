@@ -4,7 +4,8 @@
 //! mission chain from a script of [`Step`]s (see the `walker` module); and
 //! [`bits_allowing`], the control bits that make a test hold, for setting
 //! a pilot up directly; [`disable`], for disabling a ship directly;
-//! [`cloak`], for setting a ship's cloak directly; and
+//! [`cloak`], for setting a ship's cloak directly; [`hide`], for
+//! making a ship's type one whose `Cost` is -1; and
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
 //! landing sites.
 
@@ -45,6 +46,15 @@ pub fn disable(session: &mut Session, id: NpcId) {
 pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
     if let Some(npc) = session.npc_mut(id) {
         npc.cloak = to;
+    }
+}
+
+/// Makes NPC `id`'s type in `session` one whose `Cost` is -1, if it is
+/// in the system: for a test that needs a hidden ship
+/// ([`Session::is_hidden`]).
+pub fn hide(session: &mut Session, id: NpcId) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.hull.hidden = true;
     }
 }
 
@@ -110,15 +120,18 @@ pub fn list_also(
     }
 }
 
-/// A [`PilotStore`] in memory. Clones share the saves and the failure
-/// switches, so a test can seed the store before the app takes a clone,
-/// read back what was saved, or "restart" over another clone.
+/// A [`PilotStore`] in memory that records each write and delete. Clones
+/// share the saves, the records and the failure switches, so a test can seed the
+/// store before the app takes a clone, read back what was saved and when,
+/// or "restart" over another clone.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryPilots {
     saves: Rc<RefCell<BTreeMap<String, String>>>,
-    writes: Rc<Cell<usize>>,
+    written: Rc<RefCell<Vec<(String, String)>>>,
     fail_reads: Rc<Cell<bool>>,
     fail_writes: Rc<Cell<bool>>,
+    deleted: Rc<RefCell<Vec<String>>>,
+    fail_deletes: Rc<Cell<bool>>,
 }
 
 impl MemoryPilots {
@@ -151,7 +164,13 @@ impl MemoryPilots {
     /// How many writes have succeeded.
     #[must_use]
     pub fn writes(&self) -> usize {
-        self.writes.get()
+        self.written.borrow().len()
+    }
+
+    /// Each write that succeeded, in order: its key and its text.
+    #[must_use]
+    pub fn written(&self) -> Vec<(String, String)> {
+        self.written.borrow().clone()
     }
 
     /// Makes every read and list fail (`true`) or succeed again.
@@ -163,6 +182,19 @@ impl MemoryPilots {
     /// succeed again.
     pub fn fail_writes(&self, fail: bool) {
         self.fail_writes.set(fail);
+    }
+
+    /// Each key a delete succeeded on, in order, whether or not anything
+    /// was saved under it.
+    #[must_use]
+    pub fn deleted(&self) -> Vec<String> {
+        self.deleted.borrow().clone()
+    }
+
+    /// Makes every delete fail (`true`), keeping what was saved, or
+    /// succeed again.
+    pub fn fail_deletes(&self, fail: bool) {
+        self.fail_deletes.set(fail);
     }
 
     fn check_reads(&self) -> io::Result<()> {
@@ -189,7 +221,18 @@ impl PilotStore for MemoryPilots {
             return Err(io::Error::other("the disk is full"));
         }
         self.put(key, text);
-        self.writes.set(self.writes.get() + 1);
+        self.written
+            .borrow_mut()
+            .push((key.to_owned(), text.to_owned()));
+        Ok(())
+    }
+
+    fn delete(&self, key: &str) -> io::Result<()> {
+        if self.fail_deletes.get() {
+            return Err(io::Error::other("the disk is locked"));
+        }
+        self.saves.borrow_mut().remove(key);
+        self.deleted.borrow_mut().push(key.to_owned());
         Ok(())
     }
 
@@ -289,6 +332,49 @@ mod tests {
         other.put("c", "three");
         assert_eq!(store.text("c").as_deref(), Some("three"));
         assert_eq!(store.writes(), 2, "a put is not a write");
+    }
+
+    #[test]
+    fn it_logs_each_successful_write_across_clones() {
+        let store = MemoryPilots::new();
+        let other = store.clone();
+        store.write("a", "one").expect("writes");
+        other.write("b", "two").expect("writes");
+        store.write("a", "three").expect("writes");
+        store.put("c", "not a write");
+        store.fail_writes(true);
+        assert!(store.write("a", "lost").is_err());
+        assert_eq!(
+            other.written(),
+            [
+                ("a".to_owned(), "one".to_owned()),
+                ("b".to_owned(), "two".to_owned()),
+                ("a".to_owned(), "three".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_delete_removes_the_text_and_is_recorded() {
+        let store = MemoryPilots::new();
+        let other = store.clone();
+        store.put("a", "one");
+        store.put("b", "two");
+        store.delete("a").expect("deletes");
+        other.delete("c").expect("an absent key deletes");
+        assert_eq!(store.keys(), ["b"]);
+        assert_eq!(store.text("a"), None);
+        assert_eq!(other.deleted(), ["a", "c"]);
+        assert_eq!(store.writes(), 0, "a delete is not a write");
+        store.fail_deletes(true);
+        assert!(store.delete("b").is_err());
+        assert_eq!(
+            (store.keys(), store.deleted().len()),
+            (vec!["b".to_owned()], 2)
+        );
+        store.fail_deletes(false);
+        store.delete("b").expect("deletes again");
+        assert_eq!(store.keys(), Vec::<String>::new());
     }
 
     #[test]

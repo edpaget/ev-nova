@@ -21,7 +21,7 @@ use crate::mission::cargo::{
     JettisonMessage, PICKUP_BOARDING, PickupFacts, ScanOutcome, drops_off, jettison,
     loads_at_accept, picks_up_at_destination, pickup_checks, scan,
 };
-use crate::rulebook::RuleKey;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::scan::{self, Contraband};
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
@@ -51,7 +51,8 @@ impl Session {
     /// room shows why and leaves the destination unreached, so the next
     /// landing there tries again. Any other landing at the destination
     /// reaches it. Then the cargo is dropped off as [`drops_off`] says,
-    /// showing its `DumpCargoText`.
+    /// showing its `DumpCargoText` and, when it has one, resetting
+    /// ([`Session::reset_precalced`], @0x9eff9).
     pub(super) fn cargo_at_landing(&mut self, slot: u8, stellar: StellarId) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
@@ -74,7 +75,13 @@ impl Session {
             .is_some_and(|active| drops_off(&record, active, at_destination, at_return));
         if drops && let Some(active) = self.slot_holding(slot, record.id) {
             active.aboard = false;
-            self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot));
+            // The reset after the `DumpCargoText`, run only when the
+            // mission has one (@0x9ef82-0x9eff9; see the `precalced`
+            // module). One whose text resource is missing has none here,
+            // where the original shows an empty dialog and resets.
+            if self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot)) {
+                self.reset_precalced();
+            }
         }
     }
 
@@ -150,9 +157,9 @@ impl Session {
         }
         self.pilot.cargo.clear();
         self.save_due = true;
-        // `_JettisonCargo`'s refresh of the blessing (@0x3e3b5; see the
-        // `ranks` module).
-        self.refresh_blessing();
+        // `_JettisonCargo`'s reset (@0x3e3b5; see the `precalced` module):
+        // every good is gone, so its trim never cuts.
+        self.reset_precalced();
         if self.landed.is_some() {
             return;
         }
@@ -172,24 +179,39 @@ impl Session {
     /// Scans the player for each NPC that has looked the player over
     /// since the last
     /// ([`Traffic::take_scans`](crate::traffic::Traffic::take_scans)),
-    /// convicting by `law` and drawing on `chance`. `Session::tick_combat`
-    /// takes them, after its return while the player is landed or jumping:
-    /// that return is the engine's reading of `_ScanPlayer`'s jump-timing
-    /// check (@0x7e562-0x7e633; see the [`scan`](crate::scan) module), so
-    /// no scan reaches a player whose warp has begun. The scans wait from
-    /// the traffic tick that queued them to the combat tick of the same
-    /// frame, so they settle before the frame is drawn; a scan queued as
-    /// the warp begins is dropped with the system's traffic.
-    pub(super) fn take_scans(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
+    /// convicting by `law` and drawing on `chance`, unless the player is
+    /// landed, and gives whether the fight runs after them: not while the
+    /// player is landed or jumping. `Session::tick_combat` takes them
+    /// first, jumping or not, each held past the warp's lead-in by
+    /// `_ScanPlayer`'s jump-timing check (@0x7e562-0x7e633; see
+    /// [`Session::scanned_by`]).
+    ///
+    /// The scans wait from the traffic tick that queued them to the combat
+    /// tick of the same step, so they settle before the frame is drawn. In
+    /// the warp the view steps the session only while its lead-in lasts,
+    /// and the arrival comes after its last step, so a scan queued in the
+    /// lead-in settles before the arrival too. A scan the arrival would
+    /// cut off is dropped with the system's traffic, as the original's
+    /// would be held.
+    pub(super) fn take_scans(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) -> bool {
+        if self.landed.is_some() {
+            return false;
+        }
         for npc in self.traffic.take_scans() {
             self.scanned_by(npc, law, chance);
         }
+        self.jumping().is_none()
     }
 
     /// The scan of the player by NPC `id` (`_ScanPlayer` @0x7e46e),
     /// convicting by `law` and drawing on `chance`: nothing for a ship
     /// gone or of no government, or that does not go on (see
-    /// [`scan::goes_on`]). Then the mission cargo (see [`scan`]): a
+    /// [`scan::goes_on`]), or when the jump-timing check after its draw
+    /// holds it, the player's warp past its lead-in (@0x7e562-0x7e633; see
+    /// the [`warp`](crate::warp) module). A held scan is gone: the
+    /// inspection ended before it ran, so nothing retries it
+    /// (`_HighLevelAIHandler` @0x8f366-0x8f38a). Then the mission cargo
+    /// (see [`scan`]): a
     /// mission found with `Flags` 0x0020 fails at once
     /// ([`Session::quick_failure`]), the player told, with
     /// [`SimSound::ScanFailedMission`], unless it has `Flags` 0x0400; any
@@ -224,7 +246,7 @@ impl Session {
         let Some(govt) = self.govts.get(govt_id).cloned() else {
             return;
         };
-        if !scan::goes_on(ai_type, &govt, off, chance) {
+        if !scan::goes_on(ai_type, &govt, off, chance) || self.warp_holds_scans() {
             return;
         }
         self.scan_mission_cargo(id, scanner, &govt, chance);
@@ -303,12 +325,16 @@ impl Session {
                 self.set_on_player(id);
             }
             ScanOutcome::Fined { slot, credits } => {
-                let ship_name = self
-                    .pilot
-                    .missions
-                    .get(slot)
-                    .map(|active| active.ships.name.clone())
-                    .filter(|name| !name.is_empty());
+                let marked = self
+                    .npcs()
+                    .iter()
+                    .find(|npc| npc.id == id)
+                    .and_then(|npc| npc.mission)
+                    .map(|mark| mark.slot);
+                let source = self.rules.source_for(RuleKey::SmugglingShipName);
+                let ship_name = self.pilot.missions.get(slot).and_then(|active| {
+                    smuggling_ship_name(&active.ships.name, slot, marked, source)
+                });
                 self.set_on_player(id);
                 self.take_scan_fine(credits);
                 self.sounds.push(SimSound::Smuggling);
@@ -343,8 +369,8 @@ impl Session {
 
     /// Whether the pickup's checks pass for the cargo of `mission` in
     /// `slot` (`_DoMissionCargoPickup` @0x98292): the ship's holds, then
-    /// the free space, for its tons. A refusal is shown; a pass refreshes
-    /// the blessing table.
+    /// the free space, for its tons. A refusal is shown; a pass resets
+    /// ([`Session::reset_precalced`]), before the cargo is aboard.
     fn pickup_passes(&mut self, slot: u8, mission: MissionId) -> bool {
         let tons = self
             .pilot
@@ -357,9 +383,10 @@ impl Session {
         };
         match pickup_checks().first_refusal(&facts, &mut NeverFires) {
             Ok(()) => {
-                // `_DoMissionCargoPickup`'s refresh of the blessing, for a
-                // pickup that fits (@0x98316; see the `ranks` module).
-                self.refresh_blessing();
+                // `_DoMissionCargoPickup`'s reset, for a pickup that fits,
+                // before the cargo is aboard (@0x98316, then the caller's
+                // @0x9ee41; see the `precalced` module).
+                self.reset_precalced();
                 true
             }
             Err(refusal) => {
@@ -372,6 +399,23 @@ impl Session {
             }
         }
     }
+}
+
+/// The name the smuggling notice gives a scanner marked with slot
+/// `scanner` (none for a ship of no mission) when its scan found the
+/// cargo of the mission in slot `found`, whose drawn ship name is
+/// `name`, the rule ([`RuleKey::SmugglingShipName`]) read as `source`:
+/// `name` when it is not empty and, by the other reading, only when the
+/// scanner is that mission's own ship; by the engine for any scanner
+/// (`_ScanPlayer` @0x7e7ce). None names the scanner by its class.
+fn smuggling_ship_name(
+    name: &str,
+    found: u8,
+    scanner: Option<u8>,
+    source: RuleSource,
+) -> Option<String> {
+    let names = source == RuleSource::Engine || scanner == Some(found);
+    (names && !name.is_empty()).then(|| name.to_owned())
 }
 
 #[cfg(test)]
@@ -714,12 +758,10 @@ mod tests {
         assert!(!aboard(&session, 0));
     }
 
-    /// Runs `K200`.
+    /// Makes rank 200 active outside any reset, as no set expression can,
+    /// each resetting as it ends.
     fn grant_blessing_rank(session: &mut Session) {
-        session.run_set(
-            &crate::control::SetExpr::parse("K200").expect("parses"),
-            &mut NeverFires,
-        );
+        session.pilot.ranks.insert(crate::catalog::RankId(200));
     }
 
     #[test]
@@ -735,6 +777,38 @@ mod tests {
         session.pilot.missions.get_mut(0).expect("held").cargo_tons = 5;
         assert!(session.pick_up_boarded_cargo(0));
         assert!(blessed(&session));
+    }
+
+    #[test]
+    fn a_pickup_that_fits_trims_the_cargo_already_past_the_holds_before_it_is_aboard() {
+        // 30 tons of food in 20 holds, set up in code: the pickup's own
+        // checks keep a fresh pickup within the holds, so the mission's
+        // cargo is none here. Its reset comes before the cargo is aboard
+        // (@0x98316, then @0x9ee41): 30 x 20/30.
+        for pickup_mode in [2, 1] {
+            let catalog = cargo_catalog(
+                vec![MissionRecord {
+                    travel_stel: 128,
+                    return_stel: 129,
+                    ..courier(140, pickup_mode, 1)
+                }],
+                vec![],
+            );
+            let mut session = accepted(&catalog);
+            session.pilot.missions.get_mut(0).expect("held").cargo_tons = 0;
+            session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+            if pickup_mode == 2 {
+                assert!(session.pick_up_boarded_cargo(0), "a boarding pickup");
+            } else {
+                session.cargo_at_landing(0, StellarId(128));
+            }
+            assert!(aboard(&session, 0), "{pickup_mode}");
+            assert_eq!(
+                session.pilot().held(Good::Commodity(0)),
+                20,
+                "{pickup_mode}"
+            );
+        }
     }
 
     #[test]
@@ -760,6 +834,31 @@ mod tests {
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert!(aboard(&session, 0));
         assert!(blessed(&session), "the pickup's, shared with boarding");
+    }
+
+    #[test]
+    fn a_drop_off_showing_its_dump_text_resets() {
+        // `_MissionLandCargoCheck` resets only past its `DumpCargoText`
+        // (@0x9ef82-0x9eff9).
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::convicted;
+        for (dump, resets) in [(Some(DUMP), true), (None, false)] {
+            let record = MissionRecord {
+                travel_stel: 128,
+                ..courier(140, 0, 0)
+            };
+            let catalog = cargo_catalog(vec![record], vec![texts(140, None, dump)]);
+            let mut session = accepted(&catalog);
+            assert!(aboard(&session, 0));
+            // 30 tons of goods in 20 holds, set up past the landing's reset.
+            session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+            convicted(&mut session);
+            session.cargo_at_landing(0, StellarId(128));
+            assert!(!aboard(&session, 0), "{dump:?}: dropped off");
+            assert_eq!(session.scan_latches == Latches::ARMED, resets, "{dump:?}");
+            let food = if resets { 20 } else { 30 };
+            assert_eq!(session.pilot().held(Good::Commodity(0)), food, "{dump:?}");
+        }
     }
 
     #[test]
@@ -1102,9 +1201,10 @@ mod tests {
         for (all, boxes) in [(true, 4), (false, 3)] {
             let catalog = cargo_missions();
             let mut session = loaded(&catalog, &[140, 141]);
-            // 16 tons of goods, and mission 140's 4 with them.
-            session.pilot.cargo.insert(Good::Commodity(0), 14);
             in_flight(&mut session, &catalog);
+            // 16 tons of goods, and mission 140's 4 with them: past the
+            // holds, which the take-off's reset would have trimmed.
+            session.pilot.cargo.insert(Good::Commodity(0), 14);
             session.jettison_cargo(all, &mut NeverFires);
             assert_eq!(session.cargo_boxes().len(), boxes, "{all}");
         }
@@ -1328,6 +1428,72 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_the_found_missions_ship_name_names_any_scanner() {
+        for scanner in [None, Some(0), Some(1)] {
+            assert_eq!(
+                smuggling_ship_name("Rover", 0, scanner, RuleSource::Engine),
+                Some("Rover".to_owned()),
+                "{scanner:?}"
+            );
+            assert_eq!(
+                smuggling_ship_name("", 0, scanner, RuleSource::Engine),
+                None,
+                "{scanner:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_only_the_found_missions_own_ship_is_named_by_its_ship_name() {
+        assert_eq!(
+            smuggling_ship_name("Rover", 0, Some(0), RuleSource::Bible),
+            Some("Rover".to_owned())
+        );
+        assert_eq!(smuggling_ship_name("", 0, Some(0), RuleSource::Bible), None);
+        for scanner in [None, Some(1)] {
+            assert_eq!(
+                smuggling_ship_name("Rover", 0, scanner, RuleSource::Bible),
+                None,
+                "{scanner:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_only_the_missions_own_ship_is_named_by_its_ship_name() {
+        let catalog = policed(vec![masked(140, 0x0004, 0), masked(141, 0x0001, 0)], 500);
+        for (scanner_slot, ship_name) in [(None, None), (Some(1), None), (Some(0), Some("Rover"))] {
+            let mut session = inspected(&catalog, &[140, 141], Some(GovtId(128))).with_rules(
+                crate::Rulebook::default()
+                    .with_override(crate::RuleKey::SmugglingShipName, RuleSource::Bible),
+            );
+            for (slot, name) in [(0, "Rover"), (1, "Ace")] {
+                if let Some(active) = session.pilot.missions.get_mut(slot) {
+                    active.ships.name = name.to_owned();
+                }
+            }
+            if let Some(police) = session.traffic.npcs_mut().last_mut() {
+                police.mission = scanner_slot.map(|slot| crate::traffic::npc::MissionMark {
+                    order: None,
+                    slot,
+                    behav: crate::mission::ships::ShipBehav::Own,
+                    formation: None,
+                });
+            }
+            looked_over(&mut session, &catalog, 0);
+            assert_eq!(
+                session.take_messages(),
+                [SimMessage::Smuggling {
+                    scanner: ShipId(129),
+                    ship_name: ship_name.map(str::to_owned),
+                    fine: 500
+                }],
+                "{scanner_slot:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_scan_drawing_above_75_or_by_an_ungoverned_ship_finds_nothing() {
         let catalog = policed(vec![masked(140, 0x0004, 0x0020)], 500);
         let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
@@ -1500,6 +1666,23 @@ mod tests {
     }
 
     #[test]
+    fn any_set_expression_rearms_the_latches_a_conviction_cleared() {
+        let catalog = contraband_catalog(500);
+        let mut session = smuggler(&catalog, 2, 0, 100_000);
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.take_messages(), [illegal_junk(500)]);
+        assert!(!session.scan_latches.junk);
+        session.run_set(
+            &crate::control::SetExpr::parse("b1").expect("parses"),
+            &mut NeverFires,
+        );
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x99a85");
+        inspect_again(&mut session);
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.take_messages(), [illegal_junk(500)], "found again");
+    }
+
+    #[test]
     fn a_scan_finding_an_illegal_outfit_names_one_or_more_and_fines_only_above_none() {
         let catalog = contraband_catalog(500);
         let mut session = smuggler(&catalog, 0, 3, 1200);
@@ -1654,44 +1837,296 @@ mod tests {
         assert_eq!(session.take_messages(), []);
     }
 
-    /// `_ScanPlayer`'s jump-timing check holds a scan back once the warp
-    /// has begun (@0x7e562-0x7e633): here `tick_combat`'s return while
-    /// jumping does, so a scan queued as the jump begins comes to
-    /// nothing, while one through the pre-jump braking convicts.
-    #[test]
-    fn a_scan_queued_as_the_jump_begins_is_held_and_one_before_it_convicts() {
-        use crate::testkit::begin_jump_now;
-        let catalog = contraband_catalog(500);
-        // Far out, still moving, so J brakes before the jump.
-        let queued = |session: &mut Session, chance: &mut Draws| {
-            session.plot_course(SystemId(131)).expect("a route");
-            session.player.position = Vec2::new(0.0, -5000.0);
-            session.player.velocity = Vec2::new(4.0, 0.0);
-            inspect_again(session);
-            session.tick_traffic(&catalog, &LookedOver, chance);
+    // The warp's lead-in (`_ScanPlayer` @0x7e562-0x7e633; see the
+    // `warp` module). With no `snd ` 128 the warp sound runs 350 Mac
+    // ticks, and with no jump-speed bit the warp factor is 1.3, so the
+    // lead-in lasts while t ≤ 0.35 × 350 / 1.69 = 72.49 Mac ticks: through
+    // the warp's 36th engine tick, held from its 37th.
+
+    /// The warp's last tick in its lead-in, in the engine's ticks.
+    const LAST_LEAD_IN_TICK: u32 = 36;
+
+    /// Puts the player far out on the course to 131, due east, at rest
+    /// facing `heading`, and the interceptor done inspecting.
+    fn bound_east(session: &mut Session, heading: f32) {
+        session.plot_course(SystemId(131)).expect("a route");
+        session.player = crate::flight::ShipState {
+            position: Vec2::new(0.0, -5000.0),
+            velocity: Vec2::ZERO,
+            heading,
         };
-        let mut session = smuggler(&catalog, 1, 0, 1200);
-        let mut chance = Draws::of(&[0]);
-        queued(&mut session, &mut chance);
-        begin_jump_now(&mut session).expect("jumps");
-        assert!(session.jumping().is_some());
-        let at = session.player.position;
-        police(&mut session).state.position = at;
-        session.tick_combat(crate::Rules::default(), &mut chance);
-        assert!(chance.asked.is_empty(), "held: no draw");
+        police(session).goal = Goal::Idle;
+    }
+
+    /// One step of flight, as the view runs one: the session's tick, the
+    /// traffic's, which queues the scans, and the fight's, which takes
+    /// them.
+    fn step(session: &mut Session, catalog: &FakePilotCatalog, chance: &mut dyn Chance) {
+        session.tick(crate::flight::Controls::default());
+        session.tick_traffic(catalog, &LookedOver, &mut &mut *chance);
+        session.tick_combat(crate::Rules::default(), &mut &mut *chance);
+    }
+
+    /// Steps quietly until the warp's clock reads `ticks`.
+    fn step_to(session: &mut Session, catalog: &FakePilotCatalog, ticks: u32) {
+        while session.warp_clock().is_some_and(|clock| clock < ticks) {
+            step(session, catalog, &mut NeverFires);
+        }
+        assert_eq!(session.warp_clock(), Some(ticks));
+    }
+
+    /// The interceptor inspects the player again and a step takes its
+    /// scan, drawing 0.
+    fn scanned_in_a_step(session: &mut Session, catalog: &FakePilotCatalog) {
+        inspect_again(session);
+        step(session, catalog, &mut Draws::of(&[0]));
+    }
+
+    /// Whether `session` convicted the player of its bio-weapons, as a
+    /// scan before the warp does: fined, told, beeped, the jünk latch
+    /// cleared and the interceptor set on the player.
+    fn convicted(session: &mut Session) {
+        assert_eq!(session.take_messages(), [illegal_junk(500)]);
+        assert_eq!(session.take_sounds(), [SimSound::Smuggling]);
+        assert_eq!(session.pilot().cash(), 700);
+        assert!(!session.scan_latches.junk);
+        assert_eq!(police(session).goal, Goal::Attack(ShipRef::Player));
+    }
+
+    /// Whether `session`'s scan was held: nothing fined, told or beeped,
+    /// the latches still armed and the interceptor not set on the player.
+    fn held_back(session: &mut Session) {
         assert_eq!(session.take_messages(), []);
+        assert_eq!(session.take_sounds(), []);
         assert_eq!(session.pilot().cash(), 1200);
         assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_ne!(police(session).goal, Goal::Attack(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_scan_in_the_warps_lead_in_convicts_as_before_the_warp() {
+        // AC1, in hyperspace: J facing the bearing at rest starts the warp
+        // at once.
+        let catalog = contraband_catalog(500);
         let mut session = smuggler(&catalog, 1, 0, 1200);
+        bound_east(&mut session, 90.0);
+        session.begin_jump().expect("jumps");
+        assert!(session.jumping().is_some());
+        let _ = session.take_sounds();
+        step_to(&mut session, &catalog, LAST_LEAD_IN_TICK - 1);
+        assert!(session.in_warp_lead_in());
+        scanned_in_a_step(&mut session, &catalog);
+        assert_eq!(session.warp_clock(), Some(LAST_LEAD_IN_TICK), "t = 72");
+        assert!(session.jumping().is_some(), "still jumping");
+        convicted(&mut session);
+    }
+
+    #[test]
+    fn a_scan_as_the_ship_turns_in_the_lead_in_convicts_as_before_the_warp() {
+        // AC1, in the turn: at rest facing up, 30 ticks to turn east.
+        let catalog = contraband_catalog(500);
+        let mut session = smuggler(&catalog, 1, 0, 1200);
+        bound_east(&mut session, 0.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, &catalog, 10);
+        scanned_in_a_step(&mut session, &catalog);
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)), "turning");
+        convicted(&mut session);
+    }
+
+    #[test]
+    fn a_scan_queued_before_the_warp_and_taken_as_it_begins_convicts() {
+        // Queued in a traffic tick, then J begins the warp before the
+        // fight's tick takes it: t = 0, in the lead-in.
+        let catalog = contraband_catalog(500);
+        let mut session = smuggler(&catalog, 1, 0, 1200);
+        bound_east(&mut session, 90.0);
+        inspect_again(&mut session);
         let mut chance = Draws::of(&[0]);
-        queued(&mut session, &mut chance);
-        session.begin_jump().expect("accepted");
-        assert!(session.preparing_jump().is_some(), "braking");
-        let at = session.player.position;
-        police(&mut session).state.position = at;
+        session.tick_traffic(&catalog, &LookedOver, &mut chance);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.warp_clock(), Some(0));
+        let _ = session.take_sounds();
         session.tick_combat(crate::Rules::default(), &mut chance);
         assert_eq!(chance.asked, [100]);
-        assert_eq!(session.take_messages(), [illegal_junk(500)]);
+        convicted(&mut session);
+    }
+
+    /// A slow-turning ship (1° a tick) facing west, 180° off the bearing,
+    /// turns well past the lead-in.
+    fn slow_turner(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+        catalog.ships = vec![(
+            ShipId(128),
+            Ok(crate::handling::ShipFields {
+                maneuver: 10,
+                ..crate::testkit::FAST
+            }),
+        )];
+        catalog
+    }
+
+    #[test]
+    fn a_scan_past_the_lead_in_as_the_ship_turns_is_held() {
+        // AC2, in the turn.
+        let catalog = slow_turner(contraband_catalog(500));
+        let mut session = smuggler(&catalog, 1, 0, 1200);
+        bound_east(&mut session, 270.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, &catalog, LAST_LEAD_IN_TICK);
+        scanned_in_a_step(&mut session, &catalog);
+        assert_eq!(session.warp_clock(), Some(LAST_LEAD_IN_TICK + 1), "t = 74");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)), "turning");
+        held_back(&mut session);
+        // Held for good: the inspection is over, so nothing is retried
+        // (@0x8f366-0x8f38a).
+        step(&mut session, &catalog, &mut Draws::of(&[0]));
+        held_back(&mut session);
+    }
+
+    #[test]
+    fn a_scan_past_the_lead_in_fails_no_mission() {
+        // AC2: a 0x0020 mission found past the lead-in is not failed.
+        let catalog = slow_turner(policed(vec![masked(140, 0x0004, 0x0020)], 500));
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        bound_east(&mut session, 270.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, &catalog, LAST_LEAD_IN_TICK);
+        scanned_in_a_step(&mut session, &catalog);
+        assert_eq!(held_missions(&session), [(0, 140)], "not failed");
+        assert!(!session.control_bit(bit(45)), "no OnFailure");
+        assert_eq!(session.take_messages(), []);
+        assert_eq!(session.take_sounds(), []);
+        assert_ne!(police(&mut session).goal, Goal::Attack(ShipRef::Player));
+    }
+
+    #[test]
+    fn past_the_lead_in_the_traffic_stands_still_and_no_scan_reaches_the_player() {
+        // AC2, in hyperspace.
+        let catalog = contraband_catalog(500);
+        let mut session = smuggler(&catalog, 1, 0, 1200);
+        bound_east(&mut session, 90.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, &catalog, LAST_LEAD_IN_TICK);
+        assert!(session.in_warp_lead_in());
+        inspect_again(&mut session);
+        police(&mut session).state.velocity = Vec2::new(1.0, 0.0);
+        let before = police(&mut session).clone();
+        step(&mut session, &catalog, &mut Draws::of(&[0]));
+        assert!(!session.in_warp_lead_in(), "t = 74");
+        assert_eq!(*police(&mut session), before, "stands still");
+        held_back(&mut session);
+    }
+
+    #[test]
+    fn a_disabled_players_warp_never_holds_a_scan() {
+        // AC3. The engine cannot disable a player in its warp, as no fight
+        // runs in hyperspace and a pre-jump stage is given up as the ship
+        // is disabled, so the condition is set by hand. A warp factor of 0,
+        // which no `Flags` gives, is the `warp` module's.
+        let catalog = contraband_catalog(500);
+        let mut session = smuggler(&catalog, 1, 0, 1200);
+        bound_east(&mut session, 90.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, &catalog, 2 * LAST_LEAD_IN_TICK);
+        session.condition = crate::combat::hull::Condition::Disabled;
+        assert!(session.in_warp_lead_in(), "never past it");
+        inspect_again(&mut session);
+        let at = police(&mut session).state.position;
+        police(&mut session).state.velocity = Vec2::new(1.0, 0.0);
+        step(&mut session, &catalog, &mut Draws::of(&[0]));
+        assert_ne!(police(&mut session).state.position, at, "the traffic ticks");
+        assert!(session.jumping().is_some());
+        convicted(&mut session);
+    }
+
+    // The lead-in's end by the warp's d and w, read through the catalog:
+    // the warp-up's `snd ` 128 and the player's own `shïp` `Flags`.
+
+    /// Shows, through the session's tick, that the warp of a session of
+    /// `catalog` (see [`contraband_catalog`]) leaves its lead-in after
+    /// engine tick `last`: a scan taken stepping onto `last` convicts, and
+    /// one taken stepping past it is held.
+    fn lead_in_ends_after(catalog: &FakePilotCatalog, last: u32) {
+        let mut session = smuggler(catalog, 1, 0, 1200);
+        bound_east(&mut session, 90.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, catalog, last - 1);
+        scanned_in_a_step(&mut session, catalog);
+        assert_eq!(session.warp_clock(), Some(last));
+        assert!(session.in_warp_lead_in(), "tick {last} is in the lead-in");
+        convicted(&mut session);
+
+        let mut session = smuggler(catalog, 1, 0, 1200);
+        bound_east(&mut session, 90.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, catalog, last);
+        assert!(session.in_warp_lead_in());
+        scanned_in_a_step(&mut session, catalog);
+        assert_eq!(session.warp_clock(), Some(last + 1));
+        assert!(session.jumping().is_some(), "still jumping");
+        assert!(!session.in_warp_lead_in(), "tick {} is past it", last + 1);
+        held_back(&mut session);
+    }
+
+    #[test]
+    fn the_warp_up_sounds_length_moves_the_end_of_the_lead_in() {
+        // The stock warp-up runs d = 364 Mac ticks, so the lead-in lasts
+        // while t ≤ 0.35 × 364 / 1.69 = 75.38: one engine tick more than
+        // with no sound.
+        let warp_up = crate::warp::SoundLength {
+            frames: 134_016,
+            rate: 22_050,
+        };
+        let d = crate::warp::sound_duration(Some(warp_up));
+        assert_eq!(d, 364);
+        let w = crate::warp::warp_factor(0);
+        let mac = crate::warp::mac_ticks;
+        assert!(!crate::warp::held(Some(mac(37)), w, d, false));
+        assert!(crate::warp::held(Some(mac(38)), w, d, false));
+        assert!(crate::warp::held(Some(mac(37)), w, 350, false), "moved");
+
+        let mut catalog = contraband_catalog(500);
+        catalog.warp_sound = Some(warp_up);
+        lead_in_ends_after(&catalog, LAST_LEAD_IN_TICK + 1);
+    }
+
+    /// [`contraband_catalog`] with `shïp` records for the player's ship
+    /// (128), with `Flags` `player`, and the interceptor's (129), with
+    /// `Flags` `interceptor`.
+    fn flagged(player: u16, interceptor: u16) -> FakePilotCatalog {
+        let mut catalog = contraband_catalog(500);
+        catalog.ship_records = [(128, player), (129, interceptor)]
+            .map(|(id, flags)| crate::catalog::ShipRecord {
+                flags,
+                ..crate::testkit::ship(id, crate::testkit::FAST)
+            })
+            .to_vec();
+        catalog
+    }
+
+    #[test]
+    fn the_players_jump_speed_flag_moves_the_end_of_the_lead_in() {
+        // `Flags` 0x0004 gives w = 2.08, so the lead-in lasts while
+        // t ≤ 0.35 × 350 / 2.08² = 28.31 Mac ticks: through engine tick
+        // 14. The interceptor's 0x0001 (w = 0.91) plays no part.
+        let d = crate::warp::NO_SOUND_DURATION;
+        let w = crate::warp::warp_factor(0x0004);
+        let mac = crate::warp::mac_ticks;
+        assert!(!crate::warp::held(Some(mac(14)), w, d, false));
+        assert!(crate::warp::held(Some(mac(15)), w, d, false));
+        lead_in_ends_after(&flagged(0x0004, 0x0001), 14);
+    }
+
+    #[test]
+    fn another_ships_jump_speed_flag_leaves_the_lead_in_alone() {
+        lead_in_ends_after(&flagged(0, 0x0004), LAST_LEAD_IN_TICK);
     }
 
     // The mission branch's sounds and attack.

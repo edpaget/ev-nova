@@ -463,8 +463,20 @@ impl Places {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StarMap {
     nodes: BTreeMap<SystemId, Node>,
+    /// Every system's raw Con slots, hidden systems' included, in record
+    /// order, repeats and links to itself kept.
+    con: BTreeMap<SystemId, Vec<SystemId>>,
+    /// Every system's controlling government, hidden systems' included.
+    catalog_govts: BTreeMap<SystemId, Option<GovtId>>,
     /// Where every system it was built from is, and which stands for each.
     places: Places,
+}
+
+/// The system standing for a link's target `to`, of those in `places`'
+/// catalog: nothing for a system it does not hold, or with none visible
+/// at its place (`_FindActiveCoLocatedSystem` @0x4be0).
+fn resolve_link(places: &Places, to: SystemId) -> Option<SystemId> {
+    places.contains(to).then(|| places.stand_in(to)).flatten()
 }
 
 impl StarMap {
@@ -501,11 +513,15 @@ impl StarMap {
         let places = Places::new(&systems, hidden, colocated);
         // A link's target: the system standing for it, of those in the
         // catalog.
-        let resolve = |to: SystemId| places.contains(to).then(|| places.stand_in(to)).flatten();
+        let resolve = |to: SystemId| resolve_link(&places, to);
         let mut links = Vec::new();
         let mut nodes = BTreeMap::new();
+        let mut con = BTreeMap::new();
+        let mut catalog_govts = BTreeMap::new();
         for system in systems {
             let from = system.id;
+            con.insert(from, system.links.clone());
+            catalog_govts.insert(from, system.govt);
             if !places.visible(from) {
                 continue;
             }
@@ -564,7 +580,33 @@ impl StarMap {
                 }
             }
         }
-        Self { nodes, places }
+        Self {
+            nodes,
+            con,
+            catalog_govts,
+            places,
+        }
+    }
+
+    /// System `id`'s raw Con slots, as its `sÿst` lists them: in record
+    /// order, repeats and itself kept, hidden or not, unresolved. Empty
+    /// when the catalog does not hold it.
+    #[must_use]
+    pub fn con_slots(&self, id: SystemId) -> &[SystemId] {
+        self.con.get(&id).map_or(&[], Vec::as_slice)
+    }
+
+    /// System `id`'s Con slots each resolved to the visible system
+    /// standing for it, as `_SelectMissionSystem`'s -5 reads them
+    /// (@0x9ba70-0x9bac7): repeats and itself kept, a slot naming a
+    /// system the catalog does not hold or with none visible at its place
+    /// left out.
+    #[must_use]
+    pub fn usable_con_slots(&self, id: SystemId) -> Vec<SystemId> {
+        self.con_slots(id)
+            .iter()
+            .filter_map(|&to| resolve_link(&self.places, to))
+            .collect()
     }
 
     /// Where every system the map was built from is, hidden or not, and
@@ -685,6 +727,14 @@ impl StarMap {
     #[must_use]
     pub fn govt(&self, id: SystemId) -> Option<GovtId> {
         self.nodes.get(&id).and_then(|node| node.govt)
+    }
+
+    /// System `id`'s controlling government with no visibility test, a
+    /// hidden system's included: `None` when it is independent or not
+    /// among the systems the map was built from.
+    #[must_use]
+    pub fn catalog_govt(&self, id: SystemId) -> Option<GovtId> {
+        self.catalog_govts.get(&id).copied().flatten()
     }
 
     /// The fewest jumps from `from` to `to` under `rule`: each system
@@ -1860,5 +1910,31 @@ mod tests {
             assert_eq!(jump_zone(sites, 1250.0, Engine), 1250.0, "{sites:?}");
             assert_eq!(jump_zone(sites, 1250.0, Always), 1250.0, "{sites:?}");
         }
+    }
+
+    #[test]
+    fn con_slots_keep_every_slot_in_record_order_with_repeats_and_self_hidden_systems_too() {
+        // 2 is hidden at 3's place; 4 hidden alone.
+        let map = StarMap::with_hidden(
+            vec![
+                system_at(1, (0.0, 0.0), &[3, 1, 3, 2, 4, 99]),
+                system_at(2, (50.0, 0.0), &[1, 1]),
+                system_at(3, (50.0, 0.0), &[]),
+                system_at(4, (90.0, 0.0), &[]),
+            ],
+            &[SystemId(2), SystemId(4)].into(),
+            CoLocated::Lowest,
+        );
+        assert_eq!(map.con_slots(SystemId(1)), ids(&[3, 1, 3, 2, 4, 99]));
+        assert_eq!(map.con_slots(SystemId(2)), ids(&[1, 1]), "hidden");
+        assert_eq!(map.con_slots(SystemId(3)), ids(&[]));
+        assert_eq!(map.con_slots(SystemId(98)), ids(&[]), "not held");
+        assert_eq!(
+            map.usable_con_slots(SystemId(1)),
+            ids(&[3, 1, 3, 3]),
+            "each slot's stand-in: 2 resolves to 3, 4 has none, 99 is not held"
+        );
+        assert_eq!(map.usable_con_slots(SystemId(2)), ids(&[1, 1]));
+        assert_eq!(map.usable_con_slots(SystemId(98)), ids(&[]));
     }
 }

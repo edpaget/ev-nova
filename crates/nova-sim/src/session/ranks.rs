@@ -55,44 +55,30 @@
 //! governments as [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach)
 //! says, read when the table is asked. By the engine's reading of
 //! [`BlessingRefresh`](crate::rulebook::RuleKey::BlessingRefresh) it is
-//! built from the active ranks as the last refresh took them, never
-//! saved, at the original's calls of `_ResetPlayerPrecalcedValues`:
-//!
-//! - game entry (`_EnterGameFromMainScreen` @0x19ffb): [`Session::fly`],
-//!   for a load or a new pilot, and [`Session::begin`] after the first
-//!   `chär`'s `OnStart`, which the original runs before it (@0x1925e);
-//! - leaving a stellar (`_HandlePlayerDockRequest` @0x6709b): a take-off
-//!   after the stay's days and before the setup, and a gate exit before
-//!   the exit's setup;
-//! - a jump's arrival, after the days, the enter-system hook and the
-//!   setup (`_HandlePlayer` @0x6c51f);
-//! - a jettison (`_JettisonCargo` @0x3e3b5, and the jettison key's
-//!   @0x6fdaf after it);
-//! - the plunder dialog closing (`_DoPlunderDialog` @0x94a0b): an abort,
-//!   a failed capture, a self-destruct, a capture into the fleet and an
-//!   assignment, but not a boarding the system's change or setup ends;
-//! - a mission cargo pickup that fits (`_DoMissionCargoPickup` @0x98316),
-//!   whether a boarding or a landing makes it.
+//! built from the active ranks as the last reset took them, never saved,
+//! at each of the original's calls of `_ResetPlayerPrecalcedValues`
+//! (see the `precalced` module for every site): game entry, leaving a
+//! stellar, a jump's arrival, a landing, the end of every set expression
+//! that is not empty, an outfit bought or sold, a ship bought or taken
+//! as the player's, a
+//! jettison, the plunder dialog closing, a mission cargo pickup or
+//! drop-off, an escort's share of the cargo destroyed, the player's
+//! eject (@0x6f8bb), the onboard bombs (@0x69a05) and the escape pod's
+//! rescue. The same reset caches the sabotage flag and restarts its
+//! clock (see [`sabotage`](crate::sabotage)), so every site reaches it
+//! too. So a `K` or
+//! `L` blesses, or stops blessing, as its set
+//! expression ends, and a crime's rank loss (`Session::lose_ranks_to`,
+//! `_SlapWithPenalty`'s pass, which reaches no reset) only at the next
+//! reset. By the other reading the table is built
+//! from the active ranks as they are when it is asked.
 //!
 //! *Ordering against the original.* The engine runs a take-off's, a gate
 //! exit's and an arrival's story subscriptions (the days', the
 //! explorations' and the take-off's) when the script next settles, after
-//! the refresh, where the original ran them before it. So each of those
-//! three also makes the refresh due again, and the first idle settling
-//! after it refreshes once more, before any frame is drawn. The hooks the
-//! original runs after its refresh never `K`: the enter-system hook,
-//! `_MissionHandlePlayerEnteredNewSystem`, only redraws mission-ship
-//! timers (@0x99f9a, @0x99fe0).
-//!
-//! The landing cargo refreshes (`_DoMissionCargoPickup` reached from a
-//! landing @0x9ee32, and `_MissionLandCargoCheck` @0x9eff9 after a
-//! `DumpCargoText`) need nothing of their own: while docked nothing reads
-//! the blessing, and the take-off refreshes before any reader. The
-//! pickup's refresh runs from a landing too, as boarding shares it. The
-//! onboard bomb's refresh (@0x69a05) is for whoever builds the bomb, and
-//! the debug keys' (@0x6dc6f, @0x6f08a) are left out with the keys. By
-//! the other reading the table is built from the active ranks as they
-//! are when it is asked.
+//! the reset, where the original ran them before it. Each script they run
+//! resets as it ends, in both, so the settling needs no reset of its own,
+//! and no frame is drawn between them.
 //!
 //! The pilot keeps its active ranks by ID. A pilot flown from a save
 //! naming a rank the data no longer has forgets it, so the next save
@@ -167,37 +153,10 @@ impl Session {
         }
     }
 
-    /// Takes the active ranks the blessing table is built from, as
-    /// `_ResetPlayerPrecalcedValues` builds it (see the module docs'
-    /// **Blessing**), and re-arms `_ScanPlayer`'s contraband latches, as
-    /// the same reset sets them (@0xc524-0xc5a3; see
-    /// [`scan::Latches`](crate::scan::Latches)).
-    pub(super) fn refresh_blessing(&mut self) {
-        self.blessing_ranks.clone_from(&self.pilot.ranks);
-        self.scan_latches = crate::scan::Latches::ARMED;
-    }
-
-    /// The refresh of a take-off, a gate exit or a jump's arrival: now,
-    /// and again at the next idle settling (see the module docs'
-    /// **Blessing**).
-    pub(super) fn refresh_blessing_at_entry(&mut self) {
-        self.refresh_blessing();
-        self.blessing_due = true;
-    }
-
-    /// The second refresh of a take-off, a gate exit or a jump's arrival,
-    /// at the first idle settling after it (see the module docs'
-    /// **Blessing**).
-    pub(super) fn settle_blessing(&mut self) {
-        if std::mem::take(&mut self.blessing_due) {
-            self.refresh_blessing();
-        }
-    }
-
     /// The ranks' blessing table (see [`rank::blessing`]), the ranks
     /// reaching governments as the session's `rank_govt_reach` rule reads.
     /// By the engine's reading of `blessing_refresh` it is built from the
-    /// ranks the last refresh took; by the other, from the active ranks
+    /// ranks the last reset took; by the other, from the active ranks
     /// now.
     #[must_use]
     pub fn blessing(&self) -> Blessing {
@@ -978,41 +937,78 @@ pub(super) mod tests {
         reading(RuleKey::BlessingRefresh, RuleSource::Bible)
     }
 
-    #[test]
-    fn by_the_engine_a_rank_granted_in_space_blesses_only_from_the_next_refresh() {
-        let catalog = blessing_catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        assert!(!blessed(&session));
-        run(&mut session, "K200");
-        assert!(!blessed(&session), "taken at the last refresh");
-        let _ = session.settle_script(&catalog, &mut NeverFires);
-        assert!(!blessed(&session), "a settling is no refresh");
-        session.jettison_cargo(false, &mut NeverFires);
-        assert!(blessed(&session), "@0x3e3b5");
+    /// Makes rank 200 active outside any reset, as no set expression can,
+    /// each resetting as it ends.
+    fn activate_unreset(session: &mut Session) {
+        session.pilot.ranks.insert(RankId(200));
+    }
+
+    /// Runs `text` through the nested runner, and gives whether rank 200
+    /// blessed after each operator it handed on, inside the expression.
+    fn blessings_inside(session: &mut Session, text: &str) -> Vec<bool> {
+        let mut inside = Vec::new();
+        session.run_ops(&set(text), &mut Scripted::default(), &mut |session, _| {
+            inside.push(blessed(session));
+        });
+        inside
     }
 
     #[test]
-    fn by_the_other_reading_a_rank_granted_in_space_blesses_at_once() {
+    fn by_the_engine_a_k_blesses_as_its_set_expression_ends() {
+        let mut session = Session::start(&blessing_catalog()).expect("starts");
+        let inside = blessings_inside(&mut session, "K200 K201");
+        assert_eq!(inside, [false, false], "not between the operators");
+        assert!(blessed(&session), "@0x99a85");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_k_blesses_at_once() {
         let mut session = Session::start(&blessing_catalog())
             .expect("starts")
             .with_rules(live());
-        run(&mut session, "K200");
+        let inside = blessings_inside(&mut session, "K200 K201");
+        assert_eq!(inside, [true, true], "within the expression too");
         assert!(blessed(&session));
         run(&mut session, "L200");
         assert!(!blessed(&session));
     }
 
     #[test]
-    fn by_the_engine_a_rank_lost_in_space_still_blesses_until_the_next_refresh() {
+    fn by_the_engine_an_l_stops_blessing_as_its_set_expression_ends() {
         let catalog = blessing_catalog();
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.ranks.insert(RankId(200));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert!(blessed(&session), "flying refreshes (@0x19ffb)");
-        run(&mut session, "L200");
-        assert!(blessed(&session));
-        session.jettison_cargo(true, &mut NeverFires);
+        assert!(blessed(&session), "flying resets (@0x19ffb)");
+        let inside = blessings_inside(&mut session, "L200 L201");
+        assert_eq!(inside, [true, true]);
         assert!(!blessed(&session));
+    }
+
+    #[test]
+    fn a_rank_lost_to_a_crime_still_blesses_until_the_next_reset_by_the_engine() {
+        // `_SlapWithPenalty` reaches no reset, so the two readings differ
+        // from the crime until the next one.
+        use crate::rank::LOST_TO_CRIME;
+        let catalog = FakePilotCatalog {
+            ranks: vec![RankRecord {
+                flags: BLESSES_LANDING | LOST_TO_CRIME,
+                ..blessing_rank()
+            }],
+            ..catalog()
+        };
+        for (source, after_crime) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+            pilot.ranks.insert(RankId(200));
+            let mut session = Session::fly(&catalog, pilot)
+                .expect("flies")
+                .with_rules(reading(RuleKey::BlessingRefresh, source));
+            session.lose_ranks_to(crate::legal::Crime::Board, Some(GovtId(140)));
+            assert_eq!(active(&session), [] as [i16; 0], "{source:?}");
+            assert_eq!(blessed(&session), after_crime, "{source:?}");
+            session.jettison_cargo(false, &mut NeverFires);
+            assert!(!blessed(&session), "{source:?}: @0x3e3b5");
+        }
     }
 
     /// Whether the player as the session's NPCs see it carries government
@@ -1025,12 +1021,12 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_player_side_carries_the_blessing_the_last_refresh_took() {
+    fn the_player_side_carries_the_blessing_the_last_reset_took() {
         let catalog = blessing_catalog();
         let mut session = Session::start(&catalog).expect("starts");
-        run(&mut session, "K200");
-        assert!(!npcs_see_blessed(&session), "taken at the last refresh");
-        session.refresh_blessing();
+        activate_unreset(&mut session);
+        assert!(!npcs_see_blessed(&session), "taken at the last reset");
+        session.reset_precalced();
         assert!(npcs_see_blessed(&session));
     }
 
@@ -1074,8 +1070,8 @@ pub(super) mod tests {
         let catalog = blessing_catalog();
         let mut session = Session::start(&catalog).expect("starts");
         land_now(&mut session).expect("lands");
-        run(&mut session, "K200");
-        assert!(!blessed(&session), "landing is no refresh");
+        activate_unreset(&mut session);
+        assert!(!blessed(&session), "made active outside any reset");
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
@@ -1083,30 +1079,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_rank_granted_before_the_settling_after_a_take_off_counts() {
-        let catalog = blessing_catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        land_now(&mut session).expect("lands");
-        session
-            .take_off(&catalog, &mut NeverFires)
-            .expect("takes off");
-        run(&mut session, "K200");
-        assert!(!blessed(&session));
-        let _ = session.settle_script(&catalog, &mut NeverFires);
-        assert!(
-            blessed(&session),
-            "as the take-off's subscriptions ran first"
-        );
-        run(&mut session, "L200");
-        let _ = session.settle_script(&catalog, &mut NeverFires);
-        assert!(blessed(&session), "only the first settling refreshes");
-    }
-
-    #[test]
     fn a_jump_arrival_refreshes_the_blessing() {
         let catalog = blessing_catalog();
         let mut session = Session::start(&catalog).expect("starts");
-        run(&mut session, "K200");
+        activate_unreset(&mut session);
         assert!(!blessed(&session));
         jump(&mut session, &catalog, 131).expect("arrives");
         assert!(blessed(&session), "@0x6c51f");
@@ -1120,7 +1096,7 @@ pub(super) mod tests {
             let mut catalog = gated(following(0, 0), 0);
             catalog.ranks = vec![blessing_rank()];
             let mut session = Session::start(&catalog).expect("starts");
-            run(&mut session, "K200");
+            activate_unreset(&mut session);
             assert!(!blessed(&session), "{kind:?}");
             exit_gate(&mut session, &catalog, kind, &mut NeverFires);
             assert!(blessed(&session), "{kind:?}");
@@ -1128,32 +1104,34 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_rank_granted_before_the_settling_after_a_jump_arrival_counts() {
-        let catalog = blessing_catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        jump(&mut session, &catalog, 131).expect("arrives");
-        run(&mut session, "K200");
-        assert!(!blessed(&session));
-        let _ = session.settle_script(&catalog, &mut NeverFires);
-        assert!(blessed(&session), "the arrival's refresh is due again");
-    }
-
-    #[test]
-    fn a_rank_granted_before_the_settling_after_a_gate_exit_counts() {
+    fn the_settling_after_an_entry_takes_no_second_blessing() {
+        // Each script the entry's story work runs resets as it ends, so
+        // the settling after it needs no reset of its own: a rank made
+        // active outside any reset is not taken.
         use crate::gate::GateKind;
         use crate::session::gate_follow::tests::{following, gated, pass_gate};
+        let catalog = blessing_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        session.pilot.ranks.insert(RankId(200));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(!blessed(&session), "after a take-off");
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131).expect("arrives");
+        session.pilot.ranks.insert(RankId(200));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(!blessed(&session), "after an arrival");
         for kind in [GateKind::Hypergate, GateKind::Wormhole] {
             let mut catalog = gated(following(0, 0), 0);
             catalog.ranks = vec![blessing_rank()];
             let mut session = Session::start(&catalog).expect("starts");
             pass_gate(&mut session, &catalog, kind, &mut NeverFires);
-            run(&mut session, "K200");
-            assert!(!blessed(&session), "{kind:?}");
+            session.pilot.ranks.insert(RankId(200));
             let _ = session.settle_script(&catalog, &mut NeverFires);
-            assert!(
-                blessed(&session),
-                "{kind:?}: the exit's refresh is due again"
-            );
+            assert!(!blessed(&session), "{kind:?}");
         }
     }
 
@@ -1183,7 +1161,7 @@ pub(super) mod tests {
         let mut catalog = crate::session::tests::boardable();
         catalog.ranks = vec![blessing_rank()];
         let mut session = crate::session::tests::aboard(&catalog);
-        run(&mut session, "K200");
+        activate_unreset(&mut session);
         assert!(!blessed(&session));
         assert_eq!(
             crate::session::tests::take(&mut session, Take::Abort, &[]).0,
@@ -1227,7 +1205,7 @@ pub(super) mod tests {
         ];
         for (exit, close) in exits {
             let mut session = aboard(&catalog);
-            run(&mut session, "K200");
+            activate_unreset(&mut session);
             assert!(!blessed(&session), "{exit}");
             close(&mut session);
             assert_eq!(session.boarding(), None, "{exit}");
@@ -1480,15 +1458,22 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn by_the_engine_a_rank_granted_in_space_opens_its_stellars_only_from_the_next_refresh() {
+    fn by_the_engine_a_rank_made_active_opens_its_stellars_only_from_the_next_reset() {
         let catalog = guarded(0, 0);
         let mut engine = holding(&catalog, Rulebook::default(), &[]);
-        run(&mut engine, "K200");
+        activate_unreset(&mut engine);
         assert_eq!(press_twice(&mut engine), [DENIED, DENIED]);
         engine.jettison_cargo(false, &mut NeverFires);
         assert_eq!(press_twice(&mut engine), [REQUESTED, LANDED]);
         let mut live = holding(&catalog, live(), &[]);
-        run(&mut live, "K200");
+        activate_unreset(&mut live);
         assert_eq!(press_twice(&mut live), [REQUESTED, LANDED]);
+        let mut scripted = holding(&catalog, Rulebook::default(), &[]);
+        run(&mut scripted, "K200");
+        assert_eq!(
+            press_twice(&mut scripted),
+            [REQUESTED, LANDED],
+            "a K in space is taken as its expression ends"
+        );
     }
 }

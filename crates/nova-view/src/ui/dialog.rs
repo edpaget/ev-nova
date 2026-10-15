@@ -441,7 +441,7 @@ impl Dialog {
                 pressed: true,
                 repeat,
             } => self.key(key, repeat),
-            Input::Key { .. } | Input::Text(_) => None,
+            Input::Key { .. } | Input::Text(_) | Input::PointerLeft => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
     }

@@ -399,6 +399,7 @@ pub use self::cargo::{
 pub use self::goals::{
     AssistLine, Departure, GoalCheck, GoalFacts, LossFacts, ShipGoal, assists, check_goals,
     departure, fails_on_destroyed, fails_on_disabled, goals_met_moment, held_disabled, met_before,
+    plain_board_counts,
 };
 pub use self::identity::StellarMarks;
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
