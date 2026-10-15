@@ -34,8 +34,8 @@
 //! ([`MissionValues::offered`]) or a slot's ([`MissionValues::active`]),
 //! resolved, never the `mïsn`'s encodings; a free slot's is the default,
 //! every mission tag [`UNSET`]. With no mission at all, as in a person's
-//! hail quote ([`expand_tags`](crate::person::expand_tags)), a `Q`
-//! message outside a mission's script or a `RefuseText`, the mission tags
+//! hail quote ([`expand_tags`](crate::person::expand_tags)) or a
+//! `RefuseText`, the mission tags
 //! follow [`RuleKey::MissionlessTags`](crate::RuleKey::MissionlessTags):
 //! by the engine [`UNSET`], as `_MungeBriefing` with index -1 leaves them
 //! (@0x9c83f-0x9c843 → 0x9ce14); by the other reading left as written.
