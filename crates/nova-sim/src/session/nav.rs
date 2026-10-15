@@ -88,6 +88,15 @@
 //!   name, though the system shown is still the one docked in
 //!   (`_DrawStatusNav` @0x4a0fd-0x4a149), from the port's next nav
 //!   redraw (see the flight view); the take-off lets go of it (@0x674d2).
+//! - The port dialogs' restore ([`Session::restore_port_nav`]): each
+//!   dialog saves both as it opens ([`Session::save_port_nav`]) and
+//!   restores them, mode and selection exactly as saved, as it closes,
+//!   after the close's whole-bar redraw (save / restore): the outfitter
+//!   @0x5bafc-0x5bb12 / @0x5dbb8-0x5dbc5, the exchange @0x5dbed-0x5dc08 /
+//!   @0x5e64d-0x5e65d, the shipyard @0x5e70f-0x5e71e / @0x5f8e8-0x5f8f5,
+//!   the mission computer @0x5ffc0-0x5ffd0 / @0x60084-0x60096. So a
+//!   landed `M` or `N` run inside one is undone as it closes. When the
+//!   restored nav shows is the flight view's.
 //! - A map click ([`Session::plot_course`], `_DoSystemMap`
 //!   @0x136d7-0x137c7): a route cues its first hop, the original's click on
 //!   a system the current one lists (@0x137b3-0x137bb), or its cue as the
@@ -122,6 +131,12 @@
 //! with no selection in Off, writes nothing. Mode 3 docked is reachable
 //! only through [`Session::land_at`], which has no original; there `M`
 //! lets go of the selection.
+//!
+//! Of the port dialogs' save and restore: the original's mode 3 +0x6c is
+//! a link slot of the current system, where ours keeps the system, and
+//! mode 3 docked has no original, so its restore is not modelled apart;
+//! and each dialog's Map button (`_DoSystemMap`, with its own save and
+//! restore), as ours has no map in port.
 //!
 //! **The dock request** (`_dockTarget` / `_dockPermission`, see the
 //! `clearance` module) is dropped by Nav Off and Hyperspace Mode, by a stellar key or a click
@@ -209,6 +224,23 @@ impl Session {
             }
             mode => mode.deselected(),
         };
+    }
+
+    /// Saves the nav mode and its selection as a port dialog opens, as the
+    /// original saves +0x6a and +0x6c (see the module's **Setters**). The
+    /// raw selection is saved, not the one resolved by place.
+    pub fn save_port_nav(&mut self) {
+        self.port_nav = Some(self.nav);
+    }
+
+    /// Restores the nav saved as the port dialog opened
+    /// ([`Session::save_port_nav`]), mode and selection exactly as saved,
+    /// as the dialog closes. With nothing saved it changes nothing, and a
+    /// save is restored once.
+    pub fn restore_port_nav(&mut self) {
+        if let Some(saved) = self.port_nav.take() {
+            self.nav = saved;
+        }
     }
 
     /// Cues the course's next hop, as `_CueNextHyperRouteDest` (@0xe2dc)
@@ -1001,6 +1033,46 @@ mod tests {
                 assert_eq!(session.nav_mode(), before, "{expr} {before:?}");
             }
         }
+    }
+
+    // The port dialogs' save and restore.
+
+    #[test]
+    fn a_port_dialogs_restore_undoes_a_landed_m_or_n() {
+        for expr in ["M131", "N131"] {
+            for before in [stellar(128), hyperspace(131), NavMode::Off] {
+                let (catalog, mut session) = landed();
+                session.nav = before;
+                session.save_port_nav();
+                run(&mut session, expr);
+                let _ = session.settle_script(&catalog, &mut NeverFires);
+                session.restore_port_nav();
+                assert_eq!(session.nav_mode(), before, "{expr} {before:?}");
+                assert_eq!(
+                    session.pilot().system(),
+                    SystemId(131),
+                    "only the nav is restored"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_port_nav_restore_without_a_save_changes_nothing_and_restores_once() {
+        let (catalog, mut session) = landed();
+        session.restore_port_nav();
+        assert_eq!(session.nav_mode(), stellar(128), "nothing saved");
+
+        session.save_port_nav();
+        session.restore_port_nav();
+        run(&mut session, "N131");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        session.restore_port_nav();
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Stellar(None),
+            "the save was restored already"
+        );
     }
 
     // The map.

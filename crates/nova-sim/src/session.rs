@@ -680,6 +680,9 @@ pub struct Session {
     /// The player's nav mode and its selection (see the `nav` module): a
     /// stellar selected is one of `sites`.
     nav: NavMode,
+    /// The nav saved as a port dialog opened, until its close restores it
+    /// ([`Session::save_port_nav`], [`Session::restore_port_nav`]).
+    port_nav: Option<NavMode>,
     /// The galaxy every reader sees: the catalog's systems, read when the
     /// session starts, with the pilot's overlay (see the
     /// [`story`](crate::story) module's "Galaxy overlay").
@@ -1297,6 +1300,7 @@ impl Session {
             shown: system,
             landed,
             nav: NavMode::Off,
+            port_nav: None,
             galaxy,
             jump: None,
             warp_sound: warp::sound_duration(catalog.warp_sound()),
