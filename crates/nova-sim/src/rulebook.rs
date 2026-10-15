@@ -124,6 +124,7 @@
 //! | [`PrkNnnName`](RuleKey::PrkNnnName) | `prk_nnn_name` | `<PRKnnn>` reads the rank's `ShortName`, as `<SRKnnn>` does (`_MungeBriefing` +0xde @0x9d1ef, @0x9d2d0; see [`text_tags`](crate::text_tags)) | its `ConvName`, "same as `<PRK>`" |
 //! | [`CrossedRankTags`](RuleKey::CrossedRankTags) | `crossed_rank_tags` | `<PRKnnn>` and `<SRKnnn>` read the governments the last tags of their kind named, remembered between texts and reset only as a `dësc` loads, crossed: `<PRKnnn>` the `<SRKnnn>` government's rank and `<SRKnnn>` the `<PRKnnn>` one's (`_ParseTextDescription` @0x14f34-0x15055, `_MungeBriefing` @0x9d53d-0x9d5a5; see [`text_tags`](crate::text_tags)) | each reads government nnn's own rank |
 //! | [`OfferingShipName`](RuleKey::OfferingShipName) | `offering_ship_name` | `<OSN>` names the person of the ship last hailed with a `LinkMission`, kept after the dialog until a quote, a board or a new pilot clears it, so a later text names it (`_HandlePlayerCommunication` @0x621de, @0x625a4; `_MungeBriefing` @0x9cebe-0x9cf28; see [`text_tags`](crate::text_tags)) | only the person offering while its offer is open, "only works when offering a mission from a ship" |
+//! | [`CachedAvailBits`](RuleKey::CachedAvailBits) | `cached_avail_bits` | a person's 0x0400 hail quote filter reads its mission's `AvailBits` verdict as cached at the last landing, arrival, load or check of it, so a bit changed in flight goes unseen until then (`_IsMissionAvailable` @0x9b4af-0x9b4f5, `_HandleShip` @0x33e1d) | the bits are tested now\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
@@ -187,6 +188,7 @@
 //! `smuggling_ship_name`,
 //! `pay_slot_offset`,
 //! `missionless_tags`,
+//! `cached_avail_bits`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor` or
@@ -1714,6 +1716,17 @@ rule_keys! {
     /// mission from a ship)": the person offering while its offer is open, and
     /// `"[Error]"` otherwise. A hail quote names its speaker under both.
     OfferingShipName => "offering_ship_name",
+    /// Which `AvailBits` verdict a person's 0x0400 hail quote filter reads (see
+    /// the session's `persons` module). By the engine, as `_HandleShip` asks
+    /// `_IsMissionAvailable(m, 0)` (@0x33e1d), which reads the verdict cached in
+    /// `mïsn`+0x16: written for every mission at a landing, a jump's arrival, a
+    /// new pilot and a load (`_PropagateMissionBitEffects` @0x99887-0x998b2), and
+    /// for one mission by a check of it that writes it (an accept, a port offer,
+    /// the mission computer, a hail or a board; @0x9b4af-0x9b4d3), so a bit
+    /// changed in flight goes unseen until then. By the other reading the bits
+    /// are tested now. The Bible says nothing of it, so the other reading is
+    /// the intended behaviour, not anything the Bible says.
+    CachedAvailBits => "cached_avail_bits",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -2260,7 +2273,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(60),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2277,7 +2290,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(59),
+            RuleKey::ALL.iter().rev().nth(60),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -2317,7 +2330,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(58),
+            RuleKey::ALL.iter().rev().nth(59),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2339,7 +2352,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(57),
+            RuleKey::ALL.iter().rev().nth(58),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2364,7 +2377,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(56),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2390,7 +2403,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(55),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2410,7 +2423,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(54),
+            RuleKey::ALL.iter().rev().nth(55),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2430,7 +2443,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(53),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2450,7 +2463,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2472,7 +2485,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(49),
+            RuleKey::ALL.iter().rev().nth(50),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2694,7 +2707,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(48), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(49), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2709,7 +2722,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -2726,7 +2739,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -2743,7 +2756,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -2760,7 +2773,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -2777,7 +2790,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -2794,7 +2807,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -2811,7 +2824,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::PaySlotOffset)
         );
     }
@@ -2828,7 +2841,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::MissionlessTags)
         );
     }
@@ -2842,7 +2855,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::PrkNnnName)
         );
     }
@@ -2859,7 +2872,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::CrossedRankTags)
         );
     }
@@ -2876,8 +2889,25 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::OfferingShipName)
+        );
+    }
+
+    #[test]
+    fn the_cached_avail_bits_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::CachedAvailBits.key(), "cached_avail_bits");
+        assert_eq!(
+            RuleKey::from_key("cached_avail_bits"),
+            Some(RuleKey::CachedAvailBits)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::CachedAvailBits),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(37),
+            Some(&RuleKey::CachedAvailBits)
         );
     }
 
@@ -2917,7 +2947,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(52),
+            RuleKey::ALL.iter().rev().nth(53),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -3322,7 +3352,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(62),
+            RuleKey::ALL.iter().rev().nth(63),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3486,6 +3516,7 @@ mod tests {
                 RuleKey::PrkNnnName,
                 RuleKey::CrossedRankTags,
                 RuleKey::OfferingShipName,
+                RuleKey::CachedAvailBits,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,

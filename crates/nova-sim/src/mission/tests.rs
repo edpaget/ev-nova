@@ -186,6 +186,7 @@ fn refusals_with(visit: &Visit, mission: &MissionRecord, rolls: &RollTable) -> V
         mission,
         venue: Venue::of(mission.avail_loc),
         rolls,
+        cached_avail_bits: None,
     };
     availability()
         .all_refusals(&facts)
@@ -260,6 +261,7 @@ fn all_refusals_lists_every_failing_field_with_its_descriptor() {
         mission: &refused,
         venue: Venue::Computer,
         rolls: &ones(),
+        cached_avail_bits: None,
     };
     let named: Vec<(&str, Verdict<Refusal>)> = availability()
         .all_refusals(&facts)
@@ -298,6 +300,7 @@ fn the_facts_hand_over_the_visits_rule_set() {
         mission: &mission,
         venue: Venue::Computer,
         rolls: &ones(),
+        cached_avail_bits: None,
     };
     assert_eq!(facts.rulebook(), &rules);
 }
@@ -320,6 +323,7 @@ fn avail_loc_0_is_the_computers_and_every_other_but_minus_1_and_2_outside() {
             mission: &mission,
             venue,
             rolls: &ones(),
+            cached_avail_bits: None,
         };
         availability().first_refusal(&facts, &mut NeverFires)
     };
@@ -369,6 +373,7 @@ fn a_ship_offers_avail_loc_2_alone_and_only_a_ship_does() {
             mission: &mission,
             venue,
             rolls: &ones(),
+            cached_avail_bits: None,
         };
         availability().first_refusal(&facts, &mut NeverFires)
     };
@@ -1667,6 +1672,7 @@ fn a_mission_refused_by_avail_random_stays_refused_and_rechecking_draws_nothing(
         mission: rare,
         venue: Venue::Computer,
         rolls: offers.table(),
+        cached_avail_bits: None,
     };
     let mut chance = Draws::of(&[]);
     for _ in 0..3 {

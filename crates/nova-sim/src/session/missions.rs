@@ -71,6 +71,8 @@
 //! refused for want of room for the cargo. A deadline missed in flight
 //! raises [`SimMessage::DeadlineMissed`] unless the mission is hidden.
 
+use std::collections::BTreeMap;
+
 use super::Session;
 use super::mission_screens::MissionTextKind;
 use crate::catalog::{
@@ -668,6 +670,14 @@ impl Session {
         let Some(stellar) = self.landed else {
             return;
         };
+        // Each offer checked writes its cached `AvailBits` (@0xa207a).
+        let checked: Vec<MissionId> = [Venue::Computer, Venue::Outside]
+            .into_iter()
+            .flat_map(|venue| self.offers.at(venue).iter().map(|offer| offer.mission))
+            .collect();
+        for mission in checked {
+            self.check_avail_bits(mission);
+        }
         let mut offers = std::mem::take(&mut self.offers);
         self.at_visit(stellar, |visit| offers.refilter(&self.missions, visit));
         self.offers = offers;
@@ -1143,6 +1153,7 @@ impl Session {
                 mission: record,
                 venue: Venue::of(record.avail_loc),
                 rolls: self.offers.table(),
+                cached_avail_bits: None,
             };
             mission::availability()
                 .all_refusals(&facts)
@@ -1246,12 +1257,58 @@ impl Session {
         }
     }
 
+    /// Caches every mission's `AvailBits` verdict now, as the original's
+    /// refresh writes `mïsn`+0x16 for all (`_PropagateMissionBitEffects`
+    /// @0x99887-0x998b2): at a landing, a jump's arrival before its days,
+    /// a new pilot's start and a load, with the galaxy's refresh. Only the
+    /// hail quote filter reads the cache (see
+    /// [`Session::quoted_mission_available`]).
+    pub(crate) fn propagate_avail_bits(&mut self) {
+        let gate = self.gate();
+        let verdicts: BTreeMap<MissionId, bool> = self
+            .missions
+            .iter()
+            .map(|record| (record.id, gate.allows(&record.avail_bits)))
+            .collect();
+        self.avail_cache = verdicts;
+    }
+
+    /// Caches `mission`'s `AvailBits` verdict now, as a check of it that
+    /// writes the cache does (`_IsMissionAvailable(m, 1)` @0x9b4af-0x9b4d3:
+    /// an accept, a port offer, the mission computer, a hail or a board).
+    pub(super) fn check_avail_bits(&mut self, mission: MissionId) {
+        if let Some(record) = self.mission_record(mission) {
+            let holds = self.gate().allows(&record.avail_bits);
+            self.avail_cache.insert(mission, holds);
+        }
+    }
+
     /// Whether `mission` is available from a ship in flight, the visit's
     /// rolls read and nothing drawn (`_IsMissionAvailable(m, 1)` with
     /// `_offeringFromShip` set; see the [`mission`] module's "From a
     /// ship"): never while docked, nor for a mission the session has no
     /// record of.
     pub(crate) fn ship_mission_available(&self, mission: MissionId) -> bool {
+        self.ship_mission_available_reading(mission, None)
+    }
+
+    /// Whether `mission` is available from a ship in flight as the hail
+    /// quote filter checks it (`_IsMissionAvailable(m, 0)`, `_HandleShip`
+    /// @0x33e1d): its `AvailBits` as [`RuleKey::CachedAvailBits`] reads
+    /// them, by the engine the verdict cached at the last refresh or
+    /// check of it ([`Session::propagate_avail_bits`]), by the other
+    /// reading tested now; the rest as [`Session::ship_mission_available`].
+    pub(crate) fn quoted_mission_available(&self, mission: MissionId) -> bool {
+        let cached = match self.rules.source_for(RuleKey::CachedAvailBits) {
+            RuleSource::Engine => self.avail_cache.get(&mission).copied(),
+            RuleSource::Bible => None,
+        };
+        self.ship_mission_available_reading(mission, cached)
+    }
+
+    /// [`Session::ship_mission_available`], the `AvailBits` read as
+    /// `cached` when given.
+    fn ship_mission_available_reading(&self, mission: MissionId, cached: Option<bool>) -> bool {
         let Some(record) = self
             .mission_record(mission)
             .filter(|_| self.landed.is_none())
@@ -1264,6 +1321,7 @@ impl Session {
                 mission: record,
                 venue: Venue::Ship,
                 rolls: self.offers.table(),
+                cached_avail_bits: cached,
             };
             mission::availability()
                 .first_refusal(&facts, &mut NeverFires)

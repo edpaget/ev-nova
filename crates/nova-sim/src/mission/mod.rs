@@ -599,6 +599,11 @@ pub struct AvailFacts<'a> {
     pub venue: Venue,
     /// The visit's rolls.
     pub rolls: &'a RollTable,
+    /// The `AvailBits` verdict the original cached for the mission
+    /// (`mïsn`+0x16), read in place of testing the bits when given
+    /// ([`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits));
+    /// with none the bits are tested now.
+    pub cached_avail_bits: Option<bool>,
 }
 
 impl Context for AvailFacts<'_> {
@@ -732,10 +737,10 @@ fn avail_stel(facts: &AvailFacts) -> Result<(), Refusal> {
 }
 
 fn avail_bits(facts: &AvailFacts) -> Result<(), Refusal> {
-    pass(
-        facts.visit.gate.allows(&facts.mission.avail_bits),
-        Refusal::AvailBits,
-    )
+    let holds = facts
+        .cached_avail_bits
+        .unwrap_or_else(|| facts.visit.gate.allows(&facts.mission.avail_bits));
+    pass(holds, Refusal::AvailBits)
 }
 
 fn require(facts: &AvailFacts) -> Result<(), Refusal> {

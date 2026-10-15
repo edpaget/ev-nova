@@ -269,8 +269,8 @@ pub struct QuoteView {
     pub player_ai: i16,
     /// Whether the person's `LinkMission` is available from a ship
     /// (`_IsMissionAvailable(m, 0)` with `_offeringFromShip` set,
-    /// @0x33dc7-0x33e31), checked in full: the engine keeps no cached
-    /// `AvailBits` (rdm:phase/missions/phase-13-text-substitution-quirks).
+    /// @0x33dc7-0x33e31), its `AvailBits` read as
+    /// [`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits) says.
     pub mission_available: bool,
 }
 

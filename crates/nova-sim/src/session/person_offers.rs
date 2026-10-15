@@ -188,9 +188,7 @@ impl Session {
         let linked = self.linked_ship(self.answering()?, OfferedBy::Hail);
         // The hail names a linked person's ship before it checks the
         // mission, and keeps it after the dialog (@0x621de, @0x625a4).
-        if let Some(ship) = linked {
-            self.offering_ship = Some(ship);
-        }
+        self.reach_linked(linked);
         let npc = self.answering()?;
         let offered = self
             .person_offering(npc, OfferedBy::Hail)
@@ -225,24 +223,41 @@ impl Session {
         )
     }
 
-    /// The ship `npc` is as `_offeringShipIndex` names it when its hail or
-    /// boarding, as `by` says, reaches its person's offer: one whose person
-    /// has a `LinkMission` and offers on its boarding with `Flags` 0x0200
-    /// and on its hail without (`_HandlePlayerCommunication` @0x621a9-0x621de,
+    /// The ship `npc` is as `_offeringShipIndex` names it, and its
+    /// person's `LinkMission`, when its hail or boarding, as `by` says,
+    /// reaches its person's offer: one whose person has a `LinkMission` and
+    /// offers on its boarding with `Flags` 0x0200 and on its hail without
+    /// (`_HandlePlayerCommunication` @0x621a9-0x621de,
     /// `_HandlePlayerBoardAttempt` @0x6584d-0x65882), whether or not the
     /// mission is then available; none from the player's escort.
-    pub(super) fn linked_ship(&self, npc: &Npc, by: OfferedBy) -> Option<OfferingShip> {
+    pub(super) fn linked_ship(
+        &self,
+        npc: &Npc,
+        by: OfferedBy,
+    ) -> Option<(OfferingShip, MissionId)> {
         if npc.escort.is_some() {
             return None;
         }
         let person = self.traffic.person(npc.person?.id)?;
         let on_board = person.record.flags & MISSION_ON_BOARD != 0;
-        (person.record.link_mission.is_some() && on_board == (by == OfferedBy::Boarding)).then(
-            || OfferingShip {
+        let mission = MissionId(person.record.link_mission?);
+        (on_board == (by == OfferedBy::Boarding)).then(|| {
+            let ship = OfferingShip {
                 berth: npc.berth,
                 name: person.record.name.clone(),
-            },
-        )
+            };
+            (ship, mission)
+        })
+    }
+
+    /// Names `linked`'s ship for `<OSN>` and checks its mission's
+    /// `AvailBits`, writing the cache, as a hail or board of a linked
+    /// person does before it offers (@0x621de-0x6220d, @0x65882-0x658b1).
+    pub(super) fn reach_linked(&mut self, linked: Option<(OfferingShip, MissionId)>) {
+        if let Some((ship, mission)) = linked {
+            self.offering_ship = Some(ship);
+            self.check_avail_bits(mission);
+        }
     }
 
     /// The name `<OSN>` reads by the engine (`_MungeBriefing`
@@ -1134,6 +1149,19 @@ mod tests {
         let (boarded, _) = board(&mut session);
         assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
         assert_eq!(osn(&session, RuleSource::Engine), "[Error]");
+    }
+
+    #[test]
+    fn boarding_a_linked_person_writes_its_missions_avail_bits_verdict() {
+        let catalog = boardable(0);
+        let mut session = alongside_ace(&catalog);
+        session.avail_cache.insert(MissionId(130), false);
+        let _ = board(&mut session);
+        assert_eq!(
+            session.avail_cache.get(&MissionId(130)),
+            Some(&true),
+            "_IsMissionAvailable(m, 1) @0x658b1"
+        );
     }
 
     #[test]

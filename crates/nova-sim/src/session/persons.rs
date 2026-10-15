@@ -29,8 +29,11 @@
 //! A person escorting the player says none, nor does one gone for good
 //! (@0x33c62), as one whose mission was accepted with `Flags` 0x0100
 //! is. One of `Flags` 0x0400 says it only while its `LinkMission` is
-//! available from a ship, checked in full (`_HandleShip`
-//! @0x33dc7-0x33e31). "No quote showing" counts
+//! available from a ship (`_HandleShip` @0x33dc7-0x33e31), its
+//! `AvailBits` by the engine the verdict cached at the last refresh or
+//! check of it ([`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits)).
+//! A quote said, and that check of a linked person, leave `<OSN>` naming
+//! nobody (see the `person_offers` module). "No quote showing" counts
 //! only the hail quotes, the last said
 //! [`QUOTE_SHOWN_TICKS`] or more ago. A person's quote state is never
 //! saved, and "once" is once for its stay.
@@ -211,8 +214,9 @@ impl Session {
                         liked: likes_player(npc, &around, self.mission_hail(npc)),
                         player_jumping: self.jumping().is_some(),
                         player_ai,
-                        mission_available: linked
-                            .is_some_and(|mission| self.ship_mission_available(MissionId(mission))),
+                        mission_available: linked.is_some_and(|mission| {
+                            self.quoted_mission_available(MissionId(mission))
+                        }),
                     };
                     Some((npc.id, quote_eligible(npc, &person, &view, self.npcs())))
                 })
@@ -1310,6 +1314,90 @@ mod tests {
         let (said, asked) = quote_tick(&catalog, &mut session, &[0, 1]);
         assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
         assert_eq!(asked, [140, 140]);
+    }
+
+    /// [`quoters`] with Ace of `Flags` 0x0400 linked to mission 130, from
+    /// a ship while bit 7 is set, flying with Bee quiet, by `rules`.
+    fn quoting_while_b7(rules: Rulebook) -> (FakePilotCatalog, Session) {
+        let mut catalog = quoters([crate::person::QUOTE_IF_MISSION, 0]);
+        catalog.persons[0].link_mission = Some(130);
+        catalog.missions = vec![crate::catalog::MissionRecord {
+            avail_loc: 2,
+            avail_bits: Test::parse("b7"),
+            ..crate::testkit::mission(130)
+        }];
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_rules(rules);
+        session.populate(&catalog, &mut NeverFires);
+        session.traffic.npcs_mut()[1].person = None;
+        (catalog, session)
+    }
+
+    fn set_b7(session: &mut Session) {
+        session.run_set(
+            &crate::control::SetExpr::parse("b7").expect("parses"),
+            &mut crate::testkit::Scripted::default(),
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_quote_filter_reads_the_avail_bits_verdict_of_the_last_refresh() {
+        let (catalog, mut session) = quoting_while_b7(Rulebook::default());
+        assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
+        set_b7(&mut session);
+        assert_eq!(
+            quote_tick(&catalog, &mut session, &[0]),
+            (vec![], vec![]),
+            "b7 set in flight: the cached verdict still refuses (@0x33e1d)"
+        );
+        session.propagate_avail_bits();
+        let (said, _) = quote_tick(&catalog, &mut session, &[0]);
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"], "refreshed");
+    }
+
+    #[test]
+    fn by_the_other_reading_the_quote_filter_reads_the_bits_fresh() {
+        let rules = Rulebook::default().with_override(RuleKey::CachedAvailBits, RuleSource::Bible);
+        let (catalog, mut session) = quoting_while_b7(rules);
+        assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
+        set_b7(&mut session);
+        let (said, _) = quote_tick(&catalog, &mut session, &[0]);
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+    }
+
+    #[test]
+    fn by_the_engine_hailing_the_person_refreshes_its_missions_verdict() {
+        let (catalog, mut session) = quoting_while_b7(Rulebook::default());
+        set_b7(&mut session);
+        session.target = Some(NpcId(0));
+        let _ = session.open_hail(
+            &catalog,
+            &crate::hail::HailOptions::default(),
+            &mut NeverFires,
+        );
+        session.talk = None;
+        let (said, _) = quote_tick(&catalog, &mut session, &[0]);
+        assert_eq!(
+            said,
+            ["Ace: Prepare to die, Stock!"],
+            "the hail's _IsMissionAvailable(m, 1) writes it (@0x6220d)"
+        );
+    }
+
+    #[test]
+    fn a_jumps_arrival_caches_every_verdict_again() {
+        let (mut catalog, mut session) = quoting_while_b7(Rulebook::default());
+        catalog.star_map[0].links.push(SystemId(131));
+        set_b7(&mut session);
+        assert_eq!(session.avail_cache.get(&MissionId(130)), Some(&false));
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        assert_eq!(
+            session.avail_cache.get(&MissionId(130)),
+            Some(&true),
+            "@0x6bf3f"
+        );
     }
 
     #[test]

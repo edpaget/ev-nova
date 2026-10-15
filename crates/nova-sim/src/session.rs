@@ -1050,6 +1050,10 @@ pub struct Session {
     /// the `person_offers` module); never saved, and none at a new pilot
     /// or a load (`_InitMissions` @0x97bbf).
     offering_ship: Option<person_offers::OfferingShip>,
+    /// Each mission's `AvailBits` verdict as the original last cached it
+    /// (`mïsn`+0x16; see [`Session::propagate_avail_bits`]); never saved,
+    /// as a load refreshes it.
+    avail_cache: BTreeMap<MissionId, bool>,
     /// Whether the data turns on the `l33t` mode (`_leetMode`; see
     /// [`Session::with_strings`]); never saved.
     leet: bool,
@@ -1392,6 +1396,7 @@ impl Session {
             shown_texts: Vec::new(),
             rank_govts: RankTagGovts::NONE,
             offering_ship: None,
+            avail_cache: BTreeMap::new(),
             leet: false,
             suppressed: BTreeSet::new(),
             offer_venue: None,
@@ -2871,8 +2876,9 @@ impl Session {
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
-        // @0x6c144).
+        // @0x6c144); the `AvailBits` cached with it.
         let refresh = self.refresh_now();
+        self.propagate_avail_bits();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
@@ -4582,11 +4588,12 @@ impl Session {
             provokes: true,
         });
         let linked = self.linked_ship(&npc, person_offers::OfferedBy::Boarding);
+        let named = linked.is_some();
+        self.reach_linked(linked);
         if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
-            self.offering_ship = linked;
             return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
         }
-        if linked.is_some() {
+        if named {
             // Named and put back to none around the plunder
             // (@0x65882, @0x65a11).
             self.offering_ship = None;

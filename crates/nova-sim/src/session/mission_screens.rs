@@ -342,17 +342,48 @@ impl Session {
     /// is accepted at once. `None` with nothing to offer, or in flight.
     pub fn next_offer(&mut self, loc: i16, chance: &mut dyn Chance) -> Option<VenueOffer> {
         self.enter_offer_venue(loc);
-        let offer = self
+        let candidates: Vec<Offer> = self
             .mission_offers(Venue::Outside)
             .iter()
-            .find(|offer| {
+            .filter(|offer| {
                 self.mission_record(offer.mission)
                     .is_some_and(|record| record.avail_loc == loc)
                     && !self.suppressed.contains(&offer.mission)
-                    && self.still_available(offer)
-            })?
-            .mission;
-        Some(self.offer_dialog(offer, chance))
+            })
+            .cloned()
+            .collect();
+        for offer in candidates {
+            // Each one checked writes its cached `AvailBits` (@0xa372f).
+            self.check_avail_bits(offer.mission);
+            if self.still_available(&offer) {
+                return Some(self.offer_dialog(offer.mission, chance));
+            }
+        }
+        None
+    }
+
+    /// Opens the mission computer as `_DoMissionDialog` does
+    /// (@0xa37cf): [`Session::mission_computer`], but each offer it
+    /// lists checked first, writing its cached `AvailBits`
+    /// (`_IsMissionAvailable(i, 1)` @0xa38bd-0xa38ee; see
+    /// [`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits)),
+    /// unless every slot is taken.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::mission_computer`].
+    pub fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
+        if self.accept_refusal(0, &mut NeverFires) != Err(AcceptRefusal::SlotsFull) {
+            let listed: Vec<MissionId> = self
+                .mission_offers(Venue::Computer)
+                .iter()
+                .map(|offer| offer.mission)
+                .collect();
+            for mission in listed {
+                self.check_avail_bits(mission);
+            }
+        }
+        self.mission_computer()
     }
 
     /// The offer dialog for `mission`, offered now (`_OfferOneMission`
@@ -433,6 +464,7 @@ impl Session {
                 mission: record,
                 venue: offer.venue,
                 rolls: self.offers.table(),
+                cached_avail_bits: None,
             };
             availability()
                 .first_refusal(&facts, &mut NeverFires)
@@ -744,6 +776,102 @@ mod tests {
             session.offer_text(MissionId(130), "Hello")
         );
         assert_eq!(session.plain_text("Hello").as_str(), "H377o");
+    }
+
+    // The cached `AvailBits` (`mïsn`+0x16) the checks write.
+
+    /// The cached verdicts of `missions`.
+    fn cached(session: &Session, missions: &[i16]) -> Vec<Option<bool>> {
+        missions
+            .iter()
+            .map(|&id| session.avail_cache.get(&MissionId(id)).copied())
+            .collect()
+    }
+
+    /// Every verdict cached `false`, as if `AvailBits` had failed at the
+    /// last refresh.
+    fn all_cached_false(session: &mut Session) {
+        for verdict in session.avail_cache.values_mut() {
+            *verdict = false;
+        }
+    }
+
+    #[test]
+    fn a_landing_caches_every_missions_avail_bits_verdict() {
+        let catalog = screens(
+            vec![
+                MissionRecord {
+                    avail_bits: Test::parse("b7"),
+                    ..to_mars(130)
+                },
+                to_mars(131),
+            ],
+            vec![],
+        );
+        let session = docked(&catalog);
+        assert_eq!(cached(&session, &[130, 131]), [Some(false), Some(true)]);
+    }
+
+    #[test]
+    fn opening_the_computer_writes_each_offers_verdict_and_its_view_writes_none() {
+        let catalog = screens(vec![to_mars(130), to_mars(131), at_the_bar(150)], vec![]);
+        let mut session = docked(&catalog);
+        all_cached_false(&mut session);
+        let _ = session.mission_computer();
+        assert_eq!(cached(&session, &[130, 131]), [Some(false); 2], "a view");
+        let _ = session.open_mission_computer();
+        assert_eq!(
+            cached(&session, &[130, 131]),
+            [Some(true); 2],
+            "@0xa38bd-0xa38ee"
+        );
+        all_cached_false(&mut session);
+        fill_slots(&mut session);
+        assert_eq!(
+            session.open_mission_computer(),
+            Err(ComputerRefusal::SlotsFull)
+        );
+        assert_eq!(
+            cached(&session, &[130, 131]),
+            [Some(false); 2],
+            "refused first"
+        );
+    }
+
+    #[test]
+    fn a_port_offer_writes_each_verdict_it_checks_until_one_is_offered() {
+        let catalog = screens(
+            vec![at_the_bar(141), at_the_bar(142), at_the_bar(143)],
+            vec![],
+        );
+        let mut session = docked(&catalog);
+        session.enter_offer_venue(BAR);
+        session.suppressed.insert(MissionId(141));
+        all_cached_false(&mut session);
+        assert_eq!(
+            prompted(session.next_offer(BAR, &mut NeverFires)),
+            MissionId(142)
+        );
+        assert_eq!(
+            cached(&session, &[141, 142, 143]),
+            [Some(false), Some(true), Some(false)],
+            "141 suppressed, 143 never reached (@0xa372f)"
+        );
+    }
+
+    #[test]
+    fn an_accept_with_the_computer_open_writes_each_remaining_offers_verdict() {
+        let catalog = screens(vec![to_mars(130), to_mars(131), to_mars(132)], vec![]);
+        let mut session = docked(&catalog);
+        all_cached_false(&mut session);
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(
+            cached(&session, &[131, 132]),
+            [Some(true); 2],
+            "the refilter's _IsMissionAvailable(j, 1) (@0xa207a)"
+        );
     }
 
     fn ids(computer: &MissionComputer) -> Vec<i16> {

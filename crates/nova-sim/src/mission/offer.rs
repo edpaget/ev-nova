@@ -238,6 +238,7 @@ impl Offers {
                         mission,
                         venue,
                         rolls: &self.table,
+                        cached_avail_bits: None,
                     };
                     checks.first_refusal(&facts, chance).is_ok()
                 })
@@ -284,6 +285,7 @@ impl Offers {
                         mission,
                         venue: offer.venue,
                         rolls: table,
+                        cached_avail_bits: None,
                     };
                     checks.first_refusal(&facts, &mut NeverFires).is_ok()
                 })
