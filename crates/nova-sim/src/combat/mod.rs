@@ -440,6 +440,12 @@ impl Combat {
         self.resolve(fighters, &targets, &was, &gone, arsenal, chance, pass);
         self.strike_stellars(stellars, &from);
         for fighter in fighters.iter_mut() {
+            let struck = self.strikes[first_strike..]
+                .iter()
+                .any(|strike| strike.ship == fighter.ship);
+            if struck {
+                truncate_downed_player(fighter, rules.disable);
+            }
             let downed = self.update_condition(fighter, rules.disable);
             let last = self.strikes[first_strike..]
                 .iter_mut()
@@ -1010,6 +1016,25 @@ impl Fighter<'_> {
 /// how much less this is after it.
 fn taken(reserves: &Reserves) -> f32 {
     reserves.shield.now + reserves.armor.now
+}
+
+/// Truncates the armour of `fighter`, struck this tick, toward zero when
+/// it is the player, intact before the hit and now disabled or with its
+/// armour gone, as `rule` says: `_DamageShip`'s newly disabled player
+/// (+0x86 = 0, `cvttss2si`/`cvtsi2ss` @0x3b193-0x3b1a1), where
+/// `_IsDisabled` holds at armour 0 or below. It comes before the
+/// condition is decided, as the original's `_IsDying` test after it
+/// (@0x3b1e5) reads the truncated armour: armour truncated to none starts
+/// the breakup in the same hit. The session tells the player (see its
+/// `player_downed` module).
+fn truncate_downed_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
+    if fighter.ship != ShipRef::Player || *fighter.condition != Condition::Intact {
+        return;
+    }
+    let armor = fighter.reserves.armor;
+    if armour_gone(armor) || holds_armour(armor) && rule.disabled(armor, &fighter.hull) {
+        fighter.reserves.armor.now = armor.now.trunc();
+    }
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.

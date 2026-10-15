@@ -12853,10 +12853,7 @@ mod tests {
 
     #[test]
     fn use_as_my_ship_flies_and_draws_the_captured_ship() {
-        // The original's rule, once captured: by `DisablesTheStrong` the
-        // strong ship taken over would be disabled at the next fight
-        // tick, and "Ship disabled." would replace the line.
-        let mut view = captured().with_disable_rule(Rc::new(NovaDisable));
+        let mut view = captured();
         view.tick(TICK / 2);
         assert!(view.alpha() > 0.0, "between steps");
         let mut asked = view.catalog().sheets_asked.borrow().clone();

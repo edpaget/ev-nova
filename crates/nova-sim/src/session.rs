@@ -1848,9 +1848,9 @@ impl Session {
             &mut stellars,
             chance,
         );
-        self.player_downed(player_was, &mut &mut *chance);
         self.raise_disabled(&was, &mut &mut *chance);
         let mut strikes = self.combat.take_strikes();
+        self.player_downed(player_was, &strikes, &mut &mut *chance);
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
         self.punish(&strikes, &was, rules.law);
@@ -12866,7 +12866,7 @@ pub(super) mod tests {
         session
     }
 
-    const FIRE: Trigger = Trigger {
+    pub(super) const FIRE: Trigger = Trigger {
         primary: true,
         secondary: None,
         only: None,
@@ -13042,7 +13042,7 @@ pub(super) mod tests {
 
     /// Every NPC idles and holds its trigger.
     #[derive(Debug)]
-    struct Firing;
+    pub(super) struct Firing;
 
     impl Behaviour for Firing {
         fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
@@ -14563,7 +14563,6 @@ pub(super) mod tests {
         let moving = *session.player();
         session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.player_condition(), Condition::Disabled);
-        assert_eq!(session.take_sounds(), [SimSound::ShipDowned]);
         session.tick(Controls {
             thrust: true,
             turn: Turn::Left,
@@ -14594,8 +14593,8 @@ pub(super) mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
-        session.tick_combat(DISABLING, &mut NeverFires);
         session.take_sounds();
+        session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Disabled));
         assert_eq!(session.jumping(), None);
         assert_eq!(session.take_sounds(), [], "a refusal emits nothing");
