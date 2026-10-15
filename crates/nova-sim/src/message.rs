@@ -25,6 +25,17 @@ pub enum SimMessage {
     /// (`_HandleShipDisplay` @0x2db31-0x2dbab, `_DamageShip`
     /// @0x3aee8-0x3af62).
     MissionShipLost,
+    /// The player's ship was newly disabled: "Ship disabled.", `STR#`
+    /// 2002 #287 (`_DamageShip` @0x3b181; see the session's
+    /// `player_downed` module).
+    ShipDisabled,
+    /// The player's ship newly started to break up: "Ship destroyed.",
+    /// `STR#` 2002 #288 (`_DamageShip` @0x3b3b9).
+    ShipDestroyed,
+    /// The player's ship being disabled or breaking up failed its first
+    /// unfailed `Flags2` 0x0004 mission: "Mission failed.", `STR#` 2002
+    /// #284 (`_DamageShip` @0x3b0b6, @0x3b353), hidden or not.
+    DownedMissionFailed,
     /// Every ton of cargo was jettisoned (`_JettisonCargo` @0x3e354).
     CargoJettisoned,
     /// The cargo but the missions' was jettisoned (`_JettisonCargo`
@@ -114,6 +125,10 @@ impl SimMessage {
     ///   240 (`_JettisonCargo` @0x3e17d, @0x3e3b0).
     /// - [`MissionShipLost`](Self::MissionShipLost): 240
     ///   (`_HandleShipDisplay` @0x2dbab, `_DamageShip` @0x3af62).
+    /// - [`ShipDisabled`](Self::ShipDisabled),
+    ///   [`ShipDestroyed`](Self::ShipDestroyed) and
+    ///   [`DownedMissionFailed`](Self::DownedMissionFailed): 240
+    ///   (`_DamageShip` @0x3b181, @0x3b3b9, @0x3b0b6, @0x3b353).
     /// - [`DeadlineMissed`](Self::DeadlineMissed): 240
     ///   (`_MissionObjectivesCheck` @0x9ec53).
     /// - [`MissionScanned`](Self::MissionScanned),
@@ -141,6 +156,9 @@ impl SimMessage {
             | Self::MissionFailed
             | Self::DeadlineMissed
             | Self::MissionShipLost
+            | Self::ShipDisabled
+            | Self::ShipDestroyed
+            | Self::DownedMissionFailed
             | Self::CargoJettisoned
             | Self::NonMissionCargoJettisoned
             | Self::TookOff { .. } => 240,
@@ -168,6 +186,9 @@ mod tests {
             (SimMessage::MissionFailed, 240),
             (SimMessage::DeadlineMissed, 240),
             (SimMessage::MissionShipLost, 240),
+            (SimMessage::ShipDisabled, 240),
+            (SimMessage::ShipDestroyed, 240),
+            (SimMessage::DownedMissionFailed, 240),
             (SimMessage::CargoJettisoned, 240),
             (SimMessage::NonMissionCargoJettisoned, 240),
             (SimMessage::MissionScanned, 400),

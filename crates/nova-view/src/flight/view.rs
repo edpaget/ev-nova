@@ -643,9 +643,16 @@ pub const ESCORT_RECALL_KEY: Key = Key::Char('c');
 /// (`ackComm`).
 pub const MENU_CLOSE_KEY: Key = Key::Enter;
 
-/// `STR#` 2002 #284: a mission failed as its cargo was jettisoned, or as
-/// one of its special ships was lost.
+/// `STR#` 2002 #284: a mission failed as its cargo was jettisoned, as
+/// one of its special ships was lost, or as the player's ship was
+/// disabled or broke up.
 pub const MISSION_FAILED: &str = "Mission failed.";
+/// `STR#` 2002 #287: the player's ship was newly disabled (`_DamageShip`
+/// @0x3b181).
+pub const SHIP_DISABLED: &str = "Ship disabled.";
+/// `STR#` 2002 #288: the player's ship newly started to break up
+/// (`_DamageShip` @0x3b3b9).
+pub const SHIP_DESTROYED: &str = "Ship destroyed.";
 /// `STR#` 2002 #289: everything was jettisoned.
 pub const CARGO_JETTISONED: &str = "Cargo jettisoned.";
 /// `STR#` 2002 #290: all but the mission cargo was jettisoned.
@@ -764,7 +771,11 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         }
         SimMessage::Tutorial(TutorialHint::FarEnough) => FAR_ENOUGH,
         SimMessage::Tutorial(TutorialHint::NothingOutHere) => NOTHING_OUT_HERE,
-        SimMessage::MissionFailed | SimMessage::MissionShipLost => MISSION_FAILED,
+        SimMessage::MissionFailed
+        | SimMessage::MissionShipLost
+        | SimMessage::DownedMissionFailed => MISSION_FAILED,
+        SimMessage::ShipDisabled => SHIP_DISABLED,
+        SimMessage::ShipDestroyed => SHIP_DESTROYED,
         SimMessage::CargoJettisoned => CARGO_JETTISONED,
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
@@ -1119,6 +1130,9 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         SimMessage::PassedWormhole(_) => Some(PASSING_WORMHOLE),
         SimMessage::MissionFailed
         | SimMessage::MissionShipLost
+        | SimMessage::ShipDisabled
+        | SimMessage::ShipDestroyed
+        | SimMessage::DownedMissionFailed
         | SimMessage::CargoJettisoned
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
@@ -11659,6 +11673,47 @@ mod tests {
         );
     }
 
+    /// The fight of [`armed`] with the NPC straight above the player and
+    /// facing it, firing a blaster of `mass_dmg` that ignores shields at
+    /// it, ticked until the player is no longer intact: the line then.
+    fn downed_line(mass_dmg: i16) -> (Condition, Option<String>) {
+        let mut catalog = armed(1, &[]);
+        catalog.weapons[0].mass_dmg = mass_dmg;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.hulls[0].death_delay = 30;
+        catalog.hulls[1] = hull_of(129, &[BLASTER]);
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        for _ in 0..400 {
+            view.tick(TICK);
+            let condition = view.session().expect("flying").player_condition();
+            if condition != Condition::Intact {
+                return (condition, view.message().map(str::to_owned));
+            }
+        }
+        panic!("the player was never downed");
+    }
+
+    #[test]
+    fn the_player_broken_up_at_a_hit_is_left_told_ship_destroyed() {
+        let (condition, line) = downed_line(1000);
+        assert!(
+            matches!(condition, Condition::Dying { .. }),
+            "{condition:?}"
+        );
+        assert_eq!(
+            line.as_deref(),
+            Some("Ship destroyed."),
+            "#288 replaced #287"
+        );
+    }
+
+    #[test]
+    fn the_player_disabled_is_told_ship_disabled() {
+        let (condition, line) = downed_line(1);
+        assert_eq!(condition, Condition::Disabled);
+        assert_eq!(line.as_deref(), Some("Ship disabled."));
+    }
+
     #[test]
     fn a_shot_whose_look_cannot_be_read_is_a_crossed_box() {
         let mut view = fighting(armed(0, &[UNSEEN]), &[]);
@@ -12798,7 +12853,10 @@ mod tests {
 
     #[test]
     fn use_as_my_ship_flies_and_draws_the_captured_ship() {
-        let mut view = captured();
+        // The original's rule, once captured: by `DisablesTheStrong` the
+        // strong ship taken over would be disabled at the next fight
+        // tick, and "Ship disabled." would replace the line.
+        let mut view = captured().with_disable_rule(Rc::new(NovaDisable));
         view.tick(TICK / 2);
         assert!(view.alpha() > 0.0, "between steps");
         let mut asked = view.catalog().sheets_asked.borrow().clone();
@@ -14442,6 +14500,24 @@ mod tests {
             Some(MISSION_FAILED)
         );
         assert_eq!(arrival_lead(&SimMessage::MissionShipLost), None);
+    }
+
+    #[test]
+    fn the_players_downed_lines_are_str_2002_287_288_and_284() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        for (message, text) in [
+            (SimMessage::ShipDisabled, "Ship disabled."),
+            (SimMessage::ShipDestroyed, "Ship destroyed."),
+            (SimMessage::DownedMissionFailed, "Mission failed."),
+        ] {
+            assert_eq!(
+                sim_message_text(&message, session).as_deref(),
+                Some(text),
+                "{message:?}"
+            );
+            assert_eq!(arrival_lead(&message), None, "{message:?}");
+        }
     }
 
     #[test]

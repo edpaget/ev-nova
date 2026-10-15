@@ -56,6 +56,14 @@ pub enum SimSound {
     /// A disabled former escort or fighter repaired itself and rejoined
     /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
     EscortRepaired,
+    /// The player's ship was newly disabled or newly started to break up:
+    /// `_beepSnd[1]`, `snd ` 151 (`_DamageShip` @0x3b11e, @0x3b221; see
+    /// the session's `player_downed` module).
+    ShipDowned,
+    /// The player's ship being disabled or breaking up failed a `Flags2`
+    /// 0x0004 mission: `_beepSnd[1]`, `snd ` 151 (`_DamageShip`
+    /// @0x3b04e, @0x3b2f1), hidden or not.
+    DownedMissionFailed,
     /// A nav key was taken: Nav Off and Hyperspace Mode on every press
     /// (`_HandlePlayer` @0x69b19), a stellar key that found a stellar,
     /// even the one selected (@0x69ebc), and a click on a stellar not

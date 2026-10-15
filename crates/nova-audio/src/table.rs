@@ -65,6 +65,11 @@ pub struct SoundTable {
     pub tutorial_hint: Option<SoundId>,
     /// Plays as a key's action is refused and the player told why.
     pub refused: Option<SoundId>,
+    /// Plays as the player's ship is newly disabled or newly starts to
+    /// break up.
+    pub ship_downed: Option<SoundId>,
+    /// Plays as the player's ship being downed fails a mission.
+    pub downed_mission_failed: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -144,6 +149,12 @@ impl SoundTable {
     /// - `refused`: 153, `_beepSnd[3]`, the shared refusal beep, as the
     ///   jump key's refusals are told (`_HandlePlayer` @0x6b89f, @0x6b9cc,
     ///   @0x6ba72).
+    /// - `ship_downed`: 151, `_beepSnd[1]`, which `_DamageShip` plays as
+    ///   the player's ship is newly disabled (@0x3b11e) and as it newly
+    ///   starts to break up (@0x3b221).
+    /// - `downed_mission_failed`: 151, `_beepSnd[1]`, which `_DamageShip`
+    ///   plays as either fails the player's first `Flags2` 0x0004 mission
+    ///   (@0x3b04e, @0x3b2f1).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -171,6 +182,8 @@ impl SoundTable {
         target_cleared: Some(SoundId(150)),
         tutorial_hint: Some(SoundId(154)),
         refused: Some(SoundId(153)),
+        ship_downed: Some(SoundId(151)),
+        downed_mission_failed: Some(SoundId(151)),
     };
 }
 
@@ -207,5 +220,11 @@ mod tests {
         assert_eq!(table.target_cleared, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(
+            table.downed_mission_failed,
+            Some(SoundId(151)),
+            "_beepSnd[1]"
+        );
     }
 }

@@ -141,6 +141,10 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
                 Sound::Sim(SimSound::TutorialHint) => self.play(self.table.tutorial_hint),
                 Sound::Sim(SimSound::Refused) => self.play(self.table.refused),
+                Sound::Sim(SimSound::ShipDowned) => self.play(self.table.ship_downed),
+                Sound::Sim(SimSound::DownedMissionFailed) => {
+                    self.play(self.table.downed_mission_failed);
+                }
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
@@ -633,6 +637,32 @@ mod tests {
             &[Sound::Ui(UiSound::PlayerInfoRefused)],
         );
         assert_eq!(drain(&log), [play(302, 1.0)], "the table's");
+    }
+
+    #[test]
+    fn the_player_downed_and_its_failed_mission_each_beep_their_table_entry() {
+        const DOWNED: [Sound; 2] = [
+            Sound::Sim(SimSound::ShipDowned),
+            Sound::Sim(SimSound::DownedMissionFailed),
+        ];
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &DOWNED);
+        assert_eq!(drain(&log), [play(151, 0.5), play(151, 0.5)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            ship_downed: Some(SoundId(301)),
+            downed_mission_failed: Some(SoundId(302)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &DOWNED);
+        assert_eq!(drain(&log), [play(301, 1.0), play(302, 1.0)], "the table's");
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &DOWNED);
+        assert_eq!(drain(&log), [], "sound off");
     }
 
     fn mission(id: i16, exclusive: bool) -> Sound {
