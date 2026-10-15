@@ -51,7 +51,8 @@
 //! in each system ([`LegalCode::system_penalties`], **The walk** below).
 //! The record with each government ([`LegalCode::penalties`]) takes the
 //! same rules, whole, undecayed and for every government in the
-//! catalog. With P the crime's penalty field (`SmugPenalty`,
+//! catalog: one function gives both stores the change for a government
+//! S, and only the independent system's rules are the walk's own. With P the crime's penalty field (`SmugPenalty`,
 //! `DisabPenalty`, `BoardPenalty`, `KillPenalty`: types 0 to 3,
 //! `_RecursivePenaltySlap` reading gövt +0x48 + 2×type @0x9954), a
 //! crime against V changes the record with government S, or in a system
@@ -226,6 +227,33 @@ impl NovaLaw {
             crime_gains: rulebook.source_for(RuleKey::CrimeGains),
         }
     }
+
+    /// The change, untruncated and undecayed, that `crime` against a ship
+    /// of `victim` (or an independent one) makes to the record with
+    /// government `s`, or in a system of `s` (see the module docs'
+    /// **Crimes**). Both stores read it: [`LegalCode::penalties`]
+    /// truncates it, and the walk decays it.
+    fn govt_change(
+        self,
+        crime: Crime,
+        victim: Option<GovtId>,
+        s: GovtId,
+        govts: &Governments,
+    ) -> f32 {
+        let s = Some(s);
+        let penalty = |govt: Option<GovtId>| f32::from(govts.penalty(govt, crime));
+        match victim {
+            Some(_) if govts.enemies(victim, s) => ENEMY_SHARE * penalty(s),
+            // V itself too (@0x992e): a government is its own ally, and
+            // never its own enemy.
+            Some(_) if govts.allies(victim, s) => -penalty(victim),
+            Some(_) if self.crime_gains == RuleSource::Engine => ENEMY_SHARE * penalty(s),
+            None if govts.xenophobic(s) => ENEMY_SHARE * penalty(s),
+            None if govts.flag(s, NOSY) => -ENEMY_SHARE * penalty(s),
+            // By the Bible, a neutral is left alone.
+            Some(_) | None => 0.0,
+        }
+    }
 }
 
 impl LegalCode for NovaLaw {
@@ -238,23 +266,11 @@ impl LegalCode for NovaLaw {
         if crime == Crime::Shoot || govts.derelict(victim) {
             return Vec::new();
         }
-        let theirs = |govt: GovtId| f32::from(govts.penalty(Some(govt), crime));
-        let own = f32::from(govts.penalty(victim, crime));
         govts
             .ids()
             .filter_map(|id| {
-                let other = Some(id);
-                let change = match victim {
-                    Some(_) if govts.enemies(victim, other) => ENEMY_SHARE * theirs(id),
-                    Some(_) if govts.allies(victim, other) => -own,
-                    Some(_) if self.crime_gains == RuleSource::Engine => ENEMY_SHARE * theirs(id),
-                    None if govts.xenophobic(other) => ENEMY_SHARE * theirs(id),
-                    None if govts.flag(other, NOSY) => -ENEMY_SHARE * theirs(id),
-                    // By the Bible, a neutral is left alone.
-                    Some(_) | None => 0.0,
-                };
                 // Truncated: a change of less than 1 either way is none.
-                let change = change.trunc() as i32;
+                let change = self.govt_change(crime, victim, id, govts).trunc() as i32;
                 (change != 0).then_some((id, change))
             })
             .collect()
@@ -330,26 +346,21 @@ impl Walk<'_> {
         }
     }
 
-    /// The undecayed change to the record in `system` (@0x9900-0x9a86).
+    /// The undecayed change to the record in `system` (@0x9900-0x9a86):
+    /// in a governed system, its government's change, as the record with
+    /// it takes ([`NovaLaw::govt_change`]); the independent system's rules
+    /// are the walk's alone.
     fn base(&self, system: SystemId) -> f32 {
         let govts = self.govts;
+        let victim = self.victim;
+        if let Some(owner) = self.map.govt(system) {
+            return self.law.govt_change(self.crime, victim, owner, govts);
+        }
         let penalty = |govt: Option<GovtId>| f32::from(govts.penalty(govt, self.crime));
-        let (owner, victim) = (self.map.govt(system), self.victim);
-        match (owner, victim) {
-            (Some(_), None) if govts.xenophobic(owner) => ENEMY_SHARE * penalty(owner),
-            (Some(_), None) if govts.flag(owner, NOSY) => -ENEMY_SHARE * penalty(owner),
-            (Some(_), Some(_)) if govts.enemies(victim, owner) => ENEMY_SHARE * penalty(owner),
-            // The victim's own system too (@0x992e): a government is its
-            // own ally, and never its own enemy.
-            (Some(_), Some(_)) if govts.allies(victim, owner) => -penalty(victim),
-            (Some(_), Some(_)) if self.law.crime_gains == RuleSource::Engine => {
-                ENEMY_SHARE * penalty(owner)
-            }
-            // By the Bible, a neutral is left alone.
-            (Some(_), _) => 0.0,
-            (None, None) => -ENEMY_SHARE * penalty(Some(FIRST_GOVT)),
-            (None, Some(_)) if govts.xenophobic(victim) => ENEMY_SHARE * penalty(victim),
-            (None, Some(_)) => -INDEPENDENT_SHARE * penalty(victim),
+        match victim {
+            None => -ENEMY_SHARE * penalty(Some(FIRST_GOVT)),
+            Some(_) if govts.xenophobic(victim) => ENEMY_SHARE * penalty(victim),
+            Some(_) => -INDEPENDENT_SHARE * penalty(victim),
         }
     }
 }
