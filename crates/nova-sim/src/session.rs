@@ -7681,6 +7681,20 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_pilot_resumed_on_its_stellar_is_not_refuelled_and_passes_no_day() {
+        let catalog = catalog();
+        let mut pilot = landed_pilot(&catalog);
+        pilot.reserves.fuel.now = 100.0;
+        let date = pilot.date();
+        assert!(pilot.reserves().fuel.max > 100.0, "the tank part empty");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.tick(Controls::default());
+        assert_eq!(session.landed(), None);
+        assert_eq!(session.reserves().fuel.now, 100.0, "no refuel");
+        assert_eq!(session.pilot().date(), date, "no day passes");
+    }
+
+    #[test]
     fn a_pilot_resumed_on_its_stellar_lands_on_a_press_a_tick_and_a_press() {
         let catalog = catalog();
         let mut session = Session::fly(&catalog, landed_pilot(&catalog)).expect("flies");

@@ -1209,6 +1209,47 @@ mod tests {
     }
 
     #[test]
+    fn begin_picks_the_stellar_nearest_where_it_puts_the_ship_not_the_centre() {
+        // 128 is nearest the centre, 129 nearest (50, 50).
+        let mut catalog = starting_with("");
+        catalog.sites = vec![(
+            SystemId(130),
+            vec![
+                crate::testkit::planet(128, -20.0, -20.0),
+                crate::testkit::planet(129, 60.0, 60.0),
+            ],
+        )];
+        let mut session = new_pilot(&catalog);
+        assert_eq!(session.player().position, Vec2::ZERO, "flown at the centre");
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(session.pilot().stellar(), Some(StellarId(129)));
+    }
+
+    #[test]
+    fn begin_falls_back_to_the_first_stellar_listed_though_it_is_not_shown() {
+        // 130 lists 127 first, but 129, visible and lower, owns it, so 130
+        // doesn't show it; none of the three can be landed on.
+        let mut catalog = starting_with("");
+        let unlandable = |id| crate::catalog::LandingSite {
+            flags: 0,
+            ..crate::testkit::planet(id, 0.0, 0.0)
+        };
+        catalog.sites = vec![
+            (SystemId(129), vec![unlandable(127)]),
+            (SystemId(130), [127, 128, 129].map(unlandable).to_vec()),
+        ];
+        catalog.systems.push(SystemId(129));
+        catalog
+            .star_map
+            .push(crate::testkit::star(129, (-600.0, 600.0), &[]));
+        let mut session = new_pilot(&catalog);
+        session.begin(&catalog, &mut Scripted::default());
+        let shown: Vec<StellarId> = session.sites.iter().map(|site| site.id).collect();
+        assert_eq!(shown, [StellarId(128), StellarId(129)], "127 not shown");
+        assert_eq!(session.pilot().stellar(), Some(StellarId(127)));
+    }
+
+    #[test]
     fn begin_records_no_stellar_when_the_system_lists_none() {
         let mut catalog = starting_with("");
         catalog.sites = vec![(SystemId(130), Vec::new())];
