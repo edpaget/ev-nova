@@ -249,6 +249,15 @@ pub const fn fails_on_disabled(facts: LossFacts) -> bool {
     first_loss(facts) && matches!(facts.goal, ShipGoal::Escort)
 }
 
+/// Whether a mission's goal is met on reaching its return, as
+/// `_MissionLandCheck`'s escort branch decides (@0xa1a99-0xa1ab1): an
+/// escort goal with none of its ships destroyed, its ships here or not.
+/// Every other goal is met only by its ships.
+#[must_use]
+pub const fn met_at_return(goal: ShipGoal, destroyed: i16) -> bool {
+    matches!(goal, ShipGoal::Escort) && destroyed <= 0
+}
+
 /// What one of a mission's ships leaving the system counts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Departure {
@@ -993,6 +1002,28 @@ mod tests {
                     "{goal:?} {source:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn an_escort_goal_with_none_destroyed_is_met_at_the_return() {
+        assert!(met_at_return(ShipGoal::Escort, 0));
+    }
+
+    #[test]
+    fn an_escort_goal_with_one_destroyed_is_not_met_at_the_return() {
+        assert!(!met_at_return(ShipGoal::Escort, 1));
+    }
+
+    #[test]
+    fn no_other_goal_is_met_at_the_return() {
+        for goal in [
+            ShipGoal::Destroy,
+            ShipGoal::Disable,
+            ShipGoal::Board,
+            ShipGoal::Observe,
+        ] {
+            assert!(!met_at_return(goal, 0), "{goal:?}");
         }
     }
 

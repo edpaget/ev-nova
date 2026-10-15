@@ -81,7 +81,7 @@ use crate::control::{Script, Test};
 use crate::message::SimMessage;
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
 use crate::mission::aux_ships::AuxShips;
-use crate::mission::goals::ShipGoal;
+use crate::mission::goals::{ShipGoal, met_at_return};
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
@@ -845,16 +845,14 @@ impl Session {
             self.mission_failure_at(slot, failed, chance);
             return;
         }
-        // The escort branch (@0xa1a99-0xa1ab1): an escort goal with none
-        // of its ships destroyed is met at the return, its ships here or
-        // not. It writes the goals met directly: no `ShipDone` moment.
+        // The escort branch ([`met_at_return`]) writes the goals met
+        // directly: no `ShipDone` moment.
         let mission = active.mission;
-        let escort =
-            ShipGoal::from_code(self.lifecycle_record(mission).ships.goal) == ShipGoal::Escort;
+        let goal = ShipGoal::from_code(self.lifecycle_record(mission).ships.goal);
         let Some(active) = self.pilot.missions.get_mut(slot) else {
             return;
         };
-        if escort && active.ships.destroyed <= 0 && !active.goals_met {
+        if met_at_return(goal, active.ships.destroyed) && !active.goals_met {
             active.goals_met = true;
             self.save_due = true;
         }
