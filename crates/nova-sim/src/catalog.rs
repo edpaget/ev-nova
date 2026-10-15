@@ -1,6 +1,7 @@
 //! The catalog ports: what a flight session starts from
 //! ([`PilotCatalog`]), what its NPC traffic is spawned from
-//! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]) and
+//! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]),
+//! what its asteroid fields hold ([`AsteroidCatalog`]) and
 //! the game's string lists ([`CommCatalog`]), which a hailed ship answers
 //! from and the `T` set operator names the ship from, in the simulation's
 //! own terms.
@@ -1297,6 +1298,67 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
     }
 }
 
+/// One asteroid type, `röid` 128 + `kind`, with its master sprite's
+/// frames and frame size (see [`asteroid`](crate::asteroid)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AsteroidTypeRecord {
+    /// Its type, 0-15: `röid` 128 + `kind`, bit `kind` of a system's
+    /// `AstTypes`.
+    pub kind: u8,
+    /// Its `Strength`, raw.
+    pub strength: i16,
+    /// Its `SpinRate`, raw: frames a tick, in hundredths.
+    pub spin_rate: i16,
+    /// Its master sprite's frame count, `spïn` 800 + `kind`'s `xTiles` ×
+    /// `yTiles`: 0 when it does not read or is not above 0.
+    pub frames: u16,
+    /// Its master sprite's frame width and height, when the sheet reads.
+    pub frame_size: Option<(u32, u32)>,
+}
+
+/// One `sÿst`'s asteroid field: its `Asteroids` and `AstTypes`, raw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AsteroidFieldRecord {
+    /// The system.
+    pub system: SystemId,
+    /// Its `Asteroids`: how many asteroids it holds at most, 0-16.
+    pub count: i16,
+    /// Its `AstTypes`: bit `n` set for each `röid` 128 + `n` it holds.
+    pub types: u16,
+}
+
+/// The game data a session's asteroid fields are read from (see
+/// [`asteroid`](crate::asteroid)).
+pub trait AsteroidCatalog {
+    /// `röid` 128 + `kind`, `kind` 0-15, for each that reads, by kind,
+    /// with `spïn` 800 + `kind`'s frames and frame size.
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord>;
+    /// Every `sÿst` that reads: its `Asteroids` and `AstTypes`, raw.
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord>;
+}
+
+/// A borrowed catalog is a catalog.
+impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for &T {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (**self).asteroid_types()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        (**self).asteroid_fields()
+    }
+}
+
+/// A shared catalog is a catalog.
+impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for Rc<T> {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (**self).asteroid_types()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        (**self).asteroid_fields()
+    }
+}
+
 /// The game's string lists (`STR#`), read whole: a hailed ship's words
 /// come from them, and the names the `T` set operator gives the ship.
 pub trait CommCatalog {
@@ -2345,6 +2407,42 @@ mod tests {
         assert!(direct[2].contains("\"Federation\""), "{direct:?}");
         assert_eq!(combat(&One), direct);
         assert_eq!(combat(Rc::new(One)), direct);
+    }
+
+    /// Asteroid type 4, `röid` 132, and system 130's field.
+    impl AsteroidCatalog for One {
+        fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+            vec![AsteroidTypeRecord {
+                kind: 4,
+                strength: 30,
+                spin_rate: 120,
+                frames: 36,
+                frame_size: Some((48, 40)),
+            }]
+        }
+
+        fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+            vec![AsteroidFieldRecord {
+                system: SystemId(130),
+                count: 6,
+                types: 0x0011,
+            }]
+        }
+    }
+
+    fn asteroids(
+        catalog: impl AsteroidCatalog,
+    ) -> (Vec<AsteroidTypeRecord>, Vec<AsteroidFieldRecord>) {
+        (catalog.asteroid_types(), catalog.asteroid_fields())
+    }
+
+    #[test]
+    fn borrowed_and_shared_asteroid_catalogs_are_catalogs() {
+        let direct = asteroids(One);
+        assert_eq!(direct.0[0].kind, 4);
+        assert_eq!(direct.1[0].types, 0x0011);
+        assert_eq!(asteroids(&One), direct);
+        assert_eq!(asteroids(Rc::new(One)), direct);
     }
 
     /// `STR#` 3000 holds two replies; no other list exists.
