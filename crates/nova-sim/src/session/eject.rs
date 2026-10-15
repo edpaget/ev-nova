@@ -111,8 +111,11 @@
 //! the engine's reading of [`RuleKey::EjectVelocity`], the x velocity
 //! takes the y velocity's value (@0x6f782-0x6f788), so the hulk keeps the
 //! true velocity; by the other, it is kept. Then one push of the new class's top
-//! speed along the heading is added (`_Accel` @0x6f78e-0x6f7a9). A jump
-//! being warmed up is given up (+0x50 = 0, @0x6f962), the condition is
+//! speed along the heading is added (`_Accel` @0x6f78e-0x6f7a9). The
+//! original also sets +0x50 = 0 (@0x6f962), but a pre-jump has already
+//! collapsed by then: `_HandlePlayer`'s collapse (0x688aa) runs before
+//! the eject, so the engine's eject collapses one first, before the hulk
+//! takes the player's state (see the `jump_collapse` module). The condition is
 //! intact again (the death timer -1.0, @0x6f969), the engine glow goes
 //! out, and [`SimSound::Ejected`] sounds, then a [`SimSound::Halt`] of
 //! [`WARP_UP_HALTS`] (@0x6f920-0x6f95a).
@@ -234,6 +237,7 @@ impl Session {
     /// The eject itself, from a ship of class `old`, leaving a hulk in
     /// `hulk` (see the module docs).
     fn eject(&mut self, old: &ShipRecord, hulk: Condition, chance: &mut dyn Chance) {
+        self.collapse_jump();
         let save_due = self.save_due;
         let hulk = self.traffic.add_npc(self.hulk(old, hulk));
         self.target = None;
@@ -275,9 +279,6 @@ impl Session {
         let heading = self.player.heading as i32;
         self.player.velocity =
             self.player.velocity + crate::cargo_box::accel(heading, self.top_speed());
-        if matches!(self.jump, Some(super::Jump::PreJump { .. })) {
-            self.jump = None;
-        }
         self.condition = Condition::Intact;
         self.stop_thrust();
         self.sounds.push(SimSound::Ejected);
@@ -857,11 +858,6 @@ mod tests {
         session.target = Some(target);
         session.nav_target = Some(crate::catalog::StellarId(128));
         session.secondary = Some(WeaponId(128));
-        session.jump = Some(crate::session::Jump::PreJump {
-            to: crate::catalog::SystemId(131),
-            bearing: None,
-            warp: None,
-        });
         let state = crate::flight::ShipState {
             position: Vec2::new(10.0, 20.0),
             velocity: Vec2::new(3.0, 4.0),
@@ -898,7 +894,6 @@ mod tests {
         assert_eq!(session.target, None);
         assert_eq!(session.nav_target, None);
         assert_eq!(session.secondary, None);
-        assert_eq!(session.jump, None, "the pre-jump given up");
         assert_eq!(session.condition, Condition::Intact);
         assert_eq!(session.pilot.reserves.fuel.now, fuel, "fuel untouched");
         let owned: Vec<(i16, u16)> = session
@@ -919,6 +914,83 @@ mod tests {
             .map(|mount| (mount.spec.id, mount.count))
             .collect();
         assert_eq!(mounted, [(WeaponId(128), 1)]);
+    }
+
+    /// A braking pre-jump to 131.
+    const BRAKING: crate::session::Jump = crate::session::Jump::PreJump {
+        to: crate::catalog::SystemId(131),
+        bearing: None,
+        warp: None,
+    };
+
+    #[test]
+    fn a_player_killed_outright_mid_jump_collapses_before_it_ejects() {
+        use crate::flight::Controls;
+        use crate::session::jump_collapse::collapsed_velocity;
+        let mut catalog = ejecting(100);
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(128) {
+                record.flags = 0x0004;
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        session.warp_sound = 9;
+        session.jump = Some(BRAKING);
+        session.take_messages();
+        let sounds = to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert_eq!(
+            sounds,
+            [
+                SimSound::Halt(&WARP_UP_HALTS),
+                SimSound::JumpCollapsed,
+                SimSound::Ejected,
+                SimSound::Halt(&WARP_UP_HALTS),
+            ]
+        );
+        assert_eq!(session.take_messages(), [SimMessage::JumpCollapsed]);
+        assert_eq!(session.jump, None);
+        // C is the old class's (2.08, `Flags` 0x0004), not the pod's.
+        let speed = crate::warp::lead_in_speed(2, crate::warp::warp_factor(0x0004), 9);
+        assert_ne!(
+            speed,
+            crate::warp::lead_in_speed(2, crate::warp::warp_factor(0), 9)
+        );
+        assert!(speed > 0.0, "{speed}");
+        let heading = session.player.heading;
+        let collapsed = collapsed_velocity(Vec2::ZERO, heading, speed, session.top_speed());
+        assert_eq!(
+            hulk(&session).state.velocity,
+            collapsed,
+            "the hulk keeps it"
+        );
+        session.tick(Controls::default());
+        assert_eq!(session.take_messages(), [], "collapsed once");
+
+        // An escape ship's notice follows the collapse's.
+        let catalog = escaping();
+        let (mut session, sounds) = escaped(&catalog, &[], |session| {
+            session.warp_sound = 9;
+            session.jump = Some(BRAKING);
+        });
+        assert_eq!(
+            session.take_messages(),
+            [
+                SimMessage::JumpCollapsed,
+                SimMessage::EscapingIn {
+                    ship: ShipId(VIPER)
+                }
+            ]
+        );
+        assert_eq!(
+            sounds,
+            [
+                SimSound::Halt(&WARP_UP_HALTS),
+                SimSound::JumpCollapsed,
+                SimSound::Ejected,
+                SimSound::Halt(&WARP_UP_HALTS),
+            ]
+        );
     }
 
     #[test]

@@ -635,6 +635,9 @@ pub const ESCAPING_IN: &str = "Escaping in";
 /// `STR#` 2002 #38: a sabotage kill outfit went off with none named
 /// (`_HandlePlayer` @0x69645-0x6965e).
 pub const BOMB_EXPLODED_ONBOARD: &str = "A bomb has exploded onboard your ship!";
+/// `STR#` 2002 #35: a disabled player's pre-jump collapsed
+/// (`_HandlePlayer` `_GetIndString` @0x68a04).
+pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
 /// `STR#` 2002 #39: what comes before a sabotage outfit that went off.
 pub const YOUR: &str = "Your";
 /// `STR#` 2002 #40: what follows one sabotage outfit that went off.
@@ -755,6 +758,7 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
+        SimMessage::JumpCollapsed => JUMP_COLLAPSED,
         SimMessage::EscapingIn { ship } => {
             // "Escaping in", a space, the long name and a full stop
             // (@0x6f5ad-0x6f5f3).
@@ -1004,6 +1008,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::DeadlineMissed
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
+        | SimMessage::JumpCollapsed
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
         | SimMessage::BombExploded { .. }
@@ -14604,6 +14609,21 @@ mod tests {
             BOMB_EXPLODED_ONBOARD,
             "A bomb has exploded onboard your ship!"
         );
+    }
+
+    #[test]
+    fn a_collapsed_jump_says_the_hyperspace_field_collapsed() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(&SimMessage::JumpCollapsed, session).as_deref(),
+            Some("Ship disabled - hyperspace field collapsed.")
+        );
+        assert_eq!(
+            JUMP_COLLAPSED,
+            "Ship disabled - hyperspace field collapsed."
+        );
+        assert_eq!(arrival_lead(&SimMessage::JumpCollapsed), None);
     }
 
     #[test]

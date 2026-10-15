@@ -154,6 +154,7 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::OnboardExplosion) => {
                     self.play(self.table.onboard_explosion);
                 }
+                Sound::Sim(SimSound::JumpCollapsed) => self.play(self.table.jump_collapsed),
                 Sound::Sim(SimSound::Halt(sounds)) => {
                     for &sound in sounds {
                         self.audio.run(AudioCommand::Halt { sound });
@@ -621,6 +622,39 @@ mod tests {
         core.update(
             Some(Showing::ShipBrowser),
             &[Sound::Sim(SimSound::OnboardExplosion)],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_collapsed_jump_beeps_151() {
+        const WARP_UP: [SoundId; 2] = [SoundId(128), SoundId(129)];
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::Halt(&WARP_UP)),
+                Sound::Sim(SimSound::JumpCollapsed),
+            ],
+        );
+        assert_eq!(
+            drain(&log),
+            [
+                AudioCommand::Halt {
+                    sound: SoundId(128)
+                },
+                AudioCommand::Halt {
+                    sound: SoundId(129)
+                },
+                play(151, 0.5),
+            ]
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::JumpCollapsed)],
         );
         assert_eq!(drain(&log), [], "sound off");
     }

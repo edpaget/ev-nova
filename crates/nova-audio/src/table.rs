@@ -61,6 +61,8 @@ pub struct SoundTable {
     pub onboard_explosion: Option<SoundId>,
     /// Plays as the player info is refused in flight.
     pub player_info_refused: Option<SoundId>,
+    /// Plays as a disabled player's pre-jump collapses.
+    pub jump_collapsed: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -141,6 +143,10 @@ impl SoundTable {
     /// - `player_info_refused`: 153, "Beep4", `_beepSnd[3]`, which
     ///   `_HandlePlayer` plays as it refuses the player info key during a
     ///   jump (`PlaySound` @0x7039a-0x703bd).
+    /// - `jump_collapsed`: 151, "Beep2", `_beepSnd[1]`, which
+    ///   `_HandlePlayer` plays as a disabled player's pre-jump collapses,
+    ///   after halting the warp-up sounds (`_PlaySound` @0x68aaf). The
+    ///   original plays it at priority 50, not modelled.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -166,6 +172,7 @@ impl SoundTable {
         eject: Some(SoundId(372)),
         onboard_explosion: Some(SoundId(300)),
         player_info_refused: Some(SoundId(153)),
+        jump_collapsed: Some(SoundId(151)),
     };
 }
 
@@ -200,5 +207,6 @@ mod tests {
         assert_eq!(table.eject, Some(SoundId(372)), "_escapePodSnd");
         assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");
         assert_eq!(table.player_info_refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.jump_collapsed, Some(SoundId(151)), "_beepSnd[1]");
     }
 }

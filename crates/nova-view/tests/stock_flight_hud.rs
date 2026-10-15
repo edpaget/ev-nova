@@ -263,6 +263,18 @@ fn the_sabotage_notices_read_their_stock_strings() {
     );
 }
 
+/// A disabled player's jump collapse says `STR#` 2002 #35, as the stock
+/// string reads.
+#[test]
+fn the_jump_collapse_notice_reads_its_stock_string() {
+    use nova_view::flight::view::JUMP_COLLAPSED;
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(strings[34], JUMP_COLLAPSED);
+}
+
 /// A scan's notices are built from `STR#` 2002 #375-#380, as the stock
 /// strings read ("posession" as they spell it).
 #[test]

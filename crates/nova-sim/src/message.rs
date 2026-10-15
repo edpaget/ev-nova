@@ -108,6 +108,10 @@ pub enum SimMessage {
         /// Whether the player owned exactly one.
         one: bool,
     },
+    /// A disabled or dying player's pre-jump collapsed: "Ship disabled -
+    /// hyperspace field collapsed." (`STR#` 2002 #35, `_HandlePlayer`
+    /// `_GetIndString` @0x68a04).
+    JumpCollapsed,
 }
 
 impl SimMessage {
@@ -140,6 +144,8 @@ impl SimMessage {
     /// - [`Sabotaged`](Self::Sabotaged): 360 (`_HandlePlayer` @0x6969d).
     /// - [`BombExploded`](Self::BombExploded): 400 (`_HandlePlayer`
     ///   @0x698b0).
+    /// - [`JumpCollapsed`](Self::JumpCollapsed): 250 (`_HandlePlayer`
+    ///   @0x68a3d, 0xfa pushed @0x68a32).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -156,7 +162,7 @@ impl SimMessage {
             | Self::MissionShipLost
             | Self::CargoJettisoned
             | Self::NonMissionCargoJettisoned => 240,
-            Self::EscortRepaired | Self::FighterRepaired => 250,
+            Self::EscortRepaired | Self::FighterRepaired | Self::JumpCollapsed => 250,
             Self::EscapingIn { .. } => 512,
         }
     }
@@ -186,6 +192,7 @@ mod tests {
             (smuggling, 400),
             (SimMessage::EscortRepaired, 250),
             (SimMessage::FighterRepaired, 250),
+            (SimMessage::JumpCollapsed, 250),
             (SimMessage::EscapingIn { ship: ShipId(144) }, 512),
             (SimMessage::Sabotaged { outfit: None }, 360),
             (

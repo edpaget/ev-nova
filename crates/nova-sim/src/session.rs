@@ -363,6 +363,7 @@ mod hail;
 mod hire;
 mod hooks;
 mod hover;
+mod jump_collapse;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_screens;
@@ -1507,8 +1508,8 @@ impl Session {
     /// original's hypergate map is modal, so nothing ticks between the
     /// land key and the pick. A ship that is not intact ignores the
     /// controls and drifts, slowing by [`crate::flight::DISABLED_DRAG`] a
-    /// tick before it moves, giving up a jump it was turning and braking
-    /// for, and a destroyed one stays where it is, letting go of its
+    /// tick before it moves, its pre-jump collapsing first (see the
+    /// `jump_collapse` module), and a destroyed one stays where it is, letting go of its
     /// targets and counting the hold after its explosion down (see
     /// `dead_tick`).
     ///
@@ -1550,9 +1551,7 @@ impl Session {
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
-                if matches!(self.jump, Some(Jump::PreJump { .. })) {
-                    self.jump = None;
-                }
+                self.collapse_jump();
                 Controls::default()
             }
             Condition::Destroyed => {
@@ -6473,7 +6472,7 @@ pub(super) mod tests {
 
     /// A session on course for 131, due east on the map, with the ship
     /// put at `position`, moving at `velocity` and facing `heading`.
-    fn bound_for_131(
+    pub(super) fn bound_for_131(
         catalog: &FakePilotCatalog,
         position: Vec2,
         velocity: Vec2,
@@ -6490,7 +6489,7 @@ pub(super) mod tests {
     }
 
     /// Far enough out to jump, below the centre.
-    const OUT: Vec2 = Vec2 { x: 0.0, y: 1200.0 };
+    pub(super) const OUT: Vec2 = Vec2 { x: 0.0, y: 1200.0 };
 
     #[test]
     fn a_jump_begun_facing_away_turns_at_the_turn_rate_and_begins_facing_the_bearing() {
