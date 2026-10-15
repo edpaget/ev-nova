@@ -459,15 +459,25 @@ const FOLLOWS_PLAYER: i16 = -6;
 ///   for -3 and -4 with no stellar (@0xa0fec-0xa1010, @0xa1066-0xa106d),
 ///   left out as it changes no state.
 /// - -6: wherever the player is.
-/// - 128-9998: that system.
+/// - 128-2175: that system.
+/// - 2176-9998: nowhere. The original stores `code - 128` (@0xa10ea-0xa10ff),
+///   an index of 0x800 or more that `_FindActiveCoLocatedSystem` (@0x4be8)
+///   never resolves, so the ships never meet the player, even where a
+///   plug-in `sÿst` holds that ID.
 /// - -2 and 9999-31999: one visible system not at the player's place
 ///   (not together with it), of the code's kind, drawn
-///   (`_SelectMissionSystem` @0x9b993); nowhere when there is none. The
-///   original redraws `Rand(2048)` until it hits one, which comes to one
-///   draw over them by ascending ID; where it would draw forever, this is
-///   nowhere.
-/// - -5: one of the systems the player's system links to, drawn
-///   (@0x9ba70-0x9bac7); nowhere with none.
+///   (`_SelectMissionSystem` @0x9b993). The original redraws `Rand(2048)`
+///   until it hits one, which comes to one draw over them by ascending ID.
+/// - -5: one of the player's system's Con slots, drawn, each resolved to
+///   the visible system standing for it ([`StarMap::usable_con_slots`]):
+///   a system listed twice is twice as likely, and a slot naming the
+///   player's own system counts (@0x9ba70-0x9bac7).
+///
+/// Two deliberate divergences: where the original redraws forever, this
+/// is nowhere, drawing nothing. That is -5 with no usable Con slot
+/// (@0x9ba84-0x9bac3), and 15000-19999 when only the government's own
+/// systems qualify, which its counting pass counts but its draw pass
+/// rejects (@0x9bc71-0x9bd02). Copying a hang isn't fidelity.
 /// - 32000 and above: the player's system, as `_SelectMissionSystem`
 ///   gives back its second argument for a code it does not read
 ///   (@0x9c012).
@@ -486,8 +496,9 @@ pub fn select_ship_system(
         -3 => return at(facts.destination.or(facts.return_to)),
         -4 => return at(facts.return_to),
         FOLLOWS_PLAYER => return ShipSystem::FollowsPlayer,
-        -5 => return drawn(map.listed_links(facts.player_system), chance),
-        128..=9998 => return ShipSystem::At(SystemId(code)),
+        -5 => return drawn(&map.usable_con_slots(facts.player_system), chance),
+        128..=2175 => return ShipSystem::At(SystemId(code)),
+        2176..=9998 => return ShipSystem::Nowhere,
         -2 => Kind::Any,
         _ => match GovtCode::of(code) {
             Some(code) => Kind::Relation(code),
@@ -651,7 +662,7 @@ mod tests {
         assert_eq!(resolved(-4, &[]), (at(134), none.clone()), "the return's");
         assert_eq!(resolved(-6, &[]), (ShipSystem::FollowsPlayer, none.clone()));
         assert_eq!(resolved(128, &[]), (at(128), none.clone()));
-        assert_eq!(resolved(9998, &[]), (at(9998), none.clone()), "unbounded");
+        assert_eq!(resolved(2175, &[]), (at(2175), none.clone()));
         for code in [32_000, i16::MAX] {
             assert_eq!(resolved(code, &[]), (at(130), none.clone()), "{code}");
         }
@@ -725,6 +736,71 @@ mod tests {
             resolved_with(-5, &alone, &[]),
             (ShipSystem::Nowhere, vec![])
         );
+    }
+
+    /// What -5 resolves to with the player in 140, drawing `draws`, over
+    /// a map where 140's Con lists `con`: 141 visible, 142 hidden at
+    /// 141's place, 143 hidden alone, 140 the player's own.
+    fn minus_5_from(con: &[i16], draws: &[u32]) -> (ShipSystem, Vec<u32>) {
+        let map = StarMap::with_hidden(
+            vec![
+                system(140, (0.0, 0.0), con, Some(FED)),
+                system(141, (100.0, 0.0), &[], None),
+                system(142, (100.0, 0.0), &[], None),
+                system(143, (200.0, 0.0), &[], None),
+                system(144, (300.0, 0.0), &[], None),
+            ],
+            &[SystemId(142), SystemId(143)].into(),
+            CoLocated::Lowest,
+        );
+        let facts = ShipFacts {
+            player_system: SystemId(140),
+            ..facts()
+        };
+        let mut chance = Draws::of(draws);
+        let resolved = select_ship_system(-5, &facts, &map, &govts(), &mut chance);
+        (resolved, chance.asked)
+    }
+
+    #[test]
+    fn minus_5_weights_a_system_by_how_many_con_slots_list_it() {
+        let con = [141, 144, 141];
+        assert_eq!(minus_5_from(&con, &[0]), (at(141), vec![3]));
+        assert_eq!(minus_5_from(&con, &[1]), (at(144), vec![3]));
+        assert_eq!(minus_5_from(&con, &[2]), (at(141), vec![3]));
+    }
+
+    #[test]
+    fn minus_5_may_draw_the_players_own_system_when_its_con_lists_it() {
+        assert_eq!(minus_5_from(&[144, 140], &[1]), (at(140), vec![2]));
+    }
+
+    #[test]
+    fn minus_5_resolves_a_slot_to_its_stand_in_and_skips_a_slot_with_no_visible_system() {
+        // 142 stands as 141; 143 has none visible; 999 is held by no record.
+        let con = [143, 142, 999, 144];
+        assert_eq!(minus_5_from(&con, &[0]), (at(141), vec![2]));
+        assert_eq!(minus_5_from(&con, &[1]), (at(144), vec![2]));
+    }
+
+    #[test]
+    fn minus_5_with_no_usable_slot_is_nowhere() {
+        assert_eq!(
+            minus_5_from(&[143, 999], &[]),
+            (ShipSystem::Nowhere, vec![])
+        );
+    }
+
+    #[test]
+    fn codes_2176_to_9998_put_the_ships_nowhere_drawing_nothing() {
+        let map = StarMap::new(vec![system(2176, (0.0, 0.0), &[], None)]);
+        for code in [2176, 5000, 9998] {
+            let mut chance = Draws::of(&[]);
+            let resolved = select_ship_system(code, &facts(), &map, &govts(), &mut chance);
+            assert_eq!(resolved, ShipSystem::Nowhere, "{code}");
+            assert!(chance.asked.is_empty(), "{code}");
+        }
+        assert_eq!(resolved(2175, &[]).0, at(2175));
     }
 
     /// Every system `code` may draw, in order, with nothing drawn when
