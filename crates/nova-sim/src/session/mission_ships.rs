@@ -3022,7 +3022,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_escort_mission_landed_on_without_its_ships_is_not_completed() {
+    fn an_escort_mission_landed_on_at_its_return_without_its_ships_completes() {
         let mut catalog = returning(3, 0);
         catalog.missions[0].ships.syst = 131;
         let mut session = accepted(&catalog);
@@ -3031,8 +3031,10 @@ pub(super) mod tests {
         assert!(marked(&session).is_empty());
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
-        assert!(session.pilot().missions().get(0).is_some(), "still held");
-        assert!(!goals_met(&session));
+        assert!(
+            session.pilot().missions().get(0).is_none(),
+            "the escort branch met it, none destroyed (@0xa1a99-0xa1ab1)"
+        );
     }
 
     // Observing.
@@ -3517,6 +3519,252 @@ pub(super) mod tests {
                 .is_empty(),
             "the offers were rolled"
         );
+    }
+
+    // Missions started mid-landing (`_MissionLandCheck` reads each slot
+    // as it reaches it, @0xa19f7-0xa1aec).
+
+    /// Mission `id` of no goal, offered at 128 and completed back there,
+    /// paying `pay`, running `on_success`.
+    fn back_home(id: i16, pay: i32, on_success: &str) -> MissionRecord {
+        MissionRecord {
+            avail_stel: 128,
+            return_stel: 128,
+            pay_val: pay,
+            on_success: Script::parse(on_success),
+            ..mission(id)
+        }
+    }
+
+    /// Mission `id`'s texts: its `ShipDoneText` and its `CompText`, when
+    /// given.
+    fn texts(id: i16, ship_done: Option<&str>, comp: Option<&str>) -> crate::catalog::MissionTexts {
+        crate::catalog::MissionTexts {
+            ship_done: ship_done.map(str::to_owned),
+            comp: comp.map(str::to_owned),
+            ..crate::catalog::MissionTexts::named(MissionId(id), "Run")
+        }
+    }
+
+    fn comp(text: &str) -> (MissionTextKind, String) {
+        (MissionTextKind::Comp, text.to_owned())
+    }
+
+    /// [`catalog`] with `missions` and their `texts`: a session of it
+    /// docked at 128 with `accepted` accepted in turn, taken off (each
+    /// one's goals checked) and in flight at 128, its texts taken.
+    fn launched(
+        missions: Vec<MissionRecord>,
+        mission_texts: Vec<crate::catalog::MissionTexts>,
+        accepted: &[i16],
+    ) -> (FakePilotCatalog, Session) {
+        let mut catalog = catalog();
+        catalog.missions = missions;
+        catalog.mission_texts = mission_texts;
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        for &id in accepted {
+            session
+                .accept_mission(MissionId(id), &mut NeverFires)
+                .expect("accepted");
+            settle(&mut session, &catalog);
+        }
+        take_off(&mut session, &catalog);
+        let _ = shown(&mut session);
+        (catalog, session)
+    }
+
+    /// Lands `session` on 128 and settles.
+    fn land_home(session: &mut Session, catalog: &FakePilotCatalog) {
+        assert_eq!(land_now(session), Ok(StellarId(128)));
+        settle(session, catalog);
+    }
+
+    fn held(session: &Session) -> Vec<(u8, i16)> {
+        session
+            .pilot()
+            .missions()
+            .iter()
+            .map(|(slot, active)| (slot, active.mission.0))
+            .collect()
+    }
+
+    /// Slot 0's 140 completes at 128 with `OnSuccess` `S141 S142`: 141
+    /// fills the slot just freed, 142 slot 1.
+    fn two_started() -> (FakePilotCatalog, Session) {
+        launched(
+            vec![
+                back_home(140, 0, "S141 S142"),
+                back_home(141, 300, ""),
+                back_home(142, 500, "b42"),
+            ],
+            vec![
+                texts(140, None, Some("140 paid.")),
+                texts(141, Some("141 met."), Some("141 paid.")),
+                texts(142, None, Some("142 paid.")),
+            ],
+            &[140],
+        )
+    }
+
+    #[test]
+    fn a_mission_a_second_s_in_an_earlier_slots_on_success_starts_completes_at_that_landing() {
+        let (catalog, mut session) = two_started();
+        let cash = session.pilot().cash();
+        land_home(&mut session, &catalog);
+        assert_eq!(held(&session), [(0, 141)], "142 completed, slot 1 free");
+        assert!(session.control_bit(crate::control::Bit::new(42).expect("in range")));
+        assert_eq!(session.pilot().cash(), cash + 500);
+        assert_eq!(
+            shown(&mut session),
+            [comp("140 paid."), ship_done("141 met."), comp("142 paid.")]
+        );
+    }
+
+    #[test]
+    fn the_mission_an_s_in_on_success_puts_in_the_freed_slot_is_goal_checked_but_not_completed_at_that_landing()
+     {
+        let (catalog, mut session) = two_started();
+        land_home(&mut session, &catalog);
+        let _ = shown(&mut session);
+        assert!(goals_met(&session), "the trailing check met 141's goals");
+        let cash = session.pilot().cash();
+        take_off(&mut session, &catalog);
+        land_home(&mut session, &catalog);
+        assert_eq!(held(&session), []);
+        assert_eq!(shown(&mut session), [comp("141 paid.")]);
+        assert_eq!(session.pilot().cash(), cash + 300);
+    }
+
+    #[test]
+    fn a_mission_started_mid_landing_with_flags_0x0001_auto_aborts_at_that_landing() {
+        let (catalog, mut session) = launched(
+            vec![
+                back_home(140, 0, "S143"),
+                MissionRecord {
+                    flags: AUTO_ABORT,
+                    on_abort: Script::parse("b43"),
+                    ..back_home(143, 0, "")
+                },
+            ],
+            vec![texts(143, Some("143 met."), None)],
+            &[140],
+        );
+        land_home(&mut session, &catalog);
+        assert_eq!(held(&session), [], "143 auto-aborted by the trailing check");
+        assert!(session.control_bit(crate::control::Bit::new(43).expect("in range")));
+        assert_eq!(shown(&mut session), [ship_done("143 met.")]);
+    }
+
+    #[test]
+    fn a_mission_started_into_a_lower_slot_than_the_one_running_waits_for_the_take_off() {
+        let (catalog, mut session) = launched(
+            vec![
+                back_home(140, 0, ""),
+                back_home(144, 0, "S141"),
+                back_home(141, 0, ""),
+            ],
+            vec![texts(141, Some("141 met."), None)],
+            &[140, 144],
+        );
+        land_home(&mut session, &catalog);
+        assert_eq!(held(&session), [(0, 141)]);
+        assert_eq!(shown(&mut session), [], "slot 0 is not visited again");
+        assert!(!goals_met(&session));
+        take_off(&mut session, &catalog);
+        assert_eq!(shown(&mut session), [ship_done("141 met.")]);
+    }
+
+    /// `_DoMissionFailure` runs `OnFailure` (@0xa02ef) before it frees the
+    /// slot (@0xa034f), so an `S` there takes another slot, which the
+    /// landing reaches later.
+    #[test]
+    fn an_s_in_on_failure_takes_a_later_slot_checked_in_full_at_that_landing() {
+        let (catalog, mut session) = launched(
+            vec![
+                MissionRecord {
+                    on_failure: Script::parse("S142"),
+                    ..back_home(140, 0, "")
+                },
+                back_home(142, 500, "b42"),
+            ],
+            vec![texts(142, None, Some("142 paid."))],
+            &[140],
+        );
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.failed = Some(FailedBy::Marked);
+        }
+        land_home(&mut session, &catalog);
+        assert_eq!(held(&session), [], "140 failed, 142 completed in slot 1");
+        assert!(session.control_bit(crate::control::Bit::new(42).expect("in range")));
+        assert_eq!(shown(&mut session), [comp("142 paid.")]);
+    }
+
+    #[test]
+    fn an_s_in_an_auto_aborts_on_abort_refilling_the_slot_gets_its_return_check_at_that_landing() {
+        let (catalog, mut session) = launched(
+            vec![
+                MissionRecord {
+                    on_abort: Script::parse("S142"),
+                    ..back_home(145, 0, "")
+                },
+                back_home(142, 500, "b42"),
+            ],
+            vec![texts(142, None, Some("142 paid."))],
+            &[145],
+        );
+        // Unmet, with `Flags` 0x0001: the landing's leading check meets
+        // its goals and auto-aborts it.
+        if let Some(record) = session
+            .missions
+            .iter_mut()
+            .find(|record| record.id == MissionId(145))
+        {
+            record.flags = AUTO_ABORT;
+        }
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.goals_met = false;
+        }
+        land_home(&mut session, &catalog);
+        assert_eq!(held(&session), [], "142 completed in slot 0");
+        assert!(session.control_bit(crate::control::Bit::new(42).expect("in range")));
+        assert_eq!(shown(&mut session), [comp("142 paid.")]);
+    }
+
+    /// [`returning`]'s escort mission in flight with none of its ships
+    /// left in the system, its goals unmet and `destroyed` destroyed.
+    fn escort_gone(destroyed: i16) -> (FakePilotCatalog, Session) {
+        let catalog = returning(3, 0);
+        let mut session = in_flight(&catalog);
+        for npc in session.traffic.npcs_mut() {
+            npc.mission = None;
+        }
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.goals_met = false;
+            active.ships.destroyed = destroyed;
+        }
+        let _ = shown(&mut session);
+        (catalog, session)
+    }
+
+    #[test]
+    fn an_escort_mission_at_its_return_with_none_destroyed_completes_with_its_ships_gone() {
+        let (catalog, mut session) = escort_gone(0);
+        let cash = session.pilot().cash();
+        land_home(&mut session, &catalog);
+        assert_eq!(held(&session), []);
+        assert_eq!(shown(&mut session), [comp("Paid.")]);
+        assert_eq!(session.pilot().cash(), cash + 1000);
+    }
+
+    #[test]
+    fn an_escort_mission_at_its_return_with_one_destroyed_does_not_complete() {
+        let (catalog, mut session) = escort_gone(1);
+        let cash = session.pilot().cash();
+        land_home(&mut session, &catalog);
+        assert!(!shown(&mut session).contains(&comp("Paid.")));
+        assert_eq!(session.pilot().cash(), cash);
     }
 
     // Boarding.

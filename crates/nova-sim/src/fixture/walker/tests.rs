@@ -477,7 +477,7 @@ fn meeting_a_chase_off_goal_lets_the_mission_be_delivered() {
 }
 
 #[test]
-fn meeting_an_escort_goal_lands_at_the_return_and_brings_the_escorts_in_there() {
+fn meeting_an_escort_goal_then_delivering_it_completes_it_at_the_return() {
     let catalog = hunt(3, 130);
     let mut session = docked(&catalog);
     let walked = StoryWalker::new(&catalog)
@@ -507,7 +507,11 @@ fn meeting_an_escort_goal_lands_at_an_unreached_destination_first() {
     let active = session.pilot().missions().get(0).expect("held").clone();
     assert!(active.reached, "landed at 129 on the way");
     assert!(active.goals_met);
-    assert_eq!(session.landed(), Some(StellarId(140)), "then at the return");
+    assert_eq!(
+        session.landed(),
+        Some(StellarId(129)),
+        "not at the return, whose landing completes it"
+    );
 }
 
 #[test]

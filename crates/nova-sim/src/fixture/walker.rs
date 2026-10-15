@@ -30,9 +30,10 @@
 //!   `OnShipDone` and auto-abort run (the session's `meet_ship_goal`):
 //!   destroyed, disabled, boarded, seen or chased off. For an escort
 //!   goal it first lands at the mission's destination, when it is not
-//!   reached and is not its return, then at its return, as `deliver`
-//!   does, and brings the escorts in there, where the `deliver` after it
-//!   docks again and completes the mission with them.
+//!   reached and is not its return, as `deliver` does, and brings the
+//!   escorts in there. It does not land at the return: a landing there
+//!   meets an escort goal with none of its ships destroyed and completes
+//!   the mission, which is the `deliver` after it.
 //! - **`pass <n> days`** ([`Step::PassDays`]) takes off, when docked, then
 //!   lets `n` days go by ([`Session::let_days_pass`]): the take-off passes
 //!   its own days by the rules, on top of `n`. The walker stays in flight,
@@ -639,18 +640,17 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         let escorts = self
             .record(mission)
             .is_some_and(|record| ShipGoal::from_code(record.ships.goal) == ShipGoal::Escort);
-        if escorts && let Some(back) = active.return_to {
-            if let Some(destination) = active.destination
-                && !active.reached
-                && destination.stellar != back.stellar
-            {
-                watched(session, mission, &mut others, |session| {
-                    self.land(session, destination)
-                })
-                .0?;
-            }
+        // Not at the return: a landing there completes an escort mission
+        // with none of its ships destroyed (`_MissionLandCheck`'s escort
+        // branch, @0xa1a99-0xa1ab1), which is `deliver`'s to do.
+        if escorts
+            && let Some(back) = active.return_to
+            && let Some(destination) = active.destination
+            && !active.reached
+            && destination.stellar != back.stellar
+        {
             watched(session, mission, &mut others, |session| {
-                self.land(session, back)
+                self.land(session, destination)
             })
             .0?;
         }
