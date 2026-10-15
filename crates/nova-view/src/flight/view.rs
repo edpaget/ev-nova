@@ -6017,6 +6017,7 @@ mod tests {
                 || (id.0 == 132 && self.onward)
                 || (id.0 == 133 && self.reborn)
                 || (id.0 == 128 && self.home)
+                || (id.0 == 134 && self.near)
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -6026,6 +6027,7 @@ mod tests {
                 132 if self.onward => Vec::new(),
                 133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
                 128 if self.home => Vec::new(),
+                134 if self.near => Vec::new(),
                 other => panic!("asked for sÿst {other}'s sites"),
             }
         }
@@ -6128,6 +6130,9 @@ mod tests {
             }
             if self.reborn {
                 systems.push(SystemId(133));
+            }
+            if self.near {
+                systems.push(SystemId(134));
             }
             let sites: Vec<(SystemId, Vec<LandingSite>)> = systems
                 .into_iter()
@@ -6268,6 +6273,7 @@ mod tests {
                     vec![stellar(141, "Proxima Reborn", (0, 0), 1)],
                 ),
                 128 if self.home => ("Home", Vec::new()),
+                134 if self.near => ("Proxima Near", Vec::new()),
                 other => panic!("asked for sÿst {other}"),
             };
             SystemContents {
@@ -22199,6 +22205,26 @@ mod tests {
         // Proxima Near, 40 right and 30 down at 16/9: (757.1, 331.3).
         click(&mut view, at(757.0, 331.0));
         assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(134))));
+        assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
+    }
+
+    #[test]
+    fn away_from_the_origin_the_map_centres_on_the_current_system_and_clicks_follow() {
+        let mut view = near();
+        run_set(&mut view, "M134");
+        view.settle_script();
+        assert_eq!(system_of(&view), SystemId(134), "Proxima Near, at (40, 30)");
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        // Sol, 40 left and 30 up at 16/9: (614.9, 224.7).
+        let sol = Point::new(686.0 - 40.0 * (16.0 / 9.0), 278.0 - 30.0 * (16.0 / 9.0));
+        assert_eq!(
+            floating_dots(&view),
+            [FRAME_CENTRE, sol],
+            "Proxima Near at the centre, then Sol"
+        );
+        view.take_sounds();
+        click(&mut view, at(614.0, 224.0));
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(130))));
         assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
     }
 
