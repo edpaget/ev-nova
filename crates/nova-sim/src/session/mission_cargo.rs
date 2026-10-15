@@ -14,7 +14,7 @@ use crate::ai::Goal;
 use crate::catalog::{GovtRecord, MissionId, MissionRecord, ShipId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::ShipRef;
-use crate::legal::{self, Crime, LegalCode};
+use crate::legal::{Crime, LegalCode};
 use crate::market::Good;
 use crate::message::SimMessage;
 use crate::mission::cargo::{
@@ -275,8 +275,7 @@ impl Session {
         else {
             return;
         };
-        let changes = law.penalties(Crime::Smuggle, Some(govt_id), &self.govts);
-        legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+        self.convict_of(law, Crime::Smuggle, Some(govt_id));
         self.lose_ranks_to(Crime::Smuggle, Some(govt_id));
         self.set_on_player(id);
         let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = found;
@@ -1624,6 +1623,26 @@ mod tests {
                 junk: false,
                 outfits: true
             }
+        );
+    }
+
+    #[test]
+    fn a_smuggling_conviction_walks_the_records_from_the_players_system() {
+        let mut catalog = contraband_catalog(500);
+        for system in &mut catalog.star_map {
+            system.govt = Some(GovtId(128));
+        }
+        let mut session = smuggler(&catalog, 2, 0, 1200);
+        assert_eq!(session.system(), SystemId(130));
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.take_messages(), [illegal_junk(500)]);
+        let records =
+            [130, 131, 132, 133].map(|system| session.pilot().system_record(SystemId(system)));
+        assert_eq!(
+            records,
+            [-5, -3, -2, 0],
+            "SmugPenalty in the player's system, decayed by 0.65 a jump along its \
+             links; 133, linked to nothing, untouched"
         );
     }
 

@@ -191,8 +191,8 @@
 //! The player's crimes change its legal records as the fight's
 //! [`LegalCode`] says: disabling an NPC, and breaking one up (which is
 //! disabling it too when it was intact), each against the NPC's
-//! government, the record with each government changed and, by that
-//! government's change, the record in each of its systems
+//! government, the record with each government changed and the record
+//! in each system along the crime's walk from the player's system
 //! ([`legal::convict`]). Each conviction then takes the ranks its crime
 //! reaches (see [`rank`](crate::rank)'s **Crimes**). A mere hit is no
 //! crime, as in the original, and a mission's special ship, of any mark,
@@ -2374,11 +2374,24 @@ impl Session {
                 (None, _) => &[],
             };
             for &crime in crimes {
-                let changes = law.penalties(crime, govt, &self.govts);
-                legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+                self.convict_of(law, crime, govt);
                 self.lose_ranks_to(crime, govt);
             }
         }
+    }
+
+    /// Convicts the player of one `crime` against a ship of `victim`, as
+    /// `law` says: its records with each government, and its record in
+    /// each system along the crime's walk from the player's system, as
+    /// every caller of `_SlapWithPenalty` passes it (player +0x74; see the
+    /// [`legal`] module's **The walk**). The walk never reads the records,
+    /// so a crime convicted again walks the same systems and each
+    /// conviction truncates in turn.
+    fn convict_of(&mut self, law: &dyn LegalCode, crime: Crime, victim: Option<GovtId>) {
+        let govt_changes = law.penalties(crime, victim, &self.govts);
+        let system_changes =
+            law.system_penalties(crime, victim, self.system(), &self.galaxy, &self.govts);
+        legal::convict(&mut self.pilot, &govt_changes, &system_changes);
     }
 
     /// Credits the player's combat rating for each NPC among `strikes`
@@ -4593,8 +4606,7 @@ impl Session {
         }
         self.player.velocity = npc.state.velocity;
         if npc.mission.is_none() {
-            let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
-            legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+            self.convict_of(law, Crime::Board, npc.govt);
             self.lose_ranks_to(Crime::Board, npc.govt);
         }
         self.strikes.push(Strike {
@@ -14591,10 +14603,12 @@ pub(super) mod tests {
     }
 
     /// Records each crime it is asked about, and the victim's
-    /// government, and changes nothing.
+    /// government, and each system a walk starts from, and changes
+    /// nothing.
     #[derive(Debug, Default)]
     struct Witness {
         seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+        from: std::cell::RefCell<Vec<(Crime, SystemId)>>,
     }
 
     impl LegalCode for Witness {
@@ -14605,6 +14619,18 @@ pub(super) mod tests {
             _govts: &Governments,
         ) -> Vec<(GovtId, i32)> {
             self.seen.borrow_mut().push((crime, victim));
+            Vec::new()
+        }
+
+        fn system_penalties(
+            &self,
+            crime: Crime,
+            _victim: Option<GovtId>,
+            from: SystemId,
+            _map: &dyn crate::legal::CrimeMap,
+            _govts: &Governments,
+        ) -> Vec<(SystemId, f32)> {
+            self.from.borrow_mut().push((crime, from));
             Vec::new()
         }
     }
@@ -14643,19 +14669,22 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn disabling_an_npc_changes_the_records_in_each_system_of_a_changed_government() {
+    fn disabling_an_npc_walks_the_records_in_each_system_from_the_players() {
         let mut catalog = lawful();
-        for (system, govt) in catalog
-            .star_map
-            .iter_mut()
-            .zip([Some(140), Some(142), None])
+        for (system, govt) in
+            catalog
+                .star_map
+                .iter_mut()
+                .zip([Some(140), Some(142), None, Some(140)])
         {
             system.govt = govt.map(GovtId);
         }
         let mut session = facing_an_npc(&catalog, 180);
+        assert_eq!(session.system(), SystemId(130));
+        session.pilot.set_system_record(SystemId(130), -32_000);
         session.hold_trigger(FIRE);
         let systems = |session: &Session| {
-            [130, 131, 132].map(|system| session.pilot().system_record(SystemId(system)))
+            [130, 131, 132, 133].map(|system| session.pilot().system_record(SystemId(system)))
         };
         for _ in 0..80 {
             session.tick_combat(Rules::default(), &mut NeverFires);
@@ -14665,9 +14694,10 @@ pub(super) mod tests {
         }
         assert_eq!(
             systems(&session),
-            [-3, 4, 0],
-            "the victim's system and its enemy's, each its government's change; \
-             the independent untouched"
+            [-32_000, 2, 0, 0],
+            "the victim's system held at the limit, yet changed, so the walk goes on: \
+             its enemy's next door gains 8 / 2 x 0.65 truncated; the independent beyond \
+             skips 0.75 x 0.4225; the victim's 133, linked to nothing, untouched"
         );
     }
 
@@ -14691,6 +14721,14 @@ pub(super) mod tests {
                 (Crime::Disable, Some(GovtId(140))),
                 (Crime::Kill, Some(GovtId(140)))
             ]
+        );
+        assert_eq!(
+            witness.from.take(),
+            [
+                (Crime::Disable, SystemId(130)),
+                (Crime::Kill, SystemId(130))
+            ],
+            "each walked from the player's system"
         );
         assert_eq!(records(&session), [0; 4], "as the witness says");
     }
@@ -18804,6 +18842,11 @@ pub(super) mod tests {
             Ok(Boarding::Opened(ON_BOARD))
         );
         assert_eq!(*witness.seen.borrow(), [(Crime::Board, Some(GovtId(140)))]);
+        assert_eq!(
+            *witness.from.borrow(),
+            [(Crime::Board, session.system())],
+            "walked from the player's system"
+        );
         assert_eq!(session.player().velocity, Vec2::new(0.3, -0.2));
         assert!(session.npcs()[0].boarded);
         assert!(!session.npcs()[1].boarded);

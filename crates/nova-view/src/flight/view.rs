@@ -12714,6 +12714,17 @@ mod tests {
             self.seen.borrow_mut().push(crime);
             Vec::new()
         }
+
+        fn system_penalties(
+            &self,
+            _crime: nova_sim::Crime,
+            _victim: Option<GovtId>,
+            _from: nova_sim::SystemId,
+            _map: &dyn nova_sim::CrimeMap,
+            _govts: &nova_sim::Governments,
+        ) -> Vec<(nova_sim::SystemId, f32)> {
+            Vec::new()
+        }
     }
 
     #[test]

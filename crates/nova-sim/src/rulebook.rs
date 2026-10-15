@@ -16,7 +16,7 @@
 //!
 //! | [`RuleKey`] | settings key | engine | Bible |
 //! |---|---|---|---|
-//! | [`CrimeGains`](RuleKey::CrimeGains) | `crime_gains` | a crime pleases every government not allied with the victim's ([`NovaLaw`](crate::NovaLaw)) | only the victim's enemies |
+//! | [`CrimeGains`](RuleKey::CrimeGains) | `crime_gains` | a crime pleases every government not allied with the victim's, and its systems along the crime's walk ([`NovaLaw`](crate::NovaLaw)) | only the victim's enemies |
 //! | [`EmptyBooty`](RuleKey::EmptyBooty) | `empty_booty` | boarding a ship of `Booty` 0 opens the plunder dialog anyway ([`NovaBoarding`](crate::NovaBoarding)) | the player is repelled |
 //! | [`CrewlessCapture`](RuleKey::CrewlessCapture) | `crewless_capture` | a player of no crew still has odds of 1 or more ([`NovaBoarding`](crate::NovaBoarding)) | no odds: it cannot capture |
 //! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding ([`NovaAi`](crate::NovaAi)) | interceptors only |
@@ -521,9 +521,9 @@ macro_rules! rule_keys {
 
 rule_keys! {
     /// Which governments a crime against a ship improves the player's
-    /// record with: by the engine, every government not allied with the
-    /// victim's; by the Bible, only its enemies (see
-    /// [`legal`](crate::legal)).
+    /// record with, and in which governments' systems along its walk: by
+    /// the engine, every government not allied with the victim's; by the
+    /// Bible, only its enemies (see [`legal`](crate::legal)).
     CrimeGains => "crime_gains",
     /// Boarding a ship whose `düde` `Booty` is 0: by the engine, the
     /// plunder dialog opens anyway; by the Bible, the player is repelled

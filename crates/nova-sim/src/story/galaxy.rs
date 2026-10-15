@@ -84,6 +84,7 @@ use crate::catalog::{
 use crate::control::Gate;
 use crate::geometry::Vec2;
 use crate::hyperspace::{CoLocated, Places, StarMap};
+use crate::legal::CrimeMap;
 
 /// What the overlay changes of one system. The default changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -732,6 +733,28 @@ impl OverlaidGalaxy {
     }
 }
 
+/// The overlaid galaxy as a crime's walk reads it: the chain of a place
+/// is every catalog system there, hidden or not, by ascending ID, as the
+/// original's `_LoadObjectData` builds it before any is hidden
+/// (@0x783d9-0x78517); visibility and government are overlaid.
+impl CrimeMap for OverlaidGalaxy {
+    fn chain(&self, system: SystemId) -> Vec<SystemId> {
+        self.map.places().at(system).collect()
+    }
+
+    fn links(&self, system: SystemId) -> &[SystemId] {
+        self.con_slots(system)
+    }
+
+    fn visible(&self, system: SystemId) -> bool {
+        OverlaidGalaxy::visible(self, system)
+    }
+
+    fn govt(&self, system: SystemId) -> Option<GovtId> {
+        OverlaidGalaxy::govt(self, system)
+    }
+}
+
 /// Where a stellar is, as the original's owner-first readers find it:
 /// the system that holds it as the reader runs
 /// ([`OverlaidGalaxy::holder`], the stellar's +0x14 word, the rescue's
@@ -828,6 +851,34 @@ mod tests {
         assert_eq!(galaxy.con_slots(SystemId(3)), ids(&[1]), "hidden");
         assert_eq!(galaxy.con_slots(SystemId(6)), ids(&[3, 999]), "the last");
         assert_eq!(galaxy.con_slots(SystemId(7)), ids(&[]));
+    }
+
+    #[test]
+    fn the_galaxy_is_the_map_a_crimes_walk_reads() {
+        use crate::legal::CrimeMap;
+        let mut systems = systems();
+        systems.push(star(6, (9.0, 9.0), &[2, 2, 6, 999]));
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(2), Some(false));
+        overlay.set_govt(SystemId(5), Some(Some(GovtId(141))));
+        overlay.set_govt(SystemId(3), Some(None));
+        let galaxy = OverlaidGalaxy::new(systems, overlay);
+        let map: &dyn CrimeMap = &galaxy;
+        assert_eq!(
+            map.chain(SystemId(5)),
+            ids(&[2, 3, 5]),
+            "head first, hidden 2 kept"
+        );
+        assert_eq!(map.chain(SystemId(2)), ids(&[2, 3, 5]));
+        assert_eq!(map.chain(SystemId(1)), ids(&[1]));
+        assert_eq!(map.chain(SystemId(99)), ids(&[]), "not in the catalog");
+        assert_eq!(map.links(SystemId(6)), ids(&[2, 2, 6, 999]), "raw");
+        assert_eq!(map.links(SystemId(99)), ids(&[]));
+        assert!(!map.visible(SystemId(2)));
+        assert!(map.visible(SystemId(3)));
+        assert_eq!(map.govt(SystemId(5)), Some(GovtId(141)), "overlaid");
+        assert_eq!(map.govt(SystemId(3)), None, "overlaid independent");
+        assert_eq!(map.govt(SystemId(4)), Some(GovtId(141)));
     }
 
     /// 1 at (0, 0) lists 2; 2, 3 and 5 share (50, 50), 3 governed by 140;

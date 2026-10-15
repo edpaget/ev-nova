@@ -134,9 +134,11 @@
 //!   [`Service`]s a stellar's flags offer.
 //! - [`legal`]: the player's legal record, kept with each government and
 //!   in each system: the [`LegalCode`] port that says what a [`Crime`]
-//!   against a ship does to it, Nova's [`NovaLaw`], [`legal::convict`],
-//!   which applies it, and [`legal::systems_from_govts`], which derives
-//!   the records in each system.
+//!   against a ship does to it, with each government and along its walk
+//!   through the [`CrimeMap`] from system to system, Nova's [`NovaLaw`],
+//!   [`legal::convict`], which applies it, and
+//!   [`legal::systems_from_govts`], which derives the records in each
+//!   system.
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
@@ -409,7 +411,7 @@ pub use landing::{
     check_landing, cleared, is_landable, land_or_select, landing_radius, landing_reach,
     nearest_landable, services,
 };
-pub use legal::{Crime, LegalCode, NovaLaw};
+pub use legal::{Crime, CrimeMap, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
 pub use navigation::{next_after, stellar_under};

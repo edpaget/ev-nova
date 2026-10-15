@@ -4142,6 +4142,17 @@ pub(super) mod tests {
             self.seen.borrow_mut().push(crime);
             Vec::new()
         }
+
+        fn system_penalties(
+            &self,
+            _crime: crate::legal::Crime,
+            _victim: Option<GovtId>,
+            _from: crate::catalog::SystemId,
+            _map: &dyn crate::legal::CrimeMap,
+            _govts: &crate::govt::Governments,
+        ) -> Vec<(crate::catalog::SystemId, f32)> {
+            Vec::new()
+        }
     }
 
     /// [`returning`] of `goal` with `count` ships, `Flags` `flags`, its
