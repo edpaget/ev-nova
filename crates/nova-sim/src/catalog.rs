@@ -1734,12 +1734,16 @@ mod tests {
             }
         }
 
-        fn string_patch(&self, _id: i16) -> StringPatch {
-            StringPatch::Absent
+        fn string_patch(&self, id: i16) -> StringPatch {
+            if id == 1000 {
+                StringPatch::Text("Patched buoy".into())
+            } else {
+                StringPatch::Absent
+            }
         }
 
         fn buoy_strings(&self) -> Vec<String> {
-            Vec::new()
+            vec!["First buoy".into(), "Second buoy".into()]
         }
 
         /// Opals, sold at stellar 128.
@@ -1902,6 +1906,8 @@ mod tests {
             format!("{:?}", catalog.ranks()),
             format!("{:?}", catalog.system_visibility()),
             format!("{:?}", catalog.nebulae()),
+            format!("{:?}", catalog.string_patch(1000)),
+            format!("{:?}", catalog.buoy_strings()),
         ]
     }
 
@@ -1953,6 +1959,8 @@ mod tests {
         assert!(direct[27].contains("Bit(5)"), "{direct:?}");
         assert!(direct[28].contains("NebulaId(141)"), "{direct:?}");
         assert!(direct[28].contains("width: 300"), "{direct:?}");
+        assert_eq!(direct[29], r#"Text("Patched buoy")"#);
+        assert_eq!(direct[30], r#"["First buoy", "Second buoy"]"#);
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
