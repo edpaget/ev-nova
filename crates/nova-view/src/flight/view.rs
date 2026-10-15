@@ -185,9 +185,14 @@
 //!   of the flight keys. While it is open flight is paused, as in the
 //!   original, only the map is drawn and every input goes to it, except
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
-//!   router's Escape). A system clicked on the map becomes the
-//!   destination: the session plots the course there and the map shows
-//!   it. The map shows the systems the pilot has explored, and the rest
+//!   router's Escape). As it opens it selects the system the original's
+//!   `_DoSystemMap` does ([`Session::map_preselection`]): the one
+//!   selected in nav mode 3, or the current system in any other mode,
+//!   and its panel shows that system. It draws the system selected in
+//!   mode 3 as a link from the current system
+//!   ([`GalaxyMap::show_hyper_selection`]). A system clicked on the map
+//!   becomes the destination: the session plots the course there and the
+//!   map shows it, and the hop it cues as the selected link. The map shows the systems the pilot has explored, and the rest
 //!   unexplored. It draws the session's galaxy ([`Session::galaxy`]):
 //!   the catalog's geometry with only the visible systems, links and
 //!   nebulae active and explored, each system coloured by its government there, rebuilt
@@ -2278,14 +2283,24 @@ impl<
         }
     }
 
-    /// Lets go of the flight keys and shows the course map.
+    /// Lets go of the flight keys and shows the course map, with the
+    /// system the original's `_DoSystemMap` selects as it opens
+    /// ([`Session::map_preselection`]) selected, and the system selected
+    /// in nav mode 3 drawn as its link. The hypergate map opens this way
+    /// too, its pick still only an offered system.
     fn open_map(&mut self) {
         self.held.clear();
         self.map_open = true;
+        if let Ok(session) = &self.session {
+            self.map.preselect(session.map_preselection());
+            self.map
+                .show_hyper_selection(session.nav_mode().hyperspace());
+        }
     }
 
     /// The map's input; a destination clicked on it becomes the session's
-    /// course, which the map then shows.
+    /// course, which the map then shows, with the hop it cues as the
+    /// system selected in nav mode 3.
     fn map_input(&mut self, input: &Input) {
         self.map.input(input);
         let Some(destination) = self.map.take_destination() else {
@@ -2296,6 +2311,8 @@ impl<
             let _ = session.plot_course(destination);
             self.map
                 .show_course(session.system(), &session.course_shown());
+            self.map
+                .show_hyper_selection(session.nav_mode().hyperspace());
         }
     }
 
@@ -7762,8 +7779,101 @@ mod tests {
             pressed: false,
             at: alpha,
         });
-        assert_eq!(view.course_map().selected(), None, "no click");
+        assert_eq!(
+            view.course_map().selected(),
+            Some(SystemId(130)),
+            "no click: the preselect"
+        );
         assert_eq!(view.session().expect("flying").course(), []);
+    }
+
+    /// The course map's [`HYPER_SELECTED`] lines drawn, as (from, to).
+    fn hyper_selected_links(view: &View) -> Vec<(Point, Point)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Line {
+                    from, to, color, ..
+                } if color == crate::galaxy::map::HYPER_SELECTED => Some((from, to)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn opening_the_map_selects_the_current_system_when_nothing_is_selected_in_mode_3() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+        assert!(texts(&drawn(&view)).contains(&"Sol (sÿst 130)".to_owned()));
+        assert_eq!(hyper_selected_links(&view), []);
+        tap(&mut view, MAP);
+        plot(&mut view, 131);
+        tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Off);
+        tap(&mut view, MAP);
+        assert_eq!(
+            view.course_map().selected(),
+            Some(SystemId(130)),
+            "the current system, not the course's 131"
+        );
+        assert_eq!(hyper_selected_links(&view), []);
+    }
+
+    #[test]
+    fn opening_the_map_selects_and_draws_the_system_hyper_selected() {
+        let mut view = FlightView::new(FakeCatalog {
+            fan: true,
+            ..catalog()
+        });
+        plot(&mut view, 131);
+        tap(&mut view, Key::Char('\\'));
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(132))));
+        tap(&mut view, MAP);
+        let map = view.course_map();
+        assert_eq!(map.selected(), Some(SystemId(132)));
+        assert_eq!(map.route(), [SystemId(131)], "the course kept");
+        assert_eq!(
+            hyper_selected_links(&view),
+            [(on_map(&view, 130), on_map(&view, 132))]
+        );
+        assert!(texts(&drawn(&view)).contains(&"Barnard (sÿst 132)".to_owned()));
+    }
+
+    #[test]
+    fn a_click_on_the_map_draws_the_link_it_cues() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        assert!(view.map_open());
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(hyper_selected_links(&view), [(on_map(&view, 130), alpha)]);
+    }
+
+    #[test]
+    fn a_click_on_the_preselected_systems_place_selects_the_first_system_there() {
+        // `_DoSystemMap`'s click (@0x12dd4-0x1314b) never reads the
+        // preselect: it takes the first visible system at the place.
+        let mut view = FlightView::new(FakeCatalog {
+            reborn: true,
+            ..catalog()
+        });
+        tap(&mut view, Key::Char('\\'));
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        tap(&mut view, MAP);
+        assert_eq!(view.course_map().selected(), Some(SystemId(131)));
+        let alpha = on_map(&view, 131);
+        assert_eq!(alpha, on_map(&view, 133), "Alpha Reborn stands there too");
+        click(&mut view, alpha);
+        assert_eq!(view.course_map().selected(), Some(SystemId(131)), "not 133");
+        assert_eq!(course(&view), [SystemId(131)]);
+        click(&mut view, alpha);
+        assert_eq!(
+            view.course_map().selected(),
+            Some(SystemId(133)),
+            "a click again moves on"
+        );
     }
 
     const REFUSED: Sound = Sound::Sim(SimSound::Refused);
@@ -8975,7 +9085,11 @@ mod tests {
         view.input(&left(true));
         view.cancel_pointer();
         view.input(&left(false));
-        assert_eq!(view.course_map().selected(), None, "no click");
+        assert_eq!(
+            view.course_map().selected(),
+            Some(SystemId(130)),
+            "no click: the preselect"
+        );
         assert_eq!(view.session().expect("flying").course(), []);
         assert!(view.map_open());
     }
@@ -16731,6 +16845,19 @@ mod tests {
         tap(&mut view, MAP);
         assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
         assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+    }
+
+    #[test]
+    fn the_hypergate_map_opens_with_the_current_system_selected() {
+        let mut view = FlightView::new(gated());
+        plot(&mut view, 131);
+        land_now(&mut view);
+        let map = view.course_map();
+        assert_eq!(map.mode(), MapMode::Hypergate);
+        assert_eq!(map.selected(), Some(SystemId(130)), "Sol");
+        assert_eq!(map.hyper_selection(), None, "nothing in mode 3");
+        tap(&mut view, MAP);
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "no pick");
     }
 
     #[test]
