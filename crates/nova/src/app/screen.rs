@@ -3350,6 +3350,9 @@ pub(super) mod tests {
     /// stock data.
     const AMBIENT: i16 = 10_032;
 
+    /// Beta Prime's `CustSndID`, another ambient sound.
+    const BETA_AMBIENT: i16 = 10_033;
+
     /// The resources of [`game_data_full`], before they are loaded.
     #[allow(clippy::fn_params_excessive_bools)] // A fixture's switches.
     fn game_data_fork(
@@ -3375,6 +3378,8 @@ pub(super) mod tests {
         character[0x32..0x32 + on_start.len()].copy_from_slice(on_start);
         let mut stellar = landable();
         stellar[0x1A..0x1C].copy_from_slice(&AMBIENT.to_be_bytes());
+        let mut beta = landable();
+        beta[0x1A..0x1C].copy_from_slice(&BETA_AMBIENT.to_be_bytes());
         let mut fork = ForkBuilder::new();
         if trading {
             average[0x00..0x02].copy_from_slice(&10_i16.to_be_bytes());
@@ -3426,7 +3431,7 @@ pub(super) mod tests {
             .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128]))
             .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[129]))
             .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar)
-            .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &landable())
+            .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &beta)
             .resource(Spin::TYPE, 1000, None, &spin)
             .resource(Spin::TYPE, 650, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
@@ -4949,6 +4954,104 @@ pub(super) mod tests {
 
     fn halted() -> Sound {
         Sound::Ui(UiSound::PortAmbientHalted(nova_sim::SoundId(AMBIENT)))
+    }
+
+    fn beta_ambient() -> Sound {
+        Sound::Ui(UiSound::PortAmbient {
+            sound: nova_sim::SoundId(BETA_AMBIENT),
+            until_stopped: false,
+        })
+    }
+
+    /// No UI puts a landed pilot away: flight's Escape and a game over
+    /// both come from flight. So the put-away is driven through
+    /// [`AppScreen::end_flight`] itself.
+    #[test]
+    fn putting_a_landed_pilot_away_halts_the_ambient_sound() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        screen.end_flight(Side::MainMenu);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert!(screen.spaceport_view().is_none(), "gone");
+        let sounds = screen.take_sounds();
+        assert!(sounds.contains(&halted()), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_pilot_desk_move_to_another_stellar_halts_the_old_sound_before_the_new_one_starts() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        edit(
+            &mut screen,
+            PilotEdit::MoveTo {
+                system: SystemId(129),
+                stellar: nova_sim::StellarId(129),
+            },
+        );
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(129));
+        // The new spaceport's offer is served after its first frame
+        // ([`AppScreen::tick`]), which it covers, so its sound starts on
+        // the second.
+        let sounds = [
+            screen.take_sounds(),
+            frame_sounds(&mut screen, TICK),
+            frame_sounds(&mut screen, TICK),
+        ]
+        .concat();
+        let halt = sounds.iter().position(|&sound| sound == halted());
+        let started = sounds.iter().position(|&sound| sound == beta_ambient());
+        assert!(
+            halt.is_some() && started.is_some() && halt < started,
+            "Alpha Prime's halt, then Beta Prime's sound: {sounds:?}"
+        );
+        assert!(!sounds.contains(&ambient()), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_pilot_desk_edit_that_stays_landed_keeps_the_ambient_sound_and_its_wait() {
+        use nova_sim::mission::screens::mac_ticks;
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(FirstOutcome));
+        let mut screen = with_dialogs(data()).with_chance(SharedChance::new(shared));
+        land(&mut screen);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        assert_eq!(frame_sounds(&mut screen, mac_ticks(240)), []);
+        edit(&mut screen, PilotEdit::Credits(5000));
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(128));
+        let sounds = screen.take_sounds();
+        assert!(!sounds.contains(&halted()), "{sounds:?}");
+        assert_eq!(
+            frame_sounds(&mut screen, mac_ticks(120)),
+            [],
+            "not started again"
+        );
+        assert_eq!(
+            frame_sounds(&mut screen, mac_ticks(120)),
+            [ambient()],
+            "480 ticks after the first, the wait carried on"
+        );
+    }
+
+    /// No UI replaces a docked pilot's flight: the menu that opens or
+    /// creates a pilot is reached only once flight is put away. So the
+    /// replacement is driven through [`AppScreen::build_flight`] itself,
+    /// and its sounds read from the router's queue, as the spaceport side
+    /// is left showing with no spaceport to show.
+    #[test]
+    fn replacing_a_docked_pilot_halts_the_ambient_sound() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
+        screen.build_flight(bea, false);
+        assert!(screen.spaceport_view().is_none(), "gone");
+        let sounds = std::mem::take(&mut screen.sounds);
+        assert!(sounds.contains(&halted()), "{sounds:?}");
     }
 
     /// One frame of `dt`'s sounds.
