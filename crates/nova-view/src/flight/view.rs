@@ -577,10 +577,11 @@ pub const ESCORT_TICKS: u16 = 250;
 /// (`_PlayGame` @0x465a8, `_PlayerLandOnStellar` @0x635c4).
 pub const SCRIPT_MESSAGE_TICKS: u16 = 500;
 /// A landing denied or not possible: 250 (`_HandlePlayerDockRequest`
-/// @0x67ef3, @0x67e67).
+/// @0x67ef3; the not-landable line @0x67cda-0x67e5c).
 pub const LANDING_TICKS: u16 = 250;
-/// A landing refused as too far or too fast: 360
-/// (`_HandlePlayerDockRequest` @0x6787f).
+/// A landing refused as too far or too fast, at a gate as at a station
+/// or a planet: 360 (`_HandlePlayerDockRequest` @0x677c2-0x67838,
+/// @0x6787f).
 pub const TOO_FAR_TICKS: u16 = 360;
 /// A hypergate jump cancelled, or a wormhole leading nowhere: 250
 /// (`_PlayerEnterHypergate` @0x6397e, `_PlayerEnterWormhole` @0x646a3).
@@ -1330,6 +1331,10 @@ pub fn gate_refusal_message(kind: GateKind) -> String {
 
 /// `STR#` 2002 #49.
 pub const NO_STELLARS: &str = "No stellar objects present.";
+/// `STR#` 2002 #65: too far to enter a hypergate (@0x67802-0x67838).
+pub const TOO_FAR_HYPERGATE: &str = "You're too far away to enter this hypergate.";
+/// `STR#` 2002 #66: too far to enter a wormhole (@0x67802-0x67838).
+pub const TOO_FAR_WORMHOLE: &str = "You're too far away to enter this wormhole.";
 /// `STR#` 2002 #67.
 pub const TOO_FAR_STATION: &str = "You're too far away to dock at this station.";
 /// `STR#` 2002 #68.
@@ -1338,6 +1343,16 @@ pub const TOO_FAR_PLANET: &str = "You're too far away to land on this planet.";
 pub const TOO_FAST_STATION: &str = "You're moving too fast to dock at this station.";
 /// `STR#` 2002 #72.
 pub const TOO_FAST_PLANET: &str = "You're moving too fast to land on this planet.";
+/// `STR#` 2002 #69: too fast to enter a hypergate (@0x677c2-0x67800).
+pub const TOO_FAST_HYPERGATE: &str = "You're moving too fast to enter this hypergate.";
+/// `STR#` 2002 #70: too fast to enter a wormhole (@0x677c2-0x67800).
+pub const TOO_FAST_WORMHOLE: &str = "You're moving too fast to enter this wormhole.";
+/// `STR#` 2002 #87: the not-landable line's verb at a station, ending
+/// in a space (@0x67d4c).
+pub const DOCK_AT: &str = "dock at ";
+/// `STR#` 2002 #88: the not-landable line's verb at a planet, ending in
+/// a space (@0x67d56).
+pub const LAND_ON: &str = "land on ";
 /// `STR#` 2002 #82.
 pub const DOCKING_DENIED: &str = "Docking request denied.";
 /// `STR#` 2002 #83.
@@ -1511,27 +1526,70 @@ pub fn approach_greeting(
     }
 }
 
-/// What the player is told when `refusal` stops a landing: the original's
-/// words for it, for a station or a planet; nothing for a disabled ship,
-/// which `_HandlePlayerDockRequest` refuses silently (`_IsDisabled`
-/// @0x66af7, the bare epilogue 0x67eef).
+/// What the player is told when `refusal` stops a landing at a stellar
+/// that is the `gate` kind, if any, named `name`: the original's words
+/// for it, as `_HandlePlayerDockRequest` picks them; nothing for a
+/// disabled ship, which it refuses silently (`_IsDisabled` @0x66af7, the
+/// bare epilogue 0x67eef).
+///
+/// - Too far and too fast (@0x677c2-0x67838): a hypergate's or a
+///   wormhole's own string, tested before the station flag, else the
+///   station's or the planet's.
+/// - Not landable (@0x67cda-0x67e2b): a gate's [`gate_refusal_message`];
+///   else [`UNABLE_TO`], " ", [`DOCK_AT`] or [`LAND_ON`], " " again
+///   (@0x67d94, so two spaces before the name), the name, ". " and
+///   [`HOSTILE_STATION`] or [`HOSTILE_PLANET`].
+/// - Denied (@0x67ea3-0x67eea): [`HYPERGATE_DENIED`] at a hypergate only;
+///   a wormhole says the station's or the planet's.
 #[must_use]
-pub fn refusal_message(refusal: &LandingRefusal) -> Option<&'static str> {
-    let pick = |station: bool, at_station, on_planet| {
+pub fn refusal_message(
+    refusal: &LandingRefusal,
+    gate: Option<GateKind>,
+    name: &str,
+) -> Option<String> {
+    let pick = |station: bool, at_station: &'static str, on_planet: &'static str| {
         if station { at_station } else { on_planet }
+    };
+    let by_gate = |station, hypergate, wormhole, at_station, on_planet| match gate {
+        Some(GateKind::Hypergate) => hypergate,
+        Some(GateKind::Wormhole) => wormhole,
+        None => pick(station, at_station, on_planet),
     };
     let text = match *refusal {
         LandingRefusal::Jumping => IN_HYPERSPACE,
         LandingRefusal::Disabled => return None,
         LandingRefusal::NoStellars => NO_STELLARS,
-        LandingRefusal::TooFar { station, .. } => pick(station, TOO_FAR_STATION, TOO_FAR_PLANET),
+        LandingRefusal::TooFar { station, .. } => by_gate(
+            station,
+            TOO_FAR_HYPERGATE,
+            TOO_FAR_WORMHOLE,
+            TOO_FAR_STATION,
+            TOO_FAR_PLANET,
+        ),
+        LandingRefusal::TooFast { station, .. } => by_gate(
+            station,
+            TOO_FAST_HYPERGATE,
+            TOO_FAST_WORMHOLE,
+            TOO_FAST_STATION,
+            TOO_FAST_PLANET,
+        ),
         LandingRefusal::NotLandable { station, .. } => {
-            pick(station, HOSTILE_STATION, HOSTILE_PLANET)
+            if let Some(kind) = gate {
+                return Some(gate_refusal_message(kind));
+            }
+            let verb = pick(station, DOCK_AT, LAND_ON);
+            let why = pick(station, HOSTILE_STATION, HOSTILE_PLANET);
+            return Some(format!("{UNABLE_TO} {verb} {name}. {why}"));
         }
-        LandingRefusal::Denied { station, .. } => pick(station, DOCKING_DENIED, LANDING_DENIED),
-        LandingRefusal::TooFast { station, .. } => pick(station, TOO_FAST_STATION, TOO_FAST_PLANET),
+        LandingRefusal::Denied { station, .. } => {
+            if gate == Some(GateKind::Hypergate) {
+                HYPERGATE_DENIED
+            } else {
+                pick(station, DOCKING_DENIED, LANDING_DENIED)
+            }
+        }
     };
-    Some(text)
+    Some(text.to_owned())
 }
 
 /// Where a ship is drawn `alpha` of the way from `from` to `to`.
@@ -3277,18 +3335,18 @@ impl<
                 Err(refusal) => self.gate_refused(Some(refusal)),
             },
             Err(refusal) => {
-                let text = match refusal {
-                    LandingRefusal::NotLandable { stellar, .. } => {
-                        session.gate_kind(stellar).map(gate_refusal_message)
-                    }
-                    LandingRefusal::Denied { stellar, .. }
-                        if session.gate_kind(stellar) == Some(GateKind::Hypergate) =>
-                    {
-                        Some(HYPERGATE_DENIED.to_owned())
-                    }
-                    _ => None,
-                }
-                .or_else(|| refusal_message(&refusal).map(str::to_owned));
+                let stellar = match refusal {
+                    LandingRefusal::TooFar { stellar, .. }
+                    | LandingRefusal::TooFast { stellar, .. }
+                    | LandingRefusal::NotLandable { stellar, .. }
+                    | LandingRefusal::Denied { stellar, .. } => Some(stellar),
+                    LandingRefusal::Jumping
+                    | LandingRefusal::NoStellars
+                    | LandingRefusal::Disabled => None,
+                };
+                let gate = stellar.and_then(|stellar| session.gate_kind(stellar));
+                let name = stellar.map_or("", |stellar| stellar_name(self.scene.as_ref(), stellar));
+                let text = refusal_message(&refusal, gate, name);
                 if let Some(text) = text {
                     self.say_for(text, landing_refusal_ticks(&refusal));
                 }
@@ -8501,7 +8559,8 @@ mod tests {
         );
         assert_eq!(
             refused(vec![centre(0, 0)]).as_deref(),
-            Some("The planet's environment is too hostile.")
+            Some("Your ship is unable to land on  . The planet's environment is too hostile."),
+            "140 is not in Sol's scene: no name"
         );
         assert_eq!(
             refused(vec![centre(StellarFlags::CAN_LAND, 1)]).as_deref(),
@@ -8674,20 +8733,6 @@ mod tests {
                 TOO_FAR_PLANET,
             ),
             (
-                LandingRefusal::NotLandable {
-                    stellar,
-                    station: true,
-                },
-                HOSTILE_STATION,
-            ),
-            (
-                LandingRefusal::NotLandable {
-                    stellar,
-                    station: false,
-                },
-                HOSTILE_PLANET,
-            ),
-            (
                 LandingRefusal::Denied {
                     stellar,
                     station: true,
@@ -8721,10 +8766,14 @@ mod tests {
             ),
         ];
         for (refusal, text) in cases {
-            assert_eq!(refusal_message(&refusal), Some(text), "{refusal:?}");
+            assert_eq!(
+                refusal_message(&refusal, None, "Earth").as_deref(),
+                Some(text),
+                "{refusal:?}"
+            );
         }
         assert_eq!(
-            refusal_message(&LandingRefusal::Disabled),
+            refusal_message(&LandingRefusal::Disabled, None, "Earth"),
             None,
             "silent (@0x66af7, 0x67eef)"
         );
@@ -8754,6 +8803,172 @@ mod tests {
                 "Unable to land - your ship is in hyperspace.",
             ]
         );
+    }
+
+    #[test]
+    fn too_far_at_a_gate_says_its_own_words() {
+        let stellar = StellarId(128);
+        for station in [true, false] {
+            let refusal = LandingRefusal::TooFar { stellar, station };
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Hypergate), "x").as_deref(),
+                Some(TOO_FAR_HYPERGATE)
+            );
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Wormhole), "x").as_deref(),
+                Some(TOO_FAR_WORMHOLE)
+            );
+            let plain = if station {
+                TOO_FAR_STATION
+            } else {
+                TOO_FAR_PLANET
+            };
+            assert_eq!(refusal_message(&refusal, None, "x").as_deref(), Some(plain));
+        }
+        assert_eq!(
+            [TOO_FAR_HYPERGATE, TOO_FAR_WORMHOLE],
+            [
+                "You're too far away to enter this hypergate.",
+                "You're too far away to enter this wormhole.",
+            ]
+        );
+    }
+
+    #[test]
+    fn too_fast_at_a_gate_says_its_own_words() {
+        let stellar = StellarId(128);
+        for station in [true, false] {
+            let refusal = LandingRefusal::TooFast {
+                stellar,
+                station,
+                speed: 2.0,
+            };
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Hypergate), "x").as_deref(),
+                Some(TOO_FAST_HYPERGATE)
+            );
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Wormhole), "x").as_deref(),
+                Some(TOO_FAST_WORMHOLE)
+            );
+            let plain = if station {
+                TOO_FAST_STATION
+            } else {
+                TOO_FAST_PLANET
+            };
+            assert_eq!(refusal_message(&refusal, None, "x").as_deref(), Some(plain));
+        }
+        assert_eq!(
+            [TOO_FAST_HYPERGATE, TOO_FAST_WORMHOLE],
+            [
+                "You're moving too fast to enter this hypergate.",
+                "You're moving too fast to enter this wormhole.",
+            ]
+        );
+    }
+
+    #[test]
+    fn not_landable_at_a_station_or_planet_leads_with_its_name() {
+        let stellar = StellarId(128);
+        let station = LandingRefusal::NotLandable {
+            stellar,
+            station: true,
+        };
+        let planet = LandingRefusal::NotLandable {
+            stellar,
+            station: false,
+        };
+        assert_eq!(
+            refusal_message(&station, None, "Earth Station").as_deref(),
+            Some(
+                "Your ship is unable to dock at  Earth Station. \
+                 The station's hull integrity is too unstable."
+            )
+        );
+        assert_eq!(
+            refusal_message(&planet, None, "Earth").as_deref(),
+            Some("Your ship is unable to land on  Earth. The planet's environment is too hostile.")
+        );
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            for refusal in [&station, &planet] {
+                assert_eq!(
+                    refusal_message(refusal, Some(kind), "Earth"),
+                    Some(gate_refusal_message(kind))
+                );
+            }
+        }
+        assert_eq!([DOCK_AT, LAND_ON], ["dock at ", "land on "]);
+    }
+
+    #[test]
+    fn denied_at_a_hypergate_says_hypergate_usage_denied() {
+        let stellar = StellarId(128);
+        for station in [true, false] {
+            let refusal = LandingRefusal::Denied {
+                stellar,
+                station,
+                min_status: 1,
+            };
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Hypergate), "x").as_deref(),
+                Some(HYPERGATE_DENIED)
+            );
+            let plain = if station {
+                DOCKING_DENIED
+            } else {
+                LANDING_DENIED
+            };
+            for gate in [Some(GateKind::Wormhole), None] {
+                assert_eq!(refusal_message(&refusal, gate, "x").as_deref(), Some(plain));
+            }
+        }
+    }
+
+    #[test]
+    fn too_far_at_a_hypergate_or_wormhole_says_so_for_360_ticks() {
+        for (flags2, text) in [(0x1000, TOO_FAR_HYPERGATE), (0x2000, TOO_FAR_WORMHOLE)] {
+            let mut view = flight_among(vec![LandingSite {
+                flags2,
+                ..site(128, (0.0, -600.0), StellarFlags::CAN_LAND)
+            }]);
+            tap(&mut view, LAND);
+            tap(&mut view, LAND);
+            assert_lasts(&mut view, text, TOO_FAR_TICKS);
+        }
+    }
+
+    #[test]
+    fn too_fast_at_a_hypergate_or_wormhole_says_so_for_360_ticks() {
+        for (flags2, text) in [(0x1000, TOO_FAST_HYPERGATE), (0x2000, TOO_FAST_WORMHOLE)] {
+            let mut view = flight_among(vec![LandingSite {
+                flags2,
+                frame_size: Some((400, 400)),
+                ..site(128, (0.0, 0.0), StellarFlags::CAN_LAND)
+            }]);
+            view.input(&key(Key::Up, true));
+            ticks(&mut view, 15);
+            land_now(&mut view);
+            assert_eq!(view.take_landing(), None);
+            assert_lasts(&mut view, text, TOO_FAR_TICKS);
+        }
+    }
+
+    #[test]
+    fn a_not_landable_station_or_planet_is_named_for_250_ticks() {
+        for (flags, text) in [
+            (
+                StellarFlags::STATION,
+                "Your ship is unable to dock at  Earth. The station's hull integrity is too unstable.",
+            ),
+            (
+                0,
+                "Your ship is unable to land on  Earth. The planet's environment is too hostile.",
+            ),
+        ] {
+            let mut view = flight_among(vec![site(128, (0.0, 0.0), flags)]);
+            tap(&mut view, LAND);
+            assert_lasts(&mut view, text, LANDING_TICKS);
+        }
     }
 
     #[test]
@@ -20376,10 +20591,11 @@ mod tests {
             let refusal = gate_refusal_message(kind);
             assert_lasts(&mut view, &refusal, 250);
         }
-        let mut planet = flight_among(vec![site(300, (0.0, 0.0), 0)]);
+        let mut planet = flight_among(vec![site(128, (0.0, 0.0), 0)]);
         tap(&mut planet, LAND);
-        assert_eq!(planet.message(), Some(HOSTILE_PLANET), "not a gate");
-        assert_lasts(&mut planet, HOSTILE_PLANET, 250);
+        let line =
+            "Your ship is unable to land on  Earth. The planet's environment is too hostile.";
+        assert_lasts(&mut planet, line, 250);
     }
 
     #[test]
