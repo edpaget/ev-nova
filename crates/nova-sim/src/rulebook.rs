@@ -116,6 +116,7 @@
 //! | [`HiddenLossFails`](RuleKey::HiddenLossFails) | `hidden_loss_fails` | a hidden mission (`Flags` 0x0400) is not failed at once when one of its ships is destroyed or disabled, so a hidden board or rescue mission whose ship is destroyed never ends (`_HandleShipDisplay` @0x2db27, `_DamageShip` @0x3aede; see [`mission::goals`](crate::mission::goals)) | the first loss fails it as any other, but with no message\* |
 //! | [`ShipDoneOnce`](RuleKey::ShipDoneOnce) | `ship_done_once` | every time a mission's goals go from unmet to met, its `ShipDoneText` is shown and its `OnShipDone` runs, so an escort goal's run again each time its ships come back to the player (`_MissionObjectivesCheck` @0x9ec70-0x9ed87; see [`mission::goals`](crate::mission::goals)) | the moment's text, script and auto-abort happen only the first time\* |
 //! | [`SwapArrives`](RuleKey::SwapArrives) | `swap_arrives` | the ship swapped in for a person raises no arrived count and leaves the appear timer running, so for a `ShipStart` of 1 or more the timer still brings another ship in beside it (`_HandlePlayerCommunication` @0x6244b-0x6252f, `_EnterMoreShips` @0x437ec-0x43aa5; see [`mission::ships`](crate::mission::ships)) | the swapped ship counts as the timer's arrival: the timer stops, and for `ShipStart` 1 the arrived count goes up by one\* |
+//! | [`SmugglingShipName`](RuleKey::SmugglingShipName) | `smuggling_ship_name` | the smuggling notice names the scanner by the found mission's drawn ship name whenever that name is not empty, whoever the scanner is (`_ScanPlayer` @0x7e7ce; see [`scan`](crate::scan)) | by the mission's ship name only when the scanner is that mission's special ship, else by its class\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
@@ -171,6 +172,7 @@
 //! `hidden_loss_fails`,
 //! `ship_done_once`,
 //! `swap_arrives`,
+//! `smuggling_ship_name`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box` or `comm_quote`
@@ -1611,6 +1613,15 @@ rule_keys! {
     /// other reading is the intended behaviour, not anything the Bible says
     /// (see [`mission::ships`](crate::mission::ships)).
     SwapArrives => "swap_arrives",
+    /// Which name the smuggling notice gives the scanner. By the engine, as
+    /// the original (`_ScanPlayer` @0x7e7ce reads the found slot's drawn
+    /// ship name, never the scanner's mark): the found mission's ship name
+    /// whenever it is not empty, whoever the scanner is. By the other
+    /// reading, that name only when the scanner is that mission's own
+    /// special ship; any other scanner is named by its class. The Bible says
+    /// nothing of it, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see [`scan`](crate::scan)).
+    SmugglingShipName => "smuggling_ship_name",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -2106,7 +2117,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(49),
+            RuleKey::ALL.iter().rev().nth(50),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2146,7 +2157,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2168,7 +2179,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2193,7 +2204,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2219,7 +2230,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2239,7 +2250,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2259,7 +2270,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2279,7 +2290,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2301,7 +2312,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2447,7 +2458,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(38), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(39), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2462,7 +2473,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -2479,7 +2490,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -2496,7 +2507,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(35),
+            RuleKey::ALL.iter().rev().nth(36),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -2513,7 +2524,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -2530,8 +2541,25 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::SwapArrives)
+        );
+    }
+
+    #[test]
+    fn the_smuggling_ship_name_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::SmugglingShipName.key(), "smuggling_ship_name");
+        assert_eq!(
+            RuleKey::from_key("smuggling_ship_name"),
+            Some(RuleKey::SmugglingShipName)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::SmugglingShipName),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(33),
+            Some(&RuleKey::SmugglingShipName)
         );
     }
 
@@ -2571,7 +2599,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2976,7 +3004,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(51),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3133,6 +3161,7 @@ mod tests {
                 RuleKey::HiddenLossFails,
                 RuleKey::ShipDoneOnce,
                 RuleKey::SwapArrives,
+                RuleKey::SmugglingShipName,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,
