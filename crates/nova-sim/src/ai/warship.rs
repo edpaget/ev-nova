@@ -613,6 +613,7 @@ mod tests {
             downed: None,
             direct: true,
             intended: true,
+            lock: false,
         };
         let victim = ship(9, TRADERS, AiType::WimpyTrader, 900.0, 0.0);
         let npcs = [ship(1, POLICE, AiType::Warship, 0.0, 0.0), victim];

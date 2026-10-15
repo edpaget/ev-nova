@@ -54,6 +54,9 @@ pub const ROCKET_PUSH: f32 = 0.05;
 pub const BOMB_TURN: f32 = 1.0;
 /// How many ticks a homing shot flies straight before it steers.
 pub const HOMING_DELAY: u32 = 15;
+/// The age a player's homing missile locks on its target past (the 30.0
+/// @0xdd638, tested "> 30" @0x357ab).
+pub const LOCK_AGE: u32 = 30;
 
 /// A ship a shot or beam might hit.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -310,6 +313,23 @@ impl Shot {
     #[must_use]
     pub fn expired(&self) -> bool {
         self.age >= self.weapon.lifetime
+    }
+
+    /// Whether the tick it has just flown took it past [`LOCK_AGE`], as
+    /// `_HandleShot` reads its age, `Count` less its life: once before the
+    /// life is counted down (@0x3565b) and once after the move (@0x3578a).
+    /// The life of a shot just spent is put at -1 between the two
+    /// (@0x356c1), so its last move reads an age of its `Count` + 1, and a
+    /// shot of `Count` 30 passes it on that move.
+    #[must_use]
+    pub fn passes_lock_age(&self) -> bool {
+        let before = self.age.saturating_sub(1);
+        let after = if self.expired() {
+            self.weapon.lifetime + 1
+        } else {
+            self.age
+        };
+        before <= LOCK_AGE && after > LOCK_AGE
     }
 
     /// The first of the ships among `sides` it can hit that it met on its

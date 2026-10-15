@@ -696,6 +696,7 @@ mod tests {
             downed: None,
             direct: true,
             intended: true,
+            lock: false,
         };
         session.hold_grudges(&[hit(ShipRef::Npc(NpcId(7)))]);
         assert!(!session.pilot().grudge(PersonId(600)));
@@ -715,6 +716,7 @@ mod tests {
             downed: None,
             direct: false,
             intended: false,
+            lock: false,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
@@ -746,6 +748,7 @@ mod tests {
             downed: Some(crate::combat::Downed::Disabled),
             direct: true,
             intended: true,
+            lock: false,
         };
         let mut strikes = [
             downed(ShipRef::Npc(NpcId(0))),

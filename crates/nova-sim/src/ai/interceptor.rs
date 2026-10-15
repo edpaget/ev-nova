@@ -358,6 +358,7 @@ mod tests {
             downed: None,
             direct: true,
             intended: true,
+            lock: false,
         };
         assert_eq!(
             Interceptor::default()

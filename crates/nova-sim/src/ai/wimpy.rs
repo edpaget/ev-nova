@@ -170,6 +170,7 @@ mod tests {
             downed: None,
             direct: true,
             intended: true,
+            lock: false,
         };
         assert_eq!(
             WimpyTrader::default().react(&npcs[0], &strike, &around),

@@ -609,6 +609,7 @@ mod tests {
             downed: None,
             direct: true,
             intended: true,
+            lock: false,
         };
         assert_eq!(
             Peaceful.react(&npcs[0], &strike, &around),

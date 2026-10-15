@@ -4571,6 +4571,7 @@ impl Session {
             downed: None,
             direct: true,
             intended: true,
+            lock: false,
         });
         if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
             return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
@@ -5220,6 +5221,7 @@ impl Session {
             downed: None,
             direct: true,
             intended: true,
+            lock: false,
         }];
         self.target = Some(npc);
         self.aboard = Some(Aboard {
@@ -15104,6 +15106,7 @@ pub(super) mod tests {
             downed: Some(Downed::BreakingUp),
             direct: true,
             intended: true,
+            lock: false,
         };
         session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
         let by_the_police = session.pilot().combat_rating();
@@ -15153,6 +15156,7 @@ pub(super) mod tests {
                 downed: Some(Downed::BreakingUp),
                 direct: true,
                 intended: true,
+                lock: false,
             }],
             &was,
         );
@@ -15181,6 +15185,7 @@ pub(super) mod tests {
             downed,
             direct: true,
             intended: true,
+            lock: false,
         };
         session.credit_kills(
             &[
@@ -15659,6 +15664,7 @@ pub(super) mod tests {
             downed: None,
             direct: false,
             intended: false,
+            lock: false,
         };
         session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
@@ -18602,6 +18608,63 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_players_missile_lock_turns_its_target_on_the_player_and_calls_the_good_samaritans_without_a_crime()
+     {
+        // The player carries the homing missile; a warship of the traders'
+        // government sits far off, out of a missile's reach in 31 ticks;
+        // the police, their allies, are near.
+        let mut catalog = skirmish(&[(3, 140, 131), (4, 141, 130)], Some(140));
+        catalog.hulls[0] = fitted(128, 100, &[134]);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(
+            &catalog,
+            &mut placing(2, &[(0, 0, -740, 0), (1, 0, 300, 0)]),
+        );
+        stop_npcs(&mut session);
+        let (victim, police) = (NpcId(0), NpcId(1));
+        session.target = Some(victim);
+        let records = |session: &Session| {
+            [140, 141, 142, 143].map(|govt| session.pilot().legal_record(GovtId(govt)))
+        };
+        let clean = records(&session);
+        let npc = |session: &Session, id| {
+            session
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("there")
+                .clone()
+        };
+        session.hold_trigger(FIRE);
+        fight(&mut session, &catalog);
+        session.hold_trigger(Trigger::default());
+        assert_eq!(session.combat.shots().len(), 1, "the missile");
+        for _ in 2..=30 {
+            fight(&mut session, &catalog);
+        }
+        let before = npc(&session, victim);
+        assert_ne!(before.target, Some(ShipRef::Player), "not locked yet");
+        assert_ne!(npc(&session, police).goal, Goal::Attack(ShipRef::Player));
+        fight(&mut session, &catalog);
+        let after = npc(&session, victim);
+        assert_eq!(
+            after.target,
+            Some(ShipRef::Player),
+            "locked: it turns on the player"
+        );
+        assert_eq!(after.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(after.provoked, before.provoked, "no damage, no provocation");
+        assert_eq!(after.reserves, before.reserves, "no damage");
+        assert_eq!(
+            npc(&session, police).goal,
+            Goal::Attack(ShipRef::Player),
+            "the Good Samaritans come"
+        );
+        assert_eq!(records(&session), clean, "no crime");
+        assert_eq!(session.combat.shots().len(), 1, "the missile flies on");
+    }
+
+    #[test]
     fn a_blast_on_a_bystander_provokes_nothing_and_the_direct_hit_does() {
         // Two traders 100 ahead of the player, side by side; the player's
         // blaster blasts 40 pixels about its hit.
@@ -19063,6 +19126,7 @@ pub(super) mod tests {
                 downed: None,
                 direct: true,
                 intended: true,
+                lock: false,
             }]
         );
         session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);

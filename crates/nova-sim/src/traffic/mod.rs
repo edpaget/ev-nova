@@ -1839,6 +1839,7 @@ mod tests {
             downed: None,
             direct: true,
             intended: true,
+            lock: false,
         }
     }
 
