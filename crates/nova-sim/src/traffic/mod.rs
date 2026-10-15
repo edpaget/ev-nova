@@ -1422,21 +1422,37 @@ mod tests {
     fn a_ship_coming_out_of_a_gate_never_decides_until_it_is_out() {
         let mut traffic = populated(2, 1);
         traffic.npcs[1].mode = Mode::Emerging { ticks_left: 2 };
-        let behaviour = Recording::deciding(Goal::JumpOut);
+        let firing = Trigger {
+            primary: true,
+            ..Trigger::default()
+        };
+        let behaviour = Recording {
+            trigger: firing,
+            target: Some(ShipRef::Player),
+            ..Recording::deciding(Goal::JumpOut)
+        };
         let mut ticks = 0;
         while traffic.npcs()[1].mode != Mode::Flying {
             traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
             assert_eq!(behaviour.take(), [NpcId(0)], "tick {ticks}");
             assert_eq!(traffic.npcs()[1].goal, Goal::Idle);
+            assert_eq!(
+                traffic.npcs()[1].trigger,
+                Trigger::default(),
+                "tick {ticks}"
+            );
+            assert_eq!(traffic.npcs()[1].target, None, "tick {ticks}");
             ticks += 1;
             assert!(ticks < 100, "out");
         }
+        assert_eq!(traffic.npcs()[0].trigger, firing, "the flying ship decides");
         // Two ticks waiting; top speed 6: 30 down to 9 is 8 ticks; then,
         // with no lead, 30 + Rand(30) holding its course, the draw its
         // last, 29.
         assert_eq!(ticks, 2 + 8 + 59);
         traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
         assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)]);
+        assert_eq!(traffic.npcs()[1].trigger, firing, "its first decision");
     }
 
     /// A planet at the centre and a hypergate at (300, -400) heading ships
@@ -1463,6 +1479,8 @@ mod tests {
         let arrived = &traffic.npcs()[1];
         assert_eq!(arrived.mode, Mode::Emerging { ticks_left: 59 });
         assert_eq!(arrived.emerges_from, Some(StellarId(129)));
+        assert_eq!(arrived.trigger, Trigger::default(), "it holds no trigger");
+        assert_eq!(arrived.target, None);
         assert_eq!(arrived.state.position, Vec2::new(300.0, -400.0));
         assert_eq!(arrived.state.heading, 90.0);
         for _ in 1..emerge::EMERGE_TICKS {

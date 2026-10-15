@@ -12955,6 +12955,76 @@ pub(super) mod tests {
         assert_eq!(session.reserves().armor.now, 45.0);
     }
 
+    #[test]
+    fn a_ship_led_out_of_a_gate_fires_nothing_while_it_waits_or_bursts() {
+        // `_HandleShip` skips a waiting ship's fire step (@0x34a54-0x34a72)
+        // and its burst, goal 8 sub-goal 0xa, fires nothing
+        // (@0x8dd61-0x8dd93, @0x8f3c8-0x8f3d9).
+        use crate::traffic::npc::Mode;
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let escort = &mut session.traffic.npcs_mut()[0];
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        escort.trigger = FIRE;
+        escort.target = Some(ShipRef::Player);
+        session.lead_out_of_gate(StellarId(310), Vec2::new(0.0, -100.0), &mut NeverFires);
+        assert!(session.npcs()[0].emerging());
+        let mut fired = 0;
+        let mut out = false;
+        for _ in 0..200 {
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            if !matches!(
+                session.npcs()[0].mode,
+                Mode::Emerging { .. } | Mode::LeavingGate { .. }
+            ) {
+                out = true;
+                break;
+            }
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            fired += session
+                .take_combat_events()
+                .iter()
+                .filter(|event| {
+                    matches!(event, CombatEvent::Fired { ship, .. } if *ship == ShipRef::Npc(NpcId(0)))
+                })
+                .count();
+        }
+        assert!(out, "it came out of the gate");
+        assert_eq!(fired, 0);
+    }
+
+    #[test]
+    fn a_ship_waiting_in_a_gate_can_be_hit() {
+        // No shot-collision path reads goal 0x15: the only readers are
+        // `_AIShipIsEmergingFromHypergate`'s callers, and
+        // `_AICalcFormationPositions` (@0x851a7), `_HighLevelAIHandler`
+        // (@0x8dd61) and `_AIDispatch` (@0x8ff18).
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        session.hold_trigger(FIRE);
+        let mut hit = false;
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let Some(npc) = session.npcs().first() else {
+                break;
+            };
+            assert!(npc.emerging(), "still waiting");
+            if npc.reserves.shield.now < 30.0 {
+                hit = true;
+                break;
+            }
+        }
+        assert!(hit, "shot while it waits");
+    }
+
     /// The fight's 60 ticks of the player and NPC 0, 100 above it, firing
     /// at each other point-blank, NPC 0 marked by slot 0 as `formation`
     /// says: the NPC's shield and the player's after them.
