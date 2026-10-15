@@ -2876,6 +2876,84 @@ mod tests {
         assert_eq!(gliding.target, Some(ShipRef::Player));
     }
 
+    /// Has ship 0 answer a strike on ship 1, its escort, as a strike on
+    /// itself, and ship 1 answer its own.
+    #[derive(Debug)]
+    struct Guarding;
+
+    impl Behaviour for Guarding {
+        fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+        fn react(&self, npc: &Npc, strike: &Strike, _: &Surroundings) -> Reaction {
+            let answers = strike.ship == ShipRef::Npc(npc.id)
+                || (npc.id == NpcId(0) && strike.ship == ShipRef::Npc(NpcId(1)));
+            Reaction {
+                target: answers.then_some(strike.by),
+                provoked: 0.0,
+                goal: None,
+            }
+        }
+    }
+
+    #[test]
+    fn a_lead_answering_a_hit_on_its_escort_keeps_its_wait() {
+        // `_DamageShip` cuts the wait of the ship hit only (`%edi`,
+        // @0x3be6e-0x3be7c), not of the lead that answers for its escort
+        // (@0x3bcfa-0x3bd79).
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].leader = Some(NpcId(0));
+        traffic.npcs[0].mode = Mode::Coasting { ticks_left: 45 };
+        traffic.npcs[1].mode = Mode::Coasting { ticks_left: 45 };
+        traffic.tick_in(
+            &Guarding,
+            World::new(&[]),
+            &[struck(1, 5.0)],
+            &mut Draws::of(&[]),
+        );
+        let lead = &traffic.npcs()[0];
+        assert_eq!(lead.target, Some(ShipRef::Player), "the lead answers");
+        assert_eq!(
+            lead.mode,
+            Mode::Coasting { ticks_left: 44 },
+            "the lead's wait only drops by the tick"
+        );
+        let escort = &traffic.npcs()[1];
+        assert_eq!(escort.target, Some(ShipRef::Player));
+        assert_eq!(
+            escort.mode,
+            Mode::Coasting { ticks_left: 19 },
+            "the escort hit: 20, less this tick"
+        );
+    }
+
+    #[test]
+    fn a_lead_in_its_gate_answering_the_players_hit_on_its_escort_keeps_waiting_hidden() {
+        // `_AIMakeShipAttackPlayer` is called on the victim alone
+        // (@0x3be66-0x3be69), as is the wait cut (@0x3be6e-0x3be7c).
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].leader = Some(NpcId(0));
+        for npc in &mut traffic.npcs {
+            npc.mode = Mode::Emerging { ticks_left: 60 };
+            npc.emerges_from = Some(GATE);
+        }
+        let goal = traffic.npcs[0].goal;
+        traffic.tick_in(
+            &Guarding,
+            World::new(&[]),
+            &[struck(1, 5.0)],
+            &mut Draws::of(&[]),
+        );
+        let lead = &traffic.npcs()[0];
+        assert_eq!(lead.target, Some(ShipRef::Player), "the lead answers");
+        assert_eq!(lead.mode, Mode::Emerging { ticks_left: 59 }, "not held");
+        assert_eq!(lead.goal, goal);
+        assert!(lead.holds_gate_open(GATE));
+        let escort = &traffic.npcs()[1];
+        assert_eq!(escort.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(escort.mode, Mode::HeldAtGate { ticks_left: 19 });
+    }
+
     #[test]
     fn a_good_samaritan_held_at_its_gate_and_hit_later_has_its_wait_cut_to_20() {
         // `_DamageShip` cuts the victim's +0x4c to 20 whatever its goal
