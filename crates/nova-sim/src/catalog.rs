@@ -2000,6 +2000,141 @@ mod tests {
         ]
     }
 
+    /// A star map of 130, which holds stellars 128 and 129, 131, which
+    /// exists with none, and 132, which doesn't exist; nothing else, and
+    /// [`PilotCatalog::first_stellars`] left to its default.
+    struct Mapped;
+
+    impl PilotCatalog for Mapped {
+        fn first_character(&self) -> Result<CharacterStart, StartError> {
+            Err(StartError::NoCharacter)
+        }
+
+        fn ship_fields(&self, _id: ShipId) -> Result<ShipFields, String> {
+            Err(String::new())
+        }
+
+        fn default_outfits(&self, _id: ShipId) -> Vec<(OutfitId, u16)> {
+            Vec::new()
+        }
+
+        fn outfits(&self) -> Vec<OutfitRecord> {
+            Vec::new()
+        }
+
+        fn ships(&self) -> Vec<ShipRecord> {
+            Vec::new()
+        }
+
+        fn system_exists(&self, id: SystemId) -> bool {
+            matches!(id.0, 130 | 131)
+        }
+
+        /// Asked only of a system that exists.
+        fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
+            match system.0 {
+                130 => vec![
+                    crate::testkit::planet(128, 0.0, 0.0),
+                    crate::testkit::planet(129, 9.0, 0.0),
+                ],
+                131 => Vec::new(),
+                other => panic!("asked for sÿst {other}'s sites"),
+            }
+        }
+
+        fn star_map(&self) -> Vec<StarSystem> {
+            [130, 131, 132]
+                .into_iter()
+                .map(|id| crate::testkit::star(id, (0.0, 0.0), &[]))
+                .collect()
+        }
+
+        fn commodity_strings(&self) -> CommodityStrings {
+            CommodityStrings::default()
+        }
+
+        fn string_patch(&self, _id: i16) -> StringPatch {
+            StringPatch::Absent
+        }
+
+        fn buoy_strings(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn junk(&self) -> Vec<JunkRecord> {
+            Vec::new()
+        }
+
+        fn disasters(&self) -> Vec<DisasterRecord> {
+            Vec::new()
+        }
+
+        fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+            Vec::new()
+        }
+
+        fn date_affixes(&self) -> DateAffixes {
+            DateAffixes::default()
+        }
+
+        fn gate_sites(&self) -> Vec<GateSite> {
+            Vec::new()
+        }
+
+        fn stellar_lives(&self) -> Vec<StellarLife> {
+            Vec::new()
+        }
+
+        fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+            None
+        }
+
+        fn missions(&self) -> Vec<MissionRecord> {
+            Vec::new()
+        }
+
+        fn mission_texts(&self) -> Vec<MissionTexts> {
+            Vec::new()
+        }
+
+        fn listed_stellars(&self) -> Vec<ListedStellar> {
+            Vec::new()
+        }
+
+        fn system_visibility(&self) -> Vec<SystemVisibility> {
+            Vec::new()
+        }
+
+        fn place_names(&self) -> PlaceNames {
+            PlaceNames::default()
+        }
+
+        fn stellar_marks(&self) -> Vec<StellarMark> {
+            Vec::new()
+        }
+
+        fn crons(&self) -> Vec<CronRecord> {
+            Vec::new()
+        }
+
+        fn ranks(&self) -> Vec<RankRecord> {
+            Vec::new()
+        }
+
+        fn nebulae(&self) -> Vec<NebulaRecord> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn by_default_each_existing_systems_first_stellar_is_its_first_landing_site() {
+        assert_eq!(
+            Mapped.first_stellars(),
+            [(SystemId(130), StellarId(128))],
+            "131 has none; 132 doesn't exist and isn't asked"
+        );
+    }
+
     #[test]
     fn borrowed_and_shared_catalogs_are_catalogs() {
         let direct = reads(One);
