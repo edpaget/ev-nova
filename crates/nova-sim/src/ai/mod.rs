@@ -309,6 +309,16 @@ pub struct Reaction {
     pub goal: Option<Goal>,
 }
 
+/// What a ship waiting in its gate, or held at it, holds on one tick
+/// (see [`Behaviour::gate_wait`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GateWait {
+    /// The fire command it holds.
+    pub trigger: Trigger,
+    /// Whether it drops its target.
+    pub drops_target: bool,
+}
+
 /// How NPCs decide what to do.
 pub trait Behaviour: Debug {
     /// `npc`'s goal now, among `around`, rolling any choice on `chance`.
@@ -324,6 +334,18 @@ pub trait Behaviour: Debug {
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         let _ = (npc, around);
         None
+    }
+
+    /// What `npc` holds on a tick it waits in its gate or is held at it,
+    /// among `around`, in place of its [`trigger`](Self::trigger):
+    /// `_LowLevelAIHandler` at sub-goal 0 calls `_AIEscortFireUnprovoked`
+    /// every frame (@0x8521e-0x85236), which does nothing for a ship of AI
+    /// type 4 or below (@0x80e59). By default it fires nothing and keeps
+    /// its target; the escorts' and carried fighters' AIs run
+    /// [`escort::fire_unprovoked`].
+    fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
+        let _ = (npc, around);
+        GateWait::default()
     }
 
     /// How `npc` answers `strike`, a hit on itself or another ship, among
@@ -765,6 +787,22 @@ mod tests {
         assert_eq!(
             Peaceful.react(&npcs[0], &strike, &around),
             Reaction::default()
+        );
+    }
+
+    #[test]
+    fn peaceful_traffic_waiting_in_its_gate_fires_nothing_and_keeps_its_target() {
+        let mut waiting = npc(1, AiType::Warship);
+        waiting.mode = Mode::Emerging { ticks_left: 30 };
+        waiting.target = Some(ShipRef::Player);
+        let around = Surroundings::new(&[], &[]);
+        assert_eq!(Peaceful.gate_wait(&waiting, &around), GateWait::default());
+        assert_eq!(
+            GateWait::default(),
+            GateWait {
+                trigger: Trigger::default(),
+                drops_target: false,
+            }
         );
     }
 

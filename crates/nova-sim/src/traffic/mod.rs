@@ -65,9 +65,9 @@
 //!    its provocation, and one that stops inspecting a ship remembers it,
 //!    and, the player within its reach, has scanned the player
 //!    ([`Traffic::take_scans`]). Then each ship waiting in its gate or held
-//!    at it holds only its point defence, if it is an escort or fighter
-//!    with a target still intact, dropping a target that is not
-//!    (`_AIEscortFireUnprovoked`), and nothing else;
+//!    at it holds only what the behaviour gives it for the wait
+//!    ([`Behaviour::gate_wait`], `_AIEscortFireUnprovoked`), dropping its
+//!    target if the behaviour says so;
 //! 5. every NPC's cloak ([`cloak`]): a flying NPC's think
 //!    cloaks or uncloaks it, one cloaked that can no longer cloak
 //!    uncloaks, and its fade steps;
@@ -106,7 +106,7 @@ pub mod strength;
 pub mod table;
 
 use crate::ai::interceptor::within_reach;
-use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings};
+use crate::ai::{Behaviour, GateWait, Goal, PlayerSide, Reaction, Surroundings};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
@@ -556,18 +556,18 @@ impl Traffic {
             }
         }
         let around = world.around(&self.npcs);
-        let waits: Vec<Option<(Trigger, bool)>> = self
+        let waits: Vec<Option<GateWait>> = self
             .npcs
             .iter()
             .map(|npc| {
                 matches!(npc.mode, Mode::Emerging { .. } | Mode::HeldAtGate { .. })
-                    .then(|| Self::gate_wait_trigger(npc, &around))
+                    .then(|| behaviour.gate_wait(npc, &around))
             })
             .collect();
         for (npc, wait) in self.npcs.iter_mut().zip(waits) {
-            if let Some((trigger, drops)) = wait {
-                npc.trigger = trigger;
-                if drops {
+            if let Some(wait) = wait {
+                npc.trigger = wait.trigger;
+                if wait.drops_target {
                     npc.target = None;
                 }
             }
@@ -874,35 +874,6 @@ impl Traffic {
                 }
             }
         }
-    }
-
-    /// The trigger each NPC waiting in its gate or held at it holds this
-    /// tick, and whether it drops its target: `_LowLevelAIHandler` at
-    /// sub-goal 0 calls `_AIEscortFireUnprovoked` every frame
-    /// (@0x8521e-0x85236). For a ship of AI type above 4 (the player's
-    /// escorts and fighters, its mission escorts and an NPC carrier's
-    /// fighters, which [`NovaAi`](crate::ai::NovaAi) routes to the
-    /// escorts' and fighters' AIs; @0x80e59) with a target (@0x80e63), it
-    /// tail-calls `_AIFireTurret` while the target is active and intact
-    /// (+0xb8, `_IsDisabled`, @0x80e98), and drops the target otherwise
-    /// (+0x70 = -1, @0x80e9d). `_AIFireTurret` runs the point defence
-    /// first unless the shooter is disabled (@0x80afa-0x80b0d); its turret
-    /// fire flag (+0xba, @0x80e40) is never read, as `_HandleShip` skips
-    /// the fire step while the wait runs (@0x34a54-0x34a72). Any other
-    /// ship fires nothing.
-    fn gate_wait_trigger(npc: &Npc, around: &Surroundings) -> (Trigger, bool) {
-        let escort_ai = npc.escorts_player() || npc.carrier.is_some();
-        let Some(target) = npc.target.filter(|_| escort_ai) else {
-            return (Trigger::default(), false);
-        };
-        if around.condition_of(target) != Some(Condition::Intact) {
-            return (Trigger::default(), true);
-        }
-        let trigger = Trigger {
-            point_defence: npc.condition == Condition::Intact,
-            ..Trigger::default()
-        };
-        (trigger, false)
     }
 
     /// The NPCs, in the order they appeared.
@@ -2708,10 +2679,13 @@ mod tests {
 
     /// Keeps its goal and fires its primaries whatever it does, targeting
     /// its goal's quarry, and answers a hit on itself as [`Fighting`]
-    /// does, recording who decided.
+    /// does, recording who decided. Waiting in its gate it holds `waits`,
+    /// recording who was asked.
     #[derive(Debug, Default)]
     struct Firing {
         decided: RefCell<Vec<NpcId>>,
+        waits: GateWait,
+        waited: RefCell<Vec<NpcId>>,
     }
 
     const PRIMARY: Trigger = Trigger {
@@ -2744,6 +2718,11 @@ mod tests {
 
         fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
             npc.goal.quarry()
+        }
+
+        fn gate_wait(&self, npc: &Npc, _around: &Surroundings) -> GateWait {
+            self.waited.borrow_mut().push(npc.id);
+            self.waits
         }
 
         fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
@@ -2976,24 +2955,29 @@ mod tests {
         assert_eq!(hit.mode, Mode::HeldAtGate { ticks_left: 19 });
     }
 
-    /// NPC 0 waiting 30 ticks in a gate beside NPC 1, as `setup` makes
-    /// them, struck by `hit` in `world`: its mode, and the trigger and
+    /// The point defence a waiting ship's behaviour holds.
+    const DEFENDING: GateWait = GateWait {
+        trigger: POINT_DEFENCE,
+        drops_target: false,
+    };
+
+    /// NPC 0 waiting 30 ticks in a gate beside NPC 1, struck by `hit`
+    /// in `world`, deciding as `firing` says: its mode, and the trigger and
     /// target it holds, on each tick until it is out of its wait.
-    fn waiting_point_defence(
-        setup: impl Fn(&mut [Npc]),
+    fn waiting(
+        firing: &Firing,
         world: &World,
         hit: Strike,
     ) -> Vec<(Mode, Trigger, Option<ShipRef>)> {
         let mut traffic = populated(2, 1);
         traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30 };
-        setup(&mut traffic.npcs);
         let mut held = Vec::new();
         let mut strikes = vec![hit];
         while matches!(
             traffic.npcs[0].mode,
             Mode::Emerging { .. } | Mode::HeldAtGate { .. }
         ) {
-            traffic.tick_in(&Firing::default(), *world, &strikes, &mut Draws::of(&[]));
+            traffic.tick_in(firing, *world, &strikes, &mut Draws::of(&[]));
             strikes.clear();
             let npc = &traffic.npcs[0];
             held.push((npc.mode, npc.trigger, npc.target));
@@ -3001,44 +2985,35 @@ mod tests {
         held
     }
 
-    /// NPC 0 the player's escort.
-    fn players_escort(npcs: &mut [Npc]) {
-        npcs[0].escort = Some(duty(2));
-    }
-
-    /// NPC 0 a fighter NPC 1 launched.
-    fn npc_carriers_fighter(npcs: &mut [Npc]) {
-        npcs[0].leader = Some(NpcId(1));
-        npcs[0].carrier = Some(launched_from(ShipRef::Npc(NpcId(1))));
-    }
-
     #[test]
-    fn an_escort_or_fighter_waiting_in_its_gate_with_a_target_runs_its_point_defence() {
+    fn a_ship_waiting_in_or_held_at_its_gate_holds_what_its_behaviour_says_for_the_wait() {
         // `_LowLevelAIHandler` at sub-goal 0 calls
-        // `_AIEscortFireUnprovoked` (@0x8521e-0x85236), which for AI type
-        // above 4 with an active, intact target tail-calls `_AIFireTurret`
-        // (@0x80e98), whose point defence runs (@0x80b0d).
+        // `_AIEscortFireUnprovoked` every frame of the wait
+        // (@0x8521e-0x85236), the per-type AI's fire unread.
         let world = World {
             player: Some(player_at(0.0, -300.0)),
             ..World::new(&[])
         };
-        for who in [players_escort, npc_carriers_fighter] {
-            let held = waiting_point_defence(who, &world, struck_by(0, 1, 2.0));
-            let (out, waiting) = held.split_last().expect("ticks");
-            assert_eq!(waiting.len(), 19, "its cut wait");
-            for &(mode, trigger, target) in waiting {
-                assert!(matches!(mode, Mode::Emerging { .. }), "{mode:?}");
-                assert_eq!(trigger, POINT_DEFENCE, "{mode:?}");
-                assert_eq!(target, Some(ShipRef::Npc(NpcId(1))), "{mode:?}");
-            }
-            assert_eq!(out.0, Mode::LeavingGate { tick: 0 });
-            assert_eq!(out.1, Trigger::default(), "none in the burst");
+        let firing = Firing {
+            waits: DEFENDING,
+            ..Firing::default()
+        };
+        let held = waiting(&firing, &world, struck_by(0, 1, 2.0));
+        let (out, waits) = held.split_last().expect("ticks");
+        assert_eq!(waits.len(), 19, "its cut wait");
+        for &(mode, trigger, target) in waits {
+            assert!(matches!(mode, Mode::Emerging { .. }), "{mode:?}");
+            assert_eq!(trigger, POINT_DEFENCE, "{mode:?}");
+            assert_eq!(target, Some(ShipRef::Npc(NpcId(1))), "{mode:?}");
         }
-        // Held at its gate by the player's hit, it runs it too.
-        let held = waiting_point_defence(npc_carriers_fighter, &world, struck(0, 2.0));
-        let (out, waiting) = held.split_last().expect("ticks");
-        assert_eq!(waiting.len(), 19);
-        for &(mode, trigger, target) in waiting {
+        assert_eq!(out.0, Mode::LeavingGate { tick: 0 });
+        assert_eq!(out.1, Trigger::default(), "none in the burst");
+        // Held at its gate by the player's hit, its per-type AI deciding
+        // and firing primaries, it holds the wait's instead.
+        let held = waiting(&firing, &world, struck(0, 2.0));
+        let (out, waits) = held.split_last().expect("ticks");
+        assert_eq!(waits.len(), 19);
+        for &(mode, trigger, target) in waits {
             assert!(matches!(mode, Mode::HeldAtGate { .. }), "{mode:?}");
             assert_eq!(trigger, POINT_DEFENCE, "{mode:?}");
             assert_eq!(target, Some(ShipRef::Player), "{mode:?}");
@@ -3047,65 +3022,35 @@ mod tests {
     }
 
     #[test]
-    fn a_waiting_escort_whose_target_is_down_or_gone_drops_it_and_runs_nothing() {
-        // `_AIEscortFireUnprovoked` sets +0x70 to -1 (@0x80e9d).
-        let world = World {
-            player: Some(player_at(0.0, -300.0)),
-            ..World::new(&[])
+    fn a_waiting_ship_drops_its_target_when_its_behaviour_says() {
+        let firing = Firing {
+            waits: GateWait {
+                trigger: Trigger::default(),
+                drops_target: true,
+            },
+            ..Firing::default()
         };
-        let downed = |npcs: &mut [Npc]| {
-            players_escort(npcs);
-            npcs[1].condition = Condition::Disabled;
-        };
-        for (held, case) in [
-            (
-                waiting_point_defence(downed, &world, struck_by(0, 1, 2.0)),
-                "down",
-            ),
-            (
-                waiting_point_defence(players_escort, &world, struck_by(0, 9, 2.0)),
-                "gone",
-            ),
-        ] {
-            let &(mode, trigger, target) = held.first().expect("a tick");
-            assert!(matches!(mode, Mode::Emerging { .. }), "{case}");
-            assert_eq!((trigger, target), (Trigger::default(), None), "{case}");
-        }
+        let held = waiting(&firing, &World::new(&[]), struck_by(0, 1, 2.0));
+        let &(mode, trigger, target) = held.first().expect("a tick");
+        assert!(matches!(mode, Mode::Emerging { .. }));
+        assert_eq!((trigger, target), (Trigger::default(), None));
     }
 
     #[test]
-    fn a_waiting_warship_or_a_disabled_escort_runs_no_point_defence() {
-        // AI type 4 or below never reaches `_AIFireTurret` (@0x80e59), and
-        // a disabled shooter runs no point defence (@0x80afa).
-        let world = World {
-            player: Some(player_at(0.0, -300.0)),
-            ..World::new(&[])
+    fn only_a_ship_waiting_in_or_held_at_its_gate_is_asked_for_its_wait() {
+        let mut traffic = populated(6, 1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30 };
+        traffic.npcs[1].mode = Mode::HeldAtGate { ticks_left: 30 };
+        traffic.npcs[2].mode = Mode::JumpingIn { tick: 0 };
+        traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30 };
+        traffic.npcs[4].mode = Mode::LeavingGate { tick: 0 };
+        let firing = Firing {
+            waits: DEFENDING,
+            ..Firing::default()
         };
-        let warship = |npcs: &mut [Npc]| npcs[0].ai_type = AiType::Warship;
-        let disabled = |npcs: &mut [Npc]| {
-            players_escort(npcs);
-            npcs[0].condition = Condition::Disabled;
-            npcs[0].target = Some(ShipRef::Npc(NpcId(1)));
-        };
-        for (held, case) in [
-            (
-                waiting_point_defence(warship, &world, struck_by(0, 1, 2.0)),
-                "a warship",
-            ),
-            (
-                waiting_point_defence(disabled, &world, struck_by(0, 1, 2.0)),
-                "disabled",
-            ),
-        ] {
-            assert!(!held.is_empty(), "{case}");
-            assert!(
-                held.iter()
-                    .all(|&(_, trigger, _)| trigger == Trigger::default()),
-                "{case}: {held:?}"
-            );
-        }
-        let held = waiting_point_defence(disabled, &world, struck_by(0, 1, 2.0));
-        assert_eq!(held[0].2, Some(ShipRef::Npc(NpcId(1))), "its target kept");
+        traffic.tick_in(&firing, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(firing.waited.take(), [NpcId(0), NpcId(1)]);
+        assert_eq!(traffic.npcs()[5].trigger, PRIMARY, "its own, flying");
     }
 
     #[test]

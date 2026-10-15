@@ -48,7 +48,7 @@
 //! ([`Trigger::bays`]).
 
 use crate::ai::fire::FireRules;
-use crate::ai::{Behaviour, Goal, Surroundings, fire};
+use crate::ai::{Behaviour, GateWait, Goal, Surroundings, fire};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
@@ -162,6 +162,41 @@ impl Behaviour for EscortAi {
             Goal::Formation { guard } => guard,
             _ => None,
         }
+    }
+
+    /// [`fire_unprovoked`], whatever its standing order.
+    fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
+        fire_unprovoked(npc, around)
+    }
+}
+
+/// What `npc`, an escort or fighter (AI type above 4, @0x80e59), holds
+/// waiting in its gate or held at it, among `around`:
+/// `_AIEscortFireUnprovoked` (@0x80e40-0x80e9d). With a target
+/// (@0x80e63) it tail-calls `_AIFireTurret` while the target is active and
+/// intact (+0xb8, `_IsDisabled`, @0x80e98), and drops the target otherwise
+/// (+0x70 = -1, @0x80e9d). `_AIFireTurret` runs the point defence first
+/// unless the shooter is disabled (@0x80afa-0x80b0d); its turret fire flag
+/// (+0xba, @0x80e40) is never read, as `_HandleShip` skips the fire step
+/// while the wait runs (@0x34a54-0x34a72). With no target it fires
+/// nothing.
+#[must_use]
+pub fn fire_unprovoked(npc: &Npc, around: &Surroundings) -> GateWait {
+    let Some(target) = npc.target else {
+        return GateWait::default();
+    };
+    if around.condition_of(target) != Some(Condition::Intact) {
+        return GateWait {
+            trigger: Trigger::default(),
+            drops_target: true,
+        };
+    }
+    GateWait {
+        trigger: Trigger {
+            point_defence: npc.condition == Condition::Intact,
+            ..Trigger::default()
+        },
+        drops_target: false,
     }
 }
 
@@ -775,6 +810,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// What `ai` holds for `npcs[0]` waiting in its gate among `npcs`.
+    fn waiting(ai: &dyn Behaviour, npcs: &[Npc]) -> GateWait {
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], npcs)
+        };
+        let mut npc = npcs[0].clone();
+        npc.mode = Mode::Emerging { ticks_left: 30 };
+        ai.gate_wait(&npc, &around)
+    }
+
+    const POINT_DEFENCE: GateWait = GateWait {
+        trigger: Trigger {
+            primary: false,
+            secondary: None,
+            only: None,
+            turrets_only: false,
+            bays: false,
+            point_defence: true,
+        },
+        drops_target: false,
+    };
+
+    #[test]
+    fn waiting_in_its_gate_with_an_intact_target_it_runs_its_point_defence() {
+        // `_LowLevelAIHandler` at sub-goal 0 calls
+        // `_AIEscortFireUnprovoked` (@0x8521e-0x85236), which for AI type
+        // above 4 with an active, intact target tail-calls `_AIFireTurret`
+        // (@0x80e98), whose point defence runs (@0x80b0d).
+        for npc in [escort(None), fighter(None)] {
+            let npcs = [having(npc, Goal::Idle, Some(n(2))), pirate(2, 900.0, 0.0)];
+            assert_eq!(waiting(&ENGINE, &npcs), POINT_DEFENCE);
+            assert_eq!(waiting(&BIBLE, &npcs), POINT_DEFENCE);
+        }
+        let on_player = [having(escort(None), Goal::Idle, Some(ShipRef::Player))];
+        assert_eq!(waiting(&ENGINE, &on_player), POINT_DEFENCE);
+    }
+
+    #[test]
+    fn waiting_in_its_gate_with_its_target_down_or_gone_it_drops_it_and_runs_nothing() {
+        // `_AIEscortFireUnprovoked` sets +0x70 to -1 (@0x80e9d).
+        let dropped = GateWait {
+            trigger: Trigger::default(),
+            drops_target: true,
+        };
+        let mut down = pirate(2, 10.0, 0.0);
+        down.condition = Condition::Disabled;
+        let targeting = having(escort(None), Goal::Idle, Some(n(2)));
+        assert_eq!(
+            waiting(&ENGINE, &[targeting.clone(), down]),
+            dropped,
+            "down"
+        );
+        let mut destroyed = pirate(2, 10.0, 0.0);
+        destroyed.condition = Condition::Destroyed;
+        assert_eq!(
+            waiting(&ENGINE, &[targeting.clone(), destroyed]),
+            dropped,
+            "destroyed"
+        );
+        assert_eq!(waiting(&ENGINE, &[targeting]), dropped, "gone");
+    }
+
+    #[test]
+    fn waiting_in_its_gate_with_no_target_or_disabled_it_runs_nothing_and_keeps_its_target() {
+        // With no target `_AIEscortFireUnprovoked` returns (@0x80e63); a
+        // disabled shooter runs no point defence (@0x80afa).
+        let idle = [having(escort(None), Goal::Idle, None), pirate(2, 10.0, 0.0)];
+        assert_eq!(waiting(&ENGINE, &idle), GateWait::default());
+        let mut disabled = having(escort(None), Goal::Idle, Some(n(2)));
+        disabled.condition = Condition::Disabled;
+        assert_eq!(
+            waiting(&ENGINE, &[disabled, pirate(2, 10.0, 0.0)]),
+            GateWait::default()
+        );
     }
 
     #[test]

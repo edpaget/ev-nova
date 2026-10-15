@@ -20,8 +20,8 @@ use std::rc::Rc;
 
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, Reaction, Surroundings,
-    Warship, WimpyTrader,
+    Behaviour, BraveTrader, CarriedAi, EscortAi, GateWait, Goal, Interceptor, Reaction,
+    Surroundings, Warship, WimpyTrader,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -196,6 +196,10 @@ impl Behaviour for NovaAi {
         self.of(npc).target(npc, around)
     }
 
+    fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
+        self.of(npc).gate_wait(npc, around)
+    }
+
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
         self.of(npc).react(npc, strike, around)
     }
@@ -253,6 +257,17 @@ mod tests {
         fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
             self.asked.borrow_mut().push(npc.id);
             Some(self.ship())
+        }
+
+        fn gate_wait(&self, npc: &Npc, _around: &Surroundings) -> GateWait {
+            self.asked.borrow_mut().push(npc.id);
+            GateWait {
+                trigger: Trigger {
+                    only: Some(WeaponId(i16::try_from(self.mark).unwrap_or_default())),
+                    ..Trigger::default()
+                },
+                drops_target: self.mark.is_multiple_of(2),
+            }
         }
 
         fn react(&self, npc: &Npc, _strike: &Strike, _around: &Surroundings) -> Reaction {
@@ -438,6 +453,85 @@ mod tests {
             ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
             Goal::Attack(marks[2].ship())
         );
+    }
+
+    #[test]
+    fn a_ships_gate_wait_goes_to_its_own_behaviour() {
+        let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
+        let fighters = Marked::new(8);
+        let escorts = Marked::new(9);
+        let ai = TYPES
+            .into_iter()
+            .zip(&marks)
+            .fold(NovaAi::default(), |ai, (ai_type, mark)| {
+                ai.with(ai_type, mark.clone())
+            })
+            .with_escorts(escorts.clone())
+            .with_carried(fighters.clone());
+        let mut npcs: Vec<Npc> = TYPES
+            .into_iter()
+            .enumerate()
+            .map(|(i, ai_type)| of(10 + i as u32, ai_type))
+            .collect();
+        npcs.push(escorting(of(20, AiType::Warship)));
+        npcs.push(carried(of(21, AiType::Warship), ShipRef::Npc(NpcId(30))));
+        let around = Surroundings::new(&[], &npcs);
+        let behaviours = marks.iter().chain([&escorts, &fighters]);
+        for (npc, mark) in npcs.iter().zip(behaviours) {
+            let wait = ai.gate_wait(npc, &around);
+            assert_eq!(
+                wait.trigger.only,
+                Some(WeaponId(i16::try_from(mark.mark).unwrap_or_default())),
+                "{:?}",
+                npc.id
+            );
+            assert_eq!(
+                wait.drops_target,
+                mark.mark.is_multiple_of(2),
+                "{:?}",
+                npc.id
+            );
+            assert_eq!(*mark.asked.borrow(), [npc.id], "only its own");
+        }
+    }
+
+    #[test]
+    fn nova_ai_runs_the_point_defence_of_an_escort_or_fighter_waiting_in_its_gate_alone() {
+        // `_AIEscortFireUnprovoked` reaches `_AIFireTurret` for AI type
+        // above 4 alone (@0x80e59).
+        use crate::ai::fixture::{PIRATES, player, ship};
+        let pirate = ship(2, PIRATES, AiType::Warship, 300.0, 0.0);
+        let target = |mut npc: Npc| {
+            npc.target = Some(ShipRef::Npc(NpcId(2)));
+            npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 30 };
+            npc
+        };
+        let escort = target(escorting(ship(1, PIRATES, AiType::Warship, 0.0, 0.0)));
+        let fighter = target(carried(
+            ship(3, PIRATES, AiType::Interceptor, 50.0, 0.0),
+            ShipRef::Npc(NpcId(4)),
+        ));
+        let warship = target(ship(5, PIRATES, AiType::Warship, 0.0, 0.0));
+        let npcs = [escort, pirate, fighter, warship];
+        let around = Surroundings {
+            player: Some(player(0.0, 300.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let ai = NovaAi::default();
+        for i in [0, 2] {
+            let wait = ai.gate_wait(&npcs[i], &around);
+            assert!(wait.trigger.point_defence, "{:?}", npcs[i].id);
+            assert!(!wait.drops_target, "{:?}", npcs[i].id);
+        }
+        for ai_type in TYPES {
+            let mut other = npcs[3].clone();
+            other.ai_type = ai_type;
+            assert_eq!(
+                ai.gate_wait(&other, &around),
+                GateWait::default(),
+                "{ai_type:?}"
+            );
+        }
     }
 
     #[test]

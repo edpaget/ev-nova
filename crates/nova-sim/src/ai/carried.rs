@@ -17,7 +17,7 @@
 //!   targets that ship, and reacts to no hit.
 
 use crate::ai::fire::FireRules;
-use crate::ai::{Behaviour, Goal, Surroundings, fire};
+use crate::ai::{Behaviour, GateWait, Goal, Surroundings, escort, fire};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
@@ -53,6 +53,12 @@ impl Behaviour for CarriedAi {
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         npc.goal.attacking()
+    }
+
+    /// The escorts' [`fire_unprovoked`](escort::fire_unprovoked): the
+    /// original flies a carried fighter as an escort (AI type above 4).
+    fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
+        escort::fire_unprovoked(npc, around)
     }
 }
 
@@ -174,6 +180,33 @@ mod tests {
         lost.carrier = None;
         let npcs = [carrier(Goal::Attack(ShipRef::Player)), lost];
         assert_eq!(decide(&npcs), Goal::Idle, "no carrier at all");
+    }
+
+    #[test]
+    fn a_fighter_waiting_in_its_gate_runs_the_escorts_point_defence() {
+        // AI type above 4 (@0x80e59): `_AIEscortFireUnprovoked` runs.
+        let mut waiting = fighter(Goal::Idle, Some(n(3)));
+        waiting.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 30 };
+        let mut down = trader();
+        down.condition = crate::combat::hull::Condition::Disabled;
+        for npcs in [
+            [carrier(Goal::Idle), waiting.clone(), trader()],
+            [carrier(Goal::Idle), waiting.clone(), down],
+        ] {
+            let around = Surroundings::new(&[], &npcs);
+            assert_eq!(
+                CarriedAi::default().gate_wait(&waiting, &around),
+                crate::ai::escort::fire_unprovoked(&waiting, &around)
+            );
+        }
+        let npcs = [carrier(Goal::Idle), waiting.clone(), trader()];
+        let around = Surroundings::new(&[], &npcs);
+        assert!(
+            CarriedAi::default()
+                .gate_wait(&waiting, &around)
+                .trigger
+                .point_defence
+        );
     }
 
     #[test]
