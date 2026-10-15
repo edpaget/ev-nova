@@ -18564,6 +18564,20 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn setup_stops_at_fifty_five_ships_and_by_the_bible_at_none() {
+        let mut catalog = boardable();
+        catalog.traffic[0].1.avg_ships = 60;
+        let placed = vec![(1, 0, 740, 0); 60];
+        for (reading, ships) in [(RuleSource::Engine, 55), (RuleSource::Bible, 60)] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::SpawnReserve, reading));
+            session.populate(&catalog, &mut placing(2, &placed));
+            assert_eq!(session.npcs().len(), ships, "{reading:?}");
+        }
+    }
+
+    #[test]
     fn use_as_my_ship_abandons_the_old_ship_with_sixty_two_ships_in_the_system() {
         let mut full = crowded(61);
         let pilot = full.pilot().clone();
