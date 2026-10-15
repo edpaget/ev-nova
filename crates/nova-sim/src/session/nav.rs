@@ -30,12 +30,12 @@
 //!   writes +0x6c alone.
 //! - Nav Off, backquote ([`Session::nav_off`], @0x69a94-0x69b63): off,
 //!   the course kept, with [`SimSound::NavSelected`] on every press
-//!   (@0x69b19).
+//!   (@0x69b19). It shares its block with H ([`Session::nav_mode_keys`]).
 //! - Option-backquote ([`Session::clear_target`], @0x69a17-0x69a90): the
 //!   ship target let go, with [`SimSound::TargetCleared`] when there was
 //!   one (@0x69a7d). The nav mode is untouched.
 //! - Hyperspace Mode, H ([`Session::hyperspace_mode`], @0x69b76-0x69b89):
-//!   the beep, then, unless the mode is 3 already, mode 3 with nothing
+//!   the beep and the dock request dropped, then, unless the mode is 3 already, mode 3 with nothing
 //!   selected and the course cued.
 //! - The cue ([`Session::cue_course`], `_CueNextHyperRouteDest`
 //!   @0xe2dc-0xe35f): when the course's first hop is a system the ship
@@ -124,7 +124,7 @@
 //! lets go of the selection.
 //!
 //! **The dock request** (`_dockTarget` / `_dockPermission`, see the
-//! `clearance` module) is dropped by Nav Off, by a stellar key or a click
+//! `clearance` module) is dropped by Nav Off and Hyperspace Mode, by a stellar key or a click
 //! that changes the selection or the mode, and on every frame in mode 3;
 //! the land key's own selection keeps it, and so does a script's `M` or
 //! `N`.
@@ -230,34 +230,49 @@ impl Session {
         }
     }
 
-    /// Presses Nav Off (backquote): the nav system off, the course kept,
-    /// the dock request dropped (@0x69b2f-0x69b3c), with
-    /// [`SimSound::NavSelected`] on every press. During a jump
-    /// (pre-jump stage too) nothing changes and it says so.
-    pub fn nav_off(&mut self) -> bool {
+    /// Runs `_HandlePlayer`'s Nav Off / Hyperspace Mode block for one
+    /// press (@0x69ade-0x69b89), with `nav_off` the backquote (without
+    /// Option) and `hyperspace` H: one [`SimSound::NavSelected`]
+    /// (@0x69b19) and the dock request dropped (@0x69b1e-0x69b3c) for
+    /// either key; then, with `nav_off`, the nav system off, the course
+    /// kept (@0x69b41-0x69b5a); then, with `hyperspace`, unless the mode
+    /// is 3 already, mode 3 with nothing selected and the course's next
+    /// hop cued ([`Session::cue_course`], @0x69b63-0x69b89). Both in one
+    /// press give one beep, the nav off, then mode 3 and the cue. During
+    /// a jump (pre-jump stage too) nothing changes and it says so. The
+    /// flight view keeps the block's latch (0xdee04), which says when a
+    /// held key presses again.
+    pub fn nav_mode_keys(&mut self, nav_off: bool, hyperspace: bool) -> bool {
         if self.jump.is_some() {
             return false;
         }
         self.sounds.push(SimSound::NavSelected);
-        self.nav = NavMode::Off;
         self.dock = None;
-        true
-    }
-
-    /// Presses Hyperspace Mode (H): [`SimSound::NavSelected`], then,
-    /// unless the mode is 3 already, mode 3 with nothing selected and the
-    /// course's next hop cued ([`Session::cue_course`]). During a jump
-    /// (pre-jump stage too) nothing changes and it says so.
-    pub fn hyperspace_mode(&mut self) -> bool {
-        if self.jump.is_some() {
-            return false;
+        if nav_off {
+            self.nav = NavMode::Off;
         }
-        self.sounds.push(SimSound::NavSelected);
-        if !matches!(self.nav, NavMode::Hyperspace(_)) {
+        if hyperspace && !matches!(self.nav, NavMode::Hyperspace(_)) {
             self.nav = NavMode::Hyperspace(None);
             self.cue_course();
         }
         true
+    }
+
+    /// Presses Nav Off (backquote) alone ([`Session::nav_mode_keys`]):
+    /// the nav system off, the course kept, the dock request dropped,
+    /// with [`SimSound::NavSelected`] on every press. During a jump
+    /// (pre-jump stage too) nothing changes and it says so.
+    pub fn nav_off(&mut self) -> bool {
+        self.nav_mode_keys(true, false)
+    }
+
+    /// Presses Hyperspace Mode (H) alone ([`Session::nav_mode_keys`]):
+    /// [`SimSound::NavSelected`] and the dock request dropped, then,
+    /// unless the mode is 3 already, mode 3 with nothing selected and the
+    /// course's next hop cued ([`Session::cue_course`]). During a jump
+    /// (pre-jump stage too) nothing changes and it says so.
+    pub fn hyperspace_mode(&mut self) -> bool {
+        self.nav_mode_keys(false, true)
     }
 
     /// Presses Option-backquote: lets go of the ship target, with
@@ -525,6 +540,62 @@ mod tests {
         assert!(session.hyperspace_mode());
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None), "not cued");
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+    }
+
+    // The Nav Off / Hyperspace Mode block.
+
+    /// A session in mode 3 at the course's first hop, with a dock request
+    /// standing, and its sounds taken.
+    fn cued_with_a_request() -> Session {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.nav_mode(), hyperspace(131));
+        session.dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(128),
+            permission: 0,
+        });
+        quiet(session)
+    }
+
+    #[test]
+    fn the_block_with_both_keys_beeps_once_turns_off_then_cues_and_drops_the_request() {
+        let mut session = cued_with_a_request();
+        session.nav = NavMode::Hyperspace(None);
+        assert!(session.nav_mode_keys(true, true));
+        assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+        assert_eq!(session.nav_mode(), hyperspace(131), "off, then cued");
+        assert_eq!(session.dock_request(), None);
+    }
+
+    #[test]
+    fn the_block_with_h_alone_in_mode_3_keeps_the_selection_beeps_and_drops_the_request() {
+        let mut session = cued_with_a_request();
+        session.nav = NavMode::Hyperspace(Some(SystemId(130)));
+        assert!(session.nav_mode_keys(false, true));
+        assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+        assert_eq!(session.nav_mode(), hyperspace(130), "kept");
+        assert_eq!(session.dock_request(), None);
+    }
+
+    #[test]
+    fn the_block_with_nav_off_alone_turns_off_and_does_not_cue() {
+        let mut session = cued_with_a_request();
+        assert!(session.nav_mode_keys(true, false));
+        assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+        assert_eq!(session.nav_mode(), NavMode::Off);
+        assert_eq!(session.dock_request(), None);
+    }
+
+    #[test]
+    fn the_block_is_refused_in_silence_during_a_jump() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        let mut session = quiet(session);
+        assert!(!session.nav_mode_keys(true, true));
+        assert_eq!(session.take_sounds(), []);
+        assert_eq!(session.nav_mode(), hyperspace(131));
     }
 
     // Hyper Select.
