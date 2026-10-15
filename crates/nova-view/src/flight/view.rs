@@ -2966,10 +2966,10 @@ impl<
     /// they wait for the shipyard to close ([`FlightView::shop_closed`]).
     /// A refused purchase redraws nothing.
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
+        let before = self.interface_now();
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
-        let before = hud::interface_for(&self.catalog, session.interface_government());
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
-        let after = hud::interface_for(&self.catalog, session.interface_government());
+        let after = self.interface_now();
         self.catch_up();
         self.retake_radar();
         self.retake_nav();
@@ -2978,6 +2978,97 @@ impl<
             self.retake_reserves();
         }
         Ok(bought)
+    }
+
+    /// The `ïntf` the ship flies under now, as [`hud::interface_for`]
+    /// reads it from the session's government; none for a session that
+    /// failed. A ship purchase and an outfitter order each compare it
+    /// before and after, as `_LoadIntfResource` redraws the whole bar
+    /// only for an `ïntf` other than the one loaded (@0x73663-0x73672).
+    fn interface_now(&self) -> Option<Result<i16, String>> {
+        let session = self.session.as_ref().ok()?;
+        Some(hud::interface_for(
+            &self.catalog,
+            session.interface_government(),
+        ))
+    }
+
+    /// Buys or sells an outfit as [`Session::outfit`] does, it and its
+    /// hook drawing on the flight's chance; a session that failed has no
+    /// outfitter. The bar is redrawn after it
+    /// (`FlightView::after_outfit_order`).
+    pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
+        let before = self.interface_now();
+        let done = match &mut self.session {
+            Ok(session) => session.outfit(order, &mut self.chance),
+            Err(_) => Err(OutfitRefusal::NoOutfitter),
+        };
+        self.after_outfit_order(before.as_ref());
+        done
+    }
+
+    /// Buys or sells up to `count` of an outfit as
+    /// [`Session::outfit_counted`] does, on the flight's chance, giving
+    /// how many went through; a session that failed has no outfitter.
+    /// The bar is redrawn after it (`FlightView::after_outfit_order`).
+    pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
+        let before = self.interface_now();
+        let done = match &mut self.session {
+            Ok(session) => session.outfit_counted(order, count, &mut self.chance),
+            Err(_) => Err(OutfitRefusal::NoOutfitter),
+        };
+        self.after_outfit_order(before.as_ref());
+        done
+    }
+
+    /// Buys or sells up to `count` of an outfit as
+    /// [`Session::outfit_order`] does, on the flight's chance, giving the
+    /// whole run and its alert; a session that failed has no outfitter,
+    /// refused at the first pass with no alert. The bar is redrawn after
+    /// it (`FlightView::after_outfit_order`).
+    pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
+        let before = self.interface_now();
+        let run = self.run_outfit_order(order, count);
+        self.after_outfit_order(before.as_ref());
+        run
+    }
+
+    /// [`FlightView::outfit_order`]'s run.
+    fn run_outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
+        match &mut self.session {
+            Ok(session) => session.outfit_order(order, count, &mut self.chance),
+            Err(_) => OutfitRun {
+                run: OrderRun {
+                    done: 0,
+                    stopped: Some(Stopped {
+                        pass: 0,
+                        refusal: OutfitRefusal::NoOutfitter,
+                    }),
+                },
+                alert: None,
+                after: Reselection::Kept,
+            },
+        }
+    }
+
+    /// Redraws the bar after an outfitter order, given the `ïntf` the
+    /// ship flew under before it ([`FlightView::interface_now`]).
+    ///
+    /// The order's `OnPurchase` (`_EvalMissionBitSetString` @0x5c2cb) or
+    /// `OnSell` (@0x5cff6) runs inside it. When its `C`, `E` or `H`
+    /// (`_EvalSetExp` @0x15493-0x156c7) puts the ship under another
+    /// `ïntf`, `_LoadIntfResource` (@0x156c7) redraws the whole bar at
+    /// once (`_RedrawStatus(1)` @0x739bd), held gauges, nav and target
+    /// included ([`FlightView::redraw_status`]). Otherwise only the radar
+    /// is redrawn ([`FlightView::retake_radar`]). A refused order changes
+    /// no ship, so it redraws only the radar. The redraw runs inside the
+    /// order's call, before any frame is drawn.
+    fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>) {
+        if self.interface_now().as_ref() == before {
+            self.retake_radar();
+        } else {
+            self.redraw_status();
+        }
     }
 
     /// Assigns the ship captured, as [`Session::assign`] does, and says
@@ -3097,8 +3188,10 @@ impl<C> FlightView<C> {
     /// also runs in port.
     ///
     /// In port the original redraws the bar at other points too, each
-    /// taken here in part: the radar alone after an outfitter order
-    /// ([`FlightView::outfit`]), the radar, nav and target on a ship
+    /// taken here in part: the radar alone after an outfitter order, and
+    /// everything after one whose `OnPurchase` or `OnSell` puts the ship
+    /// under another `ïntf` (`_LoadIntfResource` @0x156c7 → @0x739bd,
+    /// [`FlightView::outfit`]), the radar, nav and target on a ship
     /// purchase and everything on one under another `ïntf`
     /// ([`FlightView::buy_ship`]), the fuel gauge on a recharge
     /// ([`FlightView::recharge`]), and everything as a shop closes
@@ -3116,11 +3209,15 @@ impl<C> FlightView<C> {
     }
 
     /// Takes the radar's snapshot afresh, and nothing else: what the
-    /// original's outfitter redraws after each order. Its buy
-    /// (`_DrawStatus` @0x5c5a1) and sell (@0x5d328) mark only the cargo
-    /// area, which ours draws live, and `_DrawStatus` redraws the radar on
-    /// its 15-tick timer, nearly always run out in port. A refused order
-    /// changes no gear, so the radar redrawn is the same.
+    /// original's outfitter redraws after each order that keeps the
+    /// `ïntf`. Its buy (`_DrawStatus` @0x5c5a1) and sell (@0x5d328) mark
+    /// only the cargo area, which ours draws live, and `_DrawStatus`
+    /// redraws the radar on its 15-tick timer, nearly always run out in
+    /// port. A refused order changes no gear, so the radar redrawn is the
+    /// same. An order whose `OnPurchase` (@0x5c2cb) or `OnSell` (@0x5cff6)
+    /// changes the `ïntf` redraws the whole bar instead (`_EvalSetExp`
+    /// @0x156c7 → `_RedrawStatus(1)` @0x739bd,
+    /// [`FlightView::after_outfit_order`]).
     fn retake_radar(&mut self) {
         self.radar_scene = Some(self.radar_now());
     }
@@ -3310,8 +3407,15 @@ impl<C> FlightView<C> {
     /// outfitter order, on a ship purchase and as a shop closes, so an
     /// IFF bought or sold shows on the port's bar at once. The original's
     /// port `_DrawStatus` skips the radar within 15 Mac ticks of its last
-    /// redraw (@0x4c911-0x4c923); ours, with no tick clock in port,
-    /// always retakes it.
+    /// redraw (@0x4c911-0x4c923), and flips the blink when it doesn't
+    /// (@0x4c93d-0x4c94f). Ours, with no tick clock in port, always
+    /// retakes it and keeps landing's blink: recorded, not built, by
+    /// operator decision on 2026-10-15. The player could see the gate only
+    /// on an outfitter order buying or selling IFF within 0.25 s of the
+    /// last radar redraw, and the flip only in the blank radar's centre
+    /// arrow, which no landable stock stellar is far enough out to draw.
+    /// The port's other timers are recorded in the `cadence` module's
+    /// docs.
     fn radar_shown(&self) -> Cow<'_, RadarScene> {
         match &self.radar_scene {
             Some(shown) if self.hud_waits() => Cow::Borrowed(shown),
@@ -3584,61 +3688,6 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// Buys or sells an outfit as [`Session::outfit`] does, it and its
-    /// hook drawing on the flight's chance; a session that failed has no
-    /// outfitter. The radar is redrawn after it
-    /// (`FlightView::retake_radar`).
-    pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
-        let done = match &mut self.session {
-            Ok(session) => session.outfit(order, &mut self.chance),
-            Err(_) => Err(OutfitRefusal::NoOutfitter),
-        };
-        self.retake_radar();
-        done
-    }
-
-    /// Buys or sells up to `count` of an outfit as
-    /// [`Session::outfit_counted`] does, on the flight's chance, giving
-    /// how many went through; a session that failed has no outfitter.
-    /// The radar is redrawn after it (`FlightView::retake_radar`).
-    pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
-        let done = match &mut self.session {
-            Ok(session) => session.outfit_counted(order, count, &mut self.chance),
-            Err(_) => Err(OutfitRefusal::NoOutfitter),
-        };
-        self.retake_radar();
-        done
-    }
-
-    /// Buys or sells up to `count` of an outfit as
-    /// [`Session::outfit_order`] does, on the flight's chance, giving the
-    /// whole run and its alert; a session that failed has no outfitter,
-    /// refused at the first pass with no alert. The radar is redrawn after
-    /// it (`FlightView::retake_radar`).
-    pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
-        let run = self.run_outfit_order(order, count);
-        self.retake_radar();
-        run
-    }
-
-    /// [`FlightView::outfit_order`]'s run.
-    fn run_outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
-        match &mut self.session {
-            Ok(session) => session.outfit_order(order, count, &mut self.chance),
-            Err(_) => OutfitRun {
-                run: OrderRun {
-                    done: 0,
-                    stopped: Some(Stopped {
-                        pass: 0,
-                        refusal: OutfitRefusal::NoOutfitter,
-                    }),
-                },
-                alert: None,
-                after: Reselection::Kept,
-            },
-        }
-    }
-
     /// Recharges as [`Session::recharge`] does; a session that failed
     /// sells no fuel. A recharge redraws the fuel gauge alone, as the
     /// original's marks only fuel and cargo (`_statusRedraw[4]` @0x5fdf6)
@@ -3715,7 +3764,11 @@ impl<C> FlightView<C> {
     /// Accepts `mission` as [`Session::accept_mission`] does, on the
     /// flight's chance: the slot it went into. The HUD is redrawn, as the
     /// original's mission dialog does on closing
-    /// ([`FlightView::redraw_status`]).
+    /// ([`FlightView::redraw_status`]): every close of `_DoMissionDialog`
+    /// that disposes the dialog, an accept with no text included, ends in
+    /// `_RefreshSAT` (@0xa40c8-0xa40d7), which redraws the whole bar. The
+    /// port's nav and cargo `_DrawStatus` after it (@0x6003a-0x60046) adds
+    /// nothing, so ours matches.
     ///
     /// # Errors
     ///
@@ -10619,6 +10672,128 @@ mod tests {
         view.buy_ship(ShipId(129), "Kestrel").expect("bought");
         assert_eq!(bar_shown(&view), Some(705), "ïntf 129");
         assert_eq!(view.reserves_shown().fuel.max, 350.0, "at once");
+    }
+
+    // An outfitter order whose script changes the ship's `ïntf`.
+
+    /// [`outfitting`], where ship 129 is under gövt 150, whose
+    /// `Interface` is `interface` ([`governed`]), and the fuel tank's
+    /// `OnPurchase` is `on_purchase` and its `OnSell` `on_sell`.
+    fn upgrading(interface: i16, on_purchase: &str, on_sell: &str) -> FakeCatalog {
+        let mut catalog = governed(outfitting(), 129, interface);
+        catalog.outfits[0].on_purchase = nova_sim::Script::parse(on_purchase);
+        catalog.outfits[0].on_sell = nova_sim::Script::parse(on_sell);
+        catalog
+    }
+
+    /// Holds a stale snapshot of each of the status bar's parts: no
+    /// gauges, nav naming "Stale", a target panel for "Stale", and a
+    /// radar with the player off its centre.
+    fn stale_bar(view: &mut View) {
+        view.reserves_scene = Some(Reserves::default());
+        view.nav_scene = Some((
+            view.nav_mode(),
+            NavDisplay::Stellar(Some("Stale".to_owned())),
+        ));
+        view.target_scene = Some((
+            None,
+            Some(TargetPanel {
+                name: "Stale".to_owned(),
+                subtitle: String::new(),
+                picture: None,
+                status: nova_sim::TargetStatus::Hidden,
+                tag: None,
+            }),
+        ));
+        view.radar_scene = Some(RadarScene {
+            player: at(-1.0, -1.0),
+            ..RadarScene::default()
+        });
+        assert_eq!(retaken(view), [false; 4], "stale");
+    }
+
+    /// Which of the bar's parts show as they are now: the gauges, the
+    /// nav area, the target panel and the radar.
+    fn retaken(view: &View) -> [bool; 4] {
+        [
+            view.reserves_shown() == view.reserves(),
+            view.nav_shown() == view.nav_now(),
+            *view.target_shown() == view.target_now(),
+            view.radar_scene == Some(view.radar_now()),
+        ]
+    }
+
+    /// The whole bar redrawn, or the radar alone.
+    const WHOLE_BAR: [bool; 4] = [true; 4];
+    const RADAR_ALONE: [bool; 4] = [false, false, false, true];
+
+    #[test]
+    fn an_outfit_bought_that_changes_the_intf_redraws_the_whole_bar_at_once() {
+        for (interface, redrawn) in [(129, WHOLE_BAR), (128, RADAR_ALONE)] {
+            let mut view = FlightView::new(upgrading(interface, "H129", ""));
+            land_now(&mut view);
+            stale_bar(&mut view);
+            assert_eq!(view.outfit(BUY_TANK), Ok(()));
+            assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
+            assert_eq!(retaken(&view), redrawn, "ïntf {interface}");
+        }
+    }
+
+    #[test]
+    fn an_outfit_sold_that_changes_the_intf_redraws_the_whole_bar_at_once() {
+        let sell = OutfitOrder {
+            direction: Direction::Sell,
+            ..BUY_TANK
+        };
+        for (interface, redrawn) in [(129, WHOLE_BAR), (128, RADAR_ALONE)] {
+            let mut view = FlightView::new(upgrading(interface, "", "H129"));
+            land_now(&mut view);
+            assert_eq!(view.outfit(BUY_TANK), Ok(()));
+            stale_bar(&mut view);
+            assert_eq!(view.outfit(sell), Ok(()));
+            assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
+            assert_eq!(retaken(&view), redrawn, "ïntf {interface}");
+        }
+    }
+
+    #[test]
+    fn every_outfitter_order_redraws_the_whole_bar_on_an_intf_change_and_a_refusal_the_radar() {
+        type Order = fn(&mut View) -> bool;
+        let orders: [(&str, Order); 3] = [
+            ("outfit", |view| view.outfit(BUY_TANK).is_ok()),
+            ("outfit_counted", |view| {
+                view.outfit_counted(BUY_TANK, 1) == Ok(1)
+            }),
+            ("outfit_order", |view| {
+                view.outfit_order(BUY_TANK, 1).run.done == 1
+            }),
+        ];
+        for (name, order) in orders {
+            let mut view = FlightView::new(upgrading(129, "H129", ""));
+            land_now(&mut view);
+            stale_bar(&mut view);
+            assert!(order(&mut view), "{name} went through");
+            assert_eq!(retaken(&view), WHOLE_BAR, "{name}");
+            let mut view = FlightView::new(upgrading(129, "H129", ""));
+            land_now(&mut view);
+            let mut desk = view.pilot_desk().expect("flying");
+            desk.edit(PilotEdit::Credits(0)).expect("set");
+            stale_bar(&mut view);
+            assert!(!order(&mut view), "{name} refused");
+            assert_eq!(view.session().map(Session::ship), Ok(ShipId(128)));
+            assert_eq!(retaken(&view), RADAR_ALONE, "{name} refused");
+        }
+    }
+
+    #[test]
+    fn a_ship_bought_redraws_the_whole_bar_on_an_intf_change_and_all_but_the_gauges_otherwise() {
+        for (interface, redrawn) in [(129, WHOLE_BAR), (128, [false, true, true, true])] {
+            let mut view = FlightView::new(governed(shipbuying(), 129, interface));
+            land_now(&mut view);
+            stale_bar(&mut view);
+            view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+            assert_eq!(retaken(&view), redrawn, "ïntf {interface}");
+        }
     }
 
     #[test]

@@ -57,6 +57,39 @@
 //! in the blank radar's centre arrow, which no landable stock stellar is
 //! far enough out to draw.
 //!
+//! In port ours keeps no Mac-tick clock, so the port's `_DrawStatus`
+//! calls run none of these timers. Each is recorded here, not built:
+//!
+//! - **The 15-Mac-tick radar gate** (@0x4c911-0x4c923). Recorded, not
+//!   built, by operator decision on 2026-10-15. While landed the radar is
+//!   blank: the player's pixel, IFF's black fill and cyan player, and the
+//!   centre arrow. So a radar redraw the gate skips can hide only an IFF
+//!   change, when an outfitter order that buys or sells IFF comes within
+//!   15 Mac ticks (0.25 s) of the last radar redraw, as selling then
+//!   buying IFF with the outfitter's B and S keys can. Ours retakes the
+//!   radar at every port redraw. A refused order runs no timer in the
+//!   original (@0x5c09f-0x5c0ba, @0x5c5d5-0x5c5dd), and one `_DrawStatus`
+//!   follows a whole multi-item buy (@0x5c5a1).
+//! - **Its blink flip** (@0x4c93d-0x4c94f), in the same branch, shows
+//!   only in the blank radar's centre arrow, as above. Ours keeps
+//!   landing's blink.
+//! - **`% 30` nav** (@0x4c88a-0x4c8b6) changes nothing while docked in
+//!   ours. The nav area can't change without a change of nav mode or
+//!   selection, which ours shows at once (`FlightView::nav_shown`), so the
+//!   redraw would draw what is already shown.
+//! - **`% 45` target** (@0x4c8b9-0x4c8eb) is unreachable in port. It needs
+//!   a target, and landing clears it (`_PlayerLandOnStellar` @0x6332f), as
+//!   a ship purchase does (@0x5f014). Nothing sets one while docked, and
+//!   ours' `Session::dock` clears it too.
+//! - **The port points where the timer runs with no hook in ours**: the
+//!   port opening's `_DrawStatus` (@0x5fc5c), a recharge's (@0x5fe05;
+//!   ours redraws only the fuel gauge, `FlightView::recharge`), a trade's
+//!   (@0x5e33a, @0x5e59e), the mission computer's close (@0x600a6) and
+//!   `_DoPlayerInfoDialog`'s `_RefreshSAT` (@0x5a725). None of these can
+//!   change the blank radar, and no outfitter order can follow one within
+//!   15 Mac ticks, as the outfitter has to be opened first. Their blink
+//!   flips show only in the arrow.
+//!
 //! The reading of
 //! [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence) says whether the
 //! HUD's content waits for these refreshes (the engine's) or follows

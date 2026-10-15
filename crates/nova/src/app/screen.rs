@@ -8223,4 +8223,49 @@ pub(super) mod tests {
         let width = fuel_width(&drawn(&screen)).expect("some fuel");
         assert!(width < 149.0, "redrawn as it closes: {width}");
     }
+
+    use nova_data::records::govt::Govt;
+
+    const UPGRADE: OutfitId = OutfitId(134);
+
+    /// [`barred_outfitting_data`], where the outfitter also sells `oütf`
+    /// 134, an upgrade of no mod for 100 credits whose `OnPurchase` is
+    /// `H129`, and ship 129, carrying 300 fuel, is under gövt 128, whose
+    /// `Interface` is `ïntf` 129: [`bar_interface`] again.
+    fn barred_upgrading_data() -> Rc<GameData> {
+        let mut upgrade = booster_record(b"H129");
+        put_i16s(&mut upgrade, 0x02, &[0]);
+        put_i16s(&mut upgrade, 0x06, &[0, 0]);
+        upgrade[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+        let mut govt = vec![0; Govt::SIZE.expect("fixed")];
+        put_i16s(&mut govt, 0xAC, &[129]);
+        let fork = barred(game_data_fork(true, true, false, 100, b"", b"", None))
+            .resource(Outfit::TYPE, 134, Some(b"Upgrade"), &upgrade)
+            .resource(Govt::TYPE, 128, Some(b"Rebels"), &govt)
+            .resource(Interface::TYPE, 129, None, &bar_interface());
+        let mut built = fork.build();
+        let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
+        built.put_u16(first + 0x0A, 300);
+        let second = built.layout.data_entry(Ship::TYPE, 129) + 4;
+        built.put_u16(second + 0x0A, 300);
+        built.put_u16(second + 0x48, 128);
+        loaded_bytes(built.bytes)
+    }
+
+    #[test]
+    fn an_upgrade_bought_in_port_onto_another_bar_redraws_its_fuel_gauge_at_once() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, barred_upgrading_data());
+        edit(
+            &mut screen,
+            PilotEdit::Reserve(nova_sim::Reserve::Fuel, 150.0),
+        );
+        assert_eq!(fuel_width(&drawn(&screen)), Some(149.0), "landing's");
+        click_port_item(&mut screen, 8);
+        click_for_outfit(&mut screen, UPGRADE, OUTFIT_BUY_ITEM);
+        assert_eq!(pilot(&screen).ship(), ShipId(129), "upgraded");
+        assert!(spaceport(&screen).open_outfitter().is_some(), "still open");
+        let width = fuel_width(&drawn(&screen)).expect("some fuel");
+        assert!(width < 149.0, "redrawn at once: {width}");
+    }
 }
