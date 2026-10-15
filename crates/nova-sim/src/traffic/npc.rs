@@ -527,10 +527,96 @@ impl Npc {
     ///
     /// Every modelled caller of `_IsThreatToPlayer` asks this, and so do
     /// the readers of `_ExtendedIsThreatToPlayer` @0x81b70, whose target
-    /// test has the same led clause (@0x81c2e-0x81c4a).
+    /// test has the same led clause (@0x81c2e-0x81c4a), but for the attack
+    /// quote's gate, which asks the whole of it
+    /// ([`Npc::threatens_player_extended`]).
     #[must_use]
     pub fn threatens_player_among(&self, npcs: &[Npc]) -> bool {
         self.threatens_player_or_led(|id| npcs.iter().any(|n| n.id == id && n.escorts_player()))
+    }
+
+    /// Whether it threatens the player as `_ExtendedIsThreatToPlayer`
+    /// (@0x81b70-0x81de5) asks it, reading which ships the player and it
+    /// lead from `npcs`, and `seen` saying whether the player sees it
+    /// (`_ShipVisibleToShip(ship, player)` @0x81bc6, which only the
+    /// session or its [`World`](crate::traffic::World) knows: a cloaked
+    /// ship is seen only by a player scanning for it in range, and a ship
+    /// waiting in its gate never, see [`cloak::visible`](crate::cloak::visible)).
+    ///
+    /// It is no threat when it is not intact (inactive, @0x81b82, or
+    /// `_IsDisabled`, @0x81b92), when the player leads it (+0x9a == 0,
+    /// @0x81b9f), when it has no target (+0x70 == -1, @0x81bad), or when it
+    /// is unseen. Otherwise it is a threat for any of:
+    ///
+    /// - **A stellar defender** (+0x8c != -1, @0x81bd3): not modelled, as
+    ///   the engine has no defence ships; rdm:task/planet-domination owns
+    ///   them.
+    /// - **The target clause**: it [threatens the player or a ship the
+    ///   player leads](Npc::threatens_player_or_led) by its goal's quarry,
+    ///   or its target ([`Npc::target`], the hit's, which
+    ///   `_DamageShip` sets before `_AIMakeShipAttackPlayer`, @0x3bcf6) is
+    ///   the player (@0x81be1) or a ship the player leads (@0x81c2e-0x81c4a)
+    ///   while its wait is not running ([`Npc::wait_running`], +0x4c,
+    ///   @0x81bed, @0x81c4f) and its goal is none the original leaves out
+    ///   ([`Goal::spares_player_threat`], @0x81bf3-0x81c28,
+    ///   @0x81c55-0x81c8a). @0x81c90-0x81cd7 repeats the led-target test,
+    ///   which changes nothing.
+    /// - **The escort clause** (@0x81cdd-0x81dcc): some ship in `npcs` it
+    ///   leads (+0x9a is its +0x86), whose wait is not running, intact,
+    ///   targets (or fights) the player (@0x81d33) or a ship the player
+    ///   leads (@0x81dae-0x81dbe). The goal read there is this ship's
+    ///   (`%esi` @0x81d38, @0x81d77), not the escort's, and this ship's own
+    ///   wait is not read.
+    ///
+    /// A ship gliding in ([`Mode::JumpingIn`]) or bursting out of its gate
+    /// ([`Mode::LeavingGate`]) runs no wait (`_HyperShipSpawn` sets only
+    /// +0x50, @0x42b16), so it is a threat once it targets the player. At
+    /// the burst's tick 0 the original's ship still has goal 0x15 and is
+    /// unseen; the engine's [`Npc::emerging`] treats that tick as out of
+    /// the gate, as every reader of the player's sight does.
+    ///
+    /// This is the predicate for `_AIMakeShipAttackPlayer`'s quote gate
+    /// ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote));
+    /// the hail's and the ranks' readers still ask
+    /// [`Npc::threatens_player_among`].
+    #[must_use]
+    pub fn threatens_player_extended(&self, npcs: &[Npc], seen: bool) -> bool {
+        let led = |id: NpcId| npcs.iter().any(|n| n.id == id && n.escorts_player());
+        let at_player = |ship: Option<ShipRef>| match ship {
+            Some(ShipRef::Player) => true,
+            Some(ShipRef::Npc(id)) => led(id),
+            None => false,
+        };
+        let has_target = self.target.is_some() || self.goal.quarry().is_some();
+        if !seen || self.condition != Condition::Intact || self.escorts_player() || !has_target {
+            return false;
+        }
+        let in_threat_goal = !self.goal.spares_player_threat();
+        let by_target = self.threatens_player_or_led(led)
+            || (!self.wait_running() && in_threat_goal && at_player(self.target));
+        let by_escort = in_threat_goal
+            && npcs.iter().any(|escort| {
+                escort.leader == Some(self.id)
+                    && escort.condition == Condition::Intact
+                    && !escort.wait_running()
+                    && (at_player(escort.target) || at_player(escort.goal.quarry()))
+            });
+        by_target || by_escort
+    }
+
+    /// Whether its AI wait (+0x4c) is running: waiting in its gate or
+    /// held at it, holding its course after its glide or burst, or
+    /// entering a gate to leave (see each [`Mode`]). Gliding in, bursting
+    /// out and flying, it has none.
+    #[must_use]
+    pub fn wait_running(&self) -> bool {
+        matches!(
+            self.mode,
+            Mode::Emerging { .. }
+                | Mode::HeldAtGate { .. }
+                | Mode::Coasting { .. }
+                | Mode::EnteringGate { .. }
+        )
     }
 
     /// Whether it is waiting at the gate it comes out of
@@ -1273,5 +1359,225 @@ mod tests {
         assert!(AiType::BraveTrader.trades());
         assert!(!AiType::Warship.trades());
         assert!(!AiType::Interceptor.trades());
+    }
+
+    // `_ExtendedIsThreatToPlayer` (@0x81b70-0x81de5).
+
+    /// NPC `id` at rest, flying, intact and idle.
+    fn plain(id: u32) -> Npc {
+        crate::testkit::npc(id, ShipStats::default())
+    }
+
+    /// The player's hired escort, NPC `id`.
+    fn hired(id: u32) -> Npc {
+        Npc {
+            escort: Some(EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            }),
+            ..plain(id)
+        }
+    }
+
+    #[test]
+    fn a_flying_ship_targeting_the_player_threatens_player_extended_but_one_held_or_coasting_never_does()
+     {
+        let attacking = Npc {
+            goal: Goal::Attack(ShipRef::Player),
+            ..plain(1)
+        };
+        assert!(
+            attacking.threatens_player_extended(&[], true),
+            "goal 4, target 0"
+        );
+        let targeting = Npc {
+            target: Some(ShipRef::Player),
+            ..plain(1)
+        };
+        assert!(
+            targeting.threatens_player_extended(&[], true),
+            "the hit's target, set before `_AIMakeShipAttackPlayer`"
+        );
+        for mode in [
+            Mode::HeldAtGate { ticks_left: 20 },
+            Mode::Coasting { ticks_left: 30 },
+            Mode::Emerging { ticks_left: 60 },
+        ] {
+            for npc in [&attacking, &targeting] {
+                let waiting = Npc {
+                    mode,
+                    ..npc.clone()
+                };
+                assert!(!waiting.threatens_player_extended(&[], true), "{mode:?}");
+            }
+        }
+        for mode in [Mode::JumpingIn { tick: 3 }, Mode::LeavingGate { tick: 3 }] {
+            let coming = Npc {
+                mode,
+                ..targeting.clone()
+            };
+            assert!(
+                coming.threatens_player_extended(&[], true),
+                "{mode:?}: no wait"
+            );
+        }
+        let disabled = Npc {
+            condition: Condition::Disabled,
+            ..targeting.clone()
+        };
+        assert!(!disabled.threatens_player_extended(&[], true));
+        assert!(!plain(1).threatens_player_extended(&[], true));
+        let elsewhere = Npc {
+            target: Some(ShipRef::Npc(NpcId(5))),
+            ..plain(1)
+        };
+        assert!(!elsewhere.threatens_player_extended(&[], true));
+    }
+
+    #[test]
+    fn threatens_player_extended_reads_sight_the_wait_and_the_goal() {
+        let p = ShipRef::Player;
+        let targeting = Npc {
+            target: Some(p),
+            ..plain(1)
+        };
+        assert!(targeting.threatens_player_extended(&[], true));
+        assert!(
+            !targeting.threatens_player_extended(&[], false),
+            "unseen (@0x81bc6)"
+        );
+        let players_own = Npc {
+            target: Some(p),
+            ..hired(1)
+        };
+        assert!(
+            !players_own.threatens_player_extended(&[], true),
+            "led by the player (@0x81b9f)"
+        );
+        for mode in [
+            Mode::Emerging { ticks_left: 60 },
+            Mode::HeldAtGate { ticks_left: 20 },
+            Mode::Coasting { ticks_left: 30 },
+            Mode::EnteringGate {
+                gate: StellarId(300),
+                ticks_left: 4,
+            },
+        ] {
+            let waiting = Npc {
+                mode,
+                ..targeting.clone()
+            };
+            assert!(
+                !waiting.threatens_player_extended(&[], true),
+                "{mode:?}: its wait runs (@0x81bed)"
+            );
+        }
+        for goal in [
+            Goal::Inspect(p),
+            Goal::Assist(crate::ai::Help::Refuel),
+            Goal::Assist(crate::ai::Help::Repair),
+            Goal::Dock(ShipRef::Npc(NpcId(5))),
+            Goal::Follow(NpcId(5)),
+            Goal::Formation { guard: None },
+            Goal::Hold,
+        ] {
+            let spared = Npc {
+                goal,
+                ..targeting.clone()
+            };
+            assert!(
+                !spared.threatens_player_extended(&[], true),
+                "{goal:?} (@0x81bf3-0x81c28)"
+            );
+        }
+        let escort = hired(7);
+        let at_escort = Npc {
+            target: Some(ShipRef::Npc(NpcId(7))),
+            ..plain(1)
+        };
+        assert!(
+            at_escort.threatens_player_extended(&[at_escort.clone(), escort], true),
+            "a ship the player leads (@0x81c2e-0x81c4a)"
+        );
+        assert!(
+            !at_escort.threatens_player_extended(std::slice::from_ref(&at_escort), true),
+            "a ship nobody leads"
+        );
+    }
+
+    #[test]
+    fn threatens_player_extended_counts_a_lead_whose_escort_fights_the_player() {
+        // The escort clause (@0x81cdd-0x81dcc): the lead targets an NPC.
+        let p = ShipRef::Player;
+        let lead = Npc {
+            target: Some(ShipRef::Npc(NpcId(9))),
+            ..plain(1)
+        };
+        let wing = Npc {
+            leader: Some(NpcId(1)),
+            target: Some(p),
+            ..plain(2)
+        };
+        let threat = |lead: &Npc, wing: &Npc| {
+            lead.threatens_player_extended(&[lead.clone(), wing.clone()], true)
+        };
+        assert!(threat(&lead, &wing), "its escort targets the player");
+        assert!(
+            threat(
+                &lead,
+                &Npc {
+                    target: None,
+                    goal: Goal::Attack(p),
+                    ..wing.clone()
+                }
+            ),
+            "its escort attacks the player"
+        );
+        let at_led = Npc {
+            target: Some(ShipRef::Npc(NpcId(7))),
+            ..wing.clone()
+        };
+        assert!(
+            lead.threatens_player_extended(&[lead.clone(), at_led.clone(), hired(7)], true),
+            "its escort targets a ship the player leads"
+        );
+        assert!(
+            !threat(&lead, &at_led),
+            "its escort targets a ship nobody leads"
+        );
+        assert!(
+            threat(
+                &Npc {
+                    mode: Mode::Coasting { ticks_left: 30 },
+                    ..lead.clone()
+                },
+                &wing
+            ),
+            "the lead's own wait is not read"
+        );
+        let waiting_wing = Npc {
+            mode: Mode::Coasting { ticks_left: 30 },
+            ..wing.clone()
+        };
+        assert!(!threat(&lead, &waiting_wing), "its escort's wait runs");
+        let downed_wing = Npc {
+            condition: Condition::Disabled,
+            ..wing.clone()
+        };
+        assert!(!threat(&lead, &downed_wing), "its escort is disabled");
+        let inspecting = Npc {
+            goal: Goal::Inspect(ShipRef::Npc(NpcId(9))),
+            ..lead.clone()
+        };
+        assert!(
+            !threat(&inspecting, &wing),
+            "the lead's goal is read (@0x81d38)"
+        );
+        assert!(!threat(&plain(1), &wing), "the lead has no target");
+        let stranger = Npc {
+            leader: Some(NpcId(3)),
+            ..wing
+        };
+        assert!(!threat(&lead, &stranger), "another's escort");
     }
 }

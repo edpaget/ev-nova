@@ -53,7 +53,8 @@
 //!    provocation, and any goal it takes at once; one hit in its gate has
 //!    its wait cut, and the player's hit there holds it at the gate (see
 //!    the traffic's `react`), and the player's hit on a person whose wait
-//!    runs queues its hail quote ([`Traffic::take_attack_quotes`]). A
+//!    runs, or that the player can't see, queues its hail quote
+//!    ([`Traffic::take_attack_quotes`], [`Traffic::turn_with_quote`]). A
 //!    flight answers the fight's strikes in the hit's own step instead
 //!    ([`Traffic::answer`]), so this step answers only those left;
 //! 3. an NPC not intact loses its provocation;
@@ -62,7 +63,9 @@
 //!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
 //!    gate to leave, one that is not intact, or one assisting the player
 //!    while
-//!    unprovoked (until it is done, or provoked): first every goal, then, each NPC
+//!    unprovoked (until it is done, or provoked): first every goal (each
+//!    decision that turns on the player asking its person's quote gate,
+//!    [`Traffic::turn_with_quote`], before any goal is taken), then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
 //!    its provocation, and one that stops inspecting a ship remembers it,
@@ -126,7 +129,7 @@ use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::mission::ships::ShipBehav;
-use crate::person::{self, PersonWorld, derelict_armor};
+use crate::person::{self, GateView, PersonWorld, derelict_armor};
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
 use npc::{AiType, Mode, Npc, NpcId, NpcPerson};
@@ -216,6 +219,11 @@ pub struct World<'a> {
     /// that have arrived ([`Npc::arrived`]) by the other reading
     /// ([`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits)).
     pub arrival_hits: RuleSource,
+    /// Whether the player scans for cloaked ships on screen
+    /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
+    /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
+    /// ship (see [`cloak::visible`]).
+    pub cloak_scanner: bool,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -225,7 +233,7 @@ impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, no damage aimed, no gate's
-    /// width known, and the engine's [`SPAWN_RESERVE`].
+    /// width known, the engine's [`SPAWN_RESERVE`], and no cloak scanner.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -242,6 +250,7 @@ impl<'a> World<'a> {
             type_widths: &NO_TYPE_WIDTHS,
             spawn_reserve: SPAWN_RESERVE,
             arrival_hits: RuleSource::Engine,
+            cloak_scanner: false,
         }
     }
 
@@ -252,6 +261,24 @@ impl<'a> World<'a> {
         Stellars {
             sites: self.sites,
             govts: self.govts,
+        }
+    }
+
+    /// What `_AIMakeShipAttackPlayer`'s quote gate reads of the player
+    /// here: whether it is dying or destroyed, and its sight from where it
+    /// is (the centre with no player) with its [`World::cloak_scanner`].
+    /// The player escorts no NPC, so it is never a cloaked escort.
+    #[must_use]
+    pub fn gate_view(&self) -> GateView {
+        GateView {
+            player_dying: player_dying(self),
+            observer: cloak::Observer {
+                at: self
+                    .player
+                    .map_or(Vec2::ZERO, |player| player.state.position),
+                scanner: self.cloak_scanner,
+                cloaked_escort: false,
+            },
         }
     }
 
@@ -579,9 +606,9 @@ impl Traffic {
                     .map(|decision| (npc.id, decision.dropped_target))
             })
             .collect();
-        let player_dying = player_dying(&world);
+        let view = world.gate_view();
         for (id, dropped_target) in turning {
-            self.ask_quote_gate(id, dropped_target, player_dying);
+            self.ask_quote_gate(id, dropped_target, view);
         }
         let goals = decisions
             .into_iter()
@@ -932,8 +959,17 @@ impl Traffic {
     /// says its hail quote at once ([`Traffic::turn_with_quote`]), the
     /// strikes taken in turn, as `_DamageShip` calls
     /// `_AIMakeShipAttackPlayer` for each (@0x3bcf6, @0x3be69). A flying
-    /// ship then already targets the player, so only a ship whose wait
-    /// runs says it, once a hit.
+    /// ship then already targets the player, a threat
+    /// ([`Npc::threatens_player_extended`]), so a ship whose wait runs, one
+    /// the player can't see (cloaked, with no scanner in range), or one in
+    /// a goal the threat's target clause leaves out (inspecting, docking,
+    /// following, holding or assisting) says it, once a hit; a ship whose
+    /// escort fights the player does not. A cloak that a hit uncloaks only
+    /// starts its fade down (the session's `cloak_hits`, see
+    /// [`cloak`]), and the ship stays cloaked until the fade passes 8, so
+    /// whether that
+    /// runs before or after the gate changes nothing it sees, as in the
+    /// original, whose decloak (@0x3bf1f) follows the reaction (@0x3be69).
     ///
     /// A flight answers the fight's strikes in the hit's own step
     /// ([`Traffic::answer`], from
@@ -964,7 +1000,7 @@ impl Traffic {
                     .collect()
             })
             .collect();
-        let player_dying = player_dying(world);
+        let view = world.gate_view();
         for (at, reactions) in reactions.into_iter().enumerate() {
             for (reaction, strike) in reactions.into_iter().zip(&strikes) {
                 let id = self.npcs[at].id;
@@ -978,7 +1014,7 @@ impl Traffic {
                     // it calls `_AIMakeShipAttackPlayer` (@0x3be69), whose
                     // gate reads the ship as this hit and those before it
                     // left it (@0x89c53).
-                    self.turn_with_quote(id, player_dying);
+                    self.turn_with_quote(id, view);
                 }
                 let npc = &mut self.npcs[at];
                 if on_itself {
@@ -1003,8 +1039,9 @@ impl Traffic {
     /// NPC `id` turns on the player: its person's hail quote is queued
     /// ([`Traffic::take_attack_quotes`]) when `_AIMakeShipAttackPlayer`'s
     /// gate lets it through (@0x89c50-0x89c9b, [`person::turns_with_quote`],
-    /// the player `player_dying` or not), as the NPCs are now: it did not
-    /// already threaten the player ([`person::already_threatens`]). The
+    /// the player dying or not as `view` says), as the NPCs are now: it did
+    /// not already threaten the player ([`Npc::threatens_player_extended`],
+    /// seen or not by `view`'s observer through [`cloak::visible`]). The
     /// gate is asked before the turn sets anything. An NPC not in the
     /// system queues nothing.
     ///
@@ -1034,14 +1071,14 @@ impl Traffic {
     ///   slot order, left it. The decision and the quote land in the same
     ///   tick and are drawn together, so this crosses no boundary the
     ///   player sees, and is not filed.
-    pub fn turn_with_quote(&mut self, id: NpcId, player_dying: bool) {
-        self.ask_quote_gate(id, false, player_dying);
+    pub fn turn_with_quote(&mut self, id: NpcId, view: GateView) {
+        self.ask_quote_gate(id, false, view);
     }
 
     /// [`Traffic::turn_with_quote`] for NPC `id`, its gate seeing it with
     /// no target and no goal when its think has `dropped_target` first
     /// ([`Decision::dropped_target`]).
-    fn ask_quote_gate(&mut self, id: NpcId, dropped_target: bool, player_dying: bool) {
+    fn ask_quote_gate(&mut self, id: NpcId, dropped_target: bool, view: GateView) {
         let Some(npc) = self.npcs.iter().find(|npc| npc.id == id) else {
             return;
         };
@@ -1056,8 +1093,9 @@ impl Traffic {
         } else {
             npc
         };
-        let threatened = person::already_threatens(npc, &self.npcs);
-        if person::turns_with_quote(npc, threatened, player_dying) {
+        let seen = cloak::visible(npc.cloak, npc.state.position, npc.emerging(), view.observer);
+        let threatened = npc.threatens_player_extended(&self.npcs, seen);
+        if person::turns_with_quote(npc, threatened, view.player_dying) {
             self.attack_quotes.push(id);
         }
     }
@@ -3174,6 +3212,107 @@ mod tests {
         let mut traffic = grudging(false);
         traffic.tick_in(&warship, world, &[], &mut Draws::of(&[0; 4]));
         assert_eq!(traffic.take_attack_quotes(), [], "no grudge: dropped");
+    }
+
+    /// The attack quotes queued once the player hits NPC 0 of `traffic`
+    /// in `world`, its answer taking the player as target and no goal.
+    fn quotes_on_the_hit(mut traffic: Traffic, world: &World) -> Vec<NpcId> {
+        traffic.tick_in(
+            &Fighting::deciding(Goal::Idle),
+            *world,
+            &[struck(0, 1.0)],
+            &mut Draws::of(&[]),
+        );
+        traffic.take_attack_quotes()
+    }
+
+    #[test]
+    fn a_cloaked_flying_person_the_player_hits_says_its_quote_on_the_hit() {
+        // `_ExtendedIsThreatToPlayer` asks `_ShipVisibleToShip(ship,
+        // player)` (@0x81bc6): a cloaked ship the player can't see is no
+        // threat, though it targets the player.
+        let cloaked = || {
+            let mut traffic = quoting_traffic(1);
+            traffic.npcs[0].cloak = Cloak {
+                fade: FADE_FULL,
+                direction: 0,
+            };
+            traffic
+        };
+        assert_eq!(quotes_on_the_hit(cloaked(), &World::new(&[])), [NpcId(0)]);
+        let scanning = |at: f32| World {
+            player: Some(player_at(0.0, at)),
+            cloak_scanner: true,
+            ..World::new(&[])
+        };
+        assert_eq!(
+            quotes_on_the_hit(cloaked(), &scanning(-200.0)),
+            [],
+            "scanned within 200"
+        );
+        assert_eq!(
+            quotes_on_the_hit(cloaked(), &scanning(-201.0)),
+            [NpcId(0)],
+            "scanned, out of range"
+        );
+        assert_eq!(
+            quotes_on_the_hit(quoting_traffic(1), &World::new(&[])),
+            [],
+            "uncloaked: seen"
+        );
+    }
+
+    #[test]
+    fn a_ship_gliding_in_or_bursting_out_says_no_quote_on_the_players_hit() {
+        // Neither runs a wait (`_HyperShipSpawn` sets only +0x50,
+        // @0x42b16), so the hit's target makes it a threat (@0x81bed).
+        for mode in [Mode::JumpingIn { tick: 3 }, Mode::LeavingGate { tick: 3 }] {
+            let mut traffic = quoting_traffic(1);
+            traffic.npcs[0].mode = mode;
+            assert_eq!(quotes_on_the_hit(traffic, &World::new(&[])), [], "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_flying_ship_inspecting_docking_or_following_says_its_quote_on_the_players_hit() {
+        // Goals 7, 5 and 0xa are left out of the target clause
+        // (@0x81bf3-0x81c28).
+        for goal in [
+            Goal::Inspect(ShipRef::Player),
+            Goal::Dock(ShipRef::Npc(NpcId(1))),
+            Goal::Follow(NpcId(1)),
+            Goal::Hold,
+            Goal::Assist(Help::Refuel),
+        ] {
+            let mut traffic = quoting_traffic(2);
+            traffic.npcs[0].goal = goal;
+            assert_eq!(
+                quotes_on_the_hit(traffic, &World::new(&[])),
+                [NpcId(0)],
+                "{goal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lead_whose_escort_attacks_the_player_says_no_quote_on_the_hit() {
+        // The escort clause (@0x81cdd-0x81dcc) reads not the lead's wait.
+        let led = |escort_goal| {
+            let mut traffic = quoting_traffic(2);
+            traffic.npcs[0].mode = Mode::Coasting { ticks_left: 30 };
+            traffic.npcs[1].leader = Some(NpcId(0));
+            traffic.npcs[1].goal = escort_goal;
+            traffic
+        };
+        assert_eq!(
+            quotes_on_the_hit(led(Goal::Attack(ShipRef::Player)), &World::new(&[])),
+            []
+        );
+        assert_eq!(
+            quotes_on_the_hit(led(Goal::Idle), &World::new(&[])),
+            [NpcId(0)],
+            "its escort idle"
+        );
     }
 
     #[test]

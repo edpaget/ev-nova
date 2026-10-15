@@ -2058,6 +2058,7 @@ impl Session {
             type_widths: &type_widths,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
+            cloak_scanner: self.scanner().on_screen,
         };
         f(&mut self.traffic, world);
     }
@@ -2121,6 +2122,7 @@ impl Session {
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
+            cloak_scanner: self.scanner().on_screen,
         }
     }
 
@@ -14628,6 +14630,84 @@ pub(super) mod tests {
             session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
             assert_eq!(quotes_said(&mut session, &catalog), (vec![], false));
         }
+    }
+
+    #[test]
+    fn the_players_hit_on_a_cloaked_person_says_its_quote_at_once_and_beeps() {
+        // `_ExtendedIsThreatToPlayer` asks `_ShipVisibleToShip(ship,
+        // player)` (@0x81bc6): a cloaked ship the player can't see is no
+        // threat as `_AIMakeShipAttackPlayer` asks (@0x89c53), so it says
+        // its quote at once.
+        let catalog = quoting_armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        make_quoting_warship(&mut session);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.take_sounds();
+        shoot_until_hit(&mut session);
+        session.hold_trigger(Trigger::default());
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert_eq!(
+            quotes_said(&mut session, &catalog),
+            (vec!["Prepare to die!".to_owned()], true)
+        );
+        let person = session.npcs()[0].person.expect("a person");
+        assert!(person.quoted);
+        assert_eq!(
+            person.quoted_at, None,
+            "the attack's quote, not `_HandleShip`'s"
+        );
+        // A shot still in flight that hits it while it is unseen says it
+        // again: `_DamageShip` asks the gate for each hit (@0x3be69), and
+        // the gate reads no "quoted" (+0xbc). Nothing else does.
+        let mut again = 0;
+        for tick in 0..60 {
+            let shield = session.npcs()[0].reserves.shield.now;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let hit = session.npcs()[0].reserves.shield.now < shield;
+            let unseen = session.npcs()[0].cloak.is_cloaked();
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            let said = quotes_said(&mut session, &catalog);
+            if hit && unseen {
+                again += 1;
+                assert_eq!(said, (vec!["Prepare to die!".to_owned()], true), "{tick}");
+            } else {
+                assert_eq!(said, (vec![], false), "{tick}");
+            }
+        }
+        assert!(again > 0, "a later hit, still unseen");
+        // Scanned on screen within 200, it is seen: a threat, whose quote
+        // is `_HandleShip`'s.
+        let catalog = FakePilotCatalog {
+            strings: vec![(7101, vec!["Prepare to die!".to_owned()])],
+            ..scanning(crate::cloak::SCAN_SCREEN)
+        };
+        let mut session = holding_260(&catalog);
+        make_quoting_warship(&mut session);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        shoot_until_hit(&mut session);
+        session.hold_trigger(Trigger::default());
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert!(
+            session.traffic.take_attack_quotes().is_empty(),
+            "no attack quote queued"
+        );
+    }
+
+    #[test]
+    fn the_worlds_cloak_scanner_is_the_players_on_screen_scanner() {
+        for (scan, on_screen) in [
+            (crate::cloak::SCAN_SCREEN, true),
+            (crate::cloak::SCAN_RADAR, false),
+        ] {
+            let catalog = scanning(scan);
+            let mut session = holding_260(&catalog);
+            assert_eq!(session.world().cloak_scanner, on_screen, "{scan:#x}");
+            let mut stepped = None;
+            session.step_traffic(|_, world| stepped = Some(world.cloak_scanner));
+            assert_eq!(stepped, Some(on_screen), "{scan:#x}: in flight");
+        }
+        let catalog = armed();
+        assert!(!facing_an_npc(&catalog, 180).world().cloak_scanner);
     }
 
     /// `catalog`'s session facing a warship waiting 60 ticks in a gate 100

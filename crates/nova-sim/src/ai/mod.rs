@@ -153,6 +153,35 @@ impl Goal {
     pub fn fights(self) -> bool {
         self.quarry().is_some()
     }
+
+    /// Whether a ship in this goal is no threat to the player by its
+    /// target, as `_ExtendedIsThreatToPlayer` leaves out the original's
+    /// goals 7, 9, 0xf, 0xa, 0xb, 5, 0xc and 0x12 (@0x81bf3-0x81c28, again
+    /// @0x81c55-0x81c8a; see
+    /// [`Npc::threatens_player_extended`]). The engine's goals for them:
+    ///
+    /// | Original goal | Set at | Engine goal |
+    /// |---|---|---|
+    /// | 7 (inspect) | `_InterceptorAI` @0x8ca2f, @0x8ce42, @0x8d431 | [`Goal::Inspect`] |
+    /// | 9 (refuel) | `_AIMakeShipRefuelPlayer` @0x82dd7 | [`Goal::Assist`] ([`Help::Refuel`]) |
+    /// | 0xf (repair) | `_AIMakeShipRepairPlayer` @0x82e0e | [`Goal::Assist`] ([`Help::Repair`]) |
+    /// | 5 (fighter return) | `_AIMakeFighterReturn` @0x82e3c, `_EscortAI` @0x83e89, `_HighLevelAIHandler` @0x8d608 | [`Goal::Dock`] |
+    /// | 0xa (escort fly in form) | `_AIMakeEscortFlyInForm` @0x89bb2, `_EscortAI` @0x83da3, @0x83e40, @0x83f00 | [`Goal::Follow`], [`Goal::Formation`], [`Goal::Hold`] |
+    /// | 0xb (jump with parent) | `_AIMakeShipJumpWithParent` @0x82bc7 | none: an escort follows its lead out |
+    /// | 0xc (a `ShipBehav` 1 mission ship with no target) | @0x89fe0, `_LowLevelAIHandler` @0x886f9 | none |
+    /// | 0x12 | `_DeathStarAI` @0x8c26f | none |
+    #[must_use]
+    pub fn spares_player_threat(self) -> bool {
+        matches!(
+            self,
+            Self::Inspect(_)
+                | Self::Assist(_)
+                | Self::Dock(_)
+                | Self::Follow(_)
+                | Self::Formation { .. }
+                | Self::Hold
+        )
+    }
 }
 
 /// The help an NPC flies over to give the player, once asked (see

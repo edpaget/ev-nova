@@ -34,11 +34,18 @@
 //! saved, and "once" is once for its stay.
 //!
 //! A person of `Flags` 0x0010 turning on the player as
-//! `_AIMakeShipAttackPlayer` has it, through the player's hit on a ship
-//! whose wait runs or a declined bribe, says its quote at the start of
-//! the next quote tick, with no draw and none of the filters above
-//! ([`Traffic::take_attack_quotes`](crate::traffic::Traffic::take_attack_quotes),
-//! [`turns_with_quote`](crate::person::turns_with_quote)): it is quoted,
+//! `_AIMakeShipAttackPlayer` has it, while it is no threat to the player
+//! yet (`_ExtendedIsThreatToPlayer`,
+//! [`Npc::threatens_player_extended`](crate::traffic::npc::Npc::threatens_player_extended)),
+//! says its quote at the start of the next quote tick, with no draw and
+//! none of the filters above. It turns so through the player's hit on a
+//! ship whose wait runs, that the player can't see or that is in a goal
+//! the threat leaves out; a declined bribe; or a warship's or
+//! interceptor's decision (its government's 0x0004 word, a grudge, a
+//! xenophobe's or the hunt's pick of the player: see
+//! [`Decision::turns_on_player`](crate::ai::Decision::turns_on_player);
+//! [`Traffic::take_attack_quotes`](crate::traffic::Traffic::take_attack_quotes),
+//! [`turns_with_quote`](crate::person::turns_with_quote)). It is quoted,
 //! and no random quote is said while it shows, but the time of its last
 //! quote is kept as it was. Every hail quote said beeps
 //! ([`SimSound::HailQuote`](crate::SimSound::HailQuote), `_beepSnd[4]`,
@@ -1156,7 +1163,9 @@ mod tests {
     /// `_AIMakeShipAttackPlayer`'s gate lets it through.
     fn turn_ace(session: &mut Session) {
         let ace = session.npcs()[0].id;
-        session.traffic.turn_with_quote(ace, false);
+        session
+            .traffic
+            .turn_with_quote(ace, crate::person::GateView::default());
     }
 
     #[test]

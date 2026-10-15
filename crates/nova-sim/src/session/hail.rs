@@ -527,11 +527,8 @@ impl Session {
         if deed == Deed::Attack {
             // `_AIMakeShipAttackPlayer` (@0x9621f) asks its quote's gate
             // before it sets the goal (@0x89c50-0x89c9b).
-            let dying = matches!(
-                self.condition,
-                Condition::Dying { .. } | Condition::Destroyed
-            );
-            self.traffic.turn_with_quote(id, dying);
+            let view = self.world().gate_view();
+            self.traffic.turn_with_quote(id, view);
         }
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
