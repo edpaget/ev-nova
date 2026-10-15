@@ -1468,7 +1468,6 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
-            arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
