@@ -6333,7 +6333,7 @@ mod tests {
         view.tick(TICK / 2);
         assert_ne!(view.shown_heading(), player(&view).heading, "between");
         let frame = view.frame().expect("a sheet");
-        assert_eq!(frame, 15, "{}", view.shown_heading());
+        assert_eq!(frame, 14, "148.5, truncated: {}", view.shown_heading());
         let centre = view.camera().world_to_screen(view.shown_position());
         assert_eq!(
             ship_sprites(&view),
