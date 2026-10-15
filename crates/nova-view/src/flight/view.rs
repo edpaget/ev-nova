@@ -227,17 +227,23 @@
 //!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`], presses) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
 //!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest landable one,
-//!   as L does with none; a left click in space the stellar under it
-//!   (not in the status panel, the right [`STATUS_BAR_WIDTH`] of the
-//!   screen, where the radar takes no clicks). Backquote, Nav Off
+//!   as L does with none. A left click in space
+//!   ([`Session::click_in_space`]) picks a ship first: one under it
+//!   becomes the target, a click on the player's own ship lets go of the
+//!   target, and only a click that leaves the target as it was selects
+//!   the stellar under it. Neither the status panel, the right
+//!   [`STATUS_BAR_WIDTH`] of the screen, where the radar takes no clicks,
+//!   nor the open escort menu's frame takes a click in space. Backquote, Nav Off
 //!   ([`NAV_OFF_KEY`]), turns the nav system off, keeping the course; with
 //!   Option held it lets go of the ship target instead. H
 //!   ([`HYPERSPACE_MODE_KEY`]), Hyperspace Mode, selects the course's next
 //!   hop, or no destination. Closing the course map cues the course's
 //!   next hop too. The original has no stellar cycle key: Tab is its
-//!   Target Select, cycling the ships. During a jump none of these keys or
-//!   clicks does anything (@0x69ad4, @0x69d2e, @0x6a5ef), but Option-\`
-//!   still lets go of the ship target (@0x69a17-0x69a90).
+//!   Target Select, cycling the ships. During a jump none of these keys
+//!   does anything and a click selects no stellar (@0x69ad4, @0x69d2e,
+//!   @0x6a5ef), but Option-\` still lets go of the ship target
+//!   (@0x69a17-0x69a90) and a click on a ship still targets it, as the
+//!   click's ship walk reads no jump state (@0x6a353-0x6a5e4).
 //! - `\` (a press, not its repeats), the original's Hyper Select, selects
 //!   the next system linked with this one, as
 //!   [`Session::select_next_system`] says, so the nav area shows that
@@ -253,7 +259,8 @@
 //!   the original's `_HandlePlayer` does not gate on its jump state are
 //!   taken ([`FlightView::taken_during_jump`]): Tab, R, W, Option-\`, B,
 //!   Y, Command-K and the escort menu's keys. The rest, J included, are
-//!   ignored, P is refused, and a click in space selects nothing. The keys
+//!   ignored, P is refused, and a click in space selects no stellar,
+//!   though it still targets a ship under it. The keys
 //!   held are still tracked through the jump, so a steering, thrust or fire
 //!   key still held at arrival acts on the first tick after it, as the
 //!   original reads the keys live. The stars streak when the session says
@@ -4669,16 +4676,31 @@ impl<C> FlightView<C> {
     }
 
     /// A click at screen point `at`, as the original's in space
-    /// (`_HandlePlayer` @0x6a000-0x6a717): one in the status panel, the
+    /// (`_HandlePlayer` @0x6a000-0x6a764): one in the status panel, the
     /// right [`STATUS_BAR_WIDTH`] (0xc2) of the screen, radar included, is
-    /// no click in space and does nothing; any other selects the stellar
-    /// under it ([`StellarPick::At`]).
+    /// no click in space and does nothing (@0x6a065, @0x6a36d); nor does
+    /// one in the open escort menu's frame, which the original's menu
+    /// branch takes and ends (@0x6a060-0x6a12b; its row selection is left
+    /// out, task escorts-follow-up). Any other goes to
+    /// [`Session::click_in_space`], the ships boxed where they are drawn
+    /// ([`ViewShips`]): a ship under it is targeted, during a jump too, and
+    /// otherwise the stellar under it selected.
     fn click_in_space(&mut self, at: Point) {
-        if at.x >= VIEW_SIZE.0 - STATUS_BAR_WIDTH {
+        if at.x >= VIEW_SIZE.0 - STATUS_BAR_WIDTH || self.escort_menu.holds_click(at) {
             return;
         }
         let world = self.camera().screen_to_world(at);
-        self.select_stellar(StellarPick::At(Vec2::new(world.x, world.y)));
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let ships = ViewShips {
+            view: self,
+            session,
+        };
+        let drawn = DrawnNow::of(&ships);
+        if let Ok(session) = &mut self.session {
+            session.click_in_space(Vec2::new(world.x, world.y), &drawn);
+        }
     }
 
     /// The escort menu's class rows ([`Session::escort_menu`]); none for
@@ -5411,6 +5433,40 @@ impl<C> DrawnShips for ViewShips<'_, C> {
             drawn_size(framed.and_then(|ship| self.view.npc_sheets.get(&ship)))
         };
         Some(drawn_box(self.view.shown_position(), size))
+    }
+}
+
+/// [`ViewShips`]' boxes as they stand, taken so the session can be
+/// changed by what they decide: a click in space.
+struct DrawnNow {
+    /// Each NPC's box, by id.
+    npcs: BTreeMap<NpcId, DrawnBox>,
+    /// The player's box.
+    player: Option<DrawnBox>,
+}
+
+impl DrawnNow {
+    /// The boxes `ships` gives now, for every NPC of its session.
+    fn of<C>(ships: &ViewShips<'_, C>) -> Self {
+        Self {
+            npcs: ships
+                .session
+                .npcs()
+                .iter()
+                .filter_map(|npc| Some((npc.id, ships.npc(npc.id)?)))
+                .collect(),
+            player: ships.player(),
+        }
+    }
+}
+
+impl DrawnShips for DrawnNow {
+    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
+        self.npcs.get(&id).copied()
+    }
+
+    fn player(&self) -> Option<DrawnBox> {
+        self.player
     }
 }
 
@@ -15863,6 +15919,12 @@ mod tests {
     /// one of them; its traffic ship (NPC 0) placed 100 above the player;
     /// all idle. A tick has placed the escort (NPC 1).
     fn escorted() -> View {
+        escorted_with_traffic(750, 650)
+    }
+
+    /// [`escorted`] with its traffic ship (NPC 0) placed as
+    /// [`placed`]`(x, y, 0)` places it.
+    fn escorted_with_traffic(x: u32, y: u32) -> View {
         let mut catalog = boardable();
         for record in &mut catalog.ships {
             if record.id == ShipId(130) {
@@ -15871,7 +15933,7 @@ mod tests {
             }
         }
         let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
-        let (_, chance) = scripted(&placed(750, 650, 0));
+        let (_, chance) = scripted(&placed(x, y, 0));
         let mut view = FlightView::with_pilot(catalog, pilot)
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
@@ -16063,6 +16125,30 @@ mod tests {
         view.tick(super::super::escorts::MENU_TIMEOUT + TICK);
         assert!(!view.escort_menu().is_open());
         assert_eq!(ui_sounds(&mut view), [], "it fades silently");
+    }
+
+    #[test]
+    fn a_click_in_the_open_escort_menu_over_a_ship_does_nothing() {
+        let menu = Point::new(MENU_AT.x + MENU_WIDTH / 2.0, MENU_AT.y + MENU_HEIGHT / 2.0);
+        let under = escorted().camera().screen_to_world(menu);
+        let place = |at: f32| u32::try_from((at + 750.0).round() as i64).expect("placeable");
+        let mut view = escorted_with_traffic(place(under.x), place(under.y));
+        let traffic = NpcId(0);
+        let over = npc_on_screen(&view, traffic);
+        assert!(
+            (over.x - menu.x).abs() < 2.0 && (over.y - menu.y).abs() < 2.0,
+            "{over:?}"
+        );
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        view.take_sounds();
+        click(&mut view, over);
+        assert_eq!(target_of(&view), None, "not targeted");
+        assert_eq!(view.take_sounds(), [], "silent");
+        tap(&mut view, MENU_KEY);
+        assert!(!view.escort_menu().is_open());
+        click(&mut view, over);
+        assert_eq!(target_of(&view), Some(traffic), "shut, it targets");
     }
 
     #[test]
@@ -19623,8 +19709,10 @@ mod tests {
         // edge, which decides.
         let left_of_c = on_screen(&view, (330.0 - 26.0, 0.0)).x;
         assert!(left_of_c < edge && edge < c.x);
+        view.take_sounds();
         click(&mut view, at(edge, c.y));
         assert_eq!(nav_target(&view), Some(StellarId(128)), "the edge is panel");
+        assert_eq!(view.take_sounds(), [], "the panel is silent");
         click(&mut view, at(edge - 0.5, c.y));
         assert_eq!(
             nav_target(&view),
@@ -21879,6 +21967,54 @@ mod tests {
 
     /// A point on screen over nothing at all.
     const NOWHERE: Point = Point::new(40.0, 400.0);
+
+    #[test]
+    fn a_left_click_on_a_drawn_ship_targets_it_with_the_target_beep() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        assert!(over.x < VIEW_SIZE.0 - STATUS_BAR_WIDTH, "{over:?} in space");
+        view.take_sounds();
+        click(&mut view, over);
+        assert_eq!(
+            view.session().expect("flying").target().map(|npc| npc.id),
+            Some(id)
+        );
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
+    }
+
+    #[test]
+    fn a_click_on_a_ship_targets_it_during_a_jump() {
+        // A still NPC at (0, -750), where the ship flies out past.
+        let mut catalog = trafficked(&[130], 1, 129, 3);
+        for record in &mut catalog.ships {
+            if record.id == ShipId(129) {
+                record.fields.speed = 0;
+            }
+        }
+        let (_, chance) = scripted(&placed(750, 0, 0));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let id = npc_ids(&view)[0];
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        let over = npc_on_screen(&view, id);
+        assert!(
+            (0.0..VIEW_SIZE.0 - STATUS_BAR_WIDTH).contains(&over.x)
+                && (0.0..VIEW_SIZE.1).contains(&over.y),
+            "{over:?} in space"
+        );
+        view.take_sounds();
+        click(&mut view, over);
+        assert_eq!(
+            view.session().expect("flying").target().map(|npc| npc.id),
+            Some(id)
+        );
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
+    }
 
     #[test]
     fn the_cursor_animates_over_an_npc_and_rests_off_it() {

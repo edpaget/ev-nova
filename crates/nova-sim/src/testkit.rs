@@ -1211,6 +1211,28 @@ impl ControlBits for AllowAll {
     }
 }
 
+/// No ship drawn anywhere, so a click in space falls through to the
+/// stellars.
+pub(crate) struct NoShips;
+
+impl crate::hover::DrawnShips for NoShips {
+    fn npc(&self, _id: NpcId) -> Option<crate::hover::DrawnBox> {
+        None
+    }
+
+    fn player(&self) -> Option<crate::hover::DrawnBox> {
+        None
+    }
+}
+
+/// The stellar a click at `at` in space, with no ship drawn, selects.
+pub(crate) fn click_stellar(session: &mut Session, at: Vec2) -> Option<StellarId> {
+    match session.click_in_space(at, &NoShips) {
+        Some(crate::hover::Hover::Stellar(id)) => Some(id),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

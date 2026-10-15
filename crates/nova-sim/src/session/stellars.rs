@@ -2251,9 +2251,11 @@ mod tests {
         catalog
     }
 
-    /// The stellar a click at (`x`, `y`) picks.
+    /// The stellar a click at (`x`, `y`) picks, with none selected
+    /// before it (a click passes over the one selected).
     fn click(session: &mut Session, x: f32, y: f32) -> Option<StellarId> {
-        session.select_stellar(StellarPick::At(Vec2::new(x, y)))
+        session.nav = crate::NavMode::Off;
+        crate::testkit::click_stellar(session, Vec2::new(x, y))
     }
 
     #[test]

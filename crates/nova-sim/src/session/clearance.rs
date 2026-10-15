@@ -511,7 +511,7 @@ mod tests {
             session.select_stellar(pick);
             assert_eq!(session.dock_request(), request(128, CLEARED), "{pick:?}");
         }
-        session.select_stellar(StellarPick::At(Vec2::new(30.0, -40.0)));
+        crate::testkit::click_stellar(&mut session, Vec2::new(30.0, -40.0));
         assert_eq!(session.dock_request(), request(128, CLEARED), "a click");
         assert_eq!(session.land(), landed(128));
     }
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn a_click_on_another_stellar_drops_the_request() {
         let mut session = greeted(session());
-        session.select_stellar(StellarPick::At(Vec2::new(2000.0, 0.0)));
+        crate::testkit::click_stellar(&mut session, Vec2::new(2000.0, 0.0));
         assert_eq!(session.dock_request(), None);
     }
 

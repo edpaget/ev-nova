@@ -606,7 +606,8 @@ enum Jump {
 }
 
 /// Which stellar [`Session::select_stellar`] makes the navigation
-/// target, by the original's means (`_HandlePlayer` @0x68390).
+/// target, by the original's keys (`_HandlePlayer` @0x68390); a click in
+/// space is [`Session::click_in_space`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StellarPick {
     /// The stellar in this slot of the system's navigation defaults,
@@ -616,11 +617,6 @@ pub enum StellarPick {
     /// target ([`nearest_landable`]): the original's F5, which picks
     /// through the same `_FindNearestStellar` (@0x276c) its land key does.
     Nearest,
-    /// The stellar under a click at this point in the system
-    /// ([`stellar_under`]), each boxed by the frame of the sheet drawn for
-    /// it, so a destroyed one by its `DeadType` or graphic type 0's sheet:
-    /// the original's click in space (@0x6a5f9-0x6a6fc).
-    At(Vec2),
 }
 
 /// What [`Session::land`] did, when it was not refused.
@@ -5897,8 +5893,9 @@ pub(super) mod tests {
         FAST_JUMP, FAST_JUMP_HULL, HYPERSPACE_DAYS, HYPERSPACE_DISTANCE, MULTI_JUMP,
     };
     use crate::testkit::{
-        FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, edge_lander, fly_out,
-        hideable, hiding_bit, jump, jump_with, land_now, outfit, planet, star, starting,
+        FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, click_stellar,
+        edge_lander, fly_out, hideable, hiding_bit, jump, jump_with, land_now, outfit, planet,
+        star, starting,
     };
     use entry::NoTraffic;
 
@@ -22279,19 +22276,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_click_pick_selects_the_stellar_under_it_or_nothing() {
+    fn a_click_selects_the_stellar_under_it_or_nothing() {
         let mut session = Session::start(&three_stellars()).expect("starts");
         assert_eq!(
-            session.select_stellar(StellarPick::At(Vec2::new(940.0, 30.0))),
+            click_stellar(&mut session, Vec2::new(940.0, 30.0)),
             Some(StellarId(131))
         );
-        assert_eq!(
-            session.select_stellar(StellarPick::At(Vec2::new(500.0, 500.0))),
-            None
-        );
+        assert_eq!(click_stellar(&mut session, Vec2::new(500.0, 500.0)), None);
         assert_eq!(session.nav_target(), Some(StellarId(131)), "kept");
         assert_eq!(
-            session.select_stellar(StellarPick::At(Vec2::new(2000.0, 0.0))),
+            click_stellar(&mut session, Vec2::new(2000.0, 0.0)),
             Some(StellarId(129))
         );
     }
@@ -22303,13 +22297,10 @@ pub(super) mod tests {
             ..catalog()
         };
         let mut session = Session::start(&empty).expect("starts");
-        for pick in [
-            StellarPick::Slot(0),
-            StellarPick::Nearest,
-            StellarPick::At(Vec2::ZERO),
-        ] {
+        for pick in [StellarPick::Slot(0), StellarPick::Nearest] {
             assert_eq!(session.select_stellar(pick), None, "{pick:?}");
         }
+        assert_eq!(click_stellar(&mut session, Vec2::ZERO), None, "a click");
         assert_eq!(session.nav_target(), None);
     }
 
@@ -22356,13 +22347,14 @@ pub(super) mod tests {
         session.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
         for stage in ["pre-jump", "in hyperspace"] {
-            for pick in [
-                StellarPick::Slot(1),
-                StellarPick::Nearest,
-                StellarPick::At(Vec2::new(30.0, -40.0)),
-            ] {
+            for pick in [StellarPick::Slot(1), StellarPick::Nearest] {
                 assert_eq!(session.select_stellar(pick), None, "{stage} {pick:?}");
             }
+            assert_eq!(
+                click_stellar(&mut session, Vec2::new(30.0, -40.0)),
+                None,
+                "{stage} a click"
+            );
             assert!(!session.nav_off(), "{stage}");
             assert_eq!(
                 session.nav_mode(),

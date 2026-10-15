@@ -21,7 +21,9 @@
 //!   and once no ship took the click, the first stellar in nav order whose
 //!   sprite rect, the frame of the sheet drawn for it, holds it, the rect
 //!   grown by 16 pixels a side for a sprite no taller than 47
-//!   ([`stellar_under`]). A click on empty space changes nothing;
+//!   ([`stellar_under`]), the one selected in mode 2 passed over so the
+//!   walk goes on to any under it ([`stellar_under_past`], @0x6a69d →
+//!   @0x6a703). A click on empty space changes nothing;
 //! - **Nav Off**, the backquote key (`_loadKeys` @0xcd5f8 `navOff` 0x32,
 //!   handled @0x69a94-0x69b63): the mode off, the course kept;
 //! - **Hyperspace Mode**, H (`hyperMode` 0x04, @0x69b76-0x69b89): mode 3,
@@ -135,8 +137,22 @@ pub fn stellar_under(
     at: Vec2,
     drawn: impl Fn(&LandingSite) -> Option<(u32, u32)>,
 ) -> Option<StellarId> {
+    stellar_under_past(sites, at, None, drawn)
+}
+
+/// [`stellar_under`], passing over `past`: the click in space's walk,
+/// which goes on past the stellar selected in mode 2 to the next one
+/// under the click (@0x6a69d → @0x6a703).
+#[must_use]
+pub fn stellar_under_past(
+    sites: &[LandingSite],
+    at: Vec2,
+    past: Option<StellarId>,
+    drawn: impl Fn(&LandingSite) -> Option<(u32, u32)>,
+) -> Option<StellarId> {
     sites
         .iter()
+        .filter(|site| Some(site.id) != past)
         .find(|site| {
             let (half_width, half_height) = half_box(drawn(site));
             let offset = at - site.position;

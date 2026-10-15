@@ -191,9 +191,10 @@ impl SoundTable {
     /// - `target_selected`: 152, `_beepSnd[2]`, which `_HandlePlayer`
     ///   plays on every press of Target Select (@0x69f64-0x69f6f) and as
     ///   Closest Target picks a ship other than the target
-    ///   (@0x6aa32-0x6aa55).
+    ///   (@0x6aa32-0x6aa55) or a click in space targets one (@0x6a585).
     /// - `target_cleared`: 150, `_beepSnd[0]`, as Option-backquote lets go
-    ///   of the ship target (@0x69a7d).
+    ///   of the ship target (@0x69a7d), or a click on the player's own
+    ///   ship does (@0x6a585).
     /// - `tutorial_hint`: 154, `_beepSnd[4]`, as `_HandlePlayer` shows a
     ///   first-flight tutorial hint (@0x70a1c, @0x70c12, @0x70dab,
     ///   @0x70e59).

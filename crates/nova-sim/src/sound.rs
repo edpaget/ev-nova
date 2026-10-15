@@ -117,13 +117,18 @@ pub enum SimSound {
     HyperSelected,
     /// A target key was taken: Target Select (Tab, with Shift or Option or
     /// both) on every press, before its search and whatever it finds
-    /// (`_HandlePlayer` @0x69f6f), and Closest Target (R, with or without
-    /// Option) when it picks a ship other than the target (@0x6aa55):
-    /// `_beepSnd[2]`, `snd ` 152. Closest Target finding no ship raises
-    /// [`SimSound::Refused`] instead.
+    /// (`_HandlePlayer` @0x69f6f), Closest Target (R, with or without
+    /// Option) when it picks a ship other than the target (@0x6aa55), and
+    /// a click in space on a ship other than the target
+    /// ([`Session::click_in_space`](crate::Session::click_in_space),
+    /// @0x6a585): `_beepSnd[2]`, `snd ` 152. Closest Target finding no
+    /// ship raises [`SimSound::Refused`] instead.
     TargetSelected,
     /// Option-backquote let go of the ship target (`_HandlePlayer`
-    /// @0x69a7d): `_beepSnd[0]`, `snd ` 150. With no target it is silent.
+    /// @0x69a7d), or a click on the player's own ship did
+    /// ([`Session::click_in_space`](crate::Session::click_in_space),
+    /// @0x6a585): `_beepSnd[0]`, `snd ` 150. With no target either is
+    /// silent.
     TargetCleared,
     /// A first-flight tutorial hint was shown: `_beepSnd[4]`, `snd ` 154
     /// (`_HandlePlayer` @0x70a1c, @0x70c12, @0x70dab, @0x70e59; see
