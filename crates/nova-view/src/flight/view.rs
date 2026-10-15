@@ -2894,6 +2894,34 @@ impl<
         }
     }
 
+    /// Opens the course map from the bar, as `_DoBarDialog`'s item 8 does
+    /// (@0x492a3-0x492b2), over the spaceport: in
+    /// [`MapMode::Course`](crate::galaxy::MapMode::Course), as the bar
+    /// clears the hypergate flag first (@0x492aa-0x492af). Ours' map is
+    /// in that mode whenever it is closed, as the hypergate map's close
+    /// takes its pick ([`GalaxyMap::take_gate_choice`]). Its close is
+    /// [`FlightView::close_map`]'s in port.
+    pub fn open_bar_map(&mut self) {
+        self.open_map();
+    }
+
+    /// The input to the map opened in port ([`FlightView::open_bar_map`]):
+    /// a press of [`MAP_KEY`] closes it ([`FlightView::close_map`]), and
+    /// anything else goes to the map, so flight's own keys and cursor stay
+    /// out of the port.
+    pub fn port_map_input(&mut self, input: &Input) {
+        let closing = Input::Key {
+            key: MAP_KEY,
+            pressed: true,
+            repeat: false,
+        };
+        if *input == closing {
+            self.close_map();
+        } else {
+            self.map_input(input);
+        }
+    }
+
     /// The map's input; a destination clicked on it becomes the session's
     /// course, which the map then shows, with the hop it cues as the
     /// system selected in nav mode 3.
@@ -3610,11 +3638,36 @@ impl<
     /// is cancelled ([`HYPERGATE_CANCELLED`]). Closing the course map cues
     /// the course's next hop ([`Session::cue_course`]), as the original's
     /// map does unless it is the hypergate's (`_DoSystemMap` @0x13c16).
+    ///
+    /// Docked, the course map is the bar's ([`FlightView::open_bar_map`]),
+    /// and its close is `_DoSystemMap`'s in port then the bar's: the whole
+    /// bar is redrawn first (`_RefreshSAT` @0x13bc9), showing the nav as
+    /// the map left it; the course is not cued (@0x13be2-0x13c0a skips
+    /// `_CueNextHyperRouteDest` in port); then the nav the bar opened with
+    /// is put back ([`Session::restore_bar_nav`], `_DoBarDialog`
+    /// @0x492b7-0x492d3) with no redraw, as `_UpdateAllPortDialogs`
+    /// (@0x492d7) draws no status. The nav area shows the map's selection
+    /// until the port's next nav redraw, such as the bar's close.
+    ///
+    /// `_DoSystemMap`'s own put-back of +0x6c in port (@0x13bee-0x13c06)
+    /// is left out: under the bar, the bar's restore overwrites it before
+    /// anything is drawn, so it can't be seen. It matters for the map
+    /// opened from the other port screens, filed with them in
+    /// rdm:phase/hud-fidelity-followups/phase-1-map-key-from-the-other-port-screens.
     pub fn close_map(&mut self) {
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
         if self.map.mode() != MapMode::Hypergate {
+            if let Ok(session) = &mut self.session
+                && session.landed().is_some()
+            {
+                self.redraw_status();
+                if let Ok(session) = &mut self.session {
+                    session.restore_bar_nav();
+                }
+                return;
+            }
             if let Ok(session) = &mut self.session {
                 session.cue_course();
             }
@@ -12564,6 +12617,118 @@ mod tests {
             "{dialog:?}: restored"
         );
         view
+    }
+
+    /// [`port`] with a bar on Earth, a view of it landed there by the
+    /// engine's reading (as [`docked_at_earth`]), with `course` plotted
+    /// in flight first if given, and the bar opened.
+    fn in_the_bar(course: Option<i16>) -> View {
+        let mut catalog = port();
+        catalog.sites[0].flags |= StellarFlags::BAR;
+        let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
+        let mut view = FlightView::new(catalog).with_rules(rules);
+        if let Some(to) = course {
+            view.session
+                .as_mut()
+                .expect("flying")
+                .plot_course(SystemId(to))
+                .expect("a route");
+        }
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "the land key put mode 2 over any cue"
+        );
+        assert_eq!(port_nav(&view), naming("Earth"));
+        assert!(view.open_bar());
+        view
+    }
+
+    /// Clicks system `id` on the map open in port.
+    fn port_click(view: &mut View, id: i16) {
+        let at = on_map(view, id);
+        for pressed in [true, false] {
+            view.port_map_input(&Input::PointerButton {
+                button: crate::MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    /// The nav area showing Alpha Centauri (131), unexplored, in mode 3.
+    fn cueing_alpha() -> Vec<String> {
+        vec![
+            hud::NAV_HYPERSPACE.to_owned(),
+            hud::NAV_UNEXPLORED.to_owned(),
+        ]
+    }
+
+    #[test]
+    fn the_bars_map_closing_shows_the_maps_selection_and_puts_back_the_bars_nav() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        assert!(view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        port_click(&mut view, 131);
+        assert!(view.map_open(), "a click doesn't close it");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Hyperspace(Some(SystemId(131)))),
+            "the click cues the route"
+        );
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open(), "M closes it");
+        assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "the bar's nav put back"
+        );
+        assert_eq!(
+            view.session().map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(131)]),
+            "the course kept"
+        );
+        view.refresh_status();
+        assert_eq!(port_nav(&view), naming("Earth"), "the bar's close");
+    }
+
+    #[test]
+    fn the_bars_map_key_repeat_or_release_leaves_it_open() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        view.port_map_input(&Input::Key {
+            key: MAP,
+            pressed: true,
+            repeat: true,
+        });
+        view.port_map_input(&key(MAP, false));
+        assert!(view.map_open());
+    }
+
+    /// Ours cues a route's first hop at the click ([`Session::plot_course`]),
+    /// so the port close's skipped cue (`_DoSystemMap` @0x13be2-0x13c0a)
+    /// shows only with a course plotted before the map opened, whose cue
+    /// the land key put mode 2 over.
+    #[test]
+    fn in_port_the_maps_close_cues_no_course() {
+        let mut view = in_the_bar(Some(131));
+        view.open_bar_map();
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open());
+        assert_eq!(port_nav(&view), naming("Earth"), "no cue drawn");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128))))
+        );
+        assert_eq!(
+            view.session().map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(131)]),
+            "the course kept"
+        );
     }
 
     #[test]
