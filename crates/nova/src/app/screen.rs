@@ -240,8 +240,8 @@ use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, OfferPrompt, PersonRules, Pilot, PilotCatalog, PilotKeeper, PilotStore,
-    PointDefenceRule, Rulebook, Session, Take, Taken, VenueOffer, pilot_key, text_tags,
+    NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
+    Rulebook, Session, Take, Taken, VenueOffer, pilot_key, text_tags,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -1108,12 +1108,7 @@ impl AppScreen {
         };
         let dialog = self.data.description(id).and_then(|text| {
             let text = if id == MENU_X_TEXT {
-                let ship_type = PilotCatalog::ships(&*self.data)
-                    .into_iter()
-                    .find(|ship| ship.id == nova_sim::ShipId(128))
-                    .map(|ship| ship.name)
-                    .unwrap_or_default();
-                text_tags::expand_before_any_pilot(&text, &ship_type)
+                text_tags::expand_before_any_pilot(&text, &*self.data)
             } else {
                 text
             };
