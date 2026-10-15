@@ -472,16 +472,16 @@ const FOLLOWS_PLAYER: i16 = -6;
 ///   the visible system standing for it ([`StarMap::usable_con_slots`]):
 ///   a system listed twice is twice as likely, and a slot naming the
 ///   player's own system counts (@0x9ba70-0x9bac7).
+/// - 32000 and above: the player's system, as `_SelectMissionSystem`
+///   gives back its second argument for a code it does not read
+///   (@0x9c012).
+/// - Any other code: nowhere.
 ///
 /// Two deliberate divergences: where the original redraws forever, this
 /// is nowhere, drawing nothing. That is -5 with no usable Con slot
 /// (@0x9ba84-0x9bac3), and 15000-19999 when only the government's own
 /// systems qualify, which its counting pass counts but its draw pass
 /// rejects (@0x9bc71-0x9bd02). Copying a hang isn't fidelity.
-/// - 32000 and above: the player's system, as `_SelectMissionSystem`
-///   gives back its second argument for a code it does not read
-///   (@0x9c012).
-/// - Any other code: nowhere.
 pub fn select_ship_system(
     code: i16,
     facts: &ShipFacts,
