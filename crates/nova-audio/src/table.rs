@@ -20,6 +20,8 @@ pub struct SoundTable {
     pub take_off: Option<SoundId>,
     /// Plays as a jump begins.
     pub jump: Option<SoundId>,
+    /// Plays as a jump begins in double time.
+    pub jump_double_time: Option<SoundId>,
     /// Plays as a jump ends, in the next system.
     pub arrival: Option<SoundId>,
     /// Plays as an interface button is pressed.
@@ -117,9 +119,13 @@ impl SoundTable {
     ///   "lifting off a planet is silent in the original".
     /// - `jump`: 128, "Warp up" (the guide: "128 Warp up"),
     ///   `_warpUpSnd[0]`, which `_HandlePlayer` plays as the warp stage
-    ///   begins (@0x6b60d-0x6b690). 129 "Warp up
-    ///   x2" is for a warp begun in double time, which the warp does not
-    ///   model yet (rdm:phase/hud-fidelity/phase-20-audio-double-speed-warp).
+    ///   begins out of double time (@0x6b645-0x6b690).
+    /// - `jump_double_time`: 129, "Warp up x2" (the stock resource's name
+    ///   is "Warp up.x2"), `_warpUpSnd[1]` (loaded @0x1c12f-0x1c14f), which
+    ///   `_HandlePlayer` plays in 128's place as the warp stage begins in
+    ///   double time (@0x6b60d-0x6b63f, @0x6b66f-0x6b690). The session
+    ///   decides both warp-ups' still-playing skips, so each event plays
+    ///   its sound.
     /// - `arrival`: 130, "Warp out" (the guide: "130 Warp out"),
     ///   `_warpOutSnd` (loaded @0x1c152-0x1c16a), which `_HandlePlayer`
     ///   plays as the jump ends and the next system is set up
@@ -251,6 +257,7 @@ impl SoundTable {
         landing: Some(SoundId(151)),
         take_off: None,
         jump: Some(SoundId(128)),
+        jump_double_time: Some(SoundId(129)),
         arrival: Some(SoundId(130)),
         button_down: Some(SoundId(600)),
         button_up: Some(SoundId(601)),
@@ -304,6 +311,11 @@ mod tests {
             table.jump,
             Some(SoundId(128)),
             "Warp up, _warpUpSnd[0] @0x6b690"
+        );
+        assert_eq!(
+            table.jump_double_time,
+            Some(SoundId(129)),
+            "Warp up x2, _warpUpSnd[1] @0x6b690"
         );
         assert_eq!(
             table.arrival,

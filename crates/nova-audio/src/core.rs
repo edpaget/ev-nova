@@ -135,6 +135,7 @@ impl<A: Audio> AudioCore<A> {
             }
             Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
             Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
+            Sound::Sim(SimSound::JumpBeganInDoubleTime) => self.play(self.table.jump_double_time),
             Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
             Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
             Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
@@ -702,6 +703,24 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_jump_begun_in_double_time_plays_warp_up_x2_at_the_effects_volume() {
+        let jump = Sound::Sim(SimSound::JumpBeganInDoubleTime);
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::Flight), &[jump]);
+        assert_eq!(drain(&log), [play(129, 0.5)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            jump_double_time: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::Flight), &[jump]);
+        assert_eq!(drain(&log), [], "none in the table");
     }
 
     #[test]

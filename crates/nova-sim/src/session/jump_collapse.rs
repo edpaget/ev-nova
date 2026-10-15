@@ -140,7 +140,7 @@ impl Session {
         );
         self.jump = None;
         self.messages.push(SimMessage::JumpCollapsed);
-        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
+        self.halt_sounds(&WARP_UP_HALTS);
         self.sounds.push(SimSound::JumpCollapsed);
     }
 }

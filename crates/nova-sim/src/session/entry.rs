@@ -654,6 +654,7 @@ impl Session {
         if resets.has(Reset::Dock) {
             self.landed = placement.stellar;
             self.bar_news = None;
+            self.warp_ups.clear();
         }
         let scene_changed = self.set_player_system(system, sites, dock);
         if resets.has(Reset::Dock) {

@@ -697,6 +697,10 @@ pub struct Session {
     /// [`Session::warp_sound`] gives the d of the warp's clock
     /// ([`warp::sound_duration`]).
     warp_sounds: [u32; 2],
+    /// Which warp-up sound is still playing, `snd ` 128 or 129, for the
+    /// warp start's still-playing skip and the double-time switch (see
+    /// [`warp::WarpUps`]); not saved, as the original's sounds are not.
+    warp_ups: warp::WarpUps,
     /// The rule a multi-jump follows.
     multi_jump: MultiJumpRule,
     /// The rule Hyper Select follows.
@@ -1300,6 +1304,7 @@ impl Session {
             jump: None,
             warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
                 .map(warp::sound_duration),
+            warp_ups: warp::WarpUps::default(),
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
             hyperlinks: HyperlinkRule::default(),
@@ -1659,6 +1664,9 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
+        // The warp-ups play in real time, a frame's worth on each advance
+        // pass.
+        self.warp_ups.step();
         self.takeoff_grace_tick();
         self.sound_script();
         let frame = self.frame;
@@ -2355,8 +2363,7 @@ impl Session {
         }
         self.sound_the_klaxon(was_dying, exploded);
         if exploded {
-            self.sounds
-                .push(SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS));
+            self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
         }
         self.raise_disabled(&was, &mut &mut *chance);
         self.settle_strikes(strikes, &was, rules.law);
@@ -2948,7 +2955,13 @@ impl Session {
     /// to `bearing`, `warp` the warp's clock this tick (see [`Jump`]):
     /// none while it brakes, and from 0 on the tick it stops braking,
     /// which leaves the pilot past the tutorial (@0x6b603) and sounds the
-    /// warp-up ([`SimSound::JumpBegan`], `snd ` 128, @0x6b60d-0x6b690).
+    /// warp-up: `snd ` 129 in double time
+    /// ([`SimSound::JumpBeganInDoubleTime`], @0x6b60d-0x6b63f), else 128
+    /// ([`SimSound::JumpBegan`], @0x6b645-0x6b669), played at
+    /// @0x6b690, unless that warp-up is still playing
+    /// (`ST_IsSoundPlaying` @0x6b617-0x6b62b, @0x6b645-0x6b658), when it
+    /// skips the play alone: the clock and the tutorial's flag are already
+    /// set.
     /// Once the ship is ready to turn no further and slow no more, the
     /// jump begins: the thrust stops, the glow goes out and the led ships
     /// let go of their targets.
@@ -2970,11 +2983,34 @@ impl Session {
         if started {
             // The pilot is past the tutorial (`_HandlePlayer` @0x6b603).
             self.tutorial.jumped();
-            self.sounds.push(SimSound::JumpBegan);
+            self.sound_warp_up();
         }
         if self.jumping().is_some() {
             self.let_go_of_led_targets();
         }
+    }
+
+    /// Sounds the warp-up for the warp stage's start: 129 in double time,
+    /// else 128, unless it is still playing (see [`Session::stage_jump`]).
+    fn sound_warp_up(&mut self) {
+        let double_time = self.double_time;
+        if self.warp_ups.playing(double_time) {
+            return;
+        }
+        let duration = self.warp_sounds[usize::from(double_time)];
+        self.warp_ups.start(double_time, duration);
+        self.sounds.push(if double_time {
+            SimSound::JumpBeganInDoubleTime
+        } else {
+            SimSound::JumpBegan
+        });
+    }
+
+    /// Halts each of `sounds` that is playing ([`SimSound::Halt`]), the
+    /// warp-ups among them over for the session too.
+    pub(super) fn halt_sounds(&mut self, sounds: &'static [crate::catalog::SoundId]) {
+        self.warp_ups.halt(sounds);
+        self.sounds.push(SimSound::Halt(sounds));
     }
 
     /// The warp's clock: the engine's ticks since the warp stage began,
@@ -3127,6 +3163,9 @@ impl Session {
             return None;
         };
         self.jump = None;
+        // The warp-up has ended, or the warp's end halted it
+        // (`_HandlePlayer` @0x6c69d-0x6c6d2).
+        self.warp_ups.clear();
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
@@ -3641,6 +3680,8 @@ impl Session {
         let stellar_sound = site.and_then(|site| site.landing_sound);
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
+        // A warp-up still playing is taken as over (see `warp::WarpUps`).
+        self.warp_ups.clear();
         self.pilot.stellar = Some(stellar);
         self.bar_news = None;
         self.combat.clear();
@@ -7062,7 +7103,11 @@ pub(super) mod tests {
             assert!(braked < 1000, "never slowed");
         }
         assert_eq!(session.warp_clock(), Some(0), "stamped afresh");
-        assert_eq!(warp_ups(&session.take_sounds()), 1, "the warp-up again");
+        assert_eq!(
+            warp_ups(&session.take_sounds()),
+            0,
+            "128 still playing: the still-playing skip (@0x6b645-0x6b658)"
+        );
     }
 
     #[test]
@@ -17600,6 +17645,17 @@ pub(super) mod tests {
             }
         }
         assert!(seen.len() > explosion + 3, "the hold is watched too");
+    }
+
+    #[test]
+    fn the_players_explosion_ends_a_warp_up_playing() {
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        session.warp_ups.start(true, 100_000);
+        session.warp_ups.start(false, 100_000);
+        from_the_breakup(&mut session, &catalog, 9);
+        assert_eq!(session.condition, Condition::Destroyed);
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
     }
 
     #[test]

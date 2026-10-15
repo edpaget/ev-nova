@@ -307,7 +307,7 @@ impl Session {
         self.condition = Condition::Intact;
         self.stop_thrust();
         self.sounds.push(SimSound::Ejected);
-        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
+        self.halt_sounds(&WARP_UP_HALTS);
         self.save_due = save_due;
     }
 

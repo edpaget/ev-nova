@@ -140,11 +140,13 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::armament::Trigger;
     use crate::combat::{CombatEvent, ShipRef};
+    use crate::control::SetExpr;
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::session::tests::{OUT, armed, bound_for_131, facing_an_npc};
+    use crate::sound::SimSound;
     use crate::testkit::{
-        Draws, FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, npc,
+        Draws, FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, land_now, npc,
     };
     use crate::traffic::npc::NpcId;
     use crate::warp::SoundLength;
@@ -290,6 +292,164 @@ mod tests {
             session.player().velocity,
             crate::cargo_box::accel(21, at_8) * crate::flight::DISABLED_DRAG
         );
+    }
+
+    // The warp-up (`_HandlePlayer` @0x6b60d-0x6b690).
+
+    /// The warp-up a jump begun `double_time` sounds.
+    fn warp_up(double_time: bool) -> SimSound {
+        if double_time {
+            SimSound::JumpBeganInDoubleTime
+        } else {
+            SimSound::JumpBegan
+        }
+    }
+
+    #[test]
+    fn a_jump_begun_in_double_time_sounds_warp_up_x2_and_otherwise_warp_up() {
+        for double_time in [true, false] {
+            let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
+            session.set_double_time_key(double_time);
+            session.begin_jump().expect("jumps");
+            assert_eq!(
+                session.take_sounds(),
+                [warp_up(double_time)],
+                "{double_time}"
+            );
+        }
+        assert_ne!(SimSound::JumpBeganInDoubleTime, SimSound::JumpBegan);
+    }
+
+    /// Gives up `session`'s jump as a script's move in flight does (`N130`,
+    /// [`Reset::Jump`](super::super::entry::Reset::Jump)): no halt and no
+    /// arrival. Then puts the ship back out at rest facing up, bound for
+    /// 131 again.
+    fn given_up_by_a_move(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.run_set(
+            &SetExpr::parse("N130").expect("parses"),
+            &mut Scripted::default(),
+        );
+        let _ = session.settle_script(catalog, &mut NeverFires);
+        assert_eq!(session.warp_clock(), None, "given up");
+        let sounds = session.take_sounds();
+        assert!(
+            !sounds
+                .iter()
+                .any(|sound| matches!(sound, SimSound::Halt(_))),
+            "no halt: {sounds:?}"
+        );
+        session
+            .plot_course(crate::catalog::SystemId(131))
+            .expect("a route");
+        session.player = ShipState {
+            position: OUT,
+            velocity: Vec2::ZERO,
+            heading: 0.0,
+        };
+    }
+
+    /// Runs one frame of `session` with no controls: the advance pass and,
+    /// in double time, the second.
+    fn frame(session: &mut Session) {
+        session.tick(Controls::default());
+        if session.double_time() {
+            again(session, Controls::default());
+        }
+    }
+
+    /// The still-playing skip (`_HandlePlayer` @0x6b617-0x6b62b,
+    /// @0x6b645-0x6b658): a jump whose warp stage starts while its warp-up
+    /// still plays sounds none, though its clock starts. Here a script's
+    /// move in flight gives the first jump up, with no halt and no
+    /// arrival, which end the warp-up (see the next tests). The skip
+    /// happens in the engine's normal play too: a ship knocked back past
+    /// the jump speed in its turn brakes again, and the warp stage starts
+    /// afresh as it slows (`braking_again_stops_the_warp_clock_...` in
+    /// the session's tests). The escape pod's rescue gives a jump up as
+    /// well, but the eject before it halts the warp-ups.
+    #[test]
+    fn a_warp_up_still_playing_is_not_sounded_again() {
+        // 129 lasts 120 Mac ticks, 60 frames, and 128, of which there is
+        // none, 350, 175 frames, in real time: double time's second pass
+        // doesn't shorten it.
+        let catalog = with_warp_up_x2();
+        for (double_time, frames) in [(true, 60), (false, 175)] {
+            let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+            session.set_double_time_key(double_time);
+            session.begin_jump().expect("jumps");
+            assert_eq!(session.take_sounds(), [warp_up(double_time)]);
+            for _ in 0..frames - 1 {
+                frame(&mut session);
+            }
+            given_up_by_a_move(&mut session, &catalog);
+            session.begin_jump().expect("jumps");
+            assert_eq!(session.take_sounds(), [], "{double_time}: still playing");
+            assert_eq!(session.warp_clock(), Some(0), "the clock starts");
+            frame(&mut session);
+            given_up_by_a_move(&mut session, &catalog);
+            session.begin_jump().expect("jumps");
+            assert_eq!(
+                session.take_sounds(),
+                [warp_up(double_time)],
+                "{double_time}: over"
+            );
+        }
+    }
+
+    #[test]
+    fn a_warp_up_of_the_other_speed_plays_on_its_own() {
+        // 128, begun in single time, still plays as a jump begins in
+        // double time: 129 sounds all the same.
+        let catalog = with_warp_up_x2();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
+        given_up_by_a_move(&mut session, &catalog);
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+    }
+
+    #[test]
+    fn a_collapse_halts_the_warp_up_so_the_next_jump_sounds_it_again() {
+        let catalog = with_warp_up_x2();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+        frame(&mut session);
+        session.condition = crate::combat::hull::Condition::Disabled;
+        frame(&mut session);
+        assert_eq!(session.preparing_jump(), None, "collapsed");
+        assert!(
+            session
+                .take_sounds()
+                .contains(&SimSound::Halt(&crate::sound::WARP_UP_HALTS))
+        );
+        session.condition = crate::combat::hull::Condition::Intact;
+        given_up_by_a_move(&mut session, &catalog);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+    }
+
+    #[test]
+    fn the_arrival_ends_the_warp_up() {
+        let catalog = with_warp_up_x2();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert!(session.warp_ups.playing(true));
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+    }
+
+    #[test]
+    fn landing_ends_the_warp_up() {
+        let catalog = with_warp_up_x2();
+        let mut session = session(&catalog);
+        session.warp_ups.start(true, 120);
+        land_now(&mut session).expect("lands");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
     }
 
     #[test]

@@ -18,10 +18,20 @@ pub enum SimSound {
     },
     /// The ship took off.
     TookOff,
-    /// The warp stage of a jump began, as the brake ended or at once
-    /// when the ship needed none: the warp-up, `snd ` 128 (`_HandlePlayer`
-    /// @0x6b60d-0x6b690), before the turn to the jump's bearing.
+    /// The warp stage of a jump began out of double time, as the brake
+    /// ended or at once when the ship needed none: the warp-up,
+    /// `_warpUpSnd[0]`, `snd ` 128 "Warp up" (`_HandlePlayer`
+    /// @0x6b645-0x6b690), before the turn to the jump's bearing. None
+    /// sounds while 128 still plays from an earlier start: the
+    /// still-playing skip (@0x6b645-0x6b658), which the session decides
+    /// (see the [`warp`](crate::warp) module's `WarpUps`).
     JumpBegan,
+    /// The warp stage of a jump began in double time: the double-time
+    /// warp-up, `_warpUpSnd[1]`, `snd ` 129 "Warp up x2" (`_HandlePlayer`
+    /// @0x6b60d-0x6b63f, @0x6b66f-0x6b690), in place of
+    /// [`SimSound::JumpBegan`], with its own still-playing skip
+    /// (@0x6b617-0x6b62b).
+    JumpBeganInDoubleTime,
     /// A jump ended in the next system: the warp-out, `snd ` 130
     /// (`_HandlePlayer` @0x6bbd3-0x6bc08; the hypergate @0x63e57 and the
     /// wormhole @0x6443d play it too). The original may start it up to a
@@ -136,7 +146,8 @@ pub enum SimSound {
     Klaxon,
     /// Each named `snd ` is halted if it is playing, as the original asks
     /// `ST_IsSoundPlaying` and then calls `ST_HaltSound`: every instance
-    /// of it, on any channel. The player's final explosion raises it with
+    /// of it, on any channel. A halted warp-up is over for the session's
+    /// still-playing skip and the double-time switch too. The player's final explosion raises it with
     /// [`PLAYER_EXPLOSION_HALTS`]; the eject, a sabotage kill outfit going
     /// off and a disabled player's jump collapse with [`WARP_UP_HALTS`],
     /// 128 and 129.
