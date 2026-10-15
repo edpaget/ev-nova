@@ -2170,6 +2170,43 @@ mod tests {
     }
 
     #[test]
+    fn a_burst_of_copies_one_at_a_time_runs_burst_count_times_the_count_carried() {
+        // `_WeaponBurstInterval` (@0x831c): BurstCount x the count for
+        // copies that fire one at a time; the burst's end spends one round
+        // at each multiple of BurstCount (@0x8907d-0x890ba).
+        let bursting = WeaponRecord {
+            flags3: AMMO_AT_BURST_END,
+            burst_count: 2,
+            burst_reload: 50,
+            ..pick_launcher(130, -1, 0)
+        };
+        let mut armament = mounted(bursting, 2);
+        let rounds = LauncherRounds::from([(WeaponId(130), 10), (WeaponId(138), 5)]);
+        let mut supplies = npc_supplies(rounds, 0.0);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            let volley = supplies.pick(&mut armament, 130, RuleSource::Engine, &mut ahead);
+            assert_eq!(volley.map(|volley| volley.launches.len()), Some(1));
+            let mount = armament.mounts()[0];
+            seen.push((
+                mount.burst,
+                mount.reload,
+                supplies.rounds.slot(WeaponId(130)),
+            ));
+        }
+        assert_eq!(
+            seen,
+            [(1, 0.0, 10), (2, 0.0, 9), (3, 0.0, 9), (0, 49.0, 8)],
+            "a round at bursts 2 and 4, the burst reload after the 4th"
+        );
+        assert_eq!(
+            supplies.rounds.slot(WeaponId(138)),
+            5,
+            "the copies pay none"
+        );
+    }
+
+    #[test]
     fn a_spawned_copy_reloads_by_its_share_of_reload() {
         let mut armament = mounted(pick_launcher(130, -1, 30), 3);
         let mut supplies = npc_supplies(LauncherRounds::from([(WeaponId(130), 9)]), 0.0);

@@ -5188,6 +5188,26 @@ mod tests {
         let mut combat = Combat::default();
         tick(&mut combat, &mut [still], &NovaDisable);
         assert_eq!(combat.take_shoves(), []);
+        // A recoiling turret, its target ahead or astern in its blind
+        // spot: a call that spawns nothing pushes nothing (@0x88dc0).
+        let turret = WeaponRecord {
+            recoil: 100,
+            flags: crate::combat::aim::BLIND_REAR,
+            ..turret(4)
+        };
+        let pushes = |x: f32| {
+            let mut shooter = Ship::at(1, 0.0, 0.0)
+                .armed(turret)
+                .picking(130)
+                .targeting(B);
+            shooter.hull.mass = 50.0;
+            let mut combat = Combat::default();
+            let mut ships = [shooter, Ship::at(2, x, 0.0)];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            combat.take_shoves()
+        };
+        assert_eq!(pushes(100.0).len(), 1, "ahead");
+        assert_eq!(pushes(-100.0), [], "astern, in its blind spot");
     }
 
     #[test]
