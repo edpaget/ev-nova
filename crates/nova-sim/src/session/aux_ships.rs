@@ -722,6 +722,26 @@ mod tests {
         assert_eq!(session.npc(escort).expect("in").aux, Some(0));
     }
 
+    /// Each escort keeps its own mark: one with none (as a hired escort,
+    /// `_SpawnEscort` clearing +0x8a @0x3ff8c) stays without one.
+    #[test]
+    fn each_escort_kept_across_a_setup_keeps_its_own_mark() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let ids = three_in(&mut session, &catalog);
+        session.fleet_up(ids[0], None);
+        session.npc_mut(ids[0]).expect("in").aux = None;
+        session.fleet_up(ids[1], None);
+        land_and_take_off(&mut session, &catalog);
+        let marks: Vec<Option<u8>> = session
+            .fleet
+            .iter()
+            .map(|id| session.npc(id.expect("placed")).expect("in").aux)
+            .collect();
+        assert_eq!(marks, vec![None, Some(0)]);
+        assert_eq!(aux_of(&session).left, 1, "only the third given back");
+    }
+
     /// Released, it is no longer kept, so the next setup gives it back
     /// (@0x3bfe8-0x3c024).
     #[test]
