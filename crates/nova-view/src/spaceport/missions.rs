@@ -56,7 +56,6 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
@@ -143,7 +142,6 @@ pub struct MissionComputerScreen {
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info_requested: bool,
     closed: bool,
-    sounds: Vec<Sound>,
 }
 
 impl MissionComputerScreen {
@@ -197,7 +195,6 @@ impl MissionComputerScreen {
             info_requested: false,
             player_info_requested: false,
             closed: false,
-            sounds: Vec::new(),
         };
         screen.set_computer(computer);
         screen
@@ -347,7 +344,6 @@ impl Screen for MissionComputerScreen {
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
-        self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
         }
@@ -382,11 +378,6 @@ impl Screen for MissionComputerScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
-    }
-
-    /// The buttons' sounds, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -425,7 +416,6 @@ pub struct MissionInfoScreen {
     /// The slot Abort asked for, until it is taken.
     abort: Option<u8>,
     closed: bool,
-    sounds: Vec<Sound>,
 }
 
 impl MissionInfoScreen {
@@ -471,7 +461,6 @@ impl MissionInfoScreen {
             },
             abort: None,
             closed: false,
-            sounds: Vec::new(),
         };
         screen.set_info(info);
         screen
@@ -597,7 +586,6 @@ impl Screen for MissionInfoScreen {
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
-        self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
         }
@@ -632,11 +620,6 @@ impl Screen for MissionInfoScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
-    }
-
-    /// The buttons' sounds, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -957,14 +940,12 @@ mod tests {
         assert!(screen.closed());
     }
 
-    const DOWN: Sound = Sound::Ui(crate::sound::UiSound::ButtonDown);
-    const UP: Sound = Sound::Ui(crate::sound::UiSound::ButtonUp);
-
+    /// `_TrackMissionButtons` @0x287f5 plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {
         let mut screen = screen();
         click_item(&mut screen, ACCEPT_ITEM);
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_accept(), Some(MissionId(130)));
         let at = screen
             .dialog()
@@ -980,7 +961,7 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_accept(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
     // The mission info screen.
@@ -1197,8 +1178,9 @@ mod tests {
         assert!(screen.closed());
     }
 
+    /// `_TrackMissionInfoButtons` @0x2850e plays nothing under the pointer.
     #[test]
-    fn mission_infos_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn mission_infos_pointer_click_is_silent_and_a_click_abandoned_does_nothing() {
         let mut screen = info_screen();
         let at = screen
             .dialog()
@@ -1214,9 +1196,9 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_abort(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
         click_info(&mut screen, ABORT_ITEM);
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_abort(), Some(0));
     }
 

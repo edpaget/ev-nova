@@ -4622,7 +4622,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn leaving_the_spaceport_by_leave_keeps_its_click_and_the_take_off() {
+    fn leaving_the_spaceport_by_leave_sounds_only_the_take_off() {
         let mut screen = with_dialogs(data());
         land(&mut screen);
         assert_eq!(
@@ -4643,13 +4643,14 @@ pub(super) mod tests {
             .center();
         assert_eq!(
             press_and_release(&mut screen, leave),
-            [vec![DOWN], vec![UP, Sound::Sim(SimSound::TookOff)]]
+            [vec![], vec![Sound::Sim(SimSound::TookOff)]]
         );
         assert!(screen.spaceport_view().is_none(), "gone");
     }
 
     #[test]
-    fn closing_the_about_text_by_done_keeps_its_click() {
+    /// `_TrackTextButtons` @0x26bb0 plays nothing under the pointer.
+    fn closing_the_about_text_by_done_is_silent() {
         let mut screen = with_dialogs(data());
         open_about(&mut screen);
         let done = about(&screen)
@@ -4657,7 +4658,7 @@ pub(super) mod tests {
             .item_bounds(1)
             .expect("Done")
             .center();
-        assert_eq!(press_and_release(&mut screen, done), [vec![DOWN], vec![UP]]);
+        assert_eq!(press_and_release(&mut screen, done), [vec![], vec![]]);
         assert!(screen.about().is_none(), "closed");
     }
 
@@ -5073,7 +5074,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn closing_by_ok_keeps_its_click() {
+    fn closing_by_ok_is_silent() {
         let mut screen = with_dialogs(data());
         open_prefs(&mut screen);
         let ok = prefs_dialog(&screen)
@@ -5081,7 +5082,7 @@ pub(super) mod tests {
             .item_bounds(1)
             .expect("OK")
             .center();
-        assert_eq!(press_and_release(&mut screen, ok), [vec![DOWN], vec![UP]]);
+        assert_eq!(press_and_release(&mut screen, ok), [vec![], vec![]]);
         assert!(screen.preferences().is_none(), "closed");
     }
 
@@ -6022,17 +6023,10 @@ pub(super) mod tests {
             at: ok,
         };
         screen.input(&click(true));
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(nova_view::sound::UiSound::ButtonDown)]
-        );
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&click(false));
         assert_eq!(screen.showing(), Showing::Flight);
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(nova_view::sound::UiSound::ButtonUp)],
-            "OK's sound, kept as the note closes"
-        );
+        assert_eq!(screen.take_sounds(), [], "OK is silent as it closes");
     }
 
     /// Never fires, and draws the last outcome: a heading of 359.
@@ -6253,7 +6247,8 @@ pub(super) mod tests {
             .center();
         assert_eq!(
             press_and_release(&mut screen, cancel),
-            [vec![DOWN], vec![UP]]
+            [vec![], vec![]],
+            "the pilot list's Cancel is silent"
         );
         assert!(screen.pilot_list().is_none(), "closed");
         let at = screen
@@ -6262,7 +6257,7 @@ pub(super) mod tests {
             .button(MenuChoice::NewPilot)
             .rect
             .center();
-        press_and_release(&mut screen, at);
+        assert_eq!(press_and_release(&mut screen, at), [vec![DOWN], vec![UP]]);
         let ok = screen
             .new_pilot()
             .expect("open")
@@ -6270,7 +6265,11 @@ pub(super) mod tests {
             .item_bounds(2)
             .expect("Cancel")
             .center();
-        assert_eq!(press_and_release(&mut screen, ok), [vec![DOWN], vec![UP]]);
+        assert_eq!(
+            press_and_release(&mut screen, ok),
+            [vec![], vec![]],
+            "the new pilot dialog's Cancel is silent"
+        );
         assert!(screen.new_pilot().is_none(), "cancelled");
     }
 
@@ -8005,10 +8004,7 @@ pub(super) mod tests {
         let mut screen = boarded();
         let cash = flight(&screen).pilot().expect("a pilot").cash();
         let sounds = plunder_click(&mut screen, 3);
-        assert_eq!(
-            sounds,
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(sounds, []);
         assert_eq!(
             flight(&screen).pilot().expect("a pilot").cash(),
             cash + 5750
@@ -8438,10 +8434,7 @@ pub(super) mod tests {
             });
             sounds.extend(screen.take_sounds());
         }
-        assert_eq!(
-            sounds,
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(sounds, []);
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(screen.comm().is_none());
         assert_eq!(flight(screen).hailing(), None, "hung up");

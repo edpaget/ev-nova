@@ -30,7 +30,7 @@ use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::preferences::Prefs;
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::{Sound, SoundPrefs};
+use crate::sound::SoundPrefs;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -446,15 +446,6 @@ impl Screen for PrefsDialog {
         self.target = None;
     }
 
-    /// OK's sounds as it is clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
-
     /// The preferences once after each change.
     fn take_prefs(&mut self) -> Option<Prefs> {
         self.take_change()
@@ -467,7 +458,6 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
-    use crate::sound::UiSound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemTemplate, Placement};
     use crate::ui::volume::{Arrow, draw_arrow};
@@ -1109,8 +1099,10 @@ mod tests {
         assert_eq!(labels, ["edge 4", "edge 5", "edge 6", "edge 7"]);
     }
 
+    /// OK is silent under the pointer, as the Cocoa Preferences'
+    /// `accept:` @0xcfe3a plays nothing.
     #[test]
-    fn a_click_on_ok_sounds_it_and_the_rest_are_silent() {
+    fn pointer_click_is_silent_as_the_original() {
         let mut dialog = prefs();
         let point = dialog.music().rect().center();
         click(&mut dialog, point);
@@ -1119,9 +1111,9 @@ mod tests {
         assert_eq!(dialog.take_sounds(), []);
         let ok = ok(&dialog);
         dialog.input(&button(true, ok));
-        assert_eq!(dialog.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(dialog.take_sounds(), []);
         dialog.input(&button(false, ok));
-        assert_eq!(dialog.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(dialog.take_sounds(), []);
         let mut dialog = prefs();
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_sounds(), []);

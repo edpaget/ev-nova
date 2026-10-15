@@ -501,7 +501,6 @@ impl Screen for TradeScreen {
             } => self.ask(Direction::Sell, true),
             _ => {
                 let event = laid.dialog.input(input);
-                self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
                 if let Some(DialogEvent::Item(item)) = event {
                     self.activate(item);
                 }
@@ -596,7 +595,9 @@ impl Screen for TradeScreen {
         self.quantity.release_keys();
     }
 
-    /// The buttons' sounds and the quantity dialog's, in order.
+    /// The quantity dialog's and the offer's sounds, in order. The
+    /// buttons are silent under the pointer, as `_TrackTradeButtons`
+    /// @0x294cd plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -1322,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dialogs_beep_and_button_sounds_come_out_of_the_exchange() {
+    fn the_dialogs_beep_comes_out_of_the_exchange_and_its_buttons_are_silent() {
         let mut screen = screen();
         alt_click(&mut screen, BUY_ITEM);
         screen.take_sounds();
@@ -1336,10 +1337,7 @@ mod tests {
         );
         let cancel = quantity_item(&screen, 4);
         click(&mut screen, cancel);
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(screen.take_sounds(), []);
     }
 
     /// Waste at -200 a ton, none held, with `cash` and a ton free.
@@ -1624,8 +1622,9 @@ mod tests {
         assert!(!held.closed());
     }
 
+    /// `_TrackTradeButtons` @0x294cd plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_as_they_are_clicked_and_keys_are_silent() {
+    fn pointer_click_and_keys_are_silent_as_the_original() {
         let mut screen = screen();
         let buy = item(&screen, BUY_ITEM).center();
         screen.input(&Input::PointerButton {
@@ -1633,13 +1632,13 @@ mod tests {
             pressed: true,
             at: buy,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,
             pressed: false,
             at: buy,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(screen.take_sounds(), []);
         press(&mut screen, BUY_KEY);
         press(&mut screen, Key::Enter);
         assert_eq!(screen.take_sounds(), []);
@@ -1781,7 +1780,7 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_offer_choice(), None, "abandoned");
-        assert!(!screen.take_sounds().is_empty(), "its sounds go through");
+        assert_eq!(screen.take_sounds(), [], "silent under the pointer");
         screen.input(&button(true));
         screen.input(&button(false));
         assert_eq!(

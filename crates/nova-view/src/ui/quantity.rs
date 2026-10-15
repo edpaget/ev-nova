@@ -426,10 +426,7 @@ mod tests {
         let mut dialog = dialog();
         typed(&mut dialog, "5");
         assert_eq!(dialog.field().text(), "5");
-        assert_eq!(
-            click(&mut dialog, OK_ITEM),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut dialog, OK_ITEM), []);
         assert_eq!(dialog.take_outcome(), Some(5));
         assert_eq!(dialog.take_outcome(), None, "taken once");
         let mut dialog = self::dialog();

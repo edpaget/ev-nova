@@ -51,7 +51,6 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -539,15 +538,6 @@ impl Screen for CommDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// The buttons' sounds as they are clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 /// The haggle dialog (see the module docs).
@@ -717,15 +707,6 @@ impl Screen for HaggleDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// The buttons' sounds as they are clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -736,7 +717,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
-    use crate::sound::UiSound;
+    use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
 
     fn button(label: &str, key: Option<char>) -> HailButton {
@@ -908,6 +889,8 @@ mod tests {
         assert!(texts(&dialog).contains(&"Taunt".to_owned()));
     }
 
+    /// Silent under the pointer: `_TrackCommDialogButtons` @0x28eff and
+    /// `_TrackPlanetCommDialogButtons` @0x28b28 play nothing.
     #[test]
     fn a_click_gives_its_press_once() {
         let mut three = dialog(&HailView {
@@ -928,10 +911,7 @@ mod tests {
             let sounds = click(&mut three, at);
             assert_eq!(three.take_press(), Some(press), "{item}");
             assert_eq!(three.take_press(), None, "once");
-            assert_eq!(
-                sounds,
-                [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-            );
+            assert_eq!(sounds, []);
         }
         let at = three
             .dialog()
@@ -1414,18 +1394,16 @@ mod tests {
         }
     }
 
+    /// `_TrackHaggleButtons` @0x27670 plays nothing under the pointer.
     #[test]
-    fn a_haggle_button_sounds_as_it_is_clicked_and_an_abandoned_click_chooses_nothing() {
+    fn a_haggle_button_click_is_silent_and_an_abandoned_click_chooses_nothing() {
         let mut dialog = haggle(3000);
         let at = dialog
             .dialog()
             .item_bounds(ACCEPT_ITEM)
             .expect("an item")
             .center();
-        assert_eq!(
-            click(&mut dialog, at),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut dialog, at), []);
         dialog.take_choice();
         for pressed in [true, false] {
             if !pressed {

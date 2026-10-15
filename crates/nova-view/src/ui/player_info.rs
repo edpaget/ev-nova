@@ -586,7 +586,6 @@ impl PlayerInfoScreen {
             return;
         };
         let event = dialog.input(input);
-        let _ = dialog.take_sound();
         match event {
             Some(DialogEvent::Item(YES_ITEM)) => {
                 self.confirm = None;

@@ -34,7 +34,6 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -414,15 +413,6 @@ impl Screen for NewPilotDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// OK's and Cancel's sounds as they are clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -431,7 +421,7 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::Point;
     use crate::input::MouseButton;
-    use crate::sound::{Sound, UiSound};
+    use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -596,10 +586,7 @@ mod tests {
         let mut dialog = self::dialog();
         typed(&mut dialog, "Bob");
         let ok = center(&dialog, OK_ITEM);
-        assert_eq!(
-            click(&mut dialog, ok),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut dialog, ok), []);
         assert_eq!(dialog.take_outcome(), Some(created("Bob", Gender::Male)));
     }
 

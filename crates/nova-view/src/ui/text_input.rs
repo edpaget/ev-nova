@@ -375,10 +375,7 @@ mod tests {
     fn ok_confirms_and_cancel_declines_as_clicked() {
         let mut dialog = dialog();
         typed(&mut dialog, " A b ");
-        assert_eq!(
-            click(&mut dialog, OK_ITEM),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut dialog, OK_ITEM), []);
         assert_eq!(
             dialog.take_outcome(),
             Some(TextInputOutcome::Confirm(" A b ".to_owned())),

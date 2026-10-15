@@ -736,12 +736,10 @@ impl Panel {
         &self.dialog
     }
 
-    /// Its input, its sounds added to `sounds`: whether Done, Return or
-    /// Escape closed it.
-    pub(super) fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> bool {
-        let event = self.dialog.input(input);
-        sounds.extend(self.dialog.take_sound().map(Sound::Ui));
-        event == Some(DialogEvent::Item(PANEL_DONE_ITEM))
+    /// Its input, silent under the pointer as `_TrackShipyardButtons`
+    /// @0x2a54e: whether Done, Return or Escape closed it.
+    pub(super) fn input(&mut self, input: &Input) -> bool {
+        self.dialog.input(input) == Some(DialogEvent::Item(PANEL_DONE_ITEM))
     }
 
     /// Abandons any click in progress on it.
@@ -1298,7 +1296,7 @@ impl ShipyardScreen {
         let Some(panel) = &mut self.panel else {
             return;
         };
-        if panel.input(input, &mut self.sounds) {
+        if panel.input(input) {
             self.panel = None;
         }
     }
@@ -1415,7 +1413,6 @@ impl Screen for ShipyardScreen {
             self.select(index);
         } else if let Ok(laid) = &mut self.laid {
             let event = laid.dialog.input(input);
-            self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
             if let Some(DialogEvent::Item(item)) = event {
                 self.activate(item);
             }
@@ -1486,7 +1483,9 @@ impl Screen for ShipyardScreen {
         }
     }
 
-    /// The buttons' sounds, in order.
+    /// The offer's and the naming dialog's sounds, in order. The buttons
+    /// are silent under the pointer, as `_TrackShipyardButtons` @0x2a54e
+    /// plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -2643,15 +2642,13 @@ mod tests {
         assert_eq!(screen.take_declined(), None);
     }
 
+    /// `_TrackTextButtons` @0x26bb0 plays nothing under the pointer.
     #[test]
-    fn ok_clicked_orders_the_ship_with_its_sounds() {
+    fn ok_clicked_orders_the_ship_silently() {
         let mut screen = naming_by_key();
         screen.take_sounds();
         naming_click(&mut screen, crate::ui::text_input::OK_ITEM);
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(
             screen.take_order(),
             Some(ShipOrder {
@@ -3138,15 +3135,7 @@ mod tests {
         click(&mut screen, done);
         assert!(screen.info_panel().is_none());
         assert!(!screen.closed());
-        assert_eq!(
-            screen.take_sounds(),
-            [
-                Sound::Ui(UiSound::ButtonDown),
-                Sound::Ui(UiSound::ButtonUp),
-                Sound::Ui(UiSound::ButtonDown),
-                Sound::Ui(UiSound::ButtonUp)
-            ]
-        );
+        assert_eq!(screen.take_sounds(), [], "Info and Done are silent");
         press(&mut screen, INFO_KEY);
         assert!(screen.info_panel().is_some(), "I opens it");
         screen.input(&key(INFO_KEY, true, true));
@@ -3674,8 +3663,9 @@ mod tests {
         assert!(!held.closed());
     }
 
+    /// `_TrackShipyardButtons` @0x2a54e plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_and_cancelling_the_pointer_abandons_a_click() {
+    fn pointer_click_is_silent_as_the_original_and_cancelling_the_pointer_abandons_a_click() {
         let mut screen = screen();
         press(&mut screen, Key::Right);
         let buy = item(&screen, BUY_ITEM).center();
@@ -3685,7 +3675,7 @@ mod tests {
             at: buy,
         };
         screen.input(&button(true));
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(screen.take_sounds(), []);
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_request(), None);
@@ -3824,7 +3814,7 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_offer_choice(), None, "abandoned");
-        assert!(!screen.take_sounds().is_empty(), "its sounds go through");
+        assert_eq!(screen.take_sounds(), [], "silent under the pointer");
         screen.input(&button(true));
         screen.input(&button(false));
         assert_eq!(

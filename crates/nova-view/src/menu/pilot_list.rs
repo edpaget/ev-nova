@@ -15,7 +15,6 @@ use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::dialog::outline;
 use crate::ui::prefs::{BACKDROP, BORDER};
@@ -82,7 +81,6 @@ pub struct PilotList {
     tracked: Option<Target>,
     tracker: ButtonTracker,
     outcome: Option<PilotListOutcome>,
-    sounds: Vec<Sound>,
 }
 
 impl std::fmt::Debug for PilotList {
@@ -124,7 +122,6 @@ impl PilotList {
             tracked: None,
             tracker: ButtonTracker::default(),
             outcome: None,
-            sounds: Vec::new(),
         }
     }
 
@@ -244,10 +241,9 @@ impl PilotList {
             Target::Cancel => (self.cancel.rect, true),
         };
         let activated = self.tracker.track(area, enabled, input);
-        let sound = self.tracker.take_sound();
-        if let (Some(sound), Target::Open | Target::Cancel) = (sound, target) {
-            self.sounds.push(Sound::Ui(sound));
-        }
+        // Silent under the pointer: Open Pilot is Navigation Services
+        // (`_MyOpenDocument` @0x731c5), which plays nothing.
+        let _ = self.tracker.take_sound();
         if !self.tracker.armed() {
             self.tracked = None;
         }
@@ -341,12 +337,6 @@ impl Screen for PilotList {
         self.tracker.cancel_pointer();
         self.tracked = None;
     }
-
-    /// Open's and Cancel's sounds as they are clicked; a pilot clicks
-    /// silently.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
-    }
 }
 
 #[cfg(test)]
@@ -355,7 +345,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
-    use crate::sound::UiSound;
+    use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
 
     fn list(keys: &[&str]) -> PilotList {
@@ -462,18 +452,18 @@ mod tests {
         assert_eq!(pilots.take_outcome(), None);
     }
 
+    /// Open and Cancel are silent under the pointer: Open Pilot is
+    /// Navigation Services (`_MyOpenDocument` @0x731c5), which plays
+    /// nothing.
     #[test]
     fn open_opens_the_selection_and_cancel_or_escape_cancels() {
         let mut pilots = list(&["Ada", "Bob"]);
         pilots.input(&key(Key::Down, false));
         let open_at = pilots.open_button().rect.center();
-        assert_eq!(
-            click(&mut pilots, open_at),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut pilots, open_at), []);
         assert_eq!(pilots.take_outcome(), open("Bob"));
         let cancel = pilots.cancel_button().rect.center();
-        click(&mut pilots, cancel);
+        assert_eq!(click(&mut pilots, cancel), []);
         assert_eq!(pilots.take_outcome(), Some(PilotListOutcome::Cancel));
         pilots.input(&key(Key::Escape, true));
         assert_eq!(pilots.take_outcome(), None, "a repeat");

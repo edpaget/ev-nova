@@ -17,7 +17,6 @@ use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::input::Input;
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -135,16 +134,6 @@ impl Screen for NoteDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// OK's sounds as it is clicked; the note itself plays none, as
-    /// `_EVNoteAlert` plays none.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -153,7 +142,6 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
-    use crate::sound::UiSound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -296,8 +284,10 @@ mod tests {
         );
     }
 
+    /// `_TrackOkButton` @0x26d7a plays nothing under the pointer, and
+    /// `_EVNoteAlert` plays nothing of its own.
     #[test]
-    fn a_click_on_ok_sounds_it_and_the_note_plays_nothing_else() {
+    fn pointer_click_is_silent_as_the_original() {
         let mut note = note(&template());
         assert_eq!(note.take_sounds(), []);
         let ok = note.dialog().item_bounds(OK_ITEM).expect("OK").center();
@@ -307,9 +297,9 @@ mod tests {
             at: ok,
         };
         note.input(&button(true));
-        assert_eq!(note.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(note.take_sounds(), []);
         note.input(&button(false));
-        assert_eq!(note.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(note.take_sounds(), []);
     }
 
     /// A key that activates OK plays nothing in the original:

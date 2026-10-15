@@ -681,11 +681,12 @@ fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
     assert_eq!(drain(&log), [play(151), play(LANDING_SOUND)]);
     harness.frame();
 
-    // Leave's button going down and coming up; taking off is silent.
+    // Leave is silent under the pointer, as `_TrackPlanetButtons`
+    // @0x2996f plays nothing; taking off is silent too.
     let leave = harness.item(LEAVE_ITEM).center();
     harness.click(leave);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(drain(&log), [play(600), play(601)]);
+    assert_eq!(drain(&log), []);
     harness.frame();
     assert_eq!(drain(&log), []);
 

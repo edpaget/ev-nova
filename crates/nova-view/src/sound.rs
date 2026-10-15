@@ -1,9 +1,10 @@
 //! The sounds screens make, as events: what happened, not what to play.
 //! The audio side decides which `snd ` each one plays, if any.
 //!
-//! - [`UiSound`]: the interface's own, a button pressed and released,
-//!   the alert as something is refused, the news dialog's beeps, the
-//!   course map's beeps, and the beep of the player info refused.
+//! - [`UiSound`]: the interface's own, a main-menu button pressed and
+//!   released, the alert as something is refused, the news dialog's
+//!   beeps, the course map's beeps, and the beep of the player info
+//!   refused.
 //! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
 //! - [`Sound`]: any of them, as a screen reports it through
@@ -32,18 +33,38 @@
 //! `_TradeFilter` @0x4e092, `_OutfitFilter` @0x58039, `_ShipyardFilter`
 //! @0x60449, `_MissionFilter` @0x9f7a9, `_MissionInfoFilter` @0x9d6e5,
 //! `_SingleMissionFilter` @0x98d9a).
+//!
+//! **A pointer click makes no sound either**, but on the main menu. Of the
+//! original's button trackers only `_TrackMainScreenButtons` @0x195b9
+//! plays a sound. The rest call no sound routine, so their buttons are
+//! silent under the pointer: the in-game dialogs' `_TrackTextButtons`
+//! @0x26bb0 (text dialogs, descriptions and the About box),
+//! `_TrackOkButton` @0x26d7a, `_TrackCommDialogButtons` @0x28eff,
+//! `_TrackPlanetCommDialogButtons` @0x28b28, `_TrackHaggleButtons`
+//! @0x27670, `_TrackPlunderButtons` @0x2732a, `_TrackCapAssignButtons`
+//! @0x291c7, `_TrackPlayerInfoButtons` @0x27c4d, `_TrackRaceButtons`
+//! @0x2689d and `_TrackMapButtons` @0x2aafa, and the spaceport's
+//! `_TrackPlanetButtons` @0x2996f, `_TrackBarButtons` @0x26fd5,
+//! `_TrackEscortButtons` @0x27987, `_TrackTradeButtons` @0x294cd,
+//! `_TrackOutfitButtons` @0x2a029, `_TrackShipyardButtons` @0x2a54e,
+//! `_TrackMissionButtons` @0x287f5, `_TrackMissionInfoButtons` @0x2850e
+//! and `_TrackSingleMissionButtons` @0x28188. Open Pilot is Navigation
+//! Services (`_MyOpenDocument` @0x731c5), which plays nothing either.
 
 pub use nova_sim::{SimSound, SoundId};
 
 /// A sound the interface makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiSound {
-    /// A button was pressed: the pointer went down on it. A key that
-    /// activates a button never raises it (see the module docs).
+    /// A main-menu button was pressed: the pointer went down on it
+    /// (`_TrackMainScreenButtons` @0x195b9). Only the main menu's buttons
+    /// raise it; a key that activates a button never does (see the module
+    /// docs).
     ButtonDown,
-    /// A pressed button popped back up: the pointer was let go, on the
-    /// button or off it. A key that activates a button never raises it
-    /// (see the module docs).
+    /// A pressed main-menu button popped back up: the pointer was let go,
+    /// on the button or off it (`_TrackMainScreenButtons` @0x195b9). Only
+    /// the main menu's buttons raise it; a key that activates a button
+    /// never does (see the module docs).
     ButtonUp,
     /// A key activated a main-menu button: `_PlayMainScreenClickSound`
     /// @0x177af, which plays snd 600, then 601 once 600 has ended.
