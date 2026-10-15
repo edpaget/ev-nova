@@ -106,7 +106,9 @@ pub enum Mode {
     /// `_HighLevelAIHandler` never bursts it out (@0x8dd61). Its wait
     /// +0x4c still runs: `_HandleShip` skips its steering, thrust and fire
     /// (@0x34a54-0x34a72), so it holds still, and once the wait is out it
-    /// flies its goal from rest ([`Npc::hold_at_gate`]). Its decisions are
+    /// flies its goal from rest ([`Npc::hold_at_gate`]), with no burst:
+    /// its attack rewrites the burst word +0x34 the step it first thrusts
+    /// (see [`autopilot`](crate::traffic::autopilot)). Its decisions are
     /// due through the hold, as goal 0x15 no longer skips the per-type AIs
     /// (@0x8ff18-0x8ff20 → @0x8ff26-0x90016), but it fires only the point
     /// defence of a waiting escort or fighter (see the traffic's tick).

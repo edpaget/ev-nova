@@ -92,11 +92,21 @@
 //! - Held at its gate ([`Mode::HeldAtGate`]), the player having hit it
 //!   there, it holds still where it waited, at rest, whatever its
 //!   condition and goal, its wait counting down, then flies its goal from
-//!   rest, with no burst and no wait after it. The original bursts it out
-//!   on the +0x34 the emerge left, steered by its attack's thrust word
-//!   +0x30 (`_HandleShip` @0x34a7b-0x34d32, `_LowLevelAIHandler`
-//!   @0x851f1), which [`Controls`] does not carry; that burst is not
-//!   modelled.
+//!   rest, with no burst and no wait after it, its goal kept. So does the
+//!   original: `_LowLevelAIHandler` zeroes the thrust word +0x30 each
+//!   frame (@0x851e9-0x8520d), so `_HandleShip` skips the thrust and burst
+//!   block (@0x34a7b-0x34a84) until the attack first thrusts, and every
+//!   goal-4 substate the engine reaches writes the burst word +0x34 in
+//!   that same step (sub-goal 5 @0x85d44-0x85d59, 6 @0x85f7b-0x85f82 or
+//!   @0x860a6, 7 @0x86957-0x8695e, 0x10 @0x8645a-0x86474, 0x11
+//!   @0x865b2-0x865e3). The negative +0x34 the emerge left (@0x895aa-0x895bd)
+//!   is gone, so the ship thrusts as usual (@0x34a8a-0x34bbb), never bursts
+//!   (@0x34bc0-0x34d32), never reaches `_AIMakeShipStopJumping` (@0x82e77)
+//!   and never takes its Rand(30)+30 wait (@0x34d5c-0x34d8b). Only
+//!   sub-goal 0x12's formation thrust (@0x8533d, an NPC formation the
+//!   engine does not model) and the braking thrusts of sub-goals 1 and 0xe
+//!   (@0x853fe, @0x8551e, @0x85552, @0x87137, which run only at a speed
+//!   of 0.35 or more, never at rest) leave +0x34 alone and would burst.
 //! - A ship with no lead, its glide or burst over, holds its course
 //!   ([`Mode::Coasting`]) for [`POST_BURST_WAIT`] +
 //!   `Rand(`[`POST_BURST_SPREAD`]`)` ticks (`_HandleShip`
@@ -571,8 +581,9 @@ fn wait_at_gate(npc: &mut Npc, ticks_left: u32) {
 /// as `_HandleShip` counts +0x4c down for every ship (@0x3501f-0x35048)
 /// and skips its steering, thrust and fire while it runs
 /// (@0x34a54-0x34a72); and flying its goal from rest once the wait is
-/// out, with no burst and no wait after it (the goal-4 burst is not
-/// modelled; see the module docs).
+/// out, with no burst and no wait after it, as the original's attack
+/// rewrites the burst word +0x34 the step it first thrusts (see the
+/// module docs).
 fn hold_at_gate(npc: &mut Npc, ticks_left: u32) {
     npc.state.velocity = Vec2::ZERO;
     let left = ticks_left.saturating_sub(1);
@@ -1465,6 +1476,50 @@ mod tests {
         fly(&mut ship, &[], Some(&player));
         fly(&mut ship, &[], Some(&player));
         assert_ne!(ship.state.heading, 45.0, "turns on the player");
+    }
+
+    #[test]
+    fn a_ship_held_at_its_gate_flies_its_attack_from_rest_with_no_burst_and_keeps_goal_4() {
+        // Every goal-4 substate the engine reaches writes +0x34 in the step
+        // it first thrusts (sub 5 @0x85d44-0x85d59, 6 @0x85f7b, 7 @0x86957,
+        // 0x10 @0x8645a, 0x11 @0x865b2), so `_HandleShip` takes ordinary
+        // thrust (@0x34a8a-0x34bbb), never the burst (@0x34bc0) nor
+        // `_AIMakeShipStopJumping` (@0x82e77) and its Rand(30)+30
+        // (@0x34d5c-0x34d8b).
+        let player = at(600.0, 200.0, 0.0, 0.0, 0.0);
+        let mut ship = npc(
+            FAST,
+            Goal::Attack(ShipRef::Player),
+            at(100.0, 200.0, 0.0, 0.0, 45.0),
+        );
+        ship.mode = Mode::HeldAtGate { ticks_left: 2 };
+        let top = TopSpeeds::own_of(&ship);
+        let mut draws = Draws::of(&[]);
+        for tick in 0..120 {
+            super::fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                Some(&player),
+                top,
+                &mut draws,
+            );
+            assert!(
+                !matches!(ship.mode, Mode::LeavingGate { .. } | Mode::Coasting { .. }),
+                "tick {tick}: {:?}",
+                ship.mode
+            );
+            assert_eq!(ship.goal, Goal::Attack(ShipRef::Player), "tick {tick}");
+            assert!(
+                ship.state.velocity.length() <= top.own + 1e-3,
+                "tick {tick}: {} over {}",
+                ship.state.velocity.length(),
+                top.own
+            );
+        }
+        assert_eq!(ship.mode, Mode::Flying);
+        assert!(ship.state.velocity.length() > 0.0, "it flies its attack");
+        assert_eq!(draws.asked, Vec::<u32>::new(), "no post-burst roll");
     }
 
     #[test]
