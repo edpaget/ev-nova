@@ -111,6 +111,7 @@
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
 //! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
 //! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux_ships`](crate::mission::aux_ships)) | the exit restarts them as a jump does: "-1: any system" |
+//! | [`AuxAbortFallThrough`](RuleKey::AuxAbortFallThrough) | `aux_abort_fall_through` | after a `Flags` 0x0001 mission auto-aborts as its auxiliary ships all come, the special-ship part runs on the freed slot's stale record: when its appear timer runs out that frame the special ships come, marked with the freed slot, and the mission auto-aborts again, its script, days, fuel and pay over again (`_EnterMoreShips` @0x4373a-0x43752, @0x43757-0x43ad4; see [`mission::aux_ships`](crate::mission::aux_ships)) | the freed slot is skipped\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
@@ -1547,6 +1548,20 @@ rule_keys! {
     /// "-1: any system": the exit restarts them as a jump does (see
     /// [`mission::aux_ships`](crate::mission::aux_ships)).
     AuxGate => "aux_gate",
+    /// What `_EnterMoreShips` does after a mission of `Flags` 0x0001
+    /// auto-aborts once its auxiliary ships have all come. By the engine,
+    /// as the original: the call to `_AutoAbortMission` (@0x4373a-0x43752)
+    /// falls into the special-ship part (@0x43757) with no new test of
+    /// the slot's active byte, and `_AbortMission` clears none of the
+    /// slot's record, so the special part runs on the freed slot's stale
+    /// state. When its appear timer runs out that frame, the special ships
+    /// come, marked with the freed slot, and the mission auto-aborts a
+    /// second time (@0x43abc-0x43ad4): its abort script runs again, the
+    /// days pass again, the fuel is taken again and it pays again. By the
+    /// other reading the freed slot is skipped. The Bible says nothing of
+    /// it, so the other reading is the intended behaviour, not anything
+    /// the Bible says (see the session's `aux_ships` module).
+    AuxAbortFallThrough => "aux_abort_fall_through",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -2042,7 +2057,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2082,7 +2097,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2104,7 +2119,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2129,7 +2144,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2155,7 +2170,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2175,7 +2190,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2195,7 +2210,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2215,7 +2230,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(35),
+            RuleKey::ALL.iter().rev().nth(36),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2237,7 +2252,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2383,7 +2398,24 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(33), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(34), Some(&RuleKey::AuxGate));
+    }
+
+    #[test]
+    fn the_aux_abort_fall_through_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AuxAbortFallThrough.key(), "aux_abort_fall_through");
+        assert_eq!(
+            RuleKey::from_key("aux_abort_fall_through"),
+            Some(RuleKey::AuxAbortFallThrough)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AuxAbortFallThrough),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(33),
+            Some(&RuleKey::AuxAbortFallThrough)
+        );
     }
 
     #[test]
@@ -2422,7 +2454,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2827,7 +2859,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2979,6 +3011,7 @@ mod tests {
                 RuleKey::LandedLeaves,
                 RuleKey::GateFollow,
                 RuleKey::AuxGate,
+                RuleKey::AuxAbortFallThrough,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,

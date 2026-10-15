@@ -270,6 +270,14 @@ pub(super) fn uniform_dudes(
         .collect()
 }
 
+/// What the special ships' part did to a slot's timer
+/// ([`Session::special_part`]): the timer after it, and how many came
+/// when it ran out.
+struct SpecialPart {
+    appear: i16,
+    came: Option<i16>,
+}
+
 impl Session {
     /// The special ships of `record`, just accepted as `active`, as
     /// `_LoadCurrentMissionData` loads them before `OnAccept`
@@ -594,10 +602,24 @@ impl Session {
         table: Option<&SpawnTable>,
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<ShipId> {
+        let kept = self.pilot.missions.get(slot)?.ships.uniform_type;
+        self.uniform_preset_kept(slot, record, kept, table, chance)
+    }
+
+    /// [`Session::uniform_preset`] with `kept` as the slot's kept type, as
+    /// read by the caller: the freed slot's stale record for the
+    /// fall-through after an auxiliary auto-abort.
+    fn uniform_preset_kept(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        kept: Option<ShipId>,
+        table: Option<&SpawnTable>,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<ShipId> {
         if record.flags & UNIFORM_SHIP_TYPE == 0 {
             return None;
         }
-        let kept = self.pilot.missions.get(slot)?.ships.uniform_type;
         if kept.is_some() {
             return kept;
         }
@@ -629,6 +651,21 @@ impl Session {
     /// 0x0001 auto-aborts (@0x43abc-0x43ad4), its ships staying. As the
     /// system is `entering` by a way in whose enter-system hook is still
     /// to run, if any, a slot the hook is about to restart is left to it.
+    ///
+    /// Each slot's auxiliary part ([`Session::aux_arrivals`]) comes first.
+    /// When its auto-abort frees the slot, under the engine's reading of
+    /// [`RuleKey::AuxAbortFallThrough`] the special part runs on the
+    /// freed slot's record as it stood before
+    /// ([`Session::freed_special_arrivals`], @0x43757-0x43ad4); by the
+    /// other reading the freed slot is skipped. The stale countdown tick
+    /// that follows (@0x43ae8-0x43af8) is not built: it hits a dead record
+    /// the next accept redraws (@0xa0e5f).
+    ///
+    /// On the gate exit's arrivals frame (`hook_due`) each slot's
+    /// auxiliary part and countdown tick are left to the enter-system
+    /// hook, which restarts the countdown after this frame where the
+    /// original restarts it first, so one countdown tick is lost. That
+    /// crosses no boundary the player sees, so it is not built.
     pub(super) fn mission_ship_arrivals(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -644,7 +681,20 @@ impl Session {
             .collect();
         for (slot, mission) in slots {
             if !hook_due {
+                let before = self.pilot.missions.get(slot).cloned();
                 self.aux_arrivals(catalog, slot, chance);
+                let freed = !self.pilot.missions.holds(slot, mission);
+                if freed
+                    && self.rules.source_for(RuleKey::AuxAbortFallThrough) == RuleSource::Engine
+                {
+                    if let Some(before) = before {
+                        self.freed_special_arrivals(catalog, slot, &before, chance);
+                    }
+                    // The countdown tick (@0x43ae8-0x43af8) hits the freed
+                    // record, which the next accept redraws (@0xa0e5f):
+                    // not built, as no one can see it.
+                    continue;
+                }
             }
             self.special_arrivals(catalog, slot, entering, chance);
             if !hook_due {
@@ -666,11 +716,71 @@ impl Session {
             return;
         };
         let record = self.lifecycle_record(active.mission);
-        let state = active.ships.clone();
-        if !self.ships_here(state.system)
-            || entering.is_some_and(|how| self.hook_restarts(&record, active, how))
-        {
+        let active = active.clone();
+        if entering.is_some_and(|how| self.hook_restarts(&record, &active, how)) {
             return;
+        }
+        let Some(part) = self.special_part(catalog, slot, &record, &active, chance) else {
+            return;
+        };
+        // The timer is kept, not saved, as it runs: no save is due.
+        if let Some(active) = self.pilot.missions.get_mut(slot) {
+            active.ships.appear = part.appear;
+        }
+        let Some(count) = part.came else {
+            return;
+        };
+        if let Some(active) = self.pilot.missions.get_mut(slot) {
+            active.ships.arrived = active.ships.arrived.saturating_add(count);
+        }
+        self.abort_on_spawn(slot, &record, &mut &mut *chance);
+    }
+
+    /// The special ships' part of `_EnterMoreShips` run on `before`, the
+    /// record of `slot` as it stood before its auxiliary part's
+    /// auto-abort freed it, as the original falls into the part at
+    /// @0x43757 with no new test of the slot's active byte, under the
+    /// engine's reading of [`RuleKey::AuxAbortFallThrough`], drawing on
+    /// `chance`. When the stale timer runs out, the special ships come,
+    /// marked with the freed slot (the sweep after the frame's arrivals,
+    /// `unmark_inactive_mission_ships`, makes them traffic), and a mission of `Flags` 0x0001 auto-aborts again
+    /// (@0x43abc-0x43ad4; [`Session::auto_abort_freed`]). Nothing is
+    /// written back to the freed slot: the stale timer's countdown when
+    /// it does not run out (@0x437ec-0x437fc) and its arrivals hit a dead
+    /// record, which the next accept reloads, so they are not built.
+    fn freed_special_arrivals(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        slot: u8,
+        before: &ActiveMission,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let record = self.lifecycle_record(before.mission);
+        let Some(part) = self.special_part(catalog, slot, &record, before, chance) else {
+            return;
+        };
+        if part.came.is_some() && record.flags & AUTO_ABORT != 0 {
+            self.auto_abort_freed(slot, &record, before.pay, &mut &mut *chance);
+        }
+    }
+
+    /// The core of the special ships' part (@0x43757-0x43aa5) for `active`,
+    /// a mission of `record` in `slot`, drawing on `chance`: nothing
+    /// unless its ships are here with any to come (ships left, less those
+    /// arrived for `ShipStart` 1); else a running timer counts down (from
+    /// 32000 or below), and at 0 it stops and they come in by hyperspace.
+    /// Writes nothing to the slot.
+    fn special_part(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        slot: u8,
+        record: &MissionRecord,
+        active: &ActiveMission,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<SpecialPart> {
+        let state = &active.ships;
+        if !self.ships_here(state.system) {
+            return None;
         }
         let coming = if ShipStart::from_code(record.ships.start) == ShipStart::ComesLater {
             state.left - state.arrived
@@ -678,33 +788,26 @@ impl Session {
             state.left
         };
         if coming <= 0 {
-            return;
+            return None;
         }
         let mut appear = state.appear;
         if (1..=COUNTED).contains(&appear) {
             appear -= 1;
         }
         // With any to come, ships are left.
-        let fires = appear == 0;
-        if fires {
-            appear = -1;
+        if appear != 0 {
+            return Some(SpecialPart { appear, came: None });
         }
-        // The timer is kept, not saved, as it runs: no save is due.
-        if let Some(active) = self.pilot.missions.get_mut(slot) {
-            active.ships.appear = appear;
-        }
-        if !fires {
-            return;
-        }
-        let count = self.bring_in_mission_ships(catalog, slot, &record, coming, chance);
-        if let Some(active) = self.pilot.missions.get_mut(slot) {
-            active.ships.arrived = active.ships.arrived.saturating_add(count);
-        }
-        self.abort_on_spawn(slot, &record, &mut &mut *chance);
+        let kept = state.uniform_type;
+        let count = self.bring_in_mission_ships(catalog, slot, record, kept, coming, chance);
+        Some(SpecialPart {
+            appear: -1,
+            came: Some(count),
+        })
     }
 
     /// Brings `coming` special ships of `record`, the mission in `slot`,
-    /// into the system by hyperspace ([`spawn::arriving_mission_ships`]),
+    /// its kept uniform type `kept`, into the system by hyperspace ([`spawn::arriving_mission_ships`]),
     /// their `düde`'s ships read from `catalog`, drawing on `chance`
     /// (@0x43821-0x43aa5): how many came, none for a mission of no
     /// `düde`.
@@ -713,6 +816,7 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         slot: u8,
         record: &MissionRecord,
+        kept: Option<ShipId>,
         coming: i16,
         chance: &mut (impl Chance + ?Sized),
     ) -> i16 {
@@ -727,7 +831,7 @@ impl Session {
             &self.arsenal,
         );
         let nav = Vec::new();
-        let preset = self.uniform_preset(slot, record, None, chance);
+        let preset = self.uniform_preset_kept(slot, record, kept, None, chance);
         let spawn = MissionSpawn {
             slot,
             dude,
@@ -894,7 +998,8 @@ impl Session {
             return false;
         }
         if goal == ShipGoal::Escort {
-            self.bring_in_mission_ships(catalog, slot, &record, count, chance);
+            let kept = active.ships.uniform_type;
+            self.bring_in_mission_ships(catalog, slot, &record, kept, count, chance);
         }
         if let Some(active) = self.slot_holding(slot, record.id) {
             let ships = &mut active.ships;

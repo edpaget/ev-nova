@@ -20,8 +20,12 @@
 //! after its auxiliary ships' spawn ran, whether or not a ship came
 //! (@0x4373a-0x43752), its ships staying. The original then runs the
 //! special ships' part on the slot without testing again that it is
-//! active (@0x43757); here that part reads the slot again and skips it
-//! once freed. No stock mission of `Flags` 0x0001 has auxiliary ships.
+//! active (@0x43757), on the freed slot's stale record, and so does the
+//! engine's reading of [`RuleKey::AuxAbortFallThrough`]: when the stale
+//! appear timer runs out that frame, the special ships come and the
+//! mission auto-aborts a second time (@0x43abc-0x43ad4). By the other
+//! reading the part reads the slot again and skips it once freed. No
+//! stock mission of `Flags` 0x0001 has auxiliary ships.
 //!
 //! **The restarts** are the enter-system hook's (see the
 //! `mission_ships` module) and the take-off's: each restarts every
@@ -206,7 +210,11 @@ impl Session {
 
     /// The enter-system hook's auxiliary part for the mission in `slot`
     /// on an entry `how` it runs on, drawing on `chance`: the restart,
-    /// then on a gate's exit the loss of `AuxShipSyst` -1.
+    /// then on a gate's exit the loss of `AuxShipSyst` -1. On a gate's
+    /// exit it runs after that frame's arrivals, where the original's hook
+    /// restarts the countdown before them, so the countdown's one tick of
+    /// that frame is lost; it crosses no boundary the player sees, so it
+    /// is not built (see [`Session::mission_ship_arrivals`]).
     pub(super) fn aux_on_entry(&mut self, slot: u8, how: Entrance, chance: &mut dyn Chance) {
         self.restart_aux(slot, chance);
         if how == Entrance::Gate {
@@ -607,6 +615,66 @@ mod tests {
         assert!(session.pilot().missions().get(0).is_none());
     }
 
+    /// [`aux_only`]'s mission 140 of three auxiliary ships and its twin
+    /// 141, made by `twin`; 140's three come in, the player lands at 128,
+    /// 140 is aborted there, its ships staying marked with slot 0, and
+    /// 141 is accepted into the freed slot, its ships left to come set
+    /// to 0 as though they had all come and died.
+    fn stale_marks(
+        twin: impl FnOnce(&mut crate::catalog::MissionRecord),
+    ) -> (FakePilotCatalog, Session) {
+        let mut catalog = aux_only(3, -1, 0);
+        let mut record = crate::catalog::MissionRecord {
+            id: MissionId(141),
+            ..catalog.missions[0].clone()
+        };
+        twin(&mut record);
+        catalog.missions.push(record);
+        let mut session = accepted(&catalog);
+        let _ = three_in(&mut session, &catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert!(session.abort_mission(0, &mut NeverFires).is_ok());
+        settle(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 3, "still marked with slot 0");
+        assert_eq!(
+            session.accept_mission(MissionId(141), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, &catalog);
+        let aux = aux_of(&session);
+        set_aux(&mut session, AuxShips { left: 0, ..aux });
+        (catalog, session)
+    }
+
+    /// Nothing at a mission's end clears an auxiliary ship's mark
+    /// (`_AbortMission` @0x99a92-0x99bdb), and the drop tests only the
+    /// slot's active byte (@0x3bfe8), so a survivor gives one back to
+    /// whichever mission holds its slot.
+    #[test]
+    fn a_survivor_of_a_freed_slot_gives_one_back_to_the_next_mission_in_it() {
+        let (catalog, mut session) = stale_marks(|_| {});
+        take_off(&mut session, &catalog);
+        assert_eq!(aux_of(&session).left, 3, "the drop gave 140's back to 141");
+        ticks(&mut session, &catalog, 140);
+        assert_eq!(aux_here(&session), 3, "141's ships come");
+        assert_eq!(aux_of(&session).arrived, 3);
+    }
+
+    #[test]
+    fn a_stale_give_back_is_capped_at_the_new_missions_count() {
+        let (catalog, mut session) = stale_marks(|twin| twin.aux.count = 1);
+        take_off(&mut session, &catalog);
+        assert_eq!(aux_of(&session).left, 1);
+    }
+
+    #[test]
+    fn a_stale_mark_gives_nothing_to_a_new_mission_of_no_aux_ships() {
+        let (catalog, mut session) = stale_marks(|twin| twin.aux.dude = None);
+        take_off(&mut session, &catalog);
+        assert_eq!(aux_of(&session).left, 0);
+    }
+
     /// Mission 140's three auxiliary ships come into the system in
     /// flight, none left to come; their ids, in order.
     fn three_in(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<NpcId> {
@@ -670,10 +738,34 @@ mod tests {
 
     // The auto-abort.
 
-    #[test]
-    fn a_0x0001_mission_auto_aborts_as_its_aux_ships_come_and_its_special_part_spawns_none() {
-        let catalog = aux_catalog(shipping(-1, 1), aux_ships(2, -1), AUTO_ABORT);
-        let mut session = accepted(&catalog);
+    /// What one frame of a `Flags` 0x0001 mission's two auxiliary ships
+    /// coming does, its special ships (two, `ShipStart` 1) here with
+    /// their appear timer at `appear`, under `reading` of
+    /// [`RuleKey::AuxAbortFallThrough`]: the session after it, the
+    /// mission's `OnAbort` toggling bit 7 and setting bit 8, with
+    /// `DatePostInc` 1, `Flags` 0x0008 and `Flags2` 0x0002 paying 1000.
+    struct FellThrough {
+        session: Session,
+        catalog: FakePilotCatalog,
+        cash: i64,
+        fuel: f32,
+        date: crate::date::GameDate,
+        pay: i64,
+    }
+
+    fn fall_through(appear: i16, reading: RuleSource) -> FellThrough {
+        let mut catalog = aux_catalog(
+            shipping(-1, 1),
+            aux_ships(2, -1),
+            AUTO_ABORT | crate::mission::active::AUTO_ABORT_FUEL,
+        );
+        let record = &mut catalog.missions[0];
+        record.on_abort = crate::control::Script::parse("^b7 b8");
+        record.date_post_inc = 1;
+        record.flags2 = crate::mission::active::AUTO_ABORT_PAYS;
+        record.pay_val = 1000;
+        let mut session = accepted(&catalog)
+            .with_rules(Rulebook::default().with_override(RuleKey::AuxAbortFallThrough, reading));
         take_off(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_some(), "waits");
         set_aux(
@@ -684,18 +776,97 @@ mod tests {
                 left: 2,
             },
         );
+        let pay = session.pilot().missions().get(0).expect("held").pay;
         if let Some(active) = session.pilot.missions.get_mut(0) {
-            active.ships.appear = 1;
+            active.ships.appear = appear;
         }
+        let (cash, fuel, date) = (
+            session.pilot().cash,
+            session.reserves().fuel.now,
+            session.pilot().date(),
+        );
         tick(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
         assert_eq!(aux_here(&session), 2, "its aux ships stay");
-        assert!(marked(&session).is_empty(), "no special ship after");
-        assert_eq!(
-            session.npcs().len(),
-            2,
-            "the special ships' timer fired no spawn"
+        FellThrough {
+            session,
+            catalog,
+            cash,
+            fuel,
+            date,
+            pay,
+        }
+    }
+
+    /// The special ships (of ship 200) in the system, marked or not.
+    fn special_here(session: &Session) -> usize {
+        session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.ship == ShipId(200))
+            .count()
+    }
+
+    /// The bits 7 and 8 the `OnAbort` of [`fall_through`] left.
+    fn abort_bits(session: &Session) -> (bool, bool) {
+        let bit = |n| session.control_bit(crate::control::Bit::new(n).expect("a bit"));
+        (bit(7), bit(8))
+    }
+
+    #[test]
+    fn a_0x0001_mission_auto_aborted_by_its_aux_ships_brings_its_special_ships_as_its_timer_runs_out()
+     {
+        let FellThrough {
+            mut session,
+            catalog,
+            ..
+        } = fall_through(1, RuleSource::Engine);
+        assert_eq!(special_here(&session), 2, "they came");
+        assert!(
+            marked(&session).is_empty(),
+            "the frame's sweep unmarked them, their slot free"
         );
+        tick(&mut session, &catalog);
+        assert_eq!(special_here(&session), 2, "they stay as traffic");
+        assert_eq!(session.npcs().len(), 4);
+    }
+
+    #[test]
+    fn the_fall_through_auto_aborts_again() {
+        let fell = fall_through(1, RuleSource::Engine);
+        let session = &fell.session;
+        assert_eq!(abort_bits(session), (false, true), "OnAbort ran twice");
+        assert_eq!(session.pilot().cash, fell.cash + 2 * fell.pay, "paid twice");
+        assert!(fell.pay > 0);
+        assert_eq!(
+            session.pilot().date(),
+            fell.date.next_day().next_day(),
+            "two days passed"
+        );
+        let taken = fell.fuel - session.reserves().fuel.now;
+        assert!(
+            (taken - 2.0 * crate::mission::active::AUTO_ABORT_FUEL_TAKEN).abs() < 1e-3,
+            "the fuel taken twice: {taken}"
+        );
+    }
+
+    #[test]
+    fn the_fall_through_brings_nothing_while_the_special_timer_still_runs() {
+        let fell = fall_through(5, RuleSource::Engine);
+        let session = &fell.session;
+        assert_eq!(special_here(session), 0);
+        assert_eq!(abort_bits(session), (true, true), "OnAbort ran once");
+        assert_eq!(session.pilot().cash, fell.cash + fell.pay, "paid once");
+        assert_eq!(session.pilot().date(), fell.date.next_day());
+    }
+
+    #[test]
+    fn by_the_other_reading_the_freed_slot_is_skipped() {
+        let fell = fall_through(1, RuleSource::Bible);
+        let session = &fell.session;
+        assert_eq!(special_here(session), 0, "the timer fired no spawn");
+        assert_eq!(abort_bits(session), (true, true), "OnAbort ran once");
+        assert_eq!(session.pilot().cash, fell.cash + fell.pay, "paid once");
     }
 
     #[test]

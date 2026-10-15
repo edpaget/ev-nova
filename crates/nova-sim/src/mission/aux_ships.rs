@@ -8,6 +8,16 @@
 //! of a special ship's handling: only an aux mark of their slot (the
 //! original's ship +0x8a), which gives a survivor back to its slot as the
 //! system's ships are dropped ([`AuxShips::give_back`]).
+//!
+//! The mark outlives its mission: nothing at a mission's end writes
+//! +0x8a, and `_AbortMission` (@0x99a92-0x99bdb) touches only the ships
+//! marked as its special ships (+0xc8d2). So a survivor gives one back to
+//! whichever mission holds its slot at the drop, as
+//! `_DeleteAllComputerShips` tests only the slot's active byte
+//! (@0x3bfe8), capped at that mission's count. The original also caps a
+//! free slot's dead record (@0x3c00a-0x3c024); the engine skips a free
+//! slot, which no one can see, as the next accept reloads the slot
+//! (@0xa0e20-0xa0ecb).
 
 use crate::catalog::GovtId;
 use crate::catalog::{AuxShip, DudeId, SystemId};

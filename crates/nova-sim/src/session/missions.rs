@@ -696,8 +696,35 @@ impl Session {
         let Some(pay) = self.pilot.missions.get(slot).map(|active| active.pay) else {
             return;
         };
+        if self.auto_abort_freed(slot, record, pay, chance) {
+            self.close_slot(slot, record.id);
+        }
+    }
+
+    /// The body of `_AutoAbortMission` (@0x99bdc) for `record`, paying
+    /// `pay`, in `slot` whether or not the slot still holds it, drawing on
+    /// `chance`: its `OnAbort`; its `DatePostInc` days; with `Flags`
+    /// 0x0008 the fuel taken; with `Flags2` 0x0002 its pay; and docked its
+    /// ships taken out. The slot is not freed: [`Session::auto_abort`]
+    /// frees it after. `_EnterMoreShips`' second auto-abort of a slot its
+    /// first already freed (@0x43abc-0x43ad4, under
+    /// [`RuleKey::AuxAbortFallThrough`](crate::RuleKey::AuxAbortFallThrough))
+    /// runs it alone, the original's `_AbortMission` (@0x99d0e) finding
+    /// nothing more to clear; in flight the ships it brought keep the
+    /// freed slot's mark until the next tick's sweep, as for
+    /// [`Session::auto_abort`]. The docked branch cannot be reached
+    /// there, as `_EnterMoreShips` runs only in flight, and is kept so the
+    /// two cannot drift. Whether it ran: not while `slot` is already
+    /// ending.
+    pub(super) fn auto_abort_freed(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        pay: i64,
+        chance: &mut dyn Chance,
+    ) -> bool {
         if !self.ending.insert(slot) {
-            return;
+            return false;
         }
         self.run_mission_script(slot, &record.on_abort, chance);
         self.pass_days(post_days(record.date_post_inc), chance);
@@ -711,7 +738,7 @@ impl Session {
             self.release_mission_ships(slot);
         }
         self.ending.remove(&slot);
-        self.close_slot(slot, record.id);
+        true
     }
 
     /// Applies a mission's pay (`_ApplyMissionPay` @0x98326; see
