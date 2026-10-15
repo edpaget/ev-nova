@@ -41,7 +41,11 @@
 //! ([`BarScreen::rearm`]) with the gap drawn. The offer's choice is taken
 //! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
 //! again once rearmed. Nothing is asked while the hire screen, the news
-//! or an offer is open. [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asks for the mission info screen
+//! or an offer is open; the wait runs on or stops under them as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`BarScreen::with_offer_clock`]), and by the engine the hire screen
+//! restarts it as it opens ([`BarScreen::take_offer_restart`]).
+//! [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asks for the mission info screen
 //! ([`BarScreen::take_info_request`]), and [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) for the
 //! player info screen, from the bar or its hire screen
 //! ([`BarScreen::take_player_info_request`], `_BarFilter` @0x47aaa,
@@ -60,7 +64,7 @@ use std::time::Duration;
 
 use nova_sim::hire::{HIRE_ESCORT, NONE_FOR_HIRE};
 use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
-use nova_sim::{HireList, MissionId, News, OfferPrompt, ShipId};
+use nova_sim::{HireList, MissionId, News, OfferPrompt, RuleSource, ShipId};
 
 use super::catalog::StellarId;
 use super::hire::HireScreen;
@@ -361,6 +365,17 @@ impl BarScreen {
         }
     }
 
+    /// Its offers' timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// given ([`BarScreen::with_offers`]) before it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offering: self.offering.map(|offering| offering.with_clock(clock)),
+            ..self
+        }
+    }
+
     /// Whether the bar has asked for an offer since this was last asked
     /// (`_BarFilter` @0x47be0-0x47c0f): whoever holds the session answers
     /// with [`BarScreen::open_offer`], or, with none, rearms it
@@ -395,6 +410,24 @@ impl BarScreen {
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Whether the bar's offer timer restarted since this was last asked,
+    /// as the hire screen opening restarts it by the engine
+    /// ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)): whoever
+    /// holds the session rearms it ([`BarScreen::rearm`]) with a new gap.
+    pub fn take_offer_restart(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_restart)
+    }
+
+    /// Ticks only its offers' timer, as covered: something is open over
+    /// the bar.
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, true);
         }
     }
 
@@ -474,6 +507,12 @@ impl BarScreen {
             .template
             .clone()
             .map(|template| (template, Rc::clone(&laid.metrics.0)));
+        // The hire screen is `_DoShipyardDialog` in hire mode, which sets
+        // the one offer deadline as it opens (@0x5e74c-0x5e775), once it
+        // has ships to show.
+        if let Some(offering) = &mut self.offering {
+            offering.restart();
+        }
         self.hire = Some(HireScreen::new(
             layout,
             self.hiring.info.clone(),
@@ -619,14 +658,12 @@ impl Screen for BarScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down, while neither the hire
-    /// screen, the news nor an offer is open; once it is out the bar asks.
+    /// The wait for the next offer runs down, the hire screen or the news
+    /// covering the bar while either is open; once it is out the bar asks.
     fn tick(&mut self, dt: Duration) {
-        if let Some(offering) = &mut self.offering
-            && self.hire.is_none()
-            && self.news.is_none()
-        {
-            offering.tick(dt);
+        let covered = self.hire.is_some() || self.news.is_some();
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, covered);
         }
     }
 
@@ -1343,7 +1380,7 @@ mod tests {
 
     use crate::spaceport::offer::{OfferChoice, REFUSE_ITEM};
     use nova_sim::mission::OfferLabels;
-    use nova_sim::{MissionId, OfferPrompt};
+    use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
     /// The offer dialog's shape, smaller: 300 x 200, fixed at (0, 0),
     /// with accept (1), refuse (2), the text (3) and the one button (6).
@@ -1436,8 +1473,8 @@ mod tests {
     }
 
     #[test]
-    fn after_an_offer_the_next_ask_comes_after_the_gap_given() {
-        let mut screen = offering();
+    fn by_the_other_reading_the_next_ask_comes_the_gap_given_after_the_answer() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
         screen.tick(ms(250));
         assert!(screen.take_offer_request());
         screen.open_offer(prompt());
@@ -1456,9 +1493,74 @@ mod tests {
     }
 
     #[test]
-    fn no_offer_is_asked_for_while_the_hire_screen_is_open() {
+    fn by_the_engine_the_next_ask_comes_the_gap_given_after_the_ask() {
+        let mut screen = offering();
+        screen.tick(ms(250));
+        assert!(screen.take_offer_request());
+        screen.open_offer(prompt());
+        screen.tick(ms(400));
+        assert!(!screen.take_offer_request(), "not while the offer is open");
+        screen.input(&key(Key::Enter, false));
+        assert!(screen.take_offer_choice().is_some());
+        screen.rearm(ms(600));
+        screen.tick(ms(199));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_hire_screen_is_asked_for_as_it_closes() {
         let mut screen = offering();
         screen.open_hire(list(1));
+        assert!(screen.take_offer_restart(), "the hire screen restarts it");
+        screen.rearm(ms(600));
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.hire_screen().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn by_the_engine_the_hire_screen_restarts_the_bars_wait_as_it_opens() {
+        let mut screen = offering();
+        screen.tick(ms(250));
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        screen.tick(ms(500));
+        assert!(!screen.take_offer_restart());
+        screen.open_hire(list(1));
+        assert!(screen.take_offer_restart());
+        assert!(!screen.take_offer_restart(), "once");
+        screen.rearm(ms(600));
+        screen.tick(ms(300));
+        screen.input(&key(Key::Escape, false));
+        screen.tick(ms(299));
+        assert!(
+            !screen.take_offer_request(),
+            "a new gap from the hire screen"
+        );
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn with_nothing_for_hire_the_bars_wait_is_not_restarted() {
+        let mut screen = offering();
+        screen.open_hire(list(0));
+        assert!(screen.hire_screen().is_none());
+        assert!(!screen.take_offer_restart());
+        screen.tick(ms(250));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn by_the_other_reading_the_hire_screen_neither_restarts_nor_runs_the_wait() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
+        screen.open_hire(list(1));
+        assert!(!screen.take_offer_restart());
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request());
         screen.input(&key(Key::Escape, false));
@@ -1638,8 +1740,33 @@ mod tests {
     }
 
     #[test]
-    fn no_offer_is_asked_for_while_the_news_is_open() {
+    fn by_the_engine_an_offer_due_under_the_news_is_asked_for_as_it_closes() {
         let mut screen = offering().with_news(Ok(news_template()));
+        screen.open_news(&news(), 9000);
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.news_screen().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn covered_the_bar_runs_only_its_offer_clock() {
+        for (clock, asked) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut screen = offering().with_offer_clock(clock);
+            screen.tick_covered(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: covered");
+            screen.tick(ms(0));
+            assert_eq!(screen.take_offer_request(), asked, "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_no_offer_is_asked_for_while_the_news_is_open() {
+        let mut screen = offering()
+            .with_offer_clock(RuleSource::Bible)
+            .with_news(Ok(news_template()));
         screen.open_news(&news(), 9000);
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request());

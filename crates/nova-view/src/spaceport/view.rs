@@ -60,7 +60,13 @@
 //! timer's call (@0x60176) never runs. The trade center, outfitter and
 //! shipyard ask as they open and again once rearmed, the bar a quarter
 //! second after it opens and again once rearmed; the spaceport ticks the
-//! screen open for their timers.
+//! screen open for their timers. While a mission text, the mission info
+//! screen or the player info screen covers it, only the venue's offer
+//! timer ticks, as covered, which runs on or waits as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`SpaceportView::with_offer_clock`]); the bar's hire screen restarts
+//! the bar's by the engine, which asks for a new gap
+//! ([`SpaceportView::take_offer_restart`]).
 //! [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), in the spaceport, the bar, the mission
 //! computer, the trade center, the outfitter, the shipyard (and its Info
 //! panel) or an offer over any of them, asks for the mission info screen
@@ -101,7 +107,8 @@ use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENT
 use nova_sim::{
     ComputerRefusal, ComputerRow, HireList, Market, MissionComputer, MissionId, MissionInfo,
     MissionText, News, OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo, RechargeRefusal,
-    Reselection, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
+    Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel,
+    services,
 };
 
 use super::bar::{BarScreen, BarTemplates, Hiring};
@@ -221,6 +228,17 @@ impl Open {
             Self::Shipyard(screen) => screen.as_mut(),
             Self::Bar(screen) => screen.as_mut(),
             Self::Computer(screen) => screen.as_mut(),
+        }
+    }
+
+    /// Ticks only the open venue's offer timer, as covered.
+    fn tick_covered(&mut self, dt: Duration) {
+        match self {
+            Self::Trade(screen) => screen.tick_covered(dt),
+            Self::Outfitter(screen) => screen.tick_covered(dt),
+            Self::Shipyard(screen) => screen.tick_covered(dt),
+            Self::Bar(screen) => screen.tick_covered(dt),
+            Self::Service(_) | Self::Computer(_) => {}
         }
     }
 
@@ -344,6 +362,9 @@ pub struct SpaceportView {
     barkeeping: Option<Barkeeping>,
     /// The mission screens, once given.
     missioning: Option<Missioning>,
+    /// How the venues' offer timers run
+    /// ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)).
+    offer_clock: RuleSource,
     /// The mission info screen, over whatever else is open.
     info: Option<MissionInfoScreen>,
     /// The player info screen's dialog and its Yes/No dialog, once given.
@@ -443,6 +464,7 @@ impl SpaceportView {
             shipbuying: None,
             barkeeping: None,
             missioning: None,
+            offer_clock: RuleSource::Engine,
             info: None,
             player_info_dialogs: None,
             player_info_requested: false,
@@ -867,6 +889,29 @@ impl SpaceportView {
                 info_requested: false,
             }),
             ..self
+        }
+    }
+
+    /// The spaceport with each venue's offer timer, the bar's, the trade
+    /// center's, the outfitter's and the shipyard's, running as `clock`
+    /// reads [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock): for
+    /// each venue opened after it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offer_clock: clock,
+            ..self
+        }
+    }
+
+    /// Whether the venue open restarted its offer timer since this was
+    /// last asked, as the bar's hire screen opening does by the engine:
+    /// whoever flies the ship rearms it
+    /// ([`SpaceportView::rearm_offers`]) with a new gap.
+    pub fn take_offer_restart(&mut self) -> bool {
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_offer_restart(),
+            _ => false,
         }
     }
 
@@ -1305,7 +1350,9 @@ impl SpaceportView {
             );
             bar = bar.with_news(barkeeping.news.clone());
             if let Some(missioning) = &self.missioning {
-                bar = bar.with_offers(missioning.offer.clone());
+                bar = bar
+                    .with_offers(missioning.offer.clone())
+                    .with_offer_clock(self.offer_clock);
             }
             barkeeping.opened = true;
             self.open = Some(Open::Bar(Box::new(bar)));
@@ -1315,6 +1362,7 @@ impl SpaceportView {
             .missioning
             .as_ref()
             .map(|missioning| missioning.offer.clone());
+        let clock = self.offer_clock;
         self.open = Some(
             match (&self.trade, &self.outfitting, &self.shipbuying, service) {
                 (Some((template, quantity, market)), _, _, Service::TradeCenter) => {
@@ -1322,7 +1370,7 @@ impl SpaceportView {
                     let screen =
                         TradeScreen::new(layout, quantity.clone(), market.clone(), port.style);
                     Open::Trade(Box::new(match offer {
-                        Some(offer) => screen.with_offers(offer),
+                        Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
                     }))
                 }
@@ -1340,7 +1388,7 @@ impl SpaceportView {
                         port.style,
                     );
                     Open::Shipyard(Box::new(match offer {
-                        Some(offer) => screen.with_offers(offer),
+                        Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
                     }))
                 }
@@ -1359,7 +1407,7 @@ impl SpaceportView {
                         port.style,
                     );
                     Open::Outfitter(Box::new(match offer {
-                        Some(offer) => screen.with_offers(offer),
+                        Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
                     }))
                 }
@@ -1444,14 +1492,17 @@ impl Screen for SpaceportView {
         ScreenAction::None
     }
 
-    /// The screen open ticks, unless a mission text is shown over it.
+    /// The screen open ticks; while a mission text, the mission info
+    /// screen or the player info screen covers it, only its offer timer
+    /// does, as covered.
     fn tick(&mut self, dt: Duration) {
-        if self.texts.is_empty()
-            && self.info.is_none()
-            && self.player_info.is_none()
-            && let Some(open) = &mut self.open
-        {
-            open.screen_mut().tick(dt);
+        let covered = !self.texts.is_empty() || self.info.is_some() || self.player_info.is_some();
+        if let Some(open) = &mut self.open {
+            if covered {
+                open.tick_covered(dt);
+            } else {
+                open.screen_mut().tick(dt);
+            }
         }
     }
 
@@ -4526,5 +4577,187 @@ mod tests {
         );
         view.set_mission_info(actives(0));
         assert!(view.mission_info().is_none(), "closed with nothing left");
+    }
+
+    // The offer timer under what opens over a venue (`RuleKey::OfferClock`).
+
+    use nova_sim::RuleSource;
+
+    const OFFER_VENUES: [i16; 4] = [BAR, TRADE_CENTER, OUTFITTER, SHIPYARD];
+
+    /// The spaceport button that opens `venue`.
+    fn venue_item(venue: i16) -> usize {
+        match venue {
+            BAR => 10,
+            TRADE_CENTER => 7,
+            OUTFITTER => 8,
+            _ => 9,
+        }
+    }
+
+    /// [`venues`], with the player info screen's dialogs, its offers'
+    /// timer on `clock`, landed on and `venue` opened, its first ask taken.
+    fn asked_at(venue: i16, clock: RuleSource) -> SpaceportView {
+        let mut view = informed(venues()).with_offer_clock(clock);
+        assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+        click_item(&mut view, venue_item(venue));
+        view.tick(FIRST_OFFER_DELAY);
+        assert_eq!(view.take_offer_request(), Some(venue));
+        view
+    }
+
+    /// [`asked_at`], the offer refused and the venue rearmed for 500 ms.
+    fn refused_at(venue: i16, clock: RuleSource) -> SpaceportView {
+        let mut view = asked_at(venue, clock);
+        view.open_offer(offered());
+        view.input(&key(Key::Char('n')));
+        assert!(view.take_offer_choice().is_some());
+        view.rearm_offers(ms(500));
+        view
+    }
+
+    /// What the spaceport opens over a venue.
+    #[derive(Clone, Copy, Debug)]
+    enum Overlay {
+        MissionInfo,
+        PlayerInfo,
+        MissionText,
+    }
+
+    const OVERLAYS: [Overlay; 3] = [
+        Overlay::MissionInfo,
+        Overlay::PlayerInfo,
+        Overlay::MissionText,
+    ];
+
+    fn open_overlay(view: &mut SpaceportView, overlay: Overlay) {
+        match overlay {
+            Overlay::MissionInfo => view.open_mission_info(actives(2)),
+            Overlay::PlayerInfo => view.open_player_info(pilot_info()),
+            Overlay::MissionText => view.show_mission_texts(vec![MissionText {
+                kind: MissionTextKind::Refuse,
+                mission: MissionId(141),
+                text: "Pity.".to_owned(),
+                graphic: None,
+            }]),
+        }
+        let open = view.mission_info().is_some()
+            || view.player_info().is_some()
+            || view.mission_text().is_some();
+        assert!(open, "{overlay:?}");
+    }
+
+    fn close_overlay(view: &mut SpaceportView, overlay: Overlay) {
+        match overlay {
+            Overlay::MissionInfo | Overlay::PlayerInfo => {
+                view.input(&key(Key::Escape));
+            }
+            Overlay::MissionText => done(view),
+        }
+        let open = view.mission_info().is_some()
+            || view.player_info().is_some()
+            || view.mission_text().is_some();
+        assert!(!open, "{overlay:?}");
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_an_overlay_is_asked_for_as_it_closes() {
+        for venue in OFFER_VENUES {
+            for overlay in OVERLAYS {
+                let mut view = refused_at(venue, RuleSource::Engine);
+                open_overlay(&mut view, overlay);
+                view.tick(Duration::from_secs(10));
+                assert_eq!(view.take_offer_request(), None, "{venue} {overlay:?}");
+                close_overlay(&mut view, overlay);
+                view.tick(ms(0));
+                assert_eq!(
+                    view.take_offer_request(),
+                    Some(venue),
+                    "{venue} {overlay:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_the_wait_stops_under_an_overlay() {
+        for venue in OFFER_VENUES {
+            for overlay in OVERLAYS {
+                let mut view = refused_at(venue, RuleSource::Bible);
+                open_overlay(&mut view, overlay);
+                view.tick(Duration::from_secs(10));
+                assert_eq!(view.take_offer_request(), None, "{venue} {overlay:?}");
+                close_overlay(&mut view, overlay);
+                view.tick(ms(499));
+                assert_eq!(view.take_offer_request(), None, "{venue} {overlay:?}");
+                view.tick(ms(1));
+                assert_eq!(
+                    view.take_offer_request(),
+                    Some(venue),
+                    "{venue} {overlay:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mission_info_over_an_offer_runs_the_gap_from_the_ask_by_the_engine_alone() {
+        for (clock, wait) in [(RuleSource::Engine, 0), (RuleSource::Bible, 500)] {
+            for venue in OFFER_VENUES {
+                let mut view = asked_at(venue, clock);
+                view.open_offer(offered());
+                view.input(&key(MISSION_INFO_KEY));
+                assert!(view.take_mission_info_request(), "{venue}");
+                view.open_mission_info(actives(2));
+                view.tick(Duration::from_secs(10));
+                view.input(&key(Key::Escape));
+                assert!(view.mission_info().is_none(), "{venue}");
+                view.input(&key(Key::Char('n')));
+                assert!(view.take_offer_choice().is_some(), "{venue}");
+                view.rearm_offers(ms(500));
+                if wait > 0 {
+                    view.tick(ms(wait - 1));
+                    assert_eq!(view.take_offer_request(), None, "{clock:?} {venue}");
+                    view.tick(ms(1));
+                } else {
+                    view.tick(ms(0));
+                }
+                assert_eq!(view.take_offer_request(), Some(venue), "{clock:?} {venue}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_offer_clock_reaches_each_venue_whenever_it_is_given() {
+        for venue in OFFER_VENUES {
+            let mut view = informed(venues());
+            assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+            view = view.with_offer_clock(RuleSource::Bible);
+            click_item(&mut view, venue_item(venue));
+            view.tick(FIRST_OFFER_DELAY);
+            assert_eq!(view.take_offer_request(), Some(venue));
+            view.rearm_offers(ms(500));
+            open_overlay(&mut view, Overlay::PlayerInfo);
+            view.tick(Duration::from_secs(10));
+            close_overlay(&mut view, Overlay::PlayerInfo);
+            view.tick(ms(0));
+            assert_eq!(view.take_offer_request(), None, "{venue}: the Bible's");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_the_bars_hire_screen_restarts_its_wait_through_the_spaceport() {
+        let mut view = refused_at(BAR, RuleSource::Engine);
+        assert!(!view.take_offer_restart());
+        view.open_hire(hirelings(1, true));
+        assert!(view.take_offer_restart());
+        assert!(!view.take_offer_restart(), "once");
+        let mut view = refused_at(BAR, RuleSource::Bible);
+        view.open_hire(hirelings(1, true));
+        assert!(!view.take_offer_restart(), "the other reading");
+        for venue in [TRADE_CENTER, OUTFITTER, SHIPYARD] {
+            let mut view = refused_at(venue, RuleSource::Engine);
+            assert!(!view.take_offer_restart(), "{venue}");
+        }
     }
 }

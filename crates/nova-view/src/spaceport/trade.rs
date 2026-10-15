@@ -40,8 +40,11 @@
 //! or rearms it ([`TradeScreen::rearm`]) with the gap drawn, after which it
 //! asks again (`_TradeFilter` @0x4e550-0x4e581). The offer takes every
 //! input while it is open, and its choice is taken through the screen
-//! ([`TradeScreen::take_offer_choice`]). The wait runs down only while
-//! neither the quantity dialog nor an offer is open.
+//! ([`TradeScreen::take_offer_choice`]). The quantity dialog covers the
+//! trade center, as the offer does: nothing is asked while either is
+//! open, and the wait runs on or stops as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`TradeScreen::with_offer_clock`]).
 //!
 //! Done, Return and Escape close it. Without the dialog, the screen says
 //! why, and Return or Escape still closes it.
@@ -49,7 +52,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order};
+use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order, RuleSource};
 
 use super::layout::DONE_LABEL;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
@@ -240,6 +243,17 @@ impl TradeScreen {
         }
     }
 
+    /// Its offers' timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// given ([`TradeScreen::with_offers`]) before it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offering: self.offering.map(|offering| offering.with_clock(clock)),
+            ..self
+        }
+    }
+
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
     /// since this was last asked, in the trade center or its offer
     /// (`_TradeFilter` @0x4e109), not in its quantity dialog.
@@ -296,6 +310,14 @@ impl TradeScreen {
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Ticks only its offers' timer, as covered: something is open over
+    /// the trade center.
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, true);
         }
     }
 
@@ -530,13 +552,12 @@ impl Screen for TradeScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down while neither the quantity
-    /// dialog nor an offer is open.
+    /// The wait for the next offer runs down, the quantity dialog
+    /// covering the trade center while it is open.
     fn tick(&mut self, dt: Duration) {
-        if let Some(offering) = &mut self.offering
-            && !self.quantity.is_open()
-        {
-            offering.tick(dt);
+        let covered = self.quantity.is_open();
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, covered);
         }
     }
 
@@ -1825,8 +1846,8 @@ mod tests {
     }
 
     #[test]
-    fn the_trade_center_does_not_count_down_while_its_quantity_dialog_is_open() {
-        let mut screen = offering();
+    fn by_the_other_reading_the_trade_center_waits_out_its_quantity_dialog() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
         assert!(screen.take_offer_request());
         screen.rearm(ms(600));
         alt_click(&mut screen, BUY_ITEM);
@@ -1846,6 +1867,51 @@ mod tests {
             screen.take_offer_request(),
             "the wait goes on once it closes"
         );
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_quantity_dialog_is_asked_for_as_it_closes() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        alt_click(&mut screen, BUY_ITEM);
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn the_trade_centers_gap_runs_from_the_ask_by_the_engine_and_the_answer_by_the_other() {
+        for (clock, wait) in [(RuleSource::Engine, 200), (RuleSource::Bible, 600)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.open_offer(prompt());
+            screen.tick(ms(400));
+            press(&mut screen, Key::Enter);
+            assert!(screen.take_offer_choice().is_some());
+            screen.rearm(ms(600));
+            screen.tick(ms(wait - 1));
+            assert!(!screen.take_offer_request(), "{clock:?}");
+            screen.tick(ms(1));
+            assert!(screen.take_offer_request(), "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn covered_the_trade_center_runs_only_its_offer_clock() {
+        for (clock, asked) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.rearm(ms(600));
+            screen.tick_covered(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: covered");
+            screen.tick(ms(0));
+            assert_eq!(screen.take_offer_request(), asked, "{clock:?}");
+        }
     }
 
     #[test]

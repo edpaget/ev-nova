@@ -112,8 +112,11 @@
 //! ([`ShipyardScreen::rearm`]) with the gap drawn, after which it asks
 //! again (`_ShipyardFilter` @0x60de5-0x60e1f). The offer takes every
 //! input while it is open, and its choice is taken through the screen
-//! ([`ShipyardScreen::take_offer_choice`]). The wait runs down only while
-//! neither the info panel, the name prompt nor an offer is open.
+//! ([`ShipyardScreen::take_offer_choice`]). The info panel and the name
+//! prompt cover the shipyard, as the offer does: nothing is asked while
+//! any is open, and the wait runs on or stops as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`ShipyardScreen::with_offer_clock`]).
 //!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
 //! screen says why, and Return or Escape still closes it.
@@ -123,7 +126,8 @@ use std::time::Duration;
 
 use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_sim::{
-    MissionId, OfferPrompt, Rating, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard, StockLine,
+    MissionId, OfferPrompt, Rating, RuleSource, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard,
+    StockLine,
 };
 
 use super::catalog::SpaceportCatalog;
@@ -1028,6 +1032,17 @@ impl ShipyardScreen {
         }
     }
 
+    /// Its offers' timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// given ([`ShipyardScreen::with_offers`]) before it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offering: self.offering.map(|offering| offering.with_clock(clock)),
+            ..self
+        }
+    }
+
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
     /// since this was last asked, in the shipyard, its Info panel or its
     /// offer (`_ShipyardFilter` @0x6091a, `_ShipDescFilter` @0x51132),
@@ -1085,6 +1100,14 @@ impl ShipyardScreen {
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Ticks only its offers' timer, as covered: something is open over
+    /// the shipyard.
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, true);
         }
     }
 
@@ -1455,14 +1478,12 @@ impl Screen for ShipyardScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down while neither the info
-    /// panel, the name prompt nor an offer is open.
+    /// The wait for the next offer runs down, the Info panel or the name
+    /// prompt covering the shipyard while either is open.
     fn tick(&mut self, dt: Duration) {
-        if let Some(offering) = &mut self.offering
-            && self.panel.is_none()
-            && !self.naming.is_open()
-        {
-            offering.tick(dt);
+        let covered = self.panel.is_some() || self.naming.is_open();
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, covered);
         }
     }
 
@@ -3880,8 +3901,8 @@ mod tests {
     }
 
     #[test]
-    fn the_shipyard_does_not_count_down_while_its_info_panel_or_name_prompt_is_open() {
-        let mut screen = offering();
+    fn by_the_other_reading_the_shipyard_waits_out_its_info_panel_and_name_prompt() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
         assert!(screen.take_offer_request());
         screen.rearm(ms(600));
         press(&mut screen, INFO_KEY);
@@ -3904,6 +3925,60 @@ mod tests {
             screen.take_offer_request(),
             "the wait goes on once it closes"
         );
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_info_panel_or_name_prompt_is_asked_for_as_it_closes() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        press(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_some());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not under the info panel");
+        press(&mut screen, Key::Escape);
+        assert!(screen.info_panel().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+        screen.rearm(ms(600));
+        screen.open_naming(&naming());
+        assert!(screen.naming().is_some());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not under the name prompt");
+        naming_click(&mut screen, crate::ui::text_input::CANCEL_ITEM);
+        assert!(screen.naming().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn the_shipyards_gap_runs_from_the_ask_by_the_engine_and_the_answer_by_the_other() {
+        for (clock, wait) in [(RuleSource::Engine, 200), (RuleSource::Bible, 600)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.open_offer(prompt());
+            screen.tick(ms(400));
+            press(&mut screen, Key::Enter);
+            assert!(screen.take_offer_choice().is_some());
+            screen.rearm(ms(600));
+            screen.tick(ms(wait - 1));
+            assert!(!screen.take_offer_request(), "{clock:?}");
+            screen.tick(ms(1));
+            assert!(screen.take_offer_request(), "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn covered_the_shipyard_runs_only_its_offer_clock() {
+        for (clock, asked) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.rearm(ms(600));
+            screen.tick_covered(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: covered");
+            screen.tick(ms(0));
+            assert_eq!(screen.take_offer_request(), asked, "{clock:?}");
+        }
     }
 
     #[test]

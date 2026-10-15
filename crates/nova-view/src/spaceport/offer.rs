@@ -45,11 +45,26 @@
 //! center, the shipyard and the outfitter) holds its offers in a
 //! `VenueOffers`: when it next asks for an offer, the offer dialog open
 //! over it, and the choice made, until it is taken.
+//!
+//! The venue's offer timer runs as [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)
+//! reads it. By the engine, as the original's one deadline
+//! (`_missionOfferTime`) does: the next offer is due its gap after the
+//! last ask (`_BarFilter` @0x47be0-0x47c11, `_TradeFilter`
+//! @0x4e550-0x4e581, `_OutfitFilter` @0x589ce-0x58a01, `_ShipyardFilter`
+//! @0x60de5-0x60e21 set it as they ask; nothing resets it after the
+//! answer), on wall time through the offer and through whatever is open
+//! over the venue, whose own modal loop never calls the venue's filter
+//! (`_MyModalDialog` @0x59fee). An offer that comes due while something
+//! covers the venue is asked for on the first tick nothing does. The
+//! original asks on the first event after the dialog over it closes,
+//! after redrawing the venue once; both come before any offer is drawn,
+//! so the player sees no difference. By the other reading, the gap runs
+//! from the answer, and the wait stops while anything covers the venue.
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{MissionId, OfferPrompt};
+use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -400,6 +415,14 @@ pub(crate) struct VenueOffers {
     dialog: Option<OfferDialog>,
     /// The offer answered and its choice, until it is taken.
     choice: Option<(MissionId, OfferChoice)>,
+    /// How the timer runs ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)).
+    clock: RuleSource,
+    /// The time since the venue last asked (or, before it first asks,
+    /// since it opened), which the engine's gap runs from.
+    since_ask: Duration,
+    /// Whether the timer restarted since this was last taken, and wants
+    /// a new gap.
+    restarted: bool,
 }
 
 impl VenueOffers {
@@ -412,7 +435,17 @@ impl VenueOffers {
             requested: false,
             dialog: None,
             choice: None,
+            clock: RuleSource::Engine,
+            since_ask: Duration::ZERO,
+            restarted: false,
         }
+    }
+
+    /// These offers with their timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock).
+    #[must_use]
+    pub(crate) fn with_clock(self, clock: RuleSource) -> Self {
+        Self { clock, ..self }
     }
 
     /// Offers already asking for the first, as the spaceport and the shops
@@ -475,9 +508,35 @@ impl VenueOffers {
         self.choice.take()
     }
 
-    /// Asks for the next offer after `gap`.
+    /// Asks for the next offer after `gap`: by the engine, `gap` after the
+    /// last ask (or restart), so a gap already past asks on the next tick
+    /// nothing covers the venue; by the other reading, `gap` from now.
     pub(crate) fn rearm(&mut self, gap: Duration) {
-        self.wait = Some(gap);
+        self.wait = Some(match self.clock {
+            RuleSource::Engine => gap.saturating_sub(self.since_ask),
+            RuleSource::Bible => gap,
+        });
+    }
+
+    /// By the engine, restarts the timer, as the bar's hire screen does
+    /// opening (`_DoShipyardDialog` sets the one deadline @0x5e74c-0x5e775
+    /// in hire mode too): no ask is pending, and the next is due a new gap
+    /// after now, given by [`VenueOffers::rearm`] once
+    /// [`VenueOffers::take_restart`] asks for it. By the other reading it
+    /// does nothing.
+    pub(crate) fn restart(&mut self) {
+        if self.clock == RuleSource::Engine {
+            self.wait = None;
+            self.requested = false;
+            self.since_ask = Duration::ZERO;
+            self.restarted = true;
+        }
+    }
+
+    /// Whether the timer restarted since this was last taken: whoever
+    /// holds the session rearms it with a new gap.
+    pub(crate) fn take_restart(&mut self) -> bool {
+        std::mem::take(&mut self.restarted)
     }
 
     /// Gives `input` to the offer dialog, if it is open, adding its sounds
@@ -495,17 +554,22 @@ impl VenueOffers {
         true
     }
 
-    /// The wait for the next offer runs down while no offer is open; once
-    /// it is out the venue asks.
-    pub(crate) fn tick(&mut self, dt: Duration) {
-        if self.dialog.is_some() {
+    /// The wait for the next offer runs down by `dt`; once it is out, and
+    /// nothing is `covered` over the venue nor is the offer open, the venue
+    /// asks. By the engine it runs down whatever covers the venue; by the
+    /// other reading only while nothing does.
+    pub(crate) fn tick(&mut self, dt: Duration, covered: bool) {
+        let covered = covered || self.dialog.is_some();
+        if covered && self.clock == RuleSource::Bible {
             return;
         }
+        self.since_ask = self.since_ask.saturating_add(dt);
         if let Some(wait) = &mut self.wait {
             *wait = wait.saturating_sub(dt);
-            if wait.is_zero() {
+            if wait.is_zero() && !covered {
                 self.wait = None;
                 self.requested = true;
+                self.since_ask = Duration::ZERO;
             }
         }
     }
@@ -581,6 +645,7 @@ pub(crate) mod fixture {
 
 #[cfg(test)]
 mod tests {
+    use nova_sim::RuleSource;
     use nova_sim::mission::OfferLabels;
 
     use super::*;
@@ -893,12 +958,12 @@ mod tests {
     fn waiting_offers_ask_once_after_their_first_wait() {
         let mut offers = VenueOffers::waiting(plain_only(Ok(template())), ms(250));
         assert!(!offers.take_request(), "not before any tick");
-        offers.tick(ms(249));
+        offers.tick(ms(249), false);
         assert!(!offers.take_request());
-        offers.tick(ms(1));
+        offers.tick(ms(1), false);
         assert!(offers.take_request());
         assert!(!offers.take_request(), "once");
-        offers.tick(ms(10_000));
+        offers.tick(ms(10_000), false);
         assert!(!offers.take_request(), "not again until rearmed");
     }
 
@@ -907,21 +972,24 @@ mod tests {
         let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         assert!(offers.take_request());
         assert!(!offers.take_request());
-        offers.tick(ms(10_000));
+        offers.tick(ms(10_000), false);
         assert!(!offers.take_request());
     }
 
     #[test]
-    fn the_wait_does_not_run_down_while_an_offer_is_open() {
-        let mut offers = VenueOffers::waiting(plain_only(Ok(template())), ms(100));
+    fn by_the_other_reading_the_wait_does_not_run_down_while_an_offer_is_open() {
+        let mut offers = on_the(
+            RuleSource::Bible,
+            VenueOffers::waiting(plain_only(Ok(template())), ms(100)),
+        );
         opened(&mut offers);
         assert!(offers.dialog().is_some());
-        offers.tick(ms(500));
+        offers.tick(ms(500), false);
         assert!(!offers.take_request(), "paused under the offer");
         offers.input(&key(Key::Enter), &mut Vec::new());
-        offers.tick(ms(99));
+        offers.tick(ms(99), false);
         assert!(!offers.take_request());
-        offers.tick(ms(1));
+        offers.tick(ms(1), false);
         assert!(offers.take_request());
     }
 
@@ -930,9 +998,157 @@ mod tests {
         let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         assert!(offers.take_request());
         offers.rearm(ms(600));
-        offers.tick(ms(599));
+        offers.tick(ms(599), false);
         assert!(!offers.take_request());
-        offers.tick(ms(1));
+        offers.tick(ms(1), false);
+        assert!(offers.take_request());
+    }
+
+    fn on_the(clock: RuleSource, offers: VenueOffers) -> VenueOffers {
+        offers.with_clock(clock)
+    }
+
+    /// Offers on `clock` that have asked once and were answered with
+    /// nothing, rearmed for 600 ms.
+    fn rearmed(clock: RuleSource) -> VenueOffers {
+        let mut offers = on_the(clock, VenueOffers::asking(plain_only(Ok(template()))));
+        assert!(offers.take_request());
+        offers.rearm(ms(600));
+        offers
+    }
+
+    #[test]
+    fn they_run_on_the_engines_clock_unless_told_otherwise() {
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        assert!(offers.take_request());
+        offers.rearm(ms(600));
+        offers.tick(ms(10_000), true);
+        offers.tick(ms(0), false);
+        assert!(offers.take_request(), "the engine's: ran on while covered");
+    }
+
+    #[test]
+    fn by_the_engine_the_wait_runs_out_while_covered_and_asks_once_uncovered() {
+        let mut offers = rearmed(RuleSource::Engine);
+        offers.tick(ms(10_000), true);
+        assert!(!offers.take_request(), "nothing is asked while covered");
+        offers.tick(ms(0), false);
+        assert!(offers.take_request(), "asked on the first uncovered tick");
+        offers.tick(ms(10_000), false);
+        assert!(!offers.take_request(), "once, until rearmed");
+    }
+
+    #[test]
+    fn by_the_engine_a_wait_not_yet_out_runs_on_from_where_cover_left_it() {
+        let mut offers = rearmed(RuleSource::Engine);
+        offers.tick(ms(400), true);
+        offers.tick(ms(199), false);
+        assert!(!offers.take_request());
+        offers.tick(ms(1), false);
+        assert!(offers.take_request());
+    }
+
+    #[test]
+    fn by_the_other_reading_the_wait_stops_while_covered() {
+        let mut offers = rearmed(RuleSource::Bible);
+        offers.tick(ms(10_000), true);
+        assert!(!offers.take_request());
+        offers.tick(ms(599), false);
+        assert!(!offers.take_request(), "the whole gap after the cover");
+        offers.tick(ms(1), false);
+        assert!(offers.take_request());
+    }
+
+    #[test]
+    fn by_the_engine_the_gap_runs_from_the_ask_through_the_offer() {
+        let mut offers = on_the(
+            RuleSource::Engine,
+            VenueOffers::asking(plain_only(Ok(template()))),
+        );
+        assert!(offers.take_request());
+        opened(&mut offers);
+        offers.tick(ms(400), false);
+        assert!(!offers.take_request(), "not while the offer is open");
+        offers.input(&key(Key::Enter), &mut Vec::new());
+        offers.rearm(ms(600));
+        offers.tick(ms(199), false);
+        assert!(!offers.take_request());
+        offers.tick(ms(1), false);
+        assert!(offers.take_request(), "600 ms after the ask");
+    }
+
+    #[test]
+    fn by_the_engine_a_gap_already_past_asks_on_the_next_tick() {
+        let mut offers = on_the(
+            RuleSource::Engine,
+            VenueOffers::waiting(plain_only(Ok(template())), ms(0)),
+        );
+        offers.tick(ms(0), false);
+        assert!(offers.take_request());
+        opened(&mut offers);
+        offers.tick(ms(900), false);
+        offers.input(&key(Key::Enter), &mut Vec::new());
+        offers.rearm(ms(600));
+        assert!(!offers.take_request(), "not before a tick");
+        offers.tick(ms(0), false);
+        assert!(offers.take_request());
+    }
+
+    #[test]
+    fn by_the_other_reading_the_gap_runs_from_the_answer() {
+        let mut offers = on_the(
+            RuleSource::Bible,
+            VenueOffers::asking(plain_only(Ok(template()))),
+        );
+        assert!(offers.take_request());
+        opened(&mut offers);
+        offers.tick(ms(400), false);
+        offers.input(&key(Key::Enter), &mut Vec::new());
+        offers.rearm(ms(600));
+        offers.tick(ms(599), false);
+        assert!(!offers.take_request());
+        offers.tick(ms(1), false);
+        assert!(offers.take_request());
+    }
+
+    #[test]
+    fn by_the_engine_a_restart_waits_a_new_gap_from_the_restart() {
+        let mut offers = rearmed(RuleSource::Engine);
+        offers.tick(ms(500), false);
+        assert!(!offers.take_restart(), "not restarted yet");
+        offers.restart();
+        offers.tick(ms(10_000), true);
+        assert!(!offers.take_request(), "no wait until it is given a gap");
+        assert!(offers.take_restart(), "asks for a new gap");
+        assert!(!offers.take_restart(), "once");
+        let mut offers = rearmed(RuleSource::Engine);
+        offers.tick(ms(500), false);
+        offers.restart();
+        offers.tick(ms(100), true);
+        offers.rearm(ms(600));
+        offers.tick(ms(399), true);
+        offers.tick(ms(0), false);
+        assert!(!offers.take_request(), "the gap runs from the restart");
+        offers.tick(ms(101), true);
+        offers.tick(ms(0), false);
+        assert!(offers.take_request());
+    }
+
+    #[test]
+    fn a_restart_drops_an_ask_not_yet_taken() {
+        let mut offers = rearmed(RuleSource::Engine);
+        offers.tick(ms(600), false);
+        offers.restart();
+        assert!(!offers.take_request());
+    }
+
+    #[test]
+    fn by_the_other_reading_a_restart_does_nothing() {
+        let mut offers = rearmed(RuleSource::Bible);
+        offers.tick(ms(500), false);
+        offers.restart();
+        assert!(!offers.take_restart());
+        offers.tick(ms(100), false);
         assert!(offers.take_request());
     }
 
