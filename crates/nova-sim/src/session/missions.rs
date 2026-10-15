@@ -3190,6 +3190,45 @@ mod tests {
     }
 
     #[test]
+    fn a_comp_govt_the_catalog_does_not_hold_still_has_its_record_changed() {
+        const STRAY: GovtId = GovtId(140);
+        let stray = |id, reward, mission: fn(i16) -> MissionRecord| MissionRecord {
+            comp_govt: Some(STRAY),
+            comp_reward: reward,
+            flags: 0x0040,
+            ..mission(id)
+        };
+        let catalog = lifecycle(vec![
+            stray(140, 4, to_129),
+            stray(141, 6, back_to_128),
+            stray(142, 1, to_129),
+        ]);
+        assert!(catalog.govts.iter().all(|govt| govt.id != STRAY));
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session.pilot.set_legal_record(STRAY, 10);
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(held(&session), []);
+        assert_eq!(session.pilot().legal_record(STRAY), 14, "success: +4");
+        land_on(&mut session, &catalog, 128);
+        accept(&mut session, 141);
+        run(&mut session, "F141");
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(
+            session.pilot().legal_record(STRAY),
+            11,
+            "failure: half of 6"
+        );
+        let slot = accept(&mut session, 142);
+        assert_eq!(session.abort_mission(slot, &mut NeverFires), Ok(()));
+        assert_eq!(
+            session.pilot().legal_record(STRAY),
+            6,
+            "abort: five times 1"
+        );
+    }
+
+    #[test]
     fn a_cleaning_pay_cleans_the_records_in_each_system_of_its_governments() {
         let catalog = governed_lifecycle(vec![MissionRecord {
             pay_val: -20_128,
