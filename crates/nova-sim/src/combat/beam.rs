@@ -507,6 +507,38 @@ mod tests {
         assert_eq!(beam, left, "where its firer last was");
     }
 
+    #[test]
+    fn a_turreted_beam_whose_firer_is_gone_still_aims_and_jitters_from_its_last_exit() {
+        let exits = beam_exits();
+        let spec = WeaponSpec::new(&WeaponRecord {
+            guidance: 3,
+            inaccuracy: 4,
+            ..laser_record()
+        });
+        let mut beam = Beam {
+            kind: Some(ExitKind::Beam),
+            exit: Some(1),
+            ..Beam::launch(spec, FIRER, FIRER, &at(0.0, 0.0, 0.0), Aiming::Ship(TARGET))
+        };
+        let firer = at(100.0, 100.0, 99.0);
+        let mut tick = |firer, (x, y), draw| {
+            let mut draws = Draws::of(&[draw]);
+            let targets = [target(2, x, y)];
+            assert!(beam.follow(firer, Compression::ByOffset, &targets, &[], &mut draws));
+            assert_eq!(draws.asked, [8], "a draw every tick");
+            assert!(close(beam.start, Vec2::new(100.0, 130.0)), "{beam:?}");
+            assert!(close(beam.end, beam.start + facing(beam.heading) * 100.0));
+            beam.heading
+        };
+        assert_eq!(
+            tick(Some((&firer, Some(&exits))), (100.0, 80.0), 1),
+            -3.0,
+            "at its exit on frame 9, bearing 0, turned"
+        );
+        assert_eq!(tick(None, (150.0, 130.0), 6), 92.0, "bearing 90 from there");
+        assert_eq!(tick(None, (100.0, 180.0), 3), 179.0, "bearing 180");
+    }
+
     /// Beam exits on 36 frames: exit 1 30 pixels to the right of the
     /// centre, the rest on it.
     fn beam_exits() -> ExitPoints {

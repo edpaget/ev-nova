@@ -3133,6 +3133,48 @@ mod tests {
         );
     }
 
+    /// A beam of `Count` 3 and `Decay` 1 at `Falloff` 10 lives 3 + (15 −
+    /// 10) = 8 ticks. Fired every 4 with the trigger held, a new beam
+    /// comes while the last is in its fade, so two are live from the
+    /// second on, and each hits every tick it lives.
+    #[test]
+    fn a_fast_firing_fading_beams_overlap() {
+        let pulsing = WeaponRecord {
+            decay: 1,
+            falloff: 10,
+            reload: 4,
+            ..laser()
+        };
+        let mut combat = Combat::default();
+        let mut target = Ship::at(2, 100.0, 0.0);
+        target.reserves.shield = Gauge::full(1000.0);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(pulsing), target];
+        let mut ticks = Vec::new();
+        for _ in 0..13 {
+            let before = ships[1].reserves.shield.now;
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let mut fades: Vec<u32> = combat.beams().iter().map(|beam| beam.fade).collect();
+            fades.sort_unstable();
+            ticks.push((fades, before - ships[1].reserves.shield.now));
+        }
+        let expected: Vec<(Vec<u32>, f32)> = vec![
+            (vec![0], 5.0),
+            (vec![0], 5.0),
+            (vec![0], 5.0),
+            (vec![1], 5.0),
+            (vec![0, 2], 10.0),
+            (vec![0, 3], 10.0),
+            (vec![0, 4], 10.0),
+            (vec![1, 5], 10.0),
+            (vec![0, 2], 10.0),
+            (vec![0, 3], 10.0),
+            (vec![0, 4], 10.0),
+            (vec![1, 5], 10.0),
+            (vec![0, 2], 10.0),
+        ];
+        assert_eq!(ticks, expected);
+    }
+
     /// The ships `combat` has the laser of a ship at (0, 0) facing
     /// `heading` hit on its first tick, among `ships`.
     fn beamed(mut combat: Combat, heading: f32, ships: Vec<Ship>) -> Vec<ShipRef> {
