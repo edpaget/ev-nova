@@ -16,6 +16,11 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `_AdjustedAccel`'s sign tests (`launch_velocity`): a push of exactly
+    # none adds none whichever branch it takes, so `push < 0.0` and
+    # `push <= 0.0` (the first operand, column 24) cannot be told apart.
+    # The top speed's own test beside it is caught.
+    "bay.rs:[0-9]+:24: replace < with <= in launch_velocity",
     # The galaxy map's star map is built only for its links and places;
     # nothing reads a buoy from it, so the `Message` it gives its systems
     # (-1, none) cannot be observed.

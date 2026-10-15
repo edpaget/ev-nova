@@ -614,6 +614,13 @@ mod tests {
         let (ship, at) = shot.touches(Vec2::ZERO, &touched).expect("touched");
         assert_eq!(ship, ShipRef::Npc(NpcId(2)), "the nearer along the way");
         assert!(at.x > 48.0 && at.x < 50.0, "{at:?}");
+        let (_, from_20) = shot
+            .touches(Vec2::new(20.0, 0.0), &touched)
+            .expect("touched");
+        assert!(
+            (from_20.x - at.x).abs() < 1e-3 && from_20.y.abs() < 1e-3,
+            "met at the same point on a shorter way: {from_20:?}"
+        );
         let mut own = touched[1];
         own.ship = FIRER;
         assert_eq!(shot.touches(Vec2::ZERO, &[own]), None, "never its firer");

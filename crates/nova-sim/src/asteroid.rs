@@ -522,17 +522,12 @@ impl Asteroids {
         let asteroid = (*self.slots.get(slot)?)?;
         let kind_type = type_of(types, asteroid.kind);
         let at = asteroid.position;
-        let boxes = if kind_type.yield_qty > 0 {
-            let share =
-                u32::from(kind_type.yield_qty) * u32::from(chance.roll(YIELD_SIDES) + YIELD_BASE);
-            // Whole, at most 32,767 × 1.5.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            {
-                (f64::from(share) * 0.01).trunc() as u32
-            }
-        } else {
-            0
-        };
+        // None with no `YieldQty`, which the original's guard skips.
+        let share =
+            u32::from(kind_type.yield_qty) * u32::from(chance.roll(YIELD_SIDES) + YIELD_BASE);
+        // Whole, at most 32,767 × 1.5.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let boxes = (f64::from(share) * 0.01).trunc() as u32;
         let particles = u32::try_from(kind_type.part_count)
             .ok()
             .filter(|&count| count > 0)
@@ -552,24 +547,23 @@ impl Asteroids {
                     spread: (width / 3.0).trunc(),
                 }
             });
-        if let Ok(count) = u16::try_from(kind_type.frag_count)
-            && count > 0
-        {
-            let fragments = count / 2 + chance.roll(count);
-            for _ in 0..fragments {
-                let kind = match kind_type.fragments {
-                    [Some(first), Some(second)] => {
-                        if chance.roll(2) == 0 {
-                            first
-                        } else {
-                            second
-                        }
+        // None without a `FragCount` above 0, which the original's guard
+        // skips: a roll of no sides is 0.
+        let count = u16::try_from(kind_type.frag_count).unwrap_or(0);
+        let fragments = count / 2 + chance.roll(count);
+        for _ in 0..fragments {
+            let kind = match kind_type.fragments {
+                [Some(first), Some(second)] => {
+                    if chance.roll(2) == 0 {
+                        first
+                    } else {
+                        second
                     }
-                    [Some(kind), None] | [None, Some(kind)] => kind,
-                    [None, None] => break,
-                };
-                self.spawn_fragment(at, kind, types, chance);
-            }
+                }
+                [Some(kind), None] | [None, Some(kind)] => kind,
+                [None, None] => break,
+            };
+            self.spawn_fragment(at, kind, types, chance);
         }
         self.slots[slot] = None;
         Some(Remains {
@@ -971,6 +965,8 @@ mod tests {
         assert_eq!(sized((40.0, 30.0)).radius(), 20.0);
         assert_eq!(sized((30.0, 48.0)).radius(), 24.0);
         assert_eq!(sized((0.0, 0.0)).radius(), 16.0);
+        assert_eq!(sized((40.0, 0.0)).radius(), 20.0, "a side is a sprite");
+        assert_eq!(sized((0.0, 30.0)).radius(), 15.0);
         assert_eq!(AsteroidType::MISSING.radius(), NO_SPRITE_RADIUS);
         assert_eq!(NO_SPRITE_RADIUS, 16.0);
     }

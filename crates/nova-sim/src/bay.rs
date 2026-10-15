@@ -221,6 +221,9 @@ mod tests {
         );
         let further = launch_velocity(Vec2::new(-5.0, 0.0), 90.0, -0.5, 2.0);
         assert!((further.x + 5.5).abs() < 1e-5, "{further:?}");
+        // A negative push with no top speed: added too.
+        let stopped = launch_velocity(Vec2::new(-1.0, 0.0), 90.0, -0.5, 0.0);
+        assert!((stopped.x + 1.5).abs() < 1e-5, "{stopped:?}");
         // A positive push with no top speed: added too.
         let unbounded = launch_velocity(Vec2::new(3.0, 0.0), 90.0, 0.5, 0.0);
         assert!((unbounded.x - 3.5).abs() < 1e-5, "{unbounded:?}");
