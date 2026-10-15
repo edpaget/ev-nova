@@ -5754,6 +5754,8 @@ mod tests {
         hulls: Vec<nova_sim::HullRecord>,
         /// The governments: none, by default.
         govts: Vec<nova_sim::GovtRecord>,
+        /// The ranks: none, by default.
+        ranks: Vec<nova_sim::catalog::RankRecord>,
         /// The weapons' looks: none, by default.
         looks: Vec<(i16, Result<WeaponLook, String>)>,
         /// The explosions' looks: none, by default.
@@ -5898,6 +5900,7 @@ mod tests {
             weapons: Vec::new(),
             hulls: Vec::new(),
             govts: Vec::new(),
+            ranks: Vec::new(),
             looks: Vec::new(),
             booms: Vec::new(),
             cards: Vec::new(),
@@ -6164,7 +6167,7 @@ mod tests {
         }
 
         fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
-            Vec::new()
+            self.ranks.clone()
         }
 
         fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
@@ -20998,6 +21001,48 @@ mod tests {
                     .any(|m| matches!(m, RadarMark::Fill { .. }))
             );
         }
+    }
+
+    #[test]
+    fn a_stellar_of_a_landing_blessed_government_is_yellow_on_the_radar() {
+        // `_ColorCodeStellar` @0xaab9: the government's landing blessing
+        // gives yellow whatever `MinStatus` says.
+        let earth = |on_start: &str| {
+            let base = outfitted(starting_with(on_start), &[(300, 1)]);
+            let mut sites = base.sites.clone();
+            sites[0].govt = Some(GovtId(140));
+            sites[0].min_status = 10;
+            let catalog = FakeCatalog {
+                ranks: vec![nova_sim::catalog::RankRecord {
+                    id: nova_sim::RankId(200),
+                    name: String::new(),
+                    weight: 0,
+                    affil_govt: Some(GovtId(140)),
+                    salary: 0,
+                    salary_cap: 0,
+                    contribute: 0,
+                    flags: nova_sim::rank::BLESSES_LANDING,
+                    conv_name: String::new(),
+                    short_name: String::new(),
+                    price_mod: 100,
+                }],
+                sites,
+                ..base
+            };
+            let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+            let mut view = FlightView::with_pilot(catalog, pilot);
+            view.begin();
+            ticks(&mut view, 1);
+            radar_marks(&view)
+                .into_iter()
+                .find(|mark| matches!(mark, RadarMark::Oval { rect, .. } if *rect == IRect::around(926, 77, 1)))
+        };
+        let oval = |color| RadarMark::Oval {
+            rect: IRect::around(926, 77, 1),
+            color,
+        };
+        assert_eq!(earth("K200"), Some(oval(RadarColor::Yellow)));
+        assert_eq!(earth(""), Some(oval(RadarColor::Orange)), "unblessed");
     }
 
     /// [`outfitting`] selling [`radar_outfits`] too, landed.
