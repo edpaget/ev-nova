@@ -223,6 +223,11 @@ pub struct LossFacts {
     pub before: i16,
     /// Whether the ship lost was boarded (+0xb9).
     pub boarded: bool,
+    /// Whether a hidden mission's (`Flags` 0x0400) first loss fails it,
+    /// the other reading of
+    /// [`RuleKey::HiddenLossFails`](crate::RuleKey::HiddenLossFails); by
+    /// the engine it does not.
+    pub hidden_fails: bool,
 }
 
 /// Whether a ship destroyed fails its mission at once, as
@@ -361,9 +366,10 @@ pub const fn held_disabled(goal: ShipGoal, goals_met: bool, boarded: bool) -> bo
     matches!(goal, ShipGoal::Rescue) && !goals_met && !boarded
 }
 
-/// The first loss of its kind, of a mission not failed and not hidden.
+/// The first loss of its kind, of a mission not failed and not hidden
+/// (or hidden, when `hidden_fails`).
 const fn first_loss(facts: LossFacts) -> bool {
-    facts.before == 0 && !facts.failed && facts.flags & HIDDEN == 0
+    facts.before == 0 && !facts.failed && (facts.flags & HIDDEN == 0 || facts.hidden_fails)
 }
 
 #[cfg(test)]
@@ -848,6 +854,65 @@ mod tests {
             failed: false,
             before: 0,
             boarded: false,
+            hidden_fails: false,
+        }
+    }
+
+    #[test]
+    fn a_hidden_missions_first_loss_fails_it_only_when_hidden_losses_fail() {
+        for goal in [
+            ShipGoal::Disable,
+            ShipGoal::Escort,
+            ShipGoal::Board,
+            ShipGoal::Rescue,
+        ] {
+            let hidden = LossFacts {
+                flags: HIDDEN,
+                ..loss(goal)
+            };
+            assert!(!fails_on_destroyed(hidden), "{goal:?}");
+            assert!(
+                fails_on_destroyed(LossFacts {
+                    hidden_fails: true,
+                    ..hidden
+                }),
+                "{goal:?}"
+            );
+        }
+        let hidden_escort = LossFacts {
+            flags: HIDDEN,
+            ..loss(ShipGoal::Escort)
+        };
+        assert!(!fails_on_disabled(hidden_escort));
+        assert!(fails_on_disabled(LossFacts {
+            hidden_fails: true,
+            ..hidden_escort
+        }));
+        for hidden_fails in [false, true] {
+            for goal in [ShipGoal::Escort, ShipGoal::Rescue] {
+                let shown = LossFacts {
+                    hidden_fails,
+                    ..loss(goal)
+                };
+                assert!(fails_on_destroyed(shown), "{goal:?} {hidden_fails}");
+                assert!(
+                    !fails_on_destroyed(LossFacts { before: 1, ..shown }),
+                    "{goal:?} {hidden_fails}"
+                );
+            }
+            let disabled = LossFacts {
+                hidden_fails,
+                ..loss(ShipGoal::Rescue)
+            };
+            assert!(!fails_on_disabled(disabled), "{hidden_fails}");
+            assert!(
+                !fails_on_destroyed(LossFacts {
+                    flags: HIDDEN,
+                    failed: true,
+                    ..disabled
+                }),
+                "{hidden_fails}"
+            );
         }
     }
 

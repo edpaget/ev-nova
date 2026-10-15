@@ -171,6 +171,7 @@ use crate::geometry::Vec2;
 use crate::message::SimMessage;
 use crate::mission::active::AUTO_ABORT;
 use crate::mission::cargo::PICKUP_BOARDING;
+use crate::mission::screens::HIDDEN;
 use crate::mission::ships::{
     ShipBehav, ShipFacts, ShipStart, UNIFORM_SHIP_TYPE, appear_timer, swapped_ship_type,
 };
@@ -1259,7 +1260,9 @@ impl Session {
     /// NPC `id` lost as `loss` says, drawing on `chance`: when it is a
     /// special ship of a mission in its slot, and the loss fails the
     /// mission, [`SimMessage::MissionShipLost`] and the quick failure
-    /// ([`Session::quick_failure`], @0x2dbba, @0x3af71). Its slot and
+    /// ([`Session::quick_failure`], @0x2dbba, @0x3af71). A hidden mission
+    /// (`Flags` 0x0400) fails only by the other reading of
+    /// [`RuleKey::HiddenLossFails`], and then with no message. Its slot and
     /// mission, or none for a ship of no mission held.
     fn lose_mission_ship(
         &mut self,
@@ -1280,13 +1283,16 @@ impl Session {
                 Loss::Disabled => active.ships.disabled,
             },
             boarded,
+            hidden_fails: self.rules.source_for(RuleKey::HiddenLossFails) == RuleSource::Bible,
         };
         let fails = match loss {
             Loss::Destroyed => fails_on_destroyed(facts),
             Loss::Disabled => fails_on_disabled(facts),
         };
         if fails {
-            self.messages.push(SimMessage::MissionShipLost);
+            if record.flags & HIDDEN == 0 {
+                self.messages.push(SimMessage::MissionShipLost);
+            }
             self.quick_failure(mark.slot, &record, chance);
         }
         Some((mark.slot, record.id))
@@ -2594,6 +2600,41 @@ pub(super) mod tests {
         );
         let ships = ships_of(&session);
         assert_eq!((ships.destroyed, ships.disabled), (1, 1));
+    }
+
+    /// The rulebook with [`RuleKey::HiddenLossFails`] read as `source`.
+    fn hidden_loss(source: crate::RuleSource) -> crate::Rulebook {
+        crate::Rulebook::default().with_override(RuleKey::HiddenLossFails, source)
+    }
+
+    #[test]
+    fn by_the_engine_a_hidden_rescue_losing_a_ship_is_still_held_and_not_failed() {
+        let catalog = goal_catalog(5, 0x0400);
+        let mut session = in_flight(&catalog).with_rules(hidden_loss(crate::RuleSource::Engine));
+        let _ = session.take_messages();
+        destroy(&mut session, 0);
+        assert_eq!(session.take_messages(), []);
+        assert_eq!(failed(&session), None);
+        assert_eq!(bits(&session), [] as [u16; 0]);
+        assert!(session.pilot().missions().get(0).is_some(), "still held");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_hidden_mission_losing_a_ship_fails_quietly() {
+        for can_abort in [1, 0] {
+            let mut catalog = goal_catalog(5, 0x0400);
+            catalog.missions[0].can_abort = can_abort;
+            let mut session = in_flight(&catalog).with_rules(hidden_loss(crate::RuleSource::Bible));
+            let _ = session.take_messages();
+            destroy(&mut session, 0);
+            assert_eq!(session.take_messages(), [], "{can_abort}: no message");
+            assert_eq!(bits(&session), [5], "{can_abort}: OnFailure ran");
+            if can_abort == 0 {
+                assert_eq!(failed(&session), Some(FailedBy::Quick), "held, failed");
+            } else {
+                assert!(session.pilot().missions().get(0).is_none(), "it ended");
+            }
+        }
     }
 
     #[test]

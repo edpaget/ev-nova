@@ -113,6 +113,7 @@
 //! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux_ships`](crate::mission::aux_ships)) | the exit restarts them as a jump does: "-1: any system" |
 //! | [`AuxAbortFallThrough`](RuleKey::AuxAbortFallThrough) | `aux_abort_fall_through` | after a `Flags` 0x0001 mission auto-aborts as its auxiliary ships all come, the special-ship part runs on the freed slot's stale record: when its appear timer runs out that frame the special ships come, marked with the freed slot, and the mission auto-aborts again, its script, days, fuel and pay over again (`_EnterMoreShips` @0x4373a-0x43752, @0x43757-0x43ad4; see [`mission::aux_ships`](crate::mission::aux_ships)) | the freed slot is skipped\* |
 //! | [`PlainBoardCounts`](RuleKey::PlainBoardCounts) | `plain_board_counts` | a board or rescue goal's ship counts as boarded only on the assist path (`ShipGoal` 2 or 5, `Flags` 0x0001, one ship left) or on a `PickupMode` 2 pickup; a plain board only marks it boarded, so a goal with neither path is never met (`_HandlePlayerBoardAttempt` @0x653a7, @0x65575-0x65762; see [`mission::goals`](crate::mission::goals)) | any board of a board or rescue goal's ship counts, as the Bible's "board them" and "rescue them" read |
+//! | [`HiddenLossFails`](RuleKey::HiddenLossFails) | `hidden_loss_fails` | a hidden mission (`Flags` 0x0400) is not failed at once when one of its ships is destroyed or disabled, so a hidden board or rescue mission whose ship is destroyed never ends (`_HandleShipDisplay` @0x2db27, `_DamageShip` @0x3aede; see [`mission::goals`](crate::mission::goals)) | the first loss fails it as any other, but with no message\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
@@ -165,6 +166,7 @@
 //! `route_rewrite`, `scan_outfits_past_junk`, `gate_escorts`,
 //! `lost_cargo_share`, `outfit_sale_cargo`, `release_cargo_share`, `capture_cargo`,
 //! `leaderless_swap_hold`,
+//! `hidden_loss_fails`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box` or `comm_quote`
@@ -1572,6 +1574,16 @@ rule_keys! {
     /// "board them" and "rescue them": any board of such a ship counts it
     /// (see [`mission::goals`](crate::mission::goals)).
     PlainBoardCounts => "plain_board_counts",
+    /// Whether a hidden mission (`Flags` 0x0400) fails at once on the
+    /// first loss of one of its ships. By the engine, as the original: the
+    /// hidden test (`_HandleShipDisplay` @0x2db27, `_DamageShip` @0x3aede)
+    /// skips both the message and the failure, so a hidden board or rescue
+    /// mission whose ship is destroyed never ends. By the other reading the
+    /// first loss fails it as it does any other mission, but quietly: no
+    /// message, as a hidden mission shows nothing of itself. The Bible says
+    /// nothing of it, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see [`mission::goals`](crate::mission::goals)).
+    HiddenLossFails => "hidden_loss_fails",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -2067,7 +2079,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2107,7 +2119,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2129,7 +2141,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2154,7 +2166,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2180,7 +2192,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2200,7 +2212,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2220,7 +2232,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2240,7 +2252,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2262,7 +2274,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2408,7 +2420,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(35), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(36), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2423,7 +2435,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -2440,8 +2452,25 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::PlainBoardCounts)
+        );
+    }
+
+    #[test]
+    fn the_hidden_loss_fails_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::HiddenLossFails.key(), "hidden_loss_fails");
+        assert_eq!(
+            RuleKey::from_key("hidden_loss_fails"),
+            Some(RuleKey::HiddenLossFails)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::HiddenLossFails),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(33),
+            Some(&RuleKey::HiddenLossFails)
         );
     }
 
@@ -2481,7 +2510,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2886,7 +2915,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3040,6 +3069,7 @@ mod tests {
                 RuleKey::AuxGate,
                 RuleKey::AuxAbortFallThrough,
                 RuleKey::PlainBoardCounts,
+                RuleKey::HiddenLossFails,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,
