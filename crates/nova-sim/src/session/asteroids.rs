@@ -43,9 +43,10 @@
 use std::collections::BTreeMap;
 
 use super::Session;
-use crate::asteroid::{Asteroid, FieldSpec, Origin, Ring};
+use crate::asteroid::{Asteroid, AsteroidType, FieldSpec, Origin, Ring};
 use crate::catalog::{AsteroidFieldRecord, SystemId};
 use crate::chance::Chance;
+use crate::combat::asteroid_hit::AsteroidTarget;
 use crate::rulebook::{RuleKey, RuleSource};
 
 /// Each system's field, by system, from `records`.
@@ -148,6 +149,73 @@ impl Session {
     /// [`RuleKey::AsteroidEntryField`] reads.
     pub(super) fn places_asteroids(&self) -> bool {
         self.rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible
+    }
+
+    /// The asteroids shots may hit this tick, slot by slot, each with its
+    /// type's radius and `Mass` (see
+    /// [`asteroid_hit`](crate::combat::asteroid_hit)).
+    pub(super) fn asteroid_targets(&self) -> Vec<AsteroidTarget> {
+        self.asteroids
+            .indexed()
+            .map(|(slot, asteroid)| {
+                let kind_type = self
+                    .asteroid_types
+                    .get(usize::from(asteroid.kind))
+                    .copied()
+                    .unwrap_or(AsteroidType::MISSING);
+                AsteroidTarget {
+                    slot,
+                    position: asteroid.position,
+                    velocity: asteroid.velocity,
+                    radius: kind_type.radius(),
+                    strength: asteroid.strength,
+                    mass: kind_type.mass,
+                }
+            })
+            .collect()
+    }
+
+    /// Keeps the strength and velocity each of `targets` is left with
+    /// after the fight's tick, then destroys each asteroid the shots
+    /// broke, in the order they broke, drawing on `chance`
+    /// ([`Asteroids::destroy`](crate::asteroid::Asteroids::destroy)): its
+    /// particles and explosion go off, and its scoopable boxes are
+    /// spawned where it was
+    /// ([`CargoBoxes::spawn_scoopable`](crate::cargo_box::CargoBoxes::spawn_scoopable)).
+    ///
+    /// The original destroys an asteroid inside the hit
+    /// (`_HandleAsteroidHit` @0x3691a), so its booms and particles come
+    /// before the rest of the frame's collisions, and a fragment is in the
+    /// field for the shots after it. Here they come after the fight's own
+    /// events, and its fragments are hit from the next pass on. Both
+    /// settle before the frame is drawn, which is no boundary the player
+    /// sees.
+    pub(super) fn settle_asteroid_hits(
+        &mut self,
+        targets: &[AsteroidTarget],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        for target in targets {
+            if let Some(asteroid) = self.asteroids.get_mut(target.slot) {
+                asteroid.strength = target.strength;
+                asteroid.velocity = target.velocity;
+            }
+        }
+        for slot in self.combat.take_broken_asteroids() {
+            let Some(remains) = self.asteroids.destroy(slot, &self.asteroid_types, chance) else {
+                continue;
+            };
+            for _ in 0..remains.boxes {
+                self.boxes
+                    .spawn_scoopable(remains.at, remains.contents, remains.graphic, chance);
+            }
+            if let Some(particles) = remains.particles {
+                self.combat.particles(particles);
+            }
+            if let Some(explosion) = remains.explosion {
+                self.combat.explode(remains.at, explosion);
+            }
+        }
     }
 
     /// The player's system's field: none for one the catalog doesn't
@@ -623,5 +691,459 @@ mod tests {
         let off = outside.asteroids().next().expect("spawned").position;
         // ceil(303 + 20) and ceil(300 + 15): just off screen.
         assert_eq!(off, Vec2::new(323.0, 315.0));
+    }
+
+    // Shots at asteroids.
+
+    use crate::catalog::{WeaponId, WeaponRecord};
+    use crate::combat::{CombatEvent, ParticleBurst, Rules};
+    use crate::reserves::Reserves;
+    use crate::session::tests::{Attacking, arming, blaster, homing_missile, with_an_npc_at};
+    use crate::targeting::TargetPick;
+
+    /// Asteroid type `kind` of `Strength` `strength` and `Mass` 20, its
+    /// frames `size` across: a hit radius of half of it.
+    fn rock_type(kind: u8, strength: i16, size: u32) -> AsteroidTypeRecord {
+        AsteroidTypeRecord {
+            mass: 20,
+            frame_size: Some((size, size)),
+            ..self::kind(kind, strength)
+        }
+    }
+
+    /// The NPC's gun: a blaster of `wëap` 140.
+    fn npc_gun() -> WeaponRecord {
+        WeaponRecord {
+            id: WeaponId(140),
+            ..blaster()
+        }
+    }
+
+    /// `arming`'s catalog, the player's gun `gun` and its NPC's `npc`
+    /// (of another `wëap`), with asteroid `types` and no field.
+    fn rocky_arming(
+        gun: WeaponRecord,
+        npc: WeaponRecord,
+        types: Vec<AsteroidTypeRecord>,
+    ) -> FakePilotCatalog {
+        FakePilotCatalog {
+            asteroid_types: types,
+            asteroid_fields: Vec::new(),
+            ..arming(gun, npc, 0)
+        }
+    }
+
+    /// Puts an asteroid of `kind`, as strong as `strength`, at (`x`, `y`)
+    /// at rest in `session`'s field; its slot.
+    fn put(session: &mut Session, kind: u8, strength: i16, x: f32, y: f32) -> usize {
+        session
+            .asteroids
+            .place(Asteroid {
+                position: Vec2::new(x, y),
+                velocity: Vec2::ZERO,
+                frame: 0.0,
+                spin: 0.0,
+                strength,
+                kind,
+            })
+            .expect("a free slot")
+    }
+
+    /// The asteroid in `slot`.
+    fn slot(session: &Session, slot: usize) -> Asteroid {
+        *session
+            .asteroids
+            .indexed()
+            .find(|&(at, _)| at == slot)
+            .expect("there")
+            .1
+    }
+
+    /// The player, at the centre facing up, fires once; the fight goes on
+    /// `ticks` ticks in all. The events, in order.
+    fn shoot_once(session: &mut Session, ticks: u32) -> Vec<CombatEvent> {
+        let mut events = Vec::new();
+        session.hold_fire(true, false);
+        for tick in 0..ticks {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if tick == 0 {
+                session.hold_fire(false, false);
+            }
+            events.extend(session.take_combat_events());
+        }
+        events
+    }
+
+    /// A gun 20 pixels a tick of `MassDmg` 5, `EnergyDmg` `energy`,
+    /// `Impact` `impact` and these `Flags2`.
+    fn rock_gun(energy: i16, impact: i16, flags2: u16) -> WeaponRecord {
+        WeaponRecord {
+            impact,
+            energy_dmg: energy,
+            flags2,
+            ..blaster()
+        }
+    }
+
+    /// The session of the player armed with `gun` and an asteroid of type
+    /// 0 (`Strength` 100, 40 across) 100 above it, after one shot of 6
+    /// ticks: the asteroid, and the events.
+    fn struck(gun: WeaponRecord) -> (Session, Asteroid, Vec<CombatEvent>) {
+        let catalog = rocky_arming(gun, npc_gun(), vec![rock_type(0, 100, 40)]);
+        let mut session = flying(&catalog);
+        let at = put(&mut session, 0, 100, 0.0, -100.0);
+        let events = shoot_once(&mut session, 6);
+        let rock = slot(&session, at);
+        (session, rock, events)
+    }
+
+    #[test]
+    fn a_players_shot_takes_its_mass_damage_off_an_asteroid_and_is_used_up() {
+        for energy in [10, 0] {
+            let (session, rock, _) = struck(rock_gun(energy, 0, 0));
+            assert_eq!(rock.strength, 95, "{energy}: MassDmg alone");
+            assert_eq!(session.shots(), [], "{energy}: used up");
+            assert_eq!(rock.velocity, Vec2::ZERO, "no Impact, no push");
+        }
+        let (_, rock, _) = struck(rock_gun(10, 0, 0x8000));
+        assert_eq!(rock.strength, 50, "ten times under Flags2 0x8000");
+    }
+
+    #[test]
+    fn a_hit_pushes_an_asteroid_by_impact_over_mass_along_the_shot_up_to_2() {
+        let (_, rock, _) = struck(rock_gun(10, 10, 0));
+        assert!(
+            (rock.velocity - Vec2::new(0.0, -0.5)).length() < 1e-5,
+            "{rock:?}"
+        );
+        let (_, rock, _) = struck(rock_gun(10, 100, 0));
+        assert!(
+            (rock.velocity - Vec2::new(0.0, -2.0)).length() < 1e-5,
+            "held to 2: {rock:?}"
+        );
+    }
+
+    #[test]
+    fn a_hit_raises_the_weapons_hit_particles() {
+        let gun = WeaponRecord {
+            hit_particles: 6,
+            hit_part_vel: 250,
+            hit_part_life: 40,
+            hit_part_color: 0x00FF_8000,
+            ..rock_gun(10, 0, 0)
+        };
+        let (_, _, events) = struck(gun);
+        let bursts: Vec<ParticleBurst> = events
+            .iter()
+            .filter_map(|event| match event {
+                CombatEvent::Particles(burst) => Some(*burst),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bursts.len(), 1, "{events:?}");
+        assert!(
+            (bursts[0].at - Vec2::new(0.0, -80.0)).length() < 1e-3,
+            "{bursts:?}"
+        );
+        assert_eq!(
+            bursts[0],
+            ParticleBurst {
+                at: bursts[0].at,
+                speed: (250.0_f64 * 0.01) as f32,
+                variation: 20,
+                life: (40, 50),
+                color: 0x00FF_8000,
+                count: 6,
+                spread: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn a_seeker_0x0001_gun_passes_through_an_asteroid() {
+        let gun = WeaponRecord {
+            seeker: 0x0001,
+            ..rock_gun(10, 0, 0)
+        };
+        let (session, rock, _) = struck(gun);
+        assert_eq!(rock.strength, 100);
+        assert_eq!(session.shots().len(), 1, "flying on");
+    }
+
+    /// The player's homing missile, `Seeker` `seeker`, fired at its NPC
+    /// 100 above with an asteroid between: the asteroid's strength, and
+    /// the NPC's shield.
+    fn missile_past_a_rock(seeker: u16) -> (i16, f32) {
+        let missile = WeaponRecord {
+            seeker,
+            ..homing_missile(134, 1000)
+        };
+        let catalog = rocky_arming(missile, npc_gun(), vec![rock_type(0, 100, 20)]);
+        let mut session = with_an_npc_at(&catalog, 750, 650, 180);
+        let at = put(&mut session, 0, 100, 0.0, -50.0);
+        session.select_target(TargetPick::Nearest);
+        shoot_once(&mut session, 30);
+        (
+            slot(&session, at).strength,
+            session.npcs()[0].reserves.shield.now,
+        )
+    }
+
+    #[test]
+    fn a_seeker_0x0001_missile_passes_through_an_asteroid_to_its_target() {
+        let (rock, shield) = missile_past_a_rock(0x0001);
+        assert_eq!(rock, 100, "passed through");
+        assert!(shield < 30.0, "its target hit: {shield}");
+        let (rock, shield) = missile_past_a_rock(0);
+        assert!(rock < 100, "without it, the asteroid takes it");
+        assert_eq!(shield, 30.0);
+    }
+
+    /// A gun of `ProxRadius` 40 armed at once.
+    fn fused_gun() -> WeaponRecord {
+        WeaponRecord {
+            prox_radius: 40,
+            ..rock_gun(10, 0, 0)
+        }
+    }
+
+    #[test]
+    fn an_armed_fuse_with_no_ship_in_reach_takes_the_first_asteroid_in_slot_order() {
+        let catalog = rocky_arming(fused_gun(), npc_gun(), vec![rock_type(0, 100, 10)]);
+        let mut session = flying(&catalog);
+        // Both come within 40 as the shot reaches (0, -80); the second is
+        // the nearer.
+        let first = put(&mut session, 0, 100, 35.0, -80.0);
+        let second = put(&mut session, 0, 100, 5.0, -100.0);
+        shoot_once(&mut session, 6);
+        assert_eq!(slot(&session, first).strength, 95);
+        assert_eq!(slot(&session, second).strength, 100);
+        assert_eq!(session.shots(), []);
+    }
+
+    #[test]
+    fn a_ship_that_sets_the_fuse_off_takes_the_shot_and_leaves_the_asteroids_whole() {
+        let catalog = rocky_arming(fused_gun(), npc_gun(), vec![rock_type(0, 100, 10)]);
+        // The NPC at (48, -90): within 9.9 + 40 of the shot's way to
+        // (0, -80), not to (0, -60).
+        let mut session = with_an_npc_at(&catalog, 798, 660, 180);
+        let first = put(&mut session, 0, 100, 35.0, -80.0);
+        let second = put(&mut session, 0, 100, 5.0, -100.0);
+        shoot_once(&mut session, 6);
+        assert_eq!(slot(&session, first).strength, 100);
+        assert_eq!(slot(&session, second).strength, 100);
+        assert!(session.npcs()[0].reserves.shield.now < 30.0);
+    }
+
+    #[test]
+    fn a_point_defence_shot_meets_an_asteroid_on_its_way_to_a_missile() {
+        let quad = WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..blaster()
+        };
+        let slow = WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..homing_missile(134, 1000)
+        };
+        let catalog = rocky_arming(quad, slow, vec![rock_type(0, 100, 20)]);
+        let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+        let at = put(&mut session, 0, 100, 0.0, -50.0);
+        let mut events = Vec::new();
+        for _ in 0..15 {
+            session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                CombatEvent::Fired { weapon, .. } if *weapon == WeaponId(133)
+            )),
+            "point defence fired"
+        );
+        assert!(
+            slot(&session, at).strength < 100,
+            "its shots met the asteroid"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::ShotDown { .. })),
+            "none reached the missile"
+        );
+    }
+
+    /// A blaster of `BlastRadius` `radius`.
+    fn blasting(radius: i16) -> WeaponRecord {
+        WeaponRecord {
+            blast_radius: radius,
+            ..blaster()
+        }
+    }
+
+    #[test]
+    fn a_players_shot_at_an_asteroid_blasts_the_npcs_in_its_square() {
+        let catalog = rocky_arming(blasting(30), npc_gun(), vec![rock_type(0, 100, 40)]);
+        // The NPC at (20, -70): off the shot's way, in the square about
+        // (0, -80) where it meets the asteroid.
+        let mut session = with_an_npc_at(&catalog, 770, 680, 180);
+        put(&mut session, 0, 100, 0.0, -100.0);
+        shoot_once(&mut session, 6);
+        assert!(session.npcs()[0].reserves.shield.now < 30.0, "blasted");
+    }
+
+    #[test]
+    fn an_npcs_shot_at_an_asteroid_blasts_nobody() {
+        let gun = WeaponRecord {
+            id: WeaponId(140),
+            ..blasting(60)
+        };
+        let catalog = rocky_arming(blaster(), gun, vec![rock_type(0, 100, 40)]);
+        // The NPC 200 above fires down at the player; its shot meets the
+        // asteroid at (0, -45), the player within 60 of it.
+        let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+        let at = put(&mut session, 0, 100, 0.0, -25.0);
+        for _ in 0..12 {
+            session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert!(slot(&session, at).strength < 100, "the NPC's shots met it");
+        assert_eq!(session.reserves(), Reserves::full(30.0, 45.0, 300.0));
+    }
+
+    // Destruction.
+
+    /// Asteroid type 4 (`Strength` 100, 40 across): `YieldQty` 4 of
+    /// commodity 2, 12 orange particles, 4 fragments of types 1 and 2,
+    /// `bööm` 131; and types 1 and 2 themselves.
+    fn breaking() -> Vec<AsteroidTypeRecord> {
+        vec![
+            AsteroidTypeRecord {
+                yield_type: 2,
+                yield_qty: 4,
+                part_count: 12,
+                part_color: 0x00FF_8000,
+                frag_types: [129, 130],
+                frag_count: 4,
+                explode_type: 3,
+                ..rock_type(4, 100, 40)
+            },
+            rock_type(1, 30, 20),
+            rock_type(2, 40, 20),
+        ]
+    }
+
+    /// The player shoots an asteroid of type 4 left at `strength` 100 above
+    /// it, moving (0.5, 0), with `others` asteroids of type 0 placed far
+    /// off first: the session, the asteroid's slot and the events.
+    fn breaking_one(strength: i16, others: usize) -> (Session, usize, Vec<CombatEvent>) {
+        let mut types = breaking();
+        types.push(rock_type(0, 100, 20));
+        let catalog = rocky_arming(rock_gun(10, 0, 0), npc_gun(), types);
+        let mut session = flying(&catalog);
+        for n in 0..others {
+            put(&mut session, 0, 100, 200.0, 20.0 * n as f32 - 150.0);
+        }
+        let at = put(&mut session, 4, strength, 0.0, -100.0);
+        session.asteroids.get_mut(at).expect("there").velocity = Vec2::new(0.5, 0.0);
+        let events = shoot_once(&mut session, 6);
+        (session, at, events)
+    }
+
+    #[test]
+    fn an_asteroid_left_at_0_is_still_there() {
+        let (session, at, _) = breaking_one(5, 0);
+        assert_eq!(slot(&session, at).strength, 0);
+        assert!(session.cargo_boxes().is_empty());
+    }
+
+    #[test]
+    fn an_asteroid_below_0_explodes_and_throws_off_its_particles() {
+        let (_, _, events) = breaking_one(4, 0);
+        let seen: Vec<CombatEvent> = events
+            .iter()
+            .filter(|event| !matches!(event, CombatEvent::Fired { .. }))
+            .copied()
+            .collect();
+        let at = seen
+            .iter()
+            .find_map(|event| match event {
+                CombatEvent::Exploded { at, .. } => Some(*at),
+                _ => None,
+            })
+            .expect("its explosion");
+        // Where the asteroid was, drifting right.
+        assert!(
+            (at.y + 100.0).abs() < 1e-3 && (0.0..=3.0).contains(&at.x),
+            "{at:?}"
+        );
+        assert_eq!(
+            seen,
+            [
+                CombatEvent::Particles(ParticleBurst {
+                    at,
+                    speed: 0.2,
+                    variation: 40,
+                    life: (240, 480),
+                    color: 0x00FF_8000,
+                    count: 12,
+                    spread: 13.0,
+                }),
+                CombatEvent::Exploded {
+                    at,
+                    explosion: crate::combat::weapon::Explosion::decode(3).expect("bööm 131"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_asteroid_below_0_breaks_into_fragments_of_its_frag_types_each_with_its_own_velocity() {
+        let (session, at, _) = breaking_one(4, 0);
+        let made: Vec<Asteroid> = session.asteroids().copied().collect();
+        // FragCount / 2 + Rand(FragCount): 2, each of type 1 by Rand(2) 0.
+        assert_eq!(made.len(), 2, "{made:?}");
+        for fragment in &made {
+            assert_eq!(fragment.kind, 1);
+            assert_eq!(fragment.strength, 30);
+            assert_eq!(fragment.velocity, Vec2::new(-1.0, -1.0), "not its parent's");
+        }
+        assert!(
+            session.asteroids.indexed().all(|(slot, _)| slot != at),
+            "the parent gone"
+        );
+    }
+
+    #[test]
+    fn a_full_field_takes_no_fragments_of_an_asteroid_destroyed() {
+        let (session, _, _) = breaking_one(4, crate::asteroid::SLOTS - 1);
+        assert_eq!(session.asteroids().count(), crate::asteroid::SLOTS - 1);
+        assert!(session.asteroids().all(|made| made.kind == 0));
+    }
+
+    #[test]
+    fn an_asteroid_below_0_drops_scoopable_boxes_of_its_yield() {
+        let (session, _, _) = breaking_one(4, 0);
+        let boxes = session.cargo_boxes();
+        // 4 × (Rand(101) + 50) %: 2.
+        assert_eq!(boxes.len(), 2, "{boxes:?}");
+        for made in boxes {
+            assert!(made.scoopable);
+            assert_eq!(made.contents, Some(2));
+            assert_eq!(made.graphic, 2, "type 4 / 4 + 1");
+            assert_eq!(made.life, 300.0);
+            assert_eq!(made.spin, -1);
+            assert!(
+                (made.velocity - Vec2::new(0.0, -0.12)).length() < 1e-5,
+                "{made:?}"
+            );
+        }
     }
 }

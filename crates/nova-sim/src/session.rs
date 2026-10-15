@@ -2374,6 +2374,7 @@ impl Session {
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let (player_terms, terms) = self.fight_terms();
         let mut stellars = self.stellar_targets();
+        let mut rocks = self.asteroid_targets();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -2414,7 +2415,7 @@ impl Session {
             rules,
             Scenery {
                 stellars: &mut stellars,
-                ..Scenery::default()
+                asteroids: &mut rocks,
             },
             chance,
         );
@@ -2450,6 +2451,7 @@ impl Session {
         self.orphan_fighters();
         self.clear_lost_target();
         self.strike_stellars(&stellars, rules.law, chance);
+        self.settle_asteroid_hits(&rocks, chance);
         self.see_stellars();
         self.lay_out_ships();
     }
@@ -14516,7 +14518,7 @@ pub(super) mod tests {
 
     /// A blaster firing every other tick, 20 pixels a tick for 30 ticks,
     /// doing 5 mass and 10 energy damage.
-    fn blaster() -> WeaponRecord {
+    pub(super) fn blaster() -> WeaponRecord {
         WeaponRecord {
             reload: 2,
             count: 30,
@@ -19010,7 +19012,7 @@ pub(super) mod tests {
     /// [`trafficked`] with the player carrying `player` and its traffic
     /// carrying `npc`, the player's ship type's `Flags` `flags`; outfit
     /// 250 holds the player's weapon.
-    fn arming(player: WeaponRecord, npc: WeaponRecord, flags: u16) -> FakePilotCatalog {
+    pub(super) fn arming(player: WeaponRecord, npc: WeaponRecord, flags: u16) -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![player, npc],
             outfits: vec![outfit(250, &[(MOD_WEAPON, player.id.0)])],
@@ -19027,7 +19029,12 @@ pub(super) mod tests {
 
     /// `catalog`'s session with its one NPC at (`x`, `y`) from the player
     /// (at the centre, facing up), facing `heading`, at rest.
-    fn with_an_npc_at(catalog: &FakePilotCatalog, x: u32, y: u32, heading: u32) -> Session {
+    pub(super) fn with_an_npc_at(
+        catalog: &FakePilotCatalog,
+        x: u32,
+        y: u32,
+        heading: u32,
+    ) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, x, y, heading]));
         stop_npcs(&mut session);
@@ -19080,7 +19087,7 @@ pub(super) mod tests {
 
     /// A homing missile: 10 pixels a tick for 60 ticks, turning 7 degrees
     /// a tick, standing 4 of point defence.
-    fn homing_missile(id: i16, reload: i16) -> WeaponRecord {
+    pub(super) fn homing_missile(id: i16, reload: i16) -> WeaponRecord {
         WeaponRecord {
             id: WeaponId(id),
             guidance: 1,
@@ -19118,7 +19125,7 @@ pub(super) mod tests {
 
     /// Every NPC idles, targets the player and holds its trigger.
     #[derive(Debug)]
-    struct Attacking;
+    pub(super) struct Attacking;
 
     impl Behaviour for Attacking {
         fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
