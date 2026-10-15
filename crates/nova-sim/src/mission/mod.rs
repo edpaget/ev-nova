@@ -160,7 +160,9 @@
 //! # Draws
 //!
 //! The visit's table is 1000 `Rand(100) + 1` rolls, drawn in index order
-//! as the offers are rolled ([`RollTable::draw`]), and kept for the visit:
+//! as the offers are rolled ([`RollTable::draw`]), at a jump's arrival,
+//! when a new pilot begins and when a pilot is opened from a save (as
+//! `_ResetPlayer` draws it, @0x1d93a-0x1d956), and kept for the visit:
 //! `AvailRandom` reads it as a fact, so checking a mission's availability
 //! again draws nothing, and every check is plain. The original's own
 //! destination check draws a stellar and throws it away; here it only

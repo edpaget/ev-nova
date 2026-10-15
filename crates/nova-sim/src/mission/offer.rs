@@ -36,7 +36,9 @@ impl Default for RollTable {
 
 impl RollTable {
     /// Draws every roll afresh, in index order: `Rand(100) + 1` each
-    /// (`_HandlePlayerDockRequest` @0x66d3f-0x66d60).
+    /// (`_HandlePlayerDockRequest` @0x66d3f-0x66d60), as `_ResetPlayer`
+    /// (@0x1d93a-0x1d956) and `_InitObjects` (@0x1cf45-0x1cf66) draw it
+    /// too.
     pub fn draw(&mut self, chance: &mut dyn Chance) {
         for roll in &mut self.rolls {
             *roll = chance.roll(100).saturating_add(1);

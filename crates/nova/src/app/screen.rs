@@ -7513,6 +7513,16 @@ pub(super) mod tests {
         (script, SharedChance::new(shared))
     }
 
+    /// [`under_the_player`] for a new pilot: the offers' roll table its
+    /// beginning draws, each the last outcome, then the traffic's setup.
+    fn begun_under_the_player() -> SharedChance {
+        let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
+        let setup = [6, 6, 0, 0, 750, 750, 0, 0];
+        let script: Rc<RefCell<dyn Chance>> =
+            Rc::new(RefCell::new(Script(table.chain(setup).collect())));
+        SharedChance::new(script)
+    }
+
     /// [`boarding_data_with`] no cash.
     fn boarding_data() -> Rc<GameData> {
         boarding_data_with(0)
@@ -7839,6 +7849,7 @@ pub(super) mod tests {
         let mut screen = boardable(
             with_dialogs(boarding_data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)),
         )
+        .with_chance(begun_under_the_player())
         .with_boarding_rule(Rc::new(Sure));
         create(&mut screen, "Ada");
         board(&mut screen);

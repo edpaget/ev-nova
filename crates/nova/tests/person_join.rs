@@ -565,10 +565,12 @@ impl Game {
             let pilot = Pilot::new(data.as_ref(), "Pilot").expect("a pilot");
             keeper.save(&pilot).expect("saved");
         }
-        // The load's heading first: 0, facing up.
+        // The load's heading first: 0, facing up; then the offers' roll
+        // table, each the last outcome.
         let heading = std::iter::once(0);
+        let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(
-            heading.chain(draws.iter().copied()).collect(),
+            heading.chain(table).chain(draws.iter().copied()).collect(),
         )));
         let rulebook = saved_rulebook(settings);
         let screen = start_screen(Rc::clone(&data))

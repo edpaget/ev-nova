@@ -1684,13 +1684,14 @@ impl<
         }
     }
 
-    /// Resumes a pilot opened from a save as [`Session::face_on_load`]
-    /// does, on the flight's chance: its ship faces a drawn heading, as
-    /// `_LoadPilotData` faces every pilot it loads (@0x7535b-0x75372). A
-    /// session that failed resumes nothing.
+    /// Resumes a pilot opened from a save as [`Session::resume`] does, on
+    /// the flight's chance: its ship faces a drawn heading, as
+    /// `_LoadPilotData` faces every pilot it loads (@0x7535b-0x75372), and
+    /// the offers' roll table is drawn, as the load's `_ResetPlayer` draws
+    /// it (@0x76502, @0x7673e). A session that failed resumes nothing.
     pub fn resume(&mut self) {
         if let Ok(session) = &mut self.session {
-            session.face_on_load(&mut self.chance);
+            session.resume(&mut self.chance);
         }
     }
 
@@ -9744,7 +9745,28 @@ mod tests {
         assert_eq!(player(&view).heading, 0.0, "flying alone faces up");
         view.resume();
         assert_eq!(player(&view).heading, 123.0);
-        assert_eq!(script.borrow().asked, [360]);
+        let asked = &script.borrow().asked;
+        assert_eq!(asked[0], 360, "the heading first");
+        assert_eq!(
+            asked[1..],
+            [100; nova_sim::mission::ROLLED],
+            "then the offers' roll table, on the same chance"
+        );
+    }
+
+    #[test]
+    fn beginning_draws_the_offer_roll_table_on_the_flights_chance() {
+        let (script, chance) = scripted(&[]);
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        let mut view = FlightView::with_pilot(catalog, pilot).with_chance(chance);
+        view.begin();
+        let asked = &script.borrow().asked;
+        assert!(asked.len() >= nova_sim::mission::ROLLED);
+        assert_eq!(
+            asked[asked.len() - nova_sim::mission::ROLLED..],
+            [100; nova_sim::mission::ROLLED]
+        );
     }
 
     #[test]

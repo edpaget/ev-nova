@@ -1168,6 +1168,17 @@ impl Session {
         self.offers.forget();
     }
 
+    /// Draws the offers' roll table afresh on `chance`, as `_ResetPlayer`
+    /// does whatever its argument (@0x1d795-0x1d7ab, @0x1d93a-0x1d956)
+    /// when a new pilot starts (`_DoNewPilot` @0x18dd4) or a pilot is
+    /// opened from a save (@0x76502, @0x7673e). The table is never saved,
+    /// so without this a pilot in space would read an undrawn table, all
+    /// 0, until its first landing or arrival. The offers stay; the
+    /// stellar they were rolled at is already none on both paths.
+    pub(super) fn draw_offer_rolls(&mut self, chance: &mut dyn Chance) {
+        self.offers.redraw(chance);
+    }
+
     /// Empties the offers, keeping the stellar they were rolled at.
     pub(super) fn empty_offers(&mut self) {
         self.offers.empty();
@@ -4691,6 +4702,65 @@ mod tests {
             !session.ship_mission_available(MissionId(132)),
             "no such mïsn"
         );
+    }
+
+    /// A chance whose every draw is `draw` (capped below `n`), so a
+    /// table drawn on it holds `draw + 1` at every index.
+    struct Always(u16);
+
+    impl Chance for Always {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            u32::from(self.0).min(n.saturating_sub(1))
+        }
+    }
+
+    /// Whether every one of the table's rolls is `roll`.
+    fn every_roll_is(session: &Session, roll: u16) -> bool {
+        (0..ROLLED)
+            .map(|index| MissionId(128 + i16::try_from(index).expect("an index")))
+            .all(|id| session.offer_rolls().roll(id) == Some(roll))
+    }
+
+    #[test]
+    fn a_new_pilot_begun_in_space_has_its_offer_rolls_drawn() {
+        let catalog = from_ships();
+        for (draw, available) in [(40, false), (39, true)] {
+            let mut session = Session::start(&catalog).expect("starts");
+            assert_eq!(session.landed(), None, "in space");
+            session.begin(&catalog, &mut Always(draw));
+            assert!(every_roll_is(&session, draw + 1));
+            assert_eq!(
+                session.ship_mission_available(MissionId(130)),
+                available,
+                "AvailRandom 40 against a roll of {}",
+                draw + 1
+            );
+        }
+    }
+
+    #[test]
+    fn a_pilot_resumed_in_space_has_its_offer_rolls_drawn() {
+        let catalog = from_ships();
+        for (draw, available) in [(40, false), (39, true)] {
+            let mut session = Session::start(&catalog).expect("starts");
+            assert_eq!(session.landed(), None, "in space");
+            session.resume(&mut Always(draw));
+            assert!(every_roll_is(&session, draw + 1));
+            assert!(
+                (session.player().heading - f32::from(draw)).abs() < f32::EPSILON,
+                "still faced on load"
+            );
+            assert_eq!(
+                session.ship_mission_available(MissionId(130)),
+                available,
+                "AvailRandom 40 against a roll of {}",
+                draw + 1
+            );
+        }
     }
 
     #[test]

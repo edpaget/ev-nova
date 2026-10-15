@@ -284,6 +284,16 @@ fn placing_the_trader() -> SharedChance {
     SharedChance::new(script)
 }
 
+/// [`placing_the_trader`] for a new pilot: the offers' roll table its
+/// beginning draws, each the last outcome, then the setup.
+fn begun_placing_the_trader() -> SharedChance {
+    let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
+    let setup = [6, 6, 0, 0, 850, 650, 0];
+    let script: Rc<RefCell<dyn Chance>> =
+        Rc::new(RefCell::new(Script(table.chain(setup).collect())));
+    SharedChance::new(script)
+}
+
 /// Every NPC idles.
 #[derive(Debug)]
 struct Still;
@@ -401,7 +411,7 @@ impl Harness {
         let data = data();
         let keeper = PilotKeeper::new(Box::new(MemoryPilots::new()) as Box<dyn PilotStore>);
         let screen = start_screen(Rc::clone(&data))
-            .with_chance(placing_the_trader())
+            .with_chance(begun_placing_the_trader())
             .with_behaviour(behaviour)
             .with_pilots(Some(keeper), Rc::new(MonoMetrics));
         let mut harness = Self {

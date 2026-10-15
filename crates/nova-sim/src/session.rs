@@ -1459,6 +1459,18 @@ impl Session {
         self.player.heading = f32::from(chance.roll(360));
     }
 
+    /// Resumes a pilot opened from a save, after [`Session::fly`], on
+    /// `chance`: faces it as [`Session::face_on_load`] does, then draws
+    /// the offers' roll table, docked or not, as the load's
+    /// `_ResetPlayer` does (`_OpenLastPilotFile` @0x76502,
+    /// `_OpenPilotFile` @0x7673e). The table is not in the pilot file. A
+    /// docked pilot's landing roll draws it again on its `Landed` effect,
+    /// as the original's dock request does.
+    pub fn resume(&mut self, chance: &mut dyn Chance) {
+        self.face_on_load(chance);
+        self.draw_offer_rolls(chance);
+    }
+
     /// This session with every disputed rule reading as `rules` says
     /// ([`Rulebook::source_for`]): by default, [`Rulebook::default`], every
     /// rule the engine's. The whole rule set is replaced, so a session is
@@ -7612,6 +7624,29 @@ pub(super) mod tests {
             assert_eq!(session.player().heading, f32::from(draw));
             assert_eq!(chance.sides_asked, [360]);
         }
+    }
+
+    #[test]
+    fn a_pilot_resumed_docked_has_its_offer_rolls_drawn_by_the_resume() {
+        use crate::catalog::MissionId;
+        let catalog = catalog();
+        let mut session = Session::fly(&catalog, landed_pilot(&catalog)).expect("flies");
+        let mut chance = Scripted::rolling(&[7, 41]);
+        session.resume(&mut chance);
+        assert_eq!(session.player().heading, 7.0, "faced first");
+        assert_eq!(
+            chance.sides_asked.len(),
+            1 + crate::mission::ROLLED,
+            "a heading, then the whole table"
+        );
+        assert!(chance.sides_asked[1..].iter().all(|&sides| sides == 100));
+        assert_eq!(
+            session.offer_rolls().roll(MissionId(128)),
+            Some(42),
+            "drawn before any landing effect runs"
+        );
+        assert_eq!(session.offer_rolls().roll(MissionId(129)), Some(1));
+        assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
     }
 
     #[test]

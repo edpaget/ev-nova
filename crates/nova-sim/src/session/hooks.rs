@@ -135,8 +135,11 @@ impl Session {
     /// `chär`'s `OnStart` once, drawing on `chance` (see the module docs),
     /// and nothing when the `chär` cannot be read, then refreshes the
     /// galaxy, so the systems its bits show are visible (`_PlayGame`
-    /// @0x457e9; see the `story` module), and last rebuilds the stellars
-    /// shown (see the `stellars` module). For a pilot just created and
+    /// @0x457e9; see the `story` module), rebuilds the stellars shown
+    /// (see the `stellars` module), and last draws the offers' roll table
+    /// on `chance`, as `_DoNewPilot`'s `_ResetPlayer` does (@0x18dd4).
+    /// The original draws it before the `OnStart`; nothing here reads it,
+    /// so it settles before the first frame either way. For a pilot just created and
     /// flown, before its first save; never for one opened from a save.
     pub fn begin(
         &mut self,
@@ -165,6 +168,11 @@ impl Session {
         self.reset_precalced();
         // `_DoNewPilot`'s rebuild point, after its `OnStart` (@0x1937f).
         self.rebuild_stellars();
+        // `_DoNewPilot`'s `_ResetPlayer` (@0x18dd4) draws the offers' roll
+        // table before its `OnStart`; nothing above reads the table, so
+        // drawing it last settles the same table before the first frame
+        // and the first save.
+        self.draw_offer_rolls(chance);
     }
 }
 
