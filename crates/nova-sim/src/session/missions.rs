@@ -437,7 +437,10 @@ impl Session {
     /// flight, drawing on `chance`: the accept checks, then the original's
     /// accept (`_DoMissionAccept` @0xa1b11; see the [`mission`] module's
     /// "Active missions"), and a person's offer answered (see the
-    /// `person_offers` module). The slot it went into.
+    /// `person_offers` module). The slot it went into. It is the player's
+    /// accept from the offer dialog or the mission computer, so it runs
+    /// with the dialog open (`_missionDialog`, @0xa2e06, @0xa2fba,
+    /// @0xa3bb4; see [`Session::start_mission`]).
     ///
     /// # Errors
     ///
@@ -448,6 +451,18 @@ impl Session {
     /// [`Session::next_offer`]) and, for want of room for its cargo, the
     /// refusal queued to show ([`MissionTextKind::NoRoom`]).
     pub fn accept_mission(
+        &mut self,
+        mission: MissionId,
+        chance: &mut dyn Chance,
+    ) -> Result<u8, AcceptError> {
+        self.in_offer_dialog(|session| session.accept_offered(mission, chance))
+    }
+
+    /// Accepts `mission` as [`Session::accept_mission`] does, but with the
+    /// offer dialog as it is: the offer dialog's accept at once, of an
+    /// offer that cannot be refused and has no text, comes before the
+    /// dialog is made (`_OfferOneMission` @0xa230a, before @0xa237f).
+    pub(super) fn accept_offered(
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
@@ -471,8 +486,8 @@ impl Session {
     }
 
     /// Refuses `mission`, offered on the visit under way, drawing on
-    /// `chance`: its `OnRefuse` runs (`_OfferOneMission` @0xa2f41), then
-    /// its offer is dropped (`_OfferMissionFromPort` @0xa3765-0xa37a1).
+    /// `chance`: its `OnRefuse` runs with the offer dialog open
+    /// (`_OfferOneMission` @0xa2f41), then its offer is dropped (`_OfferMissionFromPort` @0xa3765-0xa37a1).
     /// Nothing is forgotten. An offer from a ship is answered (see the
     /// `person_offers` module).
     ///
@@ -489,10 +504,21 @@ impl Session {
         let record = self.lifecycle_record(mission);
         // `RefuseText`, filled with no mission (index -1, @0xa2ec9).
         self.show_mission_text(MissionTextKind::Refuse, mission, None);
-        self.run_script(&record.on_refuse, chance);
+        self.in_offer_dialog(|session| session.run_script(&record.on_refuse, chance));
         self.offers.drop_offer(mission);
         self.end_ship_offer(false);
         Ok(())
+    }
+
+    /// Runs `f` with the offer dialog open, as `_OfferOneMission` and
+    /// `_DoMissionDialog` keep `_missionDialog` set from @0xa237f to
+    /// @0xa3628 and from @0xa39a4 to @0xa40cd, then puts it back as it
+    /// was, so a dialog's accept inside another's script leaves it open.
+    fn in_offer_dialog<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let was = std::mem::replace(&mut self.offer_dialog_open, true);
+        let done = f(self);
+        self.offer_dialog_open = was;
+        done
     }
 
     /// The player's abort of the mission in `slot`, drawing on `chance`
@@ -535,12 +561,20 @@ impl Session {
     /// @0xa1c0c-0xa2196): the slot filled and its hooks registered;
     /// `OnAccept`; the cash a pay below -50000 takes; `BriefText`; the
     /// cargo loaded with `PickupMode` 0, and its `LoadCargText`; the destination
-    /// reached when it has none, or, docked, when it is the stellar docked
-    /// at, or, in flight with an offer from a ship open, when it is the
-    /// stellar [`Session::ship_offer_reaches`] gives (@0xa1fc5-0xa1ff8);
-    /// docked, the mission's offer dropped and the others kept only
-    /// while available; the auto-abort; and its roll made 0. The slot, or
-    /// `None` when every slot is taken.
+    /// reached when it has none (@0xa1fe7), or, with the offer dialog
+    /// open, when it is the stellar docked at, or, in flight with an
+    /// offer from a ship open, when it is the stellar
+    /// [`Session::ship_offer_reaches`] gives (@0xa1fc5-0xa1ff8, the
+    /// dialog read @0xa1fde); docked with the dialog open, the mission's
+    /// offer dropped and the others kept only while available
+    /// (@0xa1ffd-0xa2136, the dialog read @0xa200b); the auto-abort, which
+    /// reads no dialog (@0xa2139-0xa2186); and its roll made 0. The
+    /// dialog is open while the player's accept or refusal runs
+    /// ([`Session::accept_mission`], [`Session::refuse_mission`]), so for
+    /// an `S` in its `OnAccept` or `OnRefuse` too, and closed for an `S`
+    /// anywhere else and for the offer dialog's accept at once
+    /// ([`Session::accept_offered`]), unless [`RuleKey::StartOutsideDialog`]
+    /// reads otherwise. The slot, or `None` when every slot is taken.
     fn start_mission(
         &mut self,
         record: &MissionRecord,
@@ -568,14 +602,18 @@ impl Session {
         // (@0xa1e0b-0xa1f13, @0xa1e56).
         self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot));
         self.load_at_accept(slot, record);
+        let in_dialog = self.offer_dialog_open
+            || self.rules.source_for(RuleKey::StartOutsideDialog) == RuleSource::Bible;
         let docked = self.landed;
-        let here = docked.or_else(|| self.ship_offer_reaches());
+        let here = docked
+            .or_else(|| self.ship_offer_reaches())
+            .filter(|_| in_dialog);
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.reached = active
                 .destination
                 .is_none_or(|stop| Some(stop.stellar) == here);
         }
-        if docked.is_some() {
+        if docked.is_some() && in_dialog {
             self.offers.drop_offer(record.id);
             self.refilter_offers();
         }
@@ -1015,7 +1053,10 @@ impl Session {
     /// (128 with none, `_RandomizeOneMission` @0x153ff), then accepted as
     /// the player's accept is once its checks pass (`_DoMissionAccept`
     /// @0x15407, its checks @0xa1b32-0xa1be5, a cargo refusal shown),
-    /// without asking whether it is available. A mission active already takes another slot, unless
+    /// without asking whether it is available, with the offer dialog as it
+    /// is: open in an `OnAccept` or `OnRefuse` the player's answer runs,
+    /// closed anywhere else (see [`Session::start_mission`]). A mission
+    /// active already takes another slot, unless
     /// [`RuleKey::StartActiveMission`] reads otherwise. Nothing for a
     /// mission the session has no record of; with every slot taken, its
     /// values are still drawn, then nothing is accepted.
@@ -3474,9 +3515,10 @@ mod tests {
             active.destination.map(|stop| stop.stellar),
             Some(StellarId(129))
         );
-        assert!(
-            session.mission_offers(Venue::Computer).is_empty(),
-            "dropped"
+        assert_eq!(
+            ids(session.mission_offers(Venue::Computer)),
+            [140],
+            "kept: no offer dialog is open (@0xa200b)"
         );
         run(&mut session, "S141");
         assert_eq!(held(&session), [(0, 140)], "no such mïsn");
@@ -3518,6 +3560,152 @@ mod tests {
         let session = started_in_flight_in(133);
         assert!(session.sites.is_empty(), "133 lists none");
         assert_eq!(destination(&session), Some(StellarId(128)));
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // untouched
+    fn an_s_in_flight_of_an_auto_aborting_mission_holds_its_slot_and_runs_only_on_accept() {
+        let catalog = lifecycle(vec![auto_aborting()]);
+        let marks = Rc::new(Marks::default());
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_set_op_observer(marks.clone());
+        settle(&mut session, &catalog);
+        let (today, fuel) = (session.date(), session.pilot().reserves().fuel.now);
+        run(&mut session, "S140");
+        assert_eq!(held(&session), [(0, 140)]);
+        assert_eq!(marks.taken(), [200], "OnAccept, no OnAbort");
+        assert_eq!(session.date(), today);
+        assert_eq!(session.pilot().reserves().fuel.now, fuel);
+    }
+
+    // `S` and the offer dialog (`_missionDialog`, @0xa1fde, @0xa200b).
+
+    /// [`lifecycle`] with 128 an outfitter selling outfit 300, free, whose
+    /// `OnPurchase` is `S141`, and missions offered at 128's computer:
+    /// 140 (to 129), available while `!b5`; 141, to 128 itself, whose
+    /// `OnAccept` sets b5; and 142 (to 129), whose `OnAccept` and
+    /// `OnRefuse` are `S141`.
+    fn dialog_catalog() -> FakePilotCatalog {
+        let mut catalog = lifecycle(vec![
+            MissionRecord {
+                avail_bits: crate::control::Test::parse("!b5"),
+                ..to_129(140)
+            },
+            MissionRecord {
+                avail_stel: 128,
+                travel_stel: 128,
+                on_accept: Script::parse("b5"),
+                ..mission(141)
+            },
+            MissionRecord {
+                on_accept: Script::parse("S141"),
+                on_refuse: Script::parse("S141"),
+                ..to_129(142)
+            },
+        ]);
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id == StellarId(128)) {
+                site.flags |= crate::landing::StellarFlags::OUTFITTER;
+                site.tech_level = 5;
+            }
+        }
+        catalog.outfits = vec![crate::catalog::OutfitRecord {
+            cost: 0,
+            mass: 0,
+            on_purchase: Script::parse("S141"),
+            ..crate::testkit::outfit(300, &[])
+        }];
+        catalog
+    }
+
+    fn reached(session: &Session, slot: u8) -> bool {
+        session.pilot().missions().get(slot).expect("held").reached
+    }
+
+    fn computer(session: &Session) -> Vec<i16> {
+        ids(session.mission_offers(Venue::Computer))
+    }
+
+    fn buy_s141(session: &mut Session) {
+        let order = crate::session::tests::buy(crate::catalog::OutfitId(300));
+        session.outfit(order, &mut NeverFires).expect("bought");
+    }
+
+    #[test]
+    fn an_s_from_an_outfits_on_purchase_leaves_its_destination_unreached_and_the_offers_as_they_were()
+     {
+        let catalog = dialog_catalog();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        assert_eq!(computer(&session), [140, 141, 142]);
+        buy_s141(&mut session);
+        assert_eq!(held(&session), [(0, 141)]);
+        assert!(session.control_bit(bit(5)), "its OnAccept ran");
+        assert!(!reached(&session, 0), "no dialog open (@0xa1fde)");
+        assert_eq!(
+            computer(&session),
+            [140, 141, 142],
+            "none dropped (@0xa200b)"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_an_s_from_an_outfits_on_purchase_reaches_and_refilters() {
+        let catalog = dialog_catalog();
+        let rules =
+            Rulebook::default().with_override(RuleKey::StartOutsideDialog, RuleSource::Bible);
+        let (mut session, _) = watched(&catalog, rules);
+        buy_s141(&mut session);
+        assert!(reached(&session, 0));
+        assert_eq!(computer(&session), [142], "140 by b5, 141 its own");
+    }
+
+    #[test]
+    fn an_s_in_an_accepts_on_accept_reaches_its_destination_and_refilters() {
+        let catalog = dialog_catalog();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        assert_eq!(accept(&mut session, 142), 0);
+        assert_eq!(held(&session), [(0, 142), (1, 141)]);
+        assert!(reached(&session, 1), "in the dialog");
+        assert_eq!(computer(&session), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn an_s_in_a_refusals_on_refuse_reaches_its_destination_and_refilters() {
+        let catalog = dialog_catalog();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session
+            .refuse_mission(MissionId(142), &mut NeverFires)
+            .expect("offered");
+        assert_eq!(held(&session), [(0, 141)]);
+        assert!(
+            reached(&session, 0),
+            "OnRefuse runs in the dialog (@0xa2f41)"
+        );
+        assert_eq!(computer(&session), Vec::<i16>::new(), "140 by b5");
+    }
+
+    #[test]
+    fn after_the_dialog_an_s_is_outside_it_again() {
+        let catalog = dialog_catalog();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        buy_s141(&mut session);
+        assert_eq!(held(&session), [(0, 140), (1, 141)]);
+        assert!(!reached(&session, 1));
+        assert_eq!(computer(&session), [141, 142]);
+    }
+
+    /// A destination gives a return (`ReturnStel` -1 returns there), so
+    /// only a mission with neither auto-aborts, and it is reached with no
+    /// dialog open too (@0xa1fe7).
+    #[test]
+    fn a_docked_s_outside_the_dialog_still_auto_aborts_a_mission_with_no_destination() {
+        let catalog = lifecycle(vec![auto_aborting()]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        run(&mut session, "S140");
+        assert_eq!(held(&session), []);
+        assert_eq!(marks.taken(), [200, 201]);
     }
 
     #[test]
@@ -3790,6 +3978,7 @@ mod tests {
             let strings: &[&str] = match id {
                 4001 => &["food", "*passengers", "industrial"],
                 25048 => &["<PN>: off to <DST>."],
+                25049 => &["<PN>: paid <PAY>."],
                 _ => &[],
             };
             strings.iter().map(|&string| string.to_owned()).collect()
@@ -4065,7 +4254,8 @@ mod tests {
     #[test]
     fn a_q_in_an_auto_aborts_on_abort_fills_its_mission_tags() {
         let catalog = scripted(vec![MissionRecord {
-            on_abort: Script::parse("Q25048"),
+            on_abort: Script::parse("Q25049"),
+            pay_val: 1234,
             ..auto_aborting()
         }]);
         let mut session = stocks(&catalog);
@@ -4073,8 +4263,8 @@ mod tests {
         assert_eq!(held(&session), [], "aborted at once");
         assert_eq!(
             left_on(&mut session, &catalog).as_deref(),
-            Some("Stock: off to [Error]."),
-            "its slot's, which has no stellar"
+            Some("Stock: paid 1,234."),
+            "its slot's, still held as OnAbort runs (@0x99ba1, @0x99c3e)"
         );
     }
 

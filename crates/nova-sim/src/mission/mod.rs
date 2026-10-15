@@ -186,12 +186,14 @@
 //!   "Cargo");
 //!   the slot filled; `OnAccept` (@0xa1da2); a `PayVal` below -50000 takes
 //!   `-50000 - PayVal`, the cash floored at none ([`accept_charge`]); the
-//!   destination reached when it has none, or, docked, when it is the
+//!   destination reached when it has none (@0xa1fe7), or, with an offer
+//!   dialog open (`_missionDialog`, @0xa1fde), docked, when it is the
 //!   stellar docked at, or, an offer from a ship accepted in flight, when
 //!   it is the navigation target as
 //!   [`person_mission_stellar`](crate::RuleKey::PersonMissionStellar)
-//!   reads (@0xa1fc5-0xa1ff8); docked, the mission's offer
-//!   dropped and the others kept only while available (@0xa1ffd-0xa2136);
+//!   reads (@0xa1fc5-0xa1ff8); docked with the dialog open (@0xa200b),
+//!   the mission's offer dropped and the others kept only while available
+//!   (@0xa1ffd-0xa2136);
 //!   the auto-abort when docked, with `Flags` 0x0001, the destination
 //!   reached, and no return stellar nor ship ([`auto_aborts_at_accept`],
 //!   @0xa2139-0xa217b); its roll made 0 (@0xa2196).
@@ -242,6 +244,13 @@
 //!   availability nor whether it is active: a mission active already
 //!   takes another slot, unless the Rulebook key
 //!   [`start_active_mission`](crate::RuleKey::StartActiveMission) reads
+//!   otherwise. The offer dialog is open only while the player's accept
+//!   or refusal runs, so an `S` in its `OnAccept` or `OnRefuse` reaches
+//!   and refilters as that accept does. An `S` anywhere else, and the
+//!   offer dialog's accept at once of an offer that cannot be refused and
+//!   has no text (@0xa230a), leave a destination with one unreached and
+//!   the offers as they are, unless the Rulebook key
+//!   [`start_outside_dialog`](crate::RuleKey::StartOutsideDialog) reads
 //!   otherwise. `A` ends every slot holding the mission, running
 //!   `OnAbort`, whatever its `CanAbort`. `F` marks each failed, running
 //!   nothing.

@@ -1053,6 +1053,11 @@ pub struct Session {
     /// The offer from a ship the offer dialog shows, until the player
     /// answers it (see the `person_offers` module); never saved.
     offering: Option<person_offers::Offering>,
+    /// Whether an offer dialog is open, as the original's `_missionDialog`
+    /// is set: while the player's accept or refusal runs, so an `S` in
+    /// that `OnAccept` or `OnRefuse` sees it (see the `missions` module);
+    /// never saved.
+    offer_dialog_open: bool,
     /// Whether the load had to fall back for data the save references
     /// and the catalog lacks ([`Session::load_repaired`]); never saved.
     load_repaired: bool,
@@ -1376,6 +1381,7 @@ impl Session {
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),
             offering: None,
+            offer_dialog_open: false,
             script_slot: None,
             load_repaired,
             pilot,

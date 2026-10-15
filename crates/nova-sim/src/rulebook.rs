@@ -102,6 +102,7 @@
 //! | [`SecondarySale`](RuleKey::SecondarySale) | `secondary_sale` | the outfitter's sale lets go of the secondary selected when the sold outfit's own count falls to 0 and one of its `ModType` 1 slots names it, even with another outfit still mounting it (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82; [`Session`](crate::Session)) | the sale lets it go when it leaves the ship not carrying it\* |
 //! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see [`mission`](crate::mission)) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
 //! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
+//! | [`StartOutsideDialog`](RuleKey::StartOutsideDialog) | `start_outside_dialog` | an accept with no offer dialog open (an `S` outside `OnAccept` and `OnRefuse`, or an unrefusable offer with no text) leaves a destination that is the stellar docked at, or in flight the stellar target, unreached, and drops and refilters no offers (`_DoMissionAccept` @0xa1fde, @0xa200b; see [`mission`](crate::mission)) | every accept acts as if made from the offer dialog\* |
 //! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
 //! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
 //! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, and an accept in flight reaches no destination\* |
@@ -167,7 +168,8 @@
 //! `move_keep_flag`, `script_sound`, `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
-//! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
+//! `start_active_mission`, `start_outside_dialog`, `pay_millions`,
+//! `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
 //! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
@@ -1447,6 +1449,23 @@ rule_keys! {
     /// the Bible says (see the [`mission`](crate::mission) module's
     /// "Active missions").
     StartActiveMission => "start_active_mission",
+    /// What an accept outside an offer dialog does, as `S` makes one from a
+    /// script that runs with no offer dialog open: an outfit's or ship's
+    /// `OnPurchase`, an `OnSuccess` at a landing, a cron, an `OnShipDone`,
+    /// and so on. By the engine, as `_DoMissionAccept` reads
+    /// `_missionDialog`: it marks a destination that is the stellar docked
+    /// at (in flight, the player's stellar target) reached only while the
+    /// dialog is open (@0xa1fde). It also drops the mission's own offer
+    /// and refilters the others only then (@0xa200b). So such an `S`
+    /// leaves that destination unreached and every offer listed. A
+    /// mission with no destination is reached either way (@0xa1fe7). The
+    /// unrefusable offer with no text that the offer dialog accepts at
+    /// once (@0xa230a) is outside it as well. By the other reading, every
+    /// accept acts as if made from the dialog. The Bible's "start mission
+    /// xxx" says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see the
+    /// [`mission`](crate::mission) module's "Active missions").
+    StartOutsideDialog => "start_outside_dialog",
     /// How a mission text's `<PAY>` writes an amount of a million or
     /// more. By the engine, in millions to two places, truncated, as
     /// `_StrcatCommaNumber` (@0x8990-0x8aa3) writes it: "1.23M". By the
@@ -2187,8 +2206,25 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(54),
+            RuleKey::ALL.iter().rev().nth(55),
             Some(&RuleKey::StartActiveMission)
+        );
+    }
+
+    #[test]
+    fn the_start_outside_dialog_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::StartOutsideDialog.key(), "start_outside_dialog");
+        assert_eq!(
+            RuleKey::from_key("start_outside_dialog"),
+            Some(RuleKey::StartOutsideDialog)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::StartOutsideDialog),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(54),
+            Some(&RuleKey::StartOutsideDialog)
         );
     }
 
@@ -3150,7 +3186,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(56),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3291,6 +3327,7 @@ mod tests {
                 RuleKey::SecondarySale,
                 RuleKey::RepeatMissionFailure,
                 RuleKey::StartActiveMission,
+                RuleKey::StartOutsideDialog,
                 RuleKey::PayMillions,
                 RuleKey::MissionOrder,
                 RuleKey::PersonMissionStellar,

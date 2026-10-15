@@ -719,6 +719,31 @@ mod tests {
     }
 
     #[test]
+    fn the_accept_at_once_on_the_hail_reaches_no_destination_that_is_the_nav_target() {
+        let mut catalog = linked(0);
+        catalog.missions[0].flags = 0x0004;
+        let mut session = populated(&catalog, Rulebook::default(), Some(129));
+        session.target = Some(NpcId(0));
+        let (hailed, _) = hail(&mut session, &catalog);
+        assert!(
+            matches!(
+                hailed,
+                Ok(Hailed::Offer(VenueOffer::Accepted {
+                    accepted: Ok(0),
+                    ..
+                }))
+            ),
+            "{hailed:?}"
+        );
+        let active = session.pilot().missions().get(0).expect("held");
+        assert_eq!(
+            active.destination.map(|stop| stop.stellar),
+            Some(StellarId(129))
+        );
+        assert!(!active.reached, "the dialog never opened (@0xa230a)");
+    }
+
+    #[test]
     fn by_the_other_reading_an_accept_in_flight_reaches_no_destination() {
         assert!(!reached(RuleSource::Bible, 129, 128), "resolved to 128");
     }

@@ -299,7 +299,9 @@ impl Session {
     /// The offer dialog for `mission`, offered now (`_OfferOneMission`
     /// @0xa21ac), drawing on `chance`: its offer text filled for the
     /// offer, and its labels; or, for one that cannot be refused with no
-    /// offer text, its accept at once (@0xa22ec-0xa231c).
+    /// offer text, its accept at once (@0xa22ec-0xa231c), made before the
+    /// dialog is, so with no offer dialog open
+    /// ([`Session::accept_offered`]).
     pub(super) fn offer_dialog(
         &mut self,
         mission: MissionId,
@@ -313,7 +315,7 @@ impl Session {
             .and_then(|texts| texts.offer.as_deref())
             .unwrap_or_default();
         if !can_refuse && raw.is_empty() {
-            let accepted = self.accept_mission(mission, chance);
+            let accepted = self.accept_offered(mission, chance);
             return VenueOffer::Accepted { mission, accepted };
         }
         let labels = offer_labels(
@@ -920,6 +922,49 @@ mod tests {
             }
         );
         assert!(!prompt.can_refuse());
+    }
+
+    #[test]
+    fn the_accept_at_once_is_outside_the_dialog_so_reaches_nothing_and_refilters_nothing() {
+        let catalog = screens(
+            vec![
+                MissionRecord {
+                    flags: UNREFUSABLE,
+                    avail_stel: 128,
+                    travel_stel: 128,
+                    on_accept: crate::control::Script::parse("b5"),
+                    ..at_the_bar(141)
+                },
+                MissionRecord {
+                    avail_bits: crate::control::Test::parse("!b5"),
+                    ..at_the_bar(143)
+                },
+            ],
+            vec![offering(141, "", "", "")],
+        );
+        let mut session = docked(&catalog);
+        let ids = |session: &Session| -> Vec<MissionId> {
+            session
+                .mission_offers(Venue::Outside)
+                .iter()
+                .map(|offer| offer.mission)
+                .collect()
+        };
+        assert_eq!(ids(&session), [MissionId(141), MissionId(143)]);
+        assert!(matches!(
+            session.next_offer(BAR, &mut NeverFires),
+            Some(VenueOffer::Accepted {
+                accepted: Ok(0),
+                ..
+            })
+        ));
+        let active = session.pilot().missions().get(0).expect("held");
+        assert!(!active.reached, "the dialog never opened (@0xa230a)");
+        assert_eq!(
+            ids(&session),
+            [MissionId(141), MissionId(143)],
+            "none dropped"
+        );
     }
 
     #[test]
