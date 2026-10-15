@@ -125,10 +125,12 @@
 //! ([`FlightView::draw_status_bar`]), its radar blank. Flight doesn't
 //! advance there, so by the engine's reading the bar shows what the
 //! port's redraws last took: landing and a docked start take everything,
-//! as do the mission dialogs and texts and a shop closing
-//! ([`FlightView::refresh_status`]); an outfitter order takes the radar
-//! alone; a ship purchase the radar, nav and target, and the gauges too
-//! under another `ïntf`; and a recharge the fuel gauge alone. The shield,
+//! as do the mission dialogs and texts, a port dialog closing, and the
+//! bar, News, player info, mission info, a ship description and the
+//! shipyard's name prompt closing ([`FlightView::refresh_status`]); an
+//! outfitter order takes the radar alone; a ship purchase the radar, nav
+//! and target, and the gauges too under another `ïntf`; and a recharge
+//! the fuel gauge alone. The shield,
 //! armour and fuel gauges, live in flight, hold while docked between
 //! those points (`FlightView::reserves_shown`), as the original's port
 //! draws them only at its redraws. So does the nav area
@@ -139,11 +141,12 @@
 //! queued, unless ours has redrawn since ([`FlightView::take_mission_texts`]),
 //! and the mission dialogs' and a ship purchase's redraws come after the
 //! script run with them, as the original's do. The outfitter, exchange,
-//! shipyard and mission computer save the nav as they open and restore it
-//! as they close ([`FlightView::close_port_dialog`]), so a landed `M` or
-//! `N` run inside one is undone: shown at once after the outfitter, the
-//! exchange and the computer, whose close redraws the nav; after the
-//! shipyard, the close's redraw stays until the port's next draw. By the
+//! shipyard, the bar's hire screen and the mission computer save the nav
+//! as they open and restore it as they close
+//! ([`FlightView::close_port_dialog`]), so a landed `M` or `N` run inside
+//! one is undone: shown at once after the outfitter, the exchange and the
+//! computer, whose close redraws the nav; after the shipyard and the hire
+//! screen, the close's redraw stays until the port's next draw. By the
 //! other reading, everything follows every frame.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
@@ -3756,12 +3759,30 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// Redraws the whole status bar as an exchange, outfitter or shipyard
-    /// closes (`FlightView::redraw_status`), as each of the original's
-    /// shops ends in `_RefreshSAT` (the outfitter @0x5dba4, the exchange
-    /// @0x5e642, the shipyard @0x5f8d4, after its `_RedrawStatus` @0x5f87c
-    /// and @0x5f8c5). The gauges an order left held show the order then.
-    /// [`FlightView::close_port_dialog`] runs it before the nav's restore.
+    /// Redraws the whole status bar (`FlightView::redraw_status`) as a
+    /// dialog closes: the original's `_RefreshSAT` at a dialog's close.
+    /// The gauges an order left held show the order then. Its callers:
+    ///
+    /// - The shops: the outfitter (@0x5dba4), the exchange (@0x5e642) and
+    ///   the shipyard (@0x5f8d4, after its `_RedrawStatus` @0x5f87c and
+    ///   @0x5f8c5), through [`FlightView::close_port_dialog`], before the
+    ///   nav's restore.
+    /// - The bar's hire screen, the shipyard's function in hire mode
+    ///   (@0x5f8d4), and the mission computer (@0xa40d7, or its refusal's
+    ///   @0xa395b), the same way.
+    /// - The bar (@0x4945e), News (@0x48153), the ship description, the
+    ///   shipyard's or the hire screen's (@0x5bac2), player info
+    ///   (@0x5a725) and mission info (@0x9e769), as the app hears from the
+    ///   spaceport; player info and mission info over flight too.
+    ///
+    /// The shipyard's name prompt redraws the same way as it closes
+    /// ([`FlightView::buy_ship`], [`FlightView::decline_ship`], @0x5eb73).
+    /// The closings the original redraws at that ours can't reach (the
+    /// bar's Gamble text and map, mission info from the shops, the
+    /// description or an offer, an empty shop, Preferences' menu command,
+    /// the shops' faded text dialogs, an OS update event) are recorded,
+    /// with their addresses, in the spaceport's module docs
+    /// ([`crate::spaceport::view`]).
     pub fn refresh_status(&mut self) {
         self.redraw_status();
     }
@@ -3853,7 +3874,9 @@ impl<C> FlightView<C> {
     /// [`FlightView::outfit`]), the radar, nav and target on a ship
     /// purchase and everything on one under another `ïntf`
     /// ([`FlightView::buy_ship`]), the fuel gauge on a recharge
-    /// ([`FlightView::recharge`]), and everything as a shop closes
+    /// ([`FlightView::recharge`]), everything as the shipyard's name
+    /// prompt closes ([`FlightView::buy_ship`],
+    /// [`FlightView::decline_ship`]), and everything as a dialog closes
     /// ([`FlightView::refresh_status`]).
     fn redraw_status(&mut self) {
         self.retake_radar();
@@ -4061,21 +4084,18 @@ impl<C> FlightView<C> {
     /// ([`FlightView::redraw_status`]: landing, a docked start, a shop
     /// closing, an accept or refusal, mission texts, and an outfitter order
     /// that changes the `ïntf`; a ship purchase, [`FlightView::buy_ship`];
-    /// and a port dialog's close, [`FlightView::close_port_dialog`]). A
+    /// a port dialog's close, [`FlightView::close_port_dialog`]; and the
+    /// other closings [`FlightView::refresh_status`] lists). A
     /// landed `M` or `N`'s write (`_EvalSetExp` @0x156f2-0x15705,
     /// @0x158fd) shows from the next of them, as the original's port bar
     /// shows it only at its next nav redraw; one run inside a port dialog
     /// is undone as it closes. A trade, a recharge, an outfitter order
-    /// that keeps the `ïntf` and a refused purchase leave it held, unless
+    /// that keeps the `ïntf` leave it held, unless
     /// the shipyard's restore marked the nav, which a trade, recharge or
     /// outfitter order that goes through then draws. The original's port
     /// `_DrawStatus` also draws nav when it lands on `TickCount() % 30 ==
     /// 0` (@0x4c88a-0x4c8b6), recorded and not built (see the `cadence`
-    /// module); and its other whole-bar redraws in port (the bar, News,
-    /// the player and mission info, Preferences, the ship description,
-    /// the shops' text dialogs) are
-    /// rdm:phase/hud-fidelity/phase-35-port-status-bar-redraws-at-the-other-dialogs.
-    /// Until then a write held in port shows at the next redraw ours
+    /// module). A write held in port shows at the next redraw ours
     /// models, or the take-off lets go of it.
     fn nav_shown(&self) -> NavDisplay {
         let docked = self
