@@ -13121,6 +13121,26 @@ mod tests {
         assert_eq!(view.nav_shown(), view.nav_now(), "the purchase's own draw");
     }
 
+    #[test]
+    fn a_ship_purchases_on_purchase_m_shows_in_its_nav_draw_over_the_gauges_before_the_fill() {
+        let mut catalog = port();
+        assert_eq!(catalog.ships[0].id, ShipId(129));
+        catalog.ships[0].on_purchase = nova_sim::Script::parse("H130 M131");
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
+        assert_eq!(
+            port_nav(&view),
+            naming("Proxima"),
+            "the purchase's own nav draw (@0x5f0b1)"
+        );
+        let (shown, now) = (view.reserves_shown().fuel, view.reserves().fuel);
+        assert_eq!(shown.max, now.max, "ship 130's, under its ïntf");
+        assert!(shown.now < shown.max, "{shown:?}: not yet filled");
+        assert_eq!(now.now, now.max, "the fill");
+    }
+
     // The take-off's redraw before its deselect.
 
     /// The nav area naming `name` in mode 2, as flight shows it.
