@@ -498,6 +498,27 @@ mod tests {
     }
 
     #[test]
+    fn codes_5000_and_9998_are_the_ends_of_the_con_range() {
+        // 128 and 5126, the first and last systems the range names, each
+        // with a Con listing 130.
+        let map = StarMap::with_hidden(
+            vec![
+                system(128, (0.0, 0.0), &[130], None),
+                system(130, (100.0, 0.0), &[], None),
+                system(5126, (200.0, 0.0), &[130], None),
+            ],
+            &BTreeSet::new(),
+            CoLocated::Lowest,
+        );
+        let allows =
+            |code, player| aux_system_allows(code, SystemId(player), (None, None), &map, &govts());
+        assert!(allows(5000, 128), "128 itself");
+        assert!(allows(5000, 130), "128's Con lists 130");
+        assert!(allows(9998, 5126), "5126 itself");
+        assert!(allows(9998, 130), "5126's Con lists 130");
+    }
+
+    #[test]
     fn government_codes_read_a_hidden_player_system_s_government() {
         assert!(allows(10_000, 131), "hidden 131 is the Federation's");
         assert!(!allows(9999, 131), "not an independent");
