@@ -1642,11 +1642,11 @@ fn every_stock_weapon_in_scope_takes_the_shields_before_the_armour() {
     }
 }
 
-/// Every stock weapon in scope, fired again and again in one fight:
-/// exactly the Mining Blaster and the three Wraith Graviton Beams report
-/// their x10 damage to asteroids (`Flags2` 0x8000), each once.
+/// Every stock weapon in scope, fired again and again in one fight,
+/// reports no unimplemented flag: the Mining Blaster's and the Wraith
+/// Graviton Beams' x10 damage to asteroids (`Flags2` 0x8000) is done.
 #[test]
-fn only_the_asteroid_damage_flag_is_reported_each_once() {
+fn no_stock_weapon_in_scope_reports_an_unimplemented_flag() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -1658,16 +1658,7 @@ fn only_the_asteroid_damage_flag_is_reported_each_once() {
         fight(&mut combat, &mut ships);
         diagnostics.extend(combat.take_diagnostics());
     }
-    let expected: BTreeSet<SimDiagnostic> = [181, 165, 167, 168]
-        .into_iter()
-        .map(|id| SimDiagnostic::UnimplementedWeaponFlag {
-            weapon: WeaponId(id),
-            field: FlagField::Flags2,
-            bit: 0x8000,
-        })
-        .collect();
-    assert_eq!(diagnostics.len(), 4, "{diagnostics:?}");
-    assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert_eq!(diagnostics, []);
 }
 
 /// Each ship type a trader `düde` (AI 1 or 2) flies, hit with Light
@@ -2025,17 +2016,17 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
         diagnostics.extend(combat.take_diagnostics());
     }
     // The Zephyr family's `Flags2` 0x4000 (183-185, 199) fires while
-    // cloaked, which `Armament::has_ammo` does, so it reports nothing.
-    let rows: [Row; 9] = [
+    // cloaked, which `Armament::has_ammo` does, so it reports nothing;
+    // `Seeker` 0x0001 (148, 182, 184, 185, 199, 229, 137) passes through
+    // asteroids and `Flags2` 0x8000 (196-198, 230) mines them, both done.
+    let rows: [Row; 7] = [
         (&[134, 136], &[(Seeker, 0x2)]),
         (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
-        (&[137], &[(Seeker, 0x1), (Seeker, 0x8)]),
-        (&[148, 182, 184, 185, 199, 229], &[(Seeker, 0x1)]),
+        (&[137], &[(Seeker, 0x8)]),
         (&[142, 201], &[(Flags2, 0x1000), (Flags3, 0x10)]),
         (&[233], &[(Flags2, 0x1000)]),
         (&[234], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x1000)]),
-        (&[196, 197, 198], &[(Flags2, 0x8000)]),
-        (&[230], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x8000)]),
+        (&[230], &[(Seeker, 0x2), (Seeker, 0x8)]),
     ];
     let expected: BTreeSet<SimDiagnostic> = rows
         .iter()
@@ -2051,15 +2042,15 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
             })
         })
         .collect();
-    assert_eq!(expected.len(), 28);
-    assert_eq!(diagnostics.len(), 28, "each once: {diagnostics:?}");
+    assert_eq!(expected.len(), 17);
+    assert_eq!(diagnostics.len(), 17, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
 }
 
 /// Every stock weapon that releases sub-munitions, fired alone again and
 /// again at a ship ahead, with its sub-munition's weapon mounted nowhere:
-/// the sub-munitions released report their unimplemented flags, each
-/// once.
+/// the sub-munitions released report no unimplemented flag, their only
+/// one, `Seeker` 0x0001, being done.
 #[test]
 fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released() {
     let Some(dir) = common::nova_data() else {
@@ -2091,17 +2082,7 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
             (parent.id.0, diagnostics)
         })
         .collect();
-    let seeker = |weapon| {
-        vec![SimDiagnostic::UnimplementedWeaponFlag {
-            weapon: WeaponId(weapon),
-            field: FlagField::Seeker,
-            bit: 0x0001,
-        }]
-    };
-    assert_eq!(
-        released,
-        [(163, seeker(229)), (182, seeker(148)), (185, seeker(148))]
-    );
+    assert_eq!(released, [(163, vec![]), (182, vec![]), (185, vec![])]);
 }
 
 // Combat AI and legal status over the stock data.

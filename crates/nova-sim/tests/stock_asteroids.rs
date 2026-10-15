@@ -5,11 +5,14 @@
 //!   type) counting frames and sizing them.
 //! - Every stock system's `AstTypes` names only types that read, and
 //!   some system holds asteroids.
+//! - Every stock `röid`'s fragment types name a type that reads, and some
+//!   `röid` yields boxes of a kept `YieldType`.
 
 mod common;
 
 use nova_data::GameData;
 use nova_sim::AsteroidCatalog;
+use nova_sim::asteroid::AsteroidType;
 
 #[test]
 fn every_stock_asteroid_type_reads_with_frames_and_a_size() {
@@ -52,4 +55,31 @@ fn every_stock_field_names_types_that_read() {
         assert_eq!(field.types & !read, 0, "{field:?}");
         assert!((0..=16).contains(&field.count), "{field:?}");
     }
+}
+
+#[test]
+fn every_stock_fragment_type_reads_and_some_asteroid_yields_boxes() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let records = data.asteroid_types();
+    let read: Vec<u8> = records.iter().map(|record| record.kind).collect();
+    for record in &records {
+        let kind = AsteroidType::from_record(record);
+        for (raw, fragment) in record.frag_types.into_iter().zip(kind.fragments) {
+            if raw == -1 {
+                continue;
+            }
+            let fragment = fragment.unwrap_or_else(|| panic!("{raw} names no type: {record:?}"));
+            assert!(read.contains(&fragment), "{record:?}");
+        }
+    }
+    assert!(
+        records.iter().any(|record| {
+            let kind = AsteroidType::from_record(record);
+            kind.yield_qty > 0 && kind.yield_type.is_some()
+        }),
+        "some asteroid yields boxes"
+    );
 }
