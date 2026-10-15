@@ -660,6 +660,19 @@ mod tests {
     }
 
     #[test]
+    fn the_rescue_starts_no_takeoff_grace() {
+        use crate::player_fate::PlayerCommand;
+        let catalog = rescuing();
+        let mut session = due(&catalog);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        let _ = session.take_sounds();
+        assert!(session.takes(PlayerCommand::Map));
+        assert!(session.takes(PlayerCommand::MissionInfo));
+        assert!(session.press_player_info());
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
     fn the_rescue_shows_desc_13999_once() {
         let catalog = rescuing();
         let mut session = due(&catalog);

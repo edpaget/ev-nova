@@ -68,13 +68,19 @@ impl Session {
     ///   can't be reached: the pod's frames return (@0x68ddd) before any
     ///   key handler, so a key in the pod is silent, as the
     ///   [`PlayerFate::Ejected`](crate::PlayerFate::Ejected) row refuses it;
+    /// - for [`TAKEOFF_GRACE_TICKS`](crate::TAKEOFF_GRACE_TICKS) after a
+    ///   take-off or a gate's exit, `_frameCounter` below 0
+    ///   (@0x7030f-0x70319; see the `takeoff_grace` module);
     /// - while the ship breaks up (-0x2ca, @0x7031d).
     ///
     /// A disabled ship is taken. In the dead branch (0x6870d-0x6888c) no
     /// key handler runs, so an exploded player's key is silent too: its
     /// fate's row refuses the press before it gets here.
     pub fn press_player_info(&mut self) -> bool {
-        if self.jump.is_some() || matches!(self.condition, Condition::Dying { .. }) {
+        if self.jump.is_some()
+            || self.in_takeoff_grace()
+            || matches!(self.condition, Condition::Dying { .. })
+        {
             self.sounds.push(SimSound::Refused);
             return false;
         }

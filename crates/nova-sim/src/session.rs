@@ -388,6 +388,7 @@ mod ship_change;
 mod status_cargo;
 mod stellars;
 mod story;
+mod takeoff_grace;
 mod target_panel;
 
 pub use hooks::HookRules;
@@ -406,6 +407,7 @@ pub use missions::{AbortError, NotOffered};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{ScriptEffectRules, Settled};
+pub use takeoff_grace::TAKEOFF_GRACE_TICKS;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -863,9 +865,14 @@ pub struct Session {
     /// The original's frame counter, which times the tribbles and
     /// perishables step (see [`market`]). The original's value when a
     /// flight starts depends on how long the program has run, so 0 here
-    /// is a choice; a take-off sets it anyway. Not saved, as the
+    /// is a choice; a take-off or a gate's exit sets it anyway. Not
+    /// saved, as the
     /// original's pilot file does not keep it.
     frame: i16,
+    /// The take-off grace's ticks still to run (see the `takeoff_grace`
+    /// module); not saved, as the original's pilot file does not keep its
+    /// frame counter.
+    takeoff_grace: u32,
     /// The Red Alert's state (see the `red_alert` module); not saved, as
     /// the original's pilot file does not keep it.
     red_alert: RedAlert,
@@ -1304,6 +1311,7 @@ impl Session {
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
+            takeoff_grace: 0,
             red_alert: RedAlert::default(),
             nav_fly_in: crate::brackets::FlyIn::default(),
             target_fly_in: crate::brackets::FlyIn::default(),
@@ -1577,7 +1585,9 @@ impl Session {
     /// targets and counting the hold after its explosion down (see
     /// `dead_tick`).
     ///
-    /// Each tick in flight, a jump's included, moves the frame counter on,
+    /// Each tick in flight, a jump's and the pod's included, counts the
+    /// take-off grace down (see the `takeoff_grace` module). Each tick in
+    /// flight, a jump's included, moves the frame counter on,
     /// and on a due frame ([`market::junk_step_due`]) steps the held
     /// tribbles and perishables in the space the goods and the mission
     /// cargo aboard leave, unless the player is destroyed. It then
@@ -1591,6 +1601,7 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
+        self.takeoff_grace_tick();
         self.sound_script();
         let frame = self.frame;
         self.frame = market::next_frame(frame);
@@ -2449,11 +2460,14 @@ impl Session {
     }
 
     /// Whether the session takes the player's `command` now: its
-    /// [`PlayerFate`]'s row decides ([`crate::FateRow::input`]). The flight
-    /// view asks before it acts on a key, and does nothing when refused.
+    /// [`PlayerFate`]'s row decides ([`crate::FateRow::input`]), and for
+    /// [`TAKEOFF_GRACE_TICKS`] after a take-off or a gate's exit the map
+    /// and the mission info are refused too (see the `takeoff_grace`
+    /// module). The flight view asks before it acts on a key, and does
+    /// nothing when refused.
     #[must_use]
     pub fn takes(&self, command: PlayerCommand) -> bool {
-        self.player_fate().row().input.takes(command)
+        self.player_fate().row().input.takes(command) && !self.takeoff_grace_refuses(command)
     }
 
     /// The shots in flight.
@@ -3262,7 +3276,9 @@ impl Session {
     /// module): those that follow come out of the exit gate after the
     /// player, or where it arrived like a jump. Last, every ship the
     /// player leads comes out of the exit gate after it, as
-    /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module).
+    /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module). The
+    /// exit then starts the take-off grace, as the take-off's path ends
+    /// (see the `takeoff_grace` module).
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -3328,6 +3344,9 @@ impl Session {
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
         self.emerge_followers(exit.position, catalog, chance);
         self.lead_out_of_gate(exit.position, chance);
+        // The tail the take-off's path ends in (@0x67673; see the
+        // `takeoff_grace` module).
+        self.start_takeoff_grace();
     }
 
     /// Docks the ship at `stellar`, one of the system's, takes the ranks'
@@ -3425,6 +3444,10 @@ impl Session {
     /// restarted on `chance` (@0x634df-0x6353c; see the `aux_ships`
     /// module), then the escort-strength timer is armed on it (see
     /// [`strength`], @0x6706f), and the population rolls on it last.
+    ///
+    /// The take-off starts the take-off grace: for
+    /// [`TAKEOFF_GRACE_TICKS`] the map, mission info and player info keys
+    /// are refused (see the `takeoff_grace` module).
     pub fn take_off(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -3443,7 +3466,9 @@ impl Session {
         if stay_days {
             self.pass_days(stay.leaving_days(), chance);
         }
-        self.frame = market::AFTER_TAKE_OFF_FRAME;
+        // The dock request's tail (@0x67673; see the `takeoff_grace`
+        // module).
+        self.start_takeoff_grace();
         if let Some(sites) = self.next_sites.take()
             && self.set_player_system(self.pilot.system, sites, Dock::AsItWas)
         {

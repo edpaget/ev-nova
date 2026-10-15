@@ -441,7 +441,7 @@ pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, ESCAPE_POD_SHIP, Hailed, HookRules,
     InfoRow, LandPress, MissionComputer, MissionInfo, MissionText, MissionTextKind, NotOffered,
     OfferPrompt, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
-    ShipChangeRules, StellarPick, VenueOffer,
+    ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{

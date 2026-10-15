@@ -266,8 +266,10 @@
 //!   ([`FlightView::take_player_info_request`], with
 //!   [`FlightView::player_info`]), letting go of the flight keys, as
 //!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
-//!   stage included, and while the ship breaks up, the session refuses it
-//!   with the shared refusal beep ([`Session::press_player_info`],
+//!   stage included, while the ship breaks up, and for
+//!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+//!   take-off or a gate's exit, the session refuses it with the shared
+//!   refusal beep ([`Session::press_player_info`],
 //!   [`SimSound::Refused`](nova_sim::SimSound::Refused), @0x7039a-0x703bd);
 //!   once the ship has exploded, and in the escape pod, it does nothing
 //!   and says nothing, as no key handler runs there. Its Jettison
@@ -4324,9 +4326,11 @@ impl<
     /// a refused one does nothing, saying nothing: while the player's ship
     /// breaks up the map, landing and mission info (`_HandlePlayer`'s
     /// breakup-timer gates at 0x6a7b3, 0x6a8cb and 0x7044b), and once it
-    /// has exploded every command (the dead branch, 0x6870d-0x6888c). The
-    /// session refuses some taken commands itself, P while the ship
-    /// breaks up with its beep among them. The held flight keys are still
+    /// has exploded every command (the dead branch, 0x6870d-0x6888c); and
+    /// for [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+    /// take-off the map and mission info (`_frameCounter` below 0,
+    /// @0x6a7de, @0x7045e). The session refuses some taken commands
+    /// itself, P with its beep among them. The held flight keys are still
     /// tracked; the session ignores them.
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.cursor_input(input);
@@ -7713,6 +7717,37 @@ mod tests {
         assert_eq!(view.take_sounds(), [], "taken");
         view.take_off();
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TookOff)]);
+    }
+
+    #[test]
+    fn m_i_and_p_are_refused_for_15_ticks_after_a_take_off() {
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        tap(&mut view, LAND);
+        tap(&mut view, LAND);
+        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        let _ = view.take_sounds();
+        for tick in 0..15 {
+            tap(&mut view, MAP_KEY);
+            assert!(!view.map_open(), "after {tick} ticks");
+            tap(&mut view, MISSION_INFO_KEY);
+            assert_eq!(view.take_mission_info_request(), None, "after {tick} ticks");
+            assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS), "silently");
+            tap(&mut view, PLAYER_INFO_KEY);
+            assert!(!view.take_player_info_request(), "after {tick} ticks");
+            assert_eq!(
+                view.take_sounds(),
+                [Sound::Sim(SimSound::Refused)],
+                "after {tick} ticks"
+            );
+            ticks(&mut view, 1);
+        }
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS), "after 15 ticks");
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(view.take_player_info_request(), "after 15 ticks");
+        tap(&mut view, MAP_KEY);
+        assert!(view.map_open(), "after 15 ticks");
     }
 
     #[test]
@@ -14531,6 +14566,7 @@ mod tests {
     #[test]
     fn a_jump_clears_the_cargo_boxes() {
         let mut view = carrying(0, true);
+        ticks(&mut view, nova_sim::TAKEOFF_GRACE_TICKS);
         plot(&mut view, 131);
         fly_out(&mut view);
         jump_now(&mut view);

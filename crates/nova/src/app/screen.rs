@@ -5046,12 +5046,21 @@ pub(super) mod tests {
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::Flight, "taken off");
         assert_eq!(pilot(&screen).held(FOOD), 3, "the cash left buys 3");
+        past_the_takeoff_grace(&mut screen);
         screen.input(&key(PLAYER_INFO_KEY, true));
         click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
         click_player_info(&mut screen, PlayerInfoButton::Jettison);
         screen.input(&key(Key::Enter, true));
         assert!(screen.flight_player_info().is_none(), "closed");
         assert_eq!(pilot(&screen).held(FOOD), 0, "jettisoned in flight");
+    }
+
+    /// Steps flight through the take-off grace, which refuses P for
+    /// [`nova_sim::TAKEOFF_GRACE_TICKS`] after a take-off.
+    fn past_the_takeoff_grace(screen: &mut AppScreen) {
+        for _ in 0..nova_sim::TAKEOFF_GRACE_TICKS {
+            screen.tick(TICK);
+        }
     }
 
     #[test]
@@ -6617,6 +6626,7 @@ pub(super) mod tests {
         let mut screen = past_the_holds(&MemoryPilots::new());
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        past_the_takeoff_grace(&mut screen);
         let held = pilot(&screen).held(FOOD);
         let trimmed = held * 10 / (held + MISSION_TONS);
         assert!(trimmed < held, "{held} still past the holds");
