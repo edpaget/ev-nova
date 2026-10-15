@@ -1046,6 +1046,9 @@ pub struct Session {
     /// Every stellar's and system's name, read when the session starts:
     /// what the text tags read (see the `missions` module).
     place_names: PlaceNames,
+    /// Each system's first stellar that can be read, read when the session
+    /// starts: what a landed `M` selects (see the `nav` module).
+    first_stellars: BTreeMap<SystemId, StellarId>,
     /// Every stellar's place and name, read when the session starts: what
     /// a mission's stop is matched by (see the `missions` module).
     stellar_marks: StellarMarks,
@@ -1075,6 +1078,13 @@ pub struct Session {
     /// The mission texts to show, until they are taken (see the
     /// `mission_screens` module); never saved.
     shown_texts: Vec<MissionText>,
+    /// How many mission texts have been queued, never reset (see the
+    /// `mission_screens` module); never saved.
+    texts_queued: u64,
+    /// The nav mode as the last text queued since they were last taken
+    /// was queued: what its dialog's redraw shows (see the
+    /// `mission_screens` module); never saved.
+    text_nav: Option<NavMode>,
     /// The outside offers whose accept was refused, passed over until
     /// another venue is entered (see the `mission_screens` module); never
     /// saved, as the original saves none of it.
@@ -1406,6 +1416,7 @@ impl Session {
             nebulae: catalog.nebulae().into(),
             galaxy_stale: false,
             place_names: catalog.place_names(),
+            first_stellars: catalog.first_stellars().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
             reoffer_due: false,
@@ -1413,6 +1424,8 @@ impl Session {
             swap_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
+            texts_queued: 0,
+            text_nav: None,
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),

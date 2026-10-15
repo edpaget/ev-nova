@@ -1356,6 +1356,20 @@ pub trait PilotCatalog {
     fn mission_dude(&self, _id: DudeId) -> Option<DudeRecord> {
         None
     }
+    /// Each system's first stellar that can be read, the first of its
+    /// [`PilotCatalog::landing_sites`], by ascending system ID; a system
+    /// with none is left out. A landed `M` selects it (see the `nav`
+    /// module of [`Session`](crate::Session)). By default it is read
+    /// through [`PilotCatalog::star_map`] and the landing sites of each
+    /// system that exists; a catalog that reads sprites for its landing
+    /// sites reads it without them.
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        self.star_map()
+            .into_iter()
+            .filter(|system| self.system_exists(system.id))
+            .filter_map(|system| Some((system.id, self.landing_sites(system.id).first()?.id)))
+            .collect()
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1474,6 +1488,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
+    }
+
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        (**self).first_stellars()
     }
 }
 
@@ -1594,6 +1612,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
+    }
+
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        (**self).first_stellars()
     }
 }
 
@@ -1918,6 +1940,12 @@ mod tests {
             })
         }
 
+        /// System 130's first stellar is 129, unlike its landing sites'
+        /// 128, so a forward that falls to the default shows.
+        fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+            vec![(SystemId(130), StellarId(129))]
+        }
+
         /// Düde 150 flies ship 128.
         fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
             (id == DudeId(150)).then(|| DudeRecord {
@@ -1968,6 +1996,7 @@ mod tests {
             format!("{:?}", catalog.buoy_strings()),
             format!("{:?}", catalog.warp_sound()),
             format!("{:?}", catalog.mission_dude(DudeId(150))),
+            format!("{:?}", catalog.first_stellars()),
         ]
     }
 
@@ -2026,6 +2055,10 @@ mod tests {
             "forwarded, not a default"
         );
         assert!(direct[32].contains("ShipId(128), 40"), "{direct:?}");
+        assert_eq!(
+            direct[33], "[(SystemId(130), StellarId(129))]",
+            "forwarded, not the default's 128"
+        );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

@@ -397,6 +397,24 @@ impl PilotCatalog for GameData {
             .collect()
     }
 
+    /// One pass over every system's `nav_def`, reading each stellar but
+    /// not its sprites, as [`GameData::landing_sites`] would for every
+    /// system.
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let first = system
+                    .ok()?
+                    .record
+                    .nav_def
+                    .into_iter()
+                    .flatten()
+                    .find(|stellar| matches!(self.get::<Stellar>(stellar.0), Some(Ok(_))))?;
+                Some((SystemId(id), first))
+            })
+            .collect()
+    }
+
     fn listed_stellars(&self) -> Vec<ListedStellar> {
         // Systems come by ascending ID, so each stellar's come in order.
         let mut listed: BTreeMap<StellarId, Vec<SystemId>> = BTreeMap::new();
@@ -2003,6 +2021,36 @@ mod tests {
              by an undecodable system left out"
         );
         assert_eq!(store(&[]).listed_stellars(), []);
+    }
+
+    #[test]
+    fn each_systems_first_stellar_is_the_first_of_its_landing_sites() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[999, 129, 128])),
+            (System::TYPE, 131, system_with(&[])),
+            (System::TYPE, 132, system_with(&[129, 128, 130])),
+            (System::TYPE, 133, short(system_with(&[128]))),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+            (Stellar::TYPE, 130, stellar(0, 0, 0, 1, 0)),
+        ]);
+        let first = data.first_stellars();
+        assert_eq!(
+            first,
+            [
+                (SystemId(130), StellarId(128)),
+                (SystemId(132), StellarId(128))
+            ],
+            "missing 999 and undecodable 129 passed over; 131 lists none and \
+             undecodable 133 is none"
+        );
+        let landing: Vec<_> = data
+            .star_map()
+            .iter()
+            .filter_map(|system| Some((system.id, data.landing_sites(system.id).first()?.id)))
+            .collect();
+        assert_eq!(first, landing, "as the landing sites give it");
+        assert_eq!(store(&[]).first_stellars(), []);
     }
 
     #[test]

@@ -436,10 +436,11 @@ fn gate() -> Resets {
 /// system and stellar change, the offers are emptied (the stellar they
 /// were rolled at kept) and the stellars wait for the take-off. As an
 /// `arrival` (the Bible's reading of `MoveArrival`) the system is
-/// explored and the course cleared at once. The nav mode is left as it
-/// is: the original sets the selection to the stellar docked at
-/// (@0x156f2-0x15709), which nothing shows while docked and the take-off
-/// lets go of.
+/// explored and the course cleared at once. The nav is kept: the
+/// operator already wrote it, as `_EvalSetExp` does (`M` in mode 2 its
+/// destination's first stellar, @0x156f2-0x15705; otherwise the selection
+/// let go, @0x15733, @0x158fd; see the `nav` module), and the take-off
+/// lets go of it (@0x674d2).
 fn script_move_landed(arrival: bool) -> Resets {
     let mut set = vec![Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers];
     let course = if arrival {

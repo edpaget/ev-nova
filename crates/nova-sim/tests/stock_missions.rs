@@ -6,7 +6,10 @@
 //! name and offer text filled. Every `mïsn`'s texts fill every tag but the
 //! ranks'. A stock cargo mission loads its cargo as it is accepted, and
 //! landing at its destination unloads it, pays and runs its `OnSuccess`.
-//! The new pilot is offered the tutorial at the spaceport. Skips, passing, when `NOVA_DATA` is unset.
+//! The new pilot is offered the tutorial at the spaceport. Every finale's
+//! `M472` leaves the port after it, and each system's first stellar is
+//! the first of its landing sites. Skips, passing, when `NOVA_DATA` is
+//! unset.
 
 mod common;
 
@@ -352,4 +355,45 @@ fn a_stock_cargo_mission_loads_on_accept_and_completes_at_its_destination() {
     if let Some(bit) = bit {
         assert!(session.control_bit(bit), "OnSuccess set {bit:?}");
     }
+}
+
+/// Every stock storyline finale that moves the player to `sÿst` 472 leaves
+/// the port after it (`Q`), so the landed `M`'s selection never reaches the
+/// port's bar in stock. And each system's first stellar, read without
+/// sprites, is the first of its landing sites: `spöb` 420 for 472.
+#[test]
+fn every_stock_m472_leaves_the_port_and_each_systems_first_stellar_is_its_first_site() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let missions = data.missions();
+    for id in [354, 381, 417, 474, 686, 712, 887] {
+        let record = missions
+            .iter()
+            .find(|record| record.id == MissionId(id))
+            .expect("a mïsn");
+        let ops = &record.on_success.tree().expect("OnSuccess parses").ops;
+        let moved = ops
+            .iter()
+            .position(|op| *op == SetOp::MoveTo(SystemId(472)))
+            .unwrap_or_else(|| panic!("mïsn {id} moves to 472"));
+        assert!(
+            ops[moved + 1..]
+                .iter()
+                .any(|op| matches!(op, SetOp::LeaveStellar(_))),
+            "mïsn {id} leaves after its M472"
+        );
+    }
+    let first = data.first_stellars();
+    let landing: Vec<_> = data
+        .star_map()
+        .iter()
+        .filter_map(|system| Some((system.id, data.landing_sites(system.id).first()?.id)))
+        .collect();
+    assert_eq!(first, landing);
+    assert!(
+        first.contains(&(SystemId(472), StellarId(420))),
+        "Our Spiel"
+    );
 }

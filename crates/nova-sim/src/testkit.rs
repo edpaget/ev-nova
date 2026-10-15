@@ -885,6 +885,23 @@ impl PilotCatalog for FakePilotCatalog {
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         TrafficCatalog::dude(self, id)
     }
+
+    /// The first of each existing system's [`FakePilotCatalog::sites`], as
+    /// [`PilotCatalog::landing_sites`] gives them, read without counting
+    /// as a read of the star map or the sites.
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        let mut first = std::collections::BTreeMap::new();
+        for (system, sites) in &self.sites {
+            first
+                .entry(*system)
+                .or_insert_with(|| sites.first().map(|site| site.id));
+        }
+        first
+            .into_iter()
+            .filter(|(system, _)| self.systems.contains(system))
+            .filter_map(|(system, stellar)| Some((system, stellar?)))
+            .collect()
+    }
 }
 
 /// No traffic unless a test sets it.

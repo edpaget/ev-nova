@@ -74,9 +74,20 @@
 //! - A hypergate (`_PlayerEnterHypergate`): off on every outcome
 //!   (@0x637e4-0x637f2, @0x63fa2-0x63faa), and when it has no links.
 //! - `M` or `N` in flight (`_EvalSetExp` @0x157e3, @0x158fd): the
-//!   selection let go, the mode kept; landed, neither is written here
-//!   (see below). The developer tools' relocation, which has no
-//!   original, does the same as in flight.
+//!   selection let go, the mode kept, as the move settles (the `entry`
+//!   module's table). The developer tools' relocation, which has no
+//!   original, does the same.
+//! - `M` or `N` landed, at its operator, before its move is queued
+//!   (`Session::select_for_landed_move`; `M` @0x1570e-0x157f5, `N`
+//!   @0x158d9-0x158fd): `M` in mode 2 selects the destination's first
+//!   stellar that can be read (+0x6c, @0x156f2-0x15705), or none with
+//!   none; any other `M`, and every `N`, lets go of the selection. The
+//!   mode is never written, and a system that doesn't exist writes
+//!   nothing (@0x15715-0x1571d, @0x158e0-0x158e8), as its move is
+//!   skipped. In mode 2 the nav area names the stellar by its `spöb`
+//!   name, though the system shown is still the one docked in
+//!   (`_DrawStatusNav` @0x4a0fd-0x4a149), from the port's next nav
+//!   redraw (see the flight view); the take-off lets go of it (@0x674d2).
 //! - A map click ([`Session::plot_course`], `_DoSystemMap`
 //!   @0x136d7-0x137c7): a route cues its first hop, the original's click on
 //!   a system the current one lists (@0x137b3-0x137bb), or its cue as the
@@ -95,10 +106,22 @@
 //! galaxy-map-fidelity roadmap's); the map dialog's Tab / `\` cycling
 //! (`_MapFilter` @0x13f0f-0x13fac); the map panel's titles by the mode
 //! (`_MapDialogUpdate` @0x10b68-0x10c76); and the destroyed player's and the ship swap's per-frame clears
-//! (@0x68712-0x68718, @0x6f41b-0x6f421). The landed `M` / `N`'s +0x6c, the
-//! stellar docked at (@0x156f2-0x15709), shows nowhere while docked and
-//! the take-off lets go of it. Mode 4, the hypergate map's, is never
-//! drawn.
+//! (@0x68712-0x68718, @0x6f41b-0x6f421). Mode 4, the hypergate map's, is
+//! never drawn.
+//!
+//! Of the landed `M`, filed as
+//! rdm:phase/hud-fidelity/phase-36-landed-m-n-left-out-branches-and-ordering:
+//! the original's first stellar is the first nav slot that isn't −1,
+//! readable or not (@0x15756-0x157f5), where ours takes the first that
+//! can be read, as the move places the ship there; and a system ID in
+//! range with no `sÿst` (@0x15715-0x1571d) is written, where ours writes
+//! nothing. Off and mode 3 while docked: the original lands in mode 2
+//! only (@0x6a8ed-0x6a932). In Off, a pilot resumed docked
+//! (`_ResetPlayer` @0x1d4cd-0x1d4d5), a landed `M`'s +0x6c shows nowhere
+//! ("Nav System Off") and the take-off lets go of it (@0x674d2), so ours,
+//! with no selection in Off, writes nothing. Mode 3 docked is reachable
+//! only through [`Session::land_at`], which has no original; there `M`
+//! lets go of the selection.
 //!
 //! **The dock request** (`_dockTarget` / `_dockPermission`, see the
 //! `clearance` module) is dropped by Nav Off, by a stellar key or a click
@@ -163,6 +186,27 @@ impl Session {
     /// Lets go of the selection and keeps the mode.
     pub(super) fn deselect(&mut self) {
         self.nav = self.nav.deselected();
+    }
+
+    /// A landed `M` (`first`) or `N` into `system` writes the selection
+    /// at its operator, as `_EvalSetExp` does (`M` @0x1570e-0x157f5, `N`
+    /// @0x158d9-0x158fd), before its move is queued: `M` in mode 2 selects
+    /// the system's first stellar that can be read, or none with none;
+    /// any other `M`, and every `N`, lets go of the selection and keeps
+    /// the mode, so Off stays off. Nothing is written for a system that
+    /// doesn't exist, as the move skips it too, nor in flight, where the
+    /// move's settling lets go of the selection (the `entry` module's
+    /// table).
+    pub(super) fn select_for_landed_move(&mut self, system: SystemId, first: bool) {
+        if self.landed.is_none() || !self.galaxy.exists(system) {
+            return;
+        }
+        self.nav = match self.nav {
+            NavMode::Stellar(_) if first => {
+                NavMode::Stellar(self.first_stellars.get(&system).copied())
+            }
+            mode => mode.deselected(),
+        };
     }
 
     /// Cues the course's next hop, as `_CueNextHyperRouteDest` (@0xe2dc)
@@ -779,13 +823,111 @@ mod tests {
     }
 
     #[test]
-    fn an_m_landed_writes_neither() {
-        let catalog = three_stellars();
+    fn in_flight_the_operator_leaves_the_selection_to_the_settling() {
+        let catalog = catalog();
+        for expr in ["M131", "N131"] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.nav = stellar(128);
+            run(&mut session, expr);
+            assert_eq!(session.nav_mode(), stellar(128), "{expr}");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.nav_mode(), NavMode::Stellar(None), "{expr}");
+        }
+    }
+
+    /// [`three_stellars`], where 132 exists with no stellar, landed on
+    /// 128 in mode 2.
+    fn landed() -> (FakePilotCatalog, Session) {
+        let mut catalog = three_stellars();
+        catalog.systems.push(SystemId(132));
         let mut session = Session::start(&catalog).expect("starts");
-        land_now(&mut session).expect("lands");
-        move_to_131(&mut session, &catalog);
-        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         assert_eq!(session.nav_mode(), stellar(128));
+        (catalog, session)
+    }
+
+    /// Runs `expr`, unsettled.
+    fn run(session: &mut Session, expr: &str) {
+        session.run_set(&SetExpr::parse(expr).expect("parses"), &mut NeverFires);
+    }
+
+    #[test]
+    fn an_m_landed_selects_the_destinations_first_stellar_at_once() {
+        let (catalog, mut session) = landed();
+        run(&mut session, "M131");
+        assert_eq!(session.nav_mode(), stellar(140), "at the operator");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
+        assert_eq!(session.nav_mode(), stellar(140), "settled");
+        session.take_off(&catalog, &mut NeverFires);
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Stellar(None),
+            "the take-off lets go of it"
+        );
+    }
+
+    #[test]
+    fn an_m_landed_to_a_system_with_no_stellar_lets_go() {
+        let (catalog, mut session) = landed();
+        run(&mut session, "M132");
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Stellar(None),
+            "at the operator"
+        );
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.pilot().system(), SystemId(132));
+        assert_eq!(session.nav_mode(), NavMode::Stellar(None), "settled");
+    }
+
+    #[test]
+    fn an_m_landed_in_off_or_mode_3_selects_no_stellar() {
+        for (before, after) in [
+            (NavMode::Off, NavMode::Off),
+            (hyperspace(131), NavMode::Hyperspace(None)),
+        ] {
+            let (catalog, mut session) = landed();
+            session.nav = before;
+            run(&mut session, "M131");
+            assert_eq!(session.nav_mode(), after, "{before:?} at the operator");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.pilot().system(), SystemId(131));
+            assert_eq!(session.nav_mode(), after, "{before:?} settled");
+        }
+    }
+
+    #[test]
+    fn an_n_landed_lets_go_and_keeps_the_mode() {
+        for (before, after) in [
+            (stellar(128), NavMode::Stellar(None)),
+            (hyperspace(131), NavMode::Hyperspace(None)),
+            (NavMode::Off, NavMode::Off),
+        ] {
+            let (catalog, mut session) = landed();
+            session.nav = before;
+            run(&mut session, "N131");
+            assert_eq!(session.nav_mode(), after, "{before:?} at the operator");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.pilot().system(), SystemId(131));
+            assert_eq!(session.nav_mode(), after, "{before:?} settled");
+        }
+    }
+
+    #[test]
+    fn a_landed_move_to_a_system_that_does_not_exist_writes_nothing() {
+        for expr in ["M999", "N999"] {
+            for before in [stellar(128), hyperspace(131)] {
+                let (catalog, mut session) = landed();
+                session.nav = before;
+                run(&mut session, expr);
+                assert_eq!(session.nav_mode(), before, "{expr} {before:?}");
+                let _ = session.settle_script(&catalog, &mut NeverFires);
+                assert_eq!(session.pilot().system(), SystemId(130), "no move");
+                assert_eq!(session.nav_mode(), before, "{expr} {before:?}");
+            }
+        }
     }
 
     // The map.
