@@ -30,6 +30,7 @@ use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record, stellar_spin_id};
 
 use crate::blink::Blink;
+use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
     AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
@@ -233,6 +234,7 @@ impl PilotCatalog for GameData {
                     links: system.con.into_iter().flatten().collect(),
                     govt: system.govt,
                     interference: system.interference,
+                    message: system.message,
                     stellars: system
                         .nav_def
                         .iter()
@@ -253,6 +255,14 @@ impl PilotCatalog for GameData {
             base_prices: strings(self, BASE_PRICES),
             price_patches: patches(self, PRICE_PATCHES),
         }
+    }
+
+    fn string_patch(&self, id: i16) -> StringPatch {
+        string_patch(self, id)
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        strings(self, BUOY_STRINGS)
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -1025,26 +1035,29 @@ const BASE_PRICES: i16 = 4004;
 /// 9300 + n patches commodity n's base price.
 const PRICE_PATCHES: i16 = 9300;
 
-/// `data`'s six `'STR '` patches from `first` up, raw. A zero-byte one is
-/// [`StringPatch::Empty`]; any other that cannot be read is
+/// `data`'s six `'STR '` patches from `first` up, raw, each as
+/// [`string_patch`] reads it.
+fn patches(data: &GameData, first: i16) -> [StringPatch; 6] {
+    std::array::from_fn(|n| string_patch(data, first + i16::try_from(n).expect("one of six")))
+}
+
+/// `data`'s `'STR '` `id`, raw, from whichever file holds it. A zero-byte
+/// one is [`StringPatch::Empty`]; any other that cannot be read is
 /// [`StringPatch::Unreadable`]. Bytes past a readable string are ignored,
 /// as the original reads only as many as its length byte says.
-fn patches(data: &GameData, first: i16) -> [StringPatch; 6] {
-    std::array::from_fn(|n| {
-        let id = first + i16::try_from(n).expect("one of six");
-        match data.get::<StrResource>(id) {
-            None => StringPatch::Absent,
-            Some(Ok(entry)) => StringPatch::Text(entry.record.text.as_str().to_owned()),
-            Some(Err(_)) => {
-                let bytes = data.resource(StrResource::TYPE, id);
-                if bytes.is_some_and(|bytes| bytes.resource.data().is_empty()) {
-                    StringPatch::Empty
-                } else {
-                    StringPatch::Unreadable
-                }
+fn string_patch(data: &GameData, id: i16) -> StringPatch {
+    match data.get::<StrResource>(id) {
+        None => StringPatch::Absent,
+        Some(Ok(entry)) => StringPatch::Text(entry.record.text.as_str().to_owned()),
+        Some(Err(_)) => {
+            let bytes = data.resource(StrResource::TYPE, id);
+            if bytes.is_some_and(|bytes| bytes.resource.data().is_empty()) {
+                StringPatch::Empty
+            } else {
+                StringPatch::Unreadable
             }
         }
-    })
+    }
 }
 
 /// Every string of `data`'s `STR#` `id`; none when it is missing or
@@ -2237,15 +2250,19 @@ mod tests {
     }
 
     #[test]
-    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_and_interference() {
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_interference_and_buoy()
+     {
         let data = store(&[
             (
                 System::TYPE,
                 131,
-                interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
+                buoyed(
+                    interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
+                    7,
+                ),
             ),
             (System::TYPE, 129, short(linked(0, 0, &[130]))),
-            (System::TYPE, 130, linked(-20, 40, &[])),
+            (System::TYPE, 130, buoyed(linked(-20, 40, &[]), -1)),
         ]);
         assert_eq!(
             data.star_map(),
@@ -2257,6 +2274,7 @@ mod tests {
                     govt: None,
                     stellars: vec![None; 16],
                     interference: 0,
+                    message: -1,
                 },
                 StarSystem {
                     id: SystemId(131),
@@ -2265,10 +2283,17 @@ mod tests {
                     govt: Some(GovtId(140)),
                     stellars: vec![None; 16],
                     interference: 45,
+                    message: 7,
                 },
             ]
         );
         assert_eq!(store(&[]).star_map(), []);
+    }
+
+    /// `bytes`, a `sÿst`, with this `Message` (offset 0x68).
+    fn buoyed(mut bytes: Vec<u8>, message: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x68, &[message]);
+        bytes
     }
 
     /// `bytes`, a `sÿst`, with this `Interference` (offset 0x6C).
@@ -2545,6 +2570,48 @@ mod tests {
             ],
             "only 9300-9305 patch prices"
         );
+    }
+
+    #[test]
+    fn a_str_arrives_raw_from_any_file_by_its_id() {
+        let data = layered(
+            &[
+                (StrResource::TYPE, 1001, str_resource("base")),
+                (StrResource::TYPE, 1002, str_resource("base")),
+            ],
+            &[
+                (StrResource::TYPE, 1002, str_resource("plug-in")),
+                (StrResource::TYPE, 1003, Vec::new()),
+                (StrResource::TYPE, 1004, b"\x05ab".to_vec()),
+                (StrResource::TYPE, 1005, b"\x03Buoxyz".to_vec()),
+                (StrList::TYPE, 1006, str_list(&["a list"])),
+            ],
+        );
+        let cases = [
+            (1000, StringPatch::Absent),
+            (1001, StringPatch::Text("base".into())),
+            (1002, StringPatch::Text("plug-in".into())),
+            (1003, StringPatch::Empty),
+            (1004, StringPatch::Unreadable),
+            (1005, StringPatch::Text("Buo".into())),
+            (1006, StringPatch::Absent),
+        ];
+        for (id, patch) in cases {
+            assert_eq!(data.string_patch(id), patch, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_buoy_strings_are_str_1000_whole_and_none_when_missing() {
+        let data = layered(
+            &[
+                (StrList::TYPE, 1000, str_list(&["one", "two"])),
+                (StrList::TYPE, 1001, str_list(&["other"])),
+            ],
+            &[],
+        );
+        assert_eq!(data.buoy_strings(), ["one", "two"]);
+        assert_eq!(store(&[]).buoy_strings(), Vec::<String>::new());
     }
 
     const STOCK_NAMES: [&str; 6] = [

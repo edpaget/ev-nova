@@ -84,6 +84,9 @@ pub struct StarSystem {
     /// Its `Interference`, raw: the radar's static
     /// ([`iff::interference`](crate::iff::interference)).
     pub interference: i16,
+    /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
+    /// −1 for none ([`StarMap::buoy`](crate::StarMap::buoy)).
+    pub message: i16,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -1278,6 +1281,13 @@ pub trait PilotCatalog {
     fn star_map(&self) -> Vec<StarSystem>;
     /// The standard commodities' names and base prices.
     fn commodity_strings(&self) -> CommodityStrings;
+    /// The `'STR '` `id`, raw, from whichever file holds it, the base
+    /// data's or a plug-in's: a message buoy's patch (see the
+    /// [`buoy`](crate::buoy) module).
+    fn string_patch(&self, id: i16) -> StringPatch;
+    /// Every string of `STR#` 1000, the message buoys', in order; none
+    /// when it is missing.
+    fn buoy_strings(&self) -> Vec<String>;
     /// Every `jünk` that can be read, by ascending ID.
     fn junk(&self) -> Vec<JunkRecord>;
     /// Every `öops` that can be read, by ascending ID.
@@ -1361,6 +1371,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn commodity_strings(&self) -> CommodityStrings {
         (**self).commodity_strings()
+    }
+
+    fn string_patch(&self, id: i16) -> StringPatch {
+        (**self).string_patch(id)
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        (**self).buoy_strings()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -1465,6 +1483,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn commodity_strings(&self) -> CommodityStrings {
         (**self).commodity_strings()
+    }
+
+    fn string_patch(&self, id: i16) -> StringPatch {
+        (**self).string_patch(id)
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        (**self).buoy_strings()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -1694,6 +1720,7 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
                 interference: 0,
+                message: -1,
             }]
         }
 
@@ -1705,6 +1732,14 @@ mod tests {
                 base_prices: vec!["75".to_owned()],
                 price_patches: Default::default(),
             }
+        }
+
+        fn string_patch(&self, _id: i16) -> StringPatch {
+            StringPatch::Absent
+        }
+
+        fn buoy_strings(&self) -> Vec<String> {
+            Vec::new()
         }
 
         /// Opals, sold at stellar 128.

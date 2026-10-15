@@ -107,7 +107,7 @@ impl MapSystem {
 }
 
 /// `entry` as the star map takes it: its links stay raw, for the star map
-/// to normalise. The map reads neither its stellars nor its
+/// to normalise. The map reads neither its stellars, its `Message` nor its
 /// `Interference`.
 pub(super) fn star_system(entry: &SystemEntry) -> StarSystem {
     StarSystem {
@@ -117,6 +117,7 @@ pub(super) fn star_system(entry: &SystemEntry) -> StarSystem {
         govt: entry.govt,
         stellars: Vec::new(),
         interference: 0,
+        message: -1,
     }
 }
 

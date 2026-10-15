@@ -211,11 +211,22 @@ pub(super) enum Reset {
     EmptyOffers,
     /// [`SimSound::Arrived`] sounds.
     ArrivalSound,
-    /// [`SimMessage::Arrived`] is raised.
+    /// [`SimMessage::Arrived`] is raised, or the system's message buoy,
+    /// [`SimMessage::Buoy`], in its place (see the `buoys` module).
     ArrivalMessage,
     /// The stellars shown are rebuilt, last: a rebuild point (see the
     /// `stellars` module).
     Rebuild,
+}
+
+/// What an entry tells as it announces the arrival: the system entered,
+/// the scene's event, if any ([`scene_event`]), and how many fighter notes
+/// stood before the entry queued its own.
+#[derive(Clone, Copy)]
+struct Heard {
+    system: SystemId,
+    event: Option<SessionEvent>,
+    notes: usize,
 }
 
 /// What becomes of the course.
@@ -313,7 +324,9 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
 /// already stopped the thrust, and every tick ends a gate's pending
 /// entry. The nav system is turned off as the arrival begins
 /// (@0x6be25-0x6be2b) and the course's next hop cued after its step
-/// (@0x6c4cd), so mode 3 comes back while hops remain. Populating lets go of the strikes, the boarding, the
+/// (@0x6c4cd), so mode 3 comes back while hops remain. The arrival
+/// message is the system's buoy in place of the arrival line when it has
+/// one (@0x6c25b-0x6c27a; see the `buoys` module). Populating lets go of the strikes, the boarding, the
 /// hail and the target too. The caller arms the escort-strength timer
 /// before entering, ahead of the jump's days ([`Session::arrive`]).
 fn jump(hops: usize) -> Resets {
@@ -584,6 +597,8 @@ impl Session {
             // price.
             self.open_port_prices();
         }
+        // The fighter notes this entry queues, which a buoy drops.
+        let notes = self.fighter_notes.len();
         self.leave_behind(&resets);
         if resets.has(Reset::RedrawOffers) {
             self.offers.redraw(&mut &mut *chance);
@@ -602,7 +617,12 @@ impl Session {
         if resets.has(Reset::EmptyOffers) {
             self.empty_offers();
         }
-        self.announce(how, &resets, system, scene_event(how, scene_changed));
+        let heard = Heard {
+            system,
+            event: scene_event(how, scene_changed),
+            notes,
+        };
+        self.announce(how, &resets, heard, stellars);
         // A jump's arrival raised its `Explored` before its days, at the
         // original's first nebula exploration (@0x6be12); a gate's or
         // wormhole's exit explores no nebula (`_PlayerEnterHypergate`
@@ -802,21 +822,31 @@ impl Session {
         }
     }
 
-    /// Sounds and raises the arrival in `system`, as `resets` says, tells
-    /// `event`, if any ([`scene_event`]), and raises
-    /// [`StoryEvent::EnteredSystem`], entered `how`.
-    fn announce(
-        &mut self,
-        how: Entry,
-        resets: &Resets,
-        system: SystemId,
-        event: Option<SessionEvent>,
-    ) {
+    /// Sounds and raises the arrival in `heard`'s system, as `resets`
+    /// says, tells its event, if any ([`scene_event`]), and raises
+    /// [`StoryEvent::EnteredSystem`], entered `how`. The arrival message
+    /// is the system's buoy, its strings read from `catalog`, or the
+    /// arrival line ([`Session::arrival_message`]); a buoy replaces the
+    /// abandoned-fighters suffix too, so it drops the fighter notes this
+    /// entry queued (see the `buoys` module).
+    fn announce<S>(&mut self, how: Entry, resets: &Resets, heard: Heard, catalog: &S)
+    where
+        S: PilotCatalog + ?Sized,
+    {
+        let Heard {
+            system,
+            event,
+            notes,
+        } = heard;
         if resets.has(Reset::ArrivalSound) {
             self.sounds.push(SimSound::Arrived);
         }
         if resets.has(Reset::ArrivalMessage) {
-            self.messages.push(SimMessage::Arrived(system));
+            let message = self.arrival_message(system, catalog);
+            if matches!(message, SimMessage::Buoy(_)) {
+                self.fighter_notes.truncate(notes);
+            }
+            self.messages.push(message);
             // The hyperspace arrival leaves the pilot past the tutorial
             // (`_HandlePlayer` @0x6c002; see the `tutorial` module).
             self.tutorial.jumped();

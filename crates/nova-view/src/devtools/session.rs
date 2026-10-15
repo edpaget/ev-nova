@@ -245,6 +245,14 @@ mod tests {
             CommodityStrings::default()
         }
 
+        fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+            nova_sim::catalog::StringPatch::Absent
+        }
+
+        fn buoy_strings(&self) -> Vec<String> {
+            Vec::new()
+        }
+
         fn junk(&self) -> Vec<JunkRecord> {
             Vec::new()
         }

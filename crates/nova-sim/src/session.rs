@@ -342,6 +342,7 @@
 
 mod aux_ships;
 mod brackets;
+mod buoys;
 mod cargo_boxes;
 mod cloaks;
 mod control;
@@ -2347,7 +2348,9 @@ impl Session {
     /// no-jump zone, at rest on the side facing the system it last left
     /// (see [`arrival`]), with its reserves as they were, so it can jump
     /// on at once. It raises
-    /// [`SimMessage::Arrived`] for that last system. The system arrived in
+    /// [`SimMessage::Arrived`] for that last system, or the system's
+    /// message buoy, [`SimMessage::Buoy`], in its place (see the `buoys`
+    /// module). The system arrived in
     /// is populated with its traffic ([`Session::populate`]), the last
     /// system's gone, and so are the shots and beams in flight; the
     /// fighters out are carried or left behind as the fighter rules say.

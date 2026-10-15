@@ -267,6 +267,7 @@ pub mod bay;
 pub mod blink;
 pub mod board;
 pub mod brackets;
+pub mod buoy;
 pub mod cargo_box;
 pub mod catalog;
 pub mod chance;

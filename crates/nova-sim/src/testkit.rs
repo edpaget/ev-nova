@@ -10,8 +10,8 @@ use crate::catalog::{
     HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
     MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
     PersonRecord, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
-    StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId, SystemTraffic,
-    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
+    StartDate, StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId,
+    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -75,6 +75,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) govts: Vec<GovtRecord>,
     /// Each `STR#`; any other is missing.
     pub(crate) strings: Vec<(i16, Vec<String>)>,
+    /// Each `'STR '` patch; any other is [`StringPatch::Absent`].
+    pub(crate) string_patches: Vec<(i16, StringPatch)>,
     /// The first `chär`'s date prefix and suffix.
     pub(crate) date_affixes: DateAffixes,
     /// How many times the date affixes were read.
@@ -577,6 +579,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         hulls: Vec::new(),
         govts: Vec::new(),
         strings: Vec::new(),
+        string_patches: Vec::new(),
         date_affixes: DateAffixes {
             prefix: String::new(),
             suffix: " NC".to_owned(),
@@ -647,6 +650,7 @@ pub(crate) fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         govt: None,
         stellars: Vec::new(),
         interference: 0,
+        message: -1,
     }
 }
 
@@ -737,6 +741,18 @@ impl PilotCatalog for FakePilotCatalog {
     fn commodity_strings(&self) -> CommodityStrings {
         *self.goods_reads.borrow_mut() += 1;
         self.commodities.clone()
+    }
+
+    fn string_patch(&self, id: i16) -> StringPatch {
+        self.string_patches
+            .iter()
+            .find(|(patch, _)| *patch == id)
+            .map_or(StringPatch::Absent, |(_, patch)| patch.clone())
+    }
+
+    /// [`FakePilotCatalog::strings`]' `STR#` 1000.
+    fn buoy_strings(&self) -> Vec<String> {
+        self.string_list(crate::buoy::BUOY_STRINGS)
     }
 
     fn junk(&self) -> Vec<JunkRecord> {

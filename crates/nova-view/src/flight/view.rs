@@ -757,6 +757,7 @@ pub fn illegal_outfit_message(
 fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
     let text = match message {
         SimMessage::Arrived(_)
+        | SimMessage::Buoy(_)
         | SimMessage::ExitedHypergate(_)
         | SimMessage::PassedWormhole(_)
         | SimMessage::TookOff { .. }
@@ -1099,7 +1100,9 @@ pub const PASSING_WORMHOLE: &str = "Passing through a wormhole into the";
 /// named `system` on `date`, as the original's `HandlePlayer` builds it,
 /// adding [`NO_STELLARS`] when the system has no stellars: the
 /// [`JUMPING_INTO`] reading of [`arrival_message_with`]. The original's
-/// fighters-abandoned suffix and message-buoy override are left out.
+/// fighters-abandoned suffix follows it as a note of its own
+/// ([`FlightView::arrived`]), and a system's message buoy replaces the
+/// whole line ([`SimMessage::Buoy`]).
 #[must_use]
 pub fn arrival_message(system: &str, date: &str, stellars: bool) -> String {
     arrival_message_with(JUMPING_INTO, system, date, stellars)
@@ -1142,6 +1145,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. }
+        | SimMessage::Buoy(_)
         | SimMessage::TookOff { .. }
         | SimMessage::Tutorial(_) => None,
     }
@@ -2397,8 +2401,12 @@ impl<
     /// ([`FlightView::catch_up`], which lays it out from the session's
     /// event, drawn from where the ship arrives), and shows the session's
     /// arrival message in the original's words, naming the scene laid
-    /// out, followed by how many fighters were abandoned and how many
-    /// hired escorts defected unpaid, if any, the fighters first.
+    /// out, or the system's message buoy in its place
+    /// ([`SimMessage::Buoy`], its text as the session gives it), followed
+    /// by how many fighters were abandoned and how many hired escorts
+    /// defected unpaid, if any, the fighters first. A buoy's arrival
+    /// carries no fighter notes: the session drops them, as the buoy
+    /// replaces the arrival line's suffix too.
     fn arrived(&mut self) {
         self.catch_up();
         let Ok(session) = &mut self.session else {
@@ -2418,15 +2426,19 @@ impl<
         let Some(scene) = &self.scene else {
             return;
         };
+        let stellars = !scene.stellars().is_empty();
         let mut said: Vec<(String, u16)> = messages
             .iter()
-            .filter_map(|message| Some((arrival_lead(message)?, message.ticks())))
-            .next_back()
-            .map(|(lead, ticks)| {
-                let stellars = !scene.stellars().is_empty();
-                let text = arrival_message_with(lead, scene.name(), &date, stellars);
-                (text, ticks)
+            .filter_map(|message| {
+                let text = match message {
+                    SimMessage::Buoy(text) => text.clone(),
+                    _ => {
+                        arrival_message_with(arrival_lead(message)?, scene.name(), &date, stellars)
+                    }
+                };
+                Some((text, message.ticks()))
             })
+            .next_back()
             .into_iter()
             .collect();
         said.extend(worded);
@@ -4795,6 +4807,8 @@ mod tests {
         sol_navs: Vec<Option<(u32, u16)>>,
         /// System 130's `Interference`: none, by default.
         sol_interference: i16,
+        /// System 131's `Message`: no buoy (−1), by default.
+        alpha_buoy: i16,
         /// The stellars Sol lists after Earth and the Moon: none, by
         /// default.
         sol_more: Vec<StellarContents>,
@@ -4957,6 +4971,7 @@ mod tests {
             reborn: false,
             sol_navs: Vec::new(),
             sol_interference: 0,
+            alpha_buoy: -1,
             sol_more: Vec::new(),
             gates: Vec::new(),
             gate_listers: Vec::new(),
@@ -5072,6 +5087,7 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
                 interference: 0,
+                message: -1,
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
@@ -5081,7 +5097,10 @@ mod tests {
                     interference: self.sol_interference,
                     ..star(130, (0.0, 0.0), sol)
                 },
-                star(131, (600.0, 0.0), onward),
+                StarSystem {
+                    message: self.alpha_buoy,
+                    ..star(131, (600.0, 0.0), onward)
+                },
                 star(132, (0.0, 600.0), &[]),
             ];
             if self.reborn {
@@ -5092,6 +5111,15 @@ mod tests {
 
         fn commodity_strings(&self) -> CommodityStrings {
             self.commodities.clone()
+        }
+
+        fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+            nova_sim::catalog::StringPatch::Absent
+        }
+
+        /// [`FakeCatalog::strings`]' `STR#` 1000.
+        fn buoy_strings(&self) -> Vec<String> {
+            self.string_list(nova_sim::buoy::BUOY_STRINGS)
         }
 
         fn junk(&self) -> Vec<JunkRecord> {
@@ -13230,7 +13258,11 @@ mod tests {
     /// ship (NPC 0) placed 100 above the player. A tick has placed the
     /// fighters (NPCs 1 and 2).
     fn fighters_out() -> View {
-        let mut catalog = boardable();
+        fighters_out_of(boardable())
+    }
+
+    /// [`fighters_out`] from `catalog`, a [`boardable`] one.
+    fn fighters_out_of(mut catalog: FakeCatalog) -> View {
         for record in &mut catalog.ships {
             if record.id == ShipId(130) {
                 record.escort_type = 0;
@@ -13299,6 +13331,69 @@ mod tests {
             texts(&drawn(&view)).contains(&"Return to Hangar".to_owned()),
             "{:?}",
             texts(&drawn(&view))
+        );
+    }
+
+    /// `catalog` with `STR#` 1000 "Message Buoy: hello." and Alpha
+    /// Centauri's buoy `message`.
+    fn buoyed(mut catalog: FakeCatalog, message: i16) -> FakeCatalog {
+        catalog
+            .strings
+            .push((nova_sim::buoy::BUOY_STRINGS, vec![HELLO.to_owned()]));
+        catalog.alpha_buoy = message;
+        catalog
+    }
+
+    const HELLO: &str = "Message Buoy: hello.";
+
+    /// How many ticks the message `view` shows stays shown.
+    fn shown_for(view: &mut View) -> u32 {
+        let mut n = 0;
+        while view.message().is_some() {
+            view.tick(TICK);
+            n += 1;
+            assert!(n < 10_000, "never cleared");
+        }
+        n
+    }
+
+    #[test]
+    fn a_jump_into_a_buoyed_system_shows_the_buoy_for_480_ticks_in_place_of_the_arrival() {
+        let mut view = FlightView::new(buoyed(catalog(), 1));
+        jump_to_alpha(&mut view);
+        assert_eq!(view.message(), Some(HELLO));
+        let buoy = shown_for(&mut view);
+        let mut plain = FlightView::new(buoyed(catalog(), -1));
+        jump_to_alpha(&mut plain);
+        assert_eq!(
+            plain.message(),
+            Some("Jumping into the Alpha Centauri system on June 24, 1177 NC.")
+        );
+        // The arrival's 240 ticks, less those the jump's end took.
+        let arrival = shown_for(&mut plain);
+        assert_eq!(buoy, arrival + 240, "480 ticks from the arrival");
+    }
+
+    #[test]
+    fn an_empty_buoy_replaces_the_line_shown_before_the_jump() {
+        let mut view = FlightView::new(buoyed(catalog(), 2));
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        view.say_for("Before the jump.", 10_000);
+        arrive_now(&mut view);
+        assert_eq!(view.message(), Some(""));
+    }
+
+    #[test]
+    fn fighters_abandoned_into_a_buoyed_system_are_not_told() {
+        let mut view = fighters_out_of(buoyed(boardable(), 1));
+        jump_to_alpha(&mut view);
+        assert_eq!(view.message(), Some(HELLO));
+        assert_eq!(
+            view.pilot().expect("flying").escorts(),
+            [],
+            "still abandoned"
         );
     }
 
@@ -14404,6 +14499,7 @@ mod tests {
         assert_eq!(text(SimMessage::Arrived(SystemId(130))), None);
         assert_eq!(text(SimMessage::ExitedHypergate(SystemId(130))), None);
         assert_eq!(text(SimMessage::PassedWormhole(SystemId(130))), None);
+        assert_eq!(text(SimMessage::Buoy(HELLO.to_owned())), None);
         for message in [
             SimMessage::MissionFailed,
             SimMessage::CargoJettisoned,

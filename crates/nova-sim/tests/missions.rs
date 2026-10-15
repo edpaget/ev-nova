@@ -127,12 +127,21 @@ impl PilotCatalog for Courier {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            message: -1,
         };
         vec![star(130, 0.0, 131), star(131, 600.0, 130)]
     }
 
     fn commodity_strings(&self) -> CommodityStrings {
         CommodityStrings::default()
+    }
+
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {

@@ -9,6 +9,12 @@ use crate::tutorial::TutorialHint;
 pub enum SimMessage {
     /// A jump ended in this system, the last of a multi-jump.
     Arrived(SystemId),
+    /// A jump ended in a system whose message buoy shows this text, in
+    /// place of [`Arrived`](Self::Arrived) and the whole arrival line
+    /// (`_HandlePlayer` @0x6c25b-0x6c27a, `_DisplayMessage`
+    /// @0x5289-0x530e; see [`buoy`](crate::buoy)): the text ready to show,
+    /// empty for the original's empty line.
+    Buoy(String),
     /// The ship came out of a hypergate in this system.
     ExitedHypergate(SystemId),
     /// The ship passed through a wormhole into this system.
@@ -115,6 +121,7 @@ impl SimMessage {
     /// frames its caller passes `_DisplayComm` (@0x90201).
     ///
     /// - [`Arrived`](Self::Arrived): 240 (`_HandlePlayer` @0x6c46d).
+    /// - [`Buoy`](Self::Buoy): 480 (`_DisplayMessage` @0x5300).
     /// - [`ExitedHypergate`](Self::ExitedHypergate): 360
     ///   (`_PlayerEnterHypergate` @0x63f1d).
     /// - [`PassedWormhole`](Self::PassedWormhole): 240
@@ -163,6 +170,7 @@ impl SimMessage {
             | Self::NonMissionCargoJettisoned
             | Self::TookOff { .. } => 240,
             Self::EscortRepaired | Self::FighterRepaired => 250,
+            Self::Buoy(_) => 480,
             Self::Tutorial(_) => 512,
         }
     }
@@ -181,6 +189,7 @@ mod tests {
         };
         let cases = [
             (SimMessage::Arrived(SystemId(128)), 240),
+            (SimMessage::Buoy("Message Buoy: hello.".into()), 480),
             (SimMessage::ExitedHypergate(SystemId(128)), 360),
             (SimMessage::PassedWormhole(SystemId(128)), 240),
             (SimMessage::MissionFailed, 240),

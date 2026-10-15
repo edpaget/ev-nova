@@ -109,6 +109,10 @@ pub const ARRIVAL_MARGIN: f32 = 1.0;
 /// standard jump distance arrives: just outside the no-jump zone, where it
 /// can jump out again.
 pub const ARRIVAL_DISTANCE: f32 = MIN_JUMP_DISTANCE + ARRIVAL_MARGIN;
+
+/// The `sÿst` `Message` that means no message buoy: the only one
+/// (`_HandlePlayer` @0x6c25b-0x6c27a).
+pub const NO_BUOY: i16 = -1;
 /// How many days pass in a jump before any outfit changes it, from the
 /// hull's `shïp` `Mass` alone: the Nova Bible's bands, 1-99 tons take one
 /// day, 100-199 take two and 200 or more take three. The original's
@@ -300,6 +304,8 @@ struct Node {
     stellars: Vec<Option<(u32, u16)>>,
     /// Its `Interference`, raw.
     interference: i16,
+    /// Its `Message`, raw: the message buoy, −1 for none.
+    message: i16,
 }
 
 impl Node {
@@ -519,6 +525,7 @@ impl StarMap {
                 ordered_jumps: Vec::new(),
                 stellars: system.stellars,
                 interference: system.interference,
+                message: system.message,
             };
             nodes.insert(from, node);
         }
@@ -659,6 +666,18 @@ impl StarMap {
     #[must_use]
     pub fn interference(&self, id: SystemId) -> i16 {
         self.nodes.get(&id).map_or(0, |node| node.interference)
+    }
+
+    /// System `id`'s message buoy, its `Message`: the index a hyperspace
+    /// arrival there shows (see the [`buoy`](crate::buoy) module), or
+    /// `None` for −1, the only value that means none, or a system not on
+    /// the map.
+    #[must_use]
+    pub fn buoy(&self, id: SystemId) -> Option<i16> {
+        self.nodes
+            .get(&id)
+            .map(|node| node.message)
+            .filter(|&message| message != NO_BUOY)
     }
 
     /// System `id`'s controlling government: `None` when it is
@@ -840,6 +859,7 @@ mod tests {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            message: -1,
         }
     }
 
@@ -1449,6 +1469,7 @@ mod tests {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            message: -1,
         }]);
         assert_eq!(map.position(SystemId(128)), Some(Vec2::new(-150.0, 75.0)));
         assert_eq!(map.position(SystemId(129)), None);
@@ -1537,6 +1558,27 @@ mod tests {
         assert_eq!(map.interference(SystemId(128)), 60);
         assert_eq!(map.interference(SystemId(129)), -5);
         assert_eq!(map.interference(SystemId(130)), 0, "not on the map");
+    }
+
+    #[test]
+    fn a_systems_buoy_is_its_message_but_minus_1() {
+        let buoyed = |id, message| StarSystem {
+            message,
+            ..system(id, &[])
+        };
+        let map = StarMap::new(vec![
+            buoyed(128, -1),
+            buoyed(129, 0),
+            buoyed(130, 3),
+            buoyed(131, 20_003),
+            buoyed(132, -2),
+        ]);
+        assert_eq!(map.buoy(SystemId(128)), None, "-1 is none");
+        assert_eq!(map.buoy(SystemId(129)), Some(0));
+        assert_eq!(map.buoy(SystemId(130)), Some(3));
+        assert_eq!(map.buoy(SystemId(131)), Some(20_003));
+        assert_eq!(map.buoy(SystemId(132)), Some(-2));
+        assert_eq!(map.buoy(SystemId(133)), None, "not on the map");
     }
 
     // Jumping.

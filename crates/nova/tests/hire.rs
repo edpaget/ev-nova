@@ -186,7 +186,7 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 }
 
 /// A `sÿst` at map (`x`, 0) with these hyperlinks and `stellar` if any;
-/// independent, with no traffic.
+/// independent, with no traffic and no message buoy.
 fn system(x: i16, links: &[i16], stellar: Option<i16>) -> Vec<u8> {
     let mut bytes = vec![0; System::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[x, 0]);
@@ -196,7 +196,7 @@ fn system(x: i16, links: &[i16], stellar: Option<i16>) -> Vec<u8> {
         put_i16s(&mut bytes, 0x24, &[stellar]);
     }
     put_i16s(&mut bytes, 0x44, &[-1; 8]);
-    put_i16s(&mut bytes, 0x64, &[0, -1]);
+    put_i16s(&mut bytes, 0x64, &[0, -1, -1]);
     bytes
 }
 
