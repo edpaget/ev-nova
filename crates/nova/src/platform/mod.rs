@@ -101,6 +101,10 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::KeyA) => Key::Char('a'),
         PhysicalKey::Code(KeyCode::KeyS) => Key::Char('s'),
         PhysicalKey::Code(KeyCode::KeyD) => Key::Char('d'),
+        // E, by position: flight's escort menu key, the comm dialog's
+        // close key, and the main menu's E, which waits for this key's
+        // release as `_QuickKeyCheck(0x0e)` does.
+        PhysicalKey::Code(KeyCode::KeyE) => Key::Char('e'),
         // Flight's key, by position: F on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyF) => Key::Char('f'),
         // The About text's key, by position: I on a US-layout keyboard.
@@ -242,6 +246,7 @@ mod tests {
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::KeyK, Key::Char('k')),
             (KeyCode::KeyX, Key::Char('x')),
+            (KeyCode::KeyE, Key::Char('e')),
             (KeyCode::SuperLeft, Key::Command),
             (KeyCode::SuperRight, Key::Command),
             (KeyCode::CapsLock, Key::CapsLock),
@@ -271,7 +276,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 33] = [
+    const GAME_CHARACTER_KEYS: [Key; 34] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -305,6 +310,7 @@ mod tests {
         nova_view::spaceport::outfitter::SELL_KEY,
         nova_view::spaceport::shipyard::BUY_KEY,
         nova_view::spaceport::shipyard::INFO_KEY,
+        nova_view::flight::escorts::MENU_KEY,
     ];
 
     /// The physical key that types `c` on a US-layout keyboard.
@@ -313,6 +319,7 @@ mod tests {
             'a' => KeyCode::KeyA,
             'b' => KeyCode::KeyB,
             'd' => KeyCode::KeyD,
+            'e' => KeyCode::KeyE,
             'f' => KeyCode::KeyF,
             'h' => KeyCode::KeyH,
             'i' => KeyCode::KeyI,
