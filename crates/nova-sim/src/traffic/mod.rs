@@ -117,6 +117,22 @@ use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
 use table::{SpawnPerson, SpawnTable};
 
+/// The ship-table slots a traffic spawn leaves free:
+/// `_GenericRandomShipSpawn(arg1, reserve)` (@0x3c89f) searches only the
+/// slots 1..(63 - reserve) of the 64-slot table (@0x3c8b1-0x3c8e9), and
+/// every spawn of the system's own traffic passes 8, so it stops at 55
+/// NPCs: `_HyperSpawnFleet`'s lead and escorts (@0x41ce9, @0x421a5), the
+/// `düde` ships (`_RandomShipSpawn` @0x43297, @0x42990), the auxiliary
+/// ships (`_SpecificDudeSpawn` from `_EnterMoreShips` @0x435a8), the
+/// persons (`_SpawnPerson` @0x40cba) and the fighters (`_LaunchFighter`
+/// @0x3d648). See [`Traffic::free_berth`].
+pub const SPAWN_RESERVE: u32 = 8;
+
+/// The ship-table slots the old ship of a "Use As My Ship" capture leaves
+/// free: `_DoShipCapture` passes 1 (@0x41136), so it takes a slot in
+/// 1-62. See [`Traffic::free_berth`].
+pub const CAPTURE_RESERVE: u32 = 1;
+
 /// How many ticks apart an NPC's decisions are: every tick, as the
 /// original at full speed.
 pub const DECISION_INTERVAL: u32 = 1;
@@ -356,7 +372,7 @@ impl Traffic {
         self.departed.clear();
         self.scans.clear();
         self.quotes.clear();
-        self.add(missions, world.persons.grudges);
+        self.add(missions, world.persons.grudges, None);
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
         let ships = spawn::initial(
@@ -366,13 +382,13 @@ impl Traffic {
             world.stellars(),
             chance,
         );
-        self.add(ships, world.persons.grudges);
+        self.add(ships, world.persons.grudges, None);
     }
 
     /// Brings `ships` into the system as they are, numbered after every
     /// other NPC: the mission ships whose appear timer ran out.
     pub fn bring_in(&mut self, ships: Vec<NewShip>) {
-        self.add(ships, &BTreeSet::new());
+        self.add(ships, &BTreeSet::new(), None);
     }
 
     /// What the system's traffic is drawn from.
@@ -558,7 +574,7 @@ impl Traffic {
             world.stellars(),
             chance,
         );
-        self.add(arrivals, world.persons.grudges);
+        self.add(arrivals, world.persons.grudges, None);
         self.escort_strength(&world, draw.world.gate(), chance);
     }
 
@@ -727,7 +743,7 @@ impl Traffic {
             chance,
             &mut fleet,
         );
-        self.add(fleet, world.persons.grudges);
+        self.add(fleet, world.persons.grudges, None);
     }
 
     /// Each arrived ([`Npc::arrived`]), intact NPC answers each of
@@ -872,6 +888,23 @@ impl Traffic {
             .unwrap_or(u32::MAX)
     }
 
+    /// The berth a spawn that leaves `reserve` slots free takes: the first
+    /// free one ([`Traffic::next_berth`]: no NPC, ship left behind or
+    /// reservation holds it), when it is below
+    /// [`MAX_SHIPS_IN_SYSTEM`](crate::board::MAX_SHIPS_IN_SYSTEM) less
+    /// `reserve`; otherwise `None`. `_GenericRandomShipSpawn` searches
+    /// slots 1..(63 - `reserve`) for one whose active flag is clear
+    /// (@0x3c8b1-0x3c8e9) and gives -1 when none is (@0x3c8eb-0x3c8f0), so
+    /// it goes by slot, not by count: a ship above the bound does not
+    /// block it, and a free slot above it cannot be taken.
+    #[must_use]
+    pub(crate) fn free_berth(&self, reserve: u32) -> Option<u32> {
+        let bound = u32::try_from(crate::board::MAX_SHIPS_IN_SYSTEM)
+            .unwrap_or(u32::MAX)
+            .saturating_sub(reserve);
+        Some(self.next_berth()).filter(|&berth| berth < bound)
+    }
+
     /// Takes NPC `id` out of the system, if it is there.
     pub fn remove(&mut self, id: NpcId) {
         self.npcs.retain(|npc| npc.id != id);
@@ -963,18 +996,58 @@ impl Traffic {
             .map(|person| person.record.name.clone())
     }
 
-    /// Adds `ships`, numbering each and pointing each escort at its lead; a
-    /// person flies its fitted ship, holding a grudge when `grudges` say;
-    /// a ship set up derelict ([`NewShip::derelict`]) starts disabled, its
-    /// shield gone and its armour cut ([`derelict_armor`]).
-    fn add(&mut self, ships: Vec<NewShip>, grudges: &BTreeSet<PersonId>) {
-        let first = self.next_id;
+    /// The leader and the berth of `ship`, added after the ships `placed`
+    /// (each one's number, or `None` for one that did not come), as
+    /// [`Traffic::add`] places it with `reserve`: `None` when it is an
+    /// escort whose lead did not come, or finds no slot.
+    fn slot_for(
+        &self,
+        ship: &NewShip,
+        placed: &[Option<NpcId>],
+        reserve: Option<u32>,
+    ) -> Option<(Option<NpcId>, u32)> {
+        let leader = match ship.lead {
+            Some(lead) => Some((*placed.get(lead)?)?),
+            None => None,
+        };
+        let berth = match reserve {
+            Some(reserve) => self.free_berth(reserve)?,
+            None => self.next_berth(),
+        };
+        Some((leader, berth))
+    }
+
+    /// Adds `ships`, numbering each and pointing each escort at its lead,
+    /// and gives how many came; a person flies its fitted ship, holding a
+    /// grudge when `grudges` say; a ship set up derelict
+    /// ([`NewShip::derelict`]) starts disabled, its shield gone and its
+    /// armour cut ([`derelict_armor`]).
+    ///
+    /// A ship whose ship type has no record does not come, and neither
+    /// does an escort whose lead did not come. With a `reserve`, each ship
+    /// takes [`Traffic::free_berth`] of it, and one that finds none does
+    /// not come: a fleet's lead with no slot brings no escorts
+    /// (`_HyperSpawnFleet` returns @0x41d02), and an escort with none is
+    /// skipped (@0x421b9 → @0x425b6). A ship that does not come adds no
+    /// arrival quote, so a fleet whose lead finds no slot shows no line and
+    /// beeps for none. The ships were rolled whole beforehand
+    /// ([`spawn::fleet`]), the cap applied only here as they are placed, in
+    /// the same call and before any frame.
+    fn add(
+        &mut self,
+        ships: Vec<NewShip>,
+        grudges: &BTreeSet<PersonId>,
+        reserve: Option<u32>,
+    ) -> usize {
+        let mut placed: Vec<Option<NpcId>> = Vec::with_capacity(ships.len());
         for ship in ships {
             let person = ship.person.and_then(|id| self.table.persons.get(&id));
-            let Some(kind) = person
+            let kind = person
                 .map(|person| &person.kind)
-                .or_else(|| self.table.ships.get(&ship.ship))
+                .or_else(|| self.table.ships.get(&ship.ship));
+            let Some(((leader, berth), kind)) = self.slot_for(&ship, &placed, reserve).zip(kind)
             else {
+                placed.push(None);
                 continue;
             };
             let mut reserves = person.map_or_else(|| kind.stats.full(), |person| person.reserves);
@@ -993,15 +1066,15 @@ impl Traffic {
             let hunts = ship
                 .mission
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
-            let berth = self.next_berth();
             self.quotes.extend(ship.quote);
+            placed.push(Some(id));
             self.npcs.push(Npc {
                 id,
                 berth,
                 ship: ship.ship,
                 govt: ship.govt,
                 ai_type: ship.ai_type,
-                leader: ship.lead.map(|lead| NpcId(first + lead as u32)),
+                leader,
                 class: kind.escort_class,
                 escort: None,
                 stats: kind.stats,
@@ -1053,6 +1126,7 @@ impl Traffic {
                 former: None,
             });
         }
+        placed.iter().flatten().count()
     }
 }
 
@@ -3853,5 +3927,114 @@ mod tests {
         assert_eq!(traffic.berths_taken(), 4);
         traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.berths_taken(), 2, "the held ones freed");
+    }
+
+    // The slot cap: `_GenericRandomShipSpawn`'s reserve.
+
+    /// Traffic of [`table`] of 0 holding an NPC at each of `berths`.
+    fn at_berths(berths: impl IntoIterator<Item = u32>) -> Traffic {
+        let mut traffic = Traffic::new();
+        traffic.enter(table(0), &mut Draws::of(&[]));
+        for berth in berths {
+            traffic.add_npc_at(ship(), berth);
+        }
+        traffic
+    }
+
+    #[test]
+    fn a_spawn_takes_the_first_free_berth_below_its_reserve() {
+        assert_eq!(at_berths(1..=54).free_berth(SPAWN_RESERVE), Some(55));
+        assert_eq!(at_berths(1..=55).free_berth(SPAWN_RESERVE), None);
+        assert_eq!(at_berths(1..=55).free_berth(0), Some(56));
+        assert_eq!(at_berths(1..=55).free_berth(CAPTURE_RESERVE), Some(56));
+        assert_eq!(at_berths(1..=61).free_berth(CAPTURE_RESERVE), Some(62));
+        assert_eq!(at_berths(1..=62).free_berth(CAPTURE_RESERVE), None);
+        assert_eq!(at_berths(1..=62).free_berth(0), Some(63));
+        assert_eq!(at_berths(1..=63).free_berth(0), None);
+    }
+
+    #[test]
+    fn the_slot_cap_goes_by_slot_not_by_count() {
+        let gapped = at_berths((1..=50).chain(59..=63));
+        assert_eq!(gapped.berths_taken(), 55);
+        assert_eq!(gapped.free_berth(SPAWN_RESERVE), Some(51));
+        let high = at_berths((1..=54).chain([60]));
+        assert_eq!(high.free_berth(SPAWN_RESERVE), Some(55));
+    }
+
+    #[test]
+    fn a_held_ship_keeps_its_slot_from_a_spawn() {
+        let mut traffic = at_berths(1..=55);
+        let last = traffic.npcs().last().expect("55 ships").id;
+        let keep: BTreeSet<NpcId> = ids(&traffic).into_iter().filter(|&id| id != last).collect();
+        traffic.retarget(table(0), &keep, AWAY);
+        assert_eq!(traffic.npcs().len(), 54);
+        assert_eq!(traffic.free_berth(SPAWN_RESERVE), None, "55 held");
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.free_berth(SPAWN_RESERVE), Some(55), "freed");
+    }
+
+    /// A fleet of ship 200: its lead, quoted with `STR#` 7600, then
+    /// `escorts` escorts following it.
+    fn quoted_fleet(escorts: usize) -> Vec<NewShip> {
+        let lead = NewShip {
+            mission: None,
+            quote: Some(7600),
+            ..mission_ship(-1, 0.0)
+        };
+        let escort = NewShip {
+            lead: Some(0),
+            quote: None,
+            ..lead
+        };
+        let mut fleet = vec![lead];
+        fleet.extend(std::iter::repeat_n(escort, escorts));
+        fleet
+    }
+
+    #[test]
+    fn a_fleet_with_no_slot_for_its_lead_brings_nothing_and_no_quote() {
+        let mut traffic = at_berths(1..=55);
+        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE));
+        assert_eq!(traffic.npcs().len(), 55);
+        assert!(traffic.take_quotes().is_empty(), "no line, no beep");
+    }
+
+    #[test]
+    fn an_escort_with_no_slot_is_skipped_and_the_lead_keeps_its_quote() {
+        let mut traffic = at_berths(1..=53);
+        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE));
+        let npcs = &traffic.npcs()[53..];
+        assert_eq!(npcs.len(), 2, "the lead and one escort");
+        assert_eq!((npcs[0].berth, npcs[1].berth), (54, 55));
+        assert_eq!(npcs[1].leader, Some(npcs[0].id));
+        assert_eq!(traffic.take_quotes(), [7600]);
+    }
+
+    #[test]
+    fn a_skipped_ship_does_not_shift_the_leaders_after_it() {
+        let mut traffic = at_berths([]);
+        let mut ships = vec![NewShip {
+            ship: ShipId(999),
+            ..mission_ship(-1, 0.0)
+        }];
+        ships.extend(quoted_fleet(1).into_iter().map(|ship| NewShip {
+            lead: ship.lead.map(|_| 1),
+            ..ship
+        }));
+        traffic.add(ships, &BTreeSet::new(), None);
+        let npcs = traffic.npcs();
+        assert_eq!(npcs.len(), 2, "ship 999 has no record");
+        assert_eq!(npcs[1].leader, Some(npcs[0].id));
+    }
+
+    #[test]
+    fn an_escort_whose_lead_has_no_record_is_skipped() {
+        let mut traffic = at_berths([]);
+        let mut fleet = quoted_fleet(1);
+        fleet[0].ship = ShipId(999);
+        traffic.add(fleet, &BTreeSet::new(), None);
+        assert_eq!(traffic.npcs(), [], "no lead, no escort");
+        assert!(traffic.take_quotes().is_empty());
     }
 }
