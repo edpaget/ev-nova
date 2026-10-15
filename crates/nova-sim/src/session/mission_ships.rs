@@ -2268,22 +2268,6 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_auto_abort_while_docked_takes_its_ships_out_at_once() {
-        let catalog = ships_catalog(shipping(-1, 0));
-        let mut session = accepted(&catalog);
-        take_off(&mut session, &catalog);
-        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
-        settle(&mut session, &catalog);
-        assert_eq!(marked(&session), [0, 0], "still there while docked");
-        let record = catalog.missions[0].clone();
-        session.auto_abort(0, &record, &mut NeverFires);
-        assert!(
-            session.npcs().is_empty(),
-            "removed under the port dialog (@0x99b22)"
-        );
-    }
-
-    #[test]
     fn an_abort_leaves_another_slots_ships_marked() {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
@@ -3765,6 +3749,44 @@ pub(super) mod tests {
         assert_eq!(held(&session), [], "142 completed in slot 0");
         assert!(session.control_bit(crate::control::Bit::new(42).expect("in range")));
         assert_eq!(shown(&mut session), [comp("142 paid.")]);
+    }
+
+    /// [`returning`]'s goalless mission 140 of `Flags` 0x0001 in flight,
+    /// its two ships here and its goals unmet, `OnAbort` `on_abort`.
+    fn auto_aborting_in_flight(on_abort: &str) -> (FakePilotCatalog, Session) {
+        let mut catalog = returning(-1, AUTO_ABORT);
+        catalog.missions[0].on_abort = Script::parse(on_abort);
+        catalog.missions.push(mission(141));
+        let mut session = in_flight(&catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.goals_met = false;
+        }
+        (catalog, session)
+    }
+
+    #[test]
+    fn a_flag_0x0001_mission_whose_goals_the_landing_meets_takes_its_ships_out_while_docked() {
+        let (catalog, mut session) = auto_aborting_in_flight("b7");
+        land_home(&mut session, &catalog);
+        assert_eq!(held(&session), [], "auto-aborted by the landing's check");
+        assert!(bits(&session).contains(&7), "OnAbort ran");
+        assert!(
+            session.npcs().is_empty(),
+            "removed under the port dialog (@0x99b22)"
+        );
+    }
+
+    #[test]
+    fn an_s_in_the_on_abort_of_a_landing_auto_abort_starts_a_mission_with_no_ships_carried_over() {
+        let (catalog, mut session) = auto_aborting_in_flight("S141");
+        land_home(&mut session, &catalog);
+        assert_eq!(
+            held(&session),
+            [(1, 141)],
+            "OnAbort runs before the slot is freed"
+        );
+        assert!(marked(&session).is_empty(), "140's ships not carried over");
+        assert!(session.npcs().is_empty());
     }
 
     /// [`returning`]'s escort mission in flight with none of its ships
