@@ -1700,4 +1700,39 @@ mod tests {
         );
         assert_eq!(screen.problem(), Some("no DLOG 1021"));
     }
+
+    /// The shape production hands over: both templates looked up, 1013
+    /// missing. A bar with no picture to show says why rather than fall
+    /// back to 1021.
+    #[test]
+    fn without_the_plain_template_an_unpictured_bar_says_why_and_never_uses_1021() {
+        for (graphic, pictures) in [(None, &[][..]), (Some(5000), &[])] {
+            let art = Rc::new(FakeArt {
+                asked: RefCell::default(),
+                pictures: pictures.iter().copied().collect(),
+                graphic,
+            });
+            let screen = BarScreen::new(
+                Ok((
+                    BarTemplates {
+                        plain: Err("no DLOG 1013".to_owned()),
+                        picture: Ok(picture_template()),
+                    },
+                    Rc::new(MonoMetrics),
+                )),
+                StellarId(157),
+                hiring(&art),
+                ButtonStyle::STOCK,
+                true,
+            );
+            assert_eq!(screen.problem(), Some("no DLOG 1013"), "{graphic:?}");
+            assert!(screen.dialog().is_none(), "no 1021 layout: {graphic:?}");
+            assert!(
+                texts(&screen)
+                    .iter()
+                    .any(|(text, color)| text.contains("no DLOG 1013") && *color == Color::ERROR),
+                "{graphic:?}"
+            );
+        }
+    }
 }
