@@ -3771,7 +3771,7 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// `dialog` closes, as `_DoPortDialog` closes each: a shop's close
+    /// `dialog` closes, as `_DoPortDialog` closes each: its close
     /// redraws the whole bar first ([`FlightView::refresh_status`],
     /// `_RefreshSAT`), then the nav saved as it opened is restored
     /// ([`Session::restore_port_nav`]; the outfitter @0x5dbb8-0x5dbc5,
@@ -3784,9 +3784,14 @@ impl<C> FlightView<C> {
     ///   @0x5fe99-0x5fea5 → @0x5ff10).
     /// - The mission computer: at once, as its close draws nav and cargo
     ///   itself (@0x6009a-0x600a6), even when the restore changed nothing.
-    ///   Its refusal's whole-bar `_RefreshSAT` (@0xa395b) is a text
-    ///   dialog's closing, left to
-    ///   rdm:phase/hud-fidelity/phase-35-port-status-bar-redraws-at-the-other-dialogs.
+    ///   Its whole-bar redraw is its loop's close's `_RefreshSAT`
+    ///   (@0xa40d7), or a refusal's after its text (@0xa395b). The
+    ///   re-entry after an accept skips it when the slots are full
+    ///   (@0xa3814) or nothing is left (@0xa391a), but follows an accept
+    ///   whose own redraws ([`FlightView::accept_mission`]) ran in the same
+    ///   input. Nothing a docked session holds changes while its texts
+    ///   show, so ours' redraw there draws what is already shown: an
+    ///   ordering difference no frame crosses, not filed.
     /// - The shipyard: the bar keeps what its close drew, before the
     ///   restore, as no `_DrawStatus` follows it in the port
     ///   (@0x5ff85-0x5ffa3 marks only `_statusRedraw[2]`). Its restore
@@ -3795,9 +3800,7 @@ impl<C> FlightView<C> {
     ///   recharge (@0x5fe05), an outfitter order (@0x5c5a1, @0x5d328), each
     ///   only when it goes through, or any nav redraw.
     pub fn close_port_dialog(&mut self, dialog: PortDialog) {
-        if dialog != PortDialog::MissionComputer {
-            self.refresh_status();
-        }
+        self.refresh_status();
         if let Ok(session) = &mut self.session {
             session.restore_port_nav();
         }
@@ -12471,11 +12474,13 @@ mod tests {
     }
 
     #[test]
-    fn the_mission_computers_close_redraws_the_nav_area() {
+    fn the_mission_computers_close_redraws_the_whole_bar() {
         let mut view = docked_at_earth(port(), RuleSource::Engine);
         run_set(&mut view, "M131");
         view.settle_script();
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
         assert_eq!(port_nav(&view), naming("Earth"), "held");
+        assert_ne!(view.reserves_shown().fuel.now, 100.0, "held");
         view.open_port_dialog();
         view.close_port_dialog(PortDialog::MissionComputer);
         assert_eq!(
@@ -12483,6 +12488,7 @@ mod tests {
             naming("Proxima"),
             "redrawn, though the restore changed nothing"
         );
+        assert_eq!(view.reserves_shown().fuel.now, 100.0, "redrawn");
     }
 
     #[test]
