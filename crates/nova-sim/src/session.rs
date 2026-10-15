@@ -3084,6 +3084,7 @@ impl Session {
             meets_require: self.contributed() & require == require,
             mission_stellar,
             blessed: blessing.blesses(site.govt, crate::rank::Blessed::Landing),
+            granted: false,
         }
     }
 

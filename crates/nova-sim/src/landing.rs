@@ -501,6 +501,8 @@ pub const ANY_RECORD: i16 = -32767;
 
 /// What traffic control weighs of the pilot at a stellar, besides the
 /// stellar itself (`_HandlePlayerDockRequest` @0x67903-0x67a05).
+// Each flag is one clause of the clearance, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Standing {
     /// The legal record `MinStatus` is checked against.
@@ -515,6 +517,10 @@ pub struct Standing {
     /// (`_PlayerBlessedByGovt` which 1, @0x679cd-0x67a05; see
     /// [`rank`](crate::rank)'s **Blessing**).
     pub blessed: bool,
+    /// Whether the pilot's dock request stands at
+    /// [`CLEARED`](crate::clearance::CLEARED) or more, whichever stellar
+    /// it is for (@0x67934-0x6793d; see [`clearance`](crate::clearance)).
+    pub granted: bool,
 }
 
 /// Whether traffic control clears the pilot of `standing` to land at
@@ -529,20 +535,30 @@ pub struct Standing {
 /// record of exactly 32767 or -32768, so they have no rule of their own.
 #[must_use]
 pub fn cleared(site: &LandingSite, standing: Standing, blessing: RuleSource) -> bool {
-    let by_record = (standing.record >= site.min_status || site.min_status == ANY_RECORD)
-        && site.min_status != NEVER_BY_RECORD;
+    let by_record = passes_min_status(standing.record, site.min_status);
     let dominated = site.flags2 & crate::market::DOMINATED != 0;
     let governed = site.govt.is_some();
     let require_ok = !governed || standing.meets_require;
     let blessed = governed && standing.blessed;
+    let granted = standing.granted;
     match blessing {
         RuleSource::Engine => {
-            ((by_record || dominated) && require_ok) || standing.mission_stellar || blessed
+            ((by_record || dominated || granted) && require_ok)
+                || standing.mission_stellar
+                || blessed
         }
         RuleSource::Bible => {
-            ((by_record || dominated || blessed) && require_ok) || standing.mission_stellar
+            ((by_record || dominated || granted || blessed) && require_ok)
+                || standing.mission_stellar
         }
     }
+}
+
+/// Whether a legal record of `record` passes a `MinStatus` of
+/// `min_status`: at least it, or `MinStatus` [`ANY_RECORD`], and never
+/// `MinStatus` [`NEVER_BY_RECORD`] (@0x67903-0x67921, @0x6481c-0x64843).
+pub(crate) fn passes_min_status(record: i16, min_status: i16) -> bool {
+    (record >= min_status || min_status == ANY_RECORD) && min_status != NEVER_BY_RECORD
 }
 
 /// The legal record that `site`'s `MinStatus` is checked against by the
@@ -1646,6 +1662,7 @@ mod tests {
             meets_require: false,
             mission_stellar: true,
             blessed: false,
+            granted: false,
         };
         for source in RuleSource::ALL {
             assert!(cleared(&governed(32767), mission, source), "@0x67977");
@@ -1665,7 +1682,42 @@ mod tests {
             meets_require,
             mission_stellar: false,
             blessed: true,
+            granted: false,
         }
+    }
+
+    /// A pilot whose record is `record`, whose dock request is granted,
+    /// meeting `Require` or not.
+    fn granted(record: i16, meets_require: bool) -> Standing {
+        Standing {
+            record,
+            meets_require,
+            granted: true,
+            ..Standing::default()
+        }
+    }
+
+    #[test]
+    fn a_granted_request_clears_alone_require_permitting() {
+        for source in RuleSource::ALL {
+            assert!(
+                cleared(&governed(32767), granted(0, true), source),
+                "@0x67934 {source:?}"
+            );
+            assert!(
+                !cleared(&governed(32767), granted(0, false), source),
+                "@0x67940 {source:?}"
+            );
+            assert!(
+                cleared(
+                    &needing(32767, StellarFlags::CAN_LAND),
+                    granted(0, false),
+                    source
+                ),
+                "an ungoverned stellar reads no Require {source:?}"
+            );
+        }
+        assert!(!Standing::default().granted);
     }
 
     #[test]

@@ -44,6 +44,9 @@
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
+//! - [`clearance`]: the dock request the land key makes
+//!   ([`DockRequest`]), its counter, and the dock approach that counts it
+//!   on every frame and greets the pilot ([`approach`]).
 //! - [`control`]: the control bits missions and storylines script with,
 //!   held as a [`ControlBitSet`] indexed by [`Bit`]; a record's parsed
 //!   control-bit [`Test`], and evaluating one against the [`PilotFacts`]
@@ -271,6 +274,7 @@ pub mod buoy;
 pub mod cargo_box;
 pub mod catalog;
 pub mod chance;
+pub mod clearance;
 pub mod cloak;
 pub mod clock;
 pub mod combat;
@@ -360,6 +364,7 @@ pub use catalog::{
     WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
+pub use clearance::{Approach, DockKind, DockRequest, approach, approach_clears};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use combat::armament::{Armament, Trigger};
 pub use combat::defence::{Allegiance, PointDefenceRule};
