@@ -895,6 +895,7 @@ impl Combat {
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
             if weapon.broadside > 0 && side_of_exit != 0.0 && quarry.is_none() {
+                // Wrapped in float, then truncated (@0x3ee7e-0x3eeb8).
                 let out = normalized(from.heading + side_of_exit * weapon.broadside as f32).trunc();
                 shot.velocity = projectile::launch_velocity(&weapon, &from, out);
             }
@@ -6203,6 +6204,25 @@ mod tests {
     }
 
     #[test]
+    fn a_broadside_angle_wraps_before_it_is_truncated() {
+        let broadside = WeaponRecord {
+            inaccuracy: -90,
+            ..gun()
+        };
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0)
+            .armed(broadside)
+            .facing(45.5)
+            .of(exits_at(0, [(-3, 10); 4]))];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let velocity = combat.shots()[0].velocity;
+        // 45.5 - 90 wraps to 315.5 in float (@0x3ee7e-0x3eea4), then
+        // `cvttss2si` (@0x3eeb8) takes 315, not trunc(-44.5) + 360 = 316.
+        let along = crate::flight::facing(315.0) * 10.0;
+        assert!(close_to(velocity, along), "{velocity:?} {along:?}");
+    }
+
+    #[test]
     fn a_broadside_bomb_or_rocket_keeps_its_launch_velocity() {
         let fired = |guidance, inaccuracy| {
             let mut combat = Combat::default();
@@ -6340,6 +6360,33 @@ mod tests {
                 ships[0].armament.exit_cursors().next(ExitKind::Beam),
                 1,
                 "stepped from 0, not set"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nearest_exit_gun_fires_from_the_exit_nearest_its_target() {
+        let nearest = WeaponRecord {
+            flags3: crate::combat::weapon::NEAREST_EXIT,
+            ..gun()
+        };
+        let guns = [(0, 20), (30, 0), (0, -20), (-30, 0)];
+        for (x, at, next) in [(100.0, 30.0, 2), (-100.0, -30.0, 0)] {
+            let mut combat = Combat::default();
+            let mut ships = [
+                Ship::at(1, 0.0, 0.0)
+                    .armed(nearest)
+                    .facing(0.0)
+                    .targeting(B)
+                    .of(exits_at(0, guns)),
+                Ship::at(2, x, 0.0),
+            ];
+            let from = next_start(&mut combat, &mut ships);
+            assert!(close_to(from, Vec2::new(at, 0.0)), "{x}: {from:?}");
+            assert_eq!(
+                ships[0].armament.exit_cursors().next(ExitKind::Gun),
+                next,
+                "{x}: on from the exit taken (@0x73d9-0x742c)"
             );
         }
     }
