@@ -59,13 +59,6 @@ const WARP_UP_SOUND: i16 = 128;
 /// @0x1c0b5-0x1c12d, `_WarpSoundDuration` @0x8210-0x8219).
 const WARP_UP_DOUBLE_SOUND: i16 = 129;
 
-/// Reads the records afresh on every call; a session asks once, when it
-/// starts.
-///
-/// The starting date's day and month are the `chär`'s two words at 0x134
-/// and 0x136, which the Bible leaves undocumented and the ResForge template
-/// labels the starting day and month (stock: 23 and 6, with `StartYear`
-/// 1177).
 /// The length of `data`'s `snd ` `id` as `_ParseSndHeader` gives it: its
 /// frames and the whole part of its rate; none when it is missing or
 /// cannot be decoded.
@@ -78,6 +71,13 @@ fn sound_length(data: &GameData, id: i16) -> Option<SoundLength> {
     })
 }
 
+/// Reads the records afresh on every call; a session asks once, when it
+/// starts.
+///
+/// The starting date's day and month are the `chär`'s two words at 0x134
+/// and 0x136, which the Bible leaves undocumented and the ResForge template
+/// labels the starting day and month (stock: 23 and 6, with `StartYear`
+/// 1177).
 impl PilotCatalog for GameData {
     fn first_character(&self) -> Result<CharacterStart, StartError> {
         let (_, first) = self
