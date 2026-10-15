@@ -298,10 +298,14 @@ impl Session {
 
     /// Each person of `Flags` 0x0001 that a shot of the player's hit among
     /// `strikes` holds a grudge against it from now on, on the pilot too
-    /// (`_DamageShip` @0x3be83-0x3beb3); an escort's shot does not count.
-    /// No save is due.
+    /// (`_DamageShip` @0x3be83-0x3beb3); an escort's shot does not count,
+    /// nor does the player's death shockwave, which provokes nothing
+    /// ([`Strike::provokes`]). No save is due.
     pub(super) fn hold_grudges(&mut self, strikes: &[Strike]) {
-        for strike in strikes.iter().filter(|strike| strike.by == ShipRef::Player) {
+        for strike in strikes
+            .iter()
+            .filter(|strike| strike.by == ShipRef::Player && strike.provokes)
+        {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };
@@ -714,11 +718,27 @@ mod tests {
             by,
             damage: 1.0,
             downed: None,
+            provokes: true,
         };
         session.hold_grudges(&[hit(ShipRef::Npc(NpcId(7)))]);
         assert!(!session.pilot().grudge(PersonId(600)));
         session.hold_grudges(&[hit(ShipRef::Player)]);
         assert!(session.pilot().grudge(PersonId(600)));
+    }
+
+    #[test]
+    fn the_players_shockwave_holds_no_grudge() {
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        session.hold_grudges(&[Strike {
+            ship: ShipRef::Npc(NpcId(0)),
+            by: ShipRef::Player,
+            damage: 32.0,
+            downed: None,
+            provokes: false,
+        }]);
+        assert!(!session.pilot().grudge(PersonId(600)));
+        assert!(!session.npcs()[0].person.expect("Ace").grudge);
     }
 
     #[test]
@@ -745,6 +765,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 9.0,
             downed: Some(crate::combat::Downed::Disabled),
+            provokes: true,
         };
         let mut strikes = [
             downed(ShipRef::Npc(NpcId(0))),

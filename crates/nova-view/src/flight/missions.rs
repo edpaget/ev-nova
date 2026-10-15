@@ -3,6 +3,12 @@
 //! shows it, and the mission info screen that I opens in flight
 //! (`_HandlePlayer` @0x704bc-0x704e3). Flight pauses under them; the
 //! router routes to them and answers the info screen's Abort.
+//!
+//! The same queue shows the `dësc`s a sabotaged player sees as it dies
+//! (`_HandlePlayer` @0x68739-0x68832), plain text with no mission behind
+//! it ([`FlightMissionDialogs::show_descs`]). Those are text only: the
+//! `DLOG` 3004 variant with the `dësc`'s graphic, and its movie, are left
+//! to `missions-fidelity/phase-4-offer-pictures-and-movies`.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -74,13 +80,19 @@ impl FlightMissionDialogs {
     /// as Done closes each. Without the dialog's template they are
     /// dropped, as the spaceport drops them.
     pub fn show_texts(&mut self, texts: Vec<MissionText>) {
+        self.show_descs(texts.into_iter().map(|text| text.text).collect());
+    }
+
+    /// Queues each of `texts`, plain text with no mission behind it,
+    /// to show as [`show_texts`](Self::show_texts) shows mission texts.
+    pub fn show_descs(&mut self, texts: Vec<String>) {
         let Ok(template) = &self.text else {
             return;
         };
         for text in texts {
             self.texts.push_back(DescDialog::new(
                 template,
-                &text.text,
+                &text,
                 self.style,
                 Rc::clone(&self.metrics),
             ));
@@ -337,6 +349,20 @@ mod tests {
             [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
         );
         assert_eq!(shown(&dialogs).as_deref(), Some("Second."));
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(shown(&dialogs), None);
+        assert!(!dialogs.is_open());
+    }
+
+    #[test]
+    fn plain_texts_show_one_after_another_and_close_on_done() {
+        let mut dialogs = dialogs();
+        dialogs.show_descs(vec!["Sabotaged.".to_owned(), "Again.".to_owned()]);
+        assert!(dialogs.is_open());
+        assert_eq!(shown(&dialogs).as_deref(), Some("Sabotaged."));
+        assert!(drawn(&dialogs).contains(&"Sabotaged.".to_owned()));
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(shown(&dialogs).as_deref(), Some("Again."));
         dialogs.input(&key(Key::Enter));
         assert_eq!(shown(&dialogs), None);
         assert!(!dialogs.is_open());

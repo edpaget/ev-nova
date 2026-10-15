@@ -27,10 +27,13 @@
 //! the original's `_ResetPlayer` seeds them (@0x1d9a4-0x1da0b). A
 //! government override leaves each system's record as it is; only later
 //! writes read the new government (the original never writes a system's
-//! government in play, `_systemData` +0x8). The `chär`'s statuses spread
-//! to allied and enemy systems (`_ActivateCharResource` @0x76dc0), the
-//! escape pod's reset (`_HandlePlayer` @0x6923c) and the readers the
-//! engine lacks belong to
+//! government in play, `_systemData` +0x8). The escape pod's rescue seeds
+//! them again the same way, from each government's `InitialRec` alone,
+//! hidden systems included, and sets the record with each government to
+//! it too (`_HandlePlayer` @0x69257-0x69290; the session's `rescue`
+//! module). The `chär`'s statuses spread to allied and enemy systems
+//! (`_ActivateCharResource` @0x76dc0) and the readers the engine lacks
+//! belong to
 //! rdm:phase/missions-fidelity/phase-23-legal-record-other-readers-and-writers.
 //!
 //! The mission writers (success, failure, abort and the cleaning pay,

@@ -66,8 +66,17 @@
 //! - **A hopeless chase** ([`hopeless_chase`]) stands off and snipes;
 //!   anything else is attacked.
 //! - With no target it goes about its business ([`idle`](super::idle)).
-
-use std::borrow::Cow;
+//!
+//! A held ship ([`Goal::Hold`], the original's goal 10 with no leader)
+//! still hears its government's word and answers its attacker, but looks
+//! for no target: `_SelectWarshipTarget` runs only for goals 0, 1, 2,
+//! 6 and 0x14 (@0x8b835-0x8b875, @0x8bb56-0x8bba2, @0x8bbab-0x8bbc2), so
+//! with no word and no provocation it holds ([`idle`](super::idle)). A
+//! warship of a government with `Flags` 0x1000 ([`PLUNDERS`]) thinks as
+//! `_PirateWarshipAI` (`_AIDispatch` @0x8ffc8-0x8fff0), which with no
+//! target goes straight to its plunder and target search and its
+//! destination pick (@0x8c339-0x8c35d): it decides as if idle, leaving
+//! the hold on its first think. Its plunder itself isn't modelled here.
 
 use crate::ai::fire::FireRules;
 use crate::ai::odds::{hopeless_chase, odds_against};
@@ -76,7 +85,7 @@ use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
-use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, WARSHIPS_RETREAT};
+use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, PLUNDERS, WARSHIPS_RETREAT};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
@@ -150,26 +159,34 @@ pub fn hunt(
             }
             let keep = |ship: ShipRef| !dropped(npc, ship, around);
             let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && keep(ship));
+            if npc.goal == Goal::Hold {
+                return provoker.map(|ship| hunted(npc, ship, around, retreat));
+            }
             let current = npc.goal.attacking().filter(|&ship| keep(ship));
             provoker.or_else(|| select_target(npc, current, around))?
         }
     };
-    let judged = if word.is_some() {
-        Cow::Owned(Npc {
+    if word.is_some() {
+        let judged = Npc {
             goal: Goal::Attack(target),
             ..npc.clone()
-        })
-    } else {
-        Cow::Borrowed(npc)
-    };
-    if retreats(&judged, around, retreat) {
-        return Some(Goal::Flee(target));
+        };
+        return Some(hunted(&judged, target, around, retreat));
     }
-    Some(if hopeless_chase(npc, target, around) {
+    Some(hunted(npc, target, around, retreat))
+}
+
+/// What a hunter `npc`, judged by the goal it holds, does about
+/// `target`: it retreats from it as `retreat` says, or snipes at it in a
+/// hopeless chase, or attacks it.
+fn hunted(npc: &Npc, target: ShipRef, around: &Surroundings, retreat: Retreat) -> Goal {
+    if retreats(npc, around, retreat) {
+        Goal::Flee(target)
+    } else if hopeless_chase(npc, target, around) {
         Goal::Snipe(target)
     } else {
         Goal::Attack(target)
-    })
+    }
 }
 
 /// What a hunter's government says of the player before anything else
@@ -262,6 +279,16 @@ impl Behaviour for Warship {
             person_coward: self.person_coward,
             ..WARSHIP_RETREAT
         };
+        let plunderer;
+        let npc = if npc.goal == Goal::Hold && around.govts.flag(npc.govt, PLUNDERS) {
+            plunderer = Npc {
+                goal: Goal::Idle,
+                ..npc.clone()
+            };
+            &plunderer
+        } else {
+            npc
+        };
         hunt(npc, around, retreat, self.always_attacks).unwrap_or_else(|| idle(npc, around, chance))
     }
 
@@ -313,6 +340,42 @@ mod tests {
     }
 
     #[test]
+    fn a_held_warship_looks_for_no_target_but_answers_its_attacker_and_its_governments_word() {
+        let mut held = police();
+        held.govt = Some(TRADERS);
+        held.goal = Goal::Hold;
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        assert_eq!(
+            decided(&[held.clone(), pirate.clone()], 0),
+            Goal::Hold,
+            "a pirate in view"
+        );
+        let mut provoked = held.clone();
+        provoked.provoked = 1.0;
+        provoked.target = Some(n(2));
+        assert_eq!(decided(&[provoked, pirate.clone()], 0), Goal::Attack(n(2)));
+        assert_eq!(
+            decided_by(&govts(ALWAYS_ATTACKS_PLAYER, 0), &[held, pirate], 0),
+            Goal::Attack(P),
+            "its government's word"
+        );
+    }
+
+    #[test]
+    fn a_held_warship_of_a_plundering_government_decides_as_its_type() {
+        let mut held = police();
+        held.govt = Some(TRADERS);
+        held.goal = Goal::Hold;
+        let govts = govts(PLUNDERS, 0);
+        assert_eq!(
+            decided_by(&govts, &[held.clone()], 0),
+            Goal::Land(StellarId(128))
+        );
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        assert_eq!(decided_by(&govts, &[held, pirate], 0), Goal::Attack(n(2)));
+    }
+
+    #[test]
     fn a_warship_attacks_a_wanted_player_a_pirate_or_whoever_provoked_it() {
         // The traders' allied police tolerate -9 at most.
         assert_eq!(decided(&[police()], -10), Goal::Attack(P));
@@ -358,7 +421,10 @@ mod tests {
         let npcs = [hunter.clone(), neutral.clone()];
         assert_eq!(decided(&npcs, 0), Goal::Attack(n(3)), "kept");
         let mut dying = neutral.clone();
-        dying.condition = Condition::Dying { ticks_left: 2 };
+        dying.condition = Condition::Dying {
+            ticks_left: 2,
+            starting: false,
+        };
         assert_eq!(
             decided(&[hunter.clone(), dying], 0),
             Goal::Land(StellarId(128))
@@ -545,6 +611,7 @@ mod tests {
             by: P,
             damage: 1.0,
             downed: None,
+            provokes: true,
         };
         let victim = ship(9, TRADERS, AiType::WimpyTrader, 900.0, 0.0);
         let npcs = [ship(1, POLICE, AiType::Warship, 0.0, 0.0), victim];
@@ -854,7 +921,13 @@ mod tests {
     fn a_government_that_always_attacks_the_player_turns_an_unprovoked_warship_on_it_and_lets_a_disabled_player_go_without_destroying_weapons()
      {
         let npcs = [attacking(n(2)), pirate()];
-        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 3 }] {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        ] {
             assert_eq!(
                 worded(ALWAYS, &npcs, Some(condition)),
                 IDLE,
@@ -875,7 +948,14 @@ mod tests {
             "it finishes the player off"
         );
         assert_eq!(
-            worded(ALWAYS, &armed, Some(Condition::Dying { ticks_left: 3 })),
+            worded(
+                ALWAYS,
+                &armed,
+                Some(Condition::Dying {
+                    ticks_left: 3,
+                    starting: false
+                })
+            ),
             IDLE,
             "breaking up, the player is gone"
         );

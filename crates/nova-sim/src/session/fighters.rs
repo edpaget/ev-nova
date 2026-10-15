@@ -1217,6 +1217,28 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_docking_on_double_times_second_pass_is_aboard_again() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 0, vec![out()]);
+        let id = session.fleet[0].expect("placed");
+        session.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        assert!(matches!(session.npcs()[0].goal, Goal::Dock(_)), "decided");
+        let docked = (1..=600).find(|_| {
+            session.tick_again(
+                Controls::default(),
+                crate::Rules::default(),
+                &mut NeverFires,
+            );
+            session.pilot().escorts().is_empty()
+        });
+        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        assert_eq!(session.npcs(), []);
+        assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
+    }
+
+    #[test]
     fn another_command_keeps_a_returning_fighter_out() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out()]);
@@ -1634,6 +1656,67 @@ mod tests {
         assert!(session.take_save_due());
     }
 
+    /// [`two_bays`] with `STR#` 1000 "one", "two", and system 131's
+    /// `Message` `message`.
+    fn buoyed_131(message: i16) -> FakePilotCatalog {
+        let mut catalog = two_bays();
+        catalog
+            .strings
+            .push((crate::buoy::BUOY_STRINGS, vec!["one".into(), "two".into()]));
+        let system = catalog
+            .star_map
+            .iter_mut()
+            .find(|system| system.id == crate::catalog::SystemId(131))
+            .expect("on the map");
+        system.message = message;
+        catalog
+    }
+
+    /// The fighter notes, messages and fighters left of a jump to 131 with
+    /// both fighters out by the engine, `Message` `message` there and
+    /// `MissingBuoyString` read as `buoy`.
+    fn abandoning_into(
+        message: i16,
+        buoy: RuleSource,
+    ) -> (Vec<FighterNote>, Vec<crate::SimMessage>, usize, bool) {
+        let catalog = buoyed_131(message);
+        let mut session = both_out(&catalog, RuleSource::Engine);
+        session.rules = session
+            .rules
+            .with_override(RuleKey::MissingBuoyString, buoy);
+        session.take_messages();
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        (
+            session.take_fighter_notes(),
+            session.take_messages(),
+            session.pilot().escorts().len(),
+            session.take_save_due(),
+        )
+    }
+
+    #[test]
+    fn a_buoy_drops_the_abandoned_fighters_note_and_the_fighters_still_go() {
+        let (notes, messages, escorts, save_due) = abandoning_into(2, RuleSource::Engine);
+        assert_eq!(notes, [], "the buoy replaces the suffix");
+        assert_eq!(messages, [crate::SimMessage::Buoy("two".into())]);
+        assert_eq!(escorts, 1, "the Dart is still abandoned");
+        assert!(save_due);
+        let (notes, messages, ..) = abandoning_into(3, RuleSource::Engine);
+        assert_eq!(notes, [], "an empty line replaces it too");
+        assert_eq!(messages, [crate::SimMessage::Buoy(String::new())]);
+    }
+
+    #[test]
+    fn with_no_buoy_shown_the_abandoned_fighters_note_stays() {
+        let arrived = [crate::SimMessage::Arrived(crate::catalog::SystemId(131))];
+        for (message, buoy) in [(-1, RuleSource::Engine), (3, RuleSource::Bible)] {
+            let (notes, messages, escorts, _) = abandoning_into(message, buoy);
+            assert_eq!(notes, [FighterNote::Abandoned(1)], "{message} {buoy:?}");
+            assert_eq!(messages, arrived, "{message} {buoy:?}");
+            assert_eq!(escorts, 1);
+        }
+    }
+
     #[test]
     fn by_the_engine_landed_the_fighters_stay_out_and_take_off_restocked() {
         let catalog = two_bays();
@@ -1717,10 +1800,12 @@ mod tests {
         catalog
     }
 
-    /// Presses L twice over the hypergate and comes out of it in 131.
+    /// Presses L over the hypergate, runs the dock approach, presses L
+    /// again and comes out of it in 131.
     fn through_the_gate(session: &mut Session, catalog: &FakePilotCatalog) {
         use crate::catalog::SystemId;
         session.land().expect("selects the gate");
+        session.dock_approach();
         assert!(matches!(
             session.land(),
             Ok(crate::session::LandPress::AtGate { .. })

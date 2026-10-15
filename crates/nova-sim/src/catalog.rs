@@ -17,6 +17,7 @@ use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::warp::SoundLength;
 
 /// A new pilot's start, from the first `chär`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -84,6 +85,9 @@ pub struct StarSystem {
     /// Its `Interference`, raw: the radar's static
     /// ([`iff::interference`](crate::iff::interference)).
     pub interference: i16,
+    /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
+    /// −1 for none ([`StarMap::buoy`](crate::StarMap::buoy)).
+    pub message: i16,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -394,6 +398,10 @@ pub struct ShipRecord {
     /// Its `OnRetire` set expression, parsed: run when the player trades
     /// one in or leaves it for a captured ship.
     pub on_retire: Script,
+    /// Its `Flags`, raw: 0x8000 marks a fighter the player can escape in
+    /// (see [`escape`](crate::escape)), and its jump-speed bits give its
+    /// warp factor ([`warp_factor`](crate::warp::warp_factor)).
+    pub flags: u16,
     /// Its `Flags3`.
     pub flags3: u16,
     /// Its `DispWeight`: higher shows nearer the top.
@@ -1311,6 +1319,13 @@ pub trait PilotCatalog {
     fn star_map(&self) -> Vec<StarSystem>;
     /// The standard commodities' names and base prices.
     fn commodity_strings(&self) -> CommodityStrings;
+    /// The `'STR '` `id`, raw, from whichever file holds it, the base
+    /// data's or a plug-in's: a message buoy's patch (see the
+    /// [`buoy`](crate::buoy) module).
+    fn string_patch(&self, id: i16) -> StringPatch;
+    /// Every string of `STR#` 1000, the message buoys', in order; none
+    /// when it is missing.
+    fn buoy_strings(&self) -> Vec<String>;
     /// Every `jünk` that can be read, by ascending ID.
     fn junk(&self) -> Vec<JunkRecord>;
     /// Every `öops` that can be read, by ascending ID.
@@ -1356,6 +1371,21 @@ pub trait PilotCatalog {
     fn ranks(&self) -> Vec<RankRecord>;
     /// Every `nëbu` 128-159 that can be read, by ascending ID.
     fn nebulae(&self) -> Vec<NebulaRecord>;
+    /// The length of the warp-up sound, `snd ` 128, which the warp's
+    /// clock reads its duration from
+    /// ([`sound_duration`](crate::warp::sound_duration)); none when there
+    /// is none or it cannot be read, as by default.
+    fn warp_sound(&self) -> Option<SoundLength> {
+        None
+    }
+    /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
+    /// of `Flags` 0x0800 draws its ships' one type from at accept (see
+    /// [`SpecialShips::uniform_type`](crate::mission::SpecialShips::uniform_type)).
+    /// None when it cannot be read, as by default: the type is then drawn
+    /// at the ships' first spawn.
+    fn mission_dude(&self, _id: DudeId) -> Option<DudeRecord> {
+        None
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1394,6 +1424,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn commodity_strings(&self) -> CommodityStrings {
         (**self).commodity_strings()
+    }
+
+    fn string_patch(&self, id: i16) -> StringPatch {
+        (**self).string_patch(id)
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        (**self).buoy_strings()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -1458,6 +1496,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn nebulae(&self) -> Vec<NebulaRecord> {
         (**self).nebulae()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        (**self).warp_sound()
+    }
+
+    fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+        (**self).mission_dude(id)
     }
 }
 
@@ -1500,6 +1546,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
         (**self).commodity_strings()
     }
 
+    fn string_patch(&self, id: i16) -> StringPatch {
+        (**self).string_patch(id)
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        (**self).buoy_strings()
+    }
+
     fn junk(&self) -> Vec<JunkRecord> {
         (**self).junk()
     }
@@ -1562,6 +1616,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn nebulae(&self) -> Vec<NebulaRecord> {
         (**self).nebulae()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        (**self).warp_sound()
+    }
+
+    fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+        (**self).mission_dude(id)
     }
 }
 
@@ -1728,6 +1790,7 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
                 interference: 0,
+                message: -1,
             }]
         }
 
@@ -1739,6 +1802,18 @@ mod tests {
                 base_prices: vec!["75".to_owned()],
                 price_patches: Default::default(),
             }
+        }
+
+        fn string_patch(&self, id: i16) -> StringPatch {
+            if id == 1000 {
+                StringPatch::Text("Patched buoy".into())
+            } else {
+                StringPatch::Absent
+            }
+        }
+
+        fn buoy_strings(&self) -> Vec<String> {
+            vec!["First buoy".into(), "Second buoy".into()]
         }
 
         /// Opals, sold at stellar 128.
@@ -1865,6 +1940,25 @@ mod tests {
         fn nebulae(&self) -> Vec<NebulaRecord> {
             vec![crate::testkit::nebula(141, (0, 0, 300, 10), "", "")]
         }
+
+        /// A second at 22050 Hz.
+        fn warp_sound(&self) -> Option<SoundLength> {
+            Some(SoundLength {
+                frames: 22_050,
+                rate: 22_050,
+            })
+        }
+
+        /// Düde 150 flies ship 128.
+        fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+            (id == DudeId(150)).then(|| DudeRecord {
+                ai_type: 2,
+                govt: None,
+                ships: vec![(ShipId(128), 40)],
+                booty: 0,
+                info_types: 0,
+            })
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1901,6 +1995,10 @@ mod tests {
             format!("{:?}", catalog.ranks()),
             format!("{:?}", catalog.system_visibility()),
             format!("{:?}", catalog.nebulae()),
+            format!("{:?}", catalog.string_patch(1000)),
+            format!("{:?}", catalog.buoy_strings()),
+            format!("{:?}", catalog.warp_sound()),
+            format!("{:?}", catalog.mission_dude(DudeId(150))),
         ]
     }
 
@@ -1952,6 +2050,13 @@ mod tests {
         assert!(direct[27].contains("Bit(5)"), "{direct:?}");
         assert!(direct[28].contains("NebulaId(141)"), "{direct:?}");
         assert!(direct[28].contains("width: 300"), "{direct:?}");
+        assert_eq!(direct[29], r#"Text("Patched buoy")"#);
+        assert_eq!(direct[30], r#"["First buoy", "Second buoy"]"#);
+        assert_eq!(
+            direct[31], "Some(SoundLength { frames: 22050, rate: 22050 })",
+            "forwarded, not a default"
+        );
+        assert!(direct[32].contains("ShipId(128), 40"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

@@ -18,6 +18,11 @@ use crate::wire::id::{
 pub struct SetExpr {
     /// The operators, in order; empty for a blank expression.
     pub ops: Vec<SetOp>,
+    /// Whether the text it was parsed from held any character, a space or
+    /// a tab included. An expression with operators came from text
+    /// whatever this says: [`SetExpr::is_empty_text`] reads both.
+    #[serde(default)]
+    pub has_text: bool,
 }
 
 /// One set operator.
@@ -113,6 +118,23 @@ pub enum BitWrite {
 }
 
 impl SetExpr {
+    /// What text that did not parse runs: no operator, from text that was
+    /// not empty.
+    pub const UNPARSED: Self = Self {
+        ops: Vec::new(),
+        has_text: true,
+    };
+
+    /// Whether it came from empty text: no operator and no character at
+    /// all. The original's set-string wrappers skip such a string
+    /// (`_EvalCurrentMissionBitSetString` @0x99a55, `_EvalMissionBitSetString`
+    /// @0x99dce test its first byte), and run their tail for any other,
+    /// one of only spaces included.
+    #[must_use]
+    pub fn is_empty_text(&self) -> bool {
+        self.ops.is_empty() && !self.has_text
+    }
+
     /// Parses a set expression; blank has no operators.
     pub fn parse(src: &str) -> Result<Self, ParseError> {
         let mut cursor = Cursor::new(src);
@@ -132,7 +154,10 @@ impl SetExpr {
             }
             cursor.skip_space();
         }
-        Ok(Self { ops })
+        Ok(Self {
+            ops,
+            has_text: !src.is_empty(),
+        })
     }
 
     /// The bits always written, in order: those outside `R(...)`.
@@ -383,6 +408,24 @@ mod tests {
     fn a_blank_set_does_nothing() {
         assert_eq!(parse(""), []);
         assert_eq!(parse(" \t "), []);
+    }
+
+    #[test]
+    fn only_a_set_of_no_text_at_all_is_empty_text() {
+        let parsed = |src: &str| SetExpr::parse(src).expect(src);
+        assert!(parsed("").is_empty_text());
+        assert!(SetExpr::default().is_empty_text(), "the blank default");
+        assert!(!parsed(" ").is_empty_text(), "a space is text");
+        assert!(!parsed("\t\t").is_empty_text());
+        assert!(!parsed("b1").is_empty_text());
+        assert!(!parsed(" b1 ").is_empty_text());
+        assert!(!SetExpr::UNPARSED.is_empty_text());
+        assert_eq!(SetExpr::UNPARSED.ops, []);
+        let built = SetExpr {
+            ops: vec![SetOp::Set(b(1))],
+            ..SetExpr::default()
+        };
+        assert!(!built.is_empty_text(), "operators always came from text");
     }
 
     #[test]

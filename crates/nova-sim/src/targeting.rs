@@ -318,7 +318,10 @@ mod tests {
         at(id, x, y, Condition::Intact)
     }
 
-    const DYING: Condition = Condition::Dying { ticks_left: 5 };
+    const DYING: Condition = Condition::Dying {
+        ticks_left: 5,
+        starting: false,
+    };
 
     #[test]
     fn intact_and_disabled_ships_are_targetable_and_dying_or_destroyed_ones_are_not() {

@@ -93,7 +93,7 @@ impl Session {
     /// the first stellar the player's system lists.
     pub(super) fn person_mission_stellar(&self) -> Option<StellarId> {
         match self.rules.source_for(RuleKey::PersonMissionStellar) {
-            RuleSource::Engine => self.nav_target,
+            RuleSource::Engine => self.nav_target(),
             RuleSource::Bible => self.sites.first().map(|site| site.id),
         }
     }
@@ -107,7 +107,7 @@ impl Session {
     pub(super) fn ship_offer_reaches(&self) -> Option<StellarId> {
         self.offering?;
         match self.rules.source_for(RuleKey::PersonMissionStellar) {
-            RuleSource::Engine => self.nav_target,
+            RuleSource::Engine => self.nav_target(),
             RuleSource::Bible => None,
         }
     }
@@ -183,7 +183,7 @@ impl Session {
     /// # Errors
     ///
     /// The [`HailRefusal`] that applies, first, drawing nothing and
-    /// beeping [`SimSound::HailRefused`](crate::SimSound::HailRefused)
+    /// beeping [`SimSound::Refused`](crate::SimSound::Refused)
     /// once: [`HailRefusal::NoTarget`] while landed, jumping or breaking
     /// up, or with no navigation stellar on the stellar path;
     /// [`HailRefusal::NoResponse`] for a navigation stellar that does not
@@ -372,7 +372,7 @@ mod tests {
 
     fn populated(catalog: &FakePilotCatalog, rules: Rulebook, nav: Option<i16>) -> Session {
         let mut session = Session::start(catalog).expect("starts").with_rules(rules);
-        session.nav_target = nav.map(StellarId);
+        session.nav = crate::navigation::NavMode::Stellar(nav.map(StellarId));
         session.populate(catalog, &mut NeverFires);
         session
     }
@@ -448,7 +448,7 @@ mod tests {
     fn a_person_jumping_in_mid_stay_resolves_and_overwrites_the_last_offer() {
         let (catalog, mut session) = awaiting_arrivals();
         assert_eq!(offered_to(&session), None, "Ace's");
-        session.nav_target = Some(StellarId(129));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
         session.tick_traffic(&catalog, &NovaAi::default(), &mut Draws::of(&[0, 0, 473]));
         let names: Vec<Option<i16>> = session
             .npcs()
@@ -457,7 +457,7 @@ mod tests {
             .collect();
         assert_eq!(names, [Some(600), Some(601)], "Bee jumps in");
         assert_eq!(offered_to(&session), Some(StellarId(129)), "Bee's");
-        session.nav_target = None;
+        session.nav = crate::navigation::NavMode::Off;
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert_eq!(
             offered_to(&session),
@@ -854,7 +854,7 @@ mod tests {
         session.target = Some(NpcId(0));
         let (hailed, _) = hail(&mut session, &catalog);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
-        session.nav_target = Some(StellarId(accepted));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(accepted)));
         assert_eq!(accept(&mut session), Ok(0));
         session.pilot().missions().get(0).expect("held").reached
     }

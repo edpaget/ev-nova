@@ -324,6 +324,17 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// asks the window for the next redraw. Closing the window, or a screen
     /// asking to quit, exits.
     ///
+    /// The original's `_MyModalDialog` also redraws the whole status bar
+    /// on an update event for its game window (@0x59b17-0x59be6:
+    /// `_RedrawStatus(0)` and `_RefreshSAT`). Under Mac OS X's buffered
+    /// windows that window gets one only when something invalidates it:
+    /// the main screen, a resume from the background in full screen
+    /// (@0x59a58), or a Quit the player declines (`_QuitAEVTHandler`
+    /// @0x56228-0x56258). Ours always runs in a window, with no full-screen
+    /// mode, and a close quits without asking, so that redraw is
+    /// unreachable and isn't ported. The main screen's leaves the bar to
+    /// be drawn at the start of flight, as ours does.
+    ///
     /// With a developer overlay, see [`App::handle_routed`].
     pub fn handle(
         &mut self,

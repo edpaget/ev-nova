@@ -269,9 +269,10 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// the second lands.
+    /// a few frames let the dock approach clear it, and the second lands.
     fn land(&mut self) {
         self.press_physical(KeyCode::KeyL);
+        self.approach();
         self.press_physical(KeyCode::KeyL);
     }
 
@@ -303,6 +304,19 @@ impl Harness {
         });
         assert_eq!(self.app.take_failures(), []);
         (*self.gpu.submits().last().expect("a frame")).clone()
+    }
+
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_millis(16 * self.frames);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
     }
 
     /// Draws frames enough for flight to tick.
@@ -404,6 +418,11 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     assert_eq!(
         harness.played(),
         [
+            // Traffic control's greeting, then the landing's beep.
+            AudioCommand::Play {
+                sound: SoundId(LANDING_BEEP),
+                volume: five
+            },
             AudioCommand::Play {
                 sound: SoundId(LANDING_BEEP),
                 volume: five

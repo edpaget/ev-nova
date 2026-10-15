@@ -111,6 +111,9 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::KeyM) => Key::Char('m'),
         // The jump key, by position: J on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyJ) => Key::Char('j'),
+        // Flight's Hyperspace Mode key and the bar's hire key, by position:
+        // H on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyH) => Key::Char('h'),
         // Hyper Select, by position: `\` on a US-layout keyboard; the
         // original's default.
         PhysicalKey::Code(KeyCode::Backslash) => Key::Char('\\'),
@@ -136,10 +139,18 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
         // Either Command (Super, the Windows key, off a Mac): what flight's
-        // jettison key needs held.
+        // jettison and eject keys need held.
         PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
         // Flight's jettison key, by position: K on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
+        // Flight's eject key, by position: X on a US-layout keyboard, the
+        // original's default (keycode 0x07).
+        PhysicalKey::Code(KeyCode::KeyX) => Key::Char('x'),
+        // Double time's key: each press toggles it, an accepted difference
+        // from the original's following the lock state. winit 0.30.13
+        // sends no Caps Lock key on macOS (its `key_to_modifier` maps Alt,
+        // Control, Super and Shift alone), so there it never arrives.
+        PhysicalKey::Code(KeyCode::CapsLock) => Key::CapsLock,
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, it reaches
         // flight as Nav Off, the original's default.
@@ -219,6 +230,7 @@ mod tests {
             (KeyCode::KeyL, Key::Char('l')),
             (KeyCode::KeyM, Key::Char('m')),
             (KeyCode::KeyJ, Key::Char('j')),
+            (KeyCode::KeyH, Key::Char('h')),
             (KeyCode::KeyP, Key::Char('p')),
             (KeyCode::KeyB, Key::Char('b')),
             (KeyCode::AltLeft, Key::Alt),
@@ -229,8 +241,10 @@ mod tests {
             (KeyCode::ShiftRight, Key::Shift),
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::KeyK, Key::Char('k')),
+            (KeyCode::KeyX, Key::Char('x')),
             (KeyCode::SuperLeft, Key::Command),
             (KeyCode::SuperRight, Key::Command),
+            (KeyCode::CapsLock, Key::CapsLock),
             (KeyCode::Backquote, Key::Char('`')),
             (KeyCode::Backslash, Key::Char('\\')),
             (KeyCode::Digit1, Key::Char('1')),
@@ -257,7 +271,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 31] = [
+    const GAME_CHARACTER_KEYS: [Key; 33] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -269,8 +283,10 @@ mod tests {
         nova_view::flight::view::SELECT_KEY,
         nova_view::flight::view::NEAREST_KEY,
         nova_view::flight::view::HYPER_SELECT_KEY,
+        nova_view::flight::view::HYPERSPACE_MODE_KEY,
         nova_view::flight::view::NAV_OFF_KEY,
         nova_view::flight::view::JETTISON_KEY,
+        nova_view::flight::view::EJECT_KEY,
         nova_view::flight::view::STELLAR_SLOT_KEYS[0][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[1][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[2][0],
@@ -298,6 +314,7 @@ mod tests {
             'b' => KeyCode::KeyB,
             'd' => KeyCode::KeyD,
             'f' => KeyCode::KeyF,
+            'h' => KeyCode::KeyH,
             'i' => KeyCode::KeyI,
             'j' => KeyCode::KeyJ,
             'k' => KeyCode::KeyK,
@@ -307,6 +324,7 @@ mod tests {
             'r' => KeyCode::KeyR,
             's' => KeyCode::KeyS,
             'w' => KeyCode::KeyW,
+            'x' => KeyCode::KeyX,
             '1' => KeyCode::Digit1,
             '2' => KeyCode::Digit2,
             '3' => KeyCode::Digit3,

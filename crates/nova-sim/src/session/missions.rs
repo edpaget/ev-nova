@@ -36,9 +36,10 @@
 //! missions"). [`Session::accept_mission`], [`Session::refuse_mission`]
 //! and [`Session::abort_mission`] are the player's; `S`, `A` and `F` are
 //! `apply_op`'s arms. Each slot filled registers its hooks, `{Missions,
-//! slot, hook}`: [`ARRIVAL`] (the cargo check, in the `mission_cargo`
-//! module), [`FAILURE`] and [`SUCCESS`] on every
-//! landing, and, for a mission with a deadline, [`DEADLINE`] on every day
+//! slot, hook}`: on every landing, in `_MissionLandCheck`'s order,
+//! [`GOALS`] (the leading goal check), [`ARRIVAL`] (the cargo check, in
+//! the `mission_cargo` module), [`RETURN`] (failure, else the escort
+//! goal, then success) and [`RECHECK`] (the trailing goal check); and, for a mission with a deadline, [`DEADLINE`] on every day
 //! and [`DEADLINE_TOOK_OFF`] on every take-off, each with a blank guard
 //! and no script; their effects come through the dispatcher's consumer
 //! match. [`REOFFER`], registered with [`ROLL`], re-offers after the last
@@ -80,6 +81,7 @@ use crate::control::{Script, Test};
 use crate::message::SimMessage;
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
 use crate::mission::aux_ships::AuxShips;
+use crate::mission::goals::{ShipGoal, met_at_return};
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
@@ -94,6 +96,18 @@ use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
 use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
+
+/// Why a mission's stop has no landing a player can reach
+/// ([`Session::stop_landing`]).
+#[cfg(any(test, feature = "fixture"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StopRefusal {
+    /// No system lists the stellar.
+    NoSystem,
+    /// Every system listing it is hidden, and no stellar identical to
+    /// it is visible.
+    Hidden,
+}
 
 /// The offer roll's subscription: the offers', which run first on a
 /// landing, before the mission ships' goal checks and every mission
@@ -113,25 +127,29 @@ pub const REOFFER: SubscriptionId = SubscriptionId {
     hook: 0,
 };
 
+/// A slot's leading goal check on `Landed` (`_MissionLandCheck`
+/// @0xa1a0c; see the `mission_ships` module).
+pub const GOALS: u8 = 0;
 /// A slot's landing hook that picks its cargo up and drops it off and
 /// marks its destination reached: the cargo check's place in
 /// `_MissionLandCheck` (`_MissionLandCargoCheck` @0x9edc5, from
 /// @0xa1a1b; see the `mission_cargo` module).
-pub const ARRIVAL: u8 = 0;
-/// A slot's landing hook that fails a failed mission at its return
-/// (@0xa1a92).
-pub const FAILURE: u8 = 1;
-/// A slot's landing hook that completes a mission at its return
-/// (@0xa1ace).
-pub const SUCCESS: u8 = 2;
+pub const ARRIVAL: u8 = 1;
+/// A slot's landing hook at its mission's return (@0xa1a37-0xa1ace):
+/// the destination marked reached, then a failed mission failed, else
+/// the escort goal settled, then the mission completed.
+pub const RETURN: u8 = 2;
+/// A slot's trailing goal check on `Landed` (@0xa1ada), on whatever
+/// mission the slot holds by then.
+pub const RECHECK: u8 = 3;
 /// A timed slot's daily deadline check, on `DayPassed`.
-pub const DEADLINE: u8 = 3;
+pub const DEADLINE: u8 = 4;
 /// A timed slot's deadline check on `TookOff`, for a deadline that ran
 /// out while docked with no day passing as the ship leaves.
-pub const DEADLINE_TOOK_OFF: u8 = 4;
+pub const DEADLINE_TOOK_OFF: u8 = 5;
 
 /// Every hook a slot can register, in order.
-const HOOKS: [u8; 5] = [ARRIVAL, FAILURE, SUCCESS, DEADLINE, DEADLINE_TOOK_OFF];
+const HOOKS: [u8; 6] = [GOALS, ARRIVAL, RETURN, RECHECK, DEADLINE, DEADLINE_TOOK_OFF];
 
 /// Slot `slot`'s subscription for `hook`.
 #[must_use]
@@ -230,6 +248,52 @@ impl Session {
             .is_some_and(|docked| self.docked_at_stop(Some(stop), docked))
     }
 
+    /// Where a mission's `stop` is landed at, as a player can reach it:
+    /// the system and the stellar. A system is visible as the next
+    /// landing's galaxy refresh leaves it (`Session::refresh_now`),
+    /// from the control bits now: a bit set since the last landing shows
+    /// or hides it already, as any landing would. A visible stellar (one
+    /// that a system in the galaxy and visible lists) is landed at in its stored
+    /// system when that is a visible lister, else in its first visible
+    /// lister. A hidden one is landed at through its first variant
+    /// ([`StellarMarks::variants`], by
+    /// [`RuleKey::MissionStellarIdentity`]) that is visible, in that
+    /// variant's first visible lister, as `_StellarsAreIdentical`
+    /// matches them. A visible lister shadowed by another at its place
+    /// (`CoLocatedResolution`) counts as visible. Built only for the
+    /// storyline walker (`fixture`), its one caller.
+    ///
+    /// # Errors
+    ///
+    /// [`StopRefusal::NoSystem`] when no system lists the stellar;
+    /// [`StopRefusal::Hidden`] when every lister is hidden and no
+    /// variant is visible.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn stop_landing(&self, stop: Stop) -> Result<(SystemId, StellarId), StopRefusal> {
+        let refresh = self.refresh_now();
+        let visible_listers = |stellar: StellarId| {
+            crate::story::listers_of(&self.listed_stellars, stellar)
+                .iter()
+                .copied()
+                .filter(|&system| self.galaxy.exists(system) && !refresh.hides(system))
+        };
+        if crate::story::listers_of(&self.listed_stellars, stop.stellar).is_empty() {
+            return Err(StopRefusal::NoSystem);
+        }
+        if let Some(first) = visible_listers(stop.stellar).next() {
+            let system = stop
+                .system
+                .filter(|&stored| visible_listers(stop.stellar).any(|system| system == stored))
+                .unwrap_or(first);
+            return Ok((system, stop.stellar));
+        }
+        let source = self.rules.source_for(RuleKey::MissionStellarIdentity);
+        self.stellar_marks
+            .variants(stop.stellar, source)
+            .find_map(|variant| Some((visible_listers(variant).next()?, variant)))
+            .ok_or(StopRefusal::Hidden)
+    }
+
     /// Registers the offer roll ([`ROLL`]) and the re-offer
     /// ([`REOFFER`]) on every landing, each with a blank guard and no
     /// script.
@@ -260,9 +324,10 @@ impl Session {
             return;
         };
         let mut hooks = vec![
+            (GOALS, StoryEventKind::Landed),
             (ARRIVAL, StoryEventKind::Landed),
-            (FAILURE, StoryEventKind::Landed),
-            (SUCCESS, StoryEventKind::Landed),
+            (RETURN, StoryEventKind::Landed),
+            (RECHECK, StoryEventKind::Landed),
         ];
         if active.days_left.is_some() {
             hooks.push((DEADLINE, StoryEventKind::DayPassed));
@@ -576,7 +641,7 @@ impl Session {
     /// hooks unregistered; and the offers' stellar is forgotten. Nothing
     /// when the slot holds another mission, or is ending already, so an
     /// `A` of the mission inside its own `OnAbort` does not end it twice.
-    fn end_mission(
+    pub(super) fn end_mission(
         &mut self,
         slot: u8,
         record: &MissionRecord,
@@ -609,12 +674,57 @@ impl Session {
     /// the daily step; with `Flags` 0x0008, a jump's fuel taken; with
     /// `Flags2` 0x0002, its pay; then the slot freed and the offers'
     /// stellar forgotten, with no second `OnAbort`.
+    ///
+    /// Its ships go as `_AbortMission`, the last call (@0x99d0e), lets
+    /// them. Docked (the original's `_portDialog` is set from @0x5fa30 to
+    /// @0x60251, covering `_MissionLandCheck` and the mission computer
+    /// and bar accepts), the slot's ships are taken out at once
+    /// (@0x99b17-0x99b24), so none keep the freed slot's mark for a later
+    /// mission in that slot to count. In flight, including the take-off's
+    /// setup, where `_portDialog` is already 0 (cleared at @0x60251 before
+    /// `_SetupShipsInSystem` @0x674c2), it leaves them marked: the next
+    /// tick's `unmark_inactive_mission_ships` (the `_AIDispatch` sweep
+    /// @0x8fbcd-0x8fc96) clears their marks, sends a `ShipBehav` 1 escort
+    /// away and keeps them as traffic.
+    ///
+    /// That one-tick lag is deliberate. `_AbortMission` clears the marks at
+    /// once (@0x99ac7), but the lag crosses no boundary the player sees,
+    /// and it keeps the setup's auto-abort from re-forming the formation
+    /// in the middle of `populate_as`, before `enter_escorts` and
+    /// `snap_mission_escorts`.
     pub(super) fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
         let Some(pay) = self.pilot.missions.get(slot).map(|active| active.pay) else {
             return;
         };
+        if self.auto_abort_freed(slot, record, pay, chance) {
+            self.close_slot(slot, record.id);
+        }
+    }
+
+    /// The body of `_AutoAbortMission` (@0x99bdc) for `record`, paying
+    /// `pay`, in `slot` whether or not the slot still holds it, drawing on
+    /// `chance`: its `OnAbort`; its `DatePostInc` days; with `Flags`
+    /// 0x0008 the fuel taken; with `Flags2` 0x0002 its pay; and docked its
+    /// ships taken out. The slot is not freed: [`Session::auto_abort`]
+    /// frees it after. `_EnterMoreShips`' second auto-abort of a slot its
+    /// first already freed (@0x43abc-0x43ad4, under
+    /// [`RuleKey::AuxAbortFallThrough`](crate::RuleKey::AuxAbortFallThrough))
+    /// runs it alone, the original's `_AbortMission` (@0x99d0e) finding
+    /// nothing more to clear; in flight the ships it brought keep the
+    /// freed slot's mark until the next tick's sweep, as for
+    /// [`Session::auto_abort`]. The docked branch cannot be reached
+    /// there, as `_EnterMoreShips` runs only in flight, and is kept so the
+    /// two cannot drift. Whether it ran: not while `slot` is already
+    /// ending.
+    pub(super) fn auto_abort_freed(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        pay: i64,
+        chance: &mut dyn Chance,
+    ) -> bool {
         if !self.ending.insert(slot) {
-            return;
+            return false;
         }
         self.run_mission_script(slot, &record.on_abort, chance);
         self.pass_days(post_days(record.date_post_inc), chance);
@@ -624,8 +734,11 @@ impl Session {
         if record.flags2 & AUTO_ABORT_PAYS != 0 {
             self.apply_pay(pay);
         }
+        if self.landed.is_some() {
+            self.release_mission_ships(slot);
+        }
         self.ending.remove(&slot);
-        self.close_slot(slot, record.id);
+        true
     }
 
     /// Applies a mission's pay (`_ApplyMissionPay` @0x98326; see
@@ -698,12 +811,12 @@ impl Session {
             return;
         };
         match (id.hook, *event) {
-            (ARRIVAL, StoryEvent::Landed { stellar }) => self.cargo_at_landing(slot, stellar),
-            (FAILURE, StoryEvent::Landed { stellar }) => {
-                self.mission_failure_at(slot, stellar, chance);
+            (GOALS | RECHECK, StoryEvent::Landed { .. }) => {
+                self.check_ship_goals(slot, false, chance);
             }
-            (SUCCESS, StoryEvent::Landed { stellar }) => {
-                self.mission_success_at(slot, stellar, chance);
+            (ARRIVAL, StoryEvent::Landed { stellar }) => self.cargo_at_landing(slot, stellar),
+            (RETURN, StoryEvent::Landed { stellar }) => {
+                self.mission_return_at(slot, stellar, chance);
             }
             (DEADLINE, StoryEvent::DayPassed { .. })
             | (DEADLINE_TOOK_OFF, StoryEvent::TookOff { .. }) => {
@@ -713,21 +826,15 @@ impl Session {
         }
     }
 
-    /// Landing on `stellar`, the return of the failed mission in `slot`,
-    /// fails it (`_DoMissionFailure` @0xa0285), drawing on `chance`: its
+    /// The failed mission in `slot`, `failed` as it was, fails at its
+    /// return (`_DoMissionFailure` @0xa0285), drawing on `chance`: its
     /// `OnFailure`, the record with `CompGovt` less half `CompReward`,
     /// then the slot freed and the offers' stellar forgotten, no
     /// `OnAbort` run. A mission failed by its deadline ran `OnFailure`
     /// already: by [`RuleKey::RepeatMissionFailure`]'s engine reading it
     /// runs again; by the other, not.
-    fn mission_failure_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
+    fn mission_failure_at(&mut self, slot: u8, failed: FailedBy, chance: &mut dyn Chance) {
         let Some(active) = self.pilot.missions.get(slot) else {
-            return;
-        };
-        let Some(failed) = active
-            .failed
-            .filter(|_| self.docked_at_stop(active.return_to, stellar))
-        else {
             return;
         };
         let record = self.lifecycle_record(active.mission);
@@ -749,15 +856,17 @@ impl Session {
         self.forget_offers();
     }
 
-    /// Landing on `stellar`, the return of the mission in `slot`,
-    /// completes it once its destination is reached and its goals are
-    /// met, and it has not failed (`_MissionLandCheck` @0xa1a4e-0xa1ace,
-    /// `_DoMissionSuccess` @0xa03fc), drawing on `chance`: the slot freed,
-    /// then its `OnSuccess`, its `DatePostInc` days, the legal records
+    /// Landing on `stellar`, the return of the mission in `slot`
+    /// (`_MissionLandCheck` @0xa1a37-0xa1ace), drawing on `chance`: its
+    /// destination marked reached when it is the return, or there is
+    /// none; then a failed mission fails ([`Session::mission_failure_at`],
+    /// @0xa1a92); else an escort goal with none of its ships destroyed
+    /// is met (@0xa1a99-0xa1ab1); then, reached and its goals met, it
+    /// completes (`_DoMissionSuccess` @0xa03fc): the slot freed, then its
+    /// `OnSuccess`, its `DatePostInc` days, the legal records
     /// ([`success_records`]), its pay, the offers' stellar forgotten, and
-    /// a re-offer due. Its destination is reached here when it is the
-    /// return, or there is none.
-    fn mission_success_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
+    /// a re-offer due.
+    fn mission_return_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
         if !self.docked_at_stop(
             self.pilot
                 .missions
@@ -780,10 +889,24 @@ impl Session {
             active.reached = true;
             self.save_due = true;
         }
-        if !active.reached || !active.goals_met || active.failed.is_some() {
+        if let Some(failed) = active.failed {
+            self.mission_failure_at(slot, failed, chance);
             return;
         }
+        // The escort branch ([`met_at_return`]) writes the goals met
+        // directly: no `ShipDone` moment.
         let mission = active.mission;
+        let goal = ShipGoal::from_code(self.lifecycle_record(mission).ships.goal);
+        let Some(active) = self.pilot.missions.get_mut(slot) else {
+            return;
+        };
+        if met_at_return(goal, active.ships.destroyed) && !active.goals_met {
+            active.goals_met = true;
+            self.save_due = true;
+        }
+        if !active.reached || !active.goals_met {
+            return;
+        }
         let record = self.lifecycle_record(mission);
         // `CompText` (@0xa0417-0xa048c), filled before the slot is freed
         // (@0xa0457).
@@ -1199,7 +1322,7 @@ mod tests {
     use crate::mission::{ROLLED, Stop};
     use crate::pilot::Pilot;
     use crate::testkit::{
-        Draws, FakePilotCatalog, catalog, jump, land_now, mission, planet, with_variants,
+        Draws, FakePilotCatalog, catalog, jump, land_now, mission, planet, swapped, with_variants,
     };
 
     /// [`catalog`] with stellar 150 in system 132, two jumps from 130, 131
@@ -1209,6 +1332,7 @@ mod tests {
     fn offering() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.star_map[1].links.push(SystemId(130));
+        catalog.systems.push(SystemId(132));
         catalog
             .sites
             .push((SystemId(132), vec![planet(150, 0.0, 0.0)]));
@@ -1323,6 +1447,7 @@ mod tests {
         // 133 at 130's place, holding 160: distant only by the other
         // reading, and owned by 133 only while it stands for itself.
         catalog.star_map[3].position = Vec2::ZERO;
+        catalog.systems.push(SystemId(133));
         catalog
             .sites
             .push((SystemId(133), vec![planet(160, 0.0, 0.0)]));
@@ -3138,7 +3263,19 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         settle(&mut session, &catalog);
-        assert_eq!(session.take_messages(), [SimMessage::DeadlineMissed]);
+        assert_eq!(
+            session.take_messages(),
+            [took_off(), SimMessage::DeadlineMissed],
+            "after the greeting"
+        );
+    }
+
+    /// The take-off greeting from planet 128, its lead rolled 0.
+    fn took_off() -> SimMessage {
+        SimMessage::TookOff {
+            stellar: StellarId(128),
+            lead: 0,
+        }
     }
 
     #[test]
@@ -3157,7 +3294,7 @@ mod tests {
             .expect("takes off");
         settle(&mut session, &catalog);
         assert_eq!(held(&session), [], "failed all the same");
-        assert_eq!(session.take_messages(), []);
+        assert_eq!(session.take_messages(), [took_off()], "the greeting alone");
     }
 
     #[test]
@@ -3597,6 +3734,25 @@ mod tests {
     }
 
     #[test]
+    fn a_landing_checks_each_slots_goals_cargo_return_and_recheck_before_the_next_slot() {
+        let catalog = lifecycle(vec![to_129(140), to_129(141)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        let mut expected = vec![ROLL];
+        for slot in 0..2 {
+            expected.extend([GOALS, ARRIVAL, RETURN, RECHECK].map(|hook| slot_hook(slot, hook)));
+        }
+        expected.push(REOFFER);
+        assert_eq!(
+            session.story_matching(&crate::story::StoryEvent::Landed {
+                stellar: StellarId(128)
+            }),
+            expected
+        );
+    }
+
+    #[test]
     fn a_timed_slot_registers_its_deadline_checks_and_an_untimed_one_none() {
         let catalog = lifecycle(vec![
             MissionRecord {
@@ -3609,7 +3765,7 @@ mod tests {
         accept(&mut session, 140);
         accept(&mut session, 141);
         for (slot, timed) in [(0, true), (1, false)] {
-            for hook in [ARRIVAL, FAILURE, SUCCESS] {
+            for hook in [GOALS, ARRIVAL, RETURN, RECHECK] {
                 assert!(
                     session.unregister_story(slot_hook(slot, hook)),
                     "{slot} {hook}"
@@ -3628,7 +3784,7 @@ mod tests {
             "registered as the session starts"
         );
         assert!(REOFFER > slot_hook(15, DEADLINE_TOOK_OFF));
-        assert!(ROLL < slot_hook(0, ARRIVAL));
+        assert!(ROLL < slot_hook(0, GOALS));
     }
 
     // The text tags.
@@ -4089,5 +4245,148 @@ mod tests {
         );
         session.pilot.reserves.fuel.now = 99.0;
         assert!(!session.ship_mission_available(MissionId(130)), "fuel");
+    }
+
+    // Where a stop is landed at.
+
+    fn stop(stellar: i16, system: Option<i16>) -> Stop {
+        Stop {
+            stellar: StellarId(stellar),
+            system: system.map(SystemId),
+        }
+    }
+
+    fn landing(system: i16, stellar: i16) -> (SystemId, StellarId) {
+        (SystemId(system), StellarId(stellar))
+    }
+
+    /// A session of `catalog` landed on 128, with b50 set, its galaxy
+    /// refreshed.
+    fn swapped_session(catalog: &FakePilotCatalog) -> Session {
+        let mut session = landed(catalog, &mut NeverFires);
+        run(&mut session, "b50");
+        session.refresh_galaxy_quietly(catalog);
+        session
+    }
+
+    #[test]
+    fn a_visible_stop_is_landed_at_in_its_stored_system() {
+        let mut galaxy = swapped(catalog(), true);
+        galaxy.sites[0].1.push(planet(141, 0.0, 3000.0));
+        let session = landed(&galaxy, &mut NeverFires);
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Ok(landing(131, 140))
+        );
+        assert_eq!(session.stop_landing(stop(140, None)), Ok(landing(131, 140)));
+        assert_eq!(
+            session.stop_landing(stop(141, Some(130))),
+            Ok(landing(130, 141)),
+            "visible though 134, which also lists it, is not"
+        );
+    }
+
+    #[test]
+    fn a_stop_stored_in_a_hidden_system_is_landed_at_in_the_first_visible_lister() {
+        let mut galaxy = swapped(catalog(), true);
+        galaxy.sites[0].1.push(planet(141, 0.0, 3000.0));
+        let session = landed(&galaxy, &mut NeverFires);
+        assert_eq!(
+            session.stop_landing(stop(141, Some(134))),
+            Ok(landing(130, 141))
+        );
+        assert_eq!(session.stop_landing(stop(141, None)), Ok(landing(130, 141)));
+    }
+
+    #[test]
+    fn a_stop_stored_in_its_second_visible_lister_is_landed_at_there() {
+        let mut galaxy = catalog();
+        galaxy.sites[0].1.push(planet(142, 0.0, 3000.0));
+        galaxy.sites[1].1.push(planet(142, 0.0, 3000.0));
+        let session = landed(&galaxy, &mut NeverFires);
+        assert_eq!(
+            session.stop_landing(stop(142, Some(131))),
+            Ok(landing(131, 142)),
+            "not 130, the first lister"
+        );
+        assert_eq!(session.stop_landing(stop(142, None)), Ok(landing(130, 142)));
+    }
+
+    #[test]
+    fn a_stop_whose_first_lister_is_hidden_is_landed_at_in_the_second() {
+        let mut galaxy = swapped(catalog(), false);
+        galaxy.sites[1].1.push(planet(142, 0.0, 3000.0));
+        galaxy.sites[2].1.push(planet(142, 0.0, 3000.0));
+        let session = swapped_session(&galaxy);
+        assert!(!session.galaxy().visible(SystemId(131)));
+        assert_eq!(session.stop_landing(stop(142, None)), Ok(landing(134, 142)));
+        assert_eq!(
+            session.stop_landing(stop(142, Some(131))),
+            Ok(landing(134, 142))
+        );
+    }
+
+    #[test]
+    fn a_hidden_stop_is_landed_at_its_visible_variant() {
+        let galaxy = swapped(catalog(), true);
+        let session = swapped_session(&galaxy);
+        assert!(!session.galaxy().visible(SystemId(131)));
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Ok(landing(134, 141))
+        );
+        assert_eq!(
+            session.stop_landing(stop(141, Some(134))),
+            Ok(landing(134, 141))
+        );
+    }
+
+    #[test]
+    fn a_bit_set_since_the_last_landing_shows_and_hides_already() {
+        let galaxy = swapped(catalog(), true);
+        let mut session = landed(&galaxy, &mut NeverFires);
+        run(&mut session, "b50");
+        assert!(session.galaxy().visible(SystemId(131)), "not yet refreshed");
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Ok(landing(134, 141))
+        );
+    }
+
+    #[test]
+    fn a_hidden_stop_with_no_visible_variant_or_no_lister_is_refused() {
+        let galaxy = swapped(catalog(), false);
+        let session = swapped_session(&galaxy);
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Err(StopRefusal::Hidden)
+        );
+        assert_eq!(
+            session.stop_landing(stop(150, None)),
+            Err(StopRefusal::NoSystem)
+        );
+        let mut marked = swapped(catalog(), true);
+        marked.visibility[1].visibility = Test::parse("b50 & b51");
+        let session = swapped_session(&marked);
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Err(StopRefusal::Hidden),
+            "its one variant, 141, hidden too"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_hidden_stop_has_no_variant() {
+        let galaxy = swapped(catalog(), true);
+        let mut session = landed(&galaxy, &mut NeverFires);
+        session = session.with_rules(
+            Rulebook::default().with_override(RuleKey::MissionStellarIdentity, RuleSource::Bible),
+        );
+        run(&mut session, "b50");
+        session.refresh_galaxy_quietly(&galaxy);
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Err(StopRefusal::Hidden)
+        );
     }
 }

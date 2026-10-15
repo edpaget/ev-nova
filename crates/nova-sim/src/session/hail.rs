@@ -35,7 +35,9 @@
 //!   ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote)).
 //! - **Release**: the player's escort leaves the fleet once the channel
 //!   closes ([`Session::hang_up`]), as the original's dialog does when it
-//!   closes (@0x96852): its AI type its `InherentAI`, of no government
+//!   closes (@0x96852), having taken its share of the fleet's cargo and
+//!   reset as it went (see the `escorts` module): its AI type its
+//!   `InherentAI`, of no government
 //!   still, it leaves the system (`_AIMakeShipLeave`), jumping out with a
 //!   jump's fuel, or else deciding as its idle block does. A save is due.
 //!   The player's escort is hailed whatever its ship type's government
@@ -142,12 +144,12 @@ impl Session {
     /// The [`HailRefusal`] that applies, drawing nothing:
     /// [`HailRefusal::NoTarget`] with no ship target (the comm key hails
     /// the navigation stellar then, [`Session::hail_key`]), or while
-    /// landed, jumping or breaking up; [`HailRefusal::InHyperspace`] for a
-    /// target still
-    /// jumping in, unless it is disabled; and [`HailRefusal::NoResponse`]
+    /// landed, breaking up, or while a jump is under way, the pre-jump
+    /// stage included (@0x61f87); [`HailRefusal::InHyperspace`] for a
+    /// target still jumping in, unless it is disabled; and [`HailRefusal::NoResponse`]
     /// for a disabled or mute one, a mute one still jumping in being in
     /// hyperspace (@0x62089-0x6209c, @0x62610-0x62676). Each beeps
-    /// [`SimSound::HailRefused`].
+    /// [`SimSound::Refused`].
     pub fn hail(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
@@ -194,7 +196,7 @@ impl Session {
         self.hailing(catalog, options).ok_or(HailRefusal::NoTarget)
     }
 
-    /// `answered`, beeping [`SimSound::HailRefused`] once with its
+    /// `answered`, beeping [`SimSound::Refused`] once with its
     /// refusal, if any, as every refusal of `_HandlePlayerCommunication`
     /// plays `_beepSnd[3]` (@0x626cf, @0x6206c, @0x6261c, @0x6264e).
     pub(super) fn beep_unanswered<T>(
@@ -202,15 +204,15 @@ impl Session {
         answered: Result<T, HailRefusal>,
     ) -> Result<T, HailRefusal> {
         if answered.is_err() {
-            self.sounds.push(SimSound::HailRefused);
+            self.sounds.push(SimSound::Refused);
         }
         answered
     }
 
     /// What the comm key hails, Option held as `option` says, drawing
     /// nothing, in `_HandlePlayerCommunication`'s order (@0x61f48-0x6209c):
-    /// [`HailRefusal::NoTarget`] while landed, jumping or breaking up;
-    /// then, with no ship target or Option held (`_QuickKeyCheck(0x3a)`
+    /// [`HailRefusal::NoTarget`] while landed, jumping (the pre-jump stage
+    /// included) or breaking up; then, with no ship target or Option held (`_QuickKeyCheck(0x3a)`
     /// @0x61f91-0x61fa6), the navigation stellar
     /// ([`Session::nav_target`]) when it is shown in the system (its
     /// active byte, +0x44 @0x62009) and [answers](landing::answers_hail),
@@ -222,7 +224,7 @@ impl Session {
         if self.target().is_some() && !option {
             return self.answering().map(|npc| HailTarget::Ship(npc.id));
         }
-        let stellar = self.nav_target.ok_or(HailRefusal::NoTarget)?;
+        let stellar = self.nav_target().ok_or(HailRefusal::NoTarget)?;
         self.sites
             .iter()
             .find(|site| site.id == stellar)
@@ -232,15 +234,15 @@ impl Session {
     }
 
     /// Whether the player may hail at all: [`HailRefusal::NoTarget`]
-    /// while landed, jumping (+0x50 @0x61f87) or breaking up (`_IsDying`
-    /// @0x61f75). The original refuses a cloaked player first
+    /// while landed, jumping (+0x50 @0x61f87, which spans the pre-jump's
+    /// brake) or breaking up (`_IsDying` @0x61f75). The original refuses a cloaked player first
     /// (`_ShipIsCloaked` @0x61f65); the player has no cloak yet.
     fn player_hails(&self) -> Result<(), HailRefusal> {
         let flying = !matches!(
             self.condition,
             Condition::Dying { .. } | Condition::Destroyed
         );
-        if self.landed.is_some() || self.jumping().is_some() || !flying {
+        if self.landed.is_some() || self.jump.is_some() || !flying {
             return Err(HailRefusal::NoTarget);
         }
         Ok(())
@@ -248,7 +250,7 @@ impl Session {
 
     /// The player's ship target, when it answers a hail, drawing nothing:
     /// otherwise [`HailRefusal::NoTarget`] with no ship target, or while
-    /// landed, jumping or breaking up; [`HailRefusal::InHyperspace`] for a
+    /// landed, jumping (the pre-jump stage included) or breaking up; [`HailRefusal::InHyperspace`] for a
     /// target still jumping in, unless it is disabled; and
     /// [`HailRefusal::NoResponse`] for a disabled one, jumping in or not,
     /// or a mute one that has arrived, an escort answering whatever its
@@ -919,18 +921,30 @@ mod tests {
     #[test]
     fn with_no_target_or_while_landed_jumping_or_dying_nothing_is_hailed() {
         let catalog = hailable();
-        // Boxed: five sessions are too large for the stack together.
+        // Boxed: six sessions are too large for the stack together.
         let mut untargeted = Box::new(targeting(&catalog));
         untargeted.target = None;
         let mut landed = Box::new(targeting(&catalog));
         landed.landed = Some(StellarId(128));
         let mut jumping = Box::new(targeting(&catalog));
-        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        jumping.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
+        let mut braking = Box::new(targeting(&catalog));
+        braking.jump = Some(crate::session::Jump::PreJump {
+            to: SystemId(131),
+            bearing: None,
+            warp: None,
+        });
         let mut dying = Box::new(targeting(&catalog));
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let mut destroyed = Box::new(targeting(&catalog));
         destroyed.condition = Condition::Destroyed;
-        for mut session in [untargeted, landed, jumping, dying, destroyed] {
+        for mut session in [untargeted, landed, jumping, braking, dying, destroyed] {
             let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
             assert_eq!(hailed, Err(HailRefusal::NoTarget));
             assert!(asked.is_empty(), "{asked:?}");
@@ -1031,7 +1045,7 @@ mod tests {
         session.take_sounds();
         let hailed = open_hail_with(&mut session, &catalog);
         assert_eq!(hailed, Err(HailRefusal::NoResponse), "@0x62145");
-        assert_eq!(session.take_sounds(), [crate::SimSound::HailRefused]);
+        assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
     }
 
     #[test]
@@ -1102,7 +1116,7 @@ mod tests {
     fn at_stellar(catalog: &FakePilotCatalog, flags: u32, flags2: u16) -> Session {
         let mut session = targeting(catalog);
         session.target = None;
-        session.nav_target = Some(StellarId(128));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         let site = session
             .sites
             .iter_mut()
@@ -1155,7 +1169,7 @@ mod tests {
             let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
             assert_eq!(hailed, Err(HailRefusal::NoResponse), "{why}: @0x6261c");
             assert!(asked.is_empty(), "{why}: {asked:?}");
-            assert_eq!(sounds, [crate::SimSound::HailRefused], "{why}");
+            assert_eq!(sounds, [crate::SimSound::Refused], "{why}");
         }
     }
 
@@ -1163,11 +1177,11 @@ mod tests {
     fn with_no_ship_target_and_no_nav_stellar_there_is_nothing_to_hail() {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
-        session.nav_target = None;
+        session.nav = crate::navigation::NavMode::Off;
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
         assert_eq!(hailed, Err(HailRefusal::NoTarget), "@0x6206c");
         assert!(asked.is_empty(), "{asked:?}");
-        assert_eq!(sounds, [crate::SimSound::HailRefused]);
+        assert_eq!(sounds, [crate::SimSound::Refused]);
     }
 
     #[test]
@@ -1191,7 +1205,7 @@ mod tests {
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
         assert_eq!(hailed, Err(HailRefusal::NoResponse), "@0x6261c");
         assert!(asked.is_empty(), "the ship is not hailed: {asked:?}");
-        assert_eq!(sounds, [crate::SimSound::HailRefused]);
+        assert_eq!(sounds, [crate::SimSound::Refused]);
         assert!(session.hailing(&catalog, &HailOptions::default()).is_none());
     }
 
@@ -1202,7 +1216,7 @@ mod tests {
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
         assert_eq!(hailed, Err(HailRefusal::NoTarget), "@0x6206c");
         assert!(asked.is_empty(), "{asked:?}");
-        assert_eq!(sounds, [crate::SimSound::HailRefused]);
+        assert_eq!(sounds, [crate::SimSound::Refused]);
     }
 
     #[test]
@@ -1211,16 +1225,22 @@ mod tests {
         let mut landed = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
         landed.landed = Some(StellarId(128));
         let mut jumping = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
-        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        jumping.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
         let mut dying = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         for mut session in [landed, jumping, dying] {
             session.target = Some(NpcId(0));
             for option in [false, true] {
                 let (hailed, asked, sounds) = key_with(&mut session, &catalog, option);
                 assert_eq!(hailed, Err(HailRefusal::NoTarget), "option {option}");
                 assert!(asked.is_empty(), "{asked:?}");
-                assert_eq!(sounds, [crate::SimSound::HailRefused]);
+                assert_eq!(sounds, [crate::SimSound::Refused]);
             }
         }
     }
@@ -1235,14 +1255,17 @@ mod tests {
         let mut arriving = Box::new(targeting(&catalog));
         npc(&mut arriving).mode = Mode::JumpingIn { tick: 0 };
         let mut jumping = Box::new(targeting(&catalog));
-        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        jumping.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
         for mut session in [untargeted, disabled, arriving, jumping] {
             session.take_sounds();
             let hailed = open_hail_with(&mut session, &catalog);
             assert!(hailed.is_err(), "{hailed:?}");
             assert_eq!(
                 session.take_sounds(),
-                [crate::SimSound::HailRefused],
+                [crate::SimSound::Refused],
                 "_beepSnd[3]"
             );
         }
@@ -1255,7 +1278,7 @@ mod tests {
         session.target = None;
         session.take_sounds();
         assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_err());
-        assert_eq!(session.take_sounds(), [crate::SimSound::HailRefused]);
+        assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
     }
 
     #[test]
@@ -1544,6 +1567,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 5.0,
             downed: None,
+            provokes: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert_eq!(npc.goal, Goal::Flee(ShipRef::Player), "hit, it flees");
@@ -2178,7 +2202,10 @@ mod tests {
         let mut landed = helped(&catalog, Help::Refuel, 0.0);
         landed.landed = Some(StellarId(128));
         let mut jumping = helped(&catalog, Help::Refuel, 0.0);
-        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        jumping.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
         let mut disabled = helped(&catalog, Help::Refuel, 0.0);
         npc(&mut disabled).condition = Condition::Disabled;
         // One at a time: three sessions make too large an array.
@@ -2205,6 +2232,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 5.0,
             downed: None,
+            provokes: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert!(!matches!(npc.goal, Goal::Assist(_)), "{:?}", npc.goal);
@@ -2367,6 +2395,62 @@ mod tests {
         assert_eq!(released.target, None);
         assert_eq!(released.govt, None);
         assert!(session.take_save_due());
+    }
+
+    /// Releases the escort [`escorting`] leads, by `source` of
+    /// `ReleaseCargoShare`, holding 30 food and 8 tons of mission cargo,
+    /// its latches cleared.
+    fn released(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+        use crate::market::Good;
+        let mut session = escorting(catalog).with_rules(
+            crate::rulebook::Rulebook::default()
+                .with_override(crate::rulebook::RuleKey::ReleaseCargoShare, source),
+        );
+        session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 8));
+        crate::session::precalced::tests::convicted(&mut session);
+        hail(&mut session, catalog);
+        session.answer(0, catalog, &HailOptions::default(), &mut Draws::of(&[]));
+        session.hang_up();
+        session
+    }
+
+    #[test]
+    fn a_released_trader_takes_its_share_and_resets_still_in_the_fleet() {
+        use crate::market::Good;
+        use crate::scan::Latches;
+        let catalog = hailable();
+        for source in RuleSource::ALL {
+            let session = released(&catalog, source);
+            assert_eq!(session.pilot().escorts(), [], "{source:?}");
+            assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}: @0x96864");
+            assert_eq!(
+                session.pilot().held(Good::Commodity(0)),
+                15,
+                "{source:?}: 20 of 40, then no trim with it still in the fleet"
+            );
+        }
+    }
+
+    #[test]
+    fn a_released_warship_takes_a_share_by_the_engine_and_none_by_the_other_reading() {
+        use crate::market::Good;
+        use crate::scan::Latches;
+        let mut catalog = hailable();
+        catalog.ship_records[0].inherent_ai = 4;
+        let session = released(&catalog, RuleSource::Engine);
+        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(
+            session.pilot().held(Good::Commodity(0)),
+            0,
+            "its 20 over the player's 20: everything"
+        );
+        let session = released(&catalog, RuleSource::Bible);
+        assert_ne!(session.scan_latches, Latches::ARMED, "no call");
+        assert_eq!(session.pilot().held(Good::Commodity(0)), 30);
     }
 
     #[test]

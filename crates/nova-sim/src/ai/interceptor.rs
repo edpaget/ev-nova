@@ -35,7 +35,9 @@
 
 use crate::ai::fire::FireRules;
 use crate::ai::warship::{Retreat, hunt};
-use crate::ai::{Admit, Behaviour, Goal, Reaction, Surroundings, fire, idle_admitting, react};
+use crate::ai::{
+    Admit, Behaviour, Goal, Reaction, Surroundings, fire, idle, idle_admitting, react,
+};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
@@ -93,6 +95,11 @@ impl Behaviour for Interceptor {
             && !within_reach(state.position - npc.state.position)
         {
             return Goal::Inspect(ship);
+        }
+        if npc.goal == Goal::Hold {
+            // The patrol and inspect block needs goal 1 or below, or 0x14
+            // (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship holds.
+            return idle(npc, around, chance);
         }
         let patrol = Admit::PlainOnly {
             uninhabited: self.patrol_uninhabited == RuleSource::Engine,
@@ -231,6 +238,16 @@ mod tests {
             Goal::Attack(n(2)),
             "no shield retreat, though a warship would at aggression 2"
         );
+    }
+
+    #[test]
+    fn a_held_interceptor_inspects_nothing() {
+        let mut held = police();
+        held.goal = Goal::Hold;
+        let npcs = [held, ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0)];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[]);
+        assert_eq!(goal, Goal::Hold);
+        assert!(asked.is_empty(), "no pick");
     }
 
     #[test]
@@ -411,6 +428,7 @@ mod tests {
             by: P,
             damage: 3.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(
             Interceptor::default()

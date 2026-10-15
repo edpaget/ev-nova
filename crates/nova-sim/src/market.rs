@@ -121,10 +121,12 @@
 //! ([`next_frame`]), so four due frames fall 250 frames apart and the
 //! next 25 frames later: 5 steps every 1025 ticks, about 34 s. Each tick
 //! in flight moves it on, a jump's too, but not a landed one; a take-off
-//! sets it to [`AFTER_TAKE_OFF_FRAME`], so the first step comes on the
-//! 15th tick of flight, and a destroyed player's ticks do not step. The
-//! original's double time, which steps a due frame twice, is not
-//! modelled.
+//! or a gate's exit sets it to [`AFTER_TAKE_OFF_FRAME`] (the dock
+//! request's tail, which both run; see the session's `takeoff_grace`
+//! module), so the first step comes on the 15th tick of flight, and a
+//! destroyed player's ticks do not step. In double time a due frame steps
+//! twice, once on each pass, as the original's `_HandlePlayer` runs the
+//! step on both (@0x70827; see the session's `double_time` module).
 //!
 //! The conditions follow
 //! [`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags): by the engine, on
@@ -713,6 +715,19 @@ pub struct Goods {
 }
 
 impl Goods {
+    /// The `Flags` of `good`'s `jünk` record: none for a commodity or a
+    /// `jünk` with no record.
+    fn junk_flags(&self, good: Good) -> u16 {
+        match good {
+            Good::Junk(id) => self
+                .junk
+                .iter()
+                .find(|junk| junk.id == id)
+                .map_or(0, |junk| junk.flags),
+            Good::Commodity(_) => 0,
+        }
+    }
+
     /// The goods and events `catalog` holds, and the stellars an event
     /// may be placed at.
     pub fn read(catalog: &impl PilotCatalog) -> Self {
@@ -1789,50 +1804,85 @@ pub fn junk_step_due(frame: i16) -> bool {
     frame % JUNK_STEP_FRAMES == 0
 }
 
+/// The `jünk` latches `_ResetPlayerPrecalcedValues` sets
+/// (`_playerHasTribbles` 0x3b5160, `_playerHasPerishableJunk` 0x3b50d4)
+/// and the tribbles and perishables step reads: set only at a reset, so
+/// they hold until the next one, whatever the step does to the cargo
+/// in between.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct JunkLatches {
+    /// A tribbles good was held at the last reset.
+    pub tribbles: bool,
+    /// A perishable good that is not tribbles was held at the last
+    /// reset.
+    pub perishable: bool,
+}
+
+impl JunkLatches {
+    /// The latches a reset leaves with `cargo` held: both cleared
+    /// (@0xc404, @0xc452), then set by each `jünk` held above none, a
+    /// tribbles good setting the tribbles latch (@0xc547), and one that
+    /// is perishable and not tribbles the perishable latch (@0xc556), so
+    /// a good of both flags sets only the tribbles latch
+    /// (@0xc524-0xc570). A `jünk` with no record sets neither.
+    pub(crate) fn of(goods: &Goods, cargo: &BTreeMap<Good, u32>) -> Self {
+        let mut latches = Self::default();
+        for (&good, &tons) in cargo {
+            if tons == 0 {
+                continue;
+            }
+            let flags = goods.junk_flags(good);
+            if flags & TRIBBLES != 0 {
+                latches.tribbles = true;
+            } else if flags & PERISHABLE != 0 {
+                latches.perishable = true;
+            }
+        }
+        latches
+    }
+}
+
 /// One tribbles and perishables step on `cargo`, in a hold of `capacity`
 /// tons that also carries `mission` tons of mission cargo, read as
-/// `source` says ([`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags));
-/// whether it changed anything. Only held `jünk` whose record has a flag
+/// `source` says ([`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags)), with
+/// the `jünk` latches as the last reset left them (`latches`); whether
+/// it changed anything. Only held `jünk` whose record has a flag
 /// changes, a ton at a time, and a good decayed to none is gone.
 ///
 /// The free space is the capacity less every good held and the mission
 /// cargo aboard, as `_TotalCargo` (@0x4a0b) counts them and the step
 /// subtracts them (@0x70863-0x70888), never below none, measured once.
 ///
-/// - By the engine (`_ResetPlayerPrecalcedValues` @0xc52e-0xc55b,
-///   `_HandlePlayer` @0x70827-0x7093b), while that space is above none,
-///   every tribbles good held gains a ton, so with several of them the
-///   hold can go over; then, when a good that is perishable and not
-///   tribbles is held, every perishable good held loses a ton, on the
-///   same space, measured before the growth. So a good with both flags
-///   only grows unless a perishable-only good is aboard too, and then it
-///   grows and decays. With no tribbles good aboard, the original's
-///   perishable test reads a value nothing set for it, which is undefined;
-///   here it reads the free space measured the same way.
+/// - By the engine (`_HandlePlayer` @0x70827-0x7093b), the latches decide
+///   whether each loop runs, and the goods each loop visits are those
+///   held now. With the tribbles latch set (@0x70827), while that space
+///   is above none, every tribbles good held gains a ton, so with several
+///   of them the hold can go over (@0x7088f-0x708c1). Then, with the
+///   perishable latch set (@0x708c3), every perishable good held loses a
+///   ton, on the same space, measured before the growth
+///   (@0x708fb-0x7093b). So a good with both flags only grows unless a
+///   perishable-only good was aboard at the last reset, and then it grows
+///   and decays until the next reset, even once that good has decayed
+///   away. With the tribbles latch clear, the original's perishable test
+///   reads a value nothing set for it, which is undefined; here it reads
+///   the free space measured the same way.
 /// - By the Bible, which says only that tribbles goods multiply and
-///   perishable goods "gradually decay away", the tribbles goods grow by
-///   ascending ID, each taking a ton of the free space, until none is
-///   left, so the hold never goes over; then every perishable good loses
-///   a ton, whatever the space.
+///   perishable goods "gradually decay away", the latches are not read:
+///   the tribbles goods held grow by ascending ID, each taking a ton of
+///   the free space, until none is left, so the hold never goes over;
+///   then every perishable good held loses a ton, whatever the space.
 pub(crate) fn step_junk(
     goods: &Goods,
     cargo: &mut BTreeMap<Good, u32>,
     capacity: u32,
     mission: u32,
     source: RuleSource,
+    latches: JunkLatches,
 ) -> bool {
-    let flags = |good: Good| match good {
-        Good::Junk(id) => goods
-            .junk
-            .iter()
-            .find(|junk| junk.id == id)
-            .map_or(0, |junk| junk.flags),
-        Good::Commodity(_) => 0,
-    };
     let held: Vec<(Good, u16)> = cargo
         .iter()
         .filter(|&(_, &tons)| tons > 0)
-        .map(|(&good, _)| (good, flags(good)))
+        .map(|(&good, _)| (good, goods.junk_flags(good)))
         .collect();
     let with = |flag: u16| -> Vec<Good> {
         held.iter()
@@ -1846,12 +1896,13 @@ pub(crate) fn step_junk(
     let free = capacity.saturating_sub(total);
     let (grow, decay) = match source {
         RuleSource::Engine => {
-            let rotting = held
-                .iter()
-                .any(|(_, flags)| flags & PERISHABLE != 0 && flags & TRIBBLES == 0);
             let room = free > 0;
-            let grow = if room { with(TRIBBLES) } else { Vec::new() };
-            let decay = if room && rotting {
+            let grow = if room && latches.tribbles {
+                with(TRIBBLES)
+            } else {
+                Vec::new()
+            };
+            let decay = if room && latches.perishable {
                 with(PERISHABLE)
             } else {
                 Vec::new()
@@ -5747,9 +5798,136 @@ mod tests {
         source: RuleSource,
         held: &[(Good, u32)],
     ) -> (Vec<(Good, u32)>, bool) {
+        let cargo: BTreeMap<Good, u32> = held.iter().copied().collect();
+        let latches = JunkLatches::of(&flagged(), &cargo);
+        stepped_latched(capacity, mission, source, latches, held)
+    }
+
+    /// `held` after one step in a hold of `capacity` tons that also
+    /// carries `mission` tons of mission cargo, by `source`, with the
+    /// `jünk` latches as `latches` left them, and whether the step
+    /// changed it.
+    fn stepped_latched(
+        capacity: u32,
+        mission: u32,
+        source: RuleSource,
+        latches: JunkLatches,
+        held: &[(Good, u32)],
+    ) -> (Vec<(Good, u32)>, bool) {
         let mut cargo: BTreeMap<Good, u32> = held.iter().copied().collect();
-        let changed = step_junk(&flagged(), &mut cargo, capacity, mission, source);
+        let changed = step_junk(&flagged(), &mut cargo, capacity, mission, source, latches);
         (cargo.into_iter().collect(), changed)
+    }
+
+    const NEITHER: JunkLatches = JunkLatches {
+        tribbles: false,
+        perishable: false,
+    };
+    const TRIBBLES_ONLY: JunkLatches = JunkLatches {
+        tribbles: true,
+        perishable: false,
+    };
+    const PERISHABLE_ONLY: JunkLatches = JunkLatches {
+        tribbles: false,
+        perishable: true,
+    };
+    const BOTH_LATCHES: JunkLatches = JunkLatches {
+        tribbles: true,
+        perishable: true,
+    };
+
+    #[test]
+    fn the_latches_are_set_from_the_junk_held_above_none() {
+        let latched =
+            |held: &[(Good, u32)]| JunkLatches::of(&flagged(), &held.iter().copied().collect());
+        assert_eq!(latched(&[]), NEITHER);
+        assert_eq!(latched(&[(FOOD, 3), (PLAIN, 2)]), NEITHER);
+        assert_eq!(latched(&[(BREEDING, 1)]), TRIBBLES_ONLY, "@0xc547");
+        assert_eq!(latched(&[(ROTTING, 1)]), PERISHABLE_ONLY, "@0xc556");
+        assert_eq!(
+            latched(&[(BOTH, 1)]),
+            TRIBBLES_ONLY,
+            "a good of both flags sets only the tribbles latch"
+        );
+        assert_eq!(
+            latched(&[(BREEDING, 1), (ROTTING, 2), (BOTH, 3)]),
+            BOTH_LATCHES
+        );
+        assert_eq!(
+            latched(&[(BREEDING, 0), (ROTTING, 0)]),
+            NEITHER,
+            "a good entered at none is not held"
+        );
+        assert_eq!(
+            latched(&[(Good::Junk(JunkId(999)), 4)]),
+            NEITHER,
+            "no record"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_clear_tribbles_latch_grows_nothing() {
+        assert_eq!(
+            stepped_latched(10, 0, ENGINE, NEITHER, &[(BREEDING, 3), (BOTH, 2)]),
+            (vec![(BREEDING, 3), (BOTH, 2)], false)
+        );
+        assert_eq!(
+            stepped_latched(10, 0, ENGINE, PERISHABLE_ONLY, &[(BREEDING, 3), (BOTH, 2)]),
+            (vec![(BREEDING, 3), (BOTH, 1)], true),
+            "decayed only"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_set_perishable_latch_decays_a_both_flags_good_alone() {
+        assert_eq!(
+            stepped_latched(10, 0, ENGINE, BOTH_LATCHES, &[(BOTH, 5)]),
+            (vec![(BOTH, 5)], false),
+            "grown and decayed, no perishable-only good aboard"
+        );
+        assert_eq!(
+            stepped_latched(10, 0, ENGINE, TRIBBLES_ONLY, &[(BOTH, 5)]),
+            (vec![(BOTH, 6)], true),
+            "grown only"
+        );
+        assert_eq!(
+            stepped_latched(10, 0, ENGINE, TRIBBLES_ONLY, &[(ROTTING, 5)]),
+            (vec![(ROTTING, 5)], false),
+            "a clear perishable latch decays nothing, a perishable-only good aboard or not"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_latches_only_decide_whether_each_loop_runs() {
+        assert_eq!(
+            stepped_latched(10, 0, ENGINE, BOTH_LATCHES, &[(FOOD, 2)]),
+            (vec![(FOOD, 2)], false),
+            "the goods each loop visits are read live"
+        );
+        assert_eq!(
+            stepped_latched(
+                10,
+                0,
+                ENGINE,
+                BOTH_LATCHES,
+                &[(FOOD, 6), (BREEDING, 2), (ROTTING, 2)]
+            ),
+            (vec![(FOOD, 6), (BREEDING, 2), (ROTTING, 2)], false),
+            "the hold full"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_the_latches_change_nothing() {
+        let held = [(BREEDING, 3), (ROTTING, 3), (BOTH, 3)];
+        let live = stepped_latched(10, 0, BIBLE, BOTH_LATCHES, &held);
+        for latches in [NEITHER, TRIBBLES_ONLY, PERISHABLE_ONLY] {
+            assert_eq!(
+                stepped_latched(10, 0, BIBLE, latches, &held),
+                live,
+                "{latches:?}"
+            );
+        }
     }
 
     const ENGINE: RuleSource = RuleSource::Engine;

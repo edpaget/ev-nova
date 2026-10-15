@@ -85,9 +85,13 @@ mod tests {
         session.jump = Some(Jump::PreJump {
             to: SystemId(131),
             bearing: None,
+            warp: None,
         });
         assert_eq!(session.hover(OVER_128, &elsewhere), None, "pre-jump");
-        session.jump = Some(Jump::Hyperspace(SystemId(131)));
+        session.jump = Some(Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
         assert_eq!(session.hover(OVER_128, &elsewhere), None, "jumping");
     }
 
@@ -120,7 +124,10 @@ mod tests {
         session.target = Some(NpcId(99));
         session.condition = Condition::Disabled;
         assert_eq!(session.hover(far, &AllAt(far)), Some(Hover::Player));
-        session.condition = Condition::Dying { ticks_left: 3 };
+        session.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         assert_eq!(session.hover(far, &AllAt(far)), None, "dying");
         session.condition = Condition::Destroyed;
         assert_eq!(session.hover(far, &AllAt(far)), None, "destroyed");

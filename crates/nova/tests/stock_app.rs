@@ -454,9 +454,9 @@ impl Driver {
 
 /// A pilot saved at HG-Kania (`spöb` 1404, at (-70, 250) in Kania) and
 /// opened from the main menu resumes docked there; leaving takes off over
-/// the gate. L, L opens the hypergate map, Tichel is clicked, and M brings
-/// the ship out of HG-Tichel at (-400, -500) in Tichel (129), flying on
-/// from there under the fade-in, on 24 June
+/// the gate. L, a tick, and L open the hypergate map, Tichel is clicked,
+/// and M brings the ship out of HG-Tichel at (-400, -500) in Tichel (129),
+/// flying on from there under the fade-in, on 24 June
 /// 1177, the take-off's day (`_PlayerLandOnStellar` @0x63440), saying
 /// so. It holds rank 147, "Have Access to Hypergate System", which
 /// blesses landing at the Hypergate government's (183) stellars: its
@@ -507,6 +507,10 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
 
     driver.press(Key::Char('l'));
+    // Two redraws, at least a tick, for the dock approach to clear the
+    // request.
+    driver.redraw();
+    driver.redraw();
     driver.press(Key::Char('l'));
     assert_eq!(driver.showing(), Showing::FlightMap);
     let map = driver.flight().course_map();

@@ -128,12 +128,21 @@ impl PilotCatalog for Courier {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            message: -1,
         };
         vec![star(130, 0.0, 131), star(131, 600.0, 130)]
     }
 
     fn commodity_strings(&self) -> CommodityStrings {
         CommodityStrings::default()
+    }
+
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -277,9 +286,13 @@ fn docked_at_128(courier: &Courier) -> Session {
     session
 }
 
-/// Presses L until it lands, the first press selecting a stellar.
+/// Presses L until it lands, the first press requesting a stellar and a
+/// tick between presses for the dock approach.
 fn land(session: &mut Session) -> StellarId {
-    for _ in 0..2 {
+    for press in 0..3 {
+        if press > 0 {
+            session.tick(nova_sim::Controls::default());
+        }
         if let Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) = session.land() {
             return stellar;
         }

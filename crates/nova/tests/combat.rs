@@ -1328,7 +1328,7 @@ fn interface_of(resources: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
     InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
-/// The traffic's setup draws first (the trader 100 above the player,
+/// The load's heading (0, facing up), then the traffic's setup draws (the trader 100 above the player,
 /// facing down), then, for the capture, a self-destruct roll that misses
 /// (99) and a capture roll that succeeds (0) on the draws of 100, and 1 on
 /// every draw of 10 (so the capture's 1 in 10 misses); otherwise the last
@@ -1367,7 +1367,7 @@ impl Boarder {
     /// rolled on a [`BoardChance`], its NPCs idling.
     fn opening(store: &MemoryPilots) -> Self {
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
-            setup: [6, 6, 0, 0, 750, 650, 180, 0].into(),
+            setup: [0, 6, 6, 0, 0, 750, 650, 180, 0].into(),
             of_100: [99, 0].into(),
         }));
         Self::opening_over(
@@ -1441,6 +1441,19 @@ impl Boarder {
         self.send(WindowEvent::Redraw { elapsed });
         assert_eq!(self.app.take_failures(), []);
         (*self.gpu.submits().last().expect("a frame")).clone()
+    }
+
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
     }
 
     fn showing(&self) -> Showing {
@@ -1575,7 +1588,7 @@ fn boarded_with(
         .save(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"))
         .expect("saved");
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
-        setup: [6, 6, 0, 0, 750, 650, 180, 0].into(),
+        setup: [0, 6, 6, 0, 0, 750, 650, 180, 0].into(),
         of_100: [99, 0].into(),
     }));
     let mut game = Boarder::opening_over(data, interface, store, SharedChance::new(chance), router);
@@ -1946,7 +1959,7 @@ fn hailer(store: &MemoryPilots, dude: (i16, i16, i16), fuel: f32) -> Boarder {
     PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
         .save(&pilot)
         .expect("saved");
-    let (_, chance) = scripted(&[6, 6, 0, 0, 750, 650, 180, 0]);
+    let (_, chance) = scripted(&[0, 6, 6, 0, 0, 750, 650, 180, 0]);
     let mut game = Boarder::opening_over(data, hailing_interface(), store, chance, |screen| screen);
     game.open_pilot();
     // The first frame runs no step; the second's sets the system up.
@@ -2376,9 +2389,9 @@ fn reopened(
     router: impl FnOnce(AppScreen) -> AppScreen,
 ) -> Boarder {
     let setup: &[u32] = if alpha_dudes.is_empty() {
-        &[]
+        &[0]
     } else {
-        &[6, 6, 0, 0, 750, 450, 180, 0]
+        &[0, 6, 6, 0, 0, 750, 450, 180, 0]
     };
     let (_, chance) = scripted(setup);
     Boarder::opening_over(
@@ -2703,6 +2716,7 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
         );
         // L requests clearance, a second L lands.
         game.tap(Key::Char('l'));
+        game.approach();
         game.tap(Key::Char('l'));
         assert_eq!(game.showing(), Showing::Spaceport, "landed");
         let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
@@ -2891,9 +2905,9 @@ fn refly(
     router: impl FnOnce(AppScreen) -> AppScreen,
 ) -> Boarder {
     let setup: &[u32] = if alpha_dudes.is_empty() {
-        &[]
+        &[0]
     } else {
-        &[6, 6, 0, 0, 750, 450, 180, 0]
+        &[0, 6, 6, 0, 0, 750, 450, 180, 0]
     };
     let (_, chance) = scripted(setup);
     Boarder::opening_over(
@@ -3099,6 +3113,7 @@ fn a_fighter_out_is_saved_on_landing_and_flies_again_after_take_off() {
     game.launch();
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport, "landed");
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
@@ -3144,6 +3159,7 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     game.launch();
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport, "landed");
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");

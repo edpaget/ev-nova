@@ -44,6 +44,9 @@ pub enum Showing {
     NewPilot,
     /// The list of saved pilots, over the main menu.
     OpenPilot,
+    /// A note over the main menu, such as the warning that an opened
+    /// pilot's load had to fall back, before its flight shows.
+    Note,
     /// The plunder dialog, over flight, which it pauses.
     Plunder,
     /// The captured-ship assignment dialog, over flight, which it pauses.

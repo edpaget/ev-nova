@@ -49,6 +49,7 @@ fn the_original_tables_sounds_are_the_named_stock_sounds_and_decode() {
     let table = SoundTable::ORIGINAL;
     let named = [
         (table.landing, "Beep2"),
+        (table.traffic_control, "Beep2"),
         (table.jump, "Warp up"),
         (table.arrival, "Warp out"),
         (table.button_down, "Menu button down"),

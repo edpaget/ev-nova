@@ -29,6 +29,8 @@
 //!   [`flight::CombatLooks`] port.
 //! - [`menu`]: the main menu (New Pilot, Open Pilot and Quit) and the
 //!   saved pilots' list.
+//! - [`fade`]: the black screen fades, the death's fade out and the main
+//!   screen's fade back in ([`fade::ScreenFade`]).
 //! - [`spaceport`]: the spaceport landed on, its landscape, name,
 //!   description and service buttons laid out by the interface file's
 //!   "Spaceport" dialog, reading the stellar through its
@@ -65,6 +67,7 @@
 pub mod color;
 pub mod devtools;
 pub mod draw;
+pub mod fade;
 pub mod flight;
 pub mod font;
 pub mod galaxy;

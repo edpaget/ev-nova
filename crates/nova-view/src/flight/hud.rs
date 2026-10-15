@@ -27,12 +27,9 @@
 //! (@0x4c325-0x4c33b); the original's clear to the background and its
 //! blit to the window are left out, as a draw list needs neither.
 //!
-//! The date is shown on the last line of the `CargoArea`, bright, in the
-//! same font, when that line clears the cargo lines ([`date_line`]); the
-//! stock area ((8, 458)-(184, 552)) has no room for it. The original
-//! shows it only on the player info screen (`STR#` 2002 #252 "Current
-//! Date:"), and no `ïntf` area is for it, so this is our choice of where
-//! it goes in flight until `hud-fidelity` phase 9 places it.
+//! Flight draws no date. The original shows it only on the player info
+//! screen (`STR#` 2002 #252 "Current Date:"), and no `ïntf` area is for
+//! it.
 //!
 //! Which `ïntf`: as `_LoadIntfResource` (@0x735f2) picks it, the player's
 //! ship type does, not the pilot. Its `InherentGovt` names a government
@@ -75,7 +72,7 @@ use crate::draw::fill_rect;
 use crate::geometry::{Bounds, Point};
 use crate::spaceport::credits::comma_number;
 use crate::system::camera::VIEW_SIZE;
-use crate::text::{LINE_HEIGHT, TextMetrics};
+use crate::text::TextMetrics;
 use crate::{Color, DrawList, Font, ImageKey};
 
 /// The `ïntf` shown by a pilot with no government, and the ID any ID
@@ -124,7 +121,7 @@ pub fn choose_status_bar(
     catalog: &impl StatusBars,
     government: Option<GovtId>,
 ) -> Result<StatusBar, String> {
-    let layout = catalog.status_bar(chosen_interface(catalog, government)?)?;
+    let layout = catalog.status_bar(interface_for(catalog, government)?)?;
     let background = background(catalog, interface_id(layout.status_bkgnd));
     Ok(StatusBar { layout, background })
 }
@@ -149,7 +146,7 @@ pub fn rechoose_status_bar(
     let Some(previous) = previous else {
         return choose_status_bar(catalog, government);
     };
-    let id = chosen_interface(catalog, government)?;
+    let id = interface_for(catalog, government)?;
     Ok(match catalog.status_bar(id) {
         Ok(layout) => StatusBar {
             background: background(catalog, interface_id(layout.status_bkgnd)),
@@ -164,8 +161,13 @@ pub fn rechoose_status_bar(
 
 /// The `ïntf` ID a ship type of `government` shows: its `gövt`'s
 /// `Interface` (@0x73648), 128 for none or one with no record, and any
-/// below 128 meaning 128 (@0x7364d-0x7365a).
-fn chosen_interface(catalog: &impl StatusBars, government: Option<GovtId>) -> Result<i16, String> {
+/// below 128 meaning 128 (@0x7364d-0x7365a). The original keeps the ID
+/// it loaded (`_currentIntf`) and loads the bar again only for another
+/// (@0x73663-0x73672).
+pub(crate) fn interface_for(
+    catalog: &impl StatusBars,
+    government: Option<GovtId>,
+) -> Result<i16, String> {
     Ok(match government {
         None => DEFAULT_INTERFACE,
         Some(govt) => catalog
@@ -269,14 +271,14 @@ pub fn credits_label(word: &str) -> String {
 /// them, so they would show the bare background.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum NavDisplay {
-    /// Mode −1, nothing selected and no course: "Nav System Off"
+    /// Mode −1, the nav system off, whatever the course: "Nav System Off"
     /// (@0x4a044-0x4a097).
     #[default]
     Off,
     /// Mode 2, a stellar selected (@0x4a09e-0x4a18c): its name, or `None`
     /// for "No Destination".
     Stellar(Option<String>),
-    /// Mode 3, a jump plotted (@0x4a198-0x4a3cb): the next system, and
+    /// Mode 3, hyperspace (@0x4a198-0x4a3cb): the system selected, and
     /// whether the ship can jump there, which picks the colours.
     Hyperspace {
         /// What the value line shows.
@@ -311,8 +313,6 @@ pub struct HudState<'a> {
     pub nav: NavDisplay,
     /// What the cargo area lists, or `None` with no session to list.
     pub cargo: Option<&'a StatusCargo>,
-    /// Today's date, as it is displayed.
-    pub date: &'a str,
     /// Whether the player's ship is disabled (`_IsDisabled`), which hides
     /// the fuel gauge.
     pub disabled: bool,
@@ -320,7 +320,7 @@ pub struct HudState<'a> {
 
 /// Draws `bar` showing `state`: its background, the radar (see the
 /// module docs), then the shield, armour and fuel bars, the nav area,
-/// its lines centred as `metrics` measures them, and the date.
+/// its lines centred as `metrics` measures them, and the cargo area.
 pub fn draw(
     list: &mut DrawList,
     bar: &StatusBar,
@@ -352,7 +352,6 @@ pub fn draw(
     if let Some(cargo) = state.cargo {
         draw_cargo(list, layout, origin, cargo, metrics);
     }
-    draw_date(list, layout, origin, state.date);
 }
 
 /// Draws one radar mark on `radar`: in the layout's radar colours, or a
@@ -524,43 +523,6 @@ pub fn draw_message_in(
         list.text_in(font, line, origin, size, None, Color::WHITE);
         top += line_height;
     }
-}
-
-/// Draws `date` on the last line of the layout's cargo area, at the bar's
-/// `origin`, in the bright text colour and the bar's font, when
-/// [`date_line`] finds room for it.
-fn draw_date(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, date: &str) {
-    let area = layout.cargo.offset(origin);
-    let size = layout.font_size;
-    let Some(last_line) = date_line(area, size) else {
-        return;
-    };
-    let width = Some(area.width());
-    list.text_in(
-        layout.font,
-        date,
-        last_line,
-        size,
-        width,
-        layout.bright_text,
-    );
-}
-
-/// Where the date goes in the cargo `area` at `size`: the top-left of
-/// the area's last line, or `None` when that line would overlap the
-/// lowest line `_DrawStatusCargo` draws ([`CARGO_CREDITS_VALUE_BASELINE`],
-/// whose box reaches [`LINE_HEIGHT`] × `size` below its top, `size`
-/// above its baseline). The stock area, 94 pixels tall, has no room.
-///
-/// The original shows no date in flight; this placement stands until
-/// `hud-fidelity` phase 9 (`hud-date-overlaps-status-bar`) replaces it
-/// with its opt-in setting and its own placement.
-#[must_use]
-pub fn date_line(area: Bounds, size: f32) -> Option<Point> {
-    let line = LINE_HEIGHT * size;
-    let lowest_bottom = area.min.y + CARGO_CREDITS_VALUE_BASELINE - size + line;
-    let top = area.max.y - line;
-    (top >= lowest_bottom).then_some(Point::new(area.min.x, top))
 }
 
 /// Draws `cargo` in the layout's cargo area, at the bar's `origin`, as
@@ -1224,7 +1186,7 @@ mod tests {
         iff: false,
         density_scanner: false,
         static_pattern: None,
-        route_shown: false,
+        hyperspace_mode: false,
     };
 
     fn state(reserves: Reserves) -> HudState<'static> {
@@ -1234,7 +1196,6 @@ mod tests {
             reserves,
             nav: NavDisplay::Off,
             cargo: None,
-            date: DATE,
             disabled: false,
         }
     }
@@ -1561,7 +1522,6 @@ mod tests {
             reserves: reserves(30.0, 60.0, 300.0),
             nav: NavDisplay::Stellar(Some("Earth".to_owned())),
             cargo: Some(&cargo),
-            date: DATE,
             disabled: false,
         };
         let list = drawn(&stock(), &hud);
@@ -1585,10 +1545,7 @@ mod tests {
         for line in cargo_drawn(&stock(), &cargo) {
             expected.push(line);
         }
-        assert_eq!(
-            list, expected,
-            "the cargo area last, with no room for the date"
-        );
+        assert_eq!(list, expected, "the cargo area last");
         let blink_off = HudState {
             blink_on: false,
             ..hud
@@ -1843,14 +1800,6 @@ mod tests {
             .collect()
     }
 
-    /// The texts but the date.
-    fn nav_texts(list: &DrawList) -> Vec<DrawCommand> {
-        texts(list)
-            .into_iter()
-            .filter(|command| !matches!(command, DrawCommand::Text { text, .. } if text == DATE))
-            .collect()
-    }
-
     /// `text` centred in the stock bar's nav area on `baseline` below its
     /// top: at (830, 0) its (8, 254)-(184, 286) is (838, 254)-(1014, 286),
     /// centred on 926, in the layout's Charcoal 11, 6.6 a character in
@@ -1872,7 +1821,7 @@ mod tests {
             nav,
             ..state(reserves(30.0, 60.0, 300.0))
         };
-        nav_texts(&drawn(&stock(), &hud))
+        texts(&drawn(&stock(), &hud))
     }
 
     #[test]
@@ -2014,7 +1963,7 @@ mod tests {
                 nav,
                 ..state(reserves(30.0, 60.0, 300.0))
             };
-            nav_texts(&drawn(&bar, &hud))
+            texts(&drawn(&bar, &hud))
         };
         // "Stellar Navigation" is 18 × 6 = 108: 884 − 54 = 830, top
         // 300 + 12 − 12. "Earth" (odd) is 30: 884 − 15 = 869, top
@@ -2053,7 +2002,7 @@ mod tests {
         let mut list = DrawList::new();
         draw(&mut list, &odd_bar(), &hud, None);
         assert_eq!(
-            nav_texts(&list),
+            texts(&list),
             [
                 geneva(NAV_STELLAR, 834.0, 300.0, FUEL_PARTIAL),
                 geneva("Earth", 834.0, 317.0, SHIELD)
@@ -2075,15 +2024,11 @@ mod tests {
         ] {
             let mut bar = odd_bar();
             bar.layout.nav = nav;
-            assert_eq!(nav_texts(&drawn(&bar, &hud)), [], "{nav:?}");
+            assert_eq!(texts(&drawn(&bar, &hud)), [], "{nav:?}");
         }
         let mut bar = odd_bar();
         bar.layout.nav = rect(10.0, 300.0, 11.0, 301.0);
-        assert_eq!(
-            nav_texts(&drawn(&bar, &hud)).len(),
-            2,
-            "one pixel is enough"
-        );
+        assert_eq!(texts(&drawn(&bar, &hud)).len(), 2, "one pixel is enough");
     }
 
     // The cargo area.
@@ -2115,8 +2060,7 @@ mod tests {
         }
     }
 
-    /// The texts drawn for `cargo` on `bar`, the nav area's and the
-    /// date's left out.
+    /// The texts drawn for `cargo` on `bar`, the nav area's left out.
     fn cargo_drawn(bar: &StatusBar, cargo: &StatusCargo) -> Vec<DrawCommand> {
         let hud = HudState {
             cargo: Some(cargo),
@@ -2124,9 +2068,7 @@ mod tests {
         };
         texts(&drawn(bar, &hud))
             .into_iter()
-            .filter(|command| {
-                !matches!(command, DrawCommand::Text { text, .. } if text == DATE || text == NAV_OFF)
-            })
+            .filter(|command| !matches!(command, DrawCommand::Text { text, .. } if text == NAV_OFF))
             .collect()
     }
 
@@ -2303,147 +2245,9 @@ mod tests {
     #[test]
     fn with_no_cargo_to_list_the_area_draws_no_cargo_lines() {
         assert_eq!(
-            nav_texts(&drawn(&stock(), &state(reserves(30.0, 60.0, 300.0)))),
+            texts(&drawn(&stock(), &state(reserves(30.0, 60.0, 300.0)))),
             [nav_text(NAV_OFF, NAV_OFF_BASELINE, Color::DIM)]
         );
-    }
-
-    // The date.
-
-    const DATE: &str = "June 23, 1177 NC";
-
-    fn dates(list: &DrawList) -> Vec<DrawCommand> {
-        texts(list)
-            .into_iter()
-            .filter(|command| matches!(command, DrawCommand::Text { text, .. } if text == DATE))
-            .collect()
-    }
-
-    /// The box a line drawn from `origin` (its top-left) at `size` covers,
-    /// `width` wide: [`LINE_HEIGHT`] × `size` tall.
-    fn line_box(origin: Point, width: f32, size: f32) -> Bounds {
-        Bounds::at(origin, width, LINE_HEIGHT * size)
-    }
-
-    fn overlap(a: Bounds, b: Bounds) -> bool {
-        a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y
-    }
-
-    /// The boxes of every text drawn but the date, measured by
-    /// [`MonoMetrics`].
-    fn cargo_boxes(list: &DrawList) -> Vec<Bounds> {
-        texts(list)
-            .into_iter()
-            .filter_map(|command| match command {
-                DrawCommand::Text {
-                    text,
-                    font,
-                    origin,
-                    size,
-                    ..
-                } if text != DATE => {
-                    Some(line_box(origin, MonoMetrics.width(font, size, &text), size))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn the_stock_cargo_area_has_no_room_for_the_date() {
-        let hud = HudState {
-            cargo: Some(&StatusCargo::default()),
-            ..state(reserves(30.0, 60.0, 300.0))
-        };
-        let list = drawn(&stock(), &hud);
-        assert_eq!(dates(&list), [], "no date");
-        // At (830, 0) the area is (838, 458)-(1014, 552); its last line of
-        // Charcoal 11 would start 13.2 above its bottom.
-        let would_be = line_box(at(838.0, 552.0 - 13.2), 176.0, 11.0);
-        let credits_value = cargo_text("0", 87.0, 82.0, TEXT);
-        assert!(texts(&list).contains(&credits_value));
-        assert!(
-            cargo_boxes(&list)
-                .into_iter()
-                .any(|line| overlap(line, would_be)),
-            "the date's line would overlap the credits line"
-        );
-        assert_eq!(date_line(rect(838.0, 458.0, 1014.0, 552.0), 11.0), None);
-    }
-
-    #[test]
-    fn a_taller_cargo_area_shows_the_date_on_its_last_line_clear_of_the_cargo() {
-        let mut bar = stock();
-        bar.layout.cargo = rect(8.0, 440.0, 184.0, 552.0);
-        let full = StatusCargo {
-            rows: std::array::from_fn(|n| Some(row("Food:", n as i64 + 1))),
-            special: Some(Special::Multiple),
-            ..full_cargo()
-        };
-        let hud = HudState {
-            cargo: Some(&full),
-            ..state(reserves(30.0, 60.0, 300.0))
-        };
-        let list = drawn(&bar, &hud);
-        let date = DrawCommand::Text {
-            text: DATE.to_owned(),
-            font: Font::Charcoal,
-            origin: at(838.0, 552.0 - 13.2),
-            size: 11.0,
-            wrap_width: Some(176.0),
-            color: TEXT,
-        };
-        assert_eq!(dates(&list), [date]);
-        assert_eq!(texts(&list).last(), Some(&dates(&list)[0]), "drawn last");
-        let date_box = line_box(at(838.0, 552.0 - 13.2), 176.0, 11.0);
-        let boxes = cargo_boxes(&list);
-        assert_eq!(boxes.len(), 19, "the nav line and every cargo line");
-        for line in boxes {
-            assert!(!overlap(line, date_box), "{line:?}");
-        }
-    }
-
-    #[test]
-    fn the_date_needs_its_whole_line_below_the_lowest_cargo_lines_box() {
-        // The credits value's box: its top 82 - 10 below the area's top,
-        // 1.2 x 10 tall, so to 84; the date's line is 12 tall.
-        let area = |bottom| rect(10.0, 400.0, 110.0, bottom);
-        assert_eq!(date_line(area(496.0), 10.0), Some(at(10.0, 484.0)));
-        assert_eq!(date_line(area(500.0), 10.0), Some(at(10.0, 488.0)));
-        assert_eq!(date_line(area(495.9), 10.0), None);
-        assert_eq!(date_line(area(552.0), 10.0), Some(at(10.0, 540.0)));
-    }
-
-    #[test]
-    fn the_date_moves_with_the_bar_and_reads_its_layout() {
-        let mut bar = stock();
-        bar.background = Some(Background {
-            id: 700,
-            width: 200.0,
-            height: 767.0,
-        });
-        bar.layout.font = Font::Geneva;
-        bar.layout.font_size = 10.0;
-        bar.layout.cargo = rect(10.0, 400.0, 110.0, 500.0);
-        bar.layout.bright_text = SHIELD;
-        let list = drawn(&bar, &state(reserves(30.0, 60.0, 300.0)));
-        assert_eq!(
-            dates(&list),
-            [DrawCommand::Text {
-                text: DATE.to_owned(),
-                font: Font::Geneva,
-                origin: at(834.0, 488.0),
-                size: 10.0,
-                wrap_width: Some(100.0),
-                color: SHIELD,
-            }]
-        );
-        bar.background = None;
-        let list = drawn(&bar, &state(reserves(30.0, 60.0, 300.0)));
-        let DrawCommand::Text { origin, .. } = &dates(&list)[0] else {
-            unreachable!("a text")
-        };
-        assert_eq!(*origin, at(VIEW_SIZE.0 - STATUS_BAR_WIDTH + 10.0, 488.0));
     }
 
     #[test]

@@ -196,6 +196,8 @@ pub struct BarScreen {
     room: bool,
     /// The hire screen, while it is open.
     hire: Option<HireScreen>,
+    /// Whether the hire screen has closed since this was last taken.
+    hire_closed: bool,
     /// The news dialog's template, or why there is none.
     news_template: Result<DialogTemplate, String>,
     /// The news, while it is open.
@@ -266,6 +268,7 @@ impl BarScreen {
             style,
             room,
             hire: None,
+            hire_closed: false,
             news_template: Err(format!("the news dialog (DLOG {NEWS_DIALOG}) is not given")),
             news: None,
             offering: None,
@@ -425,6 +428,9 @@ impl BarScreen {
         if list.rows.is_empty() {
             laid.dialog.set_text(TEXT_ITEM, NONE_FOR_HIRE);
             laid.said = Some(NONE_FOR_HIRE);
+            // The hire dialog returns at once (`_DoShipyardDialog`
+            // @0x5e8df), so the bar's reset after it runs.
+            self.hire_closed = true;
             return;
         }
         let layout = self
@@ -446,10 +452,19 @@ impl BarScreen {
         self.hire.as_mut()?.take_order()
     }
 
+    /// Whether the hire screen has closed since this was last asked,
+    /// once each time: after a hire ([`BarScreen::set_hire`]), on Cancel,
+    /// or when the bar said nothing is for hire in its place, each where
+    /// the original's `_DoBarDialog` resets after the hire dialog returns
+    /// (@0x49235).
+    pub fn take_hire_closed(&mut self) -> bool {
+        std::mem::take(&mut self.hire_closed)
+    }
+
     /// After a hire: the hire screen closes back to the bar, whose Hire
     /// Escort is greyed unless `list`'s fleet still has room.
     pub fn set_hire(&mut self, list: &HireList) {
-        self.hire = None;
+        self.hire_closed |= self.hire.take().is_some();
         self.room = list.room;
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_greyed(HIRE_ITEM, !self.room);
@@ -508,6 +523,7 @@ impl Screen for BarScreen {
             self.sounds.extend(hire.take_sounds());
             if hire.closed() {
                 self.hire = None;
+                self.hire_closed = true;
             }
             return ScreenAction::None;
         }

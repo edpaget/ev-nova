@@ -31,8 +31,18 @@
 //!   accelerates away along its bearing, and `_hyperGamma` rises from its
 //!   warp speed past a threshold (`(speed - 55) * 5`). The stars rush past
 //!   because the ship itself moves; `_HandleStars` and `_ScrollStarfield`
-//!   draw no streak lines. The ship is frozen while our effect plays, so
-//!   the streak stands in for that motion.
+//!   draw no streak lines. Our ship stays where it is while our effect
+//!   plays, so the streak stands in for that motion.
+//! - `_HandlePlayer` @0x6d1c1-0x6d296: the ship starts to move off only
+//!   once t·w/(d·0.01) − 35/w > 0, the expression `_ScanPlayer`'s
+//!   jump-timing check reads (see `nova_sim::warp`), so until then, the
+//!   warp's lead-in, the original's fight and traffic go on around a ship
+//!   that has not moved. Under our streak the flight view still runs the
+//!   session's steps through that lead-in
+//!   (`Session::in_warp_lead_in`): the traffic flies on and the scans are
+//!   taken, and the fight stands still. The streak itself starts at once,
+//!   where the original's motion waits for the lead-in to end:
+//!   rdm:phase/ship-handling-fidelity/phase-8-warp-out.
 //! - `_HandlePlayer` @0x683a4-0x68409: once `_hyperGamma` is positive it
 //!   calls `_FadeWhiteIn` @0x546f, a `CGDisplayFade` of the whole display
 //!   to white (rgb 1,1,1) over 1.5 s. It is a display fade, so the HUD

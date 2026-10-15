@@ -83,6 +83,12 @@ pub(super) struct Refresh {
 }
 
 impl Refresh {
+    /// Whether it hides `system`: whether the system's `Visibility` fails.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(super) fn hides(&self, system: SystemId) -> bool {
+        self.hidden.contains(&system)
+    }
+
     /// Writes it on `overlay`: every system's visibility and every
     /// nebula's activity. Whether that changed anything.
     pub(super) fn write(&self, overlay: &mut GalaxyOverlay) -> bool {
@@ -179,9 +185,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     }
 
     fn run(&mut self, script: &Script, between: &mut dyn FnMut(&mut dyn Stage)) {
-        let Some(expr) = script.tree() else {
-            return;
-        };
+        let expr = script.runs();
         let SessionStage {
             session,
             catalog,
@@ -1001,6 +1005,8 @@ mod tests {
         let mut session = quiet(Session::start(&catalog).expect("starts"));
         session.land().expect("selects");
         assert_eq!(session.story_raised(), [], "the first L only selects");
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.story_raised(), [], "nor the approach");
         session.land().expect("lands");
         assert_eq!(session.story_raised(), [LANDED_128]);
     }
@@ -1918,6 +1924,90 @@ mod tests {
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.sites[0].id, StellarId(141), "134's stellars");
         assert!(!session.take_save_due());
+    }
+
+    /// `catalog` with system `id` at `place`, holding `stellars`, each at
+    /// (70, 80).
+    fn add_system(catalog: &mut FakePilotCatalog, id: i16, place: (f32, f32), stellars: &[i16]) {
+        catalog.star_map.push(testkit::star(id, place, &[]));
+        catalog.systems.push(SystemId(id));
+        catalog.sites.push((
+            SystemId(id),
+            stellars
+                .iter()
+                .map(|&stellar| testkit::planet(stellar, 70.0, 80.0))
+                .collect(),
+        ));
+    }
+
+    /// A pilot of `catalog` saved in 130, last landed on 300, with each
+    /// of `hidden` hidden on its saved overlay.
+    fn saved_at_300(catalog: &FakePilotCatalog, hidden: &[i16]) -> crate::pilot::Pilot {
+        let mut pilot = crate::pilot::Pilot::new(catalog, "Ada").expect("starts");
+        pilot.stellar = Some(StellarId(300));
+        for &system in hidden {
+            pilot.galaxy.set_visible(SystemId(system), Some(false));
+        }
+        pilot
+    }
+
+    /// Asserts `session` is docked at 300, at its place, among the
+    /// stellars shown.
+    fn assert_docked_at_300(session: &Session) {
+        assert_eq!(session.landed(), Some(StellarId(300)));
+        assert_eq!(
+            session.player().position,
+            crate::geometry::Vec2::new(70.0, 80.0)
+        );
+        session.assert_docked_among_shown();
+    }
+
+    #[test]
+    fn a_stellar_no_system_owns_resumes_in_system_128_even_hidden() {
+        // 128, hidden, and 200, shadowed by 199, list 300, so no system
+        // owns it; 129 stands for 128 at its place.
+        let mut catalog = gated(&[(128, "b50")]);
+        add_system(&mut catalog, 128, (-900.0, 0.0), &[300]);
+        add_system(&mut catalog, 129, (-900.0, 0.0), &[]);
+        add_system(&mut catalog, 199, (900.0, 900.0), &[]);
+        add_system(&mut catalog, 200, (900.0, 900.0), &[300]);
+        let session = Session::fly(&catalog, saved_at_300(&catalog, &[128])).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(129), "out of hidden 128");
+        assert_docked_at_300(&session);
+    }
+
+    #[test]
+    fn a_stellar_no_system_owns_resumes_in_a_shadowed_system_128_itself() {
+        let mut catalog = gated(&[]);
+        add_system(&mut catalog, 127, (-900.0, 0.0), &[]);
+        add_system(&mut catalog, 128, (-900.0, 0.0), &[300]);
+        add_system(&mut catalog, 199, (900.0, 900.0), &[]);
+        add_system(&mut catalog, 200, (900.0, 900.0), &[300]);
+        let session = Session::fly(&catalog, saved_at_300(&catalog, &[])).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(128));
+        assert_docked_at_300(&session);
+    }
+
+    #[test]
+    fn a_stellar_listed_only_by_a_shadowed_system_resumes_there() {
+        let mut catalog = gated(&[]);
+        add_system(&mut catalog, 199, (900.0, 900.0), &[]);
+        add_system(&mut catalog, 200, (900.0, 900.0), &[300]);
+        let session = Session::fly(&catalog, saved_at_300(&catalog, &[])).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(200));
+        assert_docked_at_300(&session);
+    }
+
+    #[test]
+    fn a_stellar_listed_only_by_hidden_systems_resumes_at_the_lowest_then_moves_docked() {
+        // 150 and 160 list 300, both hidden; 151 stands for 150.
+        let mut catalog = gated(&[(150, "b50"), (160, "b50")]);
+        add_system(&mut catalog, 150, (-900.0, 0.0), &[300]);
+        add_system(&mut catalog, 151, (-900.0, 0.0), &[]);
+        add_system(&mut catalog, 160, (900.0, 900.0), &[300]);
+        let session = Session::fly(&catalog, saved_at_300(&catalog, &[150, 160])).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(151));
+        assert_docked_at_300(&session);
     }
 
     #[test]

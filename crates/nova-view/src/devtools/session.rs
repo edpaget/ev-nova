@@ -246,6 +246,14 @@ mod tests {
             CommodityStrings::default()
         }
 
+        fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+            nova_sim::catalog::StringPatch::Absent
+        }
+
+        fn buoy_strings(&self) -> Vec<String> {
+            Vec::new()
+        }
+
         fn junk(&self) -> Vec<JunkRecord> {
             Vec::new()
         }
@@ -370,6 +378,7 @@ mod tests {
         let mut session = session();
         while session.landed().is_none() {
             session.land().expect("lands");
+            session.tick(nova_sim::Controls::default());
         }
         session.take_save_due();
         session

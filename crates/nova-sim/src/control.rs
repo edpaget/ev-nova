@@ -338,6 +338,16 @@ impl Script {
     pub fn tree(&self) -> Option<&SetExpr> {
         self.0.as_ref().as_ref().ok()
     }
+
+    /// What running it runs: its operators, or for text that did not
+    /// parse none, from text that was not empty ([`SetExpr::UNPARSED`]),
+    /// so the reset at its end still runs, as the original's wrappers
+    /// reset after any string whose first byte is not 0.
+    #[must_use]
+    pub fn runs(&self) -> &SetExpr {
+        static UNPARSED: SetExpr = SetExpr::UNPARSED;
+        self.tree().unwrap_or(&UNPARSED)
+    }
 }
 
 impl Default for Script {

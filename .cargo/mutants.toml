@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The galaxy map's star map is built only for its links and places;
+    # nothing reads a buoy from it, so the `Message` it gives its systems
+    # (-1, none) cannot be observed.
+    "galaxy/model.rs:.*delete - in star_system",
     # `_SpawnBox` turns a box round with `(heading + 180) mod 360`, and
     # `accel` takes every angle mod 360 (`rem_euclid`): `- 180` lands on
     # the same heading as `+ 180`, so no push can tell them apart.

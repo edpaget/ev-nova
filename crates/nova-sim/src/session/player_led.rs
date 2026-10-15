@@ -50,11 +50,15 @@
 //! disabled former escort that repairs itself rejoins the fleet as what
 //! it was (@0x33a3b-0x33bd9, see [`self_repair`](super::self_repair));
 //! and a led ship times its warp-out by the player's clock
-//! (@0x347c1-0x348bd), which holds here by construction: the player, the
-//! traffic and the fight all stand still through the hyperspace stage, so
-//! every led ship keeps its place beside the player and arrives with it
-//! (see [`escorts`](super::escorts)). No ship has a warp-out motion, nor a
-//! disabled ship its drag (@0x34752-0x349c1, @0x3395d-0x339a1): rdm:phase/player-led-ships/phase-26-warp-out-motion-and-disabled-drag.
+//! (@0x347c1-0x348bd), which holds here by construction: the player and
+//! the fight stand still through the hyperspace stage, and so does the
+//! traffic once the warp is past its lead-in; through the lead-in the
+//! traffic tick holds every led ship and the fighters they lead still,
+//! as the original's do not accelerate before t > 0.45·d/w², after the
+//! lead-in. So every led ship keeps its place beside the player and
+//! arrives with it (see [`escorts`](super::escorts)). No ship has a
+//! warp-out motion, nor a disabled ship its drag (@0x34752-0x349c1,
+//! @0x3395d-0x339a1): rdm:phase/ship-handling-fidelity/phase-8-warp-out.
 //!
 //! **Drawn.** `_HandleShipDisplay` treats a ship the player leads apart
 //! in three branches. It draws it in the escorts' layer, under the other
@@ -276,7 +280,7 @@ impl Session {
 }
 
 /// An NPC's sprite slot: its berth.
-fn slot_of(npc: &Npc) -> Slot {
+pub(super) fn slot_of(npc: &Npc) -> Slot {
     Slot::Berth(npc.berth)
 }
 
@@ -645,6 +649,48 @@ mod tests {
         assert_eq!(led.len(), 3, "a hired escort and two mission escorts");
         assert!(led.contains(&hired));
         (session, led, traffic)
+    }
+
+    #[test]
+    fn the_ships_the_player_leads_keep_their_place_through_the_warps_lead_in() {
+        let catalog = ships_catalog(ships(1));
+        let (mut session, led, traffic) = with_traffic();
+        let class = session.npc(led[0]).expect("there").clone();
+        let fighter = session.traffic.add_npc(Npc {
+            escort: None,
+            mission: None,
+            leader: Some(led[0]),
+            ..class
+        });
+        session
+            .plot_course(crate::catalog::SystemId(131))
+            .expect("a route");
+        session.player = crate::flight::ShipState {
+            position: crate::geometry::Vec2::new(0.0, 1200.0),
+            velocity: crate::geometry::Vec2::ZERO,
+            heading: 90.0,
+        };
+        session.begin_jump().expect("jumps");
+        assert!(session.jumping().is_some(), "facing the bearing at rest");
+        for npc in session.traffic.npcs_mut() {
+            npc.state.velocity = crate::geometry::Vec2::new(1.0, 0.0);
+        }
+        let state = |session: &Session, id: NpcId| session.npc(id).expect("there").state;
+        let before: Vec<_> = led.iter().map(|&id| state(&session, id)).collect();
+        let (fighter_was, traffic_was) = (state(&session, fighter), state(&session, traffic));
+        for _ in 0..3 {
+            session.tick(crate::flight::Controls::default());
+            ticks(&mut session, &catalog, 1);
+        }
+        assert!(session.in_warp_lead_in());
+        let after: Vec<_> = led.iter().map(|&id| state(&session, id)).collect();
+        assert_eq!(after, before, "the led ships keep their place");
+        assert_eq!(state(&session, fighter), fighter_was, "and their fighters");
+        assert_ne!(
+            state(&session, traffic),
+            traffic_was,
+            "the traffic flies on"
+        );
     }
 
     /// `session` with its ships overlapping in NPC order, the player on

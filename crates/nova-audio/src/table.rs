@@ -52,16 +52,41 @@ pub struct SoundTable {
     pub news_open: Option<SoundId>,
     /// Plays as the bar's news dialog closes.
     pub news_close: Option<SoundId>,
-    /// Plays as the player info is refused in flight.
-    pub player_info_refused: Option<SoundId>,
     /// Plays as an announced fleet arrives with its arrival quote.
     pub fleet_quote: Option<SoundId>,
-    /// Plays as a hail goes unanswered.
-    pub hail_refused: Option<SoundId>,
     /// Plays as a person offers its mission on its hail.
     pub hail_offer: Option<SoundId>,
     /// Plays as a person says its hail quote in flight.
     pub hail_quote: Option<SoundId>,
+    /// Plays as a nav key is taken: Nav Off, Hyperspace Mode, a stellar
+    /// key or a click on a stellar.
+    pub nav_selected: Option<SoundId>,
+    /// Plays as Hyper Select moves through the system's links.
+    pub hyper_selected: Option<SoundId>,
+    /// Plays as Option-backquote lets go of the ship target.
+    pub target_cleared: Option<SoundId>,
+    /// Plays as a first-flight tutorial hint is shown.
+    pub tutorial_hint: Option<SoundId>,
+    /// Plays as the player's ship is newly disabled or newly starts to
+    /// break up.
+    pub ship_downed: Option<SoundId>,
+    /// Plays as the player's ship being downed fails a mission.
+    pub downed_mission_failed: Option<SoundId>,
+    /// Plays as traffic control answers the player: the dock request's
+    /// line and its denial, and the dock approach's greeting.
+    pub traffic_control: Option<SoundId>,
+    /// Plays, unless it is still playing, while the player's ship breaks
+    /// up.
+    pub klaxon: Option<SoundId>,
+    /// Plays as the player ejects.
+    pub eject: Option<SoundId>,
+    /// Plays as a sabotage outfit goes off aboard the player's ship.
+    pub onboard_explosion: Option<SoundId>,
+    /// Plays as a disabled player's pre-jump collapses.
+    pub jump_collapsed: Option<SoundId>,
+    /// Plays as a key's action is refused, whether or not the player is
+    /// told why.
+    pub refused: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -78,7 +103,8 @@ impl SoundTable {
     ///   (github.com/SirStig/NovaSwift, `Game/GameScene.swift`) notes that
     ///   "lifting off a planet is silent in the original".
     /// - `jump`: 128, "Warp up" (the guide: "128 Warp up"). 129 "Warp up
-    ///   x2" is for the double-speed mode, which is not modelled.
+    ///   x2" is for a warp begun in double time, which the warp does not
+    ///   model yet (rdm:phase/hud-fidelity/phase-20-audio-double-speed-warp).
     /// - `arrival`: 130, "Warp out" (the guide: "130 Warp out").
     /// - `button_down`: 600, "Menu button down" (the resource's name, and
     ///   the guide's).
@@ -123,21 +149,63 @@ impl SoundTable {
     ///   it opens (`PlaySound` @0x47f36).
     /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
     ///   it closes (@0x4814e).
-    /// - `player_info_refused`: 153, "Beep4", `_beepSnd[3]`, which
-    ///   `_HandlePlayer` plays as it refuses the player info key during a
-    ///   jump (`PlaySound` @0x7039a-0x703bd).
     /// - `fleet_quote`: 154, `_beepSnd[4]`, which `_HyperSpawnFleet` plays
     ///   as an announced fleet with a `Quote` arrives, even when its line
     ///   is empty (@0x42698-0x426bb).
-    /// - `hail_refused`: 153, `_beepSnd[3]`, which
-    ///   `_HandlePlayerCommunication` plays with every refusal of a hail,
-    ///   with no target too (@0x626cf, @0x6206c, @0x6261c, @0x6264e). Its
-    ///   `PlaySound` argument of 1 or 5 is not modelled.
     /// - `hail_offer`: 154, `_beepSnd[4]`, which
     ///   `_HandlePlayerCommunication` plays as a person offers its mission
     ///   on its hail (@0x62232-0x6223d).
     /// - `hail_quote`: 154, `_beepSnd[4]`, which `_ShowPersonHailQuote`
     ///   plays with every person's hail quote (@0x44586-0x445ad).
+    /// - `nav_selected`: 150, `_beepSnd[0]`, which `_HandlePlayer` plays
+    ///   on every press of Nav Off and Hyperspace Mode (@0x69b19), as a
+    ///   stellar key finds a stellar (@0x69ebc), and as a click selects one
+    ///   (@0x6a6c1).
+    /// - `hyper_selected`: 152, `_beepSnd[2]`, as Hyper Select moves
+    ///   through the system's links (@0x69c89).
+    /// - `target_cleared`: 150, `_beepSnd[0]`, as Option-backquote lets go
+    ///   of the ship target (@0x69a7d).
+    /// - `tutorial_hint`: 154, `_beepSnd[4]`, as `_HandlePlayer` shows a
+    ///   first-flight tutorial hint (@0x70a1c, @0x70c12, @0x70dab,
+    ///   @0x70e59).
+    /// - `ship_downed`: 151, `_beepSnd[1]`, which `_DamageShip` plays as
+    ///   the player's ship is newly disabled (@0x3b11e) and as it newly
+    ///   starts to break up (@0x3b221).
+    /// - `downed_mission_failed`: 151, `_beepSnd[1]`, which `_DamageShip`
+    ///   plays as either fails the player's first `Flags2` 0x0004 mission
+    ///   (@0x3b04e, @0x3b2f1).
+    /// - `traffic_control`: 151, `_beepSnd[1]`, which
+    ///   `_HandlePlayerDockRequest` plays with the request's line
+    ///   (@0x67a69) and its denial (@0x67ec6), and
+    ///   `_HandlePlayerDockApproach` with its greeting (@0x649a9).
+    /// - `klaxon`: 371, which `_LoadSounds` loads into `_klaxxonSnd`
+    ///   (@0x1c22c-0x1c23e) and `_HandlePlayer` plays while the player's
+    ///   death timer is above 1.0 and it is not already playing
+    ///   (@0x6f1e4-0x6f227, `_ST_IsSoundPlaying` @0x6f200). The original
+    ///   plays it at priority 15, not modelled.
+    /// - `eject`: 372, "Eject", which `_LoadSounds` loads into
+    ///   `_escapePodSnd` (@0x1c240-0x1c252) and `_HandlePlayer` plays as the
+    ///   player ejects, with no test of whether it is still playing
+    ///   (`PlaySound` @0x6f920). The original plays it at priority 50, not
+    ///   modelled.
+    /// - `onboard_explosion`: 300, the first of the explosions
+    ///   `_LoadSounds`' loop from 0x1c200 loads from `snd ` 300 to 363 into
+    ///   `_explodSnd`, which `_HandlePlayer` plays as a sabotage outfit goes
+    ///   off (`_explodSnd[0]`, `PlaySound` @0x69375), with no test of
+    ///   whether it is still playing. The original plays it at priority
+    ///   100, not modelled.
+    /// - `jump_collapsed`: 151, "Beep2", `_beepSnd[1]`, which
+    ///   `_HandlePlayer` plays as a disabled player's pre-jump collapses,
+    ///   after halting the warp-up sounds (`_PlaySound` @0x68aaf). The
+    ///   original plays it at priority 50, not modelled.
+    /// - `refused`: 153, "Beep4", `_beepSnd[3]`, the shared refusal beep,
+    ///   which `_HandlePlayer` plays as it refuses the player info key
+    ///   during a jump or while the ship breaks up (`PlaySound`
+    ///   @0x7039a-0x703bd) and as the jump key's refusals are told
+    ///   (@0x6b89f, @0x6b9cc, @0x6ba72), and which
+    ///   `_HandlePlayerCommunication` plays with every refusal of a hail,
+    ///   with no target too (@0x626cf, @0x6206c, @0x6261c, @0x6264e). The
+    ///   original plays it at priority 5, not modelled.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -159,11 +227,21 @@ impl SoundTable {
         smuggling: Some(SoundId(154)),
         news_open: Some(SoundId(151)),
         news_close: Some(SoundId(152)),
-        player_info_refused: Some(SoundId(153)),
         fleet_quote: Some(SoundId(154)),
-        hail_refused: Some(SoundId(153)),
         hail_offer: Some(SoundId(154)),
         hail_quote: Some(SoundId(154)),
+        nav_selected: Some(SoundId(150)),
+        hyper_selected: Some(SoundId(152)),
+        target_cleared: Some(SoundId(150)),
+        tutorial_hint: Some(SoundId(154)),
+        ship_downed: Some(SoundId(151)),
+        downed_mission_failed: Some(SoundId(151)),
+        traffic_control: Some(SoundId(151)),
+        klaxon: Some(SoundId(371)),
+        eject: Some(SoundId(372)),
+        onboard_explosion: Some(SoundId(300)),
+        jump_collapsed: Some(SoundId(151)),
+        refused: Some(SoundId(153)),
     };
 }
 
@@ -194,10 +272,24 @@ mod tests {
         assert_eq!(table.smuggling, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
-        assert_eq!(table.player_info_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.fleet_quote, Some(SoundId(154)), "_beepSnd[4]");
-        assert_eq!(table.hail_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.hail_offer, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_quote, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.nav_selected, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.hyper_selected, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.target_cleared, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(
+            table.downed_mission_failed,
+            Some(SoundId(151)),
+            "_beepSnd[1]"
+        );
+        assert_eq!(table.traffic_control, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.klaxon, Some(SoundId(371)), "_klaxxonSnd");
+        assert_eq!(table.eject, Some(SoundId(372)), "_escapePodSnd");
+        assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");
+        assert_eq!(table.jump_collapsed, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.refused, Some(SoundId(153)), "_beepSnd[3]");
     }
 }

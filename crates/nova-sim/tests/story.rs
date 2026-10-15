@@ -164,6 +164,14 @@ impl PilotCatalog for Home {
         CommodityStrings::default()
     }
 
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn junk(&self) -> Vec<JunkRecord> {
         Vec::new()
     }
@@ -265,6 +273,7 @@ fn a_registered_subscription_runs_its_script_as_the_landing_settles() {
     session.register_story(on_landing).expect("registers");
     let bit = Bit::new(42).expect("a bit");
     session.land().expect("selects");
+    session.tick(nova_sim::Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandPress::Outcome(LandOutcome::Landed(StellarId(128))))

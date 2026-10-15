@@ -50,6 +50,16 @@ pub struct ShipFields {
     pub flags2: u16,
 }
 
+impl ShipFields {
+    /// The class's top speed, in pixels a tick: its `Speed` alone, none of
+    /// its outfits' (the original's class +0x40, `_LoadObjectData`
+    /// @0x7a0db-0x7a0ef); none below none.
+    #[must_use]
+    pub fn class_speed(&self) -> f32 {
+        f32::from(self.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK
+    }
+}
+
 /// `Speed` per pixel a tick. The Bible gives a weapon's speed in "pixels
 /// per frame x100"; a ship's `Speed` is read on the same scale, so an
 /// average ship (300) tops out at 3 pixels a tick, 90 a second.
@@ -134,5 +144,17 @@ mod tests {
             (stuck.max_speed, stuck.accel, stuck.turn_rate),
             (3.0, 0.0, 1.0)
         );
+    }
+
+    #[test]
+    fn a_class_speed_is_its_speed_alone_and_none_below_none() {
+        let fields = |speed| ShipFields {
+            speed,
+            accel: 900,
+            ..ShipFields::default()
+        };
+        assert_eq!(fields(350).class_speed(), 3.5);
+        assert_eq!(fields(0).class_speed(), 0.0);
+        assert_eq!(fields(-200).class_speed(), 0.0);
     }
 }

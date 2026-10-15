@@ -442,7 +442,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     // two small ovals (4 pixels each) and the player's pixel, and three
     // bars, then the nav area's "Nav System Off" (never the
     // system's name), and the target and secondary weapon lines. This
-    // `ïntf` has no `CargoArea`, so neither the cargo lines nor the date.
+    // `ïntf` has no `CargoArea`, so no cargo lines.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");

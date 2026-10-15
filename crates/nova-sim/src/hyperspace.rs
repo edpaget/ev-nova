@@ -71,7 +71,7 @@
 //! - [`next_hyper_destination`] is the system Hyper Select (the
 //!   original's `\` key) cycles the destination to, under the
 //!   [`HyperSelectRule`]: by the engine's, the current system's listed
-//!   links in Con order, after the course's first hop. A link to a system
+//!   links in Con order, after the system selected in nav mode 3. A link to a system
 //!   the galaxy overlay hides offers the visible system at its place
 //!   instead, or nothing when there is none, as the original resolves
 //!   each slot through `_FindActiveCoLocatedSystem` (@0x4be0).
@@ -109,6 +109,10 @@ pub const ARRIVAL_MARGIN: f32 = 1.0;
 /// standard jump distance arrives: just outside the no-jump zone, where it
 /// can jump out again.
 pub const ARRIVAL_DISTANCE: f32 = MIN_JUMP_DISTANCE + ARRIVAL_MARGIN;
+
+/// The `sÿst` `Message` that means no message buoy: the only one
+/// (`_HandlePlayer` @0x6c25b-0x6c27a).
+pub const NO_BUOY: i16 = -1;
 /// How many days pass in a jump before any outfit changes it, from the
 /// hull's `shïp` `Mass` alone: the Nova Bible's bands, 1-99 tons take one
 /// day, 100-199 take two and 200 or more take three. The original's
@@ -159,18 +163,22 @@ pub enum HyperSelectRule {
     /// Con slots in record order ([`StarMap::listed_links`]), so a link
     /// only the other system lists is never offered (`_HandlePlayer`
     /// @0x69bb2-0x69ce7; `_FindActiveCoLocatedSystem` @0x4be0 skips an
-    /// empty or inactive slot). It starts after the course's first hop,
-    /// whatever the course's length, because the selection follows the
-    /// route (`_CueNextHyperRouteDest` @0xe2dc), or from the first slot
-    /// when a stellar is the nav target (the nav mode was not hyperspace).
+    /// empty or inactive slot). It starts after the system selected in nav
+    /// mode 3 (@0x69cab-0x69cce), or from the first slot in any other mode,
+    /// whose selection it lets go of first (@0x69c98). The course does not
+    /// count: only the cue (`_CueNextHyperRouteDest` @0xe2dc) selects its
+    /// first hop. Each press keeps the course and moves only the
+    /// selection (@0x69c8e-0x69cd2).
     #[default]
     Engine,
     /// The phase text's reading: every system the ship can jump to under
     /// the session's [`HyperlinkRule`], by ascending ID
     /// ([`StarMap::jumps`]), starting after the course only when it is a
-    /// single jump, and from the first otherwise. Like the course plotted
-    /// to it, it never offers a jump the hyperlinks forbid: by the
-    /// engine's, none backwards along a one-way link.
+    /// single jump, and from the first otherwise. Each press plots a
+    /// one-jump course to the system it selects, the course the next
+    /// press starts after. Like that course, it never offers a jump the
+    /// hyperlinks forbid: by the engine's, none backwards along a one-way
+    /// link.
     OneJumpCourse,
 }
 
@@ -200,9 +208,9 @@ pub enum HyperlinkRule {
 }
 
 /// The system Hyper Select picks next from `from`, under `rule`, given the
-/// plotted `course` and whether a stellar is the nav target: the next in
-/// the rule's cycle, wrapping around. `None` when `from` has no links to
-/// offer.
+/// plotted `course` and the system `selected` in nav mode 3 (`None` in any
+/// other mode): the next in the rule's cycle, wrapping around. `None` when
+/// `from` has no links to offer.
 /// The [`HyperSelectRule::OneJumpCourse`] reading cycles the systems
 /// `hyperlinks` lets the ship jump to.
 #[must_use]
@@ -210,15 +218,12 @@ pub fn next_hyper_destination(
     map: &StarMap,
     from: SystemId,
     course: &[SystemId],
-    stellar_targeted: bool,
+    selected: Option<SystemId>,
     rule: HyperSelectRule,
     hyperlinks: HyperlinkRule,
 ) -> Option<SystemId> {
     match rule {
-        HyperSelectRule::Engine => {
-            let current = course.first().copied().filter(|_| !stellar_targeted);
-            next_after(map.listed_links(from), current)
-        }
+        HyperSelectRule::Engine => next_after(map.listed_links(from), selected),
         HyperSelectRule::OneJumpCourse => {
             let current = match course {
                 [only] => Some(*only),
@@ -299,6 +304,8 @@ struct Node {
     stellars: Vec<Option<(u32, u16)>>,
     /// Its `Interference`, raw.
     interference: i16,
+    /// Its `Message`, raw: the message buoy, −1 for none.
+    message: i16,
 }
 
 impl Node {
@@ -456,8 +463,20 @@ impl Places {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StarMap {
     nodes: BTreeMap<SystemId, Node>,
+    /// Every system's raw Con slots, hidden systems' included, in record
+    /// order, repeats and links to itself kept.
+    con: BTreeMap<SystemId, Vec<SystemId>>,
+    /// Every system's controlling government, hidden systems' included.
+    catalog_govts: BTreeMap<SystemId, Option<GovtId>>,
     /// Where every system it was built from is, and which stands for each.
     places: Places,
+}
+
+/// The system standing for a link's target `to`, of those in `places`'
+/// catalog: nothing for a system it does not hold, or with none visible
+/// at its place (`_FindActiveCoLocatedSystem` @0x4be0).
+fn resolve_link(places: &Places, to: SystemId) -> Option<SystemId> {
+    places.contains(to).then(|| places.stand_in(to)).flatten()
 }
 
 impl StarMap {
@@ -494,11 +513,15 @@ impl StarMap {
         let places = Places::new(&systems, hidden, colocated);
         // A link's target: the system standing for it, of those in the
         // catalog.
-        let resolve = |to: SystemId| places.contains(to).then(|| places.stand_in(to)).flatten();
+        let resolve = |to: SystemId| resolve_link(&places, to);
         let mut links = Vec::new();
         let mut nodes = BTreeMap::new();
+        let mut con = BTreeMap::new();
+        let mut catalog_govts = BTreeMap::new();
         for system in systems {
             let from = system.id;
+            con.insert(from, system.links.clone());
+            catalog_govts.insert(from, system.govt);
             if !places.visible(from) {
                 continue;
             }
@@ -518,6 +541,7 @@ impl StarMap {
                 ordered_jumps: Vec::new(),
                 stellars: system.stellars,
                 interference: system.interference,
+                message: system.message,
             };
             nodes.insert(from, node);
         }
@@ -556,7 +580,33 @@ impl StarMap {
                 }
             }
         }
-        Self { nodes, places }
+        Self {
+            nodes,
+            con,
+            catalog_govts,
+            places,
+        }
+    }
+
+    /// System `id`'s raw Con slots, as its `sÿst` lists them: in record
+    /// order, repeats and itself kept, hidden or not, unresolved. Empty
+    /// when the catalog does not hold it.
+    #[must_use]
+    pub fn con_slots(&self, id: SystemId) -> &[SystemId] {
+        self.con.get(&id).map_or(&[], Vec::as_slice)
+    }
+
+    /// System `id`'s Con slots each resolved to the visible system
+    /// standing for it, as `_SelectMissionSystem`'s -5 reads them
+    /// (@0x9ba70-0x9bac7): repeats and itself kept, a slot naming a
+    /// system the catalog does not hold or with none visible at its place
+    /// left out.
+    #[must_use]
+    pub fn usable_con_slots(&self, id: SystemId) -> Vec<SystemId> {
+        self.con_slots(id)
+            .iter()
+            .filter_map(|&to| resolve_link(&self.places, to))
+            .collect()
     }
 
     /// Where every system the map was built from is, hidden or not, and
@@ -660,11 +710,31 @@ impl StarMap {
         self.nodes.get(&id).map_or(0, |node| node.interference)
     }
 
+    /// System `id`'s message buoy, its `Message`: the index a hyperspace
+    /// arrival there shows (see the [`buoy`](crate::buoy) module), or
+    /// `None` for −1, the only value that means none, or a system not on
+    /// the map.
+    #[must_use]
+    pub fn buoy(&self, id: SystemId) -> Option<i16> {
+        self.nodes
+            .get(&id)
+            .map(|node| node.message)
+            .filter(|&message| message != NO_BUOY)
+    }
+
     /// System `id`'s controlling government: `None` when it is
     /// independent or not on the map.
     #[must_use]
     pub fn govt(&self, id: SystemId) -> Option<GovtId> {
         self.nodes.get(&id).and_then(|node| node.govt)
+    }
+
+    /// System `id`'s controlling government with no visibility test, a
+    /// hidden system's included: `None` when it is independent or not
+    /// among the systems the map was built from.
+    #[must_use]
+    pub fn catalog_govt(&self, id: SystemId) -> Option<GovtId> {
+        self.catalog_govts.get(&id).copied().flatten()
     }
 
     /// The fewest jumps from `from` to `to` under `rule`: each system
@@ -745,7 +815,9 @@ pub fn jump_zone(sites: &[LandingSite], jump_distance: f32, rule: JumpZoneRule) 
 /// Whether `player`, holding `fuel`, can jump to `next`, the next system
 /// on its route, when it must be `min_distance` from the centre to jump
 /// (exactly that far is far enough): `next`, or the first refusal that
-/// applies.
+/// applies, in the original's order: the selection (@0x6b11e-0x6b131),
+/// then the fuel (@0x6b14b-0x6b157), then the no-jump zone
+/// (@0x6b15d-0x6b22b).
 pub fn check_jump(
     player: &ShipState,
     fuel: f32,
@@ -753,12 +825,12 @@ pub fn check_jump(
     min_distance: f32,
 ) -> Result<SystemId, JumpRefusal> {
     let next = next.ok_or(JumpRefusal::NoDestination)?;
+    if fuel < JUMP_FUEL {
+        return Err(JumpRefusal::NoFuel { fuel });
+    }
     let distance = player.position.length();
     if distance < min_distance {
         return Err(JumpRefusal::TooClose { distance });
-    }
-    if fuel < JUMP_FUEL {
-        return Err(JumpRefusal::NoFuel { fuel });
     }
     Ok(next)
 }
@@ -837,6 +909,7 @@ mod tests {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            message: -1,
         }
     }
 
@@ -1337,17 +1410,17 @@ mod tests {
 
     // Hyper Select.
 
-    /// The system Hyper Select picks in `hub` from 130 with `course`, by
-    /// the engine's hyperlinks.
-    fn select(course: &[i16], stellar_targeted: bool, rule: HyperSelectRule) -> Option<SystemId> {
-        select_by(course, stellar_targeted, rule, Engine)
+    /// The system Hyper Select picks in `hub` from 130 with `course` and
+    /// `selected` in mode 3, by the engine's hyperlinks.
+    fn select(course: &[i16], selected: Option<i16>, rule: HyperSelectRule) -> Option<SystemId> {
+        select_by(course, selected, rule, Engine)
     }
 
-    /// The system Hyper Select picks in `hub` from 130 with `course`, under
-    /// `hyperlinks`.
+    /// The system Hyper Select picks in `hub` from 130 with `course` and
+    /// `selected` in mode 3, under `hyperlinks`.
     fn select_by(
         course: &[i16],
-        stellar_targeted: bool,
+        selected: Option<i16>,
         rule: HyperSelectRule,
         hyperlinks: HyperlinkRule,
     ) -> Option<SystemId> {
@@ -1355,31 +1428,31 @@ mod tests {
             &hub(),
             SystemId(130),
             &ids(course),
-            stellar_targeted,
+            selected.map(SystemId),
             rule,
             hyperlinks,
         )
     }
 
     #[test]
-    fn the_engine_cycles_the_listed_links_after_the_courses_first_hop() {
+    fn the_engine_cycles_the_listed_links_after_the_system_selected() {
         use HyperSelectRule::Engine;
         assert_eq!(HyperSelectRule::default(), Engine);
-        assert_eq!(select(&[], false, Engine), Some(SystemId(134)), "no course");
-        assert_eq!(select(&[131], false, Engine), Some(SystemId(135)));
-        assert_eq!(select(&[135], false, Engine), Some(SystemId(134)), "wraps");
+        assert_eq!(select(&[], None, Engine), Some(SystemId(134)), "none");
+        assert_eq!(select(&[], Some(131), Engine), Some(SystemId(135)));
+        assert_eq!(select(&[], Some(135), Engine), Some(SystemId(134)), "wraps");
         assert_eq!(
-            select(&[131, 132], false, Engine),
-            Some(SystemId(135)),
-            "after a multi-jump course's first hop"
-        );
-        assert_eq!(
-            select(&[131], true, Engine),
+            select(&[131, 132], None, Engine),
             Some(SystemId(134)),
-            "a stellar targeted starts from the first"
+            "the course does not matter: nothing selected starts from the first"
         );
         assert_eq!(
-            select(&[136], false, Engine),
+            select(&[131], Some(135), Engine),
+            Some(SystemId(134)),
+            "nor with a selection"
+        );
+        assert_eq!(
+            select(&[], Some(136), Engine),
             Some(SystemId(134)),
             "136 is not listed by 130"
         );
@@ -1388,22 +1461,22 @@ mod tests {
     #[test]
     fn the_one_jump_course_reading_cycles_every_jump_by_ascending_id() {
         use HyperSelectRule::OneJumpCourse;
-        assert_eq!(select(&[], false, OneJumpCourse), Some(SystemId(131)));
-        assert_eq!(select(&[131], false, OneJumpCourse), Some(SystemId(134)));
+        assert_eq!(select(&[], None, OneJumpCourse), Some(SystemId(131)));
+        assert_eq!(select(&[131], None, OneJumpCourse), Some(SystemId(134)));
         assert_eq!(
-            select(&[135], false, OneJumpCourse),
+            select(&[135], None, OneJumpCourse),
             Some(SystemId(131)),
             "wraps"
         );
         assert_eq!(
-            select(&[131, 132], false, OneJumpCourse),
+            select(&[131, 132], None, OneJumpCourse),
             Some(SystemId(131)),
             "not a single jump: the first"
         );
         assert_eq!(
-            select(&[134], true, OneJumpCourse),
+            select(&[134], Some(131), OneJumpCourse),
             Some(SystemId(135)),
-            "the nav target does not matter"
+            "the selection does not matter"
         );
     }
 
@@ -1415,7 +1488,7 @@ mod tests {
             let mut course = vec![];
             let mut seen = vec![];
             for _ in 0..5 {
-                let next = select_by(&course, false, OneJumpCourse, hyperlinks).expect("one");
+                let next = select_by(&course, None, OneJumpCourse, hyperlinks).expect("one");
                 seen.push(next);
                 course = vec![next.0];
             }
@@ -1430,7 +1503,7 @@ mod tests {
         for rule in [HyperSelectRule::Engine, HyperSelectRule::OneJumpCourse] {
             for hyperlinks in [Engine, BothWays] {
                 assert_eq!(
-                    next_hyper_destination(&hub(), SystemId(133), &[], false, rule, hyperlinks),
+                    next_hyper_destination(&hub(), SystemId(133), &[], None, rule, hyperlinks),
                     None
                 );
             }
@@ -1446,6 +1519,7 @@ mod tests {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            message: -1,
         }]);
         assert_eq!(map.position(SystemId(128)), Some(Vec2::new(-150.0, 75.0)));
         assert_eq!(map.position(SystemId(129)), None);
@@ -1536,6 +1610,27 @@ mod tests {
         assert_eq!(map.interference(SystemId(130)), 0, "not on the map");
     }
 
+    #[test]
+    fn a_systems_buoy_is_its_message_but_minus_1() {
+        let buoyed = |id, message| StarSystem {
+            message,
+            ..system(id, &[])
+        };
+        let map = StarMap::new(vec![
+            buoyed(128, -1),
+            buoyed(129, 0),
+            buoyed(130, 3),
+            buoyed(131, 20_003),
+            buoyed(132, -2),
+        ]);
+        assert_eq!(map.buoy(SystemId(128)), None, "-1 is none");
+        assert_eq!(map.buoy(SystemId(129)), Some(0));
+        assert_eq!(map.buoy(SystemId(130)), Some(3));
+        assert_eq!(map.buoy(SystemId(131)), Some(20_003));
+        assert_eq!(map.buoy(SystemId(132)), Some(-2));
+        assert_eq!(map.buoy(SystemId(133)), None, "not on the map");
+    }
+
     // Jumping.
 
     /// Whether a ship at (`x`, `y`) holding `fuel` can jump to `next`.
@@ -1609,10 +1704,19 @@ mod tests {
             check_ship(ship(0.0, -999.9, 300.0), NEXT),
             Err(JumpRefusal::TooClose { distance: 999.9 })
         );
+    }
+
+    #[test]
+    fn fuel_is_checked_before_the_no_jump_zone() {
         assert_eq!(
             check_ship(ship(300.0, 400.0, 0.0), NEXT),
+            Err(JumpRefusal::NoFuel { fuel: 0.0 }),
+            "too close as well"
+        );
+        assert_eq!(
+            check_ship(ship(300.0, 400.0, 100.0), NEXT),
             Err(JumpRefusal::TooClose { distance: 500.0 }),
-            "before the fuel"
+            "with the fuel"
         );
     }
 
@@ -1806,5 +1910,31 @@ mod tests {
             assert_eq!(jump_zone(sites, 1250.0, Engine), 1250.0, "{sites:?}");
             assert_eq!(jump_zone(sites, 1250.0, Always), 1250.0, "{sites:?}");
         }
+    }
+
+    #[test]
+    fn con_slots_keep_every_slot_in_record_order_with_repeats_and_self_hidden_systems_too() {
+        // 2 is hidden at 3's place; 4 hidden alone.
+        let map = StarMap::with_hidden(
+            vec![
+                system_at(1, (0.0, 0.0), &[3, 1, 3, 2, 4, 99]),
+                system_at(2, (50.0, 0.0), &[1, 1]),
+                system_at(3, (50.0, 0.0), &[]),
+                system_at(4, (90.0, 0.0), &[]),
+            ],
+            &[SystemId(2), SystemId(4)].into(),
+            CoLocated::Lowest,
+        );
+        assert_eq!(map.con_slots(SystemId(1)), ids(&[3, 1, 3, 2, 4, 99]));
+        assert_eq!(map.con_slots(SystemId(2)), ids(&[1, 1]), "hidden");
+        assert_eq!(map.con_slots(SystemId(3)), ids(&[]));
+        assert_eq!(map.con_slots(SystemId(98)), ids(&[]), "not held");
+        assert_eq!(
+            map.usable_con_slots(SystemId(1)),
+            ids(&[3, 1, 3, 3]),
+            "each slot's stand-in: 2 resolves to 3, 4 has none, 99 is not held"
+        );
+        assert_eq!(map.usable_con_slots(SystemId(2)), ids(&[1, 1]));
+        assert_eq!(map.usable_con_slots(SystemId(98)), ids(&[]));
     }
 }

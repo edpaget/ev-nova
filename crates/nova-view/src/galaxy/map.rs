@@ -15,8 +15,8 @@
 //! - Pressing the left button in the map area and moving the pointer drags
 //!   the map. Releasing it after moving no more than [`CLICK_SLOP`] is a
 //!   click instead: it selects the system under the pointer (clicking again
-//!   cycles through systems that share a position) or, in empty space,
-//!   clears the selection.
+//!   cycles through systems that share a position, from a system a click
+//!   selected) or, in empty space, clears the selection.
 //! - Return (a press, not its repeats), or a click on the "Enter system"
 //!   button the panel shows while a system is selected, asks to enter the
 //!   selected system. The map only records the request; its owner takes
@@ -32,7 +32,15 @@
 //! destination, which the owner takes with
 //! [`GalaxyMap::take_destination`]. Either map draws the course it is
 //! shown ([`GalaxyMap::show_course`]): the current system marked, and the
-//! route from it through each hop.
+//! route from it through each hop. Over the course, every map draws the
+//! link from the current system to the system selected in nav mode 3
+//! ([`GalaxyMap::show_hyper_selection`]) in [`HYPER_SELECTED`], as
+//! `_DrawMap` draws it again after every link (@0xebd8-0xed31), over the
+//! dim-green slot it gave in its pass over the links (@0xea65-0xea86).
+//! As the course map opens from flight, its owner selects the system the
+//! original's `_DoSystemMap` does ([`GalaxyMap::preselect`],
+//! @0x124ac-0x124ff), which the panel then shows; a click at its place
+//! is a first click.
 //!
 //! While a hypergate is entered from flight, the course map becomes the
 //! hypergate map ([`MapMode::Hypergate`], [`GalaxyMap::offer_gates`]), as
@@ -138,6 +146,12 @@ pub const COURSE_HELP: &str =
 /// The plotted route's colour and width.
 pub const ROUTE: Color = Color::rgba(64, 224, 64, 255);
 pub const ROUTE_WIDTH: f32 = 3.0;
+/// The link from the current system to the system selected in nav mode
+/// 3 ([`GalaxyMap::show_hyper_selection`]): `_dimGreen`, RGB (0, 0x99, 0)
+/// (`_InitColors` @0x1be8c-0x1be9c), at pen 1 (`_DrawMap`
+/// @0xebd8-0xed31).
+pub const HYPER_SELECTED: Color = Color::rgba(0, 153, 0, 255);
+pub const HYPER_SELECTED_WIDTH: f32 = 1.0;
 /// The mark under the current system's dot: its colour and size.
 pub const CURRENT: Color = Color::rgba(255, 224, 64, 255);
 pub const CURRENT_SIZE: f32 = 14.0;
@@ -181,6 +195,10 @@ pub struct GalaxyMap {
     model: GalaxyModel,
     view: MapView,
     selected: Option<SystemId>,
+    /// Whether a click made the selection, so that a click again at its
+    /// place moves on through the systems there; not when the map
+    /// preselected it ([`GalaxyMap::preselect`]).
+    clicked: bool,
     press: Option<Press>,
     /// Whether the left button went down on the "Enter system" button and
     /// has not been released yet.
@@ -198,6 +216,8 @@ pub struct GalaxyMap {
     explored: Option<BTreeSet<SystemId>>,
     /// The systems a hypergate offers, on the hypergate map.
     offered: Vec<SystemId>,
+    /// The system selected in nav mode 3, as last shown.
+    hyper_selection: Option<SystemId>,
 }
 
 impl GalaxyMap {
@@ -221,6 +241,7 @@ impl GalaxyMap {
             model,
             view,
             selected: None,
+            clicked: false,
             press: None,
             armed: false,
             entry: None,
@@ -229,6 +250,7 @@ impl GalaxyMap {
             route: Vec::new(),
             explored: None,
             offered: Vec::new(),
+            hyper_selection: None,
         }
     }
 
@@ -274,6 +296,30 @@ impl GalaxyMap {
     pub fn show_course(&mut self, current: SystemId, route: &[SystemId]) {
         self.current = Some(current);
         self.route = route.to_vec();
+    }
+
+    /// Shows `selected` as the system selected in nav mode 3: the map draws
+    /// a [`HYPER_SELECTED`] link to it from the current system, over every
+    /// link and the course and under the systems, as `_DrawMap` does
+    /// (@0xebd8-0xed31) on every map mode. `None` draws none.
+    pub fn show_hyper_selection(&mut self, selected: Option<SystemId>) {
+        self.hyper_selection = selected;
+    }
+
+    /// The system shown as selected in nav mode 3.
+    #[must_use]
+    pub fn hyper_selection(&self) -> Option<SystemId> {
+        self.hyper_selection
+    }
+
+    /// Selects `system`, as the map selects as it opens (`_DoSystemMap`
+    /// @0x124ac-0x124ff), when it is on the map, and nothing otherwise. It
+    /// records no destination, and a click at its place is a first click,
+    /// selecting the first system there: the original's click never reads
+    /// the selection (@0x12dd4-0x1314b).
+    pub fn preselect(&mut self, system: Option<SystemId>) {
+        self.selected = system.filter(|&id| self.model.system(id).is_some());
+        self.clicked = false;
     }
 
     /// Draws the session's `galaxy` over the catalog's geometry
@@ -384,14 +430,17 @@ impl GalaxyMap {
             return;
         };
         if press.travelled <= CLICK_SLOP && in_map(at) {
-            let clicked = self.model.click(at, &self.view, self.selected);
+            let from = self.selected.filter(|_| self.clicked);
+            let clicked = self.model.click(at, &self.view, from);
             if self.mode == MapMode::Hypergate {
                 if clicked.is_some_and(|id| self.offered.contains(&id)) {
                     self.selected = clicked;
+                    self.clicked = true;
                 }
                 return;
             }
             self.selected = clicked;
+            self.clicked = true;
             if self.mode == MapMode::Course && self.selected.is_some() {
                 self.destination = self.selected;
             }
@@ -440,6 +489,10 @@ impl GalaxyMap {
                 if let [Some(from), Some(to)] = *hop {
                     list.line(from, to, ROUTE_WIDTH, ROUTE);
                 }
+            }
+            if let (Some(from), Some(to)) = (screen(current), self.hyper_selection.and_then(screen))
+            {
+                list.line(from, to, HYPER_SELECTED_WIDTH, HYPER_SELECTED);
             }
             if let Some(at) = screen(current) {
                 list.dot(at, CURRENT_SIZE, CURRENT);
@@ -533,8 +586,13 @@ impl GalaxyMap {
             if stack.len() > 1 {
                 let index = stack.iter().position(|&id| id == system.entry.id);
                 let ids: Vec<String> = stack.iter().map(|id| id.0.to_string()).collect();
+                let again = if self.clicked {
+                    ": click again for the next"
+                } else {
+                    ""
+                };
                 let line = format!(
-                    "{} of {} systems here (sÿst {}): click again for the next",
+                    "{} of {} systems here (sÿst {}){again}",
                     index.map_or(0, |index| index + 1),
                     stack.len(),
                     ids.join(", ")
@@ -2040,6 +2098,217 @@ mod tests {
         click_on(&mut map, 128);
         assert_eq!(map.selected(), Some(SystemId(128)));
         assert_eq!(course_line(&drawn(&map)), None, "the current system");
+    }
+
+    // The hyperspace selection.
+
+    #[test]
+    fn the_selected_link_is_drawn_dim_green_from_the_current_system() {
+        let mut map = course_map();
+        map.show_course(SystemId(130), &ids(&[128]));
+        map.show_hyper_selection(Some(SystemId(129)));
+        assert_eq!(map.hyper_selection(), Some(SystemId(129)));
+        let list = drawn(&map);
+        assert_eq!(
+            lines(&list, HYPER_SELECTED),
+            [(dot(&map, 130), dot(&map, 129), 1.0)]
+        );
+        // Over every link and the course, under every system.
+        let selected = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == HYPER_SELECTED))
+            .expect("drawn");
+        let last_line = |of: Color| {
+            list.iter()
+                .rposition(|c| matches!(c, DrawCommand::Line { color, .. } if *color == of))
+                .expect("drawn")
+        };
+        let first_dot = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Dot { .. }))
+            .expect("drawn");
+        assert!(
+            last_line(LINK) < selected && last_line(ROUTE) < selected && selected < first_dot,
+            "{list:?}"
+        );
+        // `_dimGreen` (`_InitColors` @0x1be8c-0x1be9c), at pen 1.
+        assert_eq!(HYPER_SELECTED, Color::rgba(0, 153, 0, 255));
+        assert_eq!(HYPER_SELECTED_WIDTH, 1.0);
+    }
+
+    #[test]
+    fn no_selected_link_without_a_selection_a_current_system_or_both_ends_on_the_map() {
+        let mut map = course_map();
+        map.show_hyper_selection(Some(SystemId(129)));
+        assert_eq!(lines(&drawn(&map), HYPER_SELECTED), [], "no current system");
+        map.show_course(SystemId(130), &[]);
+        map.show_hyper_selection(None);
+        assert_eq!(map.hyper_selection(), None);
+        assert_eq!(lines(&drawn(&map), HYPER_SELECTED), [], "no selection");
+        map.show_hyper_selection(Some(SystemId(999)));
+        assert_eq!(lines(&drawn(&map), HYPER_SELECTED), [], "not on the map");
+        map.show_course(SystemId(999), &[]);
+        map.show_hyper_selection(Some(SystemId(129)));
+        assert_eq!(
+            lines(&drawn(&map), HYPER_SELECTED),
+            [],
+            "here not on the map"
+        );
+    }
+
+    #[test]
+    fn the_viewer_and_the_hypergate_map_draw_the_selected_link_too() {
+        let mut map = self::map();
+        map.show_course(SystemId(130), &[]);
+        map.show_hyper_selection(Some(SystemId(129)));
+        assert_eq!(lines(&drawn(&map), HYPER_SELECTED).len(), 1, "viewer");
+        let mut map = gate_map();
+        map.show_hyper_selection(Some(SystemId(129)));
+        assert_eq!(
+            lines(&drawn(&map), HYPER_SELECTED),
+            [(dot(&map, 128), dot(&map, 129), 1.0)],
+            "hypergate"
+        );
+    }
+
+    /// The panel's title: the selected system's name, or the prompt.
+    fn title(list: &DrawList) -> String {
+        list.iter()
+            .find_map(|c| match c {
+                DrawCommand::Text { text, origin, .. } if *origin == at(LEFT, TITLE_TOP) => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .expect("a title")
+    }
+
+    #[test]
+    fn the_preselect_selects_a_system_and_the_panel_shows_it() {
+        let mut map = course_map();
+        map.preselect(Some(SystemId(129)));
+        assert_eq!(map.selected(), Some(SystemId(129)));
+        let list = drawn(&map);
+        let half = HIGHLIGHT_SIZE / 2.0;
+        let beta = dot(&map, 129);
+        assert!(
+            lines(&list, Color::WHITE).contains(&(
+                at(beta.x - half, beta.y - half),
+                at(beta.x + half, beta.y - half),
+                HIGHLIGHT_WIDTH
+            )),
+            "highlighted"
+        );
+        assert_eq!(title(&list), "Beta (sÿst 129)");
+        assert_eq!(map.take_destination(), None, "no destination");
+        map.preselect(None);
+        assert_eq!(map.selected(), None);
+        assert_eq!(title(&drawn(&map)), "Click a system to see its stellars");
+        map.preselect(Some(SystemId(999)));
+        assert_eq!(map.selected(), None, "not on the map");
+    }
+
+    #[test]
+    fn the_preselect_is_kept_only_while_the_session_shows_it() {
+        let mut map = course_map();
+        map.show_galaxy(&session_galaxy(|overlay| {
+            overlay.set_visible(SystemId(129), Some(false));
+        }));
+        map.preselect(Some(SystemId(129)));
+        assert_eq!(map.selected(), None, "hidden");
+    }
+
+    #[test]
+    fn a_click_on_the_preselected_place_is_a_first_click() {
+        // `_DoSystemMap`'s click (@0x12dd4-0x1314b) never reads
+        // `_selSystem`: it takes the first visible system at the place.
+        let mut map = course_map();
+        click_on(&mut map, 129);
+        map.take_destination();
+        map.preselect(Some(SystemId(128)));
+        let stack_line = |map: &GalaxyMap| {
+            texts(&drawn(map))
+                .into_iter()
+                .find(|text| text.contains("systems here"))
+        };
+        assert_eq!(
+            stack_line(&map).as_deref(),
+            Some("1 of 2 systems here (sÿst 128, 131)"),
+            "a preselect is not a click to click again"
+        );
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)), "not the next there");
+        assert_eq!(map.take_destination(), Some(SystemId(128)));
+        assert_eq!(
+            stack_line(&map).as_deref(),
+            Some("1 of 2 systems here (sÿst 128, 131): click again for the next")
+        );
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(131)), "a click again cycles");
+        let mut map = course_map();
+        map.preselect(Some(SystemId(131)));
+        click_on(&mut map, 131);
+        assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
+    }
+
+    #[test]
+    fn a_click_on_the_hypergate_maps_preselected_place_is_a_first_click() {
+        let mut map = course_map();
+        map.show_course(SystemId(129), &[]);
+        map.offer_gates(ids(&[131]));
+        map.preselect(Some(SystemId(128)));
+        click_on(&mut map, 128);
+        assert_eq!(
+            map.selected(),
+            Some(SystemId(128)),
+            "128 hit first, not offered: the preselect kept"
+        );
+        assert_eq!(map.take_gate_choice(), None);
+    }
+
+    /// The panel's stack line.
+    fn stack_line(map: &GalaxyMap) -> String {
+        texts(&drawn(map))
+            .into_iter()
+            .find(|text| text.contains("systems here"))
+            .expect("a stack line")
+    }
+
+    #[test]
+    fn a_click_again_on_the_hypergate_map_moves_on_through_offered_systems_there() {
+        let mut map = course_map();
+        map.show_course(SystemId(129), &[]);
+        map.offer_gates(ids(&[128, 131]));
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
+        assert!(
+            stack_line(&map).ends_with(": click again for the next"),
+            "{}",
+            stack_line(&map)
+        );
+        click_on(&mut map, 128);
+        assert_eq!(
+            map.selected(),
+            Some(SystemId(131)),
+            "a click again moves on"
+        );
+        assert_eq!(map.take_gate_choice(), Some(SystemId(131)));
+    }
+
+    #[test]
+    fn a_course_map_click_before_the_gates_are_offered_is_not_clicked_again() {
+        // A course-map click on 128 leaves it selected by a click; offering
+        // the gates lets go of it, so the first click on the hypergate map
+        // starts from the first system at the place, not the one after 128.
+        let mut map = course_map();
+        map.show_course(SystemId(129), &[]);
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)));
+        map.offer_gates(ids(&[128, 131]));
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(131)));
     }
 
     // The hypergate map.

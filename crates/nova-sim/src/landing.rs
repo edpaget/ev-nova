@@ -7,46 +7,58 @@
 //! key. You'll be given clearance to land, then press the L key again",
 //! "or just press the L key to request clearance on the nearest planet in
 //! the system" (and `STR#` 2002 #25: "to request landing clearance, then
-//! hit it again to land"). So L, with the navigation target:
+//! hit it again to land"). It is `_HandlePlayerDockRequest`
+//! (@0x66691-0x67ef9), and the dock request it keeps is the
+//! [`clearance`] module's [`DockRequest`]. L, in this
+//! order:
 //!
-//! - none, or one no longer in the system: selects the nearest stellar
-//!   that [`is_landable`] ([`nearest_landable`]), station or planet, and
-//!   gives its [`Clearance`]. It never lands, even with the ship at rest
-//!   over it. With stellars but none landable it selects nothing and
-//!   refuses with [`LandingRefusal::NotLandable`] for the nearest; with no
-//!   stellars, [`LandingRefusal::NoStellars`].
-//! - a stellar that cannot be landed on (only a slot key or a click
-//!   selects one): refuses with [`LandingRefusal::NotLandable`], wherever
-//!   the ship is, before any check of range or speed (`STR#` 2002
-//!   #84/#88/#90, "Your ship is unable to land on ... The planet's
-//!   environment is too hostile.").
-//! - a landable stellar, however selected: lands on it if
-//!   [`check_landing`] allows. A refusal keeps the target, and the player
-//!   tries again (the manual: "If you're too far away, or if you're moving
-//!   too fast ... your ship's computer will beep at you and you can try
-//!   again").
+//! 1. **The stellar.** The navigation target; with none, or one no
+//!    longer in the system, the nearest stellar that [`is_landable`]
+//!    ([`nearest_landable`]), station or planet, which the press selects
+//!    ([`DockPress::selected`]) and goes on with (@0x6a8ed-0x6a956). With
+//!    stellars but none landable it selects nothing and refuses with
+//!    [`LandingRefusal::NotLandable`] for the nearest; with no stellars,
+//!    [`LandingRefusal::NoStellars`].
+//! 2. **Not landable** (@0x6695c-0x669ae): a stellar that cannot be landed
+//!    on (only a slot key or a click selects one) refuses with
+//!    [`LandingRefusal::NotLandable`], wherever the ship is (`STR#` 2002
+//!    #84/#88/#90, "Your ship is unable to land on ... The planet's
+//!    environment is too hostile."). The request is kept.
+//! 3. **Uninhabited** (@0x66b51-0x66bcd): the request becomes the
+//!    stellar's at [`CLEARED`], "No response." is said
+//!    ([`DockSaid::NoResponse`]), and the press goes on to 4, so it lands
+//!    in the same press when it can.
+//! 4. **The attempt** (@0x66bd2-0x67800): when the request is the
+//!    stellar's, it lands if [`check_landing`] allows, and the request
+//!    ends. Otherwise the refusal keeps the request and the target, and
+//!    the player tries again (the manual: "If you're too far away, or if
+//!    you're moving too fast ... your ship's computer will beep at you and
+//!    you can try again").
+//! 5. **The request** (@0x6788f-0x67c4b, @0x67ea3-0x67ef9): otherwise
+//!    traffic control is asked ([`cleared`]), the old counter granting it
+//!    ([`Standing::granted`]). Cleared, the request becomes the stellar's,
+//!    at [`REQUESTED_NEAR`] in silence within
+//!    [`NEAR`](crate::clearance::NEAR) of it on both axes, else at 0 with
+//!    the request's line ([`DockSaid::Requested`]), and the press gives
+//!    [`LandOutcome::Requested`]. Not cleared, [`LandingRefusal::Denied`],
+//!    and the request is dropped.
 //!
-//! The ship lands on its target when it is over it, within its
-//! [`LandingReach`], and no faster than [`LANDING_SPEED`].
-//! [`check_landing`] gives the stellar, or the first [`LandingRefusal`]
-//! that applies, in this order:
+//! So a press lands only once the dock approach has counted the request
+//! past [`REQUESTED_NEAR`] ([`approach`](crate::clearance::approach)), and
+//! traffic control is not asked again. [`check_landing`] gives the
+//! stellar, or the first [`LandingRefusal`] that applies, in this order:
 //!
-//! 1. [`LandingRefusal::TooFar`]: the ship is not over the target, by
-//!    its reach. The same reach decides whether a ship moving too fast
-//!    is told it is too far or too fast, as the original's dock request
-//!    reads it again for its refusal (@0x6773a-0x677b2).
-//! 2. [`LandingRefusal::NotLandable`]: the stellar lacks the can-land flag,
-//!    or it is destroyed, or it can be landed on only once destroyed and
-//!    is not ([`is_landable`]).
-//! 3. [`LandingRefusal::Denied`]: traffic control does not clear the
-//!    pilot ([`cleared`]). An uninhabited stellar has no traffic control,
-//!    as the Bible says, so it is not asked.
-//! 4. [`LandingRefusal::TooFast`]: the ship is moving faster than
+//! 1. [`LandingRefusal::TooFar`]: the counter is not past
+//!    [`REQUESTED_NEAR`] (@0x66c13-0x66c23), or the ship is not over the
+//!    target, by its reach (@0x66c6c-0x66cfd). The same reach and counter
+//!    decide whether a ship moving too fast is told it is too far or too
+//!    fast, as the original's dock request reads them again for its
+//!    refusal (@0x6773a-0x677c0).
+//! 2. [`LandingRefusal::TooFast`]: the ship is moving faster than
 //!    [`LANDING_SPEED`].
 //!
 //! **Clearance** ([`cleared`]) is `_HandlePlayerDockRequest`'s clearance
-//! block (@0x67903-0x67a05), whole but for the request counter. Its
-//! checks run in this order, the pilot's [`Standing`] giving what they
+//! block (@0x67903-0x67a05), whole. Its checks run in this order, the pilot's [`Standing`] giving what they
 //! read of the pilot:
 //!
 //! 1. The record: the legal record (by the engine the one in the
@@ -57,7 +69,9 @@
 //! 2. Domination: the stellar is dominated (@0x6792d). The original's
 //!    byte (+0x46) is set by Demand Tribute; the engine knows only the
 //!    always-dominated `Flags2` [`DOMINATED`](crate::market::DOMINATED).
-//! 3. A request already granted (@0x67934): left out, below.
+//! 3. A request already granted (@0x67934-0x6793d): the dock request's
+//!    counter at [`CLEARED`] or more ([`Standing::granted`]), whichever
+//!    stellar it is for. The approach sets it ([`clearance`]).
 //! 4. `Require`: at a governed stellar, a pilot who does not contribute
 //!    every `Require` bit of its government is cleared by none of 1-3
 //!    (@0x67940-0x6796b, `_PlayerMeetsRequirements` @0x776f).
@@ -74,28 +88,37 @@
 //! reading of [`BlessingLanding`](crate::RuleKey::BlessingLanding), the
 //! Bible's, past `MinStatus` only. The clearance block plays no sound.
 //!
-//! Left out of the clearance:
+//! The dock approach's own clearance
+//! ([`approach_clears`](crate::clearance::approach_clears)) has no
+//! `Require` test, so it is not [`cleared`].
 //!
-//! - The request counter (@0x67934-0x6793d): a landing request at 0x2ee
-//!   or more clears the pilot, `Require` permitting. The approach sets it
-//!   (@0x64970), and so does an accepted planet bribe (`_DoPlanetCommDialog`
-//!   @0x97117). The engine has no pending request: the approach is
-//!   rdm:phase/hud-fidelity/phase-12-flight-messages-the-original-raises
-//!   and the bribe rdm:task/planet-domination, each to feed this check
-//!   through [`Standing`].
-//! - `_HandlePlayerDockApproach` (@0x647a6-0x64fff), its blessing
-//!   (@0x648af) and its `PlaySound`s (@0x649a9, @0x64f77): the engine has
-//!   no approach (hud-fidelity phase 12). Its clearance has no `Require`
-//!   test, so it is not [`cleared`].
-//! - Domination by Demand Tribute (+0x46 written @0x978fa, cleared
-//!   @0x9740f), and `_DoPlanetCommDialog`'s blessing (@0x96c15):
-//!   rdm:task/planet-domination.
+//! Left out of the press:
+//!
+//! - An accepted planet bribe's counter, 0x2ef (`_DoPlanetCommDialog`
+//!   @0x97112-0x97125), domination by Demand Tribute (+0x46 written
+//!   @0x978fa, cleared @0x9740f) and `_DoPlanetCommDialog`'s blessing
+//!   (@0x96c15): rdm:task/planet-domination.
+//! - The fee: its refusal (@0x669b4-0x66a80), the approach greeting's fee
+//!   line (@0x64d70-0x64e58) and the charge (@0x66db9-0x66df5):
+//!   rdm:task/landing-fee. The engine models no fee, and no stock stellar
+//!   has one.
+//! - The cloak refusal (@0x66a85-0x66ae9) and the silent press of a
+//!   disabled or dying ship (@0x66aee-0x66b14), which the
+//!   [`Session`](crate::Session) refuses up front with
+//!   [`LandingRefusal::Disabled`]:
+//!   rdm:phase/player-death/phase-16-handle-player-left-out-gates.
+//! - The refusals' `snd ` 153 (@0x67e8f, @0x676aa, @0x676fe):
+//!   rdm:phase/audio-fidelity/phase-4-audio-refusal-beep.
+//! - The per-axis 0.75 speed gate (@0x66c3c-0x66c66):
+//!   rdm:phase/stellar-fidelity/phase-6-per-axis-landing-speed.
+//! - The player's AI wait (+0x4c, tested @0x66c2f and zeroed @0x66b6d):
+//!   the engine keeps none.
 //!
 //! Each refusal says whether the stellar is a station, which picks the
 //! original's "dock at this station" or "land on this planet" wording.
 //!
-//! Hypergates and wormholes are landed on the same way, with the same
-//! checks; the [`Session`](crate::Session) enters one instead of docking
+//! Hypergates and wormholes are requested and landed on the same way;
+//! the [`Session`](crate::Session) enters one instead of docking
 //! ([`LandPress::AtGate`](crate::LandPress::AtGate), see
 //! [`gate`](crate::gate)).
 //!
@@ -133,6 +156,7 @@
 //! per-axis-landing-speed).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
+use crate::clearance::{self, CLEARED, DockRequest, REQUESTED_NEAR};
 use crate::flight::ShipState;
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
@@ -179,9 +203,11 @@ pub enum LandingRefusal {
     /// [`Session`](crate::Session) gives this before [`check_landing`] is
     /// asked.
     Jumping,
-    /// The ship is disabled, breaking up or destroyed. The
-    /// [`Session`](crate::Session) gives this before [`check_landing`] is
-    /// asked.
+    /// The ship is disabled, breaking up or destroyed: refused silently,
+    /// the dock request's bare epilogue 0x67eef, after the landability
+    /// check (and the fee and cloak, not modelled) for a disabled ship,
+    /// and before anything for a breaking-up or destroyed one (see
+    /// [`Session::land`](crate::Session::land)).
     Disabled,
     /// The system has no stellars.
     NoStellars,
@@ -322,71 +348,126 @@ pub fn landing_reach(site: &LandingSite, shown: StellarShown, source: RuleSource
     LandingReach::Box(reach)
 }
 
-/// The reply to a request for clearance, the land key's first press.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Clearance {
-    /// Traffic control (a station's dockmaster) clears the ship.
-    Granted,
-    /// The stellar is uninhabited, so no one answers ("no traffic
-    /// control", says the Bible), and the ship is cleared.
-    NoTrafficControl,
-    /// The pilot's legal record is below the stellar's `MinStatus`.
-    Denied,
-}
-
 /// What the land key did, when it was not refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LandOutcome {
-    /// It selected the stellar as the navigation target and requested
-    /// clearance there; it did not land.
-    Selected {
+    /// It requested docking at the stellar, and traffic control cleared
+    /// the pilot (`_HandlePlayerDockRequest` @0x67a0b): the request's
+    /// line is said away from it ([`DockSaid::Requested`]), and nothing
+    /// within [`NEAR`](crate::clearance::NEAR).
+    Requested {
         /// The stellar.
         stellar: StellarId,
         /// Whether it is a station.
         station: bool,
-        /// The reply.
-        clearance: Clearance,
     },
     /// It landed on the stellar.
     Landed(StellarId),
 }
 
-/// What the land key does with the navigation target `target`, for the
-/// ship `player` among the system's stellars `sites` (in navigation
-/// order), where `cleared` says whether traffic control clears the pilot
-/// to land at an inhabited stellar ([`cleared`]) and `reach` gives a
-/// stellar's [`LandingReach`]: see the module docs.
+/// What the land key said, besides its outcome and its refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockSaid {
+    /// "No response.": the stellar is uninhabited (@0x66b51-0x66bcd). A
+    /// refusal in the same press replaces it on the message line.
+    NoResponse,
+    /// The request's line, with its sound: the request was cleared away
+    /// from the stellar (@0x67a41-0x67c46).
+    Requested,
+}
+
+/// What one press of the land key did ([`land_or_select`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DockPress {
+    /// The stellar the press selected, when nothing was selected.
+    pub selected: Option<StellarId>,
+    /// The dock request after the press.
+    pub dock: Option<DockRequest>,
+    /// What it said besides its outcome.
+    pub said: Option<DockSaid>,
+    /// What it did, or why not.
+    pub outcome: Result<LandOutcome, LandingRefusal>,
+}
+
+/// What the land key does with the navigation target `target` and the
+/// dock request `dock`, for the ship `player` among the system's
+/// stellars `sites` (in navigation order), where `cleared` says whether
+/// traffic control clears the pilot to request docking at an inhabited
+/// stellar ([`cleared`]) and `reach` gives a stellar's [`LandingReach`]:
+/// see the module docs.
 pub fn land_or_select(
     target: Option<StellarId>,
+    dock: Option<DockRequest>,
     player: &ShipState,
     sites: &[LandingSite],
     cleared: impl Fn(&LandingSite) -> bool,
     reach: impl Fn(&LandingSite) -> LandingReach,
-) -> Result<LandOutcome, LandingRefusal> {
+) -> DockPress {
+    let refused = |refusal| DockPress {
+        selected: None,
+        dock,
+        said: None,
+        outcome: Err(refusal),
+    };
     let target = target.and_then(|id| sites.iter().find(|site| site.id == id));
-    if let Some(site) = target {
-        if !is_landable(site) {
-            return Err(not_landable(site));
-        }
-        return check_landing(player, site, cleared, reach(site)).map(LandOutcome::Landed);
+    let (site, selected) = match target {
+        Some(site) => (site, None),
+        None => match nearest_landable_site(player.position, sites) {
+            Some(site) => (site, Some(site.id)),
+            None => {
+                return refused(
+                    nearest(player.position, sites.iter())
+                        .map_or(LandingRefusal::NoStellars, not_landable),
+                );
+            }
+        },
+    };
+    if !is_landable(site) {
+        return refused(not_landable(site));
     }
-    let Some(site) = nearest_landable_site(player.position, sites) else {
-        return Err(
-            nearest(player.position, sites.iter()).map_or(LandingRefusal::NoStellars, not_landable)
-        );
+    let (stellar, station) = (site.id, is_station(site));
+    let (mut dock, mut said) = (dock, None);
+    if has(site, StellarFlags::UNINHABITED) {
+        dock = Some(DockRequest {
+            stellar,
+            permission: CLEARED,
+        });
+        said = Some(DockSaid::NoResponse);
+    }
+    let pressed = |dock, said, outcome| DockPress {
+        selected,
+        dock,
+        said,
+        outcome,
     };
-    let clearance = if has(site, StellarFlags::UNINHABITED) {
-        Clearance::NoTrafficControl
-    } else if !cleared(site) {
-        Clearance::Denied
+    if let Some(request) = dock.filter(|request| request.stellar == stellar) {
+        let attempt = check_landing(player, site, request.permission, reach(site));
+        let dock = if attempt.is_ok() { None } else { dock };
+        return pressed(dock, said, attempt.map(LandOutcome::Landed));
+    }
+    if !cleared(site) {
+        let denied = LandingRefusal::Denied {
+            stellar,
+            station,
+            min_status: site.min_status,
+        };
+        return pressed(None, said, Err(denied));
+    }
+    let near = clearance::near(site.position - player.position);
+    let request = DockRequest {
+        stellar,
+        permission: if near { REQUESTED_NEAR } else { 0 },
+    };
+    let said = if near {
+        said
     } else {
-        Clearance::Granted
+        Some(DockSaid::Requested)
     };
-    Ok(LandOutcome::Selected {
-        stellar: site.id,
-        station: is_station(site),
-        clearance,
-    })
+    pressed(
+        Some(request),
+        said,
+        Ok(LandOutcome::Requested { stellar, station }),
+    )
 }
 
 /// Whether `site` can be landed on at all, by its flags and whether it is
@@ -445,6 +526,17 @@ pub fn nearest_landable(position: Vec2, sites: &[LandingSite]) -> Option<Stellar
     nearest_landable_site(position, sites).map(|site| site.id)
 }
 
+/// The stellar [`nearest_landable`] names, and whether it is a station
+/// (`spöb` `Flags` 0x10), as the tutorial's land hint words it
+/// (`_HandlePlayer` @0x709e8-0x70a31; see [`tutorial`](crate::tutorial)).
+#[must_use]
+pub fn nearest_landable_station(
+    position: Vec2,
+    sites: &[LandingSite],
+) -> Option<(StellarId, bool)> {
+    nearest_landable_site(position, sites).map(|site| (site.id, is_station(site)))
+}
+
 /// The site [`nearest_landable`] names: the one the land key selects when
 /// there is no target.
 fn nearest_landable_site(position: Vec2, sites: &[LandingSite]) -> Option<&LandingSite> {
@@ -472,29 +564,22 @@ fn has(site: &LandingSite, flag: u32) -> bool {
     site.flags & flag != 0
 }
 
-/// Whether `player` lands on `site`, over it within `reach`: the stellar,
-/// or the first refusal that applies (see the module docs). `cleared`
-/// says whether traffic control clears the pilot to land at an inhabited
-/// stellar ([`cleared`]); an uninhabited one is not asked.
+/// Whether `player` lands on `site`, a landable stellar it has requested
+/// with its counter at `permission`, over it within `reach`: the
+/// stellar, or the refusal that applies (`_HandlePlayerDockRequest`
+/// @0x66c13-0x66cfd, @0x67687-0x67800). A counter not past
+/// [`REQUESTED_NEAR`] is [`LandingRefusal::TooFar`] wherever the ship is,
+/// as is a ship outside the reach; then a ship faster than
+/// [`LANDING_SPEED`] is [`LandingRefusal::TooFast`].
 pub fn check_landing(
     player: &ShipState,
     site: &LandingSite,
-    cleared: impl Fn(&LandingSite) -> bool,
+    permission: i16,
     reach: LandingReach,
 ) -> Result<StellarId, LandingRefusal> {
     let (stellar, station) = (site.id, is_station(site));
-    if !reach.holds(site.position - player.position) {
+    if permission <= REQUESTED_NEAR || !reach.holds(site.position - player.position) {
         return Err(LandingRefusal::TooFar { stellar, station });
-    }
-    if !is_landable(site) {
-        return Err(not_landable(site));
-    }
-    if !has(site, StellarFlags::UNINHABITED) && !cleared(site) {
-        return Err(LandingRefusal::Denied {
-            stellar,
-            station,
-            min_status: site.min_status,
-        });
     }
     let speed = player.velocity.length();
     if speed > LANDING_SPEED {
@@ -515,6 +600,8 @@ pub const ANY_RECORD: i16 = -32767;
 
 /// What traffic control weighs of the pilot at a stellar, besides the
 /// stellar itself (`_HandlePlayerDockRequest` @0x67903-0x67a05).
+// Each flag is one clause of the clearance, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Standing {
     /// The legal record `MinStatus` is checked against.
@@ -529,6 +616,21 @@ pub struct Standing {
     /// (`_PlayerBlessedByGovt` which 1, @0x679cd-0x67a05; see
     /// [`rank`](crate::rank)'s **Blessing**).
     pub blessed: bool,
+    /// Whether the pilot's dock request stands at
+    /// [`CLEARED`] or more, whichever stellar
+    /// it is for (@0x67934-0x6793d; see [`clearance`]).
+    pub granted: bool,
+}
+
+/// Whether a stellar of `MinStatus` `min_status` is open to a pilot of
+/// legal `record` by its record alone: the record is at least `MinStatus`
+/// or `MinStatus` is [`ANY_RECORD`], and never when `MinStatus` is
+/// [`NEVER_BY_RECORD`] (`_HandlePlayerDockRequest` @0x67903-0x67921,
+/// `_HandlePlayerDockApproach` @0x6481c-0x64843, and the escape pod's
+/// search @0xd1de-0xd1fc).
+#[must_use]
+pub(crate) fn open_by_record(min_status: i16, record: i16) -> bool {
+    (record >= min_status || min_status == ANY_RECORD) && min_status != NEVER_BY_RECORD
 }
 
 /// Whether traffic control clears the pilot of `standing` to land at
@@ -543,18 +645,21 @@ pub struct Standing {
 /// record of exactly 32767 or -32768, so they have no rule of their own.
 #[must_use]
 pub fn cleared(site: &LandingSite, standing: Standing, blessing: RuleSource) -> bool {
-    let by_record = (standing.record >= site.min_status || site.min_status == ANY_RECORD)
-        && site.min_status != NEVER_BY_RECORD;
+    let by_record = open_by_record(site.min_status, standing.record);
     let dominated = site.flags2 & crate::market::DOMINATED != 0;
     let governed = site.govt.is_some();
     let require_ok = !governed || standing.meets_require;
     let blessed = governed && standing.blessed;
+    let granted = standing.granted;
     match blessing {
         RuleSource::Engine => {
-            ((by_record || dominated) && require_ok) || standing.mission_stellar || blessed
+            ((by_record || dominated || granted) && require_ok)
+                || standing.mission_stellar
+                || blessed
         }
         RuleSource::Bible => {
-            ((by_record || dominated || blessed) && require_ok) || standing.mission_stellar
+            ((by_record || dominated || granted || blessed) && require_ok)
+                || standing.mission_stellar
         }
     }
 }
@@ -700,24 +805,48 @@ mod tests {
         type_width: TypeWidth::Frame,
     };
 
-    /// [`check_landing`] with `site`'s [`engine_reach`].
-    fn check(
-        player: &ShipState,
+    /// L pressed by `player` with `site` selected and requested, the
+    /// request at [`CLEARED`], by `site`'s [`engine_reach`]: the stellar
+    /// landed on, or the refusal. Traffic control is not asked.
+    fn check(player: &ShipState, site: &LandingSite) -> Result<StellarId, LandingRefusal> {
+        let press = land_or_select(
+            Some(site.id),
+            Some(DockRequest {
+                stellar: site.id,
+                permission: CLEARED,
+            }),
+            player,
+            std::slice::from_ref(site),
+            |_| panic!("traffic control is asked"),
+            engine_reach,
+        );
+        press.outcome.map(|outcome| match outcome {
+            LandOutcome::Landed(stellar) => stellar,
+            LandOutcome::Requested { .. } => panic!("{outcome:?}"),
+        })
+    }
+
+    /// L pressed by a ship parked over `site`, the system's one stellar,
+    /// with nothing selected and nothing requested, traffic control
+    /// clearing by the record `landing_record` reads in a system of
+    /// `system_govt` from `record`: the stellar requested (or landed on,
+    /// uninhabited), or the refusal.
+    fn ask(
         site: &LandingSite,
         system_govt: Option<GovtId>,
         record: impl Fn(GovtId) -> i16,
     ) -> Result<StellarId, LandingRefusal> {
-        check_landing(
-            player,
-            site,
+        let press = land_or_select(
+            None,
+            None,
+            &parked(),
+            std::slice::from_ref(site),
             |site| landing_record(site, system_govt, &record) >= site.min_status,
-            engine_reach(site),
-        )
-    }
-
-    /// A clearance by `record` alone, against `MinStatus` plainly.
-    fn by_record(record: i16) -> impl Fn(&LandingSite) -> bool {
-        move |site| record >= site.min_status
+            engine_reach,
+        );
+        press.outcome.map(|outcome| match outcome {
+            LandOutcome::Landed(stellar) | LandOutcome::Requested { stellar, .. } => stellar,
+        })
     }
 
     #[test]
@@ -806,19 +935,14 @@ mod tests {
         )));
         assert!(!is_dockable(&destroyed(F::CAN_LAND)));
         assert_eq!(
-            check(&parked(), &destroyed(F::CAN_LAND), None, |_| 0),
+            check(&parked(), &destroyed(F::CAN_LAND)),
             Err(LandingRefusal::NotLandable {
                 stellar: StellarId(128),
                 station: false,
             })
         );
         assert_eq!(
-            check(
-                &parked(),
-                &destroyed(F::CAN_LAND | F::ONLY_WHEN_DESTROYED),
-                None,
-                |_| 0
-            ),
+            check(&parked(), &destroyed(F::CAN_LAND | F::ONLY_WHEN_DESTROYED)),
             Ok(StellarId(128))
         );
     }
@@ -952,6 +1076,16 @@ mod tests {
             nearest_landable(Vec2::new(450.0, 0.0), &sites),
             Some(StellarId(128))
         );
+        assert_eq!(
+            nearest_landable_station(Vec2::ZERO, &sites),
+            Some((StellarId(131), true)),
+            "the station is said to be one"
+        );
+        assert_eq!(
+            nearest_landable_station(Vec2::new(450.0, 0.0), &sites),
+            Some((StellarId(128), false))
+        );
+        assert_eq!(nearest_landable_station(Vec2::ZERO, &[]), None);
     }
 
     #[test]
@@ -972,7 +1106,7 @@ mod tests {
     fn a_slow_ship_over_a_landable_stellar_lands_on_it() {
         let target = site(128, 10.0, -20.0);
         assert_eq!(
-            check(&ship(5.0, -15.0, 0.5, -0.5), &target, None, |_| 0),
+            check(&ship(5.0, -15.0, 0.5, -0.5), &target),
             Ok(StellarId(128))
         );
     }
@@ -980,7 +1114,7 @@ mod tests {
     #[test]
     fn too_far_names_the_target() {
         assert_eq!(
-            check(&parked(), &site(129, 0.0, -300.0), None, |_| 0),
+            check(&parked(), &site(129, 0.0, -300.0)),
             Err(LandingRefusal::TooFar {
                 stellar: StellarId(129),
                 station: false,
@@ -992,7 +1126,7 @@ mod tests {
             ..site(131, 0.0, 175.0)
         };
         assert_eq!(
-            check(&parked(), &station, None, |_| 0),
+            check(&parked(), &station),
             Err(LandingRefusal::TooFar {
                 stellar: StellarId(131),
                 station: true,
@@ -1004,7 +1138,7 @@ mod tests {
     fn exactly_at_the_radius_is_over_it_and_just_beyond_is_not() {
         let target = site(128, 0.0, 0.0);
         let circle = LandingReach::Circle(landing_radius(&target));
-        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, by_record(0), circle);
+        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, CLEARED, circle);
         assert_eq!(at(30.0, 40.0), Ok(StellarId(128)));
         assert!(matches!(
             at(30.0, 40.01),
@@ -1019,7 +1153,7 @@ mod tests {
         assert_eq!(engine_reach(&target), LandingReach::Box(175.0));
         for (x, y) in [(174.9, 0.0), (0.0, -174.9), (-174.9, 174.9)] {
             assert_eq!(
-                check(&ship(x, y, 0.0, 0.0), &target, None, |_| 0),
+                check(&ship(x, y, 0.0, 0.0), &target),
                 Ok(StellarId(128)),
                 "({x}, {y})"
             );
@@ -1027,7 +1161,7 @@ mod tests {
         for (x, y) in [(175.0, 0.0), (0.0, -175.0), (175.0, 175.0), (-175.0, 10.0)] {
             assert!(
                 matches!(
-                    check(&ship(x, y, 0.0, 0.0), &target, None, |_| 0),
+                    check(&ship(x, y, 0.0, 0.0), &target),
                     Err(LandingRefusal::TooFar { .. })
                 ),
                 "({x}, {y})"
@@ -1039,14 +1173,14 @@ mod tests {
     fn the_same_reach_decides_too_fast_and_too_far() {
         let target = site(128, 0.0, 0.0);
         let reach = LandingReach::Box(175.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, by_record(0), reach);
+        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, CLEARED, reach);
         assert!(matches!(fast(174.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(175.0), Err(LandingRefusal::TooFar { .. })));
         // Outside today's 50 circle but inside the box: too fast, not too
         // far.
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFast { .. })));
         let circle = LandingReach::Circle(50.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, by_record(0), circle);
+        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, CLEARED, circle);
         assert!(matches!(fast(50.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFar { .. })));
     }
@@ -1183,14 +1317,14 @@ mod tests {
         // 129's centre is nearer, but 128 is the target and the ship is
         // within its radius too.
         let target = site(128, 40.0, 0.0);
-        assert_eq!(check(&parked(), &target, None, |_| 0), Ok(StellarId(128)));
+        assert_eq!(check(&parked(), &target), Ok(StellarId(128)));
     }
 
     #[test]
     fn a_stellar_without_the_can_land_flag_is_not_landable() {
         for (flags, station) in [(0, false), (StellarFlags::STATION, true)] {
             assert_eq!(
-                check(&parked(), &with_flags(flags), None, |_| 0),
+                check(&parked(), &with_flags(flags)),
                 Err(LandingRefusal::NotLandable {
                     stellar: StellarId(128),
                     station,
@@ -1203,7 +1337,7 @@ mod tests {
     fn a_stellar_landable_only_once_destroyed_is_not_landable() {
         let flags = StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED;
         assert_eq!(
-            check(&parked(), &with_flags(flags), None, |_| 0),
+            check(&parked(), &with_flags(flags)),
             Err(LandingRefusal::NotLandable {
                 stellar: StellarId(128),
                 station: false,
@@ -1224,7 +1358,7 @@ mod tests {
         let can_land = StellarFlags::CAN_LAND;
         for min_status in [1, 32767] {
             assert_eq!(
-                check(&parked(), &needing(min_status, can_land), GOVT, |_| 0),
+                ask(&needing(min_status, can_land), GOVT, |_| 0),
                 Err(LandingRefusal::Denied {
                     stellar: StellarId(128),
                     station: false,
@@ -1234,7 +1368,7 @@ mod tests {
         }
         let station = can_land | StellarFlags::STATION;
         assert_eq!(
-            check(&parked(), &needing(5, station), GOVT, |_| 4),
+            ask(&needing(5, station), GOVT, |_| 4),
             Err(LandingRefusal::Denied {
                 stellar: StellarId(128),
                 station: true,
@@ -1248,7 +1382,7 @@ mod tests {
         let can_land = StellarFlags::CAN_LAND;
         for (min_status, record) in [(-32767, 0), (0, 0), (5, 5), (5, 6), (-3, -3)] {
             assert_eq!(
-                check(&parked(), &needing(min_status, can_land), GOVT, |_| record),
+                ask(&needing(min_status, can_land), GOVT, |_| record),
                 Ok(StellarId(128)),
                 "{min_status} {record}"
             );
@@ -1258,19 +1392,13 @@ mod tests {
     #[test]
     fn an_uninhabited_stellar_ignores_min_status() {
         let flags = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
-        assert_eq!(
-            check(&parked(), &needing(32767, flags), None, |_| 0),
-            Ok(StellarId(128))
-        );
+        assert_eq!(ask(&needing(32767, flags), None, |_| 0), Ok(StellarId(128)));
         // Even under a government whose record of the pilot is far below.
         let governed = LandingSite {
             govt: Some(A),
             ..needing(32767, flags)
         };
-        assert_eq!(
-            check(&parked(), &governed, Some(B), |_| -32768),
-            Ok(StellarId(128))
-        );
+        assert_eq!(ask(&governed, Some(B), |_| -32768), Ok(StellarId(128)));
     }
 
     /// Two governments, and a record of the pilot that is 10 with `A` and
@@ -1303,7 +1431,7 @@ mod tests {
 
     #[test]
     fn a_stellars_own_government_keeps_the_record_landing_reads() {
-        let land = |site, system| check(&parked(), &governed_by(site), system, record);
+        let land = |site, system| ask(&governed_by(site), system, record);
         assert_eq!(land(Some(A), Some(B)), Ok(StellarId(128)));
         assert_eq!(land(Some(B), Some(A)), denied());
         assert_eq!(land(Some(A), None), Ok(StellarId(128)));
@@ -1312,7 +1440,7 @@ mod tests {
 
     #[test]
     fn a_stellar_without_a_government_falls_back_to_its_systems() {
-        let land = |system| check(&parked(), &governed_by(None), system, record);
+        let land = |system| ask(&governed_by(None), system, record);
         assert_eq!(land(Some(A)), Ok(StellarId(128)));
         assert_eq!(land(Some(B)), denied());
     }
@@ -1324,9 +1452,9 @@ mod tests {
             govt: None,
             ..needing(min_status, StellarFlags::CAN_LAND)
         };
-        assert_eq!(check(&parked(), &needs(0), None, never), Ok(StellarId(128)));
+        assert_eq!(ask(&needs(0), None, never), Ok(StellarId(128)));
         assert_eq!(
-            check(&parked(), &needs(1), None, never),
+            ask(&needs(1), None, never),
             Err(LandingRefusal::Denied {
                 stellar: StellarId(128),
                 station: false,
@@ -1342,7 +1470,7 @@ mod tests {
         let speed = fast.velocity.length();
         assert!(speed > LANDING_SPEED, "{speed}");
         assert_eq!(
-            check(&fast, &target, None, |_| 0),
+            check(&fast, &target),
             Err(LandingRefusal::TooFast {
                 stellar: StellarId(128),
                 station: false,
@@ -1351,7 +1479,7 @@ mod tests {
         );
         let station = with_flags(StellarFlags::CAN_LAND | StellarFlags::STATION);
         assert!(matches!(
-            check(&fast, &station, None, |_| 0),
+            check(&fast, &station),
             Err(LandingRefusal::TooFast { station: true, .. })
         ));
     }
@@ -1360,33 +1488,35 @@ mod tests {
     fn exactly_the_landing_speed_lands() {
         let target = site(128, 0.0, 0.0);
         assert_eq!(
-            check(&ship(0.0, 0.0, 0.0, 1.0), &target, None, |_| 0),
+            check(&ship(0.0, 0.0, 0.0, 1.0), &target),
             Ok(StellarId(128))
         );
         assert_eq!(
-            check(&ship(0.0, 0.0, -1.0, 0.0), &target, None, |_| 0),
+            check(&ship(0.0, 0.0, -1.0, 0.0), &target),
             Ok(StellarId(128))
         );
     }
 
     #[test]
     fn each_refusal_applies_before_the_next() {
-        // Not landable, denied and too fast at once: not landable.
-        let fast = ship(0.0, 0.0, 5.0, 0.0);
+        // Not landable, too far and too fast at once: not landable.
+        let far_and_fast = ship(0.0, 500.0, 5.0, 0.0);
         assert!(matches!(
-            check(&fast, &needing(10, 0), None, |_| 0),
+            check(&far_and_fast, &needing(10, 0)),
             Err(LandingRefusal::NotLandable { .. })
         ));
-        // Denied and too fast: denied.
+        // Too far and too fast: too far.
         assert!(matches!(
-            check(&fast, &needing(10, StellarFlags::CAN_LAND), None, |_| 0),
-            Err(LandingRefusal::Denied { .. })
-        ));
-        // Too far comes first of all.
-        let far = ship(0.0, 500.0, 5.0, 0.0);
-        assert!(matches!(
-            check(&far, &needing(10, 0), None, |_| 0),
+            check(&far_and_fast, &needing(10, StellarFlags::CAN_LAND)),
             Err(LandingRefusal::TooFar { .. })
+        ));
+        // Too fast over it: too fast.
+        assert!(matches!(
+            check(
+                &ship(0.0, 0.0, 5.0, 0.0),
+                &needing(10, StellarFlags::CAN_LAND)
+            ),
+            Err(LandingRefusal::TooFast { .. })
         ));
     }
 
@@ -1403,118 +1533,351 @@ mod tests {
         ]
     }
 
-    /// L pressed with `target` selected, for a ship `player` among
-    /// `sites`, with a clean record and no government.
-    fn press(
+    /// L pressed with `target` selected and `dock` requested, for a ship
+    /// `player` among `sites`, traffic control clearing as `clear` says.
+    fn press_with(
         target: Option<i16>,
+        dock: Option<DockRequest>,
         player: &ShipState,
         sites: &[LandingSite],
-    ) -> Result<LandOutcome, LandingRefusal> {
+        clear: bool,
+    ) -> DockPress {
         land_or_select(
             target.map(StellarId),
+            dock,
             player,
             sites,
-            by_record(0),
+            |_| clear,
             engine_reach,
         )
     }
 
-    fn selected(stellar: i16, station: bool, clearance: Clearance) -> LandOutcome {
-        LandOutcome::Selected {
+    /// L pressed with `target` selected and nothing requested, for a ship
+    /// `player` among `sites`, traffic control clearing.
+    fn press(target: Option<i16>, player: &ShipState, sites: &[LandingSite]) -> DockPress {
+        press_with(target, None, player, sites, true)
+    }
+
+    // Wrapped to compare with what a press gives.
+    #[allow(clippy::unnecessary_wraps)]
+    fn request(stellar: i16, permission: i16) -> Option<DockRequest> {
+        Some(DockRequest {
+            stellar: StellarId(stellar),
+            permission,
+        })
+    }
+
+    // Wrapped to compare with what a press gives.
+    #[allow(clippy::unnecessary_wraps)]
+    fn requested(stellar: i16, station: bool) -> Result<LandOutcome, LandingRefusal> {
+        Ok(LandOutcome::Requested {
             stellar: StellarId(stellar),
             station,
-            clearance,
-        }
+        })
+    }
+
+    // Wrapped to compare with what a press gives.
+    #[allow(clippy::unnecessary_wraps)]
+    fn landed(stellar: i16) -> Result<LandOutcome, LandingRefusal> {
+        Ok(LandOutcome::Landed(StellarId(stellar)))
+    }
+
+    // Wrapped to compare with what a press gives.
+    #[allow(clippy::unnecessary_wraps)]
+    fn too_far(stellar: i16) -> Result<LandOutcome, LandingRefusal> {
+        Err(LandingRefusal::TooFar {
+            stellar: StellarId(stellar),
+            station: false,
+        })
     }
 
     #[test]
-    fn with_no_target_l_selects_the_nearest_landable_stellar_and_does_not_land() {
-        // Even at rest over it.
+    fn with_no_target_l_selects_the_nearest_landable_stellar_and_requests_it() {
+        // Even at rest over it, it does not land.
         assert_eq!(
             press(None, &parked(), &system()),
-            Ok(selected(128, false, Clearance::Granted))
+            DockPress {
+                selected: Some(StellarId(128)),
+                dock: request(128, 0x2ed),
+                said: None,
+                outcome: requested(128, false),
+            }
         );
         assert_eq!(
             press(None, &ship(380.0, 0.0, 9.0, 0.0), &system()),
-            Ok(selected(130, true, Clearance::Granted))
+            DockPress {
+                selected: Some(StellarId(130)),
+                dock: request(130, 0x2ed),
+                said: None,
+                outcome: requested(130, true),
+            }
         );
     }
 
     #[test]
     fn a_target_no_longer_in_the_system_is_as_good_as_none() {
-        assert_eq!(
-            press(Some(140), &parked(), &system()),
-            Ok(selected(128, false, Clearance::Granted))
-        );
+        let pressed = press(Some(140), &parked(), &system());
+        assert_eq!(pressed.selected, Some(StellarId(128)));
+        assert_eq!(pressed.outcome, requested(128, false));
     }
 
     #[test]
-    fn with_a_landable_target_l_lands_on_it_not_on_the_nearest() {
-        let over_129 = ship(0.0, -280.0, 0.0, 0.5);
-        assert_eq!(
-            press(Some(129), &over_129, &system()),
-            Ok(LandOutcome::Landed(StellarId(129)))
-        );
-        // Over 128, with 129 selected: too far from 129.
+    fn a_request_away_from_the_stellar_starts_at_0_and_says_its_line() {
         assert_eq!(
             press(Some(129), &parked(), &system()),
-            Err(LandingRefusal::TooFar {
-                stellar: StellarId(129),
-                station: false,
-            })
+            DockPress {
+                selected: None,
+                dock: request(129, 0),
+                said: Some(DockSaid::Requested),
+                outcome: requested(129, false),
+            }
         );
     }
 
     #[test]
-    fn with_a_landable_target_too_fast_or_denied_refuses() {
-        assert!(matches!(
-            press(Some(128), &ship(0.0, 0.0, 3.0, 0.0), &system()),
-            Err(LandingRefusal::TooFast {
-                stellar: StellarId(128),
-                ..
-            })
-        ));
-        let strict = [needing(5, StellarFlags::CAN_LAND)];
+    fn a_request_is_silent_within_249_on_both_axes() {
+        let at = |x, y| [site(128, x, y)];
+        for (x, y) in [(249.9, -249.9), (-249.9, 249.9), (0.0, 0.0)] {
+            assert_eq!(
+                press(Some(128), &parked(), &at(x, y)),
+                DockPress {
+                    selected: None,
+                    dock: request(128, 0x2ed),
+                    said: None,
+                    outcome: requested(128, false),
+                },
+                "({x}, {y})"
+            );
+        }
+        for (x, y) in [(250.0, 0.0), (0.0, 250.0), (-250.0, 10.0), (10.0, -250.0)] {
+            assert_eq!(
+                press(Some(128), &parked(), &at(x, y)),
+                DockPress {
+                    selected: None,
+                    dock: request(128, 0),
+                    said: Some(DockSaid::Requested),
+                    outcome: requested(128, false),
+                },
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn traffic_control_denying_drops_the_request() {
         assert_eq!(
-            land_or_select(
-                Some(StellarId(128)),
-                &parked(),
-                &strict,
-                by_record(4),
-                engine_reach
-            ),
+            press_with(None, request(129, 0x500), &parked(), &system(), false),
+            DockPress {
+                selected: Some(StellarId(128)),
+                dock: None,
+                said: None,
+                outcome: Err(LandingRefusal::Denied {
+                    stellar: StellarId(128),
+                    station: false,
+                    min_status: -32767,
+                }),
+            }
+        );
+        let strict = [needing(5, StellarFlags::CAN_LAND | StellarFlags::STATION)];
+        assert_eq!(
+            press_with(Some(128), None, &ship(0.0, 900.0, 0.0, 0.0), &strict, false).outcome,
             Err(LandingRefusal::Denied {
                 stellar: StellarId(128),
-                station: false,
+                station: true,
                 min_status: 5,
             })
         );
     }
 
     #[test]
-    fn a_target_that_cannot_be_landed_on_refuses_before_range_or_speed() {
+    fn a_request_on_another_stellar_is_replaced_by_this_ones() {
+        for permission in [0, 0x2ed, 0x2ee, 0x500] {
+            let pressed = press_with(
+                Some(128),
+                request(129, permission),
+                &parked(),
+                &system(),
+                true,
+            );
+            assert_eq!(pressed.dock, request(128, 0x2ed), "{permission:#x}");
+            assert_eq!(pressed.outcome, requested(128, false));
+        }
+    }
+
+    #[test]
+    fn the_requested_stellar_lands_only_on_a_counter_past_0x2ed() {
+        let over = |permission| {
+            press_with(
+                Some(128),
+                request(128, permission),
+                &parked(),
+                &system(),
+                false,
+            )
+        };
+        for permission in [0, 0x2ed] {
+            assert_eq!(
+                over(permission),
+                DockPress {
+                    selected: None,
+                    dock: request(128, permission),
+                    said: None,
+                    outcome: too_far(128),
+                },
+                "{permission:#x}: kept, traffic control not asked"
+            );
+        }
+        for permission in [0x2ee, 0x7ff] {
+            assert_eq!(
+                over(permission),
+                DockPress {
+                    selected: None,
+                    dock: None,
+                    said: None,
+                    outcome: landed(128),
+                },
+                "{permission:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_requested_stellar_is_too_fast_only_within_the_reach_and_past_0x2ed() {
+        let fast = |y, permission| {
+            press_with(
+                Some(128),
+                request(128, permission),
+                &ship(0.0, y, 3.0, 0.0),
+                &system(),
+                true,
+            )
+        };
+        let pressed = fast(174.0, 0x2ee);
+        assert!(
+            matches!(pressed.outcome, Err(LandingRefusal::TooFast { .. })),
+            "{pressed:?}"
+        );
+        assert_eq!(pressed.dock, request(128, 0x2ee), "kept");
+        assert_eq!(fast(175.0, 0x2ee).outcome, too_far(128));
+        assert_eq!(fast(0.0, 0x2ed).outcome, too_far(128));
+        // At rest, but outside the reach.
+        assert_eq!(
+            press_with(
+                Some(128),
+                request(128, 0x2ee),
+                &ship(0.0, 175.0, 0.0, 0.0),
+                &system(),
+                true
+            )
+            .outcome,
+            too_far(128)
+        );
+    }
+
+    #[test]
+    fn with_a_requested_target_l_lands_on_it_not_on_the_nearest() {
+        let over_129 = ship(0.0, -280.0, 0.0, 0.5);
+        assert_eq!(
+            press_with(Some(129), request(129, 0x2ee), &over_129, &system(), true).outcome,
+            landed(129)
+        );
+        // Over 128, with 129 selected: too far from 129.
+        assert_eq!(
+            press_with(Some(129), request(129, 0x2ee), &parked(), &system(), true).outcome,
+            too_far(129)
+        );
+    }
+
+    /// An uninhabited planet 128 at (`x`, `y`) that would deny clearance.
+    fn uninhabited(x: f32, y: f32) -> [LandingSite; 1] {
+        [LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ..needing(32767, 0)
+        }]
+        .map(|site| LandingSite {
+            position: Vec2::new(x, y),
+            ..site
+        })
+    }
+
+    #[test]
+    fn an_uninhabited_stellar_says_no_response_and_lands_in_the_same_press() {
+        assert_eq!(
+            press_with(None, None, &parked(), &uninhabited(0.0, 0.0), false),
+            DockPress {
+                selected: Some(StellarId(128)),
+                dock: None,
+                said: Some(DockSaid::NoResponse),
+                outcome: landed(128),
+            }
+        );
+        // Away from it: "No response.", then too far, the request at
+        // 0x2ee, whatever it was.
+        for dock in [
+            None,
+            request(128, 0),
+            request(128, 0x500),
+            request(129, 0x2ee),
+        ] {
+            assert_eq!(
+                press_with(Some(128), dock, &parked(), &uninhabited(0.0, 900.0), false),
+                DockPress {
+                    selected: None,
+                    dock: request(128, 0x2ee),
+                    said: Some(DockSaid::NoResponse),
+                    outcome: too_far(128),
+                },
+                "{dock:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_target_that_cannot_be_landed_on_refuses_before_anything_and_keeps_the_request() {
         let sites = [
             site(128, 0.0, 0.0),
             LandingSite {
                 flags: StellarFlags::STATION,
                 ..site(129, 5000.0, 5000.0)
             },
+            LandingSite {
+                flags: StellarFlags::UNINHABITED,
+                ..site(132, 0.0, 0.0)
+            },
         ];
         // Far from it and fast, and over a landable one: still too hostile.
         let far_and_fast = ship(0.0, 0.0, 9.0, 0.0);
         assert_eq!(
-            press(Some(129), &far_and_fast, &sites),
-            Err(LandingRefusal::NotLandable {
-                stellar: StellarId(129),
-                station: true,
-            })
+            press_with(Some(129), request(129, 0x2ee), &far_and_fast, &sites, true),
+            DockPress {
+                selected: None,
+                dock: request(129, 0x2ee),
+                said: None,
+                outcome: Err(LandingRefusal::NotLandable {
+                    stellar: StellarId(129),
+                    station: true,
+                }),
+            }
+        );
+        // Uninhabited, but not landable: no "No response.".
+        assert_eq!(
+            press_with(Some(132), request(128, 0x2ee), &parked(), &sites, true),
+            DockPress {
+                selected: None,
+                dock: request(128, 0x2ee),
+                said: None,
+                outcome: Err(LandingRefusal::NotLandable {
+                    stellar: StellarId(132),
+                    station: false,
+                }),
+            }
         );
         let only_when_destroyed = [LandingSite {
             flags: StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED,
             ..site(131, -900.0, 0.0)
         }];
         assert_eq!(
-            press(Some(131), &parked(), &only_when_destroyed),
+            press(Some(131), &parked(), &only_when_destroyed).outcome,
             Err(LandingRefusal::NotLandable {
                 stellar: StellarId(131),
                 station: false,
@@ -1535,58 +1898,28 @@ mod tests {
             },
         ];
         assert_eq!(
-            press(None, &parked(), &sites),
-            Err(LandingRefusal::NotLandable {
-                stellar: StellarId(129),
-                station: true,
-            })
+            press_with(None, request(128, 0x2ee), &parked(), &sites, true),
+            DockPress {
+                selected: None,
+                dock: request(128, 0x2ee),
+                said: None,
+                outcome: Err(LandingRefusal::NotLandable {
+                    stellar: StellarId(129),
+                    station: true,
+                }),
+            }
         );
     }
 
     #[test]
     fn with_no_stellars_l_refuses() {
-        assert_eq!(press(None, &parked(), &[]), Err(LandingRefusal::NoStellars));
         assert_eq!(
-            press(Some(128), &parked(), &[]),
+            press(None, &parked(), &[]).outcome,
             Err(LandingRefusal::NoStellars)
         );
-    }
-
-    #[test]
-    fn the_clearance_given_follows_the_record_and_traffic_control() {
-        let strict = [needing(5, StellarFlags::CAN_LAND)];
-        let select =
-            |record| land_or_select(None, &parked(), &strict, by_record(record), engine_reach);
-        assert_eq!(select(4), Ok(selected(128, false, Clearance::Denied)));
-        assert_eq!(select(5), Ok(selected(128, false, Clearance::Granted)));
-        let uninhabited = [needing(
-            32767,
-            StellarFlags::CAN_LAND | StellarFlags::UNINHABITED | StellarFlags::STATION,
-        )];
         assert_eq!(
-            land_or_select(
-                None,
-                &parked(),
-                &uninhabited,
-                by_record(-32768),
-                engine_reach
-            ),
-            Ok(selected(128, true, Clearance::NoTrafficControl))
-        );
-        // The record read is the stellar's government's.
-        let governed = [LandingSite {
-            govt: Some(B),
-            ..needing(10, StellarFlags::CAN_LAND)
-        }];
-        assert_eq!(
-            land_or_select(
-                None,
-                &parked(),
-                &governed,
-                |site| landing_record(site, Some(A), record) >= site.min_status,
-                engine_reach
-            ),
-            Ok(selected(128, false, Clearance::Denied))
+            press(Some(128), &parked(), &[]).outcome,
+            Err(LandingRefusal::NoStellars)
         );
     }
 
@@ -1697,6 +2030,7 @@ mod tests {
             meets_require: false,
             mission_stellar: true,
             blessed: false,
+            granted: false,
         };
         for source in RuleSource::ALL {
             assert!(cleared(&governed(32767), mission, source), "@0x67977");
@@ -1716,7 +2050,42 @@ mod tests {
             meets_require,
             mission_stellar: false,
             blessed: true,
+            granted: false,
         }
+    }
+
+    /// A pilot whose record is `record`, whose dock request is granted,
+    /// meeting `Require` or not.
+    fn granted(record: i16, meets_require: bool) -> Standing {
+        Standing {
+            record,
+            meets_require,
+            granted: true,
+            ..Standing::default()
+        }
+    }
+
+    #[test]
+    fn a_granted_request_clears_alone_require_permitting() {
+        for source in RuleSource::ALL {
+            assert!(
+                cleared(&governed(32767), granted(0, true), source),
+                "@0x67934 {source:?}"
+            );
+            assert!(
+                !cleared(&governed(32767), granted(0, false), source),
+                "@0x67940 {source:?}"
+            );
+            assert!(
+                cleared(
+                    &needing(32767, StellarFlags::CAN_LAND),
+                    granted(0, false),
+                    source
+                ),
+                "an ungoverned stellar reads no Require {source:?}"
+            );
+        }
+        assert!(!Standing::default().granted);
     }
 
     #[test]
@@ -1747,55 +2116,6 @@ mod tests {
                 "{source:?}"
             );
         }
-    }
-
-    /// L pressed for a ship parked at the centre, with `target` selected,
-    /// over `sites`, cleared by `clear`.
-    fn press_cleared(
-        target: Option<i16>,
-        sites: &[LandingSite],
-        clear: impl Fn(&LandingSite) -> bool,
-    ) -> Result<LandOutcome, LandingRefusal> {
-        land_or_select(target.map(StellarId), &parked(), sites, clear, engine_reach)
-    }
-
-    #[test]
-    fn the_selection_and_the_landing_read_the_same_clearance() {
-        let sites = [governed(10)];
-        for (clear, clearance, landing) in [
-            (
-                true,
-                Clearance::Granted,
-                Ok(LandOutcome::Landed(StellarId(128))),
-            ),
-            (
-                false,
-                Clearance::Denied,
-                Err(LandingRefusal::Denied {
-                    stellar: StellarId(128),
-                    station: false,
-                    min_status: 10,
-                }),
-            ),
-        ] {
-            assert_eq!(
-                press_cleared(None, &sites, |_| clear),
-                Ok(selected(128, false, clearance))
-            );
-            assert_eq!(press_cleared(Some(128), &sites, |_| clear), landing);
-        }
-        let uninhabited = [LandingSite {
-            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
-            ..governed(10)
-        }];
-        assert_eq!(
-            press_cleared(None, &uninhabited, |_| false),
-            Ok(selected(128, false, Clearance::NoTrafficControl))
-        );
-        assert_eq!(
-            press_cleared(Some(128), &uninhabited, |_| false),
-            Ok(LandOutcome::Landed(StellarId(128)))
-        );
     }
 
     #[test]

@@ -42,11 +42,10 @@ use nova_sim::Test;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::market::commodities;
 use nova_sim::{
-    Chance, Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good,
-    GovtId, JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod,
-    OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields,
-    ShipId, ShipState, ShipStats, Standing, StartDate, StellarId, StellarShown, StringPatch,
-    SystemId, TypeWidth, Vec2, check_landing, cleared, landing_reach, services,
+    Chance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good, GovtId, JunkId,
+    LandOutcome, LandPress, NeverFires, OutfitId, OutfitMod, OutfitOrder, OutfitRefusal, Pilot,
+    PilotCatalog, RechargeRefusal, Service, Session, ShipFields, ShipId, ShipState, ShipStats,
+    Standing, StartDate, StellarId, StringPatch, SystemId, Vec2, cleared, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -202,38 +201,15 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
         })
         .expect("HG-Kania is in the start system");
     assert_eq!(kania.min_status, 32767);
-    let parked = ShipState {
-        position: kania.position,
-        ..ShipState::default()
-    };
-    assert_eq!(
-        check_landing(
-            &parked,
-            kania,
-            |site| cleared(
-                site,
-                Standing {
-                    record: session.pilot().system_record(session.system()),
-                    meets_require: true,
-                    ..Standing::default()
-                },
-                RuleSource::Engine,
-            ),
-            landing_reach(
-                kania,
-                StellarShown {
-                    frame: true,
-                    type_width: TypeWidth::Frame,
-                },
-                RuleSource::Engine,
-            ),
-        ),
-        Err(LandingRefusal::Denied {
-            stellar: kania.id,
-            station: true,
-            min_status: 32767,
-        })
-    );
+    assert!(!cleared(
+        kania,
+        Standing {
+            record: session.pilot().system_record(session.system()),
+            meets_require: true,
+            ..Standing::default()
+        },
+        RuleSource::Engine,
+    ));
 
     let port_kane = data.get::<Stellar>(137).expect("present").expect("decodes");
     assert_eq!(port_kane.name, Some("Port Kane"));
@@ -1387,6 +1363,9 @@ impl Combatant {
             condition: &mut self.condition,
             held_disabled: false,
             cloaked: false,
+            class_speed: 0.0,
+            top_speed: 0.0,
+            jumping: false,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
         }
@@ -3837,7 +3816,7 @@ fn over_hg_kania(data: &GameData) -> Session {
     session
 }
 
-/// L, L over HG-Kania enters it, offering Tichel, Dani and Koria; picking
+/// L, a tick, and L over HG-Kania enters it, offering Tichel, Dani and Koria; picking
 /// Tichel brings the Shuttle out of HG-Tichel at (-400, -500), heading
 /// 120° at half its top speed, a day on, the take-off's
 /// (`_PlayerLandOnStellar` @0x63440), and with a full tank.
@@ -3851,13 +3830,13 @@ fn hg_kania_leads_to_hg_tichel() {
     assert_eq!(session.system(), SystemId(128));
     assert_eq!(
         session.land(),
-        Ok(LandOutcome::Selected {
+        Ok(LandOutcome::Requested {
             stellar: StellarId(1404),
             station: true,
-            clearance: Clearance::Granted,
         }
         .into())
     );
+    session.tick(nova_sim::Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandPress::AtGate {

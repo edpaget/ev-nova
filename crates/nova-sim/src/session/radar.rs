@@ -12,11 +12,11 @@ impl Session {
     /// What the player's outfits give the radar: IFF, a density scanner
     /// and anti-interference ([`RadarGear::of`]).
     ///
-    /// It is read afresh at every call. The original caches it and
-    /// refreshes it only where `_ResetPlayerPrecalcedValues` (@0xc357)
-    /// runs, never from the outfitter, so an outfit bought there shows on
-    /// its radar only from the next refresh point:
-    /// rdm:phase/hud-fidelity/phase-10-radar-outfit-cache-refresh.
+    /// It is read afresh at every call. The original caches it lazily,
+    /// and every change to the outfits (the outfitter included, through
+    /// `_SystemInfoToShipStats` @0x5c305 / @0x5cffb) resets the cache
+    /// through `_ResetPlayerPrecalcedValues` (@0xc357) before the next
+    /// read, so the two match.
     #[must_use]
     pub fn radar_gear(&self) -> RadarGear {
         RadarGear::of(&self.pilot.outfits, &self.outfits)
@@ -28,7 +28,7 @@ impl Session {
     /// player.
     #[must_use]
     pub fn ship_iff(&self, npc: &Npc) -> ShipIff {
-        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)))
+        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)), self.npcs())
     }
 
     /// What IFF shows `stellar` as, one of the stellars shown, as its
@@ -206,6 +206,21 @@ mod tests {
             ShipIff::Escort,
             "a mission escort's"
         );
+    }
+
+    #[test]
+    fn a_ship_attacking_the_players_escort_is_a_threat() {
+        // `_IsThreatToPlayer`'s led clause (@0x7f572-0x7f590), read over
+        // the system's ships.
+        let mut session = session(&radar_catalog());
+        let escort = session.traffic.add_npc(hired(1));
+        let stranger = session.traffic.add_npc(npc(2, ShipStats::default()));
+        let hunting = |target| Npc {
+            goal: crate::ai::Goal::Attack(crate::ShipRef::Npc(target)),
+            ..npc(3, ShipStats::default())
+        };
+        assert_eq!(session.ship_iff(&hunting(escort)), ShipIff::Threat);
+        assert_eq!(session.ship_iff(&hunting(stranger)), ShipIff::Other);
     }
 
     #[test]

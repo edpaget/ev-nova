@@ -18,7 +18,9 @@ pub enum SimSound {
     },
     /// The ship took off.
     TookOff,
-    /// A jump began.
+    /// The warp stage of a jump began, as the brake ended or at once
+    /// when the ship needed none: the warp-up, `snd ` 128 (`_HandlePlayer`
+    /// @0x6b60d-0x6b690), before the turn to the jump's bearing.
     JumpBegan,
     /// A jump ended in the next system.
     Arrived,
@@ -60,11 +62,6 @@ pub enum SimSound {
     /// `_beepSnd[4]`, `snd ` 154 (`_HyperSpawnFleet` @0x42698-0x426bb),
     /// even when the line is empty.
     FleetArrivalQuote,
-    /// A hail went unanswered, whatever the refusal, with no target too:
-    /// `_beepSnd[3]`, `snd ` 153 (`_HandlePlayerCommunication` @0x626cf,
-    /// @0x6206c, @0x6261c, @0x6264e; see
-    /// [`HailRefusal`](crate::hail::HailRefusal)).
-    HailRefused,
     /// A person's mission was offered on its hail, in place of the comm
     /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
     /// @0x62232-0x6223d).
@@ -75,4 +72,94 @@ pub enum SimSound {
     /// (`_ShowPersonHailQuote` @0x44586-0x445ad), for every hail quote
     /// said, even when its line is empty.
     HailQuote,
+    /// The player's ship was newly disabled or newly started to break up:
+    /// `_beepSnd[1]`, `snd ` 151 (`_DamageShip` @0x3b11e, @0x3b221; see
+    /// the session's `player_downed` module).
+    ShipDowned,
+    /// The player's ship being disabled or breaking up failed a `Flags2`
+    /// 0x0004 mission: `_beepSnd[1]`, `snd ` 151 (`_DamageShip`
+    /// @0x3b04e, @0x3b2f1), hidden or not.
+    DownedMissionFailed,
+    /// A nav key was taken: Nav Off and Hyperspace Mode on every press
+    /// (`_HandlePlayer` @0x69b19), a stellar key that found a stellar,
+    /// even the one selected (@0x69ebc), and a click on a stellar not
+    /// selected (@0x6a6c1): `_beepSnd[0]`, `snd ` 150.
+    NavSelected,
+    /// Hyper Select moved the selection through the system's links
+    /// (`_HandlePlayer` @0x69c89): `_beepSnd[2]`, `snd ` 152. With no
+    /// links it is silent.
+    HyperSelected,
+    /// Option-backquote let go of the ship target (`_HandlePlayer`
+    /// @0x69a7d): `_beepSnd[0]`, `snd ` 150. With no target it is silent.
+    TargetCleared,
+    /// A first-flight tutorial hint was shown: `_beepSnd[4]`, `snd ` 154
+    /// (`_HandlePlayer` @0x70a1c, @0x70c12, @0x70dab, @0x70e59; see
+    /// [`tutorial`](crate::tutorial)).
+    TutorialHint,
+    /// Traffic control answered the player: `_beepSnd[1]`, `snd ` 151.
+    /// The land key's request with its line (`_HandlePlayerDockRequest`
+    /// @0x67a69) and its denial (@0x67ec6), and the dock approach's
+    /// greeting (`_HandlePlayerDockApproach` @0x649a9) raise it; a request
+    /// within reach and "No response." are silent (see
+    /// [`clearance`](crate::clearance)).
+    TrafficControl,
+    /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
+    /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
+    /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is
+    /// not already playing (`_ST_IsSoundPlaying` @0x6f200), so it repeats
+    /// through the breakup; the audio side does that check. Its priority,
+    /// 15, is not modelled. The player's final explosion halts it
+    /// ([`PLAYER_EXPLOSION_HALTS`]).
+    Klaxon,
+    /// Each named `snd ` is halted if it is playing, as the original asks
+    /// `ST_IsSoundPlaying` and then calls `ST_HaltSound`: every instance
+    /// of it, on any channel. The player's final explosion raises it with
+    /// [`PLAYER_EXPLOSION_HALTS`]; the eject, a sabotage kill outfit going
+    /// off and a disabled player's jump collapse with [`WARP_UP_HALTS`],
+    /// 128 and 129.
+    Halt(&'static [SoundId]),
+    /// The player ejected from its disabled or dying ship, into the escape
+    /// pod or an escape ship: `_escapePodSnd`, `snd ` 372 "Eject"
+    /// (`_LoadSounds` @0x1c240-0x1c252), played by `PlaySound` with no
+    /// test of whether it is playing (`_HandlePlayer` @0x6f920). A
+    /// [`SimSound::Halt`] of [`WARP_UP_HALTS`] follows it.
+    Ejected,
+    /// A sabotage outfit went off aboard the player's ship: `_explodSnd[0]`,
+    /// `snd ` 300 (`_LoadSounds`' loop from 0x1c200 loads `snd ` 300-363),
+    /// played by `PlaySound` with no test of whether it is playing
+    /// (`_HandlePlayer` @0x69375). Its priority, 100, is not modelled.
+    OnboardExplosion,
+    /// A disabled or dying player's pre-jump collapsed: `_beepSnd[1]`,
+    /// `snd ` 151 (`_PlaySound` @0x68aaf), after a [`SimSound::Halt`] of
+    /// [`WARP_UP_HALTS`]. Its priority, 50, is not modelled.
+    JumpCollapsed,
+    /// A key's action was refused: `_beepSnd[3]`, `snd ` 153, the
+    /// original's shared refusal beep, whether or not a message says why.
+    /// The player info key's refusals raise it (`_HandlePlayer`
+    /// @0x7039a-0x703bd, priority 5, not modelled; see
+    /// [`Session::press_player_info`](crate::Session::press_player_info)),
+    /// as do the jump key's (@0x6b89f, @0x6b9cc, @0x6ba72; see
+    /// [`Session::jump_refusal_told`](crate::Session::jump_refusal_told))
+    /// and every refusal of a hail, with no target too
+    /// (`_HandlePlayerCommunication` @0x626cf, @0x6206c, @0x6261c,
+    /// @0x6264e, its `PlaySound` argument of 1 or 5 not modelled; see
+    /// [`HailRefusal`](crate::hail::HailRefusal)), and every other refusal
+    /// that beeps reuses it rather than adding a variant of its own.
+    Refused,
 }
+
+/// The warp-up sounds `_warpUpSnd[0]` and `[1]`, `snd ` 128 and 129
+/// (loaded @0x1c12f-0x1c14f), in the order the player's eject halts them
+/// after its [`SimSound::Ejected`] (`_HandlePlayer` @0x6f925-0x6f95a), a
+/// sabotage kill outfit halts them as it goes off (@0x695ea, @0x6960d),
+/// and a disabled player's jump collapse halts them before its
+/// [`SimSound::JumpCollapsed`] (@0x68a5c, @0x68a7f).
+pub const WARP_UP_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
+
+/// The sounds the player's final explosion halts, in order:
+/// `_HandleShipDisplay`, for the player only (`cmpw $0x0,0x86(%edi)`
+/// @0x2d86d), halts the klaxon `_klaxxonSnd`, `snd ` 371 (@0x2d891), the
+/// warp-up sounds `warpUpSnd[0]` and `warpUpSnd[1]`, 128 (@0x2d8b0) and
+/// 129 (@0x2d8cb), and the warp-out `warpOutSnd`, 130 (@0x2d8ea).
+pub const PLAYER_EXPLOSION_HALTS: [SoundId; 4] =
+    [SoundId(371), SoundId(128), SoundId(129), SoundId(130)];

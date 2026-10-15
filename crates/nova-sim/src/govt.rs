@@ -53,6 +53,9 @@ pub const IGNORED_WHEN_ATTACKED: u16 = 0x0020;
 pub const NEVER_ATTACKS_PLAYER: u16 = 0x0040;
 /// `Flags`: its interceptors retreat when outnumbered.
 pub const INTERCEPTORS_RETREAT: u16 = 0x0100;
+/// `Flags`: its warships plunder: a warship of it thinks as
+/// `_PirateWarshipAI` (`_AIDispatch` @0x8ffc8-0x8fff0).
+pub const PLUNDERS: u16 = 0x1000;
 /// `Flags`: derelict: no relations at all, and no crime against it.
 pub const DERELICT: u16 = 0x0800;
 /// `Flags2`: its mission ships that attack the player never follow the

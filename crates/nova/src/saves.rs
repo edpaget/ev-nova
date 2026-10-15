@@ -16,7 +16,8 @@ const EXTENSION: &str = "json";
 /// A missing directory holds no pilots, and only `.json` files are
 /// pilots. A write creates the directory, writes a temporary file beside
 /// the pilot's and renames it over it, so a write that fails part way
-/// leaves the last save whole. Errors name the path.
+/// leaves the last save whole. A delete removes the pilot's file, and a
+/// missing one is deleted already. Errors name the path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FilePilots {
     dir: PathBuf,
@@ -84,6 +85,16 @@ impl PilotStore for FilePilots {
             fs::rename(&temporary, &file)
         })();
         written.map_err(|error| naming(&file, &error))
+    }
+
+    /// Removes the pilot's file, and nothing else: not the directory, nor
+    /// any other file in it.
+    fn delete(&self, key: &str) -> io::Result<()> {
+        let file = self.file(key);
+        match fs::remove_file(&file) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(naming(&file, &error)),
+            _ => Ok(()),
+        }
     }
 
     /// The directory's path.
@@ -160,6 +171,52 @@ mod tests {
         let mut listed = FilePilots::new(dir.path()).list().expect("lists");
         listed.sort();
         assert_eq!(listed, ["Ada"]);
+    }
+
+    #[test]
+    fn a_delete_removes_the_pilots_file() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let store = FilePilots::new(dir.path());
+        store.write("Ada", "saved").expect("writes");
+        store.write("Bob", "other").expect("writes");
+        fs::write(dir.path().join("notes.txt"), "x").expect("writes");
+        store.delete("Ada").expect("deletes");
+        assert_eq!(names(dir.path()), ["Bob.json", "notes.txt"]);
+        assert_eq!(store.list().expect("lists"), ["Bob"]);
+        assert_eq!(store.read("Ada").expect("reads"), None);
+    }
+
+    #[test]
+    fn deleting_a_missing_pilot_is_ok() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let store = FilePilots::new(dir.path());
+        store.write("Bob", "other").expect("writes");
+        store
+            .delete("Ada")
+            .expect("a missing file is deleted already");
+        assert_eq!(names(dir.path()), ["Bob.json"]);
+        let missing = dir.path().join("nova").join("Pilots");
+        FilePilots::new(&missing)
+            .delete("Ada")
+            .expect("a missing directory holds nothing to delete");
+        assert!(!missing.exists(), "a delete creates no directory");
+    }
+
+    #[test]
+    fn a_failed_delete_names_the_path() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        // A directory where a pilot's file should be cannot be removed as
+        // a file.
+        let path = dir.path().join("Ada.json");
+        fs::create_dir(&path).expect("a directory");
+        let deleted = FilePilots::new(dir.path())
+            .delete("Ada")
+            .expect_err("a directory");
+        assert!(
+            deleted.to_string().starts_with(&path.display().to_string()),
+            "{deleted}"
+        );
+        assert!(path.is_dir(), "it is left alone");
     }
 
     #[test]

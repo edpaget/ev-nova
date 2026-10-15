@@ -138,8 +138,11 @@ impl Session {
 
     /// Pays every hired escort its wage for each of `days`, in fleet
     /// order (see [`hire`](crate::hire)): one the cash does not cover
-    /// defects, leaving the fleet and the system at once. When any
-    /// defected the flight is told how many, and a save is due.
+    /// defects, a trader first taking its share of the fleet's cargo, its
+    /// own holds among the fleet's, and the session resetting
+    /// ([`Session::destroy_cargo_share`], `_DoEscortPayment` @0x40240),
+    /// then leaving the fleet and the system at once. When any defected
+    /// the flight is told how many, and a save is due.
     pub(super) fn pay_escorts(&mut self, days: u32) {
         let mut defected = 0_u32;
         for _ in 0..days {
@@ -155,6 +158,12 @@ impl Session {
                     self.pilot.cash -= wage;
                     index += 1;
                     continue;
+                }
+                // A trader takes its share of the cargo, and the session
+                // resets, while it is still in the fleet, its own holds
+                // among the fleet's (@0x40225-0x40240).
+                if let Some(holds) = self.trader_holds(escort.ship) {
+                    self.destroy_cargo_share(holds, false);
                 }
                 self.pilot.escorts.remove(index);
                 if index < self.fleet.len()
@@ -839,6 +848,30 @@ mod tests {
         assert_eq!(session.pilot().escorts()[0].wage, Some(3));
     }
 
+    /// `_DoBarDialog` resets as the hire screen closes (@0x49235), after
+    /// a hire or none; the hire itself (`_DoShipyardDialog` in hire mode,
+    /// @0x5f14a-0x5f221) resets nothing of its own.
+    #[test]
+    fn the_hire_screen_closing_resets_and_a_hire_alone_does_not() {
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::{convicted, overloaded};
+        let catalog = barred(vec![hireable(129, 100)]);
+        let mut session = landed(&catalog, 25_000);
+        convicted(&mut session);
+        session.hire(ShipId(129), &mut NeverFires).expect("hires");
+        assert_ne!(session.scan_latches, Latches::ARMED, "the hire alone");
+        let trimmed = overloaded(&mut session);
+        session.close_hire();
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x49235");
+        assert_eq!(
+            session
+                .pilot()
+                .cargo()
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            trimmed
+        );
+    }
+
     #[test]
     fn hiring_a_class_draws_its_roll_again() {
         let catalog = barred(vec![hireable(129, 50), hireable(130, 50)]);
@@ -1198,6 +1231,37 @@ mod tests {
             .collect();
         assert_eq!(slots, [2, 3, 4], "re-formed");
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+    }
+
+    #[test]
+    fn a_defector_takes_its_share_and_resets_while_still_in_the_fleet() {
+        use crate::market::Good;
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::convicted;
+        for source in RuleSource::ALL {
+            let mut session = payer(350, payroll(), 1, RuleSource::Engine)
+                .with_rules(Rulebook::default().with_override(RuleKey::LostCargoShare, source));
+            // 80 tons of holds: the player's 20, three escorts' 20 each,
+            // and the carried fighter's none.
+            assert_eq!(session.capacity(), 80);
+            session.pilot.cargo = std::iter::once((Good::Commodity(0), 60)).collect();
+            session
+                .pilot
+                .missions
+                .put(0, crate::testkit::carrying(140, 30));
+            convicted(&mut session);
+            session.pay_escorts(1);
+            assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+            assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}: @0x40240");
+            assert_eq!(
+                session.pilot().held(Good::Commodity(0)),
+                45,
+                "{source:?}: 20 of 80 lost, its own holds counted once; the \
+                 reset, the defector still in the fleet, trims nothing, so 75 \
+                 tons stay past the 60 left"
+            );
+            assert_eq!(session.capacity(), 60);
+        }
     }
 
     #[test]

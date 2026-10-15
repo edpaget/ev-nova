@@ -402,9 +402,10 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// the second lands.
+    /// a few frames let the dock approach clear it, and the second lands.
     fn land(&mut self) {
         self.press(KeyCode::KeyL);
+        self.approach();
         self.press(KeyCode::KeyL);
     }
 
@@ -474,6 +475,19 @@ impl Harness {
         assert_eq!(self.app.take_failures(), []);
         assert_eq!(self.app.take_warnings(), Vec::<String>::new());
         (*self.gpu.submits().last().expect("a frame")).clone()
+    }
+
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_millis(16 * self.frames);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
     }
 
     /// A new pilot named Ada, in flight.
@@ -560,8 +574,22 @@ impl Harness {
         map.view().world_to_screen(system.position())
     }
 
-    /// Plots a course to Beta on flight's map: M, a click, M.
+    /// Runs frames until the map key is taken: a take-off refuses it for
+    /// [`nova_sim::TAKEOFF_GRACE_TICKS`].
+    fn past_the_takeoff_grace(&mut self) {
+        for _ in 0..100 {
+            if self.session().takes(nova_sim::PlayerCommand::Map) {
+                return;
+            }
+            self.frame();
+        }
+        panic!("the map was never taken");
+    }
+
+    /// Plots a course to Beta on flight's map: M, a click, M, once the
+    /// take-off grace is over.
     fn plot_beta(&mut self) {
+        self.past_the_takeoff_grace();
         self.press(KeyCode::KeyM);
         let beta = self.on_map(129);
         self.click(beta);

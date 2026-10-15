@@ -22,10 +22,16 @@
 //!   Ours sums in `i32`: the original's 16-bit `imulw`/`addw` wraps are
 //!   not replicated.
 //! - The original caches all three (`_playerHasIFF`,
-//!   `_playerHasDensityScanner`, `_playerAntiInterference`) and refreshes
-//!   them only where `_ResetPlayerPrecalcedValues` (@0xc357) runs, never
-//!   from the outfitter. Ours reads the outfits afresh every time; the
-//!   refresh points are rdm:phase/hud-fidelity/phase-10-radar-outfit-cache-refresh.
+//!   `_playerHasDensityScanner`, `_playerAntiInterference`) lazily:
+//!   `_ResetPlayerPrecalcedValues` stores a sentinel (@0xc3b6-0xc3d9), and
+//!   the getters recount the outfits on their next call (@0x436c,
+//!   @0x42e4, @0x5f3e). Every change to the player's outfits resets them
+//!   before the next read. The outfitter does so through
+//!   `_SystemInfoToShipStats` (buy @0x5c305, sell @0x5cffb, which
+//!   tail-jumps to the reset @0xcae9) and then redraws the bar
+//!   (`_DrawStatus` @0x5c5a1, @0x5d328); set expressions do so through
+//!   the wrappers @0x99a85 and @0x99dea. So reading the outfits afresh
+//!   each time, as ours does, matches.
 //!
 //! # Ships ([`ship_iff`], `_ColorCodeShip` @0x4ae8)
 //!
@@ -33,8 +39,9 @@
 //! (@0x4afa-0x4b0f), which the view draws for the player pixel and no NPC
 //! ever is; disabled (`_IsDisabled` @0x2ce6, whose armour test also holds
 //! for a ship breaking up) dark grey (@0x4b14-0x4b25); a threat
-//! (`_IsThreatToPlayer` @0x7f501, ours [`Npc::threatens_player`]) red
-//! (@0x4b27-0x4b44); an escort green (@0x4b46-0x4b8f); anything else
+//! (`_IsThreatToPlayer` @0x7f501, ours [`Npc::threatens_player_among`],
+//! which counts a ship attacking one the player leads, @0x7f572-0x7f590)
+//! red (@0x4b27-0x4b44); an escort green (@0x4b46-0x4b8f); anything else
 //! blue (@0x4b91-0x4b9c). An escort is a ship whose parent (+0x9a) is the
 //! player and that defends no stellar, or whose parent's parent is the
 //! player (@0x4b80-0x4b8f): ours, a ship that
@@ -145,13 +152,14 @@ pub enum ShipIff {
 }
 
 /// What IFF shows `npc` as, led by `leader` (the ship its
-/// [`leader`](Npc::leader) names, if it is in the system), tested in
+/// [`leader`](Npc::leader) names, if it is in the system), among the
+/// system's `npcs` (to tell which ships the player leads), tested in
 /// `_ColorCodeShip`'s order (see the module docs).
 #[must_use]
-pub fn ship_iff(npc: &Npc, leader: Option<&Npc>) -> ShipIff {
+pub fn ship_iff(npc: &Npc, leader: Option<&Npc>, npcs: &[Npc]) -> ShipIff {
     if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
         ShipIff::Disabled
-    } else if npc.threatens_player() {
+    } else if npc.threatens_player_among(npcs) {
         ShipIff::Threat
     } else if npc.escorts_player() || leader.is_some_and(Npc::escorts_player) {
         ShipIff::Escort
@@ -364,29 +372,60 @@ mod tests {
 
     #[test]
     fn a_disabled_or_breaking_up_ship_is_disabled_even_attacking() {
-        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 3 }] {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        ] {
             let npc = Npc {
                 condition,
                 ..attacking(hired())
             };
-            assert_eq!(ship_iff(&npc, None), ShipIff::Disabled, "{condition:?}");
+            assert_eq!(
+                ship_iff(&npc, None, &[]),
+                ShipIff::Disabled,
+                "{condition:?}"
+            );
         }
     }
 
     #[test]
     fn a_ship_attacking_the_player_is_a_threat_even_an_escort() {
-        assert_eq!(ship_iff(&attacking(ship()), None), ShipIff::Threat);
-        assert_eq!(ship_iff(&attacking(hired()), None), ShipIff::Threat);
+        assert_eq!(ship_iff(&attacking(ship()), None, &[]), ShipIff::Threat);
+        assert_eq!(ship_iff(&attacking(hired()), None, &[]), ShipIff::Threat);
         let elsewhere = Npc {
             goal: Goal::Attack(ShipRef::Npc(NpcId(9))),
             ..ship()
         };
-        assert_eq!(ship_iff(&elsewhere, None), ShipIff::Other);
+        assert_eq!(ship_iff(&elsewhere, None, &[]), ShipIff::Other);
+    }
+
+    #[test]
+    fn a_ship_attacking_one_the_player_leads_is_a_threat() {
+        // `_IsThreatToPlayer`'s led clause (@0x7f572-0x7f590).
+        let escort = Npc {
+            id: NpcId(5),
+            ..hired()
+        };
+        let stranger = Npc {
+            id: NpcId(6),
+            ..ship()
+        };
+        let hunting = |id| Npc {
+            id: NpcId(2),
+            goal: Goal::Attack(ShipRef::Npc(NpcId(id))),
+            ..ship()
+        };
+        let npcs = [escort, stranger];
+        assert_eq!(ship_iff(&hunting(5), None, &npcs), ShipIff::Threat);
+        assert_eq!(ship_iff(&hunting(6), None, &npcs), ShipIff::Other);
     }
 
     #[test]
     fn a_hired_or_mission_escort_is_an_escort() {
-        assert_eq!(ship_iff(&hired(), None), ShipIff::Escort);
+        assert_eq!(ship_iff(&hired(), None, &[]), ShipIff::Escort);
         let mission = Npc {
             mission: Some(MissionMark {
                 slot: 0,
@@ -396,17 +435,17 @@ mod tests {
             }),
             ..ship()
         };
-        assert_eq!(ship_iff(&mission, None), ShipIff::Escort);
+        assert_eq!(ship_iff(&mission, None, &[]), ShipIff::Escort);
     }
 
     #[test]
     fn any_other_ship_is_other_led_by_an_npc_too() {
-        assert_eq!(ship_iff(&ship(), None), ShipIff::Other);
+        assert_eq!(ship_iff(&ship(), None, &[]), ShipIff::Other);
         let led = Npc {
             leader: Some(NpcId(7)),
             ..ship()
         };
-        assert_eq!(ship_iff(&led, Some(&ship())), ShipIff::Other);
+        assert_eq!(ship_iff(&led, Some(&ship()), &[]), ShipIff::Other);
     }
 
     #[test]
@@ -417,9 +456,9 @@ mod tests {
             leader: Some(NpcId(1)),
             ..npc(2, ShipStats::default())
         };
-        assert_eq!(ship_iff(&fighter, Some(&hired())), ShipIff::Escort);
+        assert_eq!(ship_iff(&fighter, Some(&hired()), &[]), ShipIff::Escort);
         assert_eq!(
-            ship_iff(&attacking(fighter.clone()), Some(&hired())),
+            ship_iff(&attacking(fighter.clone()), Some(&hired()), &[]),
             ShipIff::Threat,
             "a threat first"
         );
@@ -428,7 +467,7 @@ mod tests {
             ..fighter
         };
         assert_eq!(
-            ship_iff(&disabled, Some(&hired())),
+            ship_iff(&disabled, Some(&hired()), &[]),
             ShipIff::Disabled,
             "disabled first"
         );

@@ -108,6 +108,14 @@ pub enum Goal {
     /// Fly back to this ship, its carrier, and dock in its fighter bay
     /// (see [`bay`](crate::bay)). It fights nothing: its quarry is none.
     Dock(ShipRef),
+    /// Hold where it is: the original's goal 10 with no leader, which a
+    /// ship swapped in for a person by a `ShipGoal` 3 mission gets
+    /// (`_AIMakeEscortFlyInForm` @0x89bbd-0x89bcd) and which no goal
+    /// block of `_HighLevelAIHandler` flies without a leader
+    /// (@0x8ed18-0x8ed31). It coasts with no thrust and no fire, and
+    /// keeps the hold until provoked or its type's think lifts it (see
+    /// [`idle`]). It fights nothing: its quarry is none.
+    Hold,
 }
 
 impl Goal {
@@ -380,8 +388,8 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 /// - An escort follows its lead while the lead is in the system; once it
 ///   is gone, the escort decides as below.
 /// - A goal it can still fly is kept: a stellar that is still there and
-///   landable, a gate it enters that is still there, or a jump it still
-///   has the fuel for.
+///   landable, a gate it enters that is still there, a jump it still
+///   has the fuel for, or a hold.
 /// - Otherwise it heads for a stellar picked at random among
 ///   `_SelectRandomStellarDest`'s candidates (@0x805de): landable, within
 ///   999 of the centre on each axis, not uninhabited unless a gate, not
@@ -395,6 +403,12 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 ///   original's `Rand(16)` loop decides, a uniform pick among them. A
 ///   hypergate or wormhole picked is entered ([`Goal::EnterGate`]), the
 ///   ship leaving the system through it.
+/// - A held ship ([`Goal::Hold`], the original's goal 10 with no
+///   leader) keeps its hold and picks nothing: every type's destination
+///   pick needs goal 0 (`_WimpyTraderAI` @0x8b06c, `_BraveTraderAI`
+///   @0x8b4d6), and `_AICheckParentExists` (@0x8926a-0x89281) never
+///   clears the goal of a ship with no leader. Only provocation, or a
+///   hunter's government's word, lifts it.
 /// - A ship that would jump without a jump's fuel stays idle.
 pub fn idle_admitting(
     npc: &Npc,
@@ -440,7 +454,7 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 
 /// Whether `npc` can still fly its goal among `around`: a stellar still
 /// there and landable, a gate still there (state 20 tests no landability
-/// again), or a jump it has the fuel for. Idling, following
+/// again), a jump it has the fuel for, or a hold. Idling, following
 /// once the lead is gone, fighting and inspecting are no goals to keep.
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
@@ -450,6 +464,7 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
             .any(|site| site.id == stellar && landable(site)),
         Goal::EnterGate(gate) => around.sites.iter().any(|site| site.id == gate),
         Goal::JumpOut => npc.reserves.fuel.now >= JUMP_FUEL,
+        Goal::Hold => true,
         _ => false,
     }
 }
@@ -783,6 +798,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 30.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(
             Peaceful.react(&npcs[0], &strike, &around),
@@ -833,6 +849,27 @@ mod tests {
         leaving.goal = Goal::JumpOut;
         assert_eq!(decide(&leaving, &sites(), &[], &mut chance), Goal::JumpOut);
         assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn a_held_ship_of_every_ai_type_keeps_its_hold_drawing_nothing() {
+        let deciders: [(AiType, &dyn Behaviour); 5] = [
+            (AiType::WimpyTrader, &Peaceful),
+            (AiType::WimpyTrader, &WimpyTrader::default()),
+            (AiType::BraveTrader, &BraveTrader::default()),
+            (AiType::Warship, &Warship::default()),
+            (AiType::Interceptor, &Interceptor::default()),
+        ];
+        let sites = sites();
+        for (ai_type, decider) in deciders {
+            let mut held = npc(1, ai_type);
+            held.goal = Goal::Hold;
+            let npcs = [held.clone()];
+            let mut chance = Draws::of(&[]);
+            let goal = decider.decide(&held, &Surroundings::new(&sites, &npcs), &mut chance);
+            assert_eq!(goal, Goal::Hold, "{decider:?}");
+            assert!(chance.asked.is_empty(), "{decider:?} drew");
+        }
     }
 
     #[test]
@@ -923,7 +960,10 @@ mod tests {
         jumping.mode = Mode::JumpingIn { tick: 0 };
         jumping.govt = Some(GovtId(140));
         let mut dying = npc(3, AiType::Warship);
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let mut disabled = npc(4, AiType::Warship);
         disabled.condition = Condition::Disabled;
         disabled.state.position = crate::geometry::Vec2::new(5.0, 6.0);
@@ -977,7 +1017,10 @@ mod tests {
         assert_eq!(around.state_of(P), Some(player.state));
         assert_eq!(around.condition_of(P), Some(Condition::Intact));
         around.player = Some(PlayerSide {
-            condition: Condition::Dying { ticks_left: 1 },
+            condition: Condition::Dying {
+                ticks_left: 1,
+                starting: false,
+            },
             ..player
         });
         assert!(!around.live(P));

@@ -85,11 +85,11 @@
 //! [`ESCORT_ARMOR_SHARE`] of its most; or, "Use As My Ship", the player
 //! takes it over, while a ship slot below the last of the
 //! [`MAX_SHIPS_IN_SYSTEM`] is free for the old ship (`_DoShipCapture`
-//! leaves 1 free @0x41136, as
-//! [`RuleKey::SpawnReserve`] reads), which joins the fleet with
-//! its class's stock loadout, full; with no slot free the whole swap is
-//! dropped. A player of no crew captures straight into the fleet. The
-//! captured class's `OnCapture` runs before it joins the fleet, and on
+//! leaves 1 free @0x41136, as [`RuleKey::SpawnReserve`] reads), which
+//! joins the fleet with its class's stock loadout, full, and by the engine
+//! reading of [`RuleKey::CaptureCargo`] the player's commodities with it;
+//! with no slot free the whole swap is dropped. A player of no crew
+//! captures straight into the fleet. The captured class's `OnCapture` runs before it joins the fleet, and on
 //! "Use As My Ship" the old class's `OnRetire` runs first; no hook runs
 //! when the swap is dropped (see the session's `hooks`).
 //!
@@ -840,7 +840,10 @@ mod tests {
     fn an_intact_dying_or_gone_ship_cannot_be_boarded() {
         for condition in [
             Condition::Intact,
-            Condition::Dying { ticks_left: 4 },
+            Condition::Dying {
+                ticks_left: 4,
+                starting: false,
+            },
             Condition::Destroyed,
         ] {
             let target = BoardTarget {
@@ -883,7 +886,13 @@ mod tests {
 
     #[test]
     fn a_player_not_intact_cannot_board() {
-        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 1 }] {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 1,
+                starting: false,
+            },
+        ] {
             assert_eq!(
                 check_board(&over(), condition, Some(quarry())),
                 Err(BoardRefusal::CantBoard),
@@ -1636,7 +1645,11 @@ mod tests {
         assert_eq!(all(19), Some(3));
         assert_eq!(all(14), Some(2));
         assert_eq!(all(5), Some(1));
-        assert_eq!(all(4), None, "none fits: nothing is granted, nor said");
+        assert_eq!(
+            all(4),
+            Some(0),
+            "none fits: the pick at a count of none, which grants nothing, nor says it"
+        );
         assert_eq!(
             granted(rule, grant_of(100, 4), spare(0, 0, 999), -30, &[0, 50]).0,
             Some(4),
@@ -1649,7 +1662,7 @@ mod tests {
         );
         assert_eq!(
             granted(rule, grant_of(100, 4), spare(1, 0, 999), -30, &[0, 50]).0,
-            None
+            Some(0)
         );
     }
 

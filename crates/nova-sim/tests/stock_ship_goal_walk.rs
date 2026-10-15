@@ -635,6 +635,14 @@ impl PilotCatalog for Probed<'_> {
         self.data.commodity_strings()
     }
 
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn junk(&self) -> Vec<cat::JunkRecord> {
         self.data.junk()
     }
@@ -730,7 +738,10 @@ fn probed(script: &Script, bit: Bit) -> Script {
             .map(|tree| tree.ops.clone())
             .unwrap_or_default(),
     );
-    Script::from(Arc::new(Ok(SetExpr { ops })))
+    Script::from(Arc::new(Ok(SetExpr {
+        ops,
+        has_text: true,
+    })))
 }
 
 /// `Ok` when, of the probed hooks, exactly `want` have run in `session`;

@@ -1,8 +1,19 @@
 //! The session's Red Alert (see [`red_alert`](crate::red_alert)): each
 //! flight tick checks the threat on a due frame, unless the player is
 //! destroyed (the death path returns before the check, @0x68838-0x6888c),
-//! sounding [`SimSound::RedAlert`] on a new threat, and steps the icon on
-//! every tick. Landing and hyperspace arrival clear the icon.
+//! sounding [`SimSound::RedAlert`] on a new threat unless the escape pod
+//! is counting down (+0xc908 > 0, @0x68cd3-0x68cdb), and steps the icon on
+//! every tick. A dying player out of the pod still hears it: the gate is
+//! the pod countdown, and `_IsPlayerThreatened` (@0x82442) has no dying
+//! test. Landing and hyperspace arrival clear the icon.
+//!
+//! In double time the check runs on both passes, on the same frame
+//! (`_HandlePlayer` @0x68c79), but the blink steps on the advance pass
+//! alone, as `_HandleAlertSprite` runs only there (`_DoPlayGameWork`
+//! @0x44518). An alert raised on the advance pass keeps the single-speed
+//! pattern. The second pass alerts only for a threat that came during
+//! the first, and that alert shows from the next tick: `cïcn` 18000 for
+//! 5 ticks, then each frame by turns every 5, 150 ticks in all.
 //!
 //! The original checks in `_HandlePlayer`, before the AI moves its ships
 //! that frame, while ours reads the NPCs as the tick finds them, after
@@ -15,15 +26,19 @@ use crate::combat::hull::Condition;
 use crate::red_alert::{AlertIcon, alert_check_due};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
-use crate::traffic::npc::Npc;
 
 impl Session {
     /// Whether any ship in the system threatens the player
     /// (`_IsPlayerThreatened` @0x82442-0x82482): any NPC for which
-    /// [`Npc::threatens_player`] holds, nothing else.
+    /// [`Npc::threatens_player_among`] the system's NPCs holds, so a ship
+    /// attacking one the player leads counts (@0x7f572-0x7f590), nothing
+    /// else.
+    ///
+    /// [`Npc::threatens_player_among`]: crate::traffic::npc::Npc::threatens_player_among
     #[must_use]
     pub fn player_threatened(&self) -> bool {
-        self.npcs().iter().any(Npc::threatens_player)
+        let npcs = self.npcs();
+        npcs.iter().any(|n| n.threatens_player_among(npcs))
     }
 
     /// The Red Alert icon frame shown, if any.
@@ -40,21 +55,19 @@ impl Session {
         self.sound_quiet = quiet;
     }
 
-    /// The Red Alert's part of a flight tick on `frame` (see the module
-    /// docs).
-    pub(super) fn red_alert_tick(&mut self, frame: i16) {
+    /// The Red Alert's check on `frame`, which runs on both of double
+    /// time's passes (see the module docs).
+    pub(super) fn red_alert_check(&mut self, frame: i16) {
         if self.condition != Condition::Destroyed && alert_check_due(frame) {
-            let dying = matches!(self.condition, Condition::Dying { .. });
             let blinks = self.sound_quiet
                 || self.rules.source_for(RuleKey::AlertBlink) != RuleSource::Engine;
             if self
                 .red_alert
-                .check(self.player_threatened(), dying, blinks)
+                .check(self.player_threatened(), self.pod.is_some(), blinks)
             {
                 self.sounds.push(SimSound::RedAlert);
             }
         }
-        self.red_alert.step(frame);
     }
 }
 
@@ -149,6 +162,36 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_attacking_one_the_player_leads_sounds_the_red_alert() {
+        // `_IsThreatToPlayer`'s led clause (@0x7f572-0x7f590).
+        let mut session = session(&catalog());
+        session.set_sound_quiet(true);
+        let escort = session.traffic.add_npc(crate::traffic::npc::Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..npc(0, ShipStats::default())
+        });
+        let stranger = session.traffic.add_npc(npc(0, ShipStats::default()));
+        let hunter = session.traffic.add_npc(crate::traffic::npc::Npc {
+            goal: Goal::Attack(ShipRef::Npc(stranger)),
+            ..npc(0, ShipStats::default())
+        });
+        assert!(!session.player_threatened(), "a stranger's foe");
+        let foe = session
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == hunter)
+            .expect("there");
+        foe.goal = Goal::Attack(ShipRef::Npc(escort));
+        assert!(session.player_threatened());
+        session.frame = 1;
+        assert_eq!(alerts_over(&mut session, 60), 1);
+    }
+
+    #[test]
     fn a_threat_sounds_the_red_alert_on_the_next_check_frame_only() {
         let mut session = threatened(&catalog());
         session.take_sounds();
@@ -234,13 +277,120 @@ mod tests {
     }
 
     #[test]
-    fn a_dying_player_hears_no_alert_and_the_threat_is_spent() {
+    fn the_red_alert_is_silent_while_the_pod_counts_down() {
         let mut session = threatened(&catalog());
-        session.condition = Condition::Dying { ticks_left: 500 };
+        session.pod = Some(crate::POD_TICKS);
         assert_eq!(alerts_over(&mut session, 60), 0);
         assert_eq!(session.red_alert_icon(), None);
-        session.condition = Condition::Intact;
+        session.pod = None;
         assert_eq!(alerts_over(&mut session, 120), 0, "the edge is spent");
+    }
+
+    // Double time.
+
+    /// Runs the second pass on the frame the last tick ran on.
+    fn again(session: &mut Session) {
+        session.tick_again(
+            Controls::default(),
+            crate::Rules::default(),
+            &mut NeverFires,
+        );
+    }
+
+    /// Ticks once in double time, giving the Red Alerts each pass sounded.
+    fn doubled_alerts(session: &mut Session) -> (usize, usize) {
+        let advance = alerts(session);
+        again(session);
+        let sounded = session.take_sounds();
+        (
+            advance,
+            sounded.iter().filter(|&&s| s == SimSound::RedAlert).count(),
+        )
+    }
+
+    /// The icon after each of `ticks` ticks in double time.
+    fn doubled_icons(session: &mut Session, ticks: usize) -> Vec<Option<AlertIcon>> {
+        (0..ticks)
+            .map(|_| {
+                session.tick(Controls::default());
+                again(session);
+                session.red_alert_icon()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_second_pass_checks_on_the_same_frame_and_shows_from_the_next_tick() {
+        let mut session = session(&catalog());
+        session.set_sound_quiet(true);
+        session.frame = 1;
+        for _ in 0..59 {
+            assert_eq!(doubled_alerts(&mut session), (0, 0));
+        }
+        assert_eq!(alerts(&mut session), 0, "frame 60 finds no threat");
+        attacker(&mut session);
+        again(&mut session);
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::RedAlert],
+            "frame 60 again"
+        );
+        assert_eq!(session.red_alert_icon(), None, "no step on the second pass");
+        let shown = doubled_icons(&mut session, 200);
+        let expected: Vec<_> = (1..=200)
+            .map(|tick: usize| match tick {
+                151.. => None,
+                _ if ((tick - 1) / 5).is_multiple_of(2) => Some(AlertIcon::Red),
+                _ => Some(AlertIcon::Dark),
+            })
+            .collect();
+        assert_eq!(shown, expected);
+        let count = |icon| shown.iter().filter(|&&shown| shown == Some(icon)).count();
+        assert_eq!((count(AlertIcon::Red), count(AlertIcon::Dark)), (75, 75));
+    }
+
+    #[test]
+    fn an_advance_pass_alert_keeps_the_146_tick_pattern_in_double_time() {
+        let mut session = threatened(&catalog());
+        assert!(doubled_icons(&mut session, 59).iter().all(Option::is_none));
+        let shown = doubled_icons(&mut session, 200);
+        let expected: Vec<_> = (0..200).map(pattern).collect();
+        assert_eq!(shown, expected);
+    }
+
+    #[test]
+    fn a_standing_threat_does_not_alert_again_on_the_second_pass() {
+        let mut session = threatened(&catalog());
+        session.take_sounds();
+        let sounded: Vec<(usize, usize)> = (0..600).map(|_| doubled_alerts(&mut session)).collect();
+        assert_eq!(sounded[59], (1, 0), "frame 60's advance pass");
+        assert_eq!(
+            sounded.iter().map(|(a, b)| a + b).sum::<usize>(),
+            1,
+            "once in all"
+        );
+    }
+
+    #[test]
+    fn the_second_pass_never_steps_the_blink() {
+        let mut session = threatened(&catalog());
+        assert_eq!(alerts_over(&mut session, 64), 1, "to frame 64");
+        session.tick(Controls::default());
+        assert_eq!(session.pass_frame, 65, "a step frame");
+        let blink = session.red_alert;
+        again(&mut session);
+        assert_eq!(session.red_alert, blink);
+    }
+
+    #[test]
+    fn a_dying_player_out_of_the_pod_hears_the_red_alert() {
+        let mut session = threatened(&catalog());
+        session.condition = Condition::Dying {
+            ticks_left: 500,
+            starting: false,
+        };
+        assert_eq!(alerts_over(&mut session, 60), 1);
+        assert_eq!(session.red_alert_icon(), Some(AlertIcon::Red));
     }
 
     #[test]
@@ -309,9 +459,11 @@ mod tests {
         session
     }
 
-    /// Presses L twice, giving the gate entry it awaits.
+    /// Presses L, runs the dock approach and presses L again, giving the
+    /// gate entry it awaits.
     fn press_land_twice(session: &mut Session) {
         session.land().expect("clearance");
+        session.dock_approach();
         assert!(matches!(
             session.land(),
             Ok(crate::session::LandPress::AtGate { .. })

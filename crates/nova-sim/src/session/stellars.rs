@@ -2053,7 +2053,11 @@ mod tests {
             position: offset,
             ..ShipState::default()
         };
-        session.nav_target = Some(StellarId(128));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(128),
+            permission: crate::clearance::CLEARED,
+        });
         match session.land()? {
             LandPress::Outcome(LandOutcome::Landed(stellar)) => Ok(stellar),
             other => panic!("not a landing: {other:?}"),
@@ -2478,7 +2482,12 @@ mod tests {
         pilot.stellar = Some(StellarId(200));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         assert_eq!(session.landed(), Some(StellarId(200)));
-        assert_eq!(shown(&session), [140, 200], "130's, but docked at");
+        assert_eq!(
+            session.system(),
+            SystemId(130),
+            "a load resumes in its stellar's owner, whatever system was saved"
+        );
+        assert_eq!(shown(&session), [128, 129, 200], "130's, docked at 200");
         session.assert_docked_among_shown();
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(200), Some(None));
@@ -2487,7 +2496,11 @@ mod tests {
         session
             .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");
-        assert_eq!(shown(&session), [140], "in flight, what 131 holds");
+        assert_eq!(
+            shown(&session),
+            [128, 129, 200],
+            "in flight, what 130 holds"
+        );
     }
 
     #[test]
