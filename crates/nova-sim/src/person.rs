@@ -90,7 +90,7 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 
 use crate::ai::Goal;
-use crate::catalog::{GovtId, PersonId, PersonRecord, SystemId, WeaponId};
+use crate::catalog::{GovtId, PersonId, PersonRecord, StringPatch, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::Condition;
@@ -201,6 +201,45 @@ pub const DERELICT_ARMOR_LESS: f32 = 1.0;
 pub const COMM_QUOTES: i16 = 7100;
 /// The hail quotes, `STR#` 7101 (0x1bbd @0x445d6).
 pub const HAIL_QUOTES: i16 = 7101;
+
+/// What a hail quote's `STR ` patch adds to its `HailQuote`: 4999 (0x1387
+/// @0x445b8), so `HailQuote` 1 is `STR ` 5000.
+pub const HAIL_QUOTE_PATCHES: i16 = 4999;
+
+/// The `STR ` that patches hail quote `hail_quote`
+/// (`_LoadPluginString(0x1387 + HailQuote)` @0x445b8-0x445c6), or none when
+/// the sum does not fit in 16 bits: the engine keeps wider numbers and
+/// looks up no `STR ` for it, as [`buoy::patch_id`](crate::buoy::patch_id)
+/// does.
+#[must_use]
+pub fn hail_quote_patch_id(hail_quote: i16) -> Option<i16> {
+    hail_quote.checked_add(HAIL_QUOTE_PATCHES)
+}
+
+/// The words of hail quote `hail_quote`, as `_ShowPersonHailQuote` reads
+/// them (@0x445b8-0x445e1): its `STR ` `patch`
+/// ([`hail_quote_patch_id`]), from any open file, base data or plug-in,
+/// when there is one; else line `hail_quote` of `lines` (`STR#` 7101,
+/// `GetIndString` @0x445e1), or an empty line for one it does not hold.
+///
+/// `_LoadPluginString` (@0x71a8e-0x71af4) answers that the `STR ` exists
+/// even when it is empty, skipping the copy (@0x71ac5), so the original
+/// shows whatever its shared buffer (0x3b5570) last held; the engine
+/// shows an empty line for an empty or unreadable `STR `, as a buoy's
+/// does ([`buoy::buoy_text`](crate::buoy::buoy_text)).
+#[must_use]
+pub fn hail_quote_text(hail_quote: i16, patch: StringPatch, lines: &[String]) -> String {
+    match patch {
+        StringPatch::Text(text) => text,
+        StringPatch::Empty | StringPatch::Unreadable => String::new(),
+        StringPatch::Absent => usize::try_from(hail_quote)
+            .ok()
+            .and_then(|line| line.checked_sub(1))
+            .and_then(|at| lines.get(at))
+            .cloned()
+            .unwrap_or_default(),
+    }
+}
 
 /// What a rank tag reads with no rank to name and no string lists wired:
 /// stock `STR#` 2002 #341 (the Bible's word; see [`rank`](crate::rank)).
@@ -1774,5 +1813,26 @@ mod tests {
                 "{flags:#x} {ship:?}"
             );
         }
+    }
+
+    // `_ShowPersonHailQuote`'s plug-in string (@0x445b8-0x445e1).
+
+    #[test]
+    fn a_hail_quotes_str_patch_wins_over_str_list_7101() {
+        use crate::catalog::StringPatch;
+        let lines = ["One".to_owned(), "Two".to_owned()];
+        let text = |hail_quote, patch| hail_quote_text(hail_quote, patch, &lines);
+        assert_eq!(text(2, StringPatch::Text("Patched".to_owned())), "Patched");
+        assert_eq!(text(2, StringPatch::Empty), "", "an empty STR");
+        assert_eq!(text(2, StringPatch::Unreadable), "", "an unreadable STR");
+        assert_eq!(text(2, StringPatch::Absent), "Two");
+        assert_eq!(text(1, StringPatch::Absent), "One");
+        assert_eq!(text(3, StringPatch::Absent), "", "out of range");
+        assert_eq!(text(0, StringPatch::Absent), "", "none");
+        assert_eq!(text(-1, StringPatch::Absent), "", "below");
+        assert_eq!(HAIL_QUOTE_PATCHES, 4999);
+        assert_eq!(hail_quote_patch_id(1), Some(5000), "0x1387 + 1 (@0x445b8)");
+        assert_eq!(hail_quote_patch_id(27_768), Some(i16::MAX));
+        assert_eq!(hail_quote_patch_id(27_769), None, "no 16-bit wrap");
     }
 }

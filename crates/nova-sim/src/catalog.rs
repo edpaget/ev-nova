@@ -1247,6 +1247,16 @@ pub trait CommCatalog {
     /// Every string of `STR#` `id`, in order; none when it is missing or
     /// cannot be read.
     fn string_list(&self, id: i16) -> Vec<String>;
+
+    /// The `'STR '` `id`, raw, from whichever open file holds it, the base
+    /// data's or a plug-in's, as `_LoadPluginString` (@0x71a8e) looks it up
+    /// with `GetResource`: a person's hail quote's patch (see
+    /// [`hail_quote_text`](crate::person::hail_quote_text)). None by
+    /// default.
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        let _ = id;
+        StringPatch::Absent
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1254,12 +1264,20 @@ impl<T: CommCatalog + ?Sized> CommCatalog for &T {
     fn string_list(&self, id: i16) -> Vec<String> {
         (**self).string_list(id)
     }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        (**self).plugin_string(id)
+    }
 }
 
 /// A shared catalog is a catalog.
 impl<T: CommCatalog + ?Sized> CommCatalog for Rc<T> {
     fn string_list(&self, id: i16) -> Vec<String> {
         (**self).string_list(id)
+    }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        (**self).plugin_string(id)
     }
 }
 

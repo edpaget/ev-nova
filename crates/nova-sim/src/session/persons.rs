@@ -21,7 +21,8 @@
 //!
 //! **Hail quotes.** Each tick in flight ([`Session::tick_quotes`]) a
 //! person may say its hail quote (`STR#` 7101 #`HailQuote`, its tags
-//! read), on the trigger its `Flags` give: when it begins to attack the
+//! read, or the `'STR '` 4999 + `HailQuote` of any open file in its place,
+//! `_ShowPersonHailQuote` @0x445b8-0x445e1), on the trigger its `Flags` give: when it begins to attack the
 //! player, now and then, and so on (see [`person`](crate::person)); the
 //! flight shows each in its message line ([`Session::take_quotes`]).
 //! A person escorting the player says none, nor does one gone for good
@@ -66,6 +67,7 @@
 use std::rc::Rc;
 
 use super::{Session, hire};
+use crate::catalog::StringPatch;
 use crate::catalog::{CommCatalog, MissionId, PersonId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -73,7 +75,8 @@ use crate::combat::{ShipRef, Strike};
 use crate::hail::likes_player;
 use crate::person::{
     ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_ODDS,
-    QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, quote_eligible,
+    QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, hail_quote_patch_id, hail_quote_text,
+    quote_eligible,
 };
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -146,7 +149,8 @@ impl Session {
     }
 
     /// A tick of the persons' hail quotes in flight, each drawn on
-    /// `chance` and read from `catalog` (see the module docs and
+    /// `chance` and read from `catalog`, its `'STR '` patch before
+    /// `STR#` 7101 (@0x445b8-0x445e1; see the module docs and
     /// [`person`](crate::person)): first each attack quote queued, said
     /// with no draw; then, in order, each person NPC whose quote
     /// may be said draws `Rand(140)`, and says it when it is due now, or
@@ -159,7 +163,7 @@ impl Session {
         }
         let lines = catalog.string_list(HAIL_QUOTES);
         for id in self.traffic.take_attack_quotes() {
-            self.say_hail_quote(id, &lines);
+            self.say_hail_quote(id, catalog, &lines);
         }
         let player_ai = self
             .ship_record(self.pilot.ship)
@@ -212,20 +216,29 @@ impl Session {
             // `_HandleShip` keeps the time of its last quote (+0xac,
             // @0x33fba).
             person.quoted_at = Some(ticks);
-            self.say_hail_quote(id, &lines);
+            self.say_hail_quote(id, catalog, &lines);
         }
         self.quote_clock.ticks += 1;
     }
 
-    /// NPC `id`'s person says its hail quote, line `HailQuote` of
-    /// `lines` (`STR#` 7101), its tags read, as `_ShowPersonHailQuote`
-    /// has it (@0x4457e-0x44660): with `_beepSnd[4]`
+    /// NPC `id`'s person says its hail quote, its tags read, as
+    /// `_ShowPersonHailQuote` has it (@0x4457e-0x44660): `catalog`'s
+    /// `'STR '` 0x1387 + `HailQuote` when there is one (`_LoadPluginString`
+    /// @0x445b8-0x445cb), else line `HailQuote` of `lines` (`STR#` 7101,
+    /// @0x445e1), an empty line for one out of range
+    /// ([`hail_quote_text`]); with `_beepSnd[4]`
     /// ([`SimSound::HailQuote`](crate::SimSound::HailQuote), @0x44586-0x445ad),
-    /// an empty line for one out of range, shown for
-    /// [`QUOTE_SHOWN_TICKS`] (@0x4464d), in which no random quote is
-    /// said. It is quoted (+0xbc); the time of its last quote is its
-    /// caller's to keep. An NPC gone, or flying no person, says nothing.
-    fn say_hail_quote(&mut self, id: NpcId, lines: &[String]) {
+    /// shown for [`QUOTE_SHOWN_TICKS`] (@0x4464d), in which no random
+    /// quote is said. It is quoted (+0xbc); the time of its last quote is
+    /// its caller's to keep. An NPC gone, or flying no person, says
+    /// nothing. Every hail quote, on attack, due now or at random, is said
+    /// here, as every one goes through `_ShowPersonHailQuote`.
+    fn say_hail_quote(
+        &mut self,
+        id: NpcId,
+        catalog: &(impl CommCatalog + ?Sized),
+        lines: &[String],
+    ) {
         let ticks = self.quote_clock.ticks;
         let Some(person) = self
             .traffic
@@ -239,11 +252,9 @@ impl Session {
         person.quoted = true;
         let (person, hail_quote) = (person.id, person.hail_quote);
         self.quote_clock.quiet_until = ticks + QUOTE_SHOWN_TICKS;
-        let line = usize::try_from(hail_quote - 1)
-            .ok()
-            .and_then(|at| lines.get(at))
-            .cloned()
-            .unwrap_or_default();
+        let patch = hail_quote_patch_id(hail_quote)
+            .map_or(StringPatch::Absent, |patch| catalog.plugin_string(patch));
+        let line = hail_quote_text(hail_quote, patch, lines);
         let tags = QuoteTags {
             person: self
                 .traffic
@@ -1251,6 +1262,33 @@ mod tests {
         );
         assert_eq!(quote_tick(&catalog, &mut session, &[]), (vec![], vec![]));
         assert_eq!(session.take_sounds(), [], "a mission's ship");
+    }
+
+    #[test]
+    fn a_plugins_str_patch_says_the_hail_quote_in_place_of_str_list_7101() {
+        // `_ShowPersonHailQuote` looks up `STR ` 0x1387 + HailQuote first
+        // (`_LoadPluginString` @0x445b8-0x445cb), `STR#` 7101 only with
+        // none (@0x445e1).
+        let (mut catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
+        catalog.string_patches = vec![(
+            5000,
+            crate::catalog::StringPatch::Text("Plug-in: <PN>!".to_owned()),
+        )];
+        session.take_sounds();
+        turn_ace(&mut session);
+        let (said, _) = quote_tick(&catalog, &mut session, &[1]);
+        assert_eq!(said, ["Plug-in: Stock!"], "tags read");
+        assert_eq!(session.take_sounds(), [SimSound::HailQuote]);
+        for _ in 0..420 {
+            quote_tick(&catalog, &mut session, &[1]);
+        }
+        let (said, _) = quote_tick(&catalog, &mut session, &[0]);
+        assert_eq!(said, ["Plug-in: Stock!"], "Bee's at random too");
+        let (mut catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
+        catalog.string_patches = vec![(5000, crate::catalog::StringPatch::Empty)];
+        turn_ace(&mut session);
+        let (said, _) = quote_tick(&catalog, &mut session, &[1]);
+        assert_eq!(said, [""], "an empty STR");
     }
 
     #[test]

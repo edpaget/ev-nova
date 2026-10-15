@@ -950,6 +950,10 @@ impl CommCatalog for GameData {
     fn string_list(&self, id: i16) -> Vec<String> {
         strings(self, id)
     }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        string_patch(self, id)
+    }
 }
 
 /// The most a `shïp`'s `InherentGovt` adds to a `gövt` ID to say it

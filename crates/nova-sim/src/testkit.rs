@@ -952,6 +952,12 @@ impl CommCatalog for FakePilotCatalog {
             .find(|(list, _)| *list == id)
             .map_or_else(Vec::new, |(_, strings)| strings.clone())
     }
+
+    /// [`FakePilotCatalog::string_patches`]' `'STR '` `id`, as
+    /// [`PilotCatalog::string_patch`] reads it.
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        self.string_patch(id)
+    }
 }
 
 /// Flies the ship out from the centre until it is at least
