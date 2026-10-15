@@ -1117,7 +1117,7 @@ mod tests {
         offers.tick(ms(500), false);
         assert!(!offers.take_restart(), "not restarted yet");
         offers.restart();
-        offers.tick(ms(10_000), true);
+        offers.tick(ms(10_000), false);
         assert!(!offers.take_request(), "no wait until it is given a gap");
         assert!(offers.take_restart(), "asks for a new gap");
         assert!(!offers.take_restart(), "once");
