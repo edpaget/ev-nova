@@ -56,10 +56,13 @@
 //!   rdm:phase/missions-fidelity/phase-2-text-substitution-quirks
 //!   ports. A context with no ranks wired ([`RankNames::none`]) reads
 //!   "captain" ([`NO_RANK`](crate::person::NO_RANK)) for each.
-//! - `<PAY>` of a million or more follows [`RuleKey::PayMillions`](crate::RuleKey::PayMillions).
+//! - `<PAY>` of a million or more follows [`RuleKey::PayMillions`](crate::RuleKey::PayMillions),
+//!   and a slot's `<PAY>` of a pay that is not cash, a fine or a charge
+//!   follows [`RuleKey::PaySlotOffset`](crate::RuleKey::PaySlotOffset):
+//!   by the engine the slot's byte offset, as the original's register
+//!   leaves it ([`MissionTags::other_pay`]).
 //!
-//! The original's quirks not reproduced here (a slot's `<PAY>` reading
-//! its byte offset, the crossed `<PRKnnn>`/`<SRKnnn>` governments, a stale
+//! The original's quirks not reproduced here (the crossed `<PRKnnn>`/`<SRKnnn>` governments, a stale
 //! `<OSN>`, the `l33t` mode, `'STR '` 9100+ cargo name patches, and
 //! `"[Error]"` for the mission tags with no mission) are
 //! rdm:phase/missions/phase-13-text-substitution-quirks.
@@ -80,15 +83,21 @@ const FINES: std::ops::RangeInclusive<i64> = -40_099..=-40_001;
 /// `PayVal` below which a pay is cash taken at accept: `-50000 - pay`.
 const CHARGES_BELOW: i64 = -50_000;
 
+/// The bytes of one active mission slot (`_currentMissions`, 0x8ec):
+/// what a slot's `<PAY>` of any other pay reads by the engine, times the
+/// slot (@0x9c874-0x9c87c).
+pub const SLOT_BYTES: i64 = 0x8ec;
+
 /// The amount `<PAY>` shows for a pay of `pay` with `cash` held
 /// (@0x9c7a0-0x9c835, @0x9cd2a-0x9cdb6): above 0, the pay; -40099 to
 /// -40001, its percent of the cash, worked in doubles and truncated as
 /// the original does (trunc(cash × (percent × 0.01)), 0.01 @0xdd098);
-/// below -50000, the cash taken at accept; any other pay, 0. `None` for
-/// an amount below 0, which the tag shows as [`UNSET`].
+/// below -50000, the cash taken at accept; any other pay, `other`
+/// ([`MissionTags::other_pay`]). `None` for an amount below 0, which the
+/// tag shows as [`UNSET`].
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-pub fn pay_shown(pay: i64, cash: i64) -> Option<i64> {
+pub fn pay_shown(pay: i64, cash: i64, other: i64) -> Option<i64> {
     let amount = match pay {
         1.. => pay,
         pay if FINES.contains(&pay) => {
@@ -96,7 +105,7 @@ pub fn pay_shown(pay: i64, cash: i64) -> Option<i64> {
             (cash as f64 * (percent * 0.01)).trunc() as i64
         }
         pay if pay < CHARGES_BELOW => CHARGES_BELOW - pay,
-        _ => 0,
+        _ => other,
     };
     (amount >= 0).then_some(amount)
 }
@@ -237,6 +246,44 @@ pub struct MissionTags<'a> {
     /// How a pay of a million or more is written
     /// ([`RuleKey::PayMillions`](crate::RuleKey::PayMillions)).
     pub pay_millions: RuleSource,
+    /// The active slot the mission is in; `None` for an offer.
+    pub slot: Option<u8>,
+}
+
+impl MissionTags<'_> {
+    /// What `<PAY>` shows of a pay that is not cash, a fine or a charge,
+    /// as `rule` ([`RuleKey::PaySlotOffset`](crate::RuleKey::PaySlotOffset))
+    /// reads it: an offer's is 0 (@0x9c7e6-0x9c7f0); a slot's is, by the
+    /// engine, the slot's byte offset, [`SLOT_BYTES`] × the slot, which
+    /// the original's register still holds (@0x9cd2a-0x9cdb6), and by
+    /// the other reading 0, as an offer's.
+    #[must_use]
+    pub fn other_pay(&self, rule: RuleSource) -> i64 {
+        match (self.slot, rule) {
+            (Some(slot), RuleSource::Engine) => SLOT_BYTES * i64::from(slot),
+            _ => 0,
+        }
+    }
+}
+
+/// The disputed rules the tags follow, each a
+/// [`RuleKey`](crate::RuleKey)'s reading: the engine's by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TagRules {
+    /// What a slot's `<PAY>` of any other pay reads
+    /// ([`RuleKey::PaySlotOffset`](crate::RuleKey::PaySlotOffset)).
+    pub pay_slot_offset: RuleSource,
+}
+
+impl TagRules {
+    /// The readings `rules` gives.
+    #[must_use]
+    pub fn from_rulebook(rules: &crate::rulebook::Rulebook) -> Self {
+        use crate::rulebook::RuleKey;
+        Self {
+            pay_slot_offset: rules.source_for(RuleKey::PaySlotOffset),
+        }
+    }
 }
 
 /// What a text's tags read.
@@ -255,6 +302,8 @@ pub struct TagContext<'a> {
     /// The mission, if the text has one; with none its tags are left as
     /// written.
     pub mission: Option<MissionTags<'a>>,
+    /// The disputed rules the tags follow.
+    pub rules: TagRules,
 }
 
 /// `stop`'s stellar's and system's names, [`UNSET`] for each missing.
@@ -279,6 +328,7 @@ fn or_else(value: String, fallback: &str) -> String {
 /// The mission tags' values, in the table's order (@0x9c38a-0x9cdb6).
 fn mission_values(
     mission: &MissionTags,
+    rules: TagRules,
     names: &(impl TagNames + ?Sized),
 ) -> [(&'static str, String); 9] {
     let values = &mission.values;
@@ -299,7 +349,7 @@ fn mission_values(
         });
     let pay = values
         .pay
-        .and_then(|pay| pay_shown(pay, mission.cash))
+        .and_then(|pay| pay_shown(pay, mission.cash, mission.other_pay(rules.pay_slot_offset)))
         .map_or_else(unset, |amount| comma_number(amount, mission.pay_millions));
     [
         ("<DST>", or_else(dst, &rst)),
@@ -356,7 +406,7 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
     let mission = context
         .mission
         .as_ref()
-        .map(|mission| mission_values(mission, names));
+        .map(|mission| mission_values(mission, context.rules, names));
     let (early, pay) = match &mission {
         Some([early @ .., pay]) => (early.as_slice(), Some(pay)),
         None => (&[][..], None),
@@ -393,34 +443,43 @@ mod tests {
 
     #[test]
     fn a_pay_above_0_shows_itself() {
-        assert_eq!(pay_shown(1, 500), Some(1));
-        assert_eq!(pay_shown(25_000, 500), Some(25_000));
+        assert_eq!(pay_shown(1, 500, 0), Some(1));
+        assert_eq!(pay_shown(25_000, 500, 0), Some(25_000));
     }
 
     #[test]
     fn a_fining_pay_shows_its_percent_of_the_cash_truncated() {
-        assert_eq!(pay_shown(-40_001, 12_345), Some(123));
-        assert_eq!(pay_shown(-40_010, 12_345), Some(1234));
-        assert_eq!(pay_shown(-40_099, 12_345), Some(12_221));
-        assert_eq!(pay_shown(-40_050, 0), Some(0));
+        assert_eq!(pay_shown(-40_001, 12_345, 0), Some(123));
+        assert_eq!(pay_shown(-40_010, 12_345, 0), Some(1234));
+        assert_eq!(pay_shown(-40_099, 12_345, 0), Some(12_221));
+        assert_eq!(pay_shown(-40_050, 0, 0), Some(0));
     }
 
     #[test]
     fn a_fine_of_a_negative_cash_shows_nothing() {
-        assert_eq!(pay_shown(-40_010, -500), None);
+        assert_eq!(pay_shown(-40_010, -500, 0), None);
     }
 
     #[test]
     fn a_charging_pay_shows_what_it_takes() {
-        assert_eq!(pay_shown(-50_001, 500), Some(1));
-        assert_eq!(pay_shown(-60_000, 500), Some(10_000));
+        assert_eq!(pay_shown(-50_001, 500, 0), Some(1));
+        assert_eq!(pay_shown(-60_000, 500, 0), Some(10_000));
     }
 
     #[test]
-    fn any_other_pay_shows_0() {
+    fn any_other_pay_shows_the_other_amount() {
         for pay in [0, -1, -10_128, -40_000, -40_100, -50_000] {
-            assert_eq!(pay_shown(pay, 12_345), Some(0), "{pay}");
+            assert_eq!(pay_shown(pay, 12_345, 0), Some(0), "{pay}");
+            assert_eq!(pay_shown(pay, 12_345, 4568), Some(4568), "{pay}");
         }
+    }
+
+    #[test]
+    fn the_other_amount_changes_no_cash_fine_or_charge() {
+        assert_eq!(pay_shown(25_000, 12_345, 4568), Some(25_000));
+        assert_eq!(pay_shown(-40_010, 12_345, 4568), Some(1234));
+        assert_eq!(pay_shown(-60_000, 12_345, 4568), Some(10_000));
+        assert_eq!(pay_shown(-40_010, -500, 4568), None);
     }
 
     // Numbers with commas.
@@ -557,7 +616,9 @@ mod tests {
                 today: today(),
                 date_affixes: &AFFIXES,
                 pay_millions: RuleSource::Engine,
+                slot: None,
             }),
+            rules: TagRules::default(),
         }
     }
 
@@ -768,6 +829,69 @@ mod tests {
             ..values()
         };
         assert_eq!(with(fine, "<PAY>"), "1,234", "10 % of 12,345");
+    }
+
+    /// `values` filled in slot `slot` (none for an offer) under the
+    /// `pay_slot_offset` reading `rule`.
+    fn in_slot(values: MissionValues, slot: Option<u8>, rule: RuleSource, text: &str) -> String {
+        let mut tags = context(Some(values));
+        if let Some(mission) = &mut tags.mission {
+            mission.slot = slot;
+        }
+        tags.rules.pay_slot_offset = rule;
+        expand(text, &tags, &names())
+    }
+
+    #[test]
+    fn by_the_engine_a_slots_other_pay_reads_its_byte_offset() {
+        for (slot, shown) in [(0, "0"), (1, "2,284"), (3, "6,852"), (15, "34,260")] {
+            for pay in [0, -45_000] {
+                let values = MissionValues {
+                    pay: Some(pay),
+                    ..values()
+                };
+                assert_eq!(
+                    in_slot(values, Some(slot), RuleSource::Engine, "<PAY>"),
+                    shown,
+                    "slot {slot}, pay {pay}: slot x 0x8ec (@0x9cd2a-0x9cdb6)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_slots_other_pay_reads_0() {
+        let values = MissionValues {
+            pay: Some(0),
+            ..values()
+        };
+        assert_eq!(in_slot(values, Some(3), RuleSource::Bible, "<PAY>"), "0");
+    }
+
+    #[test]
+    fn an_offers_other_pay_reads_0_by_either_reading() {
+        for rule in RuleSource::ALL {
+            let values = MissionValues {
+                pay: Some(-10),
+                ..values()
+            };
+            assert_eq!(in_slot(values, None, rule, "<PAY>"), "0", "{rule:?}");
+        }
+    }
+
+    #[test]
+    fn a_slots_fine_and_charge_are_unchanged_by_the_offset() {
+        for (pay, shown) in [(-40_010, "1,234"), (-60_000, "10,000"), (25_000, "25,000")] {
+            let values = MissionValues {
+                pay: Some(pay),
+                ..values()
+            };
+            assert_eq!(
+                in_slot(values, Some(3), RuleSource::Engine, "<PAY>"),
+                shown,
+                "{pay}"
+            );
+        }
     }
 
     #[test]

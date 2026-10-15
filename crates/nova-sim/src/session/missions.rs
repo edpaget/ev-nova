@@ -95,7 +95,7 @@ use crate::rules::Verdict;
 use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
-use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
+use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames, TagRules};
 
 /// Why a mission's stop has no landing a player can reach
 /// ([`Session::stop_landing`]).
@@ -1273,9 +1273,10 @@ impl Session {
         self.offers.table()
     }
 
-    /// What `text`'s tags read for `mission`, or no mission: the pilot,
-    /// its ship, no person, and the session's cash, date and rules.
-    fn tag_context(&self, mission: Option<MissionValues>) -> TagContext<'_> {
+    /// What `text`'s tags read for `mission`, in `slot` (none for an
+    /// offer), or no mission: the pilot, its ship, no person, and the
+    /// session's cash, date and rules.
+    fn tag_context(&self, mission: Option<MissionValues>, slot: Option<u8>) -> TagContext<'_> {
         TagContext {
             pilot: &self.pilot.name,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
@@ -1288,7 +1289,9 @@ impl Session {
                 today: self.pilot.date,
                 date_affixes: &self.date_affixes,
                 pay_millions: self.rules.source_for(RuleKey::PayMillions),
+                slot,
             }),
+            rules: TagRules::from_rulebook(&self.rules),
         }
     }
 
@@ -1299,7 +1302,7 @@ impl Session {
     #[must_use]
     pub fn offer_text(&self, mission: MissionId, text: &str) -> Option<String> {
         let offer = self.offer_of(mission)?;
-        let context = self.tag_context(Some(MissionValues::offered(&offer)));
+        let context = self.tag_context(Some(MissionValues::offered(&offer)), None);
         Some(text_tags::expand(text, &context, self))
     }
 
@@ -1314,7 +1317,7 @@ impl Session {
             .get(slot)
             .map(MissionValues::active)
             .unwrap_or_default();
-        text_tags::expand(text, &self.tag_context(Some(values)), self)
+        text_tags::expand(text, &self.tag_context(Some(values), Some(slot)), self)
     }
 
     /// `text` with its tags filled with no mission, as the original's
@@ -1323,7 +1326,7 @@ impl Session {
     /// tags are left as written.
     #[must_use]
     pub fn plain_text(&self, text: &str) -> String {
-        text_tags::expand(text, &self.tag_context(None), self)
+        text_tags::expand(text, &self.tag_context(None, None), self)
     }
 }
 
@@ -4170,6 +4173,37 @@ mod tests {
         assert_eq!(
             full.offer_text(MissionId(130), "<PAY>").as_deref(),
             Some("1,234,567")
+        );
+    }
+
+    #[test]
+    fn a_slots_pay_of_0_reads_the_slots_byte_offset_by_the_engine_and_0_by_the_other() {
+        let mut catalog = briefed();
+        catalog.missions[0].pay_val = 0;
+        let mut session = stocks(&catalog);
+        let slot = accept(&mut session, 130);
+        let active = session.pilot.missions.free(slot).expect("accepted");
+        assert!(session.pilot.missions.put(1, active));
+        assert_eq!(session.mission_text(1, "<PAY>"), "2,284", "1 x 0x8ec");
+        assert_eq!(
+            session.offer_text(MissionId(130), "<PAY>"),
+            None,
+            "accepted, so no longer offered"
+        );
+        let other = session.with_rules(
+            Rulebook::default().with_override(RuleKey::PaySlotOffset, RuleSource::Bible),
+        );
+        assert_eq!(other.mission_text(1, "<PAY>"), "0");
+    }
+
+    #[test]
+    fn an_offers_pay_of_0_reads_0() {
+        let mut catalog = briefed();
+        catalog.missions[0].pay_val = 0;
+        let session = stocks(&catalog);
+        assert_eq!(
+            session.offer_text(MissionId(130), "<PAY>").as_deref(),
+            Some("0")
         );
     }
 

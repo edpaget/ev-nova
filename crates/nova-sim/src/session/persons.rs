@@ -57,6 +57,7 @@ use crate::person::{
     ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_ODDS,
     QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, quote_eligible,
 };
+use crate::text_tags::TagRules;
 use crate::traffic::npc::{Npc, NpcId};
 
 /// A person's hail quote said, for the flight's message line.
@@ -205,6 +206,7 @@ impl Session {
                 ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
                 ship_name: self.pilot.ship_name().unwrap_or_default(),
                 ranks: self.rank_names(),
+                rules: TagRules::from_rulebook(&self.rules),
             };
             let text = expand_tags(&line, &tags);
             self.quotes.push(PersonQuote { npc: id, text });

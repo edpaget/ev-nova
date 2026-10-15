@@ -19,7 +19,7 @@ use nova_sim::control::SetOp;
 use nova_sim::mission::screens::SPACEPORT;
 use nova_sim::mission::{Offer, Stop, Venue, VenueOffer};
 use nova_sim::story::listers_of;
-use nova_sim::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
+use nova_sim::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames, TagRules};
 use nova_sim::{
     Bit, CommCatalog, DateAffixes, GameDate, GovtId, MissionId, NeverFires, Pilot, PilotCatalog,
     RuleSource, Session, StellarId, SystemId, is_landable,
@@ -176,7 +176,9 @@ fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
             today,
             date_affixes: &affixes,
             pay_millions: RuleSource::Engine,
+            slot: None,
         }),
+        rules: TagRules::default(),
     };
     let mut texts = 0;
     let mut tagged = 0;

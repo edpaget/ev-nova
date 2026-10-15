@@ -102,7 +102,7 @@ use crate::pilot::Escort;
 use crate::rank::RankNames;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::text_tags::{self, NoNames, TagContext};
+use crate::text_tags::{self, NoNames, TagContext, TagRules};
 use crate::traffic::npc::{Mode, Npc, NpcPerson};
 use crate::traffic::table::ShipKind;
 
@@ -227,6 +227,8 @@ pub struct QuoteTags<'a> {
     pub ship_name: &'a str,
     /// The player's ranks: the rank tags.
     pub ranks: RankNames<'a>,
+    /// The disputed rules the tags follow.
+    pub rules: TagRules,
 }
 
 /// `text` with its tags read as `tags` say, through the one substitution
@@ -242,6 +244,7 @@ pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
         person: Some(tags.person),
         ranks: tags.ranks.clone(),
         mission: None,
+        rules: tags.rules,
     };
     text_tags::expand(text, &context, &NoNames)
 }
@@ -1299,6 +1302,7 @@ mod tests {
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames::none(),
+            rules: TagRules::default(),
         };
         assert_eq!(
             expand_tags("<OSN>: Prepare to die, <PN>!", &tags),
@@ -1341,6 +1345,7 @@ mod tests {
                 recent: Some(RankId(200)),
                 fallback: "captain".into(),
             },
+            rules: TagRules::default(),
         };
         assert_eq!(
             expand_tags("<PRK>, <SRK>, <RRK>, <PRK128>.", &tags),
