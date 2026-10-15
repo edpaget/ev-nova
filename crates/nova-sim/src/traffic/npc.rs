@@ -81,7 +81,9 @@ pub enum Mode {
     /// arrival out of a gate (see [`emerge`](crate::traffic::emerge)) and
     /// a mission ship following the player through one
     /// (`_AIMakeShipEmergeFromHyperGate`, goal 21; see the session's
-    /// `gate_follow` module) both wait so, untargetable and not drawn.
+    /// `gate_follow` module) both wait so, untargetable and not drawn,
+    /// with no target and no trigger held ([`Npc::emerge_from_gate`]):
+    /// it fires nothing here or in its burst.
     Emerging {
         /// The ticks of the wait left.
         ticks_left: u32,

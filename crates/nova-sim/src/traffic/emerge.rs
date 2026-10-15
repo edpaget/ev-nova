@@ -52,6 +52,20 @@
 //!   burst is the generic one from [`LED_BURST_TICK`].
 //! - **Drawn** (`_HandleShipDisplay` @0x2c090-0x2c18e): hidden while its
 //!   timer is above [`FADE_TICKS`], then fading in ([`emerge_level`]).
+//! - **Holding fire.** A ship coming out of a gate fires nothing while it
+//!   waits or bursts. The original holds no trigger from one frame to the
+//!   next: `_LowLevelAIHandler` clears the fire flag +0xba each frame
+//!   (@0x851f6) for an `_AIFire*` call to set again. While the wait runs
+//!   `_HandleShip` skips the fire step (@0x34a54-0x34a72, the step at
+//!   @0x34fcb), and `_AIEscortFireUnprovoked` (@0x85236) fires only at a
+//!   target, which the emerge has cleared (@0x89544). Once the wait is
+//!   out, `_HighLevelAIHandler` turns goal 0x15 into the jump-in goal 8
+//!   (@0x8dd61-0x8dd93) with sub-goal 0xa (@0x8f3c8-0x8f3d9), whose
+//!   `_LowLevelAIHandler` block calls no `_AIFire*` (@0x88114-0x88140).
+//!   Here no decision is due outside [`Mode::Flying`](crate::traffic::npc::Mode::Flying),
+//!   and an arrival out of a gate starts with no trigger; a ship sent to a
+//!   gate from flight has its trigger released and its target cleared
+//!   there ([`Npc::emerge_from_gate`](crate::traffic::npc::Npc::emerge_from_gate)).
 //!
 //! The radar and the shots do not read the emerging state: an emerging
 //! ship shows on the radar at its gate and can be hit.

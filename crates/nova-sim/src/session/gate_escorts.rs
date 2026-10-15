@@ -8,9 +8,11 @@
 //! `_AIMakeShipEmergeFromHyperGate` (@0x89518), then puts it at the exit
 //! stellar's position, gives it the player's heading (+0x44), and sets its
 //! wait (+0x4c) to `Rand(20) + 15` ticks. `_AIMakeShipEmergeFromHyperGate`
-//! clears its target (+0x70 = -1) and, for leader 0, starts its burst at
-//! 15 rather than 30 (@0x895aa-0x895bd; see
-//! [`emerge`](crate::traffic::emerge)). Loop C follows loop B and
+//! clears its target (+0x70 = -1, @0x89544) and, for leader 0, starts its
+//! burst at 15 rather than 30 (@0x895aa-0x895bd; see
+//! [`emerge`](crate::traffic::emerge)). Its trigger is released too
+//! ([`Npc::emerge_from_gate`](crate::traffic::npc::Npc::emerge_from_gate)),
+//! so it fires nothing while it waits or bursts. Loop C follows loop B and
 //! `_EnterMoreShips`, so it takes the ships the arrival brought in, the
 //! followers included. Neither makes a sound.
 //!
@@ -46,8 +48,8 @@ impl Session {
     /// Loop C (`_HandlePlayerDockRequest` @0x674ef-0x675c8): at a gate
     /// exit, `gate` at `exit`, every ship the player leads, in ship-table
     /// order, comes out of the exit gate after it: there at rest with the
-    /// player's heading, no target, waiting `Rand(20) + 15` ticks drawn on
-    /// `chance`, then bursting at 15 ([`Npc::led_out`](crate::traffic::npc::Npc::led_out)),
+    /// player's heading, no target, its trigger released, waiting
+    /// `Rand(20) + 15` ticks drawn on `chance`, then bursting at 15 ([`Npc::led_out`](crate::traffic::npc::Npc::led_out)),
     /// coming out of `gate` ([`Npc::emerges_from`](crate::traffic::npc::Npc::emerges_from),
     /// @0x8954a).
     ///
@@ -83,10 +85,8 @@ impl Session {
                     velocity: Vec2::ZERO,
                     heading,
                 };
-                npc.target = None;
-                npc.mode = Mode::Emerging { ticks_left: wait };
+                npc.emerge_from_gate(gate, wait);
                 npc.led_out = true;
-                npc.emerges_from = Some(gate);
             }
         }
     }
@@ -97,6 +97,7 @@ mod tests {
     use super::*;
     use crate::catalog::{ShipId, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::armament::Trigger;
     use crate::gate::GateKind;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
@@ -177,13 +178,18 @@ mod tests {
     }
 
     #[test]
-    fn a_led_ship_loses_its_target_as_it_is_led_out() {
+    fn a_led_ship_loses_its_target_and_its_trigger_as_it_is_led_out() {
         let catalog = catalog();
         let mut session = flying(&catalog, Rulebook::default());
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
         for &id in &ids {
-            session.npc_mut(id).expect("here").target = Some(crate::combat::ShipRef::Player);
+            let npc = session.npc_mut(id).expect("here");
+            npc.target = Some(crate::combat::ShipRef::Player);
+            npc.trigger = Trigger {
+                primary: true,
+                ..Trigger::default()
+            };
         }
         assert!(session.player_led().any(Npc::is_players));
         assert!(session.player_led().any(Npc::mission_escort));
@@ -193,7 +199,9 @@ mod tests {
             &mut NeverFires,
         );
         for &id in &ids {
-            assert_eq!(session.npc(id).expect("here").target, None);
+            let npc = session.npc(id).expect("here");
+            assert_eq!(npc.target, None);
+            assert_eq!(npc.trigger, Trigger::default());
         }
     }
 

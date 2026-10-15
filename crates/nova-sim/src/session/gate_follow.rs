@@ -15,6 +15,11 @@
 //! draws first, where the original draws them after the hook's restarts;
 //! they follow the escort-strength timer's arming (@0x6706f), as there.
 //!
+//! Loop B gives each follower the player's heading (@0x67453-0x67456)
+//! after `_AIMakeShipEmergeFromHyperGate` has rolled `Rand(360)` for an
+//! exit angle outside 0-359 (@0x8958e-0x895a5), so the exit's angle never
+//! decides a follower's heading.
+//!
 //! By the other reading the exit leaves the slots as a jump does.
 
 use super::Session;
@@ -27,7 +32,6 @@ use crate::mission::ShipSystem;
 use crate::mission::ships::{GateSlot, NOT_APPEARING, ShipBehav, through_gate};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Entrance;
-use crate::traffic::npc::Mode;
 
 /// `Rand(50) + 100`: the ticks a follower waits in the gate (@0x6745c).
 const EMERGE_DRAW: u32 = 50;
@@ -123,7 +127,10 @@ impl Session {
     /// @0x67346-0x67487) comes out after the player, in order: at rest at
     /// `exit`, or where the player arrived under
     /// [`GateArrivalRule::LikeJump`], with the player's heading, waiting
-    /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, then
+    /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, with no
+    /// target and its trigger released
+    /// ([`Npc::emerge_from_gate`](crate::traffic::npc::Npc::emerge_from_gate),
+    /// @0x89544), then
     /// bursting out of it as any ship coming out of a gate does (see the
     /// traffic's [`emerge`](crate::traffic::emerge)), coming out of
     /// `gate` ([`Npc::emerges_from`](crate::traffic::npc::Npc::emerges_from),
@@ -171,8 +178,7 @@ impl Session {
                 heading,
             };
             let wait = chance.below(EMERGE_DRAW) + EMERGE_LEAST;
-            npc.mode = Mode::Emerging { ticks_left: wait };
-            npc.emerges_from = Some(gate);
+            npc.emerge_from_gate(gate, wait);
         }
     }
 }
@@ -184,6 +190,7 @@ pub(super) mod tests {
     use crate::catalog::{GateSite, MissionShip, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
+    use crate::combat::armament::Trigger;
     use crate::gate::{HYPERGATE, WORMHOLE};
     use crate::geometry::Vec2;
     use crate::govt::{
@@ -199,7 +206,7 @@ pub(super) mod tests {
     use crate::story::{Fate, StoryEvent};
     use crate::testkit::Draws;
     use crate::testkit::{FakePilotCatalog, govt, land_now, planet};
-    use crate::traffic::npc::Npc;
+    use crate::traffic::npc::{Mode, Npc};
 
     /// Where hypergate 300 is in 130.
     const HYPERGATE_AT: Vec2 = Vec2::new(-3000.0, 0.0);
@@ -529,6 +536,61 @@ pub(super) mod tests {
                 assert_eq!(ship.goal.quarry(), Some(ShipRef::Player), "{kind:?}");
             }
             assert_eq!(marked(&session), [0, 0], "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_follower_comes_out_of_the_gate_with_no_target_and_its_trigger_released() {
+        let catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        let firing = Trigger {
+            primary: true,
+            ..Trigger::default()
+        };
+        for npc in session.traffic.npcs_mut() {
+            npc.trigger = firing;
+            npc.target = Some(ShipRef::Player);
+        }
+        session.emerge_followers(
+            exit_gate_of(GateKind::Hypergate),
+            exit_of(GateKind::Hypergate),
+            &mut NeverFires,
+        );
+        let ships = specials(&session);
+        assert_eq!(ships.len(), 2);
+        for ship in ships {
+            assert!(ship.emerging());
+            assert_eq!(ship.trigger, Trigger::default());
+            assert_eq!(ship.target, None);
+        }
+    }
+
+    #[test]
+    fn a_follower_takes_the_players_heading_whatever_the_exits_angle() {
+        // `_AIMakeShipEmergeFromHyperGate` rolls `Rand(360)` for an exit
+        // angle outside 0-359 (@0x8958e-0x895a5), but loop B overwrites
+        // the heading with the player's (@0x67453-0x67456).
+        let mut catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
+        for site in &mut catalog.gates {
+            site.exit_angle = -1;
+        }
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        exit_gate_raising(
+            &mut session,
+            &catalog,
+            GateKind::Hypergate,
+            &mut Draws::of(&[]),
+        );
+        let heading = session.player().heading;
+        assert_ne!(heading, 90.0, "the exit's angle is not used");
+        let ships = specials(&session);
+        assert_eq!(ships.len(), 2);
+        for ship in ships {
+            assert!(ship.emerging());
+            assert_eq!(ship.state.heading, heading);
         }
     }
 
