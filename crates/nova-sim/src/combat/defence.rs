@@ -44,7 +44,7 @@ use std::fmt::Debug;
 use super::ShipRef;
 use super::aim::{angle_off, bearing, blind};
 use super::hull::HullSpec;
-use super::projectile::Shot;
+use super::projectile::{Jam, Shot};
 use super::weapon::{Guidance, WeaponSpec};
 use crate::catalog::GovtId;
 use crate::flight::ShipState;
@@ -126,7 +126,7 @@ pub fn engageable(
     govts: &Governments,
 ) -> bool {
     missile.weapon.guidance == Guidance::Homing
-        && !missile.lost
+        && missile.jam == Jam::Clear
         && !missile.weapon.pd_immune()
         && rule.hostile(defender, Side::of(missile), govts)
 }
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn a_lost_untargetable_unguided_far_or_unseen_missile_is_not_a_candidate() {
         let lost = Shot {
-            lost: true,
+            jam: Jam::Lost,
             ..missile(1, 0.0, -100.0, Some(DEFENDER))
         };
         assert_eq!(picked(&[lost], 0, 0), None, "lost");

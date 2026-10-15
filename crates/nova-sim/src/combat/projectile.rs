@@ -15,10 +15,13 @@
 //! - A homing shot flies at its speed along its heading every tick. Once
 //!   it has flown [`HOMING_DELAY`] ticks it steers at its target, turning
 //!   `GuidedTurn` a tick the short way while the target's bearing is
-//!   further off than that, and keeping its heading otherwise. Once its
-//!   target is gone (destroyed, landed or jumped out) or breaking up, it is
-//!   lost: it flies straight on and hits nothing. One fired with no target
-//!   flies straight.
+//!   further off than that, and keeping its heading otherwise, a target
+//!   breaking up included. One fired with no target flies straight.
+//! - Any shot but point defence whose ship ([`Shot::aimed_at`]) is gone
+//!   (destroyed, or out of the fight as it landed or jumped) is lost
+//!   ([`Jam::Lost`]) before it next moves: it flies on, aimed at nothing,
+//!   and hits no ship for the rest of its life (`_HandleShot`
+//!   @0x355e0-0x35621). A homing one then flies straight.
 //! - A shot lives its weapon's `Count` ticks, then detonates if its weapon
 //!   says so (`Flags` 0x8000) and otherwise vanishes.
 //! - It hits the first ship ([`Target`]) it passes within the ship's hit
@@ -95,6 +98,18 @@ pub fn contact(from: Vec2, to: Vec2, centre: Vec2, radius: f32) -> Option<f32> {
     (0.0..=1.0).contains(&t).then_some(t)
 }
 
+/// How a shot is jammed off its ship: the original's shot +0x30, which
+/// `_ShotCanHitShip` (@0x447f7) and `_CalculateTargetedDamage` read as
+/// "jammed" whenever it is not 0.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Jam {
+    /// Not jammed (0).
+    #[default]
+    Clear,
+    /// Lost, its ship gone (998, `_HandleShot` @0x3561b).
+    Lost,
+}
+
 /// A shot's number in its fight, never reused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShotId(pub u32);
@@ -145,9 +160,10 @@ pub struct Shot {
     /// point defence, and a sub-munition's own target. See
     /// [`Combat::targeted_damage`](super::Combat::targeted_damage).
     pub aimed_at: Option<ShipRef>,
-    /// Whether a homing shot has lost its target: it flies straight on
-    /// and hits nothing.
-    pub lost: bool,
+    /// Whether it is jammed off its ship (the original's shot +0x30): a
+    /// shot jammed any way hits no ship, and its damage counts as aimed
+    /// at none.
+    pub jam: Jam,
     /// What point defence must still take off it before the next hit
     /// destroys it.
     pub durability: f32,
@@ -192,7 +208,7 @@ impl Shot {
             id: ShotId::default(),
             target: None,
             aimed_at: None,
-            lost: false,
+            jam: Jam::Clear,
             durability: weapon.durability,
             generation: 0,
             disable_only: weapon.disable_only(),
@@ -200,8 +216,10 @@ impl Shot {
     }
 
     /// Flies the shot one tick, a homing one steering at its target among
-    /// `targets`, and gives where it was.
+    /// `targets`, and gives where it was. First, a shot whose ship has
+    /// gone is lost ([`Shot::lose_a_gone_ship`]).
     pub fn step(&mut self, targets: &[Target]) -> Vec2 {
+        self.lose_a_gone_ship(targets);
         match self.weapon.guidance {
             Guidance::Homing => self.home(targets),
             Guidance::Rocket => {
@@ -220,28 +238,52 @@ impl Shot {
         was
     }
 
-    /// Steers a homing shot a tick at its target among `targets`, which
-    /// it loses once the target is gone or breaking up, and sets its
-    /// velocity to its speed along its heading (see the module docs).
+    /// `_HandleShot`'s target rule (@0x355e0-0x35621), run before the
+    /// shot's life is counted down and it moves: a shot not jammed, and
+    /// not point defence, whose ship ([`Shot::aimed_at`], +0x2a) is not
+    /// active among `targets` (destroyed, or out of the fight as it
+    /// landed, jumped or was taken out: the slot's +0xb8) is lost, jam
+    /// 998, and aimed at nothing from then on. A jammed shot keeps its
+    /// ship. Point defence (guidance 9) is aimed at no ship every tick
+    /// and is never lost. A ship breaking up is still active, so a shot
+    /// at it is not lost.
+    fn lose_a_gone_ship(&mut self, targets: &[Target]) {
+        if self.weapon.guidance == Guidance::PointDefence {
+            self.aimed_at = None;
+            return;
+        }
+        if self.jam != Jam::Clear {
+            return;
+        }
+        let Some(ship) = self.aimed_at else {
+            return;
+        };
+        let active = targets
+            .iter()
+            .any(|target| target.ship == ship && target.condition.active());
+        if !active {
+            self.jam = Jam::Lost;
+            self.aimed_at = None;
+            self.target = None;
+        }
+    }
+
+    /// Steers a homing shot a tick at its target among `targets`, while
+    /// that is active, breaking up included (`_HandleShotGuidance` steers
+    /// at any active slot), and sets its velocity to its speed along its
+    /// heading (see the module docs).
     fn home(&mut self, targets: &[Target]) {
-        if let Some(ship) = self.target {
-            let target = targets
+        let target = self.target.and_then(|ship| {
+            targets
                 .iter()
-                .find(|target| target.ship == ship && target.condition.standing());
-            match target {
-                None => {
-                    self.target = None;
-                    self.lost = true;
-                }
-                Some(target) if self.age >= HOMING_DELAY => {
-                    let wanted = bearing(self.position, target.position);
-                    let off = shortest_turn(self.heading, wanted);
-                    let turn = self.weapon.turn;
-                    if off.abs() > turn {
-                        self.heading = normalized(self.heading + turn.copysign(off));
-                    }
-                }
-                Some(_) => {}
+                .find(|target| target.ship == ship && target.condition.active())
+        });
+        if let Some(target) = target.filter(|_| self.age >= HOMING_DELAY) {
+            let wanted = bearing(self.position, target.position);
+            let off = shortest_turn(self.heading, wanted);
+            let turn = self.weapon.turn;
+            if off.abs() > turn {
+                self.heading = normalized(self.heading + turn.copysign(off));
             }
         }
         self.velocity = facing(self.heading) * self.weapon.speed;
@@ -1176,7 +1218,7 @@ mod tests {
             shot.step(&in_its_path());
         }
         assert_eq!(shot.heading, 90.0);
-        assert!(!shot.lost);
+        assert_eq!(shot.jam, Jam::Clear);
         assert_eq!(
             passing_homing(0, None).hit(Vec2::ZERO, &among(&in_its_path())),
             None
@@ -1184,33 +1226,22 @@ mod tests {
     }
 
     #[test]
-    fn a_homing_shot_whose_target_is_gone_or_breaking_up_is_lost() {
-        for gone in [
-            vec![],
-            vec![target(
-                2,
-                0.0,
-                1000.0,
-                Condition::Dying {
-                    ticks_left: 9,
-                    starting: false,
-                },
-            )],
-            vec![target(2, 0.0, 1000.0, Condition::Destroyed)],
-        ] {
+    fn a_homing_shot_whose_target_is_gone_is_lost_and_one_breaking_up_is_chased() {
+        for gone in [vec![], vec![target(2, 0.0, 1000.0, Condition::Destroyed)]] {
             let mut shot = homing(missile(0), Some(TARGET));
+            shot.aimed_at = Some(TARGET);
             for _ in 0..20 {
                 shot.step(&gone);
             }
-            assert!(shot.lost, "{gone:?}");
-            assert_eq!(shot.target, None, "{gone:?}");
+            assert_eq!(shot.jam, Jam::Lost, "{gone:?}");
+            assert_eq!((shot.target, shot.aimed_at), (None, None), "{gone:?}");
             assert_eq!(shot.heading, 90.0, "flies straight on: {gone:?}");
             let back = [target(2, 0.0, 1000.0, Condition::Intact)];
             shot.step(&back);
             assert_eq!(shot.heading, 90.0, "lost for good: {gone:?}");
         }
         let lost = Shot {
-            lost: true,
+            jam: Jam::Lost,
             ..passing_homing(0x0008, Some(TARGET))
         };
         assert_eq!(
@@ -1218,23 +1249,124 @@ mod tests {
             None,
             "hits nothing"
         );
-        let disabled = [target(2, 0.0, 1000.0, Condition::Disabled)];
-        let mut chasing = homing(missile(0), Some(TARGET));
-        for _ in 0..16 {
-            chasing.step(&disabled);
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 9,
+                starting: false,
+            },
+        ] {
+            let quarry = [target(2, 0.0, 1000.0, condition)];
+            let mut chasing = homing(missile(0), Some(TARGET));
+            chasing.aimed_at = Some(TARGET);
+            for _ in 0..16 {
+                chasing.step(&quarry);
+            }
+            assert_eq!(chasing.jam, Jam::Clear, "{condition:?}");
+            assert!(chasing.heading > 90.0, "chased: {condition:?}");
         }
-        assert!(
-            !chasing.lost && chasing.heading > 90.0,
-            "a disabled one is chased"
-        );
+    }
+
+    /// A shot of `guidance` at (0, 0) moving 10 pixels a tick right,
+    /// fired by its firer at ship 2, set off by any ship.
+    fn aimed_at_two(guidance: i16) -> Shot {
+        let mut weapon = WeaponSpec::new(&WeaponRecord {
+            guidance,
+            speed: 1000,
+            count: 100,
+            flags2: 0x0008,
+            ..weapon(128)
+        });
+        weapon.speed = 10.0;
+        Shot {
+            velocity: Vec2::new(10.0, 0.0),
+            target: Some(TARGET),
+            aimed_at: Some(TARGET),
+            ..Shot::launch(weapon, FIRER, FIRER, &state(0.0, 0.0, 0.0, 0.0, 90.0), 90.0)
+        }
     }
 
     #[test]
-    fn a_shot_starts_unaimed_whole_and_of_the_first_generation() {
+    fn a_shot_of_every_guidance_but_point_defence_whose_ship_has_left_the_fight_is_lost_and_passes_through_the_ships_behind()
+     {
+        // Ship 3 sits in the path; ship 2, aimed at, is far off or gone.
+        let behind = target(3, 5.0, 0.0, Condition::Intact);
+        let aimed = target(2, 0.0, 900.0, Condition::Intact);
+        for guidance in [-1, 4, 5, 6, 1] {
+            let mut kept = aimed_at_two(guidance);
+            let was = kept.position;
+            kept.step(&[behind, aimed]);
+            assert_eq!(kept.jam, Jam::Clear, "{guidance}");
+            assert_eq!(kept.aimed_at, Some(TARGET), "{guidance}");
+            assert_eq!(
+                kept.hit(was, &among(&[behind, aimed]))
+                    .map(|(ship, _)| ship),
+                Some(ShipRef::Npc(NpcId(3))),
+                "{guidance}: aimed at a ship still there"
+            );
+            let mut lost = aimed_at_two(guidance);
+            let was = lost.position;
+            lost.step(&[behind]);
+            assert_eq!(lost.jam, Jam::Lost, "{guidance}");
+            assert_eq!((lost.aimed_at, lost.target), (None, None), "{guidance}");
+            assert_eq!(lost.hit(was, &among(&[behind])), None, "{guidance}");
+            for _ in 0..200 {
+                let was = lost.position;
+                lost.step(&[behind, aimed]);
+                assert_eq!(lost.hit(was, &among(&[behind, aimed])), None);
+            }
+            assert_eq!(lost.jam, Jam::Lost, "{guidance}: for good");
+        }
+    }
+
+    #[test]
+    fn a_shot_aimed_at_nothing_is_never_lost() {
+        let mut ahead = Shot {
+            target: None,
+            aimed_at: None,
+            ..aimed_at_two(7)
+        };
+        ahead.step(&[]);
+        assert_eq!(ahead.jam, Jam::Clear);
+    }
+
+    #[test]
+    fn a_point_defence_shot_is_never_lost_and_is_aimed_at_no_ship() {
+        let mut defence = aimed_at_two(9);
+        defence.step(&[]);
+        assert_eq!(defence.jam, Jam::Clear);
+        assert_eq!(defence.aimed_at, None);
+        assert_eq!(defence.target, Some(TARGET), "its quarry kept");
+    }
+
+    #[test]
+    fn a_shot_whose_ship_is_breaking_up_stays_clear_and_one_destroyed_is_lost() {
+        let dying = target(
+            2,
+            0.0,
+            900.0,
+            Condition::Dying {
+                ticks_left: 5,
+                starting: false,
+            },
+        );
+        let mut shot = aimed_at_two(-1);
+        shot.step(&[dying]);
+        assert_eq!(shot.jam, Jam::Clear);
+        let destroyed = Target {
+            condition: Condition::Destroyed,
+            ..dying
+        };
+        shot.step(&[destroyed]);
+        assert_eq!(shot.jam, Jam::Lost);
+    }
+
+    #[test]
+    fn a_shot_starts_unaimed_whole_clear_and_of_the_first_generation() {
         let shot = homing(missile(0), None);
         assert_eq!(
-            (shot.id, shot.lost, shot.durability, shot.generation),
-            (ShotId(0), false, 4.0, 0)
+            (shot.id, shot.jam, shot.durability, shot.generation),
+            (ShotId(0), Jam::Clear, 4.0, 0)
         );
         let unguided = passing(0);
         assert_eq!((unguided.target, unguided.durability), (None, 0.0));
@@ -1257,7 +1389,7 @@ mod tests {
             turret.step(&below);
         }
         assert_eq!(turret.heading, 90.0);
-        assert!(!turret.lost);
+        assert_eq!(turret.jam, Jam::Clear);
         let passing_turret = Shot {
             position: Vec2::new(100.0, 0.0),
             ..turret

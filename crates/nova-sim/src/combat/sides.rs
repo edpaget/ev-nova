@@ -19,9 +19,10 @@
 //! 1. a ship of class 0x2ff (shïp 895, the escape pod) or after it
 //!    (@0x447b3-0x447d9): the shot passes through it unspent;
 //! 2. its firer (@0x447df-0x447f1);
-//! 3. as a homing shot, any ship but its target, unless `Flags2` 0x0008
-//!    (@0x44812-0x44836), nor anything once lost (the engine's stand-in
-//!    for the original's jam 998, @0x447f7, until the shot tick takes it);
+//! 3. as a jammed shot ([`Jam`], +0x30 not 0, @0x447f7), any ship: a shot
+//!    whose ship has gone is lost, jam 998
+//!    ([`projectile`](super::projectile)); as a homing shot, any ship but
+//!    its target, unless `Flags2` 0x0008 (@0x44812-0x44836);
 //! 4. as a shot no ship fired ([`Source::Other`]), any ship but the one it
 //!    is aimed at, when it is aimed at one (@0x44a71-0x44a88); nothing
 //!    below applies to it.
@@ -72,8 +73,8 @@
 //! left it ends the walk (the original reads its stale slot), and a walk
 //! stops after one pass over the ships, should leaders form a loop.
 //!
-//! Left out, each with its owner: a shot past its life (@0x447c2) and the
-//! jam (@0x447f7), weapons-fidelity phase 3; the nag ship (@0x44803), as
+//! Left out, each with its owner: a shot past its life (@0x447c2),
+//! weapons-fidelity phase 3; the nag ship (@0x44803), as
 //! there is none; two defence ships of one stellar (6c, @0x44893) and a
 //! non-ship shot's +0x8c clause (@0x44a81), task `planet-domination`; the
 //! turret miss (6d, @0x448ad), weapons-fidelity phase 10; a miner's shots
@@ -85,7 +86,7 @@
 use super::ShipRef;
 use super::beam::Beam;
 use super::hull::ESCAPE_POD_SHIP;
-use super::projectile::{Shot, Source, Target};
+use super::projectile::{Jam, Shot, Source, Target};
 use super::weapon::Guidance;
 use crate::catalog::GovtId;
 use crate::govt::{Governments, NEVER_ATTACKS_PLAYER, PLAYER_SHOTS_PASS};
@@ -158,7 +159,10 @@ impl Sides<'_> {
     /// Whether `shot` can hit `target` (see the module docs).
     #[must_use]
     pub fn shot_can_hit(&self, shot: &Shot, target: &Target) -> bool {
-        if !target.condition.active() || target.ship_type >= ESCAPE_POD_SHIP || shot.lost {
+        if !target.condition.active()
+            || target.ship_type >= ESCAPE_POD_SHIP
+            || shot.jam != Jam::Clear
+        {
             return false;
         }
         if shot.weapon.guidance == Guidance::Homing
@@ -208,7 +212,7 @@ impl Sides<'_> {
         {
             return false;
         }
-        self.root(target.ship) != self.root(firer)
+        !self.share_parent(target.ship, firer)
     }
 
     /// Whether `beam` can hit `target` (see the module docs).
@@ -315,6 +319,13 @@ impl Sides<'_> {
         false
     }
 
+    /// Whether `one` and `other` share a parent (`_ShipsShareParent`
+    /// @0x7926-0x79c1): their leaders lead up to the same ship
+    /// ([`Sides::root`]).
+    pub(crate) fn share_parent(&self, one: ShipRef, other: ShipRef) -> bool {
+        self.root(one) == self.root(other)
+    }
+
     /// The ship `ship`'s leaders lead up to (`_ShipsShareParent`): each
     /// step from a ship still active to a leader not itself.
     fn root(&self, ship: ShipRef) -> ShipRef {
@@ -336,6 +347,80 @@ impl Sides<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::ShipId;
+    use crate::combat::hull::Condition;
+    use crate::combat::projectile::Jam;
+    use crate::combat::weapon::WeaponSpec;
+    use crate::flight::ShipState;
+    use crate::geometry::Vec2;
+    use crate::testkit::{among, weapon};
+    use crate::traffic::npc::NpcId;
+
+    fn npc(id: u32) -> ShipRef {
+        ShipRef::Npc(NpcId(id))
+    }
+
+    /// `ship`, led by `leader`, at the centre.
+    fn ship(ship: ShipRef, leader: Option<ShipRef>) -> Target {
+        Target {
+            ship,
+            ship_type: ShipId(128),
+            fleet: ship,
+            ties: Ties {
+                leader,
+                ..Ties::default()
+            },
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            radius: 5.0,
+            condition: Condition::Intact,
+        }
+    }
+
+    #[test]
+    fn a_lost_shot_hits_no_ship_its_old_target_included() {
+        let aimed = npc(2);
+        let shot = Shot {
+            target: Some(aimed),
+            aimed_at: Some(aimed),
+            ..Shot::launch(
+                WeaponSpec::new(&weapon(128)),
+                npc(1),
+                npc(1),
+                &ShipState::default(),
+                0.0,
+            )
+        };
+        let targets = [ship(aimed, None), ship(npc(3), None)];
+        let sides = among(&targets);
+        for target in &targets {
+            assert!(sides.shot_can_hit(&shot, target), "{:?}", target.ship);
+            let lost = Shot {
+                jam: Jam::Lost,
+                ..shot
+            };
+            assert!(!sides.shot_can_hit(&lost, target), "{:?}", target.ship);
+        }
+    }
+
+    #[test]
+    fn two_ships_share_a_parent_when_their_leaders_lead_up_to_one_ship() {
+        // 4 escorts the player and leads 5; 6 escorts 7.
+        let targets = [
+            ship(ShipRef::Player, None),
+            ship(npc(4), Some(ShipRef::Player)),
+            ship(npc(5), Some(npc(4))),
+            ship(npc(6), Some(npc(7))),
+            ship(npc(7), None),
+        ];
+        let sides = among(&targets);
+        assert!(sides.share_parent(npc(5), ShipRef::Player));
+        assert!(sides.share_parent(npc(4), ShipRef::Player));
+        assert!(sides.share_parent(ShipRef::Player, ShipRef::Player));
+        assert!(sides.share_parent(npc(6), npc(7)));
+        assert!(!sides.share_parent(npc(6), ShipRef::Player));
+        assert!(!sides.share_parent(npc(7), npc(5)));
+    }
 
     #[test]
     fn the_engines_reading_counts_the_player_side_and_the_bibles_the_player_alone() {

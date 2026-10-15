@@ -148,7 +148,7 @@ use hull::{
     Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
     never_breaks_up,
 };
-use projectile::{Shot, ShotId, Source, Target, contact};
+use projectile::{Jam, Shot, ShotId, Source, Target, contact};
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
@@ -624,7 +624,7 @@ impl Combat {
     #[must_use]
     pub fn targeted_damage(&self) -> BTreeMap<ShipRef, i32> {
         let mut aimed = BTreeMap::new();
-        for shot in self.shots.iter().filter(|shot| !shot.lost) {
+        for shot in self.shots.iter().filter(|shot| shot.jam == Jam::Clear) {
             let Some(ship) = shot.aimed_at else {
                 continue;
             };
@@ -872,7 +872,7 @@ impl Combat {
                 (Some(shot.blast(Some(ship))), Some(Some(ship)))
             } else if shot.expired() {
                 let blast = shot.weapon.detonates().then(|| shot.blast(None));
-                (blast, shot.weapon.subs_on_expiry().then_some(shot.target))
+                (blast, shot.weapon.subs_on_expiry().then_some(shot.aimed_at))
             } else {
                 kept.push(shot);
                 continue;
@@ -1561,9 +1561,9 @@ mod tests {
         assert_eq!(combat.shots()[0].aimed_at, None, "no target");
         let gone = launched_by(Ship::at(1, 0.0, 0.0).targeting(C), blaster(), Vec::new());
         assert_eq!(
-            gone.shots()[0].aimed_at,
-            Some(C),
-            "its target, there or not"
+            (gone.shots()[0].aimed_at, gone.shots()[0].jam),
+            (None, Jam::Lost),
+            "its target not in the fight: lost on its first move"
         );
     }
 
@@ -1630,7 +1630,7 @@ mod tests {
                 ..aimed(missile)
             },
             Shot {
-                lost: true,
+                jam: Jam::Lost,
                 ..aimed(missile)
             },
         ];
@@ -3184,6 +3184,160 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_shot_whose_ship_was_destroyed_is_lost_from_the_next_tick() {
+        // B, far off, is destroyed at the end of the tick the shot is
+        // fired: its death timer is at the explosion band's edge.
+        let mut combat = Combat::default();
+        let mut wreck = Ship::at(2, 0.0, 900.0);
+        wreck.condition = Condition::Dying {
+            ticks_left: EXPLOSION_BAND + 1,
+            starting: false,
+        };
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster()).targeting(B), wreck];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        assert_eq!(ships[1].condition, Condition::Destroyed);
+        assert_eq!(
+            (combat.shots()[0].jam, combat.shots()[0].aimed_at),
+            (Jam::Clear, Some(B)),
+            "clear through the tick B was destroyed"
+        );
+        let was = combat.shots()[0].position;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shot = combat.shots()[0];
+        assert_eq!((shot.jam, shot.aimed_at), (Jam::Lost, None));
+        assert!((shot.position - was).length() > 1.0, "lost, then moved");
+    }
+
+    #[test]
+    fn a_volley_at_a_ship_that_left_the_fight_passes_through_the_ships_behind_it() {
+        let mut combat = Combat::default();
+        let mut ships = vec![
+            Ship::at(1, 0.0, 0.0).armed(blaster()).targeting(B),
+            Ship::at(2, 0.0, 900.0),
+            Ship::at(3, 100.0, 0.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        // B lands or jumps: it is no longer among the fighters.
+        ships.remove(1);
+        let mut strikes = Vec::new();
+        while !combat.shots().is_empty() {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            strikes.extend(combat.take_strikes());
+        }
+        assert_eq!(strikes, [], "passed through C");
+        assert_eq!(ships[1].reserves, Reserves::full(10.0, 30.0, 100.0));
+    }
+
+    #[test]
+    fn a_homing_missile_steers_into_a_breaking_up_target_and_hits_it() {
+        // Fired at B, which then starts breaking up.
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0)
+                .armed(missile())
+                .facing(90.0)
+                .targeting(B),
+            Ship::at(2, 0.0, -300.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        ships[1].condition = Condition::Dying {
+            ticks_left: 500,
+            starting: false,
+        };
+        let mut strikes = Vec::new();
+        for _ in 0..100 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            strikes.extend(combat.take_strikes());
+            if !strikes.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(strikes.len(), 1, "{:?}", combat.shots());
+        assert_eq!((strikes[0].ship, strikes[0].downed), (B, None));
+        assert!(matches!(ships[1].condition, Condition::Dying { .. }));
+    }
+
+    #[test]
+    fn a_lost_shot_still_detonates_and_blasts_at_the_end_of_its_life() {
+        let flak = WeaponRecord {
+            count: 3,
+            speed: 1000,
+            explod_type: 2,
+            blast_radius: 40,
+            flags: 0x8000,
+            ..blaster()
+        };
+        let mut combat = Combat::default();
+        let mut ships = vec![
+            Ship::at(1, 0.0, 0.0).armed(flak).targeting(B),
+            Ship::at(2, 0.0, 900.0),
+            Ship::at(3, 30.0, 35.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        ships.remove(1);
+        let mut strikes = Vec::new();
+        let mut events = Vec::new();
+        for _ in 0..2 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            strikes.extend(combat.take_strikes());
+            events.extend(combat.take_events());
+        }
+        assert_eq!(combat.shots(), []);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::Exploded { .. })),
+            "{events:?}"
+        );
+        assert_eq!(strikes.len(), 1, "{strikes:?}");
+        assert_eq!((strikes[0].ship, strikes[0].direct), (C, false));
+    }
+
+    #[test]
+    fn an_unguided_shells_expiry_submunitions_are_aimed_at_the_ship_its_damage_was() {
+        let (shell, arsenal) = cluster(0);
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell).targeting(C),
+            Ship::at(3, 0.0, 900.0),
+        ];
+        for _ in 0..3 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            ships[0].trigger = QUIET;
+        }
+        let subs = sub_shots(&combat);
+        assert_eq!(subs.len(), 2);
+        for sub in subs {
+            assert_eq!((sub.target, sub.aimed_at), (Some(C), Some(C)));
+        }
+    }
+
+    #[test]
+    fn a_lost_shots_expiry_submunitions_are_aimed_at_nothing() {
+        let (shell, arsenal) = cluster(0);
+        let mut combat = Combat::default();
+        let mut ships = vec![
+            Ship::at(1, 0.0, 0.0).armed(shell).targeting(B),
+            Ship::at(2, 0.0, 900.0),
+        ];
+        tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        ships[0].trigger = QUIET;
+        ships.remove(1);
+        for _ in 0..2 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        }
+        let subs = sub_shots(&combat);
+        assert_eq!(subs.len(), 2);
+        for sub in subs {
+            assert_eq!((sub.target, sub.aimed_at), (None, None));
+        }
+    }
+
     /// The Quad Light Blaster Turret: point defence firing every 5 ticks,
     /// 20 pixels a tick for 12, doing 1 mass and 4 energy damage (3 to a
     /// missile).
@@ -3577,7 +3731,7 @@ mod tests {
             for shot in &mut combat.shots {
                 if shot.firer == C {
                     shot.target = None;
-                    shot.lost = true;
+                    shot.jam = Jam::Lost;
                 }
             }
             events.extend(combat.take_events());
