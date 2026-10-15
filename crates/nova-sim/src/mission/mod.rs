@@ -394,7 +394,11 @@
 //! (@0x9edfd, @0x9f01d) and the success and failure at the return
 //! (@0xa1a37) match so; the accept's "reached here" (@0xa1fd8) and the
 //! success check's "the destination is the return" (@0xa1a4e) compare
-//! raw IDs.
+//! raw IDs. By [`RuleKey::StellarIdentityRecord`](crate::RuleKey::StellarIdentityRecord)'s
+//! engine reading, the stellars compare as the original's records hold
+//! them ([`IdentityRules`]): no ID outside 128..=2175 matches, a name
+//! counts as its length and first 30 characters, and a `spöb` that
+//! didn't load reads as a zeroed record, unnamed at 0,0.
 
 pub mod active;
 pub mod aux_ships;
@@ -428,7 +432,7 @@ pub use self::goals::{
     departure, fails_on_destroyed, fails_on_disabled, goals_met_moment, held_disabled, met_before,
     plain_board_counts,
 };
-pub use self::identity::StellarMarks;
+pub use self::identity::{IdentityRules, StellarMarks};
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
 pub use self::screens::{
     OfferLabels, OfferPrompt, VenueOffer, display_order, offer_gap, offer_labels,

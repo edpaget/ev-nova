@@ -165,6 +165,7 @@
 //! | [`EjectVelocity`](RuleKey::EjectVelocity) | `eject_velocity` | as the player ejects, its new ship's x velocity takes the y velocity's value, the hulk keeping the true velocity, before the push of its top speed along its heading (`_HandlePlayer` @0x6f782-0x6f788; see [`escape`](crate::escape)) | the new ship keeps the velocity it had\* |
 //! | [`RescueArmor`](RuleKey::RescueArmor) | `rescue_armor` | the escape pod's rescue sets the armour to the shield capacity, `_ShipShieldCapacity` a second time (`_HandlePlayer` @0x690db-0x69100; see the session's `rescue` module), so it may stand above the armour's most | the armour is filled to its own capacity\* |
 //! | [`UnlistedStellar`](RuleKey::UnlistedStellar) | `unlisted_stellar` | a loaded pilot whose saved stellar no system lists resumes in the lowest system that exists, which needn't hold the stellar (`_LoadPilotData` @0x752d6-0x75318; see [`Session::load`](crate::Session::load)) | it keeps its saved system: **the default — a deliberate departure from the original**††††††††††† |
+//! | [`StellarIdentityRecord`](RuleKey::StellarIdentityRecord) | `stellar_identity_record` | two stellars are compared as the original's stellar records hold them: either ID outside 128..=2175 is identical to nothing, even itself (`_StellarsAreIdentical` @0xab51-0xab6c), a name keeps its full length but only its first 30 characters (`_LoadObjectData` @0x77310-0x7732a; compared @0xaba6-0xac74), and a `spöb` that doesn't load reads as a zeroed record at 0,0 with no name (see [`StellarMarks::identical`](crate::mission::StellarMarks::identical)) | as the `spöb`s are written: equal IDs are always identical, names are compared whole, and a missing `spöb` is identical only to itself\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -194,7 +195,8 @@
 //! `cached_avail_bits`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
-//! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor` or
+//! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor`,
+//! `stellar_identity_record` or
 //! `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count` and `nebula_explore_once`
@@ -2106,6 +2108,23 @@ rule_keys! {
     /// starts undocked at the centre, and the load reports the repair
     /// ([`Session::load_repaired`](crate::Session::load_repaired)).
     UnlistedStellar => "unlisted_stellar",
+    /// How two stellars' records are read when
+    /// [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) counts
+    /// them as one mission stop (see
+    /// [`StellarMarks::identical`](crate::mission::StellarMarks::identical)).
+    /// By the engine, as the original's stellar record array holds the
+    /// `spöb`s: `_StellarsAreIdentical` returns false when either ID is
+    /// outside 128..=2175, the array's 0x800 slots, before it compares the
+    /// IDs (@0xab51-0xab6c); `_LoadObjectData` keeps a name's full length
+    /// but only its first 30 characters (`strncpy` 0x1f @0x77310-0x7732a),
+    /// which the compare reads (@0xaba6-0xac74); and a `spöb` that doesn't
+    /// load leaves its slot as allocated, zeros, so it reads as place 0,0
+    /// with no name (@0x1b7d4, @0x779bd-0x779c6). By the other reading,
+    /// the `spöb`s as written: equal IDs are always identical, names are
+    /// compared whole, and a missing `spöb` is identical only to itself.
+    /// The Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says.
+    StellarIdentityRecord => "stellar_identity_record",
 }
 
 impl RuleKey {
@@ -2331,7 +2350,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(63),
+            RuleKey::ALL.iter().rev().nth(64),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2348,7 +2367,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(62),
+            RuleKey::ALL.iter().rev().nth(63),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -2362,7 +2381,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(61),
+            RuleKey::ALL.iter().rev().nth(62),
             Some(&RuleKey::OfferShift)
         );
     }
@@ -2402,7 +2421,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(60),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2424,7 +2443,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(59),
+            RuleKey::ALL.iter().rev().nth(60),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2449,7 +2468,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(58),
+            RuleKey::ALL.iter().rev().nth(59),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2475,7 +2494,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(57),
+            RuleKey::ALL.iter().rev().nth(58),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2495,7 +2514,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(56),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2512,7 +2531,7 @@ mod tests {
             Some(RuleKey::MissionAllyIndex)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(55),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::MissionAllyIndex)
         );
         assert_eq!(
@@ -2532,7 +2551,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(54),
+            RuleKey::ALL.iter().rev().nth(55),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2552,7 +2571,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(51),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2574,7 +2593,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2591,7 +2610,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -2608,7 +2627,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -2625,7 +2644,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::NonStrictSpeed)
         );
     }
@@ -2642,7 +2661,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::HunterBribe)
         );
     }
@@ -2659,7 +2678,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::ShipOverlap)
         );
     }
@@ -2676,7 +2695,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::QuadrantTurretArc)
         );
     }
@@ -2693,7 +2712,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::HiddenShips)
         );
     }
@@ -2710,7 +2729,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::HiddenShipHoverBox)
         );
     }
@@ -2731,7 +2750,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::BreakupStall)
         );
     }
@@ -2748,7 +2767,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::EjectVelocity)
         );
     }
@@ -2765,7 +2784,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::RescueArmor)
         );
     }
@@ -2785,7 +2804,27 @@ mod tests {
             Rulebook::new(RuleSource::Engine).source_for(RuleKey::UnlistedStellar),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::UnlistedStellar));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::UnlistedStellar)
+        );
+    }
+
+    #[test]
+    fn the_stellar_identity_record_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::StellarIdentityRecord.key(),
+            "stellar_identity_record"
+        );
+        assert_eq!(
+            RuleKey::from_key("stellar_identity_record"),
+            Some(RuleKey::StellarIdentityRecord)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::StellarIdentityRecord),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::StellarIdentityRecord));
     }
 
     #[test]
@@ -2796,7 +2835,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(49), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(50), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2811,7 +2850,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -2828,7 +2867,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -2845,7 +2884,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -2862,7 +2901,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -2879,7 +2918,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -2896,7 +2935,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -2913,7 +2952,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::PaySlotOffset)
         );
     }
@@ -2930,7 +2969,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::MissionlessTags)
         );
     }
@@ -2944,7 +2983,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::PrkNnnName)
         );
     }
@@ -2961,7 +3000,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::CrossedRankTags)
         );
     }
@@ -2978,7 +3017,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::OfferingShipName)
         );
     }
@@ -2995,7 +3034,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::CachedAvailBits)
         );
     }
@@ -3009,7 +3048,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -3023,7 +3062,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(35),
+            RuleKey::ALL.iter().rev().nth(36),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -3036,7 +3075,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(53),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -3054,7 +3093,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -3071,7 +3110,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(32),
+            RuleKey::ALL.iter().rev().nth(33),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -3088,10 +3127,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(30), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(31), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -3106,7 +3145,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(30),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -3125,15 +3164,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(28),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -3150,7 +3189,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -3164,11 +3203,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -3189,11 +3228,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -3207,11 +3246,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::BlessingLanding)
         );
     }
@@ -3231,7 +3270,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::BlessingAlwaysAttacks)
         );
     }
@@ -3248,7 +3287,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::ExploredByPlace)
         );
     }
@@ -3265,7 +3304,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::RouteRewrite)
         );
     }
@@ -3282,7 +3321,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::NebulaExploreOnce)
         );
     }
@@ -3299,7 +3338,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::NebulaNewPilot)
         );
     }
@@ -3313,11 +3352,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::ScanOutfitsPastJunk)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::OutfitScanFine)
         );
     }
@@ -3441,7 +3480,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(65),
+            RuleKey::ALL.iter().rev().nth(66),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3644,7 +3683,8 @@ mod tests {
                 RuleKey::BreakupStall,
                 RuleKey::EjectVelocity,
                 RuleKey::RescueArmor,
-                RuleKey::UnlistedStellar
+                RuleKey::UnlistedStellar,
+                RuleKey::StellarIdentityRecord
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

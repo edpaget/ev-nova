@@ -228,7 +228,9 @@ pub struct StellarMark {
     /// Its raw `xPos` and `yPos` (@0x7733b-0x7734d).
     pub place: (i16, i16),
     /// Its resource name up to its last ';', trailing spaces and ';'s
-    /// dropped (@0x772ab-0x7732a), empty when it has none.
+    /// dropped (@0x772ab-0x77308), empty when it has none. Kept whole:
+    /// [`StellarMarks`](crate::mission::StellarMarks) compares the 30
+    /// characters the original's record keeps (@0x77310-0x7732a).
     pub name: String,
 }
 

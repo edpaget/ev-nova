@@ -438,8 +438,12 @@ impl PilotCatalog for GameData {
     }
 
     /// Each `spöb`'s `xPos`/`yPos` (@0x7733b-0x7734d) and its name as
-    /// `_LoadObjectData` keeps it (@0x772ab-0x7732a): up to its last ';',
-    /// trailing spaces and ';'s dropped, empty when it has none.
+    /// `_LoadObjectData` trims it (@0x772ab-0x77308): up to its last ';',
+    /// trailing spaces and ';'s dropped, empty when it has none. The name
+    /// is kept whole: the original's 30-character field (@0x77310-0x7732a)
+    /// is the core's to apply ([`StellarMarks`](crate::mission::StellarMarks)),
+    /// by [`StellarIdentityRecord`](crate::RuleKey::StellarIdentityRecord).
+    /// A `spöb` that can't be decoded is left out, as one that didn't load.
     fn stellar_marks(&self) -> Vec<StellarMark> {
         self.records::<Stellar>()
             .filter_map(|(id, stellar)| {
@@ -2094,6 +2098,20 @@ mod tests {
             ],
             "up to the last ';', trailing spaces and ';'s dropped; unnamed, empty; \
              undecodable 130 left out"
+        );
+    }
+
+    #[test]
+    fn stellar_marks_keep_a_name_over_30_characters_whole() {
+        let name = "A Stellar Named Well Past Thirty Chars";
+        let data = store_named(&[(Stellar::TYPE, 128, Some(name), stellar(1, 2, 0, 1, 0))]);
+        assert_eq!(
+            data.stellar_marks(),
+            [StellarMark {
+                id: StellarId(128),
+                place: (1, 2),
+                name: name.to_owned(),
+            }]
         );
     }
 

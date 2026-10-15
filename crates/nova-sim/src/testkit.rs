@@ -105,8 +105,14 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) place_names: PlaceNames,
     /// How many times the names were read.
     pub(crate) place_name_reads: RefCell<usize>,
-    /// What `stellar_marks` returns: none unless a test sets them.
+    /// What `stellar_marks` returns for the stellars it names: none
+    /// unless a test sets them. Every other stellar a system lists as a
+    /// landing site is marked at 0,0 with a name of its own, `#<id>`, so
+    /// no two read as one stop, unless it is `unloaded`.
     pub(crate) marks: Vec<StellarMark>,
+    /// The listed stellars `stellar_marks` leaves unmarked, as `spöb`s
+    /// that didn't load: none, by default.
+    pub(crate) unloaded: Vec<StellarId>,
     /// Each system's `Visibility`: none, by default, which leaves every
     /// system visible.
     pub(crate) visibility: Vec<SystemVisibility>,
@@ -602,6 +608,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         place_names: PlaceNames::default(),
         place_name_reads: RefCell::default(),
         marks: Vec::new(),
+        unloaded: Vec::new(),
         visibility: Vec::new(),
         crons: Vec::new(),
         ranks: Vec::new(),
@@ -850,7 +857,22 @@ impl PilotCatalog for FakePilotCatalog {
     }
 
     fn stellar_marks(&self) -> Vec<StellarMark> {
-        self.marks.clone()
+        let given = |id: StellarId| {
+            self.marks.iter().any(|mark| mark.id == id) || self.unloaded.contains(&id)
+        };
+        let listed = self
+            .sites
+            .iter()
+            .flat_map(|(_, sites)| sites.iter().map(|site| site.id))
+            .filter(|&id| !given(id))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|id| StellarMark {
+                id,
+                place: (0, 0),
+                name: format!("#{}", id.0),
+            });
+        self.marks.iter().cloned().chain(listed).collect()
     }
 
     fn crons(&self) -> Vec<CronRecord> {

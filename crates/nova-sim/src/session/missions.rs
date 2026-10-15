@@ -87,9 +87,10 @@ use crate::mission::goals::{ShipGoal, met_at_return};
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
-    AvailFacts, FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit,
-    World, abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
-    cleaned, failure_records, fined, pay_effect, placements, stellars_of, success_records,
+    AvailFacts, FailedBy, IdentityRules, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop,
+    Venue, Visit, World, abort_checks, abort_penalty, accept_charge, accept_checks,
+    auto_aborts_at_accept, cleaned, failure_records, fined, pay_effect, placements, stellars_of,
+    success_records,
 };
 use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -235,11 +236,12 @@ impl Session {
     /// `_MissionLandCargoCheck` (@0x9edfd, @0x9f01d) and
     /// `_MissionLandCheck` (@0xa1a37) ask `_StellarsAreIdentical`: by
     /// [`RuleKey::MissionStellarIdentity`]'s engine reading, also a
-    /// stellar of another ID at the same place with the same name
+    /// stellar of another ID at the same place with the same name, read
+    /// as [`RuleKey::StellarIdentityRecord`] says
     /// ([`StellarMarks::identical`]). No stop is never docked at.
     pub(super) fn docked_at_stop(&self, stop: Option<Stop>, docked: StellarId) -> bool {
-        let source = self.rules.source_for(RuleKey::MissionStellarIdentity);
-        stop.is_some_and(|stop| self.stellar_marks.identical(stop.stellar, docked, source))
+        let rules = IdentityRules::of(&self.rules);
+        stop.is_some_and(|stop| self.stellar_marks.identical(stop.stellar, docked, rules))
     }
 
     /// Whether the ship is docked at a mission's `stop`, as
@@ -261,7 +263,8 @@ impl Session {
     /// system when that is a visible lister, else in its first visible
     /// lister. A hidden one is landed at through its first variant
     /// ([`StellarMarks::variants`], by
-    /// [`RuleKey::MissionStellarIdentity`]) that is visible, in that
+    /// [`RuleKey::MissionStellarIdentity`] and
+    /// [`RuleKey::StellarIdentityRecord`]) that is visible, in that
     /// variant's first visible lister, as `_StellarsAreIdentical`
     /// matches them. A visible lister shadowed by another at its place
     /// (`CoLocatedResolution`) counts as visible. Built only for the
@@ -291,9 +294,8 @@ impl Session {
                 .unwrap_or(first);
             return Ok((system, stop.stellar));
         }
-        let source = self.rules.source_for(RuleKey::MissionStellarIdentity);
         self.stellar_marks
-            .variants(stop.stellar, source)
+            .variants(stop.stellar, IdentityRules::of(&self.rules))
             .find_map(|variant| Some((visible_listers(variant).next()?, variant)))
             .ok_or(StopRefusal::Hidden)
     }
@@ -3301,6 +3303,44 @@ mod tests {
         land_on(&mut session, &catalog, 151);
         land_on(&mut session, &catalog, 128);
         assert_eq!(held(&session), [(0, 140), (1, 141)]);
+    }
+
+    /// `with_variants` with 153 unmarked, a `spöb` that didn't load, and
+    /// 152 marked unnamed at 0,0: what a zeroed record reads as.
+    fn with_a_missing_return() -> FakePilotCatalog {
+        let mut catalog = with_variants(lifecycle(vec![travel(140, -1, 153)]));
+        catalog.marks.retain(|mark| mark.id != StellarId(153));
+        catalog.unloaded.push(StellarId(153));
+        let unnamed = catalog
+            .marks
+            .iter_mut()
+            .find(|mark| mark.id == StellarId(152))
+            .expect("152 marked");
+        unnamed.place = (0, 0);
+        unnamed.name.clear();
+        catalog
+    }
+
+    #[test]
+    fn a_missing_return_is_reached_at_an_unnamed_stellar_at_0_0_by_the_record() {
+        let catalog = with_a_missing_return();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 152);
+        assert_eq!(held(&session), [], "153 reads as a zeroed record");
+    }
+
+    #[test]
+    fn a_missing_return_is_reached_only_at_itself_by_the_spobs_as_written() {
+        let catalog = with_a_missing_return();
+        let rules =
+            Rulebook::default().with_override(RuleKey::StellarIdentityRecord, RuleSource::Bible);
+        let (mut session, _) = watched(&catalog, rules);
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 152);
+        assert_eq!(held(&session), [(0, 140)]);
+        land_on(&mut session, &catalog, 153);
+        assert_eq!(held(&session), []);
     }
 
     /// The accept compares the docked stellar by its raw ID (@0xa1fd8).
