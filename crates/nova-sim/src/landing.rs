@@ -17,8 +17,9 @@
 //!    ([`nearest_landable`]), station or planet, which the press selects
 //!    ([`DockPress::selected`]) and goes on with (@0x6a8ed-0x6a956). With
 //!    stellars but none landable it selects nothing and refuses with
-//!    [`LandingRefusal::NotLandable`] for the nearest; with no stellars,
-//!    [`LandingRefusal::NoStellars`].
+//!    [`LandingRefusal::NothingLandable`]; with no stellars,
+//!    [`LandingRefusal::NoStellars`]. Both are silent: the land key makes
+//!    no dock request (@0x6a94c).
 //! 2. **Not landable** (@0x6695c-0x669ae): a stellar that cannot be landed
 //!    on (only a slot key or a click selects one) refuses with
 //!    [`LandingRefusal::NotLandable`], wherever the ship is (`STR#` 2002
@@ -205,8 +206,14 @@ pub enum LandingRefusal {
     /// and before anything for a breaking-up or destroyed one (see
     /// [`Session::land`](crate::Session::land)).
     Disabled,
-    /// The system has no stellars.
+    /// The system has no stellars, so the land key has nothing to select
+    /// and makes no dock request (@0x6a94c): a silent refusal.
     NoStellars,
+    /// No stellar was selected, and the system has stellars but none the
+    /// land key would select (`_FindNearestStellar` gave -1, @0x6a94c):
+    /// the press makes no dock request, a silent refusal. It names no
+    /// stellar, as the original selects none.
+    NothingLandable,
     /// The ship is not over the stellar it would land on.
     TooFar {
         /// The stellar.
@@ -401,12 +408,8 @@ pub fn land_or_select(
         Some(site) => (site, None),
         None => match nearest_landable_site(player.position, sites) {
             Some(site) => (site, Some(site.id)),
-            None => {
-                return refused(
-                    nearest(player.position, sites.iter())
-                        .map_or(LandingRefusal::NoStellars, not_landable),
-                );
-            }
+            None if sites.is_empty() => return refused(LandingRefusal::NoStellars),
+            None => return refused(LandingRefusal::NothingLandable),
         },
     };
     if !is_landable(site) {
@@ -1813,8 +1816,10 @@ mod tests {
         );
     }
 
+    /// With nothing selected, `_FindNearestStellar` gives -1, so the land
+    /// key makes no dock request and names no stellar (@0x6a94c).
     #[test]
-    fn with_none_landable_l_says_so_of_the_nearest_and_selects_nothing() {
+    fn with_none_landable_l_selects_nothing_and_makes_no_request() {
         let sites = [
             LandingSite {
                 flags: 0,
@@ -1831,14 +1836,12 @@ mod tests {
                 selected: None,
                 dock: request(128, 0x2ee),
                 said: None,
-                outcome: Err(LandingRefusal::NotLandable {
-                    stellar: StellarId(129),
-                    station: true,
-                }),
+                outcome: Err(LandingRefusal::NothingLandable),
             }
         );
     }
 
+    /// No stellars, so nothing to select: no dock request (@0x6a94c).
     #[test]
     fn with_no_stellars_l_refuses() {
         assert_eq!(

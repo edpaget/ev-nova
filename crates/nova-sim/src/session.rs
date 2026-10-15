@@ -3198,8 +3198,11 @@ impl Session {
     /// A disabled ship's press goes as far as `_HandlePlayerDockRequest`
     /// does for it and no further: with no target it selects one, starting
     /// its fly-in, as the land key does before the dock request
-    /// (@0x6a8fb-0x6a932); a target that can't be landed on, or none, is
-    /// refused as an intact ship's is (@0x66977-0x669aa). Then the dock
+    /// (@0x6a8fb-0x6a932); a target that can't be landed on is refused as
+    /// an intact ship's is (@0x66977-0x669aa), and with nothing to select
+    /// ([`LandingRefusal::NoStellars`], [`LandingRefusal::NothingLandable`])
+    /// the press makes no dock request, as an intact ship's makes none
+    /// (@0x6a94c). Then the dock
     /// request's `_IsDisabled` test (@0x66af7) goes to its bare epilogue
     /// (0x67eef): [`LandingRefusal::Disabled`], said nothing of, before
     /// the range and speed checks (@0x67838) and the clearance
@@ -3234,7 +3237,9 @@ impl Session {
             self.select_pressed(press.selected);
             return match press.outcome {
                 Err(
-                    refusal @ (LandingRefusal::NotLandable { .. } | LandingRefusal::NoStellars),
+                    refusal @ (LandingRefusal::NotLandable { .. }
+                    | LandingRefusal::NoStellars
+                    | LandingRefusal::NothingLandable),
                 ) => Err(refusal),
                 Ok(_) | Err(_) => Err(LandingRefusal::Disabled),
             };
@@ -16368,13 +16373,35 @@ pub(super) mod tests {
             ..catalog()
         };
         let mut session = disabled(&empty);
-        assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x669aa");
+        assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x6a94c");
         session.condition = Condition::Intact;
         assert_eq!(
             session.land(),
             Err(LandingRefusal::NoStellars),
             "the same refusal"
         );
+    }
+
+    #[test]
+    fn a_disabled_players_l_with_nothing_landable_selects_nothing_as_an_intact_one_does() {
+        let mut catalog = catalog();
+        for site in &mut catalog.sites[0].1 {
+            site.flags = 0;
+        }
+        let mut session = disabled(&catalog);
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NothingLandable),
+            "@0x6a94c"
+        );
+        assert_eq!(session.nav_target(), None, "nothing selected");
+        session.condition = Condition::Intact;
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NothingLandable),
+            "the same refusal"
+        );
+        assert_eq!(session.nav_target(), None, "nothing selected");
     }
 
     #[test]

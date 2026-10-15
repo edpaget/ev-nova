@@ -570,8 +570,7 @@ pub struct FlightOverlays {
 /// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
 /// the abandoned fighters on arrival (@0x6c46d). It is also the time of
 /// the messages the original does not have ([`TAKE_OFF_FIRST`],
-/// [`IN_HYPERSPACE`], [`REPELLED`], [`NO_STELLARS`] on
-/// L) and of the defection notice, which the original
+/// [`REPELLED`]) and of the defection notice, which the original
 /// shows in a dialog (`_DoEscortPayment` @0x40301).
 pub const MESSAGE_TICKS: u16 = 240;
 /// A person's hail quote: 420 (0x1a4, `_ShowPersonHailQuote` @0x4464d).
@@ -622,17 +621,19 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
 /// or too fast, [`LANDING_TICKS`] denied or not landable, and
-/// [`MESSAGE_TICKS`] for the engine's own refusals. A disabled ship's
-/// refusal shows no message ([`refusal_message`]), so its time is never
-/// used.
+/// [`MESSAGE_TICKS`] for the silent ones. A disabled ship's refusal, and
+/// one where the land key makes no dock request (jumping, no stellars,
+/// nothing landable), shows no message ([`refusal_message`]), so its
+/// time is never used.
 #[must_use]
 pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
     match refusal {
         LandingRefusal::TooFar { .. } | LandingRefusal::TooFast { .. } => TOO_FAR_TICKS,
         LandingRefusal::Denied { .. } | LandingRefusal::NotLandable { .. } => LANDING_TICKS,
-        LandingRefusal::Jumping | LandingRefusal::Disabled | LandingRefusal::NoStellars => {
-            MESSAGE_TICKS
-        }
+        LandingRefusal::Jumping
+        | LandingRefusal::Disabled
+        | LandingRefusal::NoStellars
+        | LandingRefusal::NothingLandable => MESSAGE_TICKS,
     }
 }
 
@@ -1390,10 +1391,6 @@ pub const LANDING_DENIED: &str = "Landing request denied.";
 pub const HOSTILE_STATION: &str = "The station's hull integrity is too unstable.";
 /// `STR#` 2002 #90: why a ship cannot land on a planet.
 pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
-/// Not the original's, which takes no keys during a jump: worded after
-/// `STR#` 2002 #54 ("Unable to send hail - target ship is entering
-/// hyperspace.").
-pub const IN_HYPERSPACE: &str = "Unable to land - your ship is in hyperspace.";
 
 /// `STR#` 2002 #76.
 pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
@@ -1559,7 +1556,9 @@ pub fn approach_greeting(
 /// that is the `gate` kind, if any, named `name`: the original's words
 /// for it, as `_HandlePlayerDockRequest` picks them; nothing for a
 /// disabled ship, which it refuses silently (`_IsDisabled` @0x66af7, the
-/// bare epilogue 0x67eef).
+/// bare epilogue 0x67eef), and nothing either when the land key makes no
+/// dock request: jumping (@0x6a8cb → 0x6a95d), or nothing selected and
+/// nothing to select (@0x6a94c).
 ///
 /// - Too far and too fast (@0x677c2-0x67838): a hypergate's or a
 ///   wormhole's own string, tested before the station flag, else the
@@ -1585,9 +1584,10 @@ pub fn refusal_message(
         None => pick(station, at_station, on_planet),
     };
     let text = match *refusal {
-        LandingRefusal::Jumping => IN_HYPERSPACE,
-        LandingRefusal::Disabled => return None,
-        LandingRefusal::NoStellars => NO_STELLARS,
+        LandingRefusal::Jumping
+        | LandingRefusal::Disabled
+        | LandingRefusal::NoStellars
+        | LandingRefusal::NothingLandable => return None,
         LandingRefusal::TooFar { station, .. } => by_gate(
             station,
             TOO_FAR_HYPERGATE,
@@ -3462,6 +3462,7 @@ impl<
                     | LandingRefusal::Denied { stellar, .. } => Some(stellar),
                     LandingRefusal::Jumping
                     | LandingRefusal::NoStellars
+                    | LandingRefusal::NothingLandable
                     | LandingRefusal::Disabled => None,
                 };
                 let gate = stellar.and_then(|stellar| session.gate_kind(stellar));
@@ -8840,21 +8841,12 @@ mod tests {
         };
         let station = StellarFlags::CAN_LAND | StellarFlags::STATION;
         assert_eq!(
-            refused(Vec::new()).as_deref(),
-            Some("No stellar objects present.")
-        );
-        assert_eq!(
             refused(vec![site(140, (0.0, -600.0), StellarFlags::CAN_LAND)]).as_deref(),
             Some("You're too far away to land on this planet.")
         );
         assert_eq!(
             refused(vec![site(140, (0.0, -600.0), station)]).as_deref(),
             Some("You're too far away to dock at this station.")
-        );
-        assert_eq!(
-            refused(vec![centre(0, 0)]).as_deref(),
-            Some("Your ship is unable to land on  . The planet's environment is too hostile."),
-            "140 is not in Sol's scene: no name"
         );
         assert_eq!(
             refused(vec![centre(StellarFlags::CAN_LAND, 1)]).as_deref(),
@@ -8864,6 +8856,53 @@ mod tests {
             refused(vec![centre(station, 32767)]).as_deref(),
             Some("Docking request denied.")
         );
+        // Only a selected stellar reaches the dock request's not-landable
+        // line (@0x6a945-0x6a94c, @0x66977-0x669ae).
+        let mut view = flight_among(vec![centre(0, 0)]);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        tap(&mut view, LAND);
+        assert_eq!(nav_target(&view), Some(StellarId(140)), "kept");
+        assert_eq!(
+            view.message(),
+            Some("Your ship is unable to land on  . The planet's environment is too hostile."),
+            "140 is not in Sol's scene: no name"
+        );
+    }
+
+    /// Says `earlier` in `view`, taps L, and asserts the message line
+    /// still says `earlier`: the press said nothing and cleared nothing.
+    #[track_caller]
+    fn l_says_nothing(view: &mut View) {
+        view.say_for("earlier", MESSAGE_TICKS);
+        tap(view, LAND);
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(view.message(), Some("earlier"), "unchanged");
+    }
+
+    #[test]
+    fn l_with_no_stellars_says_nothing() {
+        // Nothing to select, so no dock request (@0x6a94c).
+        let mut view = flight_among(Vec::new());
+        l_says_nothing(&mut view);
+    }
+
+    #[test]
+    fn l_with_nothing_landable_and_no_target_says_nothing() {
+        // `_FindNearestStellar` gives -1: no dock request (@0x6a94c).
+        let mut view = flight_among(vec![site(140, (0.0, 0.0), 0)]);
+        l_says_nothing(&mut view);
+        assert_eq!(nav_target(&view), None, "nothing selected");
+        let mut fresh = flight_among(vec![site(140, (0.0, 0.0), 0)]);
+        tap(&mut fresh, LAND);
+        assert_eq!(fresh.message(), None, "no line either");
+    }
+
+    #[test]
+    fn l_during_a_jump_says_nothing() {
+        // The jump words send the land key to 0x6a95d (@0x6a8cb-0x6a8e3).
+        for mut view in through_a_jump(flight) {
+            l_says_nothing(&mut view);
+        }
     }
 
     #[test]
@@ -8896,8 +8935,6 @@ mod tests {
     fn each_refusal_and_assignment_lasts_its_callers_ticks() {
         let stellar = StellarId(128);
         let landing = [
-            (LandingRefusal::Jumping, 240),
-            (LandingRefusal::NoStellars, 240),
             (
                 LandingRefusal::TooFar {
                     stellar,
@@ -9010,8 +9047,6 @@ mod tests {
     fn every_refusal_has_its_string() {
         let stellar = StellarId(128);
         let cases = [
-            (LandingRefusal::Jumping, IN_HYPERSPACE),
-            (LandingRefusal::NoStellars, NO_STELLARS),
             (
                 LandingRefusal::TooFar {
                     stellar,
@@ -9071,6 +9106,17 @@ mod tests {
             None,
             "silent (@0x66af7, 0x67eef)"
         );
+        for (refusal, at) in [
+            (LandingRefusal::Jumping, "@0x6a95d"),
+            (LandingRefusal::NoStellars, "@0x6a94c"),
+            (LandingRefusal::NothingLandable, "@0x6a94c"),
+        ] {
+            assert_eq!(
+                refusal_message(&refusal, None, "Earth"),
+                None,
+                "no dock request, silent ({at})"
+            );
+        }
         assert_eq!(
             [
                 NO_STELLARS,
@@ -9082,7 +9128,6 @@ mod tests {
                 LANDING_DENIED,
                 HOSTILE_STATION,
                 HOSTILE_PLANET,
-                IN_HYPERSPACE,
             ],
             [
                 "No stellar objects present.",
@@ -9094,7 +9139,6 @@ mod tests {
                 "Landing request denied.",
                 "The station's hull integrity is too unstable.",
                 "The planet's environment is too hostile.",
-                "Unable to land - your ship is in hyperspace.",
             ]
         );
     }
@@ -9259,7 +9303,10 @@ mod tests {
                 "Your ship is unable to land on  Earth. The planet's environment is too hostile.",
             ),
         ] {
+            // Selected: only a selected stellar reaches the dock request
+            // (@0x6a945-0x6a94c).
             let mut view = flight_among(vec![site(128, (0.0, 0.0), flags)]);
+            tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
             tap(&mut view, LAND);
             assert_lasts(&mut view, text, LANDING_TICKS);
         }
@@ -21146,11 +21193,13 @@ mod tests {
                 flags2,
                 ..site(300, (0.0, 0.0), StellarFlags::STATION)
             }]);
+            tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
             tap(&mut view, LAND);
             let refusal = gate_refusal_message(kind);
             assert_lasts(&mut view, &refusal, 250);
         }
         let mut planet = flight_among(vec![site(128, (0.0, 0.0), 0)]);
+        tap(&mut planet, STELLAR_SLOT_KEYS[0][0]);
         tap(&mut planet, LAND);
         let line =
             "Your ship is unable to land on  Earth. The planet's environment is too hostile.";
