@@ -23521,6 +23521,16 @@ mod tests {
     }
 
     #[test]
+    fn each_fresh_press_of_h_or_nav_off_acts_with_no_tick_between() {
+        for k in [HYPERSPACE_MODE_KEY, NAV_OFF_KEY] {
+            let mut view = flight();
+            tap(&mut view, k);
+            tap(&mut view, k);
+            assert_eq!(count(&mut view, SimSound::NavSelected), 2, "{k:?}");
+        }
+    }
+
+    #[test]
     fn h_and_nav_off_held_through_the_jump_act_once_together_after_arrival() {
         let mut view = streaking_to(131);
         view.input(&key(HYPERSPACE_MODE_KEY, true));
@@ -23697,6 +23707,24 @@ mod tests {
             .filter(|&&sound| sound == REFUSED)
             .count();
         assert_eq!(refused, 1);
+    }
+
+    #[test]
+    fn j_held_through_a_jump_with_a_hop_to_go_does_not_begin_the_next() {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        plot(&mut view, 132);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        tick_to_arrival(&mut view);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(132))));
+        let arrival = view.message().map(str::to_owned);
+        ticks(&mut view, 3);
+        assert!(!view.preparing_jump());
+        assert_eq!(view.session().expect("flying").jumping(), None);
+        assert_eq!(view.message().map(str::to_owned), arrival, "nor refused");
     }
 
     #[test]
