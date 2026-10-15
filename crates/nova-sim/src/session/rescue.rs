@@ -19,8 +19,10 @@
 //!    is cleared (`_playerPaint`); the Red Alert forgets its threat and
 //!    its icon (`_playerThreatened`, `_oldPlayerThreatened`,
 //!    `_alertSpritePending`); the rank last activated is forgotten
-//!    (`_recentActivatedRank`, @0x1db44); and the blessing table is taken
-//!    again, as its tail call into `_ResetPlayerPrecalcedValues` does.
+//!    (`_recentActivatedRank`, @0x1db44); and its tail call into
+//!    `_ResetPlayerPrecalcedValues` runs (`Session::reset_precalced`: the
+//!    latches, the sabotage clock and the blessing table; the cargo is
+//!    already empty, so its trim never cuts).
 //!    The credits, the records, the exploration, the persons and the
 //!    escort orders are kept: argument 0 skips their block (@0x1d97e).
 //! 3. **`OnPurchase`** of `shïp` 128 (@0x68f34-0x68f55).
@@ -275,7 +277,7 @@ impl Session {
         self.pilot.paint = None;
         self.red_alert = RedAlert::default();
         self.recent_rank = None;
-        self.refresh_blessing();
+        self.reset_precalced();
     }
 
     /// The rescue's reserves: fuel and shield full, the armour as

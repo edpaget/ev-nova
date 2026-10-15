@@ -36,17 +36,40 @@
 //! ([`GATES`], `Flags2` 0x1000 and 0x2000). By the Bible, any of the
 //! system's stellars counts.
 //!
-//! Not modelled: the original's walk also explores the nebulae near each
-//! system (`_ExploreNebulaeFromSystem`) and marks the systems next to an
-//! explored one as seen for the map (+0x1ec); and it explores a system
-//! to level 2 where `X` explores to level 1, which the pilot's one set of
-//! explored systems does not tell apart.
+//! **Shared by place** ([`explored_with`], [`shared_by_place`],
+//! [`start_neighbours`]), as
+//! [`RuleKey::ExploredByPlace`](crate::RuleKey::ExploredByPlace) says.
+//! The head of a place is `_FindFirstCoLocatedSystem` (@0x4baa-0x4bdf),
+//! [`Places::head`]: its lowest-ID system, hidden or not. By the engine,
+//! exploring a system explores its head too: `_RecursiveAutoExplore`
+//! raises the system (@0xd98f-0xd9af), then its head (@0xd9b6-0xda10),
+//! so every map grant does; a jump's arrival (@0x6c16c-0x6c1b8), a
+//! hypergate's exit (@0x63a04-0x63a49), a wormhole's exit
+//! (@0x642ae-0x642f3) and the take-off (@0x63457-0x634a7) raise both.
+//! `X` raises only its system (`_EvalSetExp` @0x15c71-0x15ca1). Each
+//! rebuild point raises every system, hidden or not, to its head's level
+//! whenever its head is another system (`_HandleStellarSystemVisibility`
+//! @0x32b13-0x32b8f), so a member explored while its head is not shares
+//! nothing. A new pilot explores, for each of its start system's Con
+//! slots naming a visible system, that system's head (`_DoNewPilot`
+//! @0x18f97-0x19003). By the other reading each system is explored on
+//! its own, and a new pilot explores each visible neighbour itself. The
+//! session applies these at its sites (its `explored` module).
+//!
+//! The original's walk also explores the nebulae near each system
+//! (`_ExploreNebulaeFromSystem`, not its head's): the session raises
+//! `Explored` for each system reached, and its `nebulae` module explores
+//! them (see the [`nebula`](crate::nebula) module).
+//! The known flag (+0x1ec) and the explored levels 1 and 2 kept apart are
+//! deferred to the fidelity roadmap (crons-news-ranks-fidelity phases 20
+//! and 21): the pilot's one set of explored systems does not tell `X`'s
+//! level 1 from a map's level 2.
 
 use std::collections::{BTreeSet, VecDeque};
 
 use crate::catalog::SystemId;
 use crate::govt::Governments;
-use crate::hyperspace::{HyperlinkRule, StarMap};
+use crate::hyperspace::{HyperlinkRule, Places, StarMap};
 use crate::outfit_effects::MapReach;
 use crate::rulebook::RuleSource;
 
@@ -127,6 +150,65 @@ fn walk(
     for next in map.ordered_jumps(at, hyperlinks) {
         walk(map, hyperlinks, next, depth + 1, most, visited);
     }
+}
+
+/// The systems that exploring `system` explores, as `source` says (see
+/// the module docs): `system` itself, then, by the engine, its place's
+/// head when that is another system. A system at no place explores only
+/// itself.
+#[must_use]
+pub fn explored_with(system: SystemId, places: &Places, source: RuleSource) -> Vec<SystemId> {
+    let mut explored = vec![system];
+    if source == RuleSource::Engine
+        && let Some(head) = places.head(system)
+        && head != system
+    {
+        explored.push(head);
+    }
+    explored
+}
+
+/// The systems a rebuild point explores, of those not in `explored`, as
+/// `source` says (see the module docs): by the engine, every system at
+/// the place of an explored head, hidden or not; by the other reading,
+/// none.
+#[must_use]
+pub fn shared_by_place(
+    explored: &BTreeSet<SystemId>,
+    places: &Places,
+    source: RuleSource,
+) -> BTreeSet<SystemId> {
+    if source == RuleSource::Bible {
+        return BTreeSet::new();
+    }
+    explored
+        .iter()
+        .filter(|&&head| places.head(head) == Some(head))
+        .flat_map(|&head| places.at(head))
+        .filter(|member| !explored.contains(member))
+        .collect()
+}
+
+/// What a new pilot explores from its start system's Con slots `links`,
+/// as `source` says (see the module docs): for each slot naming a system
+/// `visible` holds, by the engine that system's head (itself at no
+/// place), by the other reading the system itself.
+#[must_use]
+pub fn start_neighbours(
+    links: &[SystemId],
+    visible: impl Fn(SystemId) -> bool,
+    places: &Places,
+    source: RuleSource,
+) -> Vec<SystemId> {
+    links
+        .iter()
+        .copied()
+        .filter(|&link| visible(link))
+        .map(|link| match source {
+            RuleSource::Engine => places.head(link).unwrap_or(link),
+            RuleSource::Bible => link,
+        })
+        .collect()
 }
 
 /// Every system within `most` jumps of `from`, `from` among them.
@@ -363,5 +445,141 @@ mod tests {
         assert!(!inhabited(&fifth, RuleSource::Engine));
         assert!(inhabited(&fifth, RuleSource::Bible));
         assert!(inhabited(&fifth[1..], RuleSource::Engine), "the fourth");
+    }
+
+    /// 130, 131 and 132 at one place, 130 its head; 133 elsewhere; 131
+    /// hidden.
+    fn place() -> Places {
+        Places::new(
+            &[
+                star(130, (5.0, 5.0), &[]),
+                star(131, (5.0, 5.0), &[]),
+                star(132, (5.0, 5.0), &[]),
+                star(133, (9.0, 9.0), &[]),
+            ],
+            &ids(&[131]),
+            crate::hyperspace::CoLocated::Lowest,
+        )
+    }
+
+    fn list(list: &[i16]) -> Vec<SystemId> {
+        list.iter().copied().map(SystemId).collect()
+    }
+
+    #[test]
+    fn exploring_a_member_explores_its_head_by_the_engine() {
+        let places = place();
+        for member in [131, 132] {
+            assert_eq!(
+                explored_with(SystemId(member), &places, RuleSource::Engine),
+                list(&[member, 130])
+            );
+            assert_eq!(
+                explored_with(SystemId(member), &places, RuleSource::Bible),
+                list(&[member])
+            );
+        }
+    }
+
+    #[test]
+    fn exploring_a_head_explores_only_itself() {
+        let places = place();
+        for source in RuleSource::ALL {
+            assert_eq!(explored_with(SystemId(130), &places, source), list(&[130]));
+            assert_eq!(explored_with(SystemId(133), &places, source), list(&[133]));
+        }
+    }
+
+    #[test]
+    fn a_system_at_no_place_explores_itself() {
+        let places = place();
+        for source in RuleSource::ALL {
+            assert_eq!(explored_with(SystemId(200), &places, source), list(&[200]));
+        }
+    }
+
+    #[test]
+    fn a_rebuild_shares_an_explored_head_with_every_member_hidden_or_not() {
+        let places = place();
+        assert_eq!(
+            shared_by_place(&ids(&[130]), &places, RuleSource::Engine),
+            ids(&[131, 132])
+        );
+        assert_eq!(
+            shared_by_place(&ids(&[130, 133]), &places, RuleSource::Engine),
+            ids(&[131, 132]),
+            "a place of one shares nothing"
+        );
+        assert_eq!(
+            shared_by_place(&ids(&[130]), &places, RuleSource::Bible),
+            ids(&[])
+        );
+    }
+
+    #[test]
+    fn an_explored_member_shares_nothing_while_its_head_is_unexplored() {
+        let places = place();
+        for source in RuleSource::ALL {
+            assert_eq!(shared_by_place(&ids(&[131]), &places, source), ids(&[]));
+            assert_eq!(
+                shared_by_place(&ids(&[200]), &places, source),
+                ids(&[]),
+                "a system at no place"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_new_is_shared_twice() {
+        let places = place();
+        assert_eq!(
+            shared_by_place(&ids(&[130, 131, 132]), &places, RuleSource::Engine),
+            ids(&[])
+        );
+        assert_eq!(
+            shared_by_place(&ids(&[130, 131]), &places, RuleSource::Engine),
+            ids(&[132])
+        );
+    }
+
+    /// 131 and 132 visible, 133 visible, 134 hidden.
+    fn visible(system: SystemId) -> bool {
+        system != SystemId(134)
+    }
+
+    #[test]
+    fn a_new_pilot_explores_each_visible_neighbours_head_by_the_engine() {
+        let places = place();
+        let links = list(&[131, 133, 134]);
+        assert_eq!(
+            start_neighbours(&links, visible, &places, RuleSource::Engine),
+            list(&[130, 133])
+        );
+        assert_eq!(
+            start_neighbours(&links, visible, &places, RuleSource::Bible),
+            list(&[131, 133])
+        );
+    }
+
+    #[test]
+    fn a_hidden_neighbour_is_skipped_under_both_readings() {
+        let places = place();
+        for source in RuleSource::ALL {
+            assert_eq!(
+                start_neighbours(&list(&[134]), visible, &places, source),
+                list(&[])
+            );
+        }
+    }
+
+    #[test]
+    fn a_neighbour_at_no_place_is_its_own_head() {
+        let places = place();
+        for source in RuleSource::ALL {
+            assert_eq!(
+                start_neighbours(&list(&[200]), visible, &places, source),
+                list(&[200])
+            );
+        }
     }
 }

@@ -9,6 +9,9 @@
 //! the saved pilots and flies the one chosen, from the spaceport of the
 //! stellar it last landed on when it is docked. Quit quits. Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
+//! Each flight put away leaves its ship slots' draw-layer history, which
+//! every later flight of the run starts from, as the original's sprite
+//! layers outlive a pilot ([`nova_sim::ship_layer`]).
 //!
 //! A pilot with a name is saved through the [`PilotKeeper`] on landing,
 //! on taking off, after each change made in the spaceport
@@ -174,7 +177,12 @@
 //! is given; [`AppScreen::with_rulebook`] sets the rule set from one
 //! rulebook and builds each of the strategies above from it. Each time
 //! the spaceport's outfitter opens, the flight is told
-//! ([`FlightView::open_outfitter`]) and the outfitter shown afresh.
+//! ([`FlightView::open_outfitter`]) and the outfitter shown afresh; each
+//! time it closes, or the bar's hire screen closes, the flight is told
+//! ([`FlightView::close_outfitter`], [`FlightView::close_hire`]) and the
+//! shops shown afresh, as each resets the session. The player info screen
+//! opens on what [`FlightView::open_player_info`] gives, which resets the
+//! session first.
 //! The flight's diagnostics about game
 //! data it could not read or the simulation does not handle yet come
 //! through [`Screen::take_diagnostics`].
@@ -217,6 +225,7 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
+use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
@@ -247,6 +256,7 @@ use nova_view::text::TextMetrics;
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
+use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::quantity::QUANTITY_DIALOG;
@@ -271,6 +281,10 @@ pub const MENU_HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map";
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
 pub const HINT_COLOR: Color = Color::DIM;
+
+/// The key that, with Command held, opens the Preferences on every side:
+/// the Mac's Command+comma.
+pub const PREFERENCES_KEY: Key = Key::Char(',');
 
 /// The About text's `dësc`.
 pub const ABOUT_TEXT: i16 = 32767;
@@ -311,6 +325,11 @@ pub struct AppScreen {
     galaxy: Navigator<Rc<GameData>>,
     /// Flight, once entered, reading the same game data.
     flight: Option<FlightView<Rc<GameData>>>,
+    /// The ship slots' draw-layer and cloned-frame history the last
+    /// flight put away left, which each new flight starts from: the
+    /// original's sprites outlive a pilot, `_InitSprites` running once at
+    /// launch (see [`nova_sim::ship_layer`]).
+    slot_sprites: SlotSprites,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
     /// The About dialog, while it is open.
@@ -378,6 +397,10 @@ pub struct AppScreen {
     /// The fade back from black over the side shown after a death, while
     /// it plays.
     fade_in: Option<ScreenFade>,
+    /// The player info screen over flight, while it is open.
+    player_info: Option<PlayerInfoScreen>,
+    /// Whether Command is held, for Command+comma.
+    command_held: bool,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -425,6 +448,7 @@ impl AppScreen {
             ships: ShipBrowser::new(Rc::clone(&data)),
             data,
             flight: None,
+            slot_sprites: SlotSprites::default(),
             dialogs: None,
             about: None,
             spaceport: None,
@@ -456,6 +480,8 @@ impl AppScreen {
             offer: None,
             missions: None,
             fade_in: None,
+            player_info: None,
+            command_held: false,
         }
     }
 
@@ -617,6 +643,12 @@ impl AppScreen {
         self.offer.as_ref()
     }
 
+    /// The player info screen open over flight, if it is.
+    #[must_use]
+    pub fn flight_player_info(&self) -> Option<&PlayerInfoScreen> {
+        self.player_info.as_ref()
+    }
+
     /// The mission text shown over flight, if any.
     #[must_use]
     pub fn flight_mission_text(&self) -> Option<&DescDialog> {
@@ -661,6 +693,7 @@ impl AppScreen {
             .with_boarding_rule(Rc::clone(&self.boarding_rule))
             .with_hail_options(self.hail_options.clone())
             .with_rules(self.rules)
+            .with_slot_sprites(self.slot_sprites.clone())
             .with_overlays(self.flight_overlays)
             .with_hire_terms(Rc::clone(&self.hire_terms))
             .with_control_bits(Rc::clone(&self.control_bits))
@@ -812,6 +845,9 @@ impl AppScreen {
         }
         if self.preferences.is_some() {
             return Showing::Preferences;
+        }
+        if self.player_info.is_some() {
+            return Showing::PlayerInfo;
         }
         if self.haggle.is_some() {
             return Showing::Haggle;
@@ -1009,6 +1045,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.preferences {
             return Some(dialog);
         }
+        if let Some(screen) = &mut self.player_info {
+            return Some(screen);
+        }
         if let Some(dialog) = &mut self.haggle {
             return Some(dialog);
         }
@@ -1085,6 +1124,13 @@ impl AppScreen {
         if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
             self.open_offer(prompt);
         }
+        if self
+            .flight
+            .as_mut()
+            .is_some_and(FlightView::take_player_info_request)
+        {
+            self.open_flight_player_info();
+        }
         if let Some(info) = self
             .flight
             .as_mut()
@@ -1144,6 +1190,53 @@ impl AppScreen {
         ScreenAction::None
     }
 
+    /// Opens the player info screen over flight, which pauses, and over
+    /// any offer dialog open there, on what flight gives as the dialog
+    /// opens ([`FlightView::open_player_info`], which resets the session
+    /// first; nothing opens in a jump or while the ship breaks up): laid out by
+    /// the interface file's `DLOG` 1017 and its Yes/No dialog, 3002, or
+    /// saying why not. The screen below lets go of its keys. With no
+    /// dialogs, nothing opens, as the mission info does not.
+    fn open_flight_player_info(&mut self) {
+        let Some(dialogs) = &self.dialogs else {
+            return;
+        };
+        let Some(info) = self.flight.as_mut().and_then(FlightView::open_player_info) else {
+            return;
+        };
+        let layout = dialogs
+            .resources
+            .dialog_template(PLAYER_INFO_DIALOG)
+            .map(|template| (template, Rc::clone(&dialogs.metrics)));
+        let confirm = dialogs.resources.dialog_template(YES_NO_DIALOG);
+        self.cancel_pointer();
+        self.release_keys();
+        self.player_info = Some(PlayerInfoScreen::new(
+            layout,
+            confirm,
+            info,
+            self.data.button_style(),
+        ));
+    }
+
+    /// The player info screen's input over flight: a confirmed Jettison
+    /// jettisons everything through flight. Once it closes, the screen
+    /// below lets go of its keys.
+    fn player_info_input(&mut self, input: &Input) -> ScreenAction {
+        let screen = self.player_info.as_mut().expect("open");
+        screen.input(input);
+        let jettison = screen.take_jettison();
+        let closed = screen.closed();
+        if jettison && let Some(flight) = &mut self.flight {
+            flight.jettison_all();
+        }
+        if closed {
+            self.player_info = None;
+            self.release_keys();
+        }
+        ScreenAction::None
+    }
+
     /// Opens the offer dialog on `prompt`, a person's mission offered on
     /// its hail or boarding, over flight, which pauses: the interface
     /// file's, or, without it or the metrics to lay it out, the dialog's
@@ -1165,6 +1258,10 @@ impl AppScreen {
     fn offer_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.offer.as_mut().expect("open");
         dialog.input(input);
+        if dialog.take_player_info_request() {
+            self.open_flight_player_info();
+            return ScreenAction::None;
+        }
         let Some(choice) = dialog.take_choice() else {
             return ScreenAction::None;
         };
@@ -1473,6 +1570,8 @@ impl AppScreen {
                     template_of(DESC_DIALOG),
                 );
         }
+        spaceport =
+            spaceport.with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG));
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
     }
@@ -1482,6 +1581,7 @@ impl AppScreen {
     /// spaceport.
     fn start_flight(&mut self, pilot: Pilot) {
         self.spaceport = None;
+        self.put_away_flight();
         let mut flight = self.flight(|data| FlightView::with_pilot(data, pilot));
         let landing = flight.take_landing();
         self.flight = Some(flight);
@@ -1500,7 +1600,7 @@ impl AppScreen {
     fn end_flight(&mut self, side: Side) {
         self.put_away_pilot();
         self.switch_to(side);
-        self.flight = None;
+        self.put_away_flight();
         self.spaceport = None;
         self.plunder = None;
         self.assignment = None;
@@ -1508,6 +1608,7 @@ impl AppScreen {
         self.haggle = None;
         self.offer = None;
         self.missions = None;
+        self.player_info = None;
     }
 
     /// The seam at the expiry of the hold after the player's death, before
@@ -1606,6 +1707,19 @@ impl AppScreen {
             if fade.done() {
                 self.fade_in = None;
             }
+        }
+    }
+
+    /// Drops the flight, if any, keeping its ship slots' draw-layer and
+    /// cloned-frame history for the next flight in this run.
+    fn put_away_flight(&mut self) {
+        if let Some(slot_sprites) = self
+            .flight
+            .take()
+            .as_ref()
+            .and_then(FlightView::slot_sprites)
+        {
+            self.slot_sprites = slot_sprites.clone();
         }
     }
 
@@ -2041,13 +2155,62 @@ impl AppScreen {
             // outfits: so all three go back.
             refresh_spaceport(spaceport, flight);
         }
+        self.serve_closings();
+        let spaceport = self.spaceport.as_mut().expect(LANDED);
         if spaceport.left() {
             self.close_spaceport();
             self.flight.as_mut().expect(ENTERED).take_off();
             return ScreenAction::None;
         }
         self.serve_offers();
+        self.serve_player_info();
         ScreenAction::None
+    }
+
+    /// The outfitter and the hire screen closing, however they closed this
+    /// input (an outfitter's Done or Escape, an order that left nothing
+    /// listed, or the input that closed that order's alert; a hire screen
+    /// after its hire, on Cancel, or a bar with nothing for hire), each
+    /// read once its order or hire went through: flight is told
+    /// ([`FlightView::close_outfitter`], [`FlightView::close_hire`]), whose
+    /// reset can trim the cargo, and the shops are handed back.
+    fn serve_closings(&mut self) {
+        let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
+            return;
+        };
+        let outfitter = spaceport.take_outfitter_closed();
+        let hire = spaceport.take_hire_closed();
+        if outfitter {
+            flight.close_outfitter();
+        }
+        if hire {
+            flight.close_hire();
+        }
+        if outfitter || hire {
+            refresh_spaceport(spaceport, flight);
+        }
+    }
+
+    /// The spaceport's player info screen: asked for, it opens on what
+    /// flight gives as the dialog opens ([`FlightView::open_player_info`]),
+    /// whose reset can trim the cargo, so the shops are handed back; its
+    /// Jettison drops everything through flight, which changes the
+    /// exchange, so the shops are handed back, and the session makes a
+    /// save due.
+    fn serve_player_info(&mut self) {
+        let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
+            return;
+        };
+        if spaceport.take_player_info_request()
+            && let Some(info) = flight.open_player_info()
+        {
+            spaceport.open_player_info(info);
+            refresh_spaceport(spaceport, flight);
+        }
+        if spaceport.take_player_info_jettison() {
+            flight.jettison_all();
+            refresh_spaceport(spaceport, flight);
+        }
     }
 
     /// The venues' mission offers (`_OfferMissionFromPort` @0xa369e): a
@@ -2086,13 +2249,51 @@ impl AppScreen {
         }
     }
 
+    /// Whether `input` is a Preferences key, which the router takes, with
+    /// dialogs to open them by: Command+comma on every side, as the
+    /// original's app menu opens them (`_PrefAEVTHandler` @0x56181), and
+    /// P on the main menu, the ship browser and the galaxy viewer, away
+    /// from flight and the spaceport, where P is the player info key. A
+    /// press opens them; its repeats and release do nothing.
+    fn preferences_key(&mut self, input: &Input) -> bool {
+        let Input::Key {
+            key,
+            pressed,
+            repeat,
+        } = *input
+        else {
+            return false;
+        };
+        let away = matches!(self.side, Side::MainMenu | Side::Ships | Side::Galaxy);
+        let taken =
+            (key == PREFERENCES_KEY && self.command_held) || (key == Key::Char('p') && away);
+        if !taken || self.dialogs.is_none() {
+            return false;
+        }
+        if pressed && !repeat {
+            self.open_preferences();
+        }
+        true
+    }
+
     /// Routes one input, as [`Screen::input`] describes.
     fn route(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: Key::Command,
+            pressed,
+            ..
+        } = *input
+        {
+            self.command_held = pressed;
+        }
         if self.about.is_some() {
             return self.about_input(input);
         }
         if self.preferences.is_some() {
             return self.preferences_input(input);
+        }
+        if self.player_info.is_some() {
+            return self.player_info_input(input);
         }
         if self.haggle.is_some() {
             return self.haggle_input(input);
@@ -2127,16 +2328,7 @@ impl AppScreen {
         {
             return self.spaceport_input(input);
         }
-        if let Input::Key {
-            key: Key::Char('p'),
-            pressed,
-            repeat,
-        } = *input
-            && self.dialogs.is_some()
-        {
-            if pressed && !repeat {
-                self.open_preferences();
-            }
+        if self.preferences_key(input) {
             return ScreenAction::None;
         }
         match self.side {
@@ -2335,6 +2527,9 @@ impl Screen for AppScreen {
         if let Some(dialog) = &self.offer {
             dialog.draw(list);
         }
+        if let Some(screen) = &self.player_info {
+            screen.draw(list);
+        }
         if let Some(dialogs) = &self.missions {
             dialogs.draw(list);
         }
@@ -2360,6 +2555,7 @@ impl Screen for AppScreen {
     }
 
     fn release_keys(&mut self) {
+        self.command_held = false;
         match self.overlay_mut() {
             Some(overlay) => overlay.release_keys(),
             None => self.shown_mut().release_keys(),
@@ -2412,6 +2608,12 @@ impl Screen for AppScreen {
 
     fn now_showing(&self) -> Option<Showing> {
         Some(self.showing())
+    }
+
+    /// Flight's ([`FlightView`]'s cursor), while it shows with nothing
+    /// over it.
+    fn hides_pointer(&self) -> bool {
+        self.showing() == Showing::Flight && self.shown().hides_pointer()
     }
 
     /// Puts the pilot flying away, in flight or in the spaceport, when it
@@ -2724,6 +2926,7 @@ pub(super) mod tests {
             .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar)
             .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &landable())
             .resource(Spin::TYPE, 1000, None, &spin)
+            .resource(Spin::TYPE, 650, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
     }
 
@@ -3358,6 +3561,18 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn only_flight_with_nothing_over_it_hides_the_system_pointer() {
+        let mut screen = with_dialogs(data());
+        assert!(!screen.hides_pointer(), "the ship browser");
+        fly(&mut screen);
+        assert!(screen.hides_pointer(), "flight");
+        open_prefs(&mut screen);
+        assert!(!screen.hides_pointer(), "the preferences over it");
+        screen.input(&key(Key::Escape, true));
+        assert!(screen.hides_pointer(), "flight again");
+    }
+
+    #[test]
     fn entering_and_leaving_flight_let_go_of_the_keys_held() {
         let mut screen = AppScreen::new(data());
         enter(&mut screen, 128);
@@ -3519,6 +3734,12 @@ pub(super) mod tests {
             if id == NEW_PILOT_DIALOG {
                 return Ok(new_pilot_template());
             }
+            if id == PLAYER_INFO_DIALOG {
+                return Ok(player_info_template());
+            }
+            if id == YES_NO_DIALOG {
+                return Ok(yes_no_template());
+            }
             if id != DESC_DIALOG {
                 return Err(format!("no DLOG {id}"));
             }
@@ -3531,6 +3752,51 @@ pub(super) mod tests {
                     item(10.0, 10.0, 100.0, 36.0, ItemSpec::User),
                 ],
             })
+        }
+    }
+
+    /// "Player Info" (1017), as stock lays it out: 413 x 227, centred,
+    /// with Done (1), the tabs (2-5), the content box (6) and Jettison
+    /// (7).
+    fn player_info_template() -> DialogTemplate {
+        let item = |x, y, w, h| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 413.0, 227.0),
+            placement: Placement::Center,
+            items: vec![
+                item(293.0, 195.0, 99.0, 25.0),
+                item(7.0, 8.0, 99.0, 25.0),
+                item(107.0, 8.0, 99.0, 25.0),
+                item(207.0, 8.0, 99.0, 25.0),
+                item(307.0, 8.0, 99.0, 25.0),
+                item(4.0, 40.0, 405.0, 141.0),
+                item(60.0, 195.0, 150.0, 25.0),
+            ],
+        }
+    }
+
+    /// `YesNo` (3002), as stock lays it out: 355 x 109, centred, with OK
+    /// (1), the question (3) and Cancel (5).
+    fn yes_no_template() -> DialogTemplate {
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind,
+        };
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 355.0, 109.0),
+            placement: Placement::Center,
+            items: vec![
+                item(263.0, 75.0, 70.0, 20.0, ItemSpec::Button("OK".into())),
+                item(277.0, 131.0, 68.0, 30.0, ItemSpec::Picture(129)),
+                item(52.0, 5.0, 295.0, 50.0, ItemSpec::StaticText(String::new())),
+                item(7.0, 5.0, 32.0, 32.0, ItemSpec::Picture(130)),
+                item(181.0, 75.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
+            ],
         }
     }
 
@@ -4133,8 +4399,29 @@ pub(super) mod tests {
 
     const PREFS: Key = Key::Char('p');
 
+    /// Presses Command+comma, letting go of Command once it is done.
+    fn command_comma(screen: &mut AppScreen) {
+        screen.input(&key(Key::Command, true));
+        assert_eq!(
+            screen.input(&key(PREFERENCES_KEY, true)),
+            ScreenAction::None
+        );
+        screen.input(&key(PREFERENCES_KEY, false));
+        screen.input(&key(Key::Command, false));
+    }
+
+    /// Opens the Preferences as the player does on the side shown: P on
+    /// the menu, the ship browser and the galaxy viewer, Command+comma in
+    /// flight and the spaceport.
     fn open_prefs(screen: &mut AppScreen) {
-        assert_eq!(screen.input(&key(PREFS, true)), ScreenAction::None);
+        if matches!(
+            screen.showing(),
+            Showing::Flight | Showing::FlightMap | Showing::Spaceport
+        ) {
+            command_comma(screen);
+        } else {
+            assert_eq!(screen.input(&key(PREFS, true)), ScreenAction::None);
+        }
         assert_eq!(screen.showing(), Showing::Preferences);
         assert_eq!(screen.now_showing(), Some(Showing::Preferences));
     }
@@ -4169,34 +4456,65 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn p_opens_the_preferences_over_ships_galaxy_flight_its_map_and_the_spaceport() {
+    fn p_opens_the_preferences_over_ships_and_galaxy() {
         let mut screen = with_dialogs(data());
         assert!(screen.preferences().is_none());
-        open_prefs(&mut screen);
+        screen.input(&key(PREFS, true));
+        assert_eq!(screen.showing(), Showing::Preferences);
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::ShipBrowser);
 
         screen.input(&key(Key::Tab, true));
-        open_prefs(&mut screen);
+        screen.input(&key(PREFS, true));
+        assert_eq!(screen.showing(), Showing::Preferences);
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::GalaxyMap);
+    }
+
+    #[test]
+    fn command_comma_opens_the_preferences_on_every_side() {
+        let mut screen = with_dialogs(data());
+        command_comma(&mut screen);
+        assert_eq!(screen.showing(), Showing::Preferences, "the ship browser");
+        screen.input(&key(Key::Escape, true));
 
         fly(&mut screen);
-        open_prefs(&mut screen);
+        command_comma(&mut screen);
+        assert_eq!(screen.showing(), Showing::Preferences, "flight");
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::Flight, "Escape only closes it");
 
         screen.input(&key(MAP, true));
-        open_prefs(&mut screen);
+        command_comma(&mut screen);
+        assert_eq!(screen.showing(), Showing::Preferences, "over the map");
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::FlightMap);
         screen.input(&key(Key::Escape, true));
 
         land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
-        open_prefs(&mut screen);
+        command_comma(&mut screen);
+        assert_eq!(screen.showing(), Showing::Preferences, "the spaceport");
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::Spaceport, "still landed");
+    }
+
+    #[test]
+    fn a_comma_without_command_or_after_it_is_let_go_opens_nothing() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        screen.input(&key(PREFERENCES_KEY, true));
+        assert_eq!(screen.showing(), Showing::Flight, "no Command");
+        screen.input(&key(Key::Command, true));
+        screen.input(&held(PREFERENCES_KEY));
+        assert_eq!(screen.showing(), Showing::Flight, "a repeat");
+        screen.input(&key(Key::Command, false));
+        screen.input(&key(PREFERENCES_KEY, true));
+        assert_eq!(screen.showing(), Showing::Flight, "Command let go");
+        screen.input(&key(Key::Command, true));
+        screen.release_keys();
+        screen.input(&key(PREFERENCES_KEY, true));
+        assert_eq!(screen.showing(), Showing::Flight, "the window lost focus");
     }
 
     #[test]
@@ -4331,6 +4649,10 @@ pub(super) mod tests {
     #[test]
     fn a_p_repeat_or_release_opens_nothing_and_reaches_nothing() {
         let mut screen = with_dialogs(data());
+        for input in [held(PREFS), key(PREFS, false)] {
+            assert_eq!(screen.input(&input), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::ShipBrowser, "{input:?}");
+        }
         fly(&mut screen);
         for input in [held(PREFS), key(PREFS, false)] {
             assert_eq!(screen.input(&input), ScreenAction::None);
@@ -4350,9 +4672,15 @@ pub(super) mod tests {
         assert_eq!(screen.showing(), Showing::ShipBrowser);
         assert_eq!(drawn(&screen), before);
         fly(&mut screen);
-        screen.input(&key(PREFS, true));
+        command_comma(&mut screen);
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(screen.preferences().is_none());
+        screen.input(&key(PREFS, true));
+        assert_eq!(screen.showing(), Showing::Flight, "P is the player info");
+        assert!(
+            screen.flight_player_info().is_none(),
+            "no dialogs to show it"
+        );
     }
 
     #[test]
@@ -4491,9 +4819,133 @@ pub(super) mod tests {
         assert!(screen.preferences().is_none(), "closed");
     }
 
+    // The player info screen.
+
+    use nova_view::ui::player_info::{PLAYER_INFO_KEY, PlayerInfoButton, Tab};
+
+    /// Clicks `button` on the player info screen open over flight, or
+    /// else over the spaceport.
+    fn click_player_info(screen: &mut AppScreen, button: PlayerInfoButton) {
+        let open = screen
+            .flight_player_info()
+            .or_else(|| screen.spaceport_view()?.player_info())
+            .expect("the player info is open");
+        let at = open.button_bounds(button).expect("laid out").center();
+        click_at(screen, at);
+    }
+
     #[test]
-    fn the_flight_help_offers_p() {
-        assert!(nova_view::flight::view::HELP.contains("P: preferences"));
+    fn p_in_flight_opens_the_player_info_over_the_paused_flight() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK);
+        let moving = ship(&screen);
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        assert_eq!(screen.showing(), Showing::PlayerInfo);
+        assert_eq!(screen.now_showing(), Some(Showing::PlayerInfo));
+        let open = screen.flight_player_info().expect("open");
+        assert_eq!(open.problem(), None, "laid out by DLOG 1017");
+        assert_eq!(open.info().credits, pilot(&screen).cash());
+        let list = drawn(&screen);
+        let over = drawn(open);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            commands[commands.len() - over.iter().count()..],
+            over.iter().collect::<Vec<_>>()[..],
+            "drawn over flight"
+        );
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen), moving, "paused");
+        screen.input(&key(PLAYER_INFO_KEY, false));
+        screen.input(&key(Key::Up, false));
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(
+            screen.flight_player_info().map(PlayerInfoScreen::tab),
+            Some(Tab::Cargo),
+            "it takes the input"
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "Escape closes it alone");
+        let coasting = ship(&screen);
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen).velocity, coasting.velocity, "no thrust");
+    }
+
+    #[test]
+    fn p_opens_the_player_info_over_the_spaceport_and_its_dialogs() {
+        let store = MemoryPilots::new();
+        let check = |screen: &mut AppScreen, what: &str| {
+            screen.input(&key(PLAYER_INFO_KEY, true));
+            let open = spaceport(screen).player_info().expect(what);
+            assert_eq!(open.problem(), None, "{what}");
+            assert_eq!(screen.showing(), Showing::Spaceport, "{what}");
+            screen.input(&key(Key::Escape, true));
+            assert!(spaceport(screen).player_info().is_none(), "{what}");
+        };
+        let mut screen = landed_trader(&store);
+        check(&mut screen, "the spaceport");
+        click_port_item(&mut screen, 7);
+        check(&mut screen, "the trade center");
+        assert!(spaceport(&screen).open_trade().is_some(), "still trading");
+        let mut screen = landed_shipyard(&MemoryPilots::new());
+        click_port_item(&mut screen, 9);
+        check(&mut screen, "the shipyard");
+        screen.input(&key(Key::Char('i'), true));
+        assert!(
+            spaceport(&screen)
+                .open_shipyard()
+                .and_then(ShipyardScreen::info_panel)
+                .is_some()
+        );
+        check(&mut screen, "its Info panel");
+        assert!(
+            spaceport(&screen)
+                .open_shipyard()
+                .and_then(ShipyardScreen::info_panel)
+                .is_some(),
+            "back to the panel"
+        );
+        let mut screen = landed_at_venues(&MemoryPilots::new(), venue_data(SPACEPORT));
+        assert!(spaceport(&screen).offer_dialog().is_some());
+        check(&mut screen, "the spaceport's offer");
+        assert!(spaceport(&screen).offer_dialog().is_some(), "still offered");
+    }
+
+    #[test]
+    fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).held(FOOD), 10);
+        let writes = store.writes();
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        click_player_info(&mut screen, PlayerInfoButton::Jettison);
+        screen.input(&key(Key::Enter, true));
+        assert!(spaceport(&screen).player_info().is_none(), "closed");
+        assert_eq!(pilot(&screen).held(FOOD), 0, "jettisoned");
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!(open.market().row(FOOD).map(|row| row.held), Some(0));
+        assert_eq!(store.writes(), writes + 1, "saved");
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        assert_eq!(pilot(&screen).held(FOOD), 3, "the cash left buys 3");
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        click_player_info(&mut screen, PlayerInfoButton::Jettison);
+        screen.input(&key(Key::Enter, true));
+        assert!(screen.flight_player_info().is_none(), "closed");
+        assert_eq!(pilot(&screen).held(FOOD), 0, "jettisoned in flight");
+    }
+
+    #[test]
+    fn the_flight_help_offers_p_and_command_comma() {
+        assert!(nova_view::flight::view::HELP.contains("P: player info"));
+        assert!(nova_view::flight::view::HELP.contains("Cmd-,: preferences"));
     }
 
     // The main menu and pilots.
@@ -4618,6 +5070,72 @@ pub(super) mod tests {
             Showing::GalaxyMap,
             "back to the map first"
         );
+    }
+
+    /// Slot history with berth 1 in the escorts' layer and holding
+    /// `shïp` 140's frames, as a flight that led a ship of that type there
+    /// leaves it.
+    fn led_berth_1() -> SlotSprites {
+        let mut sprites = SlotSprites::default();
+        sprites.layers.put(
+            nova_sim::ship_layer::Slot::Berth(1),
+            nova_sim::ship_layer::ShipLayer::Led,
+        );
+        sprites
+            .frames
+            .clone_frames(nova_sim::ship_layer::Slot::Berth(1), nova_sim::ShipId(140));
+        sprites
+    }
+
+    /// Gives the flight shown `sprites` as its history, as its ticks would.
+    fn lay_out(screen: &mut AppScreen, sprites: SlotSprites) {
+        screen.flight = screen
+            .flight
+            .take()
+            .map(|flight| flight.with_slot_sprites(sprites));
+    }
+
+    #[test]
+    fn a_pilot_loaded_after_another_starts_from_the_layers_it_left() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        assert_eq!(
+            AppScreen::new(data()).slot_sprites,
+            SlotSprites::default(),
+            "a run starts from the launch order"
+        );
+        create(&mut screen, "Ada");
+        lay_out(&mut screen, led_berth_1());
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert!(screen.flight_view().is_none(), "put away");
+        create(&mut screen, "Bea");
+        assert_eq!(pilot(&screen).name(), "Bea");
+        assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
+    }
+
+    #[test]
+    fn a_pilot_replaced_while_flying_hands_on_its_layers() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        lay_out(&mut screen, led_berth_1());
+        let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
+        screen.start_flight(bea);
+        assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
+    }
+
+    #[test]
+    fn the_developers_flight_after_a_pilot_starts_from_the_layers_it_left() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        lay_out(&mut screen, led_berth_1());
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Tab, true));
+        screen.input(&key(Key::Char('f'), true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
     }
 
     #[test]
@@ -5556,6 +6074,256 @@ pub(super) mod tests {
         assert!(!spaceport(&screen).left());
     }
 
+    /// [`outfitting_data`], the booster made a cargo pod: 10 tons more
+    /// cargo space (`ModType` 2) for 100 credits.
+    fn cargo_pod_data() -> Rc<GameData> {
+        let mut built = game_data_fork(true, true, false, 100, b"", b"", None).build();
+        let pod = built.layout.data_entry(Outfit::TYPE, 128) + 4;
+        built.put_u16(pod + 0x06, 2);
+        built.put_u16(pod + 0x08, 10);
+        built.bytes[pod + 0x0E..pod + 0x12].copy_from_slice(&100_i32.to_be_bytes());
+        loaded_bytes(built.bytes)
+    }
+
+    /// The trade and outfit dialogs.
+    struct ShopDialogs;
+
+    impl DialogResources for ShopDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            match id {
+                TRADE_DIALOG => Ok(trade_template()),
+                OUTFIT_DIALOG => Ok(outfit_template()),
+                _ => Dialogs.dialog_template(id),
+            }
+        }
+    }
+
+    /// The router over [`cargo_pod_data`], landed, by the other reading of
+    /// [`RuleKey::OutfitSaleCargo`]: Ada buys the pod (20 tons), then 12
+    /// tons of food with the 900 credits left, a lot of 10 and then 2,
+    /// and sells the pod in the
+    /// outfitter, which stays open, keeping the 12 tons in her 10.
+    fn twelve_tons_in_ten(store: &MemoryPilots) -> AppScreen {
+        let rulebook =
+            Rulebook::default().with_override(RuleKey::OutfitSaleCargo, RuleSource::Bible);
+        let mut screen = AppScreen::new(cargo_pod_data())
+            .with_rulebook(&rulebook)
+            .with_dialogs(Rc::new(ShopDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the pod bought");
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(pilot(&screen).held(FOOD), 12);
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the pod sold");
+        assert!(spaceport(&screen).open_outfitter().is_some());
+        assert_eq!(pilot(&screen).held(FOOD), 12, "kept past the holds");
+        screen
+    }
+
+    #[test]
+    fn closing_the_outfitter_trims_the_cargo_past_the_holds() {
+        let mut screen = twelve_tons_in_ten(&MemoryPilots::new());
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_outfitter().is_none());
+        assert_eq!(pilot(&screen).held(FOOD), 10, "@0x5db10");
+        click_port_item(&mut screen, 7);
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!(
+            open.market().row(FOOD).map(|row| row.held),
+            Some(10),
+            "the shops shown afresh"
+        );
+    }
+
+    // The resets past the holds: the player info opening and the hire
+    // screen closing.
+
+    use nova_view::spaceport::bar::BarScreen;
+
+    /// The mission cargo [`past_the_holds`] carries: 9 tons, never cut.
+    const MISSION_TONS: u32 = 9;
+
+    /// [`cargo_pod_data`] whose outfitter offers mission 130 (see
+    /// [`venue_mission`]) carrying [`MISSION_TONS`] of cargo aboard from
+    /// its accept, and whose first ship class is for hire in the bar
+    /// every day (`HireRandom` 100).
+    fn past_the_holds_data() -> Rc<GameData> {
+        let mut mission = venue_mission(OUTFITTER);
+        let tons = i16::try_from(MISSION_TONS).expect("a few tons");
+        mission[0x10..0x12].copy_from_slice(&0_i16.to_be_bytes());
+        mission[0x12..0x14].copy_from_slice(&tons.to_be_bytes());
+        let fork = game_data_fork(true, true, false, 100, b"", b"", None)
+            .resource(Mission::TYPE, 130, Some(b"Cargo job"), &mission)
+            .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &desc_of("Job 130."));
+        let mut built = fork.build();
+        let pod = built.layout.data_entry(Outfit::TYPE, 128) + 4;
+        built.put_u16(pod + 0x06, 2);
+        built.put_u16(pod + 0x08, 10);
+        built.bytes[pod + 0x0E..pod + 0x12].copy_from_slice(&100_i32.to_be_bytes());
+        let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
+        built.put_u16(first + 0x38A, 100);
+        loaded_bytes(built.bytes)
+    }
+
+    /// The shop dialogs, the offer, the bar and its hire screen.
+    struct PastTheHoldsDialogs;
+
+    impl DialogResources for PastTheHoldsDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            match id {
+                OFFER_DIALOG => Ok(offer_template()),
+                BAR_DIALOG => Ok(bar_template()),
+                SHIPYARD_DIALOG => Ok(shipyard_template()),
+                _ => ShopDialogs.dialog_template(id),
+            }
+        }
+    }
+
+    /// "Bar", smaller: 263 x 185 at (0, 0), with Leave (1), Hire Escort
+    /// (5) and the text (7).
+    fn bar_template() -> DialogTemplate {
+        let item = |x: f32, y: f32, w: f32, h: f32| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: false,
+            kind: ItemSpec::User,
+        };
+        let mut items: Vec<ItemTemplate> = (0..10).map(|_| item(0.0, 300.0, 1.0, 1.0)).collect();
+        items[0] = item(156.0, 154.0, 99.0, 26.0);
+        items[4] = item(6.0, 125.0, 146.0, 26.0);
+        items[6] = item(16.0, 10.0, 230.0, 106.0);
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 263.0, 185.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// The router over [`past_the_holds_data`], landed, by the other
+    /// reading of [`RuleKey::OutfitSaleCargo`]: Ada accepts the
+    /// outfitter's mission ([`MISSION_TONS`] aboard), buys the pod (20
+    /// tons), then 10 tons of food, and sells the pod, keeping 19 tons in
+    /// her 10. The outfitter's close trims the food to trunc(10 x 10 /
+    /// 19) = 5, leaving 14 tons in 10, as the mission cargo is never cut:
+    /// each reset after it trims the food again.
+    fn past_the_holds(store: &MemoryPilots) -> AppScreen {
+        let rulebook =
+            Rulebook::default().with_override(RuleKey::OutfitSaleCargo, RuleSource::Bible);
+        let mut screen = AppScreen::new(past_the_holds_data())
+            .with_rulebook(&rulebook)
+            .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(offered_mission(open.offer_dialog()), Some(MissionId(130)));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(130)]);
+        assert_eq!(pilot(&screen).total_cargo(), i64::from(MISSION_TONS));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the pod bought");
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(pilot(&screen).held(FOOD), 10);
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen)
+                .open_outfitter()
+                .is_some_and(|open| open.offer_dialog().is_none()),
+            "no offer over the sale"
+        );
+        screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the pod sold");
+        assert_eq!(pilot(&screen).held(FOOD), 10, "kept past the holds");
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_outfitter().is_none());
+        assert_eq!(pilot(&screen).held(FOOD), 5, "the close's trim");
+        screen
+    }
+
+    /// The trade center's food row as the spaceport shows it.
+    fn food_shown(screen: &AppScreen) -> Option<u32> {
+        spaceport(screen)
+            .open_trade()
+            .and_then(|open| open.market().row(FOOD))
+            .map(|row| row.held)
+    }
+
+    #[test]
+    fn p_over_the_trade_center_resets_and_shows_the_cargo_trimmed() {
+        let mut screen = past_the_holds(&MemoryPilots::new());
+        click_port_item(&mut screen, 7);
+        assert_eq!(food_shown(&screen), Some(5));
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        assert!(spaceport(&screen).player_info().is_some(), "open");
+        assert_eq!(pilot(&screen).held(FOOD), 3, "trunc(5 x 10 / 14) @0x5a06a");
+        assert_eq!(food_shown(&screen), Some(3), "the shops shown afresh");
+        let shown = spaceport(&screen)
+            .player_info()
+            .and_then(|open| open.info().cargo.clone())
+            .expect("cargo shown");
+        // The cargo line counts every ton aboard: 3 of food and the
+        // mission's 9, not the 14 before the reset.
+        assert!(shown.contains("12"), "the info built after: {shown}");
+    }
+
+    #[test]
+    fn cancelling_the_hire_screen_resets_and_the_shops_show_it() {
+        let mut screen = past_the_holds(&MemoryPilots::new());
+        click_port_item(&mut screen, 10);
+        assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
+        screen.input(&key(Key::Char('h'), true));
+        assert!(
+            spaceport(&screen)
+                .open_bar()
+                .and_then(BarScreen::hire_screen)
+                .is_some(),
+            "for hire"
+        );
+        assert_eq!(pilot(&screen).held(FOOD), 5, "opening resets nothing");
+        screen.input(&key(Key::Escape, true));
+        assert!(
+            spaceport(&screen)
+                .open_bar()
+                .is_some_and(|bar| bar.hire_screen().is_none()),
+            "cancelled back to the bar"
+        );
+        assert_eq!(pilot(&screen).held(FOOD), 3, "trunc(5 x 10 / 14) @0x49235");
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_bar().is_none(), "left the bar");
+        click_port_item(&mut screen, 7);
+        assert_eq!(food_shown(&screen), Some(3), "the shops shown afresh");
+    }
+
+    #[test]
+    fn p_in_flight_resets_before_the_info_is_built() {
+        let mut screen = past_the_holds(&MemoryPilots::new());
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        let held = pilot(&screen).held(FOOD);
+        let trimmed = held * 10 / (held + MISSION_TONS);
+        assert!(trimmed < held, "{held} still past the holds");
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        let shown = screen
+            .flight_player_info()
+            .and_then(|open| open.info().cargo.clone())
+            .expect("open, showing the cargo");
+        assert_eq!(pilot(&screen).held(FOOD), trimmed, "@0x5a06a");
+        let total = (trimmed + MISSION_TONS).to_string();
+        assert!(shown.contains(&total), "the info built after: {shown}");
+    }
+
     #[test]
     fn an_outfit_order_changes_the_pilot_refreshes_the_outfitter_and_saves() {
         let store = MemoryPilots::new();
@@ -6107,11 +6875,15 @@ pub(super) mod tests {
         assert_eq!(screen.showing(), Showing::Spaceport);
         let prompt = name_prompt(&screen).expect("the name prompt");
         assert_eq!(prompt.field().text(), "pif");
-        // Once it is closed, P opens Preferences again.
+        // Once it is closed, P opens the player info.
         click_cancel(&mut screen);
         assert!(name_prompt(&screen).is_none(), "declined");
         screen.input(&key(Key::Char('p'), true));
-        assert!(screen.preferences().is_some(), "P is Preferences again");
+        assert!(screen.preferences().is_none());
+        assert!(
+            spaceport(&screen).player_info().is_some(),
+            "P is the player info"
+        );
     }
 
     #[test]

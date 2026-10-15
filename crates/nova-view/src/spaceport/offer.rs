@@ -21,7 +21,10 @@
 //! accept label's first letter accepts and, when the mission can be
 //! refused, the refuse label's refuses, unless both start with the same
 //! letter. Escape does nothing. The choice is taken once
-//! ([`OfferDialog::take_choice`]), and the dialog is then answered.
+//! ([`OfferDialog::take_choice`]), and the dialog is then answered. P
+//! ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press) asks for the player info screen
+//! ([`OfferDialog::take_player_info_request`], @0xa3215), before the
+//! labels' letters are read; the dialog stays open under it.
 //!
 //! A venue that offers missions (the bar, the spaceport, the trade
 //! center, the shipyard and the outfitter) holds its offers in a
@@ -45,6 +48,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
+use crate::ui::player_info::is_player_info_press;
 
 /// The offer dialog's `DLOG` (and `DITL`) ID.
 pub const OFFER_DIALOG: i16 = 1016;
@@ -86,6 +90,8 @@ pub struct OfferDialog {
     /// The choice made, until it is taken.
     choice: Option<OfferChoice>,
     answered: bool,
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
+    player_info: bool,
     sounds: Vec<Sound>,
 }
 
@@ -144,8 +150,15 @@ impl OfferDialog {
             prompt,
             choice: None,
             answered: false,
+            player_info: false,
             sounds: Vec::new(),
         }
+    }
+
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since
+    /// this was last taken, once.
+    pub fn take_player_info_request(&mut self) -> bool {
+        std::mem::take(&mut self.player_info)
     }
 
     /// The dialog, if it could be laid out.
@@ -212,6 +225,10 @@ impl Screen for OfferDialog {
     /// to the dialog. Once answered it takes nothing. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.answered {
+            return ScreenAction::None;
+        }
+        if is_player_info_press(input) {
+            self.player_info = true;
             return ScreenAction::None;
         }
         if let Input::Key {
@@ -328,6 +345,14 @@ impl VenueOffers {
     /// The offer dialog, while it is open.
     pub(crate) fn dialog(&self) -> Option<&OfferDialog> {
         self.dialog.as_ref()
+    }
+
+    /// Whether the offer dialog open asked for the player info screen
+    /// since this was last taken, once.
+    pub(crate) fn take_player_info_request(&mut self) -> bool {
+        self.dialog
+            .as_mut()
+            .is_some_and(OfferDialog::take_player_info_request)
     }
 
     /// The offer answered since this was last taken, and the choice made,

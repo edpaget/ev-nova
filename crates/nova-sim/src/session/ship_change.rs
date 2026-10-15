@@ -26,8 +26,12 @@
 //! (`_LoadPilotData` @0x754dc) fill the shield and armour. So a shield or
 //! armour above the new class's most lasts, in flight, until damage
 //! takes it: [`RuleKey::ShipChangeReserves`].
-//! The block never calls `_DestroyPartialFleetCargo`, so the cargo is
-//! kept even past the new hold; it leaves the escorts and the fighters
+//! The block never calls `_DestroyPartialFleetCargo`, but each
+//! `_SystemInfoToShipStats` ends in `_ResetPlayerPrecalcedValues`
+//! (@0xcae9), whose trim (@0xc7d8-0xc887) cuts the commodities to the
+//! fleet's holds, and so does the set-string wrapper's tail once the
+//! expression ends (@0x99a85, @0x99dea): the cargo is kept past the new
+//! hold only until then. The block leaves the escorts and the fighters
 //! out alone, checks no mass, moves no cash, draws no `_Rand`, and does
 //! not branch on `_playerIsLanded`, so landed and in flight are alike.
 //! It never calls `_EvalMissionBitSetString`, so no `OnPurchase`,
@@ -51,7 +55,8 @@
 //! record, the hull, weapons and stats from them and the outfits), each
 //! reserve held to its new most unless
 //! [`ShipChangeRules::reserves`] keeps a shield or armour above it, the
-//! cargo kept or trimmed as [`ShipChangeRules::cargo`] says, and the
+//! cargo left as it was (the reset at the expression's end trims it, as
+//! [`ShipChangeRules::cargo`] says; see the `precalced` module), and the
 //! armour raised a point at a time, never past its most, while the
 //! session's [`DisableRule`] has the ship disabled
 //! ([`Session::with_disable_rule`]; [`NovaDisable`] by default). Its
@@ -166,7 +171,6 @@ use crate::outfitter::{Hardpoints, OutfitFlags};
 use crate::pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::ship_change::{Fold, Limits, OutfitCarry, SET_OP_PERSISTENT, carried_outfits};
-use crate::shipyard;
 
 /// What the armour gains a step while the ship is disabled after a
 /// change (the constant @0xdd068).
@@ -182,8 +186,9 @@ pub struct ShipChangeRules {
     /// Whether `E` and `H` hold the outfits to their limits
     /// ([`RuleKey::ShipChangeMax`]).
     pub max: RuleSource,
-    /// Whether `C`, `E` and `H` keep the cargo past the new hold
-    /// ([`RuleKey::ShipChangeCargo`]).
+    /// Whether the cargo `C`, `E` and `H` leave past the new hold is
+    /// trimmed as the set expression ends, or kept until a reset outside
+    /// a set expression ([`RuleKey::ShipChangeCargo`]).
     pub cargo: RuleSource,
     /// Whether `C`, `E` and `H` keep a shield or armour above the new
     /// most ([`RuleKey::ShipChangeReserves`]).
@@ -398,18 +403,6 @@ impl Session {
             reserves: ReservePolicy::reading(rules.reserves),
         };
         self.become_class(&record, change, |_| {});
-        if rules.cargo == RuleSource::Bible {
-            // To the new ship's own hold, goods in order: the purchase
-            // rule's other reading, with no escorts' holds counted. The
-            // mission cargo aboard takes its room first and always stays.
-            shipyard::keep_cargo(
-                &mut self.pilot.cargo,
-                self.stats.capacity,
-                self.pilot.missions.tons_aboard(),
-                &[],
-                RuleSource::Bible,
-            );
-        }
         self.bump_armor();
     }
 
@@ -1612,79 +1605,103 @@ mod tests {
 
     // Cargo.
 
-    #[test]
-    fn by_the_engine_the_cargo_is_kept_past_the_new_hold_and_otherwise_trimmed() {
-        let catalog = changing();
-        let loaded = |rules| {
-            let mut session = session(&catalog).with_rules(rules);
-            session.pilot.cargo = [(Good::Commodity(0), 3), (Good::Commodity(2), 9)]
-                .into_iter()
-                .collect();
-            run(&mut session, "C130");
-            session
-        };
-        let session = loaded(Rulebook::default());
-        assert_eq!(session.capacity(), 5);
-        assert_eq!(
-            session.pilot().cargo().collect::<Vec<_>>(),
-            [(Good::Commodity(0), 3), (Good::Commodity(2), 9)],
-            "every ton kept"
-        );
-        let session =
-            loaded(Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible));
-        assert_eq!(
-            session.pilot().cargo().collect::<Vec<_>>(),
-            [(Good::Commodity(0), 3), (Good::Commodity(2), 2)],
-            "trimmed in Good order"
-        );
+    /// Commodity 0 x3 and commodity 2 x9: 12 tons.
+    fn twelve_tons() -> BTreeMap<Good, u32> {
+        [(Good::Commodity(0), 3), (Good::Commodity(2), 9)]
+            .into_iter()
+            .collect()
+    }
+
+    fn cargo(session: &Session) -> BTreeMap<Good, u32> {
+        session.pilot().cargo().collect()
     }
 
     #[test]
-    fn the_mission_cargo_aboard_takes_the_new_hold_first_when_trimmed_and_always_stays() {
+    fn by_the_engine_c_e_and_h_trim_the_cargo_past_the_new_hold_as_the_expression_ends() {
         let catalog = changing();
-        let loaded = |rules| {
-            let mut session = session(&catalog).with_rules(rules);
-            session.pilot.cargo = [(Good::Commodity(0), 2), (Good::Commodity(2), 9)]
-                .into_iter()
-                .collect();
-            session
-                .pilot
-                .missions
-                .put(0, crate::testkit::carrying(140, 3));
-            run(&mut session, "C130");
-            session
-        };
-        let mission_cargo = |session: &Session| {
-            let held = session.pilot.missions.get(0).expect("still held");
-            (held.cargo_tons, held.aboard)
-        };
-        let session = loaded(Rulebook::default());
-        assert_eq!(
-            session.pilot().cargo().collect::<Vec<_>>(),
-            [(Good::Commodity(0), 2), (Good::Commodity(2), 9)],
-            "by the engine every ton kept"
-        );
-        assert_eq!(mission_cargo(&session), (3, true));
-        let session =
-            loaded(Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible));
-        assert_eq!(
-            session.pilot().cargo().collect::<Vec<_>>(),
-            [(Good::Commodity(0), 2)],
-            "2 tons of the 5 left by the mission cargo"
-        );
-        assert_eq!(mission_cargo(&session), (3, true));
-        assert_eq!(session.pilot().total_cargo(), 5);
-        let mut session = self::session(&catalog).with_rules(
-            Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible),
-        );
-        session.pilot.cargo = std::iter::once((Good::Commodity(0), 4)).collect();
+        for op in ["C130", "E130", "H130"] {
+            let mut session = session(&catalog);
+            session.pilot.cargo = twelve_tons();
+            let mut inside = Vec::new();
+            session.run_ops(
+                &SetExpr::parse(op).expect("parses"),
+                &mut Scripted::default(),
+                &mut |session, _| inside.push(cargo(session)),
+            );
+            assert_eq!(inside, [twelve_tons()], "{op}: kept inside the expression");
+            assert_eq!(session.capacity(), 5);
+            assert_eq!(
+                cargo(&session),
+                [(Good::Commodity(0), 1), (Good::Commodity(2), 3)].into(),
+                "{op}: 5/12 of each, truncated, as the expression ends"
+            );
+            assert!(session.take_save_due(), "{op}");
+        }
+    }
+
+    #[test]
+    fn the_trim_counts_the_trader_escorts_and_the_mission_cargo_and_keeps_the_junk() {
+        let catalog = changing();
+        let mut session = session(&catalog);
+        session.pilot.escorts.push(Escort {
+            ship: ShipId(131),
+            reserves: Reserves::default(),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        });
+        session.pilot.cargo = [
+            (Good::Commodity(0), 20),
+            (Good::Commodity(2), 9),
+            (Good::Junk(crate::catalog::JunkId(150)), 4),
+        ]
+        .into_iter()
+        .collect();
         session
             .pilot
             .missions
-            .put(0, crate::testkit::carrying(140, 7));
+            .put(0, crate::testkit::carrying(140, 3));
         run(&mut session, "C130");
-        assert_eq!(session.pilot().cargo().count(), 0, "no room left");
-        assert_eq!(mission_cargo(&session), (7, true), "kept past the hold");
+        assert_eq!(session.capacity(), 25, "5 and the escort's 20");
+        assert_eq!(
+            cargo(&session),
+            [
+                (Good::Commodity(0), 13),
+                (Good::Commodity(2), 6),
+                (Good::Junk(crate::catalog::JunkId(150)), 4)
+            ]
+            .into(),
+            "25/36 of each commodity"
+        );
+        let held = session.pilot.missions.get(0).expect("still held");
+        assert_eq!((held.cargo_tons, held.aboard), (3, true));
+    }
+
+    #[test]
+    fn by_the_other_reading_the_cargo_past_the_hold_waits_for_a_reset_outside_a_set_expression() {
+        let catalog = changing();
+        for op in ["C130", "E130", "H130"] {
+            let mut session = session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible),
+            );
+            session.pilot.cargo = twelve_tons();
+            run(&mut session, op);
+            assert_eq!(session.capacity(), 5, "{op}");
+            assert_eq!(cargo(&session), twelve_tons(), "{op}: every ton kept");
+            run(&mut session, "b1");
+            assert_eq!(
+                cargo(&session),
+                twelve_tons(),
+                "{op}: no set expression trims"
+            );
+            crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+            assert_eq!(
+                cargo(&session),
+                [(Good::Commodity(0), 1), (Good::Commodity(2), 3)].into(),
+                "{op}: the arrival's reset trims (@0x6c51f)"
+            );
+        }
     }
 
     // The armour bump.

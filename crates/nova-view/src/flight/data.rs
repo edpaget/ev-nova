@@ -132,6 +132,9 @@ pub const FIRST_BOOM_SPIN: i16 = 400;
 /// The first `spïn` of the cargo boxes' graphics, the box masters
 /// `_InitSprites` loads (500-504).
 pub const FIRST_BOX_SPIN: i16 = 500;
+/// The mouse cursor's `spïn`, which `_InitSprites` loads with
+/// `_GetSpriteInfo(0x28a)` (@0x2147c-0x215eb).
+pub const CURSOR_SPIN: i16 = 650;
 /// The first `snd ` of the explosions' sounds (`_LoadSounds`: 300-363).
 pub const FIRST_BOOM_SOUND: i16 = 300;
 /// The first target picture, `PICT` 3000 for `shïp` 128
@@ -206,6 +209,10 @@ impl CombatLooks for GameData {
     fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
         let graphic = i16::try_from(graphic).unwrap_or(i16::MAX);
         effect_sheet(self, FIRST_BOX_SPIN.saturating_add(graphic))
+    }
+
+    fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+        effect_sheet(self, CURSOR_SPIN)
     }
 }
 
@@ -821,6 +828,19 @@ mod tests {
         assert_eq!(
             data.weapon_look(WeaponId(130)),
             Err("no wëap 130".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_cursors_sheet_is_spin_650() {
+        let data = named_store(&[
+            (Spin::TYPE, 650, None, spin(651)),
+            (RLED, 651, None, sheet(8)),
+        ]);
+        assert_eq!(data.cursor_sheet(), Ok(sheet_of(651, 8)));
+        assert_eq!(
+            named_store(&[]).cursor_sheet(),
+            Err("no spïn 650".to_owned())
         );
     }
 

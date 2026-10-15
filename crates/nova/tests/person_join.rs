@@ -775,6 +775,29 @@ fn by_the_engines_default_merchant_offers_its_mission_in_place_of_the_comm_dialo
 }
 
 #[test]
+fn p_on_merchants_offer_opens_the_player_info_over_it() {
+    let store = MemoryPilots::new();
+    let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::Offer);
+    game.tap(Key::Char('p'));
+    assert_eq!(game.showing(), Showing::PlayerInfo, "over the offer");
+    let open = game.app.screen().flight_player_info().expect("open");
+    assert_eq!(
+        open.problem(),
+        Some("no DLOG 1017"),
+        "the interface file has no player info dialog: it says why"
+    );
+    assert_eq!(game.offered(), Some(128), "the offer stays");
+    game.tap(Key::Escape);
+    assert_eq!(game.showing(), Showing::Offer, "back to the offer");
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), [128]);
+}
+
+#[test]
 fn n_refuses_merchants_offer_and_flight_resumes() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");

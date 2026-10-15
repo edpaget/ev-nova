@@ -110,13 +110,15 @@
 //! day), as the rulebook's [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay)
 //! chooses ([`Session::with_rules`](crate::Session::with_rules)).
 //!
+//! A freighter that defects first destroys its share of the fleet's
+//! cargo, its own holds still among the fleet's, and the session resets
+//! (`_DestroyPartialFleetCargo` @0x40240, see the session's `precalced`
+//! module); only then does it leave, so the cargo can stay past the holds
+//! left until the next reset.
+//!
 //! # Not modelled
 //!
-//! A freighter that defects would destroy its share of the fleet's cargo
-//! (`_DestroyPartialFleetCargo` @0x40240): its holds now count in the
-//! fleet's cargo space ([`fleet_holds`](crate::market::fleet_holds)), but
-//! the share destroyed waits for rdm task `hire-escorts-follow-up`;
-//! mission escorts, never paid, wait for missions; and the extra days the
+//! Mission escorts, never paid, wait for missions; and the extra days the
 //! original passes for outfitting and buying a ship are not passed.
 //!
 //! # Why the session keeps these ports

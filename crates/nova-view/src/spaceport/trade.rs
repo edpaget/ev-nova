@@ -66,6 +66,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::player_info::is_player_info_press;
 use crate::ui::quantity::QuantityDialog;
 
 /// The "Trade" dialog's `DLOG` (and `DITL`) ID.
@@ -167,6 +168,8 @@ pub struct TradeScreen {
     quantity: QuantityAsk<(usize, Direction)>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
+    player_info: bool,
     /// The order asked for, until it is taken.
     order: Option<Order>,
     closed: bool,
@@ -210,6 +213,7 @@ impl TradeScreen {
             top: 0,
             quantity: QuantityAsk::new(quantity.ok(), style),
             offering: None,
+            player_info: false,
             order: None,
             closed: false,
             style,
@@ -229,6 +233,17 @@ impl TradeScreen {
             offering: Some(VenueOffers::asking(template)),
             ..self
         }
+    }
+
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// since this was last asked, in the trade center or its offer
+    /// (`_TradeFilter` @0x4e109), not in its quantity dialog.
+    pub fn take_player_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_player_info_request);
+        std::mem::take(&mut self.player_info) || offer
     }
 
     /// Whether the trade center has asked for an offer since this was last
@@ -456,6 +471,10 @@ impl Screen for TradeScreen {
             }
             return ScreenAction::None;
         };
+        if is_player_info_press(input) {
+            self.player_info = true;
+            return ScreenAction::None;
+        }
         match *input {
             Input::Key {
                 key: MAX_LOT_KEY, ..

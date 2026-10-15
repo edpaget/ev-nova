@@ -8,8 +8,12 @@
 //! [`GrantEffect`](crate::outfit_effects::GrantEffect) applies: a map
 //! explores the systems [`map_reveals`] gives from the pilot's system,
 //! along the session's hyperlinks and as
-//! [`OutfitRules::map_explore`] says, read when the grant runs, raising
-//! [`StoryEvent::Explored`] for each, in order; a paint
+//! [`OutfitRules::map_explore`] says, read when the grant runs, each
+//! with its place's head by the engine reading of
+//! [`RuleKey::ExploredByPlace`](crate::RuleKey::ExploredByPlace)
+//! (`_RecursiveAutoExplore` @0xd9b6-0xda10; see the `explored` module),
+//! raising [`StoryEvent::Explored`] for each system reached, in order,
+//! and none for a head; a paint
 //! paints the ship; a clean-record outfit cleans the legal records; and
 //! anything else is added, one more owned. An ID in range with no record
 //! is added as a plain item, as the original bumps that slot's count.
@@ -61,7 +65,8 @@
 //!   pays nothing; by the other reading of
 //!   [`RuleKey::RemoveRefund`](crate::RuleKey::RemoveRefund) it pays what
 //!   selling the outfit would.
-//! - `Xxxxx` (@0x15c71) explores the system. The original
+//! - `Xxxxx` (@0x15c71) explores the system, and never its place's head
+//!   (@0x15c71-0x15ca1). The original
 //!   writes the explored level of any slot 128 to 2175, a system or not;
 //!   here a system not on the star map is not explored, and the explored
 //!   systems are one set, where the original keeps `X`'s level 1 apart
@@ -200,7 +205,9 @@ impl Session {
                 self.outfit_rules().map_explore,
             );
             for system in reached {
-                self.pilot.explore(system);
+                // With its place's head, by the engine
+                // (`_RecursiveAutoExplore` @0xd9b6-0xda10).
+                self.explore_place(system);
                 self.raise(StoryEvent::Explored { system });
             }
         }
@@ -755,6 +762,85 @@ mod tests {
         });
         session.grant_outfit(JUMPS_2);
         assert_eq!(explored(&session), ids(&[130, 132, 133]), "131 hidden");
+    }
+
+    #[test]
+    fn the_inhabited_independent_map_skips_a_hidden_system() {
+        // @0x44de3 tests the visible flag.
+        let catalog = mapped();
+        let mut session = session(&catalog);
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_visible(SystemId(134), Some(false));
+        });
+        session.grant_outfit(INDEPENDENTS);
+        assert_eq!(explored(&session), ids(&[130]), "134 hidden");
+    }
+
+    #[test]
+    fn a_government_class_map_skips_a_hidden_system() {
+        // @0x44e45 tests the visible flag.
+        let catalog = mapped();
+        let mut session = session(&catalog);
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_visible(SystemId(135), Some(false));
+        });
+        session.grant_outfit(CLASS_3);
+        assert_eq!(explored(&session), ids(&[130]), "135 hidden");
+    }
+
+    /// [`mapped`] with 129 at 131's place and 128 at 135's, each the head
+    /// of its place, both hidden, sharing exploration as `source` says.
+    fn shadowed(source: RuleSource) -> (FakePilotCatalog, Session) {
+        let mut catalog = mapped();
+        catalog.star_map.push(star(129, (1.0, 0.0), &[]));
+        catalog.star_map.push(star(128, (6.0, 0.0), &[]));
+        let mut session = session(&catalog)
+            .with_rules(Rulebook::default().with_override(RuleKey::ExploredByPlace, source));
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_visible(SystemId(129), Some(false));
+            galaxy.set_visible(SystemId(128), Some(false));
+        });
+        (catalog, session)
+    }
+
+    #[test]
+    fn a_map_grant_explores_each_reached_systems_head_and_raises_explored_for_the_reached_only() {
+        for source in RuleSource::ALL {
+            let (_, mut session) = shadowed(source);
+            session.drop_raised();
+            session.grant_outfit(JUMPS_2);
+            let heads: &[i16] = match source {
+                RuleSource::Engine => &[129],
+                RuleSource::Bible => &[],
+            };
+            let mut expected = ids(&[130, 131, 132]);
+            expected.extend(heads);
+            assert_eq!(explored(&session), expected, "{source:?}");
+            assert_eq!(
+                session.story_raised(),
+                [130, 131, 132].map(|system| StoryEvent::Explored {
+                    system: SystemId(system)
+                }),
+                "{source:?}"
+            );
+            session.grant_outfit(CLASS_3);
+            assert_eq!(
+                session.pilot().has_explored(SystemId(128)),
+                source == RuleSource::Engine,
+                "{source:?}: a government-class map"
+            );
+        }
+    }
+
+    #[test]
+    fn x_explores_a_member_without_its_head_under_both_readings() {
+        // `_EvalSetExp` @0x15c71-0x15ca1 raises only the system.
+        for source in RuleSource::ALL {
+            let (_, mut session) = shadowed(source);
+            assert!(run(&mut session, "X131"));
+            assert!(session.pilot().has_explored(SystemId(131)));
+            assert!(!session.pilot().has_explored(SystemId(129)), "{source:?}");
+        }
     }
 
     #[test]

@@ -20,14 +20,14 @@
 //! @0x7ef0d-0x7ef7b); nothing moves in between, so once is enough.
 //!
 //! The jump-timing check after the draw (@0x7e562-0x7e633) holds every
-//! scan back once the player's warp has begun accelerating: the session
-//! takes the scans only in `Session::tick_combat`, which returns at once
-//! while the player jumps, and through the pre-jump braking the scan
-//! runs, as in the original. The original's warp still scans during its
-//! lead-in, while t·w/(d·0.01) − 35/w ≤ 0 (t the ticks since the warp
-//! began, w the ship class's warp factor, d the warp sound's duration);
-//! the session freezes through the warp, so that window is
-//! rdm:phase/cargo-and-scanning/phase-7-scan-through-warp-lead-in.
+//! scan back once the player's warp is past its lead-in: while
+//! t·w/(d·0.01) − 35/w ≤ 0 (t the ticks since the warp stage began, w
+//! the ship class's warp factor, d the warp sound's duration) the scan
+//! runs, and so it does through the pre-jump braking, and always for a
+//! disabled player (see the [`warp`](crate::warp) module, which works
+//! it). The session takes the scans in `Session::tick_combat` through
+//! the lead-in, the traffic flying on to queue them, and holds them in
+//! `Session::scanned_by` once it is past.
 //!
 //! # Contraband
 //!

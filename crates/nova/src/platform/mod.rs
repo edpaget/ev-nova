@@ -37,6 +37,7 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
         WinitEvent::CursorMoved { position, .. } => WindowEvent::PointerMoved {
             px: (position.x, position.y),
         },
+        WinitEvent::CursorLeft { .. } => WindowEvent::PointerLeft,
         WinitEvent::MouseInput { state, button, .. } => WindowEvent::PointerButton {
             button: map_button(*button),
             pressed: state.is_pressed(),
@@ -113,9 +114,13 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Hyper Select, by position: `\` on a US-layout keyboard; the
         // original's default.
         PhysicalKey::Code(KeyCode::Backslash) => Key::Char('\\'),
-        // The Preferences dialog's key, by position: P on a US-layout
+        // The player info key in flight and the spaceport, and the
+        // Preferences dialog's elsewhere, by position: P on a US-layout
         // keyboard.
         PhysicalKey::Code(KeyCode::KeyP) => Key::Char('p'),
+        // Command+comma opens the Preferences, by position: the comma on a
+        // US-layout keyboard.
+        PhysicalKey::Code(KeyCode::Comma) => Key::Char(','),
         // The Trade Center's buy key, by position: B on a US-layout
         // keyboard. Its sell key is S, above.
         PhysicalKey::Code(KeyCode::KeyB) => Key::Char('b'),
@@ -126,7 +131,7 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // possible, and flight's weapon select go back, while held.
         PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
         // Either Shift, which turns flight's target select key back while
-        // held.
+        // held, and the player info's Tab to the previous tab.
         PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::Shift,
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
@@ -256,10 +261,12 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 30] = [
+    const GAME_CHARACTER_KEYS: [Key; 32] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
+        nova_view::ui::player_info::PLAYER_INFO_KEY,
+        crate::app::screen::PREFERENCES_KEY,
         nova_view::flight::view::LAND_KEY,
         nova_view::flight::view::MAP_KEY,
         nova_view::flight::view::JUMP_KEY,
@@ -315,6 +322,7 @@ mod tests {
             '-' => KeyCode::Minus,
             '`' => KeyCode::Backquote,
             '\\' => KeyCode::Backslash,
+            ',' => KeyCode::Comma,
             other => panic!("no physical key listed for {other:?}"),
         }
     }
@@ -332,7 +340,7 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 14] = [
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 16] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
@@ -362,6 +370,15 @@ mod tests {
         // Flight's jettison key's modifier.
         (Key::Command, KeyCode::SuperLeft),
         (Key::Command, KeyCode::SuperRight),
+        // The player info's Tab goes back with Shift held.
+        (
+            nova_view::ui::player_info::BACKWARDS_KEY,
+            KeyCode::ShiftLeft,
+        ),
+        (
+            nova_view::ui::player_info::BACKWARDS_KEY,
+            KeyCode::ShiftRight,
+        ),
     ];
 
     #[test]
@@ -470,6 +487,10 @@ mod tests {
             translate(&moved, &Window),
             Some(WindowEvent::PointerMoved { px: (12.5, 40.0) })
         );
+        let left = WinitEvent::CursorLeft {
+            device_id: DeviceId::dummy(),
+        };
+        assert_eq!(translate(&left, &Window), Some(WindowEvent::PointerLeft));
         let pressed = WinitEvent::MouseInput {
             device_id: DeviceId::dummy(),
             state: ElementState::Pressed,

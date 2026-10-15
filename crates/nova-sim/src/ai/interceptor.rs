@@ -8,7 +8,9 @@
 //!   [`RuleKey::PersonCoward`](crate::RuleKey::PersonCoward)), and its
 //!   odds retreat is gated on its government's `Flags` 0x0100
 //!   rather than 0x0010 (@0x8d180, likely a slip in the original, kept as
-//!   the default).
+//!   the default). Its word reaches a blessed player as
+//!   [`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks)
+//!   says (`_InterceptorAI` @0x8cb5c reads no blessing).
 //! - Idle with nothing to fight, it inspects (@0x8ce34): it flies up to a
 //!   ship picked at random among the others in the system (the player
 //!   first, then the NPCs in order), but not the one it last inspected
@@ -63,6 +65,9 @@ pub struct Interceptor {
     pub piracy_police: RuleSource,
     /// Which persons retreat at their `Coward`.
     pub person_coward: RuleSource,
+    /// Whether its government's 0x0004 word reaches a blessed player
+    /// ([`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks)).
+    pub always_attacks: RuleSource,
     /// The rulebook's entries its weapon pick follows.
     pub fire: FireRules,
 }
@@ -73,7 +78,7 @@ impl Behaviour for Interceptor {
             person_coward: self.person_coward,
             ..INTERCEPTOR_RETREAT
         };
-        if let Some(goal) = hunt(npc, around, retreat) {
+        if let Some(goal) = hunt(npc, around, retreat, self.always_attacks) {
             return goal;
         }
         if let Goal::Inspect(ship) = npc.goal
@@ -343,6 +348,31 @@ mod tests {
                 .react(&npcs[0], &hit, &around)
                 .provoked,
             3.0
+        );
+    }
+
+    #[test]
+    fn an_interceptor_holds_back_a_0x0004_word_for_a_blessed_player_as_its_rule_says() {
+        let govts = govts(0, crate::govt::ALWAYS_ATTACKS_PLAYER);
+        let sites = sites();
+        let npcs = [police()];
+        let mut seen = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        if let Some(player) = seen.player.as_mut() {
+            player.blessing = crate::ai::fixture::blessing_of(POLICE);
+        }
+        let decide = |always_attacks| {
+            let interceptor = Interceptor {
+                always_attacks,
+                ..Interceptor::default()
+            };
+            interceptor.decide(&npcs[0], &seen, &mut Draws::of(&[0]))
+        };
+        assert_eq!(Interceptor::default().always_attacks, RuleSource::Engine);
+        assert_eq!(decide(RuleSource::Engine), Goal::Attack(P));
+        assert_eq!(
+            decide(RuleSource::Bible),
+            Goal::Inspect(P),
+            "no word: it goes about inspecting"
         );
     }
 }

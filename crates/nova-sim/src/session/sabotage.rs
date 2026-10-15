@@ -1,9 +1,9 @@
 //! The player's sabotage outfits (see [`sabotage`](crate::sabotage)).
 //!
-//! **The refresh.** The session's sabotage clock is refreshed with the
-//! blessing table (`Session::refresh_blessing`, the stand-in for
-//! `_ResetPlayerPrecalcedValues`; see the `ranks` module's **Blessing**),
-//! so every refresh point re-derives the cached flag.
+//! **The refresh.** The session's sabotage clock is refreshed by
+//! `Session::reset_precalced`, the stand-in for
+//! `_ResetPlayerPrecalcedValues` (see the `precalced` module for every
+//! site), so every reset re-derives the cached flag.
 //!
 //! **The tick** runs at the head of [`Session::tick_combat`], after its
 //! return while landed or jumping and before the eject check, skipped
@@ -42,13 +42,15 @@
 //! counted disabled before it as its armour then says (`_IsDisabled`
 //! @0x3a9ad), so a second bomb sees the first's damage. The damage is at
 //! least the armour capacity, so the bomb never kills: an intact player
-//! is left at what a self-repair leaves, a disabled one at 1. Then the
-//! blessing table is refreshed (@0x69a05), the sabotage clock with it:
+//! is left at what a self-repair leaves, a disabled one at 1. Then
+//! `_ResetPlayerPrecalcedValues` runs (@0x69a05), the sabotage clock's
+//! refresh with it:
 //! no bomb is left, so the flag clears and the next tick zeroes the
 //! count, and the bombs go off once. No ship stats are rebuilt, as
 //! `_ResetPlayerPrecalcedValues` rebuilds none: the stats and armament
 //! follow the outfits at the next refit. No save is due, as the original
-//! saves nothing here.
+//! saves nothing here, unless that reset's trim cuts the cargo (see the
+//! `precalced` module).
 //!
 //! *Ordering against the original.* The block runs after
 //! [`Session::tick`]'s steering in the same step, where the original runs
@@ -127,7 +129,7 @@ impl Session {
                 was_disabled,
             );
         }
-        self.refresh_blessing();
+        self.reset_precalced();
     }
 
     /// A kill outfit goes off (`_HandlePlayer` @0x69384-0x696a2; see the
@@ -198,7 +200,7 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         assert_eq!(session.sabotage_death_descs(), Vec::<i16>::new());
         session.pilot.outfits.insert(OutfitId(KILL), 1);
-        session.refresh_blessing();
+        session.reset_precalced();
         assert_eq!(session.sabotage_death_descs(), [4100]);
     }
 
@@ -212,7 +214,7 @@ mod tests {
             Vec::<i16>::new(),
             "gained since the last refresh (@0x6873e)"
         );
-        session.refresh_blessing();
+        session.reset_precalced();
         session.pilot.outfits.remove(&OutfitId(KILL));
         session.pilot.outfits.insert(OutfitId(KILL), 0);
         assert_eq!(session.sabotage_death_descs(), Vec::<i16>::new());
@@ -239,7 +241,7 @@ mod tests {
         fight(&mut session, &[]);
         assert_eq!(session.sabotage.flag(), Sabotage::None);
         assert_eq!(session.sabotage.counter(), 0.0);
-        session.refresh_blessing();
+        session.reset_precalced();
         fight(&mut session, &[5]);
         assert_eq!(session.sabotage.flag(), Sabotage::Bomb);
         assert_eq!(session.sabotage.counter(), 6.0);
@@ -259,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn the_idle_settling_after_a_take_off_reseeds_again() {
+    fn the_idle_settling_after_a_take_off_runs_no_reset_of_its_own() {
         let catalog = sabotaged();
         let mut session = flown(&catalog, &[(KILL, 1)]);
         land_now(&mut session).expect("lands");
@@ -268,13 +270,13 @@ mod tests {
             .expect("takes off");
         fight(&mut session, &[10]);
         fight(&mut session, &[]);
-        assert_eq!(session.sabotage.counter(), 12.0);
+        assert_eq!(session.sabotage.counter(), 12.0, "the take-off's reset");
         let _ = session.settle_script(&catalog, &mut Draws::of(&[]));
-        assert_eq!(session.sabotage.counter(), 0.0, "refreshed again");
-        fight(&mut session, &[20]);
-        assert_eq!(session.sabotage.counter(), 21.0);
-        let _ = session.settle_script(&catalog, &mut Draws::of(&[]));
-        assert_eq!(session.sabotage.counter(), 21.0, "only the first settling");
+        assert_eq!(
+            session.sabotage.counter(),
+            12.0,
+            "no script ran, so no reset (see the `precalced` module)"
+        );
     }
 
     #[test]

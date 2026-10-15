@@ -42,7 +42,10 @@
 //! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
 //! again once rearmed. Nothing is asked while the hire screen, the news
 //! or an offer is open. [`MISSION_INFO_KEY`] asks for the mission info screen
-//! ([`BarScreen::take_info_request`]).
+//! ([`BarScreen::take_info_request`]), and [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) for the
+//! player info screen, from the bar or its hire screen
+//! ([`BarScreen::take_player_info_request`], `_BarFilter` @0x47aaa,
+//! `_ShipyardFilter` @0x6091a), not from the news.
 //!
 //! Leave, Return, Enter and Escape leave the bar. Without its dialog, the
 //! bar says why, and Return or Escape still leaves.
@@ -72,6 +75,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::player_info::is_player_info_press;
 
 /// The bar dialog's `DLOG` (and `DITL`) ID.
 pub const BAR_DIALOG: i16 = 1013;
@@ -169,11 +173,14 @@ struct Laid {
 
 /// What the bar has asked whoever holds the session for.
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(clippy::struct_excessive_bools)] // each is one request, taken on its own
 struct Asks {
     /// The ships for hire: Hire Escort was pressed.
     hire: bool,
     /// The mission info screen: [`MISSION_INFO_KEY`] was pressed.
     info: bool,
+    /// The player info screen: [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) was pressed.
+    player_info: bool,
     /// The visit's news: Holovid was pressed.
     news: bool,
 }
@@ -189,6 +196,8 @@ pub struct BarScreen {
     room: bool,
     /// The hire screen, while it is open.
     hire: Option<HireScreen>,
+    /// Whether the hire screen has closed since this was last taken.
+    hire_closed: bool,
     /// The news dialog's template, or why there is none.
     news_template: Result<DialogTemplate, String>,
     /// The news, while it is open.
@@ -259,6 +268,7 @@ impl BarScreen {
             style,
             room,
             hire: None,
+            hire_closed: false,
             news_template: Err(format!("the news dialog (DLOG {NEWS_DIALOG}) is not given")),
             news: None,
             offering: None,
@@ -399,6 +409,16 @@ impl BarScreen {
         std::mem::take(&mut self.asks.info)
     }
 
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// since this was last asked, in the bar, its hire screen or its offer.
+    pub fn take_player_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_player_info_request);
+        std::mem::take(&mut self.asks.player_info) || offer
+    }
+
     /// Opens the hire screen over the bar on `list`; with nothing for
     /// hire, the bar says so instead.
     pub fn open_hire(&mut self, list: HireList) {
@@ -408,6 +428,9 @@ impl BarScreen {
         if list.rows.is_empty() {
             laid.dialog.set_text(TEXT_ITEM, NONE_FOR_HIRE);
             laid.said = Some(NONE_FOR_HIRE);
+            // The hire dialog returns at once (`_DoShipyardDialog`
+            // @0x5e8df), so the bar's reset after it runs.
+            self.hire_closed = true;
             return;
         }
         let layout = self
@@ -429,10 +452,19 @@ impl BarScreen {
         self.hire.as_mut()?.take_order()
     }
 
+    /// Whether the hire screen has closed since this was last asked,
+    /// once each time: after a hire ([`BarScreen::set_hire`]), on Cancel,
+    /// or when the bar said nothing is for hire in its place, each where
+    /// the original's `_DoBarDialog` resets after the hire dialog returns
+    /// (@0x49235).
+    pub fn take_hire_closed(&mut self) -> bool {
+        std::mem::take(&mut self.hire_closed)
+    }
+
     /// After a hire: the hire screen closes back to the bar, whose Hire
     /// Escort is greyed unless `list`'s fleet still has room.
     pub fn set_hire(&mut self, list: &HireList) {
-        self.hire = None;
+        self.hire_closed |= self.hire.take().is_some();
         self.room = list.room;
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_greyed(HIRE_ITEM, !self.room);
@@ -482,11 +514,16 @@ impl Screen for BarScreen {
         {
             return ScreenAction::None;
         }
+        if is_player_info_press(input) && (self.hire.is_some() || self.laid.is_ok()) {
+            self.asks.player_info = true;
+            return ScreenAction::None;
+        }
         if let Some(hire) = &mut self.hire {
             hire.input(input);
             self.sounds.extend(hire.take_sounds());
             if hire.closed() {
                 self.hire = None;
+                self.hire_closed = true;
             }
             return ScreenAction::None;
         }

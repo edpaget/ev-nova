@@ -14,16 +14,22 @@
 //! Rank 147, "Have Access to Hypergate System" (govt 183, `Flags`
 //! 0x0208), blesses landing at the 19 hypergates (`spöb` 1400-1418, govt
 //! 183, `MinStatus` 32767), which no record clears.
+//!
+//! Rank 128 (govt 128, `Flags` 0x0b08) blesses the Federation's allies
+//! with peace, Bureau 164 (`Flags` 0x4214, class 0) among them, whose word
+//! still attacks the player by the engine (`blessing_always_attacks`).
 
 mod common;
 
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_sim::news;
+use nova_sim::player_info::Words;
 use nova_sim::rank::{self, Blessed, Held, LOST_TO_CRIME, LOST_TO_VIOLENCE};
 use nova_sim::{
-    Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleSource, Session, SetExpr,
-    SetOp, Standing, StellarId, cleared,
+    CommCatalog, Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleSource, Session,
+    SetExpr, SetOp, Standing, StellarId, cleared,
 };
 
 #[test]
@@ -68,6 +74,40 @@ fn a_stock_rank_granted_by_its_mission_shows_in_the_pilot_info_and_pays() {
         ranked.pilot().cash(),
         control.pilot().cash() + 200,
         "a day's salary"
+    );
+}
+
+#[test]
+fn a_stock_rank_granted_by_a_set_expression_shows_on_the_player_infos_honors() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let mut session = Session::start(&*data)
+        .expect("the stock first chär starts")
+        .with_strings(data.clone());
+    let info = session.player_info(&*data);
+    assert_eq!(info.honors, None, "a new pilot has none");
+    assert_eq!(
+        info.legal_status, "No Record",
+        "no record: STR# 134 #2 (_legalStatusStrings[1])"
+    );
+    session.run_set(&SetExpr::parse("K128").expect("parses"), &mut NeverFires);
+    assert_eq!(
+        session.player_info(&*data).honors.as_deref(),
+        Some("Your ranks and honors:\r\rFederation Naval Rank of Commander\r")
+    );
+}
+
+#[test]
+fn the_player_infos_stock_words_are_str_2002s() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    assert_eq!(
+        Words::from_list(&data.string_list(news::MISC_STRINGS)),
+        Words::STOCK
     );
 }
 
@@ -187,4 +227,29 @@ fn the_hypergate_access_rank_clears_every_hypergate() {
     for which in [Blessed::Peace, Blessed::Landing] {
         assert!(commander.blesses(Some(GovtId(128)), which), "{which:?}");
     }
+}
+
+#[test]
+fn the_federation_commander_blesses_the_bureau_whose_word_still_attacks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let records = PilotCatalog::ranks(&data);
+    let govts = Governments::read(&data);
+    let blessing = |reach| {
+        rank::blessing(
+            &records,
+            &std::collections::BTreeSet::from([RankId(128)]),
+            &govts,
+            reach,
+        )
+    };
+    let bureau = Some(GovtId(164));
+    assert!(blessing(RuleSource::Engine).blesses(bureau, Blessed::Peace));
+    assert!(govts.flag(bureau, nova_sim::govt::ALWAYS_ATTACKS_PLAYER));
+    assert!(
+        !blessing(RuleSource::Bible).blesses(bureau, Blessed::Peace),
+        "the rank's own government only"
+    );
 }

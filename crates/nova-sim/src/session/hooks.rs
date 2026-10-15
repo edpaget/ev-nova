@@ -8,8 +8,10 @@
 //! drawn on the caller's [`Chance`], the other operators applied by
 //! `Session::apply_op` (`G`, `D`, `X`, `C`, `E`, `H`, `T`, `M`, `N`, `Q`
 //! and `P`; any other is skipped and told once a session as a
-//! [`ScriptNote`](crate::ScriptNote)). A blank script, or one that did
-//! not parse, does nothing at all: no save is due and nothing is told.
+//! [`ScriptNote`](crate::ScriptNote)). A blank script does nothing at
+//! all: no save is due and nothing is told. One that did not parse runs
+//! no operator, but resets as it ends, as any script of text that is not
+//! empty does (see the `precalced` module).
 //!
 //! **Where each runs**, in the original's order:
 //!
@@ -93,12 +95,11 @@ impl Session {
     }
 
     /// Runs `script` on the session (see the module docs), drawing
-    /// `R(...)` on `chance`: nothing at all when it is blank or did not
-    /// parse.
+    /// `R(...)` on `chance`: nothing at all when its text was empty, and
+    /// no operator but the reset its end runs when it did not parse
+    /// ([`Script::runs`]).
     pub fn run_script(&mut self, script: &Script, chance: &mut (impl Chance + ?Sized)) {
-        if let Some(expr) = script.tree().filter(|expr| !expr.ops.is_empty()) {
-            self.run_set(expr, chance);
-        }
+        self.run_set(script.runs(), chance);
     }
 
     /// Runs ship class `ship`'s `hook`, drawing on `chance`: nothing when
@@ -123,7 +124,13 @@ impl Session {
         self.ship_hook(captured, ShipHook::Capture, chance);
     }
 
-    /// Begins a new pilot's game: destroys the stellars that start the
+    /// Begins a new pilot's game: by the engine's reading of
+    /// [`RuleKey::NebulaNewPilot`](crate::RuleKey::NebulaNewPilot),
+    /// withdraws the `Explored` events [`Session::fly`] raised, so the
+    /// start system's nebulae wait for the first exploration (see the
+    /// `nebulae` module); explores the start system's visible
+    /// neighbours, or by the engine their heads (see the `explored`
+    /// module), destroys the stellars that start the
     /// game destroyed (see the `stellars` module), then runs the first
     /// `chär`'s `OnStart` once, drawing on `chance` (see the module docs),
     /// and nothing when the `chär` cannot be read, then refreshes the
@@ -136,6 +143,13 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut dyn Chance,
     ) {
+        // `_DoNewPilot` explores its start system's nebulae while every
+        // one is inactive (@0x19118; see the `nebulae` module).
+        self.withdraw_new_pilot_explored();
+        // `_DoNewPilot` explores the start system's neighbours
+        // (@0x18f97-0x1902e) before its destroyed stellars (@0x192d6) and
+        // its `OnStart` (see the `explored` module).
+        self.explore_start_neighbours();
         self.destroy_from_the_start();
         if let Ok(start) = catalog.first_character() {
             if self.hook_rules().start_ship_purchase == RuleSource::Bible {
@@ -146,9 +160,9 @@ impl Session {
         // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
         // `_DoNewPilot`'s, before the `OnStart`, was the flight's.
         self.refresh_galaxy(catalog);
-        // Game entry's refresh of the blessing comes after `_DoNewPilot`'s
+        // Game entry's reset comes after `_DoNewPilot`'s
         // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
-        self.refresh_blessing();
+        self.reset_precalced();
         // `_DoNewPilot`'s rebuild point, after its `OnStart` (@0x1937f).
         self.rebuild_stellars();
     }
@@ -244,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_or_broken_script_does_nothing_at_all() {
+    fn a_blank_or_broken_script_runs_no_operator() {
         for script in [Script::default(), Script::parse("S300&")] {
             let (mut session, probe) = probed(Session::start(&catalog()).expect("starts"));
             session.run_script(&script, &mut Scripted::default());
@@ -936,7 +950,10 @@ mod tests {
                 Some(&1),
                 "before the swap"
             );
-            assert_eq!(snap.escorts, 0, "the old ship not yet an escort");
+            assert_eq!(
+                snap.escorts, 1,
+                "the old ship already an escort (@0x41188-0x4156f)"
+            );
         }
         assert_eq!(session.ship(), ShipId(129));
     }
@@ -1041,6 +1058,48 @@ mod tests {
         assert_eq!(probe.0.borrow()[0].outfits.get(&OutfitId(200)), Some(&1));
         assert!(session.control_bit(bit(5)));
         assert!(session.take_save_due());
+    }
+
+    /// Records the explored systems each time it sees an operator.
+    #[derive(Debug, Default)]
+    struct ExploredSeen(RefCell<Vec<Vec<i16>>>);
+
+    impl SetOpObserver for ExploredSeen {
+        fn saw(&self, _op: &SetOp, session: &Session) {
+            let explored = session.pilot().explored().map(|system| system.0);
+            self.0.borrow_mut().push(explored.collect());
+        }
+    }
+
+    #[test]
+    fn begin_explores_the_start_systems_visible_neighbours() {
+        // 130 lists 131, at 127's place, then 133, then 132, hidden; 127
+        // is hidden too. `X999` explores nothing: the observer sees it.
+        let mut catalog = starting_with("X999");
+        catalog.star_map[0].links = [131, 133, 132].map(crate::catalog::SystemId).to_vec();
+        catalog
+            .star_map
+            .push(crate::testkit::star(127, (600.0, 0.0), &[]));
+        for (hidden, test) in [(127, "b1"), (132, "b2")] {
+            catalog.visibility.push(crate::catalog::SystemVisibility {
+                id: crate::catalog::SystemId(hidden),
+                visibility: crate::control::Test::parse(test),
+            });
+        }
+        for source in RuleSource::ALL {
+            let seen = Rc::new(ExploredSeen::default());
+            let mut session = new_pilot(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::ExploredByPlace, source))
+                .with_set_op_observer(seen.clone());
+            session.begin(&catalog, &mut Scripted::default());
+            let explored: Vec<i16> = session.pilot().explored().map(|system| system.0).collect();
+            let (on_start, after): (&[i16], &[i16]) = match source {
+                RuleSource::Engine => (&[127, 130, 133], &[127, 130, 131, 133]),
+                RuleSource::Bible => (&[130, 131, 133], &[130, 131, 133]),
+            };
+            assert_eq!(*seen.0.borrow(), [on_start.to_vec()], "{source:?}: OnStart");
+            assert_eq!(explored, after, "{source:?}: after begin's rebuild");
+        }
     }
 
     #[test]

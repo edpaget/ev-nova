@@ -147,6 +147,9 @@
 //! What cargo is kept follows the rulebook's
 //! [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo) (`purchase_cargo`);
 //! the rest is left behind, unpaid. By the engine, `_DoShipyardDialog`
+//! first writes the new class's stats (`_SystemInfoToShipStats` @0x5ee99),
+//! whose tail into `_ResetPlayerPrecalcedValues` (@0xcae9) trims the
+//! commodities to the new fleet's holds as described below, and then
 //! calls `_DestroyPartialFleetCargo(0)` (@0x5ef9f, @0xcd32-0xcff6) once
 //! the new class, launched fighters dropped and the outfits above are in
 //! place. A is the new ship's cargo space (its `Holds` and the `ModType` 2
@@ -161,13 +164,15 @@
 //! wins), and each `jünk` loses trunc(held x f), so with no such escorts
 //! every `jünk` goes (@0xcf94-0xcfe4); the share never reads the mission
 //! cargo. Then `_DestroyPartialFleetCargo` jumps on to
-//! `_ResetPlayerPrecalcedValues` (@0xcff6), which trims (@0xc7d8-0xc82c):
+//! `_ResetPlayerPrecalcedValues` (@0xcff6), which trims again
+//! (@0xc7d8-0xc82c), as the first trim did:
 //! when the fleet's holds ([`fleet_holds`]) are below everything held as
 //! `_TotalCargo` (@0x4a0b) counts it for the player, every good and the
 //! mission cargo aboard (@0xc7ea), each commodity becomes trunc(held x
 //! holds / held in all), worked in single floats; `jünk` and the mission
 //! cargo are not cut, so the mission cargo makes the trim harder and
-//! stays aboard even past the holds. By the other reading, the phase's
+//! stays aboard even past the holds, and each trim cuts again while it
+//! does. By the other reading, the phase's
 //! first wording (the Bible and the forums are silent), the mission cargo
 //! aboard takes the new ship's own cargo space first and always stays,
 //! and the goods that fit in what it leaves are kept, in [`Good`] order
@@ -1400,8 +1405,19 @@ pub(crate) fn keep_cargo(
     source: RuleSource,
 ) -> BTreeMap<Good, u32> {
     let before = cargo.clone();
+    // Everything held is every good and the mission tons aboard, as
+    // `_TotalCargo` (@0x4a0b) counts them (@0xc7ea); the mission cargo is
+    // not cut, so it can stay past the holds.
+    let total = |cargo: &BTreeMap<Good, u32>| {
+        cargo.values().map(|&tons| i64::from(tons)).sum::<i64>() + i64::from(mission)
+    };
     match source {
         RuleSource::Engine => {
+            let holds = fleet_holds(capacity, escorts.iter().copied());
+            // The reset of the `_SystemInfoToShipStats` that writes the new
+            // class's stats (@0x5ee99, tail @0xcae9) trims first.
+            let held = total(cargo);
+            trim_commodities(cargo, holds, held);
             let share = new_ships_share(capacity, escort_tons(escorts.iter().copied()));
             for (good, tons) in cargo.iter_mut() {
                 // The share is in 0..=1, so the part is in 0..=held.
@@ -1411,12 +1427,10 @@ pub(crate) fn keep_cargo(
                     Good::Junk(_) => tons.saturating_sub(part),
                 };
             }
-            // Everything held is every good and the mission tons aboard, as
-            // `_TotalCargo` (@0x4a0b) counts them (@0xc7ea); the mission
-            // cargo is not cut, so it can stay past the holds.
-            let total: i64 =
-                cargo.values().map(|&tons| i64::from(tons)).sum::<i64>() + i64::from(mission);
-            trim_commodities(cargo, fleet_holds(capacity, escorts.iter().copied()), total);
+            // Then the share's own tail into the reset (@0xcff6) trims
+            // again.
+            let held = total(cargo);
+            trim_commodities(cargo, holds, held);
         }
         RuleSource::Bible => {
             let mut room = capacity.saturating_sub(mission);
@@ -3686,7 +3700,11 @@ mod tests {
         assert_eq!(bought.outfits, map(&[(140, 2), (150, 1)]));
         assert_eq!(bought.settlement.cash, 10_000 - 17_500 + 2500 + 4500);
         assert_eq!(bought.settlement.name, "Kestrel");
-        assert_eq!(bought.settlement.cargo, BTreeMap::from([(FOOD, 15)]));
+        assert_eq!(
+            bought.settlement.cargo,
+            BTreeMap::from([(FOOD, 13)]),
+            "20 x 15/22, then the opals gone"
+        );
         assert_eq!(bought.report.sold_back, map(&[(140, 3)]));
         apply(&mut pilot, bought);
         assert_eq!(pilot.ship(), before.ship(), "the class is not the sale's");
@@ -4080,8 +4098,9 @@ mod tests {
 
     #[test]
     fn by_the_engine_the_mission_cargo_aboard_takes_no_share_and_the_junk_is_not_trimmed() {
-        // A = 10, B = 20: f = 0.5, leaving 10 food and 2 opals in a fleet
-        // of 20 tons; then 10 x 20/22, the opals uncut.
+        // A fleet of 20 tons holding 34: first 20 x 20/34, the opals
+        // uncut; then A = 10, B = 20, f = 0.5, leaving 5 food and 2 opals,
+        // 17 tons with the mission cargo, so no second trim.
         assert_eq!(
             kept_beside(
                 &[(FOOD, 20), (OPALS, 4)],
@@ -4091,8 +4110,8 @@ mod tests {
                 RuleSource::Engine
             ),
             (
-                vec![(FOOD, 9), (OPALS, 2)],
-                BTreeMap::from([(FOOD, 11), (OPALS, 2)])
+                vec![(FOOD, 5), (OPALS, 2)],
+                BTreeMap::from([(FOOD, 15), (OPALS, 2)])
             )
         );
     }
@@ -4100,14 +4119,15 @@ mod tests {
     #[test]
     fn by_the_engine_mission_cargo_alone_past_the_holds_trims_the_commodities() {
         // 11 tons of mission cargo in 10 holds; everything held is
-        // 20 + 9 + 11 = 40, so 20 x 10/40 and 9 x 10/40. Leaving the other
-        // commodity out of the total would keep 20 x 10/31 = 6 food and
-        // 9 x 10/20 = 4 metal.
+        // 20 + 9 + 11 = 40, so first 20 x 10/40 and 9 x 10/40, 5 and 2;
+        // the share keeps both (f = 1); then 5 + 2 + 11 = 18 is still
+        // past the holds, so 5 x 10/18 and 2 x 10/18. Leaving the other
+        // commodity out of the total would keep more of each.
         assert_eq!(
             kept_beside(&[(FOOD, 20), (METAL, 9)], 10, 11, &[], RuleSource::Engine),
             (
-                vec![(FOOD, 5), (METAL, 2)],
-                BTreeMap::from([(FOOD, 15), (METAL, 7)])
+                vec![(FOOD, 2), (METAL, 1)],
+                BTreeMap::from([(FOOD, 18), (METAL, 8)])
             )
         );
     }
@@ -4156,16 +4176,18 @@ mod tests {
                 RuleSource::Engine
             ),
             (
-                vec![(FOOD, 15), (METAL, 5)],
-                BTreeMap::from([(FOOD, 15), (METAL, 5), (OPALS, 5)])
+                vec![(FOOD, 13), (METAL, 4)],
+                BTreeMap::from([(FOOD, 17), (METAL, 6), (OPALS, 5)])
             ),
-            "the jünk goes first, then 20 of 40"
+            "20 of 45 first (@0x5ee99), then the jünk goes"
         );
     }
 
     #[test]
     fn by_the_engine_trader_escorts_take_their_share_of_each_good() {
-        // A = 20, B = 50: f = 0.4.
+        // 52 tons in a fleet of 50: first 50/52 of each commodity, 38
+        // food and 6 metal; then A = 20, B = 50: f = 0.4, and the fleet has
+        // room.
         assert_eq!(
             kept(
                 &[(FOOD, 40), (METAL, 7), (OPALS, 5)],
@@ -4174,17 +4196,30 @@ mod tests {
                 RuleSource::Engine
             ),
             (
-                vec![(FOOD, 16), (METAL, 2), (OPALS, 3)],
-                BTreeMap::from([(FOOD, 24), (METAL, 5), (OPALS, 2)])
+                vec![(FOOD, 15), (METAL, 2), (OPALS, 3)],
+                BTreeMap::from([(FOOD, 25), (METAL, 5), (OPALS, 2)])
+            )
+        );
+        assert_eq!(
+            kept(
+                &[(FOOD, 40), (METAL, 7), (OPALS, 3)],
+                20,
+                &[trader(30)],
+                RuleSource::Engine
             ),
-            "the fleet has room, so no trim"
+            (
+                vec![(FOOD, 16), (METAL, 2), (OPALS, 2)],
+                BTreeMap::from([(FOOD, 24), (METAL, 5), (OPALS, 1)])
+            ),
+            "50 tons in 50: no trim, only the share"
         );
     }
 
     #[test]
     fn by_the_engine_a_fleet_over_its_holds_trims_the_commodities_and_not_the_junk() {
-        // A = 10, B = 20: f = 0.5, leaving 30 food and 5 opals in a fleet
-        // of 20 tons; then 30 x 20/35.
+        // 70 tons in a fleet of 20: first 60 x 20/70, 17 food, the opals
+        // uncut; then A = 10, B = 20: f = 0.5, leaving 8 food and 5 opals,
+        // within the holds.
         assert_eq!(
             kept(
                 &[(FOOD, 60), (OPALS, 10)],
@@ -4193,8 +4228,8 @@ mod tests {
                 RuleSource::Engine
             ),
             (
-                vec![(FOOD, 17), (OPALS, 5)],
-                BTreeMap::from([(FOOD, 43), (OPALS, 5)])
+                vec![(FOOD, 8), (OPALS, 5)],
+                BTreeMap::from([(FOOD, 52), (OPALS, 5)])
             )
         );
     }

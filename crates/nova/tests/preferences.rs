@@ -119,7 +119,8 @@ const LANDING_SOUND: i16 = 10_032;
 const LANDING_BEEP: i16 = 151;
 
 /// The pilot flies ship 128 in Alpha (128), over Alpha Prime (128) at
-/// (0, 0), which can be landed on; with Nova's button pictures.
+/// (0, 0), which can be landed on; with Nova's button pictures and the
+/// hover cursor (`spïn` 650).
 fn game_data() -> Rc<GameData> {
     let mut character = vec![0; Character::SIZE.expect("fixed")];
     put_i16s(&mut character, 0x04, &[128, 128, -1, -1, -1]);
@@ -138,6 +139,8 @@ fn game_data() -> Rc<GameData> {
     put_i16s(&mut stellar, 0x18, &[-1, LANDING_SOUND]);
     let mut spin = vec![0; Spin::SIZE.expect("fixed")];
     put_i16s(&mut spin, 0x00, &[1000, -1, 0, 0, 1, 1]);
+    let mut cursor = vec![0; Spin::SIZE.expect("fixed")];
+    put_i16s(&mut cursor, 0x00, &[651, -1, 1, 1, 8, 1]);
     let mut resources = vec![
         (Character::TYPE, 128, character),
         (Ship::TYPE, 128, ship),
@@ -147,6 +150,8 @@ fn game_data() -> Rc<GameData> {
         (Stellar::TYPE, 128, stellar),
         (Spin::TYPE, 1004, spin),
         (RLED, 1000, sheet(1)),
+        (Spin::TYPE, 650, cursor),
+        (RLED, 651, sheet(8)),
     ];
     for state in [7500, 7503, 7506] {
         resources.push((PICT, state, pict(13, 25, [200, 0, 0])));
@@ -250,6 +255,19 @@ impl Harness {
         }
     }
 
+    /// Presses Command+comma through winit's translation, as the player
+    /// opens the Preferences in flight, where P is the player info.
+    fn command_comma(&mut self) {
+        let super_key = PhysicalKey::Code(KeyCode::SuperLeft);
+        self.send(platform::key_event(super_key, ElementState::Pressed, false));
+        self.press_physical(KeyCode::Comma);
+        self.send(platform::key_event(
+            super_key,
+            ElementState::Released,
+            false,
+        ));
+    }
+
     /// Presses L twice, as the player lands: the first requests clearance,
     /// the second lands.
     fn land(&mut self) {
@@ -323,7 +341,7 @@ fn solids(frame: &Frame) -> usize {
 }
 
 #[test]
-fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
+fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     let store = seeded();
     let mut harness = Harness::new(&store);
     harness.press_physical(KeyCode::KeyF);
@@ -337,7 +355,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
         "the seeded music volume"
     );
 
-    harness.press_physical(KeyCode::KeyP);
+    harness.command_comma();
     assert_eq!(harness.showing(), Showing::Preferences);
     let open = harness.frame();
     let shown = texts(&open);
@@ -429,7 +447,7 @@ fn a_failed_save_is_a_warning_and_the_change_still_plays() {
     let mut harness = Harness::new(&store);
     harness.press(Key::Char('f'));
     harness.played();
-    harness.press(Key::Char('p'));
+    harness.command_comma();
     store.fail_writes(true);
     let music = harness.dialog().music().rect().center();
     harness.click(music);
@@ -468,7 +486,7 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
     harness.fly();
     assert_eq!(harness.played(), [engine], "thrusting");
 
-    harness.press(Key::Char('p'));
+    harness.command_comma();
     assert_eq!(harness.showing(), Showing::Preferences);
     harness.fly();
     assert_eq!(
@@ -544,4 +562,41 @@ fn hyperspace_effects_toggle_by_click_and_key_and_survive_a_restart() {
     let json = saved(&store);
     assert_eq!(json["hyperspace_effects"], true);
     assert_eq!(json["music"], false, "the audio change kept");
+}
+
+/// Where flight draws its hover cursor.
+fn cursor(harness: &Harness) -> Option<Point> {
+    harness
+        .app
+        .screen()
+        .flight_view()
+        .expect("flying")
+        .cursor_at()
+}
+
+#[test]
+fn the_cursor_comes_back_under_the_pointer_when_the_preferences_close() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('f'));
+    let a = Point::new(100.0, 600.0);
+    harness.send(WindowEvent::PointerMoved {
+        px: (f64::from(a.x), f64::from(a.y)),
+    });
+    harness.frame();
+    assert_eq!(cursor(&harness), Some(a));
+
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    harness.frame();
+    let ok = harness
+        .dialog()
+        .dialog()
+        .item_bounds(nova_view::ui::prefs::OK_ITEM)
+        .expect("an OK button")
+        .center();
+    harness.click(ok);
+    assert_eq!(harness.showing(), Showing::Flight);
+    harness.frame();
+    assert_eq!(cursor(&harness), Some(ok), "under the pointer, not at A");
 }

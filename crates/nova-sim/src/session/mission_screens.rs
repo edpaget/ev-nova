@@ -163,25 +163,26 @@ impl Session {
 
     /// Queues `mission`'s `kind` text to show, when it has one, filled
     /// for `slot` ([`Session::mission_text`]), or with no mission
-    /// ([`Session::plain_text`]).
+    /// ([`Session::plain_text`]): whether it had one.
     pub(super) fn show_mission_text(
         &mut self,
         kind: MissionTextKind,
         mission: MissionId,
         slot: Option<u8>,
-    ) {
+    ) -> bool {
         let Some(raw) = self
             .mission_texts
             .get(&mission)
             .and_then(|texts| kind.of(texts))
         else {
-            return;
+            return false;
         };
         let text = match slot {
             Some(slot) => self.mission_text(slot, raw),
             None => self.plain_text(raw),
         };
         self.show_text(kind, mission, text);
+        true
     }
 
     /// Queues `text`, `mission`'s `kind` text, to show as it is.

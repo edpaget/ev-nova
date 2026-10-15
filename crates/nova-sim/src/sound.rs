@@ -18,7 +18,9 @@ pub enum SimSound {
     },
     /// The ship took off.
     TookOff,
-    /// A jump began.
+    /// The warp stage of a jump began, as the brake ended or at once
+    /// when the ship needed none: the warp-up, `snd ` 128 (`_HandlePlayer`
+    /// @0x6b60d-0x6b690), before the turn to the jump's bearing.
     JumpBegan,
     /// A jump ended in the next system.
     Arrived,

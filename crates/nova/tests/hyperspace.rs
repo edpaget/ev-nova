@@ -463,6 +463,13 @@ impl Harness {
         self.key(key, false);
     }
 
+    /// Presses Command+comma, which opens the Preferences in flight.
+    fn command_comma(&mut self) {
+        self.key(Key::Command, true);
+        self.press(Key::Char(','));
+        self.key(Key::Command, false);
+    }
+
     /// Holds exactly `keys` of the flight keys, pressing and releasing
     /// only those that change.
     fn hold(&mut self, keys: &[Key]) {
@@ -1116,8 +1123,9 @@ fn with_hyperspace_effects_off_a_jump_streaks_and_arrives_without_fading() {
     let mut harness = Harness::on_the_menu_with_prefs(&MemoryPilots::new());
     harness.new_pilot("Ada");
 
-    // P, a click on Hyperspace Effects, and Return turn the effects off.
-    harness.press(Key::Char('p'));
+    // Command+comma, a click on Hyperspace Effects, and Return turn the
+    // effects off.
+    harness.command_comma();
     assert_eq!(harness.showing(), Showing::Preferences);
     let at = harness.hyperspace_effects_box();
     harness.click(at);
@@ -1163,9 +1171,9 @@ fn with_hyperspace_effects_off_a_jump_streaks_and_arrives_without_fading() {
     assert!(whites >= 1, "a white arrival frame");
     assert!(harness.flight().jump_effect().is_none(), "the jump is over");
 
-    // P, Tab to the box, Space and Return turn them back on: the next jump
-    // fades out and in again.
-    harness.press(Key::Char('p'));
+    // Command+comma, Tab to the box, Space and Return turn them back on:
+    // the next jump fades out and in again.
+    harness.command_comma();
     for _ in 0..3 {
         harness.press(Key::Tab);
     }

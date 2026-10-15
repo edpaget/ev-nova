@@ -58,6 +58,8 @@ impl NovaAi {
     /// entry says, the escorts fly as its [`RuleKey::EscortAi`] entry
     /// says, a paid-off `ShipBehav` 0 hunter attacks the player again
     /// or honours the bribe as its [`RuleKey::HunterBribe`] entry says,
+    /// the warships' and interceptors' government's 0x0004 word reaches a
+    /// blessed player as its [`RuleKey::BlessingAlwaysAttacks`] entry says,
     /// and every one of them, the escorts and the carried fighters aim
     /// their quadrant turrets as its [`RuleKey::QuadrantTurretArc`] entry
     /// says.
@@ -65,6 +67,7 @@ impl NovaAi {
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         let piracy_police = rulebook.source_for(RuleKey::PiracyPolice);
         let person_coward = rulebook.source_for(RuleKey::PersonCoward);
+        let always_attacks = rulebook.source_for(RuleKey::BlessingAlwaysAttacks);
         let fire = FireRules {
             quadrant_arc: rulebook.source_for(RuleKey::QuadrantTurretArc),
         };
@@ -80,11 +83,13 @@ impl NovaAi {
             warship: Rc::new(Warship {
                 piracy_police,
                 person_coward,
+                always_attacks,
                 fire,
             }),
             interceptor: Rc::new(Interceptor {
                 piracy_police,
                 person_coward,
+                always_attacks,
                 fire,
             }),
             escorts: Rc::new(EscortAi {
@@ -865,5 +870,34 @@ mod tests {
             ai.target(&unspared[0], &with_player(&unspared, Condition::Intact)),
             Some(ShipRef::Player)
         );
+    }
+
+    #[test]
+    fn nova_ai_reads_blessing_always_attacks_from_the_rulebook() {
+        use crate::ai::fixture::{POLICE, around, blessing_of, govts, ship, sites};
+        let govts = govts(0, crate::govt::ALWAYS_ATTACKS_PLAYER);
+        let sites = sites();
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let npcs = [ship(1, POLICE, ai_type, 0.0, 0.0)];
+            let mut seen = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+            if let Some(player) = seen.player.as_mut() {
+                player.blessing = blessing_of(POLICE);
+            }
+            let decide = |rulebook: &Rulebook| {
+                NovaAi::from_rulebook(rulebook).decide(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+            };
+            assert_eq!(
+                decide(&Rulebook::default()),
+                Goal::Attack(ShipRef::Player),
+                "{ai_type:?}: the engine"
+            );
+            let held = Rulebook::default()
+                .with_override(RuleKey::BlessingAlwaysAttacks, RuleSource::Bible);
+            assert_ne!(
+                decide(&held),
+                Goal::Attack(ShipRef::Player),
+                "{ai_type:?}: the blessing holds the word back"
+            );
+        }
     }
 }

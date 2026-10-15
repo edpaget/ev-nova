@@ -98,9 +98,10 @@
 //! @0x6f88e), where the engine's fit takes the largest load of an
 //! ammunition; a fighter bay's load goes to its own fighters on both.
 //! `_ShipStatsToSystemInfo` (@0x6f8bb) ends in a tail jump to
-//! `_ResetPlayerPrecalcedValues` (@0xcce7), so the eject refreshes the
-//! blessing table and the sabotage clock (see the `ranks` module's
-//! **Blessing**), after the outfits are dropped and the stock weapons
+//! `_ResetPlayerPrecalcedValues` (@0xcce7), so the eject resets
+//! (`Session::reset_precalced`: the latches, the sabotage clock, the trim
+//! to the new class's holds and the blessing table; see the `precalced`
+//! module), after the outfits are dropped and the stock weapons
 //! fitted and before the default outfits are added (@0x6f8c0). The
 //! engine boards the class in one step, so it refreshes after the
 //! defaults too: an escape ship whose `shïp` defaults hold a sabotage
@@ -118,7 +119,7 @@
 //!
 //! Nothing is saved: the original saves no pilot at an eject, so the
 //! eject leaves whether a save is due as it found it, though the class
-//! change and `OnRetire` would make one due.
+//! change, `OnRetire` and the reset's trim would make one due.
 //!
 //! The sprite clones (`_SWCloneFramesFromMaster` @0x6f3f5 for the hulk,
 //! @0x6f768 for the player) are left out here: they belong with the
@@ -252,7 +253,7 @@ impl Session {
         if let Some(record) = &record {
             let defaults = crate::pilot::tally(record.defaults.iter().copied());
             self.board_class(record, &defaults);
-            self.refresh_blessing();
+            self.reset_precalced();
             let fields = record.fields;
             let shield = shield_points(fields.shield);
             let reserves = &mut self.pilot.reserves;
@@ -859,6 +860,7 @@ mod tests {
         session.jump = Some(crate::session::Jump::PreJump {
             to: crate::catalog::SystemId(131),
             bearing: None,
+            warp: None,
         });
         let state = crate::flight::ShipState {
             position: Vec2::new(10.0, 20.0),
@@ -1148,7 +1150,7 @@ mod tests {
         let mut catalog = ejecting(100);
         catalog.outfits.push(outfit(KILLER, &[(SABOTAGE_KILL, 0)]));
         let mut session = flying(&catalog, &[POD, AUTO, KILLER]);
-        session.refresh_blessing();
+        session.reset_precalced();
         fight(&mut session, false);
         session.sabotage.set_counter(FUSE);
         let (sounds, _) = fight(&mut session, false);
@@ -1181,16 +1183,22 @@ mod tests {
         for (id, kept) in [(KILLER, false), (KEPT_KILLER, true)] {
             let (mut session, _) = escaped(&catalog, &[0; 3], |session| {
                 session.pilot.outfits.insert(OutfitId(id), 1);
-                session.refresh_blessing();
+                session.reset_precalced();
             });
             assert_eq!(session.pilot.ship, ShipId(VIPER), "{id}");
-            // Seeded 99 on the eject's tick, and counted while disabled.
+            // Seeded 99 on the eject's tick, and counted while disabled;
+            // the old class's `OnRetire` resets as it ends (@0x99dea), the
+            // outfit still owned, which zeroes the count.
             if kept {
                 assert_eq!(session.sabotage.flag(), Sabotage::Kill);
                 assert_eq!(session.sabotage.counter(), 0.0, "zeroed, reseeding");
             } else {
                 assert_eq!(session.sabotage.flag(), Sabotage::None, "@0x6f8bb");
-                assert_eq!(session.sabotage.counter(), 100.0, "left as it was");
+                assert_eq!(
+                    session.sabotage.counter(),
+                    0.0,
+                    "left as `OnRetire`'s reset left it"
+                );
             }
             session.tick_combat(Rules::default(), &mut Draws::of(&[7]));
             let counter = if kept { 8.0 } else { 0.0 };

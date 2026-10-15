@@ -11,6 +11,8 @@ publish.workspace = true
 # The chär and shïp records a flight session starts from, read through the
 # sim's own port.
 nova-data.workspace = true
+# The resource types the GameData adapter reads raw, such as `snd `.
+nova-rsrc.workspace = true
 # The save schema: JSON, through private records.
 serde.workspace = true
 serde_json.workspace = true

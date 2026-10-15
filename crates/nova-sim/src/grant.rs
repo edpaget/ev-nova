@@ -34,7 +34,9 @@
 //!    grant may pass it; otherwise it is held to `Max` less the owned.
 //! 6. *Room* ([`fit_count`]): while the count times the outfit's mass is
 //!    above the free mass, taken as none when below none, the count drops
-//!    by one. At none, nothing is granted and nothing said. By the engine
+//!    by one. At none, nothing is granted and nothing said; the roll
+//!    still gives the outfit picked, at a count of none, as the original
+//!    resets once an outfit is picked (@0x931d9), whatever then fits. By the engine
 //!    the mass is the raw `Mass`, not scaled by its `Flags` 0x0400, as
 //!    the original weighs it; otherwise it is the outfitter's mass
 //!    ([`unit_mass`](crate::outfitter::unit_mass), as
@@ -121,12 +123,15 @@ pub struct GrantStock {
     pub max: i16,
 }
 
-/// What a grant gave: `count` of `outfit`.
+/// What a grant gave: `count` of `outfit`, the outfit picked; a count of
+/// none when none of it fits (step 6 of the module docs), which grants
+/// nothing and says nothing, but still resets the session as the pick
+/// does (`_DoPlunderDialog` @0x931d9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Granted {
     /// The outfit granted.
     pub outfit: OutfitId,
-    /// How many, at least 1.
+    /// How many: none when none of it fits.
     pub count: u16,
 }
 
@@ -206,7 +211,9 @@ pub fn held_to_max(
 
 /// What `grant` gives from `stock`, with `free_mass` free, its count
 /// and `Max` as `rules` (`grant_count`, `grant_max`) say, drawn on
-/// `chance` (see the module docs).
+/// `chance` (see the module docs): none when the odds miss or nothing can
+/// be picked, and the outfit picked at a count of none when none of it
+/// fits.
 pub fn roll(
     grant: &PersonGrant,
     stock: &[GrantStock],
@@ -230,7 +237,7 @@ pub fn roll(
     };
     let count = held_to_max(max_rule, count, &picked, free_mass)
         .unwrap_or_else(|| fit_count(count, i64::from(picked.mass), free_mass));
-    (count > 0).then_some(Granted {
+    Some(Granted {
         outfit: picked.outfit,
         count,
     })

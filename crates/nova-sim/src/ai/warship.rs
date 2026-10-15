@@ -21,6 +21,15 @@
 //!     picks afresh ([`select_target`] with none kept, as
 //!     `_SelectWarshipTarget` does in the same think, @0x8b835-0x8b875).
 //!
+//!   The word reads no blessing (neither function calls
+//!   `_PlayerBlessedByGovt`), so by the engine a 0x0004 ship turns on a
+//!   player its government blesses with peace (rank `Flags` 0x0100,
+//!   [`Surroundings::blessed`]), as Bureau 164's warships do to a
+//!   Federation Commander. By the other reading of
+//!   [`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks),
+//!   the Bible's, a blessed ship gives no word, and [`select_target`]
+//!   gives it no player either.
+//!
 //!   So a 0x0004 ship attacking a ship the player leads goes on fighting
 //!   it, and a 0x0040 ship attacking one drops it. The original also sets
 //!   +0x96 = 1, which keeps a ship with a target in state 4
@@ -98,6 +107,8 @@ pub struct Retreat {
 }
 
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
+/// says and letting its government's word reach a blessed player as
+/// `always_attacks` ([`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks))
 /// says: its goal, or none when it has nothing to fight (see the module
 /// docs).
 ///
@@ -116,8 +127,13 @@ pub struct Retreat {
 /// target retreats one think later here than in the original: a
 /// one-think lag the player can't see, noted here and not filed.
 #[must_use]
-pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat) -> Option<Goal> {
-    let word = government_word(npc, around);
+pub fn hunt(
+    npc: &Npc,
+    around: &Surroundings,
+    retreat: Retreat,
+    always_attacks: RuleSource,
+) -> Option<Goal> {
+    let word = government_word(npc, around, always_attacks);
     let target = match word {
         Some(Word::TakePlayer) => {
             if dropped(npc, ShipRef::Player, around) {
@@ -169,15 +185,17 @@ enum Word {
 /// The word `npc`'s government has on the player among `around`, if any
 /// (`_WarshipAI` @0x8b76c-0x8b80f, `_InterceptorAI` @0x8cb0d-0x8cbf3; see
 /// the module docs): none without a government, provoked, or with no
-/// player in the system.
-fn government_word(npc: &Npc, around: &Surroundings) -> Option<Word> {
+/// player in the system; and by the Bible's `always_attacks`, no 0x0004
+/// word for a blessed player.
+fn government_word(npc: &Npc, around: &Surroundings, always_attacks: RuleSource) -> Option<Word> {
     if npc.govt.is_none() || npc.provoked > 0.0 || around.player.is_none() {
         return None;
     }
     let govts = around.govts;
     let threat = npc.threatens_player_among(around.npcs);
     if govts.flag(npc.govt, ALWAYS_ATTACKS_PLAYER) {
-        (!threat).then_some(Word::TakePlayer)
+        let held = always_attacks == RuleSource::Bible && around.blessed(npc.govt);
+        (!threat && !held).then_some(Word::TakePlayer)
     } else if govts.flag(npc.govt, NEVER_ATTACKS_PLAYER) {
         threat.then_some(Word::DropTarget)
     } else {
@@ -223,6 +241,9 @@ pub struct Warship {
     pub piracy_police: RuleSource,
     /// Which persons retreat at their `Coward`.
     pub person_coward: RuleSource,
+    /// Whether its government's 0x0004 word reaches a blessed player
+    /// ([`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks)).
+    pub always_attacks: RuleSource,
     /// The rulebook's entries its weapon pick follows.
     pub fire: FireRules,
 }
@@ -241,7 +262,7 @@ impl Behaviour for Warship {
             person_coward: self.person_coward,
             ..WARSHIP_RETREAT
         };
-        hunt(npc, around, retreat).unwrap_or_else(|| idle(npc, around, chance))
+        hunt(npc, around, retreat, self.always_attacks).unwrap_or_else(|| idle(npc, around, chance))
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -1085,6 +1106,53 @@ mod tests {
             worded(ALWAYS | WARSHIPS_RETREAT, &idle, INTACT),
             Goal::Flee(P),
             "state 4 at once, from no fight"
+        );
+    }
+
+    // The blessing.
+
+    /// The decision of `npcs[0]`, a warship of the police with `flags`
+    /// following `always_attacks`, the player 100 above blessed by the
+    /// police or not.
+    fn blessed_word(flags: u16, npcs: &[Npc], blessed: bool, always_attacks: RuleSource) -> Goal {
+        let govts = govts(0, flags);
+        let sites = sites();
+        let mut seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+        if blessed && let Some(player) = seen.player.as_mut() {
+            player.blessing = crate::ai::fixture::blessing_of(POLICE);
+        }
+        let warship = Warship {
+            always_attacks,
+            ..Warship::default()
+        };
+        warship.decide(&npcs[0], &seen, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn a_0x0004_word_turns_on_a_blessed_player_by_the_engine() {
+        assert_eq!(Warship::default().always_attacks, RuleSource::Engine);
+        for npcs in [vec![police()], vec![attacking(n(2)), pirate()]] {
+            assert_eq!(
+                blessed_word(ALWAYS, &npcs, true, RuleSource::Engine),
+                Goal::Attack(P)
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_bible_a_blessing_holds_a_0x0004_word_back() {
+        let bible = RuleSource::Bible;
+        assert_eq!(blessed_word(ALWAYS, &[police()], true, bible), IDLE);
+        let fighting = [attacking(n(2)), pirate()];
+        assert_eq!(
+            blessed_word(ALWAYS, &fighting, true, bible),
+            Goal::Attack(n(2)),
+            "it keeps its own target"
+        );
+        assert_eq!(
+            blessed_word(ALWAYS, &[police()], false, bible),
+            Goal::Attack(P),
+            "unblessed, the word holds"
         );
     }
 }

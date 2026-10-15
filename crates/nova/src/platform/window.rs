@@ -23,4 +23,8 @@ impl WindowPort for WinitWindow {
     fn request_redraw(&mut self) {
         self.0.request_redraw();
     }
+
+    fn set_pointer_visible(&mut self, visible: bool) {
+        self.0.set_cursor_visible(visible);
+    }
 }

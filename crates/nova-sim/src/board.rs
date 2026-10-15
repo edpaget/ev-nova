@@ -81,8 +81,10 @@
 //! [`ESCORT_ARMOR_SHARE`] of its most; or, "Use As My Ship", the player
 //! takes it over, while a ship slot is free in the system
 //! ([`MAX_SHIPS_IN_SYSTEM`]) for the old ship, which joins the fleet with
-//! its class's stock loadout, full; with no slot free the whole swap is
-//! dropped. A player of no crew captures straight into the fleet. The
+//! its class's stock loadout, full, and by the engine reading of
+//! [`RuleKey::CaptureCargo`] the player's commodities with it; with no
+//! slot free the whole swap is dropped. A player of no crew captures
+//! straight into the fleet. The
 //! captured class's `OnCapture` runs before it joins the fleet, and on
 //! "Use As My Ship" the old class's `OnRetire` runs first; no hook runs
 //! when the swap is dropped (see the session's `hooks`).
@@ -1636,7 +1638,11 @@ mod tests {
         assert_eq!(all(19), Some(3));
         assert_eq!(all(14), Some(2));
         assert_eq!(all(5), Some(1));
-        assert_eq!(all(4), None, "none fits: nothing is granted, nor said");
+        assert_eq!(
+            all(4),
+            Some(0),
+            "none fits: the pick at a count of none, which grants nothing, nor says it"
+        );
         assert_eq!(
             granted(rule, grant_of(100, 4), spare(0, 0, 999), -30, &[0, 50]).0,
             Some(4),
@@ -1649,7 +1655,7 @@ mod tests {
         );
         assert_eq!(
             granted(rule, grant_of(100, 4), spare(1, 0, 999), -30, &[0, 50]).0,
-            None
+            Some(0)
         );
     }
 

@@ -684,3 +684,77 @@ fn the_mission_screens_pictures_decode_at_their_dialogs_sizes() {
         (9.0, 40.0)
     );
 }
+
+#[test]
+fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
+    use nova_sim::PlayerInfo;
+    use nova_view::ui::player_info::{
+        BACKGROUND, CAP_HEIGHT, PLAYER_INFO_DIALOG, PlayerInfoButton, PlayerInfoScreen, Tab,
+        YES_NO_DIALOG,
+    };
+    for (dir, path) in builds() {
+        let ui = interface(&path);
+        let template = ui.dialog_template(PLAYER_INFO_DIALOG).expect("converts");
+        assert_eq!(
+            (template.bounds.width(), template.bounds.height()),
+            (413.0, 227.0)
+        );
+        assert_eq!(template.placement, Placement::Center);
+        assert_eq!(template.items.len(), 7);
+        for (item, bounds) in [
+            (1, ltrb(293.0, 195.0, 392.0, 220.0)),
+            (2, ltrb(7.0, 8.0, 106.0, 33.0)),
+            (3, ltrb(107.0, 8.0, 206.0, 33.0)),
+            (4, ltrb(207.0, 8.0, 306.0, 33.0)),
+            (5, ltrb(307.0, 8.0, 406.0, 33.0)),
+            (6, ltrb(4.0, 40.0, 409.0, 181.0)),
+            (7, ltrb(60.0, 195.0, 210.0, 220.0)),
+        ] {
+            assert_eq!(template.items[item - 1].bounds, bounds, "item {item}");
+        }
+        assert!(!template.items[5].enabled, "the content box is disabled");
+        let confirm = ui.dialog_template(YES_NO_DIALOG);
+        assert!(confirm.is_ok(), "{confirm:?}");
+        let info = PlayerInfo {
+            pilot_name: "Ada".to_owned(),
+            date: String::new(),
+            system: String::new(),
+            legal_status: String::new(),
+            ship_name: String::new(),
+            ship_class: String::new(),
+            turn_rate: 0,
+            accel: 0,
+            max_speed: 0,
+            credits: 0,
+            shield: None,
+            armor: None,
+            energy: None,
+            income: None,
+            fleet: false,
+            cargo: None,
+            extras: None,
+            honors: None,
+            jettisonable: false,
+            words: nova_sim::player_info::Words::STOCK,
+        };
+        let screen =
+            PlayerInfoScreen::new(Ok((template, mono())), confirm, info, ButtonStyle::STOCK);
+        assert_eq!(screen.problem(), None);
+        assert_eq!(screen.tab(), Tab::General);
+        let bounds = screen.bounds().expect("laid out");
+        assert_eq!(bounds.min, Point::new(305.0, 270.0), "centred");
+        assert_eq!(
+            screen.button_bounds(PlayerInfoButton::Done),
+            Some(ltrb(598.0, 465.0, 697.0, 490.0))
+        );
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let size = |key: ImageKey| {
+            let image = picture(&data, key.id);
+            (image.width(), image.height())
+        };
+        assert_eq!(size(BACKGROUND[0]), (413, 40), "upper");
+        assert_eq!(size(BACKGROUND[1]), (413, 215), "middle");
+        assert_eq!(size(BACKGROUND[2]), (413, 40), "lower");
+        assert_eq!(CAP_HEIGHT, 40.0);
+    }
+}

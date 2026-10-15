@@ -586,7 +586,7 @@ impl Blessing {
     }
 
     /// Makes `govt` bless `which`; nothing for an ID outside 128-383.
-    fn bless(&mut self, govt: GovtId, which: Blessed) {
+    pub(crate) fn bless(&mut self, govt: GovtId, which: Blessed) {
         if let Some(slot) = blessed_slot(govt) {
             let set = match which {
                 Blessed::Peace => &mut self.peace,
@@ -728,6 +728,8 @@ pub struct PilotInfoRanks {
     pub line: String,
     /// Today's salaries, each tested against today's cash, with no floor.
     pub salary: i64,
+    /// How many ranks the line lists.
+    pub listed: usize,
 }
 
 /// The pilot info's ranks (see the module docs): the line of the ranks
@@ -760,7 +762,11 @@ pub fn pilot_info(
         }
     }
     let salary = held().map(|rank| salary_paid(rank, cash, cap)).sum();
-    PilotInfoRanks { line, salary }
+    PilotInfoRanks {
+        line,
+        salary,
+        listed: named.len(),
+    }
 }
 
 /// Whether ranks of `a` and `b` share a government for the sweeps.
@@ -1438,6 +1444,10 @@ mod tests {
         assert_eq!(line(&records, &[200, 201, 202], 0), "Mid, and Low");
         assert_eq!(line(&records, &[201], 0), "");
         assert_eq!(line(&records, &[250], 0), "", "no record");
+        let listed =
+            |active| pilot_info(&records, &ids(active), 0, RuleSource::Engine, "", 0).listed;
+        assert_eq!(listed(&[200, 201, 202]), 2, "the ranks placed");
+        assert_eq!(listed(&[201, 250]), 0);
     }
 
     #[test]

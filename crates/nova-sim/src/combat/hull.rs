@@ -103,6 +103,8 @@ pub const TOUGH_DISABLE_PERCENT: f64 = 10.0;
 pub const BLIND_SPOTS: u16 = 0x7000;
 /// The `shïp` `Flags` bit of a planet-type ship.
 pub const PLANET_TYPE: u16 = 0x0400;
+/// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
+pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
 pub const DEATH_SIZE_MASS: f32 = 100.0;
 /// The death explosion's size per ton (the double @0xdd588).
@@ -155,6 +157,11 @@ pub struct HullSpec {
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
+    /// Whether it is hidden: its `Cost` is -1, and `_HandleShipDisplay`
+    /// hides a ship of such a type and leaves its slot's layer as it was
+    /// (@0x2b7f3 → @0x2cc6b; see
+    /// [`ship_layer`](crate::ship_layer)).
+    pub hidden: bool,
 }
 
 impl Default for HullSpec {
@@ -177,6 +184,7 @@ impl Default for HullSpec {
             sprite_height: None,
             planet_type: false,
             key_carried: None,
+            hidden: false,
         }
     }
 }
@@ -204,6 +212,7 @@ impl HullSpec {
             sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
             planet_type: record.flags & PLANET_TYPE != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
+            hidden: record.cost == HIDDEN_COST,
         }
     }
 
@@ -512,6 +521,20 @@ mod tests {
         assert!(!ordinary.planet_type);
         assert!(!HullSpec::default().planet_type);
         assert_eq!(PLANET_TYPE, 0x0400);
+    }
+
+    #[test]
+    fn a_hull_is_hidden_when_its_cost_is_minus_one() {
+        let hidden = HullSpec::new(&HullRecord {
+            cost: -1,
+            ..hull(141)
+        });
+        assert!(hidden.hidden);
+        for cost in [0, -2, 5000] {
+            let shown = HullSpec::new(&HullRecord { cost, ..hull(141) });
+            assert!(!shown.hidden, "cost {cost}");
+        }
+        assert!(!HullSpec::default().hidden);
     }
 
     #[test]

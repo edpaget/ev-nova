@@ -21,11 +21,15 @@
 //!   other intact ship, not allied, of a government at war with its own
 //!   or attacking it, and the player, while intact, when the ship
 //!   threatens the player or a ship the player leads
-//!   ([`Npc::threatens_player_among`]: `_ExtendedIsThreatToShip` @0x81a63
-//!   asks of the player only while it is active and not disabled,
-//!   @0x81a33-0x81a4a, and then asks `_IsThreatToPlayer` of the ship,
-//!   @0x81a9c; the blessing that excuses the player, @0x81a89, is
-//!   crons-news-ranks phase 12's).
+//!   ([`Npc::threatens_player_among`]: `_ExtendedIsThreatToShip` @0x81a63,
+//!   called @0x84a63, asks of the player only while it is active and not
+//!   disabled, @0x81a33-0x81a4a, and then asks `_IsThreatToPlayer` of the
+//!   ship, @0x81a9c), and the ship's government doesn't bless the player
+//!   ([`Surroundings::blessed`]: `_PlayerBlessedByGovt(G, 0)` @0x81a89
+//!   makes the player no threat before the threat test, @0x81a90). So a
+//!   blessing government's ship counts no player in its odds, even while
+//!   it attacks the player, under either reading of `rank_govt_reach` and
+//!   `blessing_refresh`.
 //!   The NPC loop (@0x84af9-0x84bfd) never asks `_ExtendedIsThreatToShip`:
 //!   an NPC is an enemy by its government or while it attacks or snipes
 //!   at the ship (AI state 4, @0x84bc3, which a warship's hopeless
@@ -140,7 +144,9 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
     let mut friends = npc.hull.strength;
     let mut enemies = match around.player {
         Some(player)
-            if player.condition == Condition::Intact && npc.threatens_player_among(around.npcs) =>
+            if player.condition == Condition::Intact
+                && !around.blessed(npc.govt)
+                && npc.threatens_player_among(around.npcs) =>
         {
             player.hull.strength * rating_factor(player.rating, player.yardstick)
         }
@@ -214,6 +220,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::ai::fixture::blessing_of;
     use crate::ai::{Goal, PlayerSide};
     use crate::catalog::{GovtId, GovtRecord, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
@@ -222,6 +229,7 @@ mod tests {
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::govt::Governments;
+    use crate::rank::Blessing;
     use crate::reserves::Gauge;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, govt, weapon};
@@ -274,6 +282,7 @@ mod tests {
             rating: 0,
             yardstick: 0,
             untargetable: false,
+            blessing: Blessing::NONE,
         }
     }
 
@@ -491,6 +500,51 @@ mod tests {
             ..escort
         };
         assert_eq!(odds(&stranger), 0.0, "a ship nobody leads");
+    }
+
+    #[test]
+    fn a_blessing_government_counts_no_player_in_its_odds() {
+        let govts = govts();
+        let mut hunting = ship(1, 140, 50.0);
+        hunting.goal = Goal::Attack(ShipRef::Player);
+        let mut raider = ship(1, 143, 50.0);
+        raider.goal = Goal::Attack(n(2));
+        let mut escort = ship(2, 143, 0.0);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        for (npcs, rating, unblessed, case) in [
+            (vec![hunting], 0, 2.0, "hunting the player"),
+            (
+                vec![raider, escort],
+                128_000,
+                4.0,
+                "attacking a ship the player leads, at the rating",
+            ),
+        ] {
+            let odds = |blessing| {
+                let around = Surroundings {
+                    govts: &govts,
+                    player: Some(PlayerSide {
+                        rating,
+                        yardstick: 10,
+                        blessing,
+                        ..player(100.0)
+                    }),
+                    ..Surroundings::new(&[], &npcs)
+                };
+                odds_against(&npcs[0], &around)
+            };
+            let own = npcs[0].govt.expect("governed");
+            assert_eq!(odds(Blessing::NONE), unblessed, "{case}: unblessed");
+            assert_eq!(odds(blessing_of(own)), 0.0, "{case}");
+            assert_eq!(
+                odds(blessing_of(GovtId(141))),
+                unblessed,
+                "{case}: another government's blessing"
+            );
+        }
     }
 
     #[test]

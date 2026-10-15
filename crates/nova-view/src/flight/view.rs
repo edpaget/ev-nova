@@ -176,7 +176,7 @@
 //!   it. The map shows the systems the pilot has explored, and the rest
 //!   unexplored. It draws the session's galaxy ([`Session::galaxy`]):
 //!   the catalog's geometry with only the visible systems, links and
-//!   active nebulae, each system coloured by its government there, rebuilt
+//!   nebulae active and explored, each system coloured by its government there, rebuilt
 //!   on the frame after each change to it; and the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
 //!   for it.
@@ -261,6 +261,21 @@
 //!   player give their help ([`Session::tick_assistance`], by the screen's
 //!   [`DisableRule`]), and each says when it is done, as a message
 //!   ([`comm_message`]).
+//! - P ([`PLAYER_INFO_KEY`], a press), outside the map, asks the router
+//!   for the player info screen over the paused flight
+//!   ([`FlightView::take_player_info_request`], with
+//!   [`FlightView::player_info`]), letting go of the flight keys, as
+//!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
+//!   stage included, it is refused with `_beepSnd[3]`
+//!   ([`UiSound::PlayerInfoRefused`], @0x7039a-0x703bd). Its Jettison
+//!   jettisons everything ([`FlightView::jettison_all`]). The original
+//!   also refuses it for 15 frames after a take-off and while the ship
+//!   is dying, which the engine does not model
+//!   (crons-news-ranks-fidelity phase 27, player-death phase 4).
+//!   `_DoPlayerInfoDialog`'s own gate (@0x5a013-0x5a064) refuses nothing
+//!   more: its `_screenFaded` holds only while a jump fades out, and
+//!   nothing sets its `_fadePending` (only `_ResetPlayer` writes it, a 0,
+//!   @0x1d7c3).
 //! - I ([`MISSION_INFO_KEY`], a press), outside the map and a jump, asks
 //!   the router for the mission info screen over the paused flight
 //!   ([`FlightView::take_mission_info_request`]), letting go of the
@@ -356,7 +371,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -384,8 +399,10 @@ use nova_sim::{
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
-    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
+    NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent, StellarIff, TagNames,
+    VenueOffer, ship_layer::SlotSprites,
 };
+use nova_sim::{DrawnBox, DrawnShips};
 use nova_sim::{PlayerCommand, PlayerFate};
 
 use super::alert;
@@ -393,6 +410,7 @@ use super::boxes::{self, BoxShown};
 use super::brackets;
 use super::cadence::{Drawn, HudCadence, retake_target};
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
+use super::cursor::HoverCursor;
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
@@ -417,6 +435,7 @@ use crate::text::TextMetrics;
 use crate::time::ticks;
 use crate::ui::PlunderShown;
 use crate::ui::comm::grouped;
+use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
     Sound, SoundPrefs, UiSound,
@@ -430,7 +449,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave";
 /// The port's own overlays on the flight screen, which the original does
 /// not draw: developer settings, both off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1402,6 +1421,7 @@ impl Chance for SharedChance {
 
 /// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
 pub struct FlightView<C> {
     /// What the screen reads: when it is built, and on each arrival.
     catalog: C,
@@ -1446,6 +1466,9 @@ pub struct FlightView<C> {
     /// The mission info [`MISSION_INFO_KEY`] asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,
+    /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen, for
+    /// the router.
+    pending_player_info: bool,
     /// The mission a person hailed or boarded just offered, for the
     /// router.
     pending_offer: Option<OfferPrompt>,
@@ -1514,7 +1537,8 @@ pub struct FlightView<C> {
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
     escort_menu: EscortMenu,
-    /// The escort menu's beeps not yet taken ([`Screen::take_sounds`]).
+    /// The interface's beeps not yet taken ([`Screen::take_sounds`]): the
+    /// escort menu's, and the player info key refused during a jump.
     ui_sounds: Vec<UiSound>,
     /// The escort menu's colours, read once.
     escort_colors: EscortMenuColors,
@@ -1535,6 +1559,8 @@ pub struct FlightView<C> {
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
     /// chance ([`radar::static_frame`]); `None` without.
     radar_static: Option<i16>,
+    /// The mouse cursor sprite (see the `cursor` module).
+    cursor: HoverCursor,
 }
 
 /// A message on the message line.
@@ -1561,8 +1587,9 @@ struct Redrawn {
     stellar: bool,
     /// The galaxy overlay changed: the course map was rebuilt.
     galaxy: bool,
-    /// A rebuild point changed which stellars shown are dead since it:
-    /// the stellars were drawn again.
+    /// A rebuild point changed which stellars are shown, or which shown
+    /// are dead since it: the stellars were drawn again, and read again
+    /// when they are others.
     rebuilt: bool,
 }
 
@@ -1580,6 +1607,14 @@ fn show_destroyed(scene: &mut SystemScene, session: &Session) {
         },
         session.rules().source_for(RuleKey::DeadTypeFallback),
     );
+}
+
+/// The system `session`'s player is in, read from `catalog`, with only the
+/// stellars the session shows ([`Session::stellars_shown`]), in navigation
+/// order.
+fn shown_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
+    let shown: BTreeSet<StellarId> = session.stellars_shown().collect();
+    SystemScene::load_shown(catalog, session.system(), &shown)
 }
 
 /// Text metrics, shared.
@@ -1647,7 +1682,7 @@ impl<
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
                 Some({
-                    let mut scene = SystemScene::load(&catalog, session.system());
+                    let mut scene = shown_scene(&catalog, session);
                     show_destroyed(&mut scene, session);
                     scene
                 }),
@@ -1710,6 +1745,7 @@ impl<
             pending_boarding: false,
             pending_hail: None,
             pending_mission_info: None,
+            pending_player_info: false,
             pending_offer: None,
             pending_leads: Vec::new(),
             hail_options: HailOptions::default(),
@@ -1738,6 +1774,7 @@ impl<
             nav_scene: None,
             target_scene: None,
             radar_static: None,
+            cursor: HoverCursor::default(),
         }
     }
 
@@ -1753,6 +1790,29 @@ impl<
         };
         view.show_destroyed();
         view
+    }
+
+    /// The flight with its ship slots' draw layers and cloned frames
+    /// starting from `slot_sprites`, the history an earlier flight of the
+    /// same run left ([`Session::with_slot_sprites`]).
+    #[must_use]
+    pub fn with_slot_sprites(self, slot_sprites: SlotSprites) -> Self {
+        let mut view = Self {
+            session: self
+                .session
+                .map(|session| session.with_slot_sprites(slot_sprites)),
+            ..self
+        };
+        view.read_npc_sheets();
+        view
+    }
+
+    /// The ship slots' draw-layer and cloned-frame history as the flight
+    /// leaves it ([`Session::slot_sprites`]), or `None` when its session
+    /// never started.
+    #[must_use]
+    pub fn slot_sprites(&self) -> Option<&SlotSprites> {
+        self.session.as_ref().ok().map(Session::slot_sprites)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
@@ -1911,6 +1971,61 @@ impl<
         self.pending_hail.take()
     }
 
+    /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen since
+    /// this was last taken, once: the router opens it on
+    /// [`FlightView::player_info`] over the paused flight.
+    pub fn take_player_info_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_player_info)
+    }
+
+    /// What the player info screen shows, as [`Session::player_info`]
+    /// gives it from the screen's catalog, changing nothing; `None` for a
+    /// session that failed. An opening of the screen is
+    /// [`FlightView::open_player_info`].
+    #[must_use]
+    pub fn player_info(&self) -> Option<PlayerInfo> {
+        let session = self.session.as_ref().ok()?;
+        Some(session.player_info(&self.catalog))
+    }
+
+    /// The player info dialog opens, as [`Session::open_player_info`] has
+    /// it: the session resets first, so the screen it gives shows the
+    /// cargo trimmed; none in a jump or while the ship breaks up, when
+    /// nothing opens, or for a session that failed. The router opens the
+    /// screen on it, from flight and from the spaceport alike.
+    pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
+        let session = self.session.as_mut().ok()?;
+        session.open_player_info(&self.catalog)
+    }
+
+    /// Presses [`PLAYER_INFO_KEY`] outside a jump: asks the router for the
+    /// player info screen, letting go of the flight keys
+    /// (`_HandlePlayer` @0x702bf-0x703c9).
+    fn ask_player_info(&mut self) -> ScreenAction {
+        self.pending_player_info = true;
+        self.held.clear();
+        ScreenAction::None
+    }
+
+    /// A key `press` during a jump, which flight ignores but for
+    /// [`PLAYER_INFO_KEY`] outside the map: refused with `_beepSnd[3]`
+    /// (@0x7039a-0x703bd).
+    fn refuse_player_info(&mut self, press: Option<Key>) -> ScreenAction {
+        if press == Some(PLAYER_INFO_KEY) && !self.map_open {
+            self.ui_sounds.push(UiSound::PlayerInfoRefused);
+        }
+        ScreenAction::None
+    }
+
+    /// Jettisons everything, mission cargo included, as the player info's
+    /// Jettison does (`_JettisonCargo(1)` @0x5a66d), saying what went.
+    pub fn jettison_all(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.jettison_cargo(true, &mut self.chance);
+        }
+        self.say_messages();
+    }
+
     /// The mission info [`MISSION_INFO_KEY`] asked for the mission info
     /// screen on, once: the router opens the screen on it over the paused
     /// flight.
@@ -1965,7 +2080,9 @@ impl<
     }
 
     /// Reads the sheet of each ship type the traffic can spawn that has
-    /// not been read yet.
+    /// not been read yet, and of each type a ship here is boxed by
+    /// ([`Session::framed_types`]), such as the stale frames of a hidden
+    /// ship's slot.
     fn read_npc_sheets(&mut self) {
         let Ok(session) = &self.session else {
             return;
@@ -1977,6 +2094,11 @@ impl<
             self.cards
                 .entry(ship)
                 .or_insert_with(|| self.catalog.target_card(ship));
+        }
+        for ship in session.framed_types() {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
         }
         for govt in session.npcs().iter().filter_map(|npc| npc.govt) {
             self.codes
@@ -2186,6 +2308,89 @@ impl<
         }
     }
 
+    /// Runs up to `steps` of the session's steps, each only while
+    /// `go_on` holds of the session before it: the ship's tick under the
+    /// keys held, the traffic's, the quotes', the assistance's and the
+    /// fight's, then the effects. Then says the comm notes, quotes and
+    /// messages they raised, and reads the sheets of a system the session
+    /// populated afresh. Flight and the warp's lead-in under the streak
+    /// both step this way. The eject chord is held as the keys say, and
+    /// a step whose ship tick brings the escape pod's rescue ends the
+    /// stepping there, the view laid out afresh where the rescue put the
+    /// ship.
+    fn run_steps(&mut self, steps: u32, go_on: fn(&Session) -> bool) {
+        let controls = self.controls();
+        let fire = (
+            self.held.contains(&FIRE_KEY),
+            self.held.contains(&SECONDARY_KEY),
+        );
+        let eject = self.takes(PlayerCommand::Eject)
+            && self.held.contains(&Key::Command)
+            && self.held.contains(&EJECT_KEY);
+        let mut notes = Vec::new();
+        let mut quotes = Vec::new();
+        let mut rescued = false;
+        if let Ok(session) = &mut self.session {
+            session.set_play_area(play_area());
+            session.hold_fire(fire.0, fire.1);
+            session.hold_eject(eject);
+            for _ in 0..steps {
+                if !go_on(session) {
+                    break;
+                }
+                self.previous = *session.player();
+                self.npc_previous = session
+                    .npcs()
+                    .iter()
+                    .map(|npc| (npc.id, npc.state))
+                    .collect();
+                session.tick(controls);
+                // The rescue settles on the tick the pod's countdown runs
+                // out, and stops the stepping so its dësc opens before the
+                // next: the original's `_HandlePlayer` runs it in place of
+                // the rest of that frame's player handling (@0x68ddd).
+                if session.rescue_if_due(&self.catalog, &mut self.chance) {
+                    self.previous = *session.player();
+                    rescued = true;
+                    break;
+                }
+                session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
+                session.tick_quotes(&self.catalog, &mut self.chance);
+                quotes.extend(session.take_quotes());
+                session.tick_assistance(&*self.disable_rule);
+                notes.extend(session.take_comm());
+                let rules = Rules {
+                    disable: &*self.disable_rule,
+                    defence: &*self.defence_rule,
+                    law: &*self.law,
+                };
+                session.tick_combat(rules, &mut self.chance);
+                let player = point(session.player().position);
+                let dying = dying(session, &self.sheet, &self.npc_sheets);
+                let chance = &mut self.effects_chance;
+                self.effects.step(&dying, player, &self.looks, chance);
+                let scene = Scene { player };
+                for event in session.take_combat_events() {
+                    self.effects.apply(&event, &scene, &self.looks, chance);
+                }
+            }
+        }
+        for note in &notes {
+            self.say_for(comm_message(note), MESSAGE_TICKS);
+        }
+        for quote in quotes {
+            self.say_for(quote.text, HAIL_QUOTE_TICKS);
+        }
+        if rescued {
+            // Laid out in the system the rescue took the pod to, from where
+            // it put the ship, before the frame is drawn.
+            self.catch_up();
+        }
+        self.say_messages();
+        // The session may have populated its system afresh.
+        self.read_npc_sheets();
+    }
+
     /// Starts the jump's streak, from the current system towards the next,
     /// once the session says the jump has begun, unless it is playing
     /// already.
@@ -2271,6 +2476,8 @@ impl<
     /// ([`FlightView::follow_ship`]); a system entered afresh is laid out
     /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
     /// the system shown draws the ship there ([`FlightView::place_ship`]);
+    /// a rebuild point that changed which stellars are shown, with no
+    /// system entered, reads the scene again with them ([`shown_scene`]);
     /// and a change to the galaxy draws the session's galaxy on the course
     /// map ([`GalaxyMap::show_galaxy`]) with the course as it is flown.
     ///
@@ -2299,7 +2506,25 @@ impl<
             self.map
                 .show_course(session.system(), &session.course_shown());
         }
+        // The explored set changes with no event: a rebuild point's share
+        // by place, `X` and a map grant between system changes.
+        if self
+            .map
+            .explored()
+            .is_none_or(|shown| !shown.iter().copied().eq(session.pilot().explored()))
+        {
+            self.map.show_explored(session.pilot().explored());
+        }
         let system = session.system();
+        let reshown = redrawn.rebuilt
+            && !redrawn.system
+            && self.scene.as_ref().is_some_and(|scene| {
+                !scene
+                    .stellars()
+                    .iter()
+                    .map(|stellar| stellar.id)
+                    .eq(session.stellars_shown())
+            });
         if redrawn.ship {
             self.follow_ship();
         }
@@ -2307,6 +2532,9 @@ impl<
             self.lay_out(system);
         } else if redrawn.stellar {
             self.place_ship();
+        }
+        if reshown && let Ok(session) = &self.session {
+            self.scene = Some(shown_scene(&self.catalog, session));
         }
         if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
             self.show_destroyed();
@@ -2325,14 +2553,15 @@ impl<
         }
     }
 
-    /// Lays out `system`, the session's: its scene, read from the catalog,
-    /// the course map's course and explored systems, and the ship drawn
+    /// Lays out `system`, the session's: its scene, read from the catalog
+    /// with the stellars the session shows ([`shown_scene`]), the course
+    /// map's course and explored systems, and the ship drawn
     /// from where it is, the last system's NPCs and effects let go.
     fn lay_out(&mut self, system: SystemId) {
         let Ok(session) = &self.session else {
             return;
         };
-        self.scene = Some(SystemScene::load(&self.catalog, system));
+        self.scene = Some(shown_scene(&self.catalog, session));
         self.map.show_course(system, &session.course_shown());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
@@ -2891,6 +3120,12 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// Where the hover cursor is drawn, or `None` while it isn't.
+    #[must_use]
+    pub fn cursor_at(&self) -> Option<Point> {
+        self.cursor.shown_at()
+    }
+
     /// Whether the course map is shown.
     #[must_use]
     pub fn map_open(&self) -> bool {
@@ -3140,6 +3375,22 @@ impl<C> FlightView<C> {
     pub fn open_outfitter(&mut self) {
         if let Ok(session) = &mut self.session {
             session.open_outfitter();
+        }
+    }
+
+    /// The outfitter closes, as [`Session::close_outfitter`] has it; a
+    /// session that failed has none.
+    pub fn close_outfitter(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.close_outfitter();
+        }
+    }
+
+    /// The bar's hire screen closes, as [`Session::close_hire`] has it; a
+    /// session that failed has no bar.
+    pub fn close_hire(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.close_hire();
         }
     }
 
@@ -3434,6 +3685,71 @@ impl<C> FlightView<C> {
                 (npc, at, heading)
             })
             .collect()
+    }
+
+    /// Runs the cursor's `steps` flight steps (see the `cursor` module),
+    /// hovering as the pointer is over something targetable now
+    /// ([`FlightView::hovering`]), once the session's steps have run and
+    /// the ships are where the frame draws them. A key pressed since the
+    /// last step, or a flight key held, fades it. While the jump's streak
+    /// and fade-out hold flight no step runs, and the cursor holds, which
+    /// no player sees under the streak.
+    fn step_cursor(&mut self, steps: u32) {
+        if steps == 0 {
+            return;
+        }
+        let frames = self.looks.cursor_sheet().map(|sheet| sheet.frames);
+        let hovering = self.hovering();
+        let held = !self.held.is_empty();
+        for _ in 0..steps {
+            self.cursor.step(hovering, frames, held);
+        }
+    }
+
+    /// Tracks a flight key `input` presses or lets go of as held.
+    fn track_held(&mut self, input: &Input) {
+        if let Input::Key { key, pressed, .. } = *input
+            && FLIGHT_KEYS.contains(&key)
+        {
+            if pressed {
+                self.held.insert(key);
+            } else {
+                self.held.remove(&key);
+            }
+        }
+    }
+
+    /// What `input` tells the cursor: a pointer move or button press shows
+    /// it where the pointer is, and the pointer leaving the window hides
+    /// it; a key pressed fades it at the next flight step (none runs while
+    /// the map is open, and the M that opened it has faded it already).
+    fn cursor_input(&mut self, input: &Input) {
+        match *input {
+            Input::PointerMoved(at)
+            | Input::PointerButton {
+                pressed: true, at, ..
+            } => {
+                self.cursor.pointer(at);
+            }
+            Input::PointerLeft => self.cursor.left(),
+            Input::Key { pressed: true, .. } => self.cursor.key(),
+            _ => {}
+        }
+    }
+
+    /// Whether the pointer, while the cursor shows, is over something the
+    /// player can target ([`Session::hover`]), the ships boxed where they
+    /// are drawn ([`ViewShips`]).
+    fn hovering(&self) -> bool {
+        let (Ok(session), Some(at)) = (&self.session, self.cursor.shown_at()) else {
+            return false;
+        };
+        let world = self.camera().screen_to_world(at);
+        let ships = ViewShips {
+            view: self,
+            session,
+        };
+        session.hover(Vec2::new(world.x, world.y), &ships).is_some()
     }
 
     /// Draws the ships, bottom first, in their layers as
@@ -3862,10 +4178,7 @@ impl<C> FlightView<C> {
             && let Some(npc) = session.target()
         {
             let (at, _) = self.shown_npc(npc);
-            let sprite = match self.npc_sheets.get(&npc.ship) {
-                Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
-                _ => (PLACEHOLDER_SIZE as u32, PLACEHOLDER_SIZE as u32),
-            };
+            let sprite = drawn_size(self.npc_sheets.get(&npc.ship));
             let at = camera.world_to_screen(at);
             brackets::draw_ship(list, at, Some(sprite), target.expand, target.standing);
         }
@@ -3976,10 +4289,7 @@ impl<
     /// has exploded every command (the dead branch, 0x6870d-0x6888c). The
     /// held flight keys are still tracked; the session ignores them.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if self.jump.is_some() || self.preparing_jump() {
-            self.jump_input(input);
-            return ScreenAction::None;
-        }
+        self.cursor_input(input);
         let press = match *input {
             Input::Key {
                 key,
@@ -3988,6 +4298,10 @@ impl<
             } => Some(key),
             _ => None,
         };
+        if self.jump.is_some() || self.preparing_jump() {
+            self.jump_input(input);
+            return self.refuse_player_info(press);
+        }
         if self.map_open {
             if press == Some(MAP_KEY) {
                 self.close_map();
@@ -4033,6 +4347,7 @@ impl<
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(),
+            Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
             Some(HYPER_SELECT_KEY) => {
                 if let Ok(session) = &mut self.session {
                     session.select_next_system();
@@ -4065,31 +4380,26 @@ impl<
             Some(key) => self.nav_key(key),
             None => {}
         }
-        if let Input::Key { key, pressed, .. } = *input
-            && FLIGHT_KEYS.contains(&key)
-        {
-            if pressed {
-                self.held.insert(key);
-            } else {
-                self.held.remove(&key);
-            }
-        }
+        self.track_held(input);
         ScreenAction::None
     }
 
     /// First catches the screen up with what the session has told since
     /// (see the module docs), map open or not. Then runs the simulation's
-    /// steps for `dt` with the keys held, and advances the stellars'
-    /// animations. While the map is open nothing moves. During
-    /// the pre-jump stage the session flies on, and the streak starts on
-    /// the step the session begins the jump, which is the last step run.
-    /// While the stars streak and the old system fades out only the
-    /// jump's effect moves, and the ship arrives when the effect says.
-    /// From then on the session flies again while the rest of the effect,
-    /// the fade-in or the white flash, plays over it; that plays on with
-    /// the map open too, as the original's display fade does. The escort
-    /// menu times out on every step the map is shut, the streak's
-    /// included.
+    /// steps for `dt` with the keys held ([`FlightView::run_steps`]), and
+    /// advances the stellars' animations. While the map is open nothing
+    /// moves. During the pre-jump stage the session flies on, and the
+    /// streak starts on the step the session begins the jump, which is the
+    /// last step run. While the stars streak and the old system fades out
+    /// the jump's effect moves, and the session runs its steps only while
+    /// its warp is in its lead-in ([`Session::in_warp_lead_in`]): the
+    /// ship stays where it is, but the traffic flies on and the scans are
+    /// taken, as the original still scans a warping player then. The ship
+    /// arrives when the effect says, after the last step. From then on
+    /// the session flies again while the rest of the effect, the fade-in
+    /// or the white flash, plays over it; that plays on with the map open
+    /// too, as the original's display fade does. The escort menu times out
+    /// on every step the map is shut, the streak's included.
     ///
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
@@ -4109,9 +4419,17 @@ impl<
             self.advance_death_fade(dt);
             return;
         }
-        if let Some(effect) = &mut self.jump {
-            self.elapsed += dt;
-            if effect.advance(dt) {
+        self.elapsed += dt;
+        if self.jump.is_some() {
+            let leading_in = self.session.as_ref().is_ok_and(Session::in_warp_lead_in);
+            if leading_in {
+                let Steps { steps, alpha } = self.clock.advance(dt);
+                self.run_steps(steps, Session::in_warp_lead_in);
+                self.alpha = alpha;
+            }
+            if let Some(effect) = &mut self.jump
+                && effect.advance(dt)
+            {
                 self.arrive();
                 self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
@@ -4119,80 +4437,13 @@ impl<
             self.advance_hud();
             return;
         }
-        self.elapsed += dt;
         let Steps { steps, alpha } = self.clock.advance(dt);
-        let controls = self.controls();
-        let fire = (
-            self.held.contains(&FIRE_KEY),
-            self.held.contains(&SECONDARY_KEY),
-        );
-        let eject = self.takes(PlayerCommand::Eject)
-            && self.held.contains(&Key::Command)
-            && self.held.contains(&EJECT_KEY);
-        let mut notes = Vec::new();
-        let mut quotes = Vec::new();
-        let mut rescued = false;
-        if let Ok(session) = &mut self.session {
-            session.set_play_area(play_area());
-            session.hold_fire(fire.0, fire.1);
-            session.hold_eject(eject);
-            for _ in 0..steps {
-                self.previous = *session.player();
-                self.npc_previous = session
-                    .npcs()
-                    .iter()
-                    .map(|npc| (npc.id, npc.state))
-                    .collect();
-                session.tick(controls);
-                // The rescue settles on the tick the pod's countdown runs
-                // out, and stops the stepping so its dësc opens before the
-                // next: the original's `_HandlePlayer` runs it in place of
-                // the rest of that frame's player handling (@0x68ddd).
-                if session.rescue_if_due(&self.catalog, &mut self.chance) {
-                    self.previous = *session.player();
-                    rescued = true;
-                    break;
-                }
-                session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                session.tick_quotes(&self.catalog, &mut self.chance);
-                quotes.extend(session.take_quotes());
-                session.tick_assistance(&*self.disable_rule);
-                notes.extend(session.take_comm());
-                let rules = Rules {
-                    disable: &*self.disable_rule,
-                    defence: &*self.defence_rule,
-                    law: &*self.law,
-                };
-                session.tick_combat(rules, &mut self.chance);
-                let player = point(session.player().position);
-                let dying = dying(session, &self.sheet, &self.npc_sheets);
-                let chance = &mut self.effects_chance;
-                self.effects.step(&dying, player, &self.looks, chance);
-                let scene = Scene { player };
-                for event in session.take_combat_events() {
-                    self.effects.apply(&event, &scene, &self.looks, chance);
-                }
-                if session.jumping().is_some() || session.hold_expired() {
-                    break;
-                }
-            }
-        }
-        for note in &notes {
-            self.say_for(comm_message(note), MESSAGE_TICKS);
-        }
-        for quote in quotes {
-            self.say_for(quote.text, HAIL_QUOTE_TICKS);
-        }
-        if rescued {
-            // Laid out in the system the rescue took the pod to, from where
-            // it put the ship, before the frame is drawn.
-            self.catch_up();
-        }
-        self.say_messages();
-        // The session may have populated its system afresh.
-        self.read_npc_sheets();
+        self.run_steps(steps, |session| {
+            session.jumping().is_none() && !session.hold_expired()
+        });
         self.update_escort_menu();
         self.alpha = alpha;
+        self.step_cursor(steps);
         self.start_streak_if_jumping();
         self.advance_hud();
     }
@@ -4270,12 +4521,18 @@ impl<
             }
             Err(reason) => hud::draw_unavailable(list, reason),
         }
+        self.cursor.draw(list, &self.looks);
         self.draw_fades(list);
     }
 
-    /// Abandons any gesture on the course map.
+    /// Abandons any gesture on the course map, and forgets where the
+    /// pointer was: flight stops getting pointer moves while it is hidden
+    /// or covered, so the cursor sprite is not drawn (and nothing is
+    /// hovered) at that stale point until the next move, which the app
+    /// sends when flight shows again.
     fn cancel_pointer(&mut self) {
         self.map.cancel_pointer();
+        self.cursor.left();
     }
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
@@ -4286,7 +4543,8 @@ impl<
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),
-    /// then the fight's. The course map has no buttons that sound.
+    /// then the fight's, then the interface's (the player info refused).
+    /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
             .session
@@ -4296,6 +4554,14 @@ impl<
         sounds.extend(self.ui_sounds.drain(..).map(Sound::Ui));
         sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
         sounds
+    }
+
+    /// Flight hides the system's pointer over the window for its cursor
+    /// sprite (`_HandleMouse` @0x38007-0x38017 hides it inside the
+    /// window), unless the map is open, the flight never started or the
+    /// cursor's sheet could not be read.
+    fn hides_pointer(&self) -> bool {
+        !self.map_open && self.session.is_ok() && self.looks.cursor_sheet().is_some()
     }
 
     /// What could not be read of the looks, then the session's
@@ -4308,6 +4574,74 @@ impl<
         }
         diagnostics
     }
+}
+
+/// The ships where the flight draws them, for the hover test: the
+/// session's [`DrawnShips`] port. Every NPC is drawn, by its sheet or as
+/// its crossed box, so each has a box, even one its cloak hides from the
+/// player: [`Session::hover`] asks the cloak itself. Each box is the size
+/// of a frame of the sheet its slot's sprite holds
+/// ([`Session::framed_by`]): a shown ship's own type's. A hidden ship
+/// ([`Session::is_hidden`]: its type's `Cost` is -1) is boxed where it
+/// would be drawn, as the original still positions its hidden sprite
+/// (`_HandleShipDisplay` @0x2cd17) and `_HandleMouse` skips only a slot
+/// with no sprite (@0x38171), by the frames its slot last cloned, as
+/// `_SWCloneFramesFromMaster` (@0x2b824) is skipped for it: often the
+/// previous ship's at that slot ([`nova_sim::RuleKey::HiddenShipHoverBox`]
+/// chooses).
+struct ViewShips<'a, C> {
+    /// The flight, which says where each ship is drawn.
+    view: &'a FlightView<C>,
+    /// The flight's session.
+    session: &'a Session,
+}
+
+impl<C> DrawnShips for ViewShips<'_, C> {
+    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
+        let npc = self.session.npcs().iter().find(|npc| npc.id == id)?;
+        let (at, _) = self.view.shown_npc(npc);
+        let framed = self.session.framed_by(ShipRef::Npc(id))?;
+        let sheet = self.view.npc_sheets.get(&framed);
+        Some(drawn_box(at, drawn_size(sheet)))
+    }
+
+    fn player(&self) -> Option<DrawnBox> {
+        let framed = self.session.framed_by(ShipRef::Player);
+        let size = if framed == Some(self.session.ship()) {
+            match &self.view.sheet {
+                Ok(sheet) => (sheet.frame_width, sheet.frame_height),
+                Err(_) => placeholder_size(),
+            }
+        } else {
+            drawn_size(framed.and_then(|ship| self.view.npc_sheets.get(&ship)))
+        };
+        Some(drawn_box(self.view.shown_position(), size))
+    }
+}
+
+/// A ship's box drawn at `at` (in system coordinates) of `size`.
+fn drawn_box(at: Point, (width, height): (u32, u32)) -> DrawnBox {
+    DrawnBox {
+        centre: Vec2::new(at.x, at.y),
+        width,
+        height,
+    }
+}
+
+/// The frame size of an NPC drawn by `sheet`, the one read for its ship
+/// type if any: its crossed box's when the sheet could not be read.
+fn drawn_size(sheet: Option<&Result<ShipSheet, String>>) -> (u32, u32) {
+    match sheet {
+        Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
+        _ => placeholder_size(),
+    }
+}
+
+/// The crossed box's size, as a frame's.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn placeholder_size() -> (u32, u32) {
+    let side = PLACEHOLDER_SIZE as u32;
+    (side, side)
 }
 
 /// The simulation's `v` as a view point.
@@ -4559,6 +4893,8 @@ mod tests {
         /// The jettisoned cargo box's sheet: `rlëD` 500 of 36 frames, by
         /// default.
         box_sheet: Result<EffectSheet, String>,
+        /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
+        cursor_sheet: Result<EffectSheet, String>,
         /// The string lists: none, by default.
         strings: Vec<(i16, Vec<String>)>,
         /// The persons: none, by default.
@@ -4573,6 +4909,9 @@ mod tests {
         fan: bool,
         /// Every stellar a gate may lead to: none, by default.
         gates: Vec<GateSite>,
+        /// The gates each system lists beyond its stellars: none, by
+        /// default.
+        gate_listers: Vec<(SystemId, StellarId)>,
         /// Whether Alpha Reborn (133) exists, at Alpha Centauri's place,
         /// with no links and Proxima Reborn (141) at its centre: not by
         /// default.
@@ -4676,6 +5015,10 @@ mod tests {
                 image_id: 500,
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
+            cursor_sheet: Ok(EffectSheet {
+                image_id: 651,
+                frames: NonZeroU16::new(8).expect("non-zero"),
+            }),
             strings: Vec::new(),
             persons: Vec::new(),
             defaults: Vec::new(),
@@ -4687,6 +5030,7 @@ mod tests {
             sol_interference: 0,
             sol_more: Vec::new(),
             gates: Vec::new(),
+            gate_listers: Vec::new(),
             lives: Vec::new(),
             missions: Vec::new(),
             mission_texts: Vec::new(),
@@ -4713,6 +5057,7 @@ mod tests {
             dead_frame_size: None,
             type_counts_frames: true,
             exit_angle: -1,
+            tribute: 0,
         }
     }
 
@@ -4865,8 +5210,27 @@ mod tests {
             self.mission_texts.clone()
         }
 
+        /// Every stellar of each system's [`landing_sites`], with every
+        /// system listing it, and the gates of `gate_listers`.
         fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
-            Vec::new()
+            let mut systems = vec![SystemId(130), SystemId(131)];
+            if self.onward {
+                systems.push(SystemId(132));
+            }
+            if self.reborn {
+                systems.push(SystemId(133));
+            }
+            let sites: Vec<(SystemId, Vec<LandingSite>)> = systems
+                .into_iter()
+                .map(|system| (system, self.landing_sites(system)))
+                .collect();
+            let mut listed = nova_sim::fixture::listed_stellars(
+                sites
+                    .iter()
+                    .map(|(system, sites)| (*system, sites.as_slice())),
+            );
+            nova_sim::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
+            listed
         }
 
         fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
@@ -4886,6 +5250,10 @@ mod tests {
         }
 
         fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
+            Vec::new()
+        }
+
+        fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
             Vec::new()
         }
     }
@@ -5054,6 +5422,12 @@ mod tests {
                     ..sheet()
                 }),
                 130 => Err("no shän 130".to_owned()),
+                131 => Ok(ShipSheet {
+                    image_id: 2002,
+                    frame_width: 100,
+                    frame_height: 100,
+                    ..sheet()
+                }),
                 other => panic!("asked for shïp {other}'s sheet"),
             }
         }
@@ -5099,6 +5473,10 @@ mod tests {
                 0 => self.box_sheet.clone(),
                 other => Err(format!("no spïn {}", 500 + other)),
             }
+        }
+
+        fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+            self.cursor_sheet.clone()
         }
     }
 
@@ -5702,7 +6080,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -6325,7 +6703,14 @@ mod tests {
             radar_square: square,
             ..stellar(id, "Extra", at, 1)
         };
+        let mut sites = catalog().sites;
+        sites.extend([
+            site(150, (640.0, 0.0), StellarFlags::STATION),
+            site(151, (-640.0, 320.0), 0),
+            site(152, (0.0, 640.0), 0),
+        ]);
         let view = FlightView::new(FakeCatalog {
+            sites,
             sol_more: vec![
                 sized(150, (640, 0), (300, 300), true),
                 sized(151, (-640, 320), (120, 60), false),
@@ -6422,7 +6807,10 @@ mod tests {
     #[test]
     fn while_landed_the_radar_shows_only_the_player_until_take_off() {
         for every in [false, true] {
-            let view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+            let view = flight_among(vec![
+                site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
+                site(129, (6.0, -8.0), StellarFlags::CAN_LAND),
+            ]);
             let mut view = if every { every_frame(view) } else { view };
             ticks(&mut view, 3);
             let flying = radar_marks(&view);
@@ -8361,7 +8749,8 @@ mod tests {
 
     #[test]
     fn a_pilot_whose_system_is_gone_cannot_fly() {
-        let mut pilot = docked_pilot("Ada");
+        // In flight: a docked pilot resumes in its stellar's system.
+        let mut pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         pilot.explore(SystemId(132));
         let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 132");
         let moved = nova_sim::save::decode(&text).expect("a pilot");
@@ -8419,6 +8808,27 @@ mod tests {
         arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(explored(&view), Some(vec![SystemId(130), SystemId(131)]));
+    }
+
+    #[test]
+    fn the_course_map_shows_systems_explored_between_frames() {
+        let centred = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..catalog()
+        };
+        let mut view = FlightView::new(centred);
+        land_now(&mut view);
+        assert!(view.transact(|pilot| {
+            pilot.explore(SystemId(131));
+        }));
+        let shown = |view: &View| view.course_map().explored().cloned();
+        assert_eq!(shown(&view), Some([SystemId(130)].into()), "not yet");
+        view.tick(TICK);
+        assert_eq!(
+            shown(&view),
+            Some([SystemId(130), SystemId(131)].into()),
+            "the next frame"
+        );
     }
 
     // The exchange and the day's chances.
@@ -9640,6 +10050,68 @@ mod tests {
         );
     }
 
+    /// Turns east at rest, then drifts out slowly that way until far
+    /// enough to jump: facing Alpha Centauri and slow enough, J streaks at
+    /// once.
+    fn ready_to_jump(view: &mut View) {
+        view.input(&key(Key::Right, true));
+        ticks(view, 30);
+        view.input(&key(Key::Right, false));
+        view.input(&key(Key::Up, true));
+        ticks(view, 10);
+        view.input(&key(Key::Up, false));
+        for _ in 0..2000 {
+            if player(view).position.length() >= MIN_JUMP_DISTANCE {
+                break;
+            }
+            view.tick(TICK);
+        }
+        assert_eq!(player(view).heading, 90.0);
+    }
+
+    #[test]
+    fn the_traffic_flies_under_the_streak_through_the_warps_lead_in_then_stands_still() {
+        // The traffic follows the ship out, then makes for planet 128 at
+        // the centre as the ship jumps.
+        let catalog = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..trafficked(&[130], 2, 129, 1)
+        };
+        let jumped = Rc::new(std::cell::Cell::new(false));
+        let landing = Goal::Land(StellarId(128));
+        let mut view = FlightView::new(catalog)
+            .with_behaviour(Rc::new(InspectingUntil(Rc::clone(&jumped), landing)));
+        plot(&mut view, 131);
+        ready_to_jump(&mut view);
+        jumped.set(true);
+        view.input(&key(JUMP, true));
+        assert!(view.jump_effect().is_some(), "streaking on J");
+        let leaving = player(&view);
+        let start = npc_states(&view);
+        assert_eq!(start.len(), 2);
+        // The lead-in lasts 36 ticks (`nova_sim::warp`): 1.2 s.
+        view.tick(ms(500));
+        let session = view.session().expect("flying");
+        assert!(session.in_warp_lead_in());
+        assert_ne!(
+            npc_states(&view),
+            start,
+            "the traffic flies on under the streak"
+        );
+        assert_eq!(player(&view), leaving, "the ship stays where it is");
+        view.tick(ms(800));
+        let session = view.session().expect("flying");
+        assert!(!session.in_warp_lead_in(), "past the lead-in");
+        assert_eq!(session.system(), SystemId(130), "not yet arrived");
+        let past = npc_states(&view);
+        view.tick(ms(150));
+        assert_eq!(npc_states(&view), past, "the traffic stands still");
+        assert_eq!(view.session().expect("flying").system(), SystemId(130));
+        // The arrival keeps the effect's time: past 1.5 s.
+        view.tick(ms(100));
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    }
+
     #[test]
     fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
         let catalog = FakeCatalog {
@@ -9865,6 +10337,7 @@ mod tests {
             height: None,
             strength: 0,
             key_carried: None,
+            cost: 0,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
@@ -10002,6 +10475,7 @@ mod tests {
             height: None,
             strength: 0,
             key_carried: None,
+            cost: 0,
         }
     }
 
@@ -13894,6 +14368,15 @@ mod tests {
     }
 
     #[test]
+    fn jettison_all_empties_the_hold_and_says_so() {
+        let mut view = carrying(0x0400, false);
+        assert!(cargo_aboard(&view) > 0);
+        view.jettison_all();
+        assert_eq!(cargo_aboard(&view), 0);
+        assert_eq!(view.message(), Some(CARGO_JETTISONED));
+    }
+
+    #[test]
     fn a_hidden_missions_cargo_jettisoned_says_the_cargo_went() {
         let mut view = carrying(0x0400, false);
         command_tap(&mut view, JETTISON_KEY, false);
@@ -14304,6 +14787,50 @@ mod tests {
         FlightView::with_pilot(catalog, pilot)
             .with_chance(chance)
             .with_behaviour(Rc::new(Inspector::default()))
+    }
+
+    /// Inspects the player until its flag is set; then it has looked the
+    /// player over, and goes on to its goal.
+    #[derive(Debug)]
+    struct InspectingUntil(Rc<std::cell::Cell<bool>>, Goal);
+
+    impl Behaviour for InspectingUntil {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            if self.0.get() {
+                self.1
+            } else {
+                Goal::Inspect(ShipRef::Player)
+            }
+        }
+    }
+
+    #[test]
+    fn a_scan_in_the_warps_lead_in_is_said_under_the_streak() {
+        let done = Rc::new(std::cell::Cell::new(false));
+        let mut view = smuggling(0, 500)
+            .with_behaviour(Rc::new(InspectingUntil(Rc::clone(&done), Goal::Idle)));
+        plot(&mut view, 131);
+        ready_to_jump(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.jump_effect().is_some(), "streaking on J");
+        assert_eq!(view.pilot().expect("flying").cash(), 1200, "not yet");
+        done.set(true);
+        view.tick(TICK);
+        assert_eq!(view.pilot().expect("flying").cash(), 700, "convicted");
+        assert_eq!(
+            view.message(),
+            Some(
+                "Ship 129:  Kestrel, your attempt to smuggle illegal cargo through this \
+                 system has been detected. You have been fined 500 credits."
+            ),
+            "said under the streak"
+        );
+        assert!(view.jump_effect().is_some());
     }
 
     #[test]
@@ -15309,6 +15836,61 @@ mod tests {
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "at Proxima");
     }
 
+    // The stellars shown.
+
+    /// The IDs of the stellars `view`'s scene draws.
+    fn scene_ids(view: &View) -> Vec<StellarId> {
+        view.scene()
+            .expect("laid out")
+            .stellars()
+            .iter()
+            .map(|stellar| stellar.id)
+            .collect()
+    }
+
+    /// The stellars `view`'s session shows.
+    fn shown_ids(view: &View) -> Vec<StellarId> {
+        view.session().expect("flying").stellars_shown().collect()
+    }
+
+    /// [`catalog`] with Sol listing Proxima (140) too: Sol, the lower and
+    /// visible, owns it, though Alpha Centauri lists it.
+    fn proxima_in_sol() -> FakeCatalog {
+        let mut catalog = catalog();
+        catalog
+            .sites
+            .push(site(140, (0.0, 0.0), StellarFlags::CAN_LAND));
+        catalog
+    }
+
+    #[test]
+    fn the_flight_scene_shows_only_the_sessions_stellars() {
+        let view = FlightView::new(FakeCatalog {
+            character: Ok(CharacterStart {
+                ship: Some(ShipId(128)),
+                systems: [Some(SystemId(131)), None, None, None],
+                ..CharacterStart::default()
+            }),
+            ..proxima_in_sol()
+        });
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(shown_ids(&view), [], "Proxima is Sol's");
+        assert_eq!(scene_ids(&view), [], "Alpha Centauri lists it, unshown");
+    }
+
+    #[test]
+    fn a_rebuild_that_changes_the_stellars_shown_lays_out_the_scene_again() {
+        let mut view = FlightView::with_pilot(proxima_in_sol(), docked_pilot("Ada"));
+        view.take_landing();
+        move_to(&mut view, 131, 140);
+        view.tick(TICK);
+        assert_eq!(shown_ids(&view), [StellarId(140)], "docked at it");
+        assert_eq!(scene_ids(&view), [StellarId(140)]);
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        assert_eq!(shown_ids(&view), [], "in flight, Sol's again");
+        assert_eq!(scene_ids(&view), shown_ids(&view));
+    }
+
     // The galaxy overlay.
 
     /// Changes `view`'s galaxy by itself, not through the view.
@@ -16100,6 +16682,91 @@ mod tests {
             Vec2::ZERO,
             "the flight keys let go"
         );
+    }
+
+    #[test]
+    fn p_asks_for_the_player_info_once_letting_go_of_the_flight_keys() {
+        let mut view = flight();
+        assert!(!view.take_player_info_request());
+        view.input(&key(Key::Up, true));
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(view.take_player_info_request());
+        assert!(!view.take_player_info_request(), "once");
+        view.input(&Input::Key {
+            key: PLAYER_INFO_KEY,
+            pressed: true,
+            repeat: true,
+        });
+        assert!(!view.take_player_info_request(), "not a repeat");
+        view.tick(TICK);
+        assert_eq!(
+            view.session().expect("flying").player().velocity,
+            Vec2::ZERO,
+            "the flight keys let go"
+        );
+        assert_eq!(
+            view.player_info().map(|info| info.credits),
+            Some(view.pilot().expect("flying").cash())
+        );
+        assert!(view.take_sounds().is_empty(), "silent");
+    }
+
+    #[test]
+    fn p_during_a_jump_beeps_and_asks_nothing() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        let _ = view.take_sounds();
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            "turning to jump"
+        );
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let _ = view.take_sounds();
+        view.input(&Input::Key {
+            key: PLAYER_INFO_KEY,
+            pressed: true,
+            repeat: true,
+        });
+        assert!(view.take_sounds().is_empty(), "not a repeat");
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            "streaking"
+        );
+    }
+
+    #[test]
+    fn opening_the_player_info_gives_the_screen_unless_in_a_jump() {
+        let mut view = flight();
+        assert_eq!(view.open_player_info(), view.player_info(), "flying");
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        assert!(view.player_info().is_some(), "the getter reads it");
+        assert_eq!(view.open_player_info(), None, "no opening (@0x5a02a)");
+    }
+
+    #[test]
+    fn p_with_the_map_open_does_nothing() {
+        let mut view = flight();
+        tap(&mut view, MAP_KEY);
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert!(view.map_open());
+        assert!(HELP.contains("P: player info"), "{HELP}");
     }
 
     #[test]
@@ -16937,11 +17604,10 @@ mod tests {
     use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR};
     use nova_sim::GateKind;
 
-    /// Stellar `id` in `system` at (`x`, `y`), with `flags2`, `links` and
+    /// Stellar `id` at (`x`, `y`), with `flags2`, `links` and
     /// `exit_angle`.
     fn gate_site(
         id: i16,
-        system: i16,
         (x, y): (f32, f32),
         flags2: u16,
         links: &[i16],
@@ -16953,7 +17619,6 @@ mod tests {
         }
         GateSite {
             id: StellarId(id),
-            system: SystemId(system),
             position: Vec2::new(x, y),
             flags2,
             links: slots,
@@ -16975,9 +17640,10 @@ mod tests {
                 )
             }],
             gates: vec![
-                gate_site(300, 130, (0.0, 0.0), 0x1200, &[310], 120),
-                gate_site(310, 131, (100.0, 200.0), 0x1000, &[300], 90),
+                gate_site(300, (0.0, 0.0), 0x1200, &[310], 120),
+                gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
             ],
+            gate_listers: vec![(SystemId(131), StellarId(310))],
             ..catalog()
         }
     }
@@ -16991,9 +17657,10 @@ mod tests {
                 ..site(400, (0.0, 0.0), StellarFlags::CAN_LAND)
             }],
             gates: vec![
-                gate_site(400, 130, (0.0, 0.0), 0x2200, &[], 120),
-                gate_site(410, 131, (-300.0, 40.0), 0x2000, &[], 0),
+                gate_site(400, (0.0, 0.0), 0x2200, &[], 120),
+                gate_site(410, (-300.0, 40.0), 0x2000, &[], 0),
             ],
+            gate_listers: vec![(SystemId(131), StellarId(410))],
             ..catalog()
         }
     }
@@ -17199,11 +17866,18 @@ mod tests {
     fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
         // The course map, closed by its key or as Escape does; then the
         // hypergate map, cancelled and entered (`_PlayerEnterHypergate`).
+        // The gate's Sol lists Earth and the Moon too, so its radar holds
+        // them.
+        let gated_sol = || {
+            let mut gated = gated();
+            gated.sites.extend(catalog().sites);
+            gated
+        };
         for (catalog, pick, by_key) in [
             (catalog(), false, true),
             (catalog(), false, false),
-            (gated(), false, true),
-            (gated(), true, true),
+            (gated_sol(), false, true),
+            (gated_sol(), true, true),
         ] {
             let gate = !catalog.gates.is_empty();
             let mut view = FlightView::new(catalog);
@@ -17348,6 +18022,7 @@ mod tests {
         let mut catalog = FakeCatalog {
             sites: holed().sites,
             gates: holed().gates,
+            gate_listers: holed().gate_listers,
             ..trafficked(&[130, 131], 0, 129, 3)
         };
         catalog.dudes[0].1.govt = Some(GovtId(140));
@@ -18079,5 +18754,338 @@ mod tests {
         assert!(blinked, "the session blinked it");
         assert_eq!(told(&mut view), 0, "once");
         assert_eq!(told(&mut flight()), 0, "the default catalog has it");
+    }
+
+    // The hover cursor (`_HandleMouse`).
+
+    /// The cursor sprites in `list`: frame and centre.
+    fn cursor_sprites(list: &DrawList) -> Vec<(u16, Point)> {
+        sprites(list)
+            .into_iter()
+            .filter(|(image, _)| image.id == 651)
+            .map(|(image, at)| (image.frame, at))
+            .collect()
+    }
+
+    /// A flight with one still NPC, drawn after a tick, and its id.
+    fn flight_with_npc(catalog: FakeCatalog) -> (View, NpcId) {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let id = npc_ids(&view)[0];
+        (view, id)
+    }
+
+    /// A point on screen over nothing at all.
+    const NOWHERE: Point = Point::new(40.0, 400.0);
+
+    #[test]
+    fn the_cursor_animates_over_an_npc_and_rests_off_it() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        view.input(&Input::PointerMoved(over));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, over)]);
+        ticks(&mut view, 2);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(1, over)]);
+        view.input(&Input::PointerMoved(NOWHERE));
+        ticks(&mut view, 1);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+        ticks(&mut view, 4);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)], "rests");
+    }
+
+    #[test]
+    fn a_button_press_shows_the_cursor_where_it_is() {
+        let mut view = flight();
+        assert_eq!(cursor_sprites(&drawn(&view)), [], "no pointer yet");
+        view.input(&Input::PointerButton {
+            button: MouseButton::Right,
+            pressed: true,
+            at: NOWHERE,
+        });
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+    }
+
+    #[test]
+    fn the_cursor_draws_over_the_hud_and_under_the_jump_fade() {
+        let cursor_at = |list: &DrawList| {
+            list.iter()
+                .position(
+                    |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 651),
+                )
+                .expect("drawn")
+        };
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        let list = drawn(&view);
+        let cursor = cursor_at(&list);
+        assert!(cursor > hud_at(&list), "over the HUD");
+        assert_eq!(cursor, list.len() - 1, "last, with no fade");
+
+        let mut view = fading_in_on_course_to_barnard();
+        view.input(&Input::PointerMoved(NOWHERE));
+        let list = drawn(&view);
+        let (at_fade, _) = fade(&list).expect("fading in");
+        assert!(cursor_at(&list) < at_fade, "under the fade");
+    }
+
+    #[test]
+    fn a_cloaked_npc_is_hovered_only_with_a_scanner_that_targets_cloaked_ships() {
+        let cloaking = |scanned: bool| {
+            let mut scanner = radar_outfits();
+            let mut mods = [(0, 0); 4];
+            mods[1] = (nova_sim::cloak::MOD_SCANNER, nova_sim::cloak::SCAN_TARGET);
+            scanner[0].mods = mods;
+            let catalog = FakeCatalog {
+                outfits: scanner,
+                defaults: if scanned {
+                    vec![(OutfitId(300), 1)]
+                } else {
+                    Vec::new()
+                },
+                ..trafficked(&[130], 1, 129, 3)
+            };
+            let (mut view, id) = flight_with_npc(catalog);
+            let session = view.session.as_mut().expect("flying");
+            nova_sim::fixture::cloak(session, id, CLOAKED);
+            let session = view.session().expect("flying");
+            assert!(!session.scanner().on_screen, "cannot see it");
+            assert_eq!(session.scanner().targets, scanned);
+            let over = npc_on_screen(&view, id);
+            view.input(&Input::PointerMoved(over));
+            ticks(&mut view, 2);
+            let frames: Vec<u16> = cursor_sprites(&drawn(&view))
+                .into_iter()
+                .map(|(frame, _)| frame)
+                .collect();
+            frames
+        };
+        assert_eq!(cloaking(false), [0], "rests");
+        assert_eq!(
+            cloaking(true),
+            [1],
+            "animates over the ship it does not draw"
+        );
+    }
+
+    #[test]
+    fn the_players_own_ship_is_hovered_only_while_it_holds_a_target() {
+        let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let frame = |view: &mut View| {
+            view.input(&Input::PointerMoved(VIEW_CENTER));
+            ticks(view, 2);
+            cursor_sprites(&drawn(view))
+        };
+        assert_eq!(frame(&mut view), [(0, VIEW_CENTER)], "no target");
+        view.input(&key(TARGET_KEY, true));
+        view.input(&key(TARGET_KEY, false));
+        assert!(view.session().expect("flying").target().is_some());
+        assert_eq!(frame(&mut view), [(1, VIEW_CENTER)], "a target");
+    }
+
+    #[test]
+    fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        let near = |list: &DrawList| {
+            list.iter().any(|command| match *command {
+                DrawCommand::Sprite { center, image, .. } => {
+                    image.id != 651
+                        && (center.x - over.x).abs() < 0.01
+                        && (center.y - over.y).abs() < 0.01
+                }
+                _ => false,
+            })
+        };
+        assert!(near(&drawn(&view)), "drawn while shown");
+        nova_sim::fixture::hide(view.session.as_mut().expect("flying"), id);
+        assert!(view.session().expect("flying").is_hidden(ShipRef::Npc(id)));
+        assert!(!near(&drawn(&view)), "not drawn hidden");
+        view.input(&Input::PointerMoved(over));
+        ticks(&mut view, 2);
+        assert_eq!(
+            cursor_sprites(&drawn(&view)),
+            [(1, over)],
+            "animates over where it would be drawn"
+        );
+    }
+
+    /// [`SlotSprites`] whose `slot` last cloned `shïp` 131's 100-pixel
+    /// frames, as a flight that showed one there leaves it.
+    fn cloned_131(slot: nova_sim::ship_layer::Slot) -> SlotSprites {
+        let mut sprites = SlotSprites::default();
+        sprites.frames.clone_frames(slot, ShipId(131));
+        sprites
+    }
+
+    /// Whether the pointer at `over` hovers a ship in `view`, after the
+    /// two ticks the cursor takes to animate.
+    fn hovers(view: &mut View, over: Point) -> bool {
+        view.input(&Input::PointerMoved(over));
+        ticks(view, 2);
+        cursor_sprites(&drawn(view))
+            .first()
+            .is_some_and(|&(frame, _)| frame == 1)
+    }
+
+    #[test]
+    fn a_hidden_ship_is_hovered_by_the_box_its_berth_last_drew() {
+        let engine = Rulebook::default;
+        let hover = |rules: Rulebook, off: f32| {
+            let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+            let session = view.session.as_mut().expect("flying");
+            nova_sim::fixture::hide(session, id);
+            let berth = session
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("there")
+                .berth;
+            let mut view = view
+                .with_rules(rules)
+                .with_slot_sprites(cloned_131(nova_sim::ship_layer::Slot::Berth(berth)));
+            let carried = sheets(&view).contains(&ShipId(131));
+            assert_eq!(
+                carried,
+                rules == engine(),
+                "read as the history is carried in"
+            );
+            let over = npc_on_screen(&view, id);
+            hovers(&mut view, Point::new(over.x, over.y + off))
+        };
+        assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
+        assert!(!hover(engine(), 60.0), "outside it");
+        let own = || {
+            Rulebook::default().with_override(
+                nova_sim::RuleKey::HiddenShipHoverBox,
+                nova_sim::RuleSource::Bible,
+            )
+        };
+        assert!(hover(own(), 30.0), "inside its own 40-pixel frame's margin");
+        assert!(!hover(own(), 40.0), "boxed by its own 40-pixel frame");
+    }
+
+    #[test]
+    fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
+        let hover = |rules: Rulebook, off: f32| {
+            let catalog = FakeCatalog {
+                hulls: vec![nova_sim::HullRecord {
+                    cost: -1,
+                    ..hull_of(128, &[])
+                }],
+                ..trafficked(&[130], 1, 129, 3)
+            };
+            let (view, _) = flight_with_npc(catalog);
+            let mut view = view
+                .with_rules(rules)
+                .with_slot_sprites(cloned_131(nova_sim::ship_layer::Slot::Player));
+            assert!(view.session().expect("flying").is_hidden(ShipRef::Player));
+            view.input(&key(TARGET_KEY, true));
+            view.input(&key(TARGET_KEY, false));
+            assert!(view.session().expect("flying").target().is_some());
+            hovers(&mut view, Point::new(VIEW_CENTER.x, VIEW_CENTER.y + off))
+        };
+        let engine = Rulebook::default;
+        assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
+        assert!(!hover(engine(), 60.0));
+        let own = || {
+            Rulebook::default().with_override(
+                nova_sim::RuleKey::HiddenShipHoverBox,
+                nova_sim::RuleSource::Bible,
+            )
+        };
+        assert!(hover(own(), 30.0));
+        assert!(!hover(own(), 40.0), "boxed by its own sheet");
+    }
+
+    #[test]
+    fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
+        let mut sprites = SlotSprites::default();
+        sprites.layers.put(
+            nova_sim::ship_layer::Slot::Berth(2),
+            nova_sim::ship_layer::ShipLayer::Led,
+        );
+        sprites
+            .frames
+            .clone_frames(nova_sim::ship_layer::Slot::Berth(2), ShipId(140));
+        let view = flight().with_slot_sprites(sprites.clone());
+        assert_eq!(view.session().expect("flying").slot_sprites(), &sprites);
+        assert_eq!(view.slot_sprites(), Some(&sprites));
+        let failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        })
+        .with_slot_sprites(sprites);
+        assert_eq!(failed.slot_sprites(), None);
+    }
+
+    #[test]
+    fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+        assert_eq!(view.cursor_at(), Some(NOWHERE));
+        view.cancel_pointer();
+        assert_eq!(cursor_sprites(&drawn(&view)), [], "not at the old point");
+        assert_eq!(view.cursor_at(), None);
+        let other = Point::new(60.0, 420.0);
+        view.input(&Input::PointerMoved(other));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, other)]);
+        assert_eq!(view.cursor_at(), Some(other));
+    }
+
+    #[test]
+    fn the_cursor_is_hidden_once_the_pointer_leaves_the_window() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&Input::PointerLeft);
+        assert_eq!(cursor_sprites(&drawn(&view)), []);
+    }
+
+    #[test]
+    fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(Key::Char('z'), true));
+        ticks(&mut view, 1);
+        let tint = |view: &View| {
+            drawn(view).iter().find_map(|command| match *command {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
+        };
+        assert_eq!(tint(&view), Some(247), "31 of 32");
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 2);
+        assert_eq!(tint(&view), Some(231), "held: 29 of 32");
+    }
+
+    #[test]
+    fn the_cursor_is_not_drawn_while_the_map_is_open() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(MAP_KEY, true));
+        assert!(view.map_open());
+        assert_eq!(cursor_sprites(&drawn(&view)), []);
+    }
+
+    #[test]
+    fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() {
+        let mut view = flight();
+        assert!(view.hides_pointer());
+        view.input(&key(MAP_KEY, true));
+        assert!(!view.hides_pointer(), "the map");
+        let no_cursor = FakeCatalog {
+            cursor_sheet: Err("no spïn 650".to_owned()),
+            ..catalog()
+        };
+        assert!(!FlightView::new(no_cursor).hides_pointer());
+        let failed = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        assert!(!FlightView::new(failed).hides_pointer());
     }
 }

@@ -34,6 +34,17 @@
 //! another, and for a pilot flown docked at a stellar of a hidden system at
 //! its place. A mover says only where the ship is docked ([`Dock`]).
 //!
+//! Which of a system's stellars are shown is the galaxy's: those it holds
+//! by ownership or by the rescue ([`OverlaidGalaxy::shows`]), as
+//! `_HandleStellarSystemVisibility` shows only the active stellars the
+//! player's system owns, so a stellar another visible system owns is not
+//! shown though the system lists it. The stellar the ship is docked at
+//! is always among those shown. The session keeps every stellar the
+//! system lists, and derives the stellars shown from them as the system
+//! changes and at each flight rebuild point ([`Session::reshow`]); a
+//! galaxy change between rebuild points reads the stellars shown again
+//! but never changes which are shown.
+//!
 //! The last step announces the arrival, and tells a view what to redraw
 //! ([`scene_event`], see the `events` module): measured against the
 //! system whose stellars are shown, which after a landed move is still
@@ -218,8 +229,11 @@ pub(super) enum Reset {
 pub(super) enum CourseStep {
     /// It is kept.
     Keep,
-    /// Its first so many systems, the hops made, are taken off.
-    Drop(usize),
+    /// A jump's arrival: the hops made dropped, and an arrival off the
+    /// course cleared or its first hop dropped as
+    /// [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see
+    /// the `course` module).
+    Arrival { hops: usize },
     /// It is cleared.
     Clear,
 }
@@ -317,8 +331,10 @@ fn rescue() -> Resets {
 /// jump's fuel (@0x6c0b9-0x6c0f9) and resets the mission sound ID
 /// (@0x6c4ff), and forgets the stellar the offers were rolled at
 /// (@0x6bfce), drawing the roll table afresh before the system is set up
-/// (@0x6c040-0x6c066). It never clears the course, only drops the hops made; the
-/// jump's start already stopped the thrust, and every tick ends a gate's
+/// (@0x6c040-0x6c066). It drops the hops made, and an arrival that made
+/// none clears the course or drops its first hop as
+/// [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says
+/// (@0x6c472-0x6c4c6; see the `course` module); the jump's start already stopped the thrust, and every tick ends a gate's
 /// pending entry. Populating lets go of the strikes, the boarding, the
 /// hail and the target too. The caller arms the escort-strength timer
 /// before entering, ahead of the jump's days ([`Session::arrive`]).
@@ -341,7 +357,7 @@ fn jump(hops: usize) -> Resets {
             Reset::ArrivalMessage,
             Reset::Rebuild,
         ],
-        CourseStep::Drop(hops),
+        CourseStep::Arrival { hops },
         TrafficStep::Populate,
     )
 }
@@ -560,14 +576,13 @@ impl Session {
             self.pilot.stellar = placement.stellar;
         }
         if resets.has(Reset::Explore) {
-            self.pilot.explore(system);
+            // With its place's head, by the engine (see the `explored`
+            // module).
+            self.explore_place(system);
         }
         match resets.course {
             CourseStep::Keep => {}
-            CourseStep::Drop(hops) => {
-                let hops = hops.min(self.pilot.course.len());
-                self.pilot.course.drain(..hops);
-            }
+            CourseStep::Arrival { hops } => self.course_after_arrival(hops, system),
             CourseStep::Clear => self.pilot.course.clear(),
         }
         if resets.has(Reset::Touchdown) {
@@ -604,8 +619,11 @@ impl Session {
         }
         self.announce(how, &resets, system, scene_event(how, scene_changed));
         // A jump's arrival raised its `Explored` before its days, at the
-        // original's first nebula exploration (@0x6be12).
-        if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. }) {
+        // original's first nebula exploration (@0x6be12); a gate's or
+        // wormhole's exit explores no nebula (`_PlayerEnterHypergate`
+        // 0x637bf, `_PlayerEnterWormhole` 0x64005; see the `nebulae`
+        // module).
+        if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. } | Entry::Gate) {
             self.raise(StoryEvent::Explored { system });
         }
         if resets.has(Reset::Rebuild) {
@@ -613,38 +631,81 @@ impl Session {
         }
     }
 
-    /// Makes `system` the player's system and `sites` its stellars: the one
-    /// owner of which stellars the session shows (see the module docs).
-    /// In flight, or docked at a stellar of `system` itself, `sites` are
-    /// shown at once and nothing waits for the take-off. Docked at a
-    /// stellar of another system (where the ship was, or `dock`'s system),
-    /// that system's stellars stay shown, or `dock`'s become so, and
-    /// `sites` wait for the take-off. Whether the system whose stellars are
-    /// shown changed.
+    /// Makes `system` the player's system and `listed` every stellar it
+    /// lists: the one owner of which stellars the session shows (see the
+    /// module docs). In flight, or docked at a stellar of `system` itself,
+    /// those of `listed` it shows are shown at once and nothing waits for
+    /// the take-off. Docked at a stellar of another system (where the ship
+    /// was, or `dock`'s system), that system's stellars stay shown, or
+    /// `dock`'s become so, and `listed` waits for the take-off. Either
+    /// way the stellars shown are those their system holds, and the one
+    /// docked at ([`shown_sites`](super::shown_sites)). Whether the system
+    /// whose stellars are shown changed.
     pub(super) fn set_player_system(
         &mut self,
         system: SystemId,
-        sites: Vec<LandingSite>,
+        listed: Vec<LandingSite>,
         dock: Dock,
     ) -> bool {
         let before = self.shown;
         self.pilot.system = system;
-        let (docked_in, docked_sites) = match dock {
+        let (docked_in, docked_listed) = match dock {
             Dock::AsItWas => (self.shown, None),
-            Dock::At(at, at_sites) => (at, Some(at_sites)),
+            Dock::At(at, at_listed) => (at, Some(at_listed)),
         };
         if self.landed.is_none() || docked_in == system {
-            self.sites = sites;
-            self.shown = system;
+            self.show(system, listed);
             self.next_sites = None;
         } else {
-            if let Some(docked_sites) = docked_sites {
-                self.sites = docked_sites;
+            if let Some(docked_listed) = docked_listed {
+                self.show(docked_in, docked_listed);
             }
             self.shown = docked_in;
-            self.next_sites = Some(sites);
+            self.next_sites = Some(listed);
         }
         self.shown != before
+    }
+
+    /// Shows the stellars of `listed`, every one `system` lists, that it
+    /// shows ([`shown_sites`](super::shown_sites)).
+    fn show(&mut self, system: SystemId, listed: Vec<LandingSite>) {
+        self.sites = super::shown_sites(
+            &self.galaxy,
+            &self.listed_stellars,
+            system,
+            &listed,
+            self.landed,
+        );
+        self.listed = listed;
+        self.shown = system;
+    }
+
+    /// Derives the stellars shown afresh from those their system lists, in
+    /// flight only, and says whether that changed which are shown: a
+    /// flight rebuild point's part (see the `stellars` module), as
+    /// `_HandleStellarSystemVisibility` sets which stellars are active
+    /// and owned by the player's system at each rebuild point.
+    ///
+    /// Docked, nothing is derived: the landing's rebuild (@0x5fbf0) would
+    /// change only the sprites the flight shows, and the take-off's
+    /// (@0x674c7) derives them again before the first frame, so the
+    /// difference crosses no boundary the player sees. Every flight
+    /// rebuild point lets go of the navigation target first, so it never
+    /// names a stellar no longer shown.
+    pub(super) fn reshow(&mut self) -> bool {
+        if self.landed.is_some() {
+            return false;
+        }
+        let listed = std::mem::take(&mut self.listed);
+        let before: Vec<StellarId> = self.stellars_shown().collect();
+        self.show(self.shown, listed);
+        !self.stellars_shown().eq(before)
+    }
+
+    /// The stellars shown, in navigation order (their system's `NavDefs`
+    /// order): what the flight view draws.
+    pub fn stellars_shown(&self) -> impl Iterator<Item = StellarId> + '_ {
+        self.sites.iter().map(|site| site.id)
     }
 
     /// Checks the invariant [`Session::set_player_system`] keeps: docked,
@@ -831,7 +892,7 @@ mod tests {
                         Reset::RedrawOffers,
                     ],
                 ),
-                CourseStep::Drop(hops),
+                CourseStep::Arrival { hops },
                 TrafficStep::Populate,
             );
             for f in [facts(true, false), facts(false, true)] {

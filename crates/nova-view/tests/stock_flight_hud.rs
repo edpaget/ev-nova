@@ -3,7 +3,7 @@
 //! 767 background against the right edge, a Fed Destroyer shows the
 //! Federation's `ïntf` 130, and every stock `ïntf` reads; and
 //! the combat looks: every weapon the simulation flies, every explosion
-//! type, every cargo box graphic and a ship's target card read, and
+//! type, every cargo box graphic, the cursor and a ship's target card read, and
 //! every looped weapon sound's length; a boarding grant's message reads
 //! the strings it is built from; the cargo area's strings and area read; and the radar draws the
 //! stock stations, hypergates and wormholes as squares. Skips, passing,
@@ -191,6 +191,19 @@ fn every_cargo_box_graphic_reads_its_spin() {
         let spin = data.spin_sheet(500 + graphic.cast_signed()).expect("reads");
         assert_eq!(sheet.image_id, spin.image_id, "box {graphic}");
     }
+}
+
+#[test]
+fn the_cursors_sheet_is_spin_650s() {
+    let Some(data) = open() else {
+        return;
+    };
+    let sheet = data.cursor_sheet().expect("spïn 650 reads");
+    assert_eq!(
+        (sheet.image_id, sheet.frames.get()),
+        (8080, 9),
+        "rlëD 8080, 9 frames"
+    );
 }
 
 #[test]

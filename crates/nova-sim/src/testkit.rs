@@ -8,10 +8,10 @@ use crate::catalog::{
     AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
     HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
-    MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
+    StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId, SystemTraffic,
+    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -27,6 +27,7 @@ use crate::session::LandPress;
 use crate::session::Session;
 use crate::stats::ShipStats;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::warp::SoundLength;
 
 /// A canned first `chär`, ships and systems; records the ships asked
 /// for.
@@ -83,6 +84,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) gates: Vec<GateSite>,
     /// How many times the gate sites were read.
     pub(crate) gate_reads: RefCell<usize>,
+    /// Each system's `NavDefs` entries beyond its landing sites: the
+    /// gates it lists that the ship never flies among, which the gate
+    /// rules resolve to it. None, by default.
+    pub(crate) gate_listers: Vec<(SystemId, StellarId)>,
     /// Every stellar's life: none, by default ([`FakePilotCatalog::living`]).
     pub(crate) lives: Vec<StellarLife>,
     /// How many times the stellars' lives were read.
@@ -107,6 +112,11 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) crons: Vec<CronRecord>,
     /// Every `ränk`: none, by default.
     pub(crate) ranks: Vec<RankRecord>,
+    /// Every `nëbu`: none, by default.
+    pub(crate) nebulae: Vec<NebulaRecord>,
+    /// The warp-up sound's length: none, by default, so the warp's clock
+    /// takes 350 Mac ticks.
+    pub(crate) warp_sound: Option<SoundLength>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -134,6 +144,25 @@ pub(crate) fn cron(id: i16) -> CronRecord {
         news_govt: [-1; 4],
         govt_news: [-1; 4],
         ind_news: -1,
+    }
+}
+
+/// Nebula `id` over `rect` (left, top, width, height), active by
+/// `active_on` and running `on_explore` as it is explored.
+pub(crate) fn nebula(
+    id: i16,
+    rect: (i16, i16, i16, i16),
+    active_on: &str,
+    on_explore: &str,
+) -> NebulaRecord {
+    NebulaRecord {
+        id: NebulaId(id),
+        left: rect.0,
+        top: rect.1,
+        width: rect.2,
+        height: rect.3,
+        active_on: Test::parse(active_on),
+        on_explore: Script::parse(on_explore),
     }
 }
 
@@ -252,7 +281,7 @@ pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
         aboard: true,
         failed: None,
         ships: crate::mission::SpecialShips::default(),
-        aux: crate::mission::aux::AuxShips::default(),
+        aux: crate::mission::aux_ships::AuxShips::default(),
     }
 }
 
@@ -275,6 +304,7 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         dead_frame_size: None,
         type_counts_frames: true,
         exit_angle: -1,
+        tribute: 0,
     }
 }
 
@@ -312,7 +342,7 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 
 /// `shïp` `id` with `fields`: 10,000 credits, tech level 1, for sale
 /// every day (`BuyRandom` 100), never for hire (`HireRandom` 0),
-/// requiring nothing, with no default items, no `Flags3` and no inherent
+/// requiring nothing, with no default items, no `Flags` or `Flags3` and no inherent
 /// government, hailed as "ship `id`", a wimpy trader whose escort class
 /// is worked out (`EscortType` -1).
 pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
@@ -399,6 +429,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         height: None,
         strength: 0,
         key_carried: None,
+        cost: 0,
     }
 }
 
@@ -559,6 +590,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         date_affix_reads: RefCell::default(),
         gates: Vec::new(),
         gate_reads: RefCell::default(),
+        gate_listers: Vec::new(),
         lives: Vec::new(),
         life_reads: RefCell::default(),
         fallback_frame: Some((100, 100)),
@@ -570,6 +602,8 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         visibility: Vec::new(),
         crons: Vec::new(),
         ranks: Vec::new(),
+        nebulae: Vec::new(),
+        warp_sound: None,
     }
 }
 
@@ -603,6 +637,39 @@ pub(crate) fn with_variants(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
         mark(152, (2000, 0), "Other"),
         mark(153, (2001, 0), "Varia"),
     ];
+    catalog
+}
+
+/// `catalog` with a system 134 at 131's map place, (600, 0), listing a
+/// stellar 141 at the centre, as 131 lists 140: 131 shows while b50 is
+/// clear, 134 once it is set. With `marked`, 140 and 141 are marked with
+/// one place and name, so b50 swaps a stellar for its variant (Tri'niphu
+/// 212 for 657 after b1502, in miniature); without, they differ by name.
+pub(crate) fn swapped(mut catalog: FakePilotCatalog, marked: bool) -> FakePilotCatalog {
+    catalog.systems.push(SystemId(134));
+    catalog.star_map.push(star(134, (600.0, 0.0), &[]));
+    catalog
+        .sites
+        .push((SystemId(134), vec![planet(141, 0.0, 0.0)]));
+    let mark = |id, name: &str| StellarMark {
+        id: StellarId(id),
+        place: (0, 0),
+        name: name.to_owned(),
+    };
+    let other = if marked { "Tre'ar Zalom" } else { "Elsewhere" };
+    catalog
+        .marks
+        .extend([mark(140, "Tre'ar Zalom"), mark(141, other)]);
+    catalog.visibility.extend([
+        SystemVisibility {
+            id: SystemId(131),
+            visibility: Test::parse("!b50"),
+        },
+        SystemVisibility {
+            id: SystemId(134),
+            visibility: Test::parse("b50"),
+        },
+    ]);
     catalog
 }
 
@@ -755,34 +822,19 @@ impl PilotCatalog for FakePilotCatalog {
     }
 
     /// Every stellar of [`FakePilotCatalog::sites`], with every system
-    /// listing it.
+    /// listing it ([`listed_stellars`](crate::fixture::listed_stellars)),
+    /// and the gates of [`FakePilotCatalog::gate_listers`]; the sites of
+    /// systems outside [`FakePilotCatalog::systems`] are left out.
     fn listed_stellars(&self) -> Vec<ListedStellar> {
-        let mut listed: std::collections::BTreeMap<StellarId, ListedStellar> =
-            std::collections::BTreeMap::new();
         // Only the systems that can be read list, as the port says.
-        let mut sites: Vec<_> = self
-            .sites
-            .iter()
-            .filter(|(system, _)| self.systems.contains(system))
-            .cloned()
-            .collect();
-        sites.sort_by_key(|(system, _)| *system);
-        for (system, sites) in sites {
-            for site in sites {
-                listed
-                    .entry(site.id)
-                    .or_insert_with(|| ListedStellar {
-                        id: site.id,
-                        systems: Vec::new(),
-                        flags: site.flags,
-                        flags2: site.flags2,
-                        govt: site.govt,
-                    })
-                    .systems
-                    .push(system);
-            }
-        }
-        listed.into_values().collect()
+        let mut listed = crate::fixture::listed_stellars(
+            self.sites
+                .iter()
+                .filter(|(system, _)| self.systems.contains(system))
+                .map(|(system, sites)| (*system, sites.as_slice())),
+        );
+        crate::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
+        listed
     }
 
     fn system_visibility(&self) -> Vec<SystemVisibility> {
@@ -804,6 +856,14 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn ranks(&self) -> Vec<RankRecord> {
         self.ranks.clone()
+    }
+
+    fn nebulae(&self) -> Vec<NebulaRecord> {
+        self.nebulae.clone()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        self.warp_sound
     }
 }
 

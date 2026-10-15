@@ -10,6 +10,13 @@
 //! **Hostility to the player** ([`hostile_to_player`]), the player being
 //! in the system and not breaking up:
 //!
+//! - A G that blesses the player (rank `Flags` 0x0100,
+//!   [`Surroundings::blessed`]): never, whatever below would say,
+//!   `Flags` 0x0004 included. The original's hunt skips the legal table
+//!   for it (the in-reach flag cleared, @0x8a6a8-0x8a701), and its final
+//!   step clears the player candidate whatever set it (@0x8aa35-0x8aa48).
+//!   Hostility feeds only step 7 below, so no step 7 gives a blessed
+//!   player.
 //! - `Flags` 0x0004: always; else `Flags` 0x0040: never.
 //! - A xenophobic G: unless S is G and L is above none.
 //! - Otherwise only while the player is within [`HUNT_REACH`] times the
@@ -23,9 +30,13 @@
 //!   | allied with G | L < -1.5 T ([`ALLIED_TOLERANCE`], @0xdd640) |
 //!   | neutral, or none | only with `Flags` 0x0002: L < -2 T |
 //!
-//! The player is never blessed (no ranks yet), carries no IFF scrambler,
-//! and its ship has no combat government, so the original's 1-in-50
-//! chance against a player flying an enemy's ship is not modelled.
+//! The blessing is the deciding ship's own government's, as
+//! [`Session::blessing`](crate::Session::blessing) takes it under either
+//! reading of `rank_govt_reach` and `blessing_refresh`; another
+//! government's blessing changes nothing here. The player carries no IFF
+//! scrambler (+0x83, @0x8aa13), and its ship has no combat government, so
+//! the original's 1-in-50 chance against a player flying an enemy's ship
+//! (@0x8a930-0x8a9c3) is not modelled.
 //!
 //! **The target** ([`select_target`]): these steps in order, the first
 //! that gives one winning; "nearest" is by squared distance, a tie to the
@@ -36,28 +47,34 @@
 //! 2. **A grudge** (`_SelectWarshipTarget` @0x89ebc-0x89f20): a person
 //!    whose `Flags` has 0x0001 and who holds a grudge against the player
 //!    (see [`person`](crate::person)) picks the player, while it is in
-//!    the system and not breaking up, unless it spares it.
+//!    the system and not breaking up, unless it spares it. It reads no
+//!    blessing: a blessing government's person with a grudge still takes
+//!    the player.
 //! 3. **A mission ship of `ShipBehav` 0** (@0x89f25-0x89f84, see
 //!    [`mission_hunt`]): while the player is in the system, the player,
 //!    or none when it is disabled or breaking up and the ship has no
 //!    destroying weapons (as `_WarshipAI` drops such a target in the same think,
 //!    @0x8bc8b-0x8bca9); no later step runs, so such a hunter never turns
 //!    on another ship while the player is here, and a paid-off one takes
-//!    the player again. The `ShipBehav` 1 branch (@0x89f86-0x89fef) never
-//!    runs (see the session's `mission_escorts` module).
+//!    the player again. It reads no blessing either. The `ShipBehav` 1
+//!    branch (@0x89f86-0x89fef) never runs (see the session's
+//!    `mission_escorts` module).
 //! 4. **Out of ammunition** (@0x89ff4-0x8a006): a ship with no weapon,
 //!    or every weapon out of rounds or fuel
 //!    ([`AmmoLeft::Dry`](crate::ai::fire::AmmoLeft::Dry)), takes no new
 //!    target.
 //! 5. **A xenophobe**: the nearest of the player (unless `Flags` 0x0040,
-//!    or S is G and L is above none; always with 0x0004) and every NPC
-//!    enemy not allied with it and not of its own fleet.
+//!    or S is G and L is above none; always with 0x0004; never while G
+//!    blesses the player, @0x8a1ae) and every NPC enemy not allied with it
+//!    and not of its own fleet.
 //! 6. **Help allies** (@0x8a418): the ship T that the first other ship of
 //!    a government allied with its own (its own included) attacks or
 //!    flees from, when its own friend strength times its government's
 //!    `MaxOdds` is no less than T's. T may be the player, but never a
 //!    ship it spares (below). This is how police come to a trader's
-//!    defence.
+//!    defence. While G blesses the player, an ally whose T is the player
+//!    or a ship the player leads is passed over, and the search goes on to
+//!    the next ally (@0x8a4e4-0x8a50e, then @0x8a5de).
 //! 7. **The player** when it is hostile, and **every NPC enemy**: the
 //!    nearest of them, each dropped when its friend strength is above the
 //!    ship's own times its `MaxOdds`, and a disabled NPC skipped unless
@@ -68,7 +85,9 @@
 //!    leads ([`Npc::threatens_npc_among`]), other than one it spares. The
 //!    player is never one here: the original asks of it while the ship
 //!    has no target (@0x8ad3c), so `_IsThreatToPlayer` of the ship is
-//!    false. The original's second threat search, for a ship of AI type
+//!    false, and the blessing `_ExtendedIsThreatToShip` reads there
+//!    (@0x81a89) cannot change the answer. A blessing government's ship
+//!    still turns on an NPC threat. The original's second threat search, for a ship of AI type
 //!    6 (@0x8ae70, @0x8af1d), never runs: only AI types 3 and 4 reach
 //!    this function (`_AIDispatch` @0x8ffc2-0x9000a).
 //!
@@ -120,8 +139,11 @@ pub fn hostile_to_player(npc: &Npc, around: &Surroundings) -> bool {
     let Some(player) = around.player.filter(|_| around.live(ShipRef::Player)) else {
         return false;
     };
-    let govts = around.govts;
     let own = npc.govt;
+    if around.blessed(own) {
+        return false;
+    }
+    let govts = around.govts;
     if govts.flag(own, ALWAYS_ATTACKS_PLAYER) {
         return true;
     }
@@ -152,13 +174,15 @@ pub fn hostile_to_player(npc: &Npc, around: &Surroundings) -> bool {
 
 /// Whether a xenophobic `npc` takes the player as a candidate among
 /// `around`: unless `Flags` 0x0040 (and not 0x0004), or the player is in
-/// good standing in the ship's own system.
+/// good standing in the ship's own system; and never while its government
+/// blesses the player, 0x0004 or not (@0x8a1ae).
 fn xenophobe_hunts_player(npc: &Npc, around: &Surroundings) -> bool {
     let govts = around.govts;
     around.live(ShipRef::Player)
         && (govts.flag(npc.govt, ALWAYS_ATTACKS_PLAYER)
             || !(govts.flag(npc.govt, NEVER_ATTACKS_PLAYER)
                 || (around.system_govt == npc.govt && around.record > 0)))
+        && !around.blessed(npc.govt)
 }
 
 /// The nearest of `candidates` to `npc` among `around`, by squared
@@ -268,6 +292,7 @@ pub fn select_target(
         }
     }
     let own = friend_strength(me, around) * govts.max_odds(npc.govt);
+    let blessed = around.blessed(npc.govt);
     let helped = others()
         .filter(|ally| {
             ally.condition == Condition::Intact
@@ -276,6 +301,9 @@ pub fn select_target(
         })
         .find_map(|ally| {
             let foe = ally.goal.quarry()?;
+            if blessed && leads_or_is_player(foe, around) {
+                return None;
+            }
             (foe != me
                 && around.live(foe)
                 && !spares(npc, foe, around)
@@ -307,6 +335,15 @@ pub fn select_target(
     nearest(npc, threats, around)
 }
 
+/// Whether `ship` is the player or a ship the player leads, among
+/// `around` (the quarry's leader +0x9a is 0, @0x8a4e4).
+fn leads_or_is_player(ship: ShipRef, around: &Surroundings) -> bool {
+    match ship {
+        ShipRef::Player => true,
+        ShipRef::Npc(id) => around.npc(id).is_some_and(Npc::escorts_player),
+    }
+}
+
 /// Whether `npc` spares `ship` among `around`: the player once it has
 /// paid to be spared, or an NPC allied with it or of its own fleet (see
 /// the module docs).
@@ -335,6 +372,7 @@ pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::fixture::blessing_of;
     use crate::ai::{Goal, PlayerSide};
     use crate::catalog::{GovtId, GovtRecord, WeaponRecord};
     use crate::combat::armament::Armament;
@@ -343,6 +381,7 @@ mod tests {
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::govt::{Governments, XENOPHOBIC};
+    use crate::rank::Blessing;
     use crate::reserves::Reserves;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, govt, weapon};
@@ -424,6 +463,7 @@ mod tests {
             rating: 0,
             yardstick: 0,
             untargetable: false,
+            blessing: Blessing::NONE,
         }
     }
 
@@ -436,11 +476,25 @@ mod tests {
     /// Whether ship 1 of govt 140 (of `flags`) at the centre is hostile
     /// to the player at (`x`, `y`) with record `record` in a system of
     /// `system`.
-    fn hostile(flags: u16, system: Option<GovtId>, record: i16, (x, y): (f32, f32)) -> bool {
+    fn hostile(flags: u16, system: Option<GovtId>, record: i16, at: (f32, f32)) -> bool {
+        hostile_blessed(flags, system, record, at, Blessing::NONE)
+    }
+
+    /// [`hostile`], the player blessed by `blessing`.
+    fn hostile_blessed(
+        flags: u16,
+        system: Option<GovtId>,
+        record: i16,
+        (x, y): (f32, f32),
+        blessing: Blessing,
+    ) -> bool {
         let govts = govts(flags);
         let npcs = [ship(1, ME, 0.0, 0.0)];
         let around = Surroundings {
-            player: Some(player(x, y)),
+            player: Some(PlayerSide {
+                blessing,
+                ..player(x, y)
+            }),
             govts: &govts,
             system_govt: system,
             record,
@@ -531,6 +585,16 @@ mod tests {
     /// between the player 100 above and a rival 300 to the right, with
     /// record `record` in a system of `system`.
     fn xenophobe_choice(flags: u16, system: Option<GovtId>, record: i16) -> Option<ShipRef> {
+        xenophobe_choice_blessed(flags, system, record, Blessing::NONE)
+    }
+
+    /// [`xenophobe_choice`], the player blessed by `blessing`.
+    fn xenophobe_choice_blessed(
+        flags: u16,
+        system: Option<GovtId>,
+        record: i16,
+        blessing: Blessing,
+    ) -> Option<ShipRef> {
         let govts = Governments::new([
             GovtRecord {
                 flags: XENOPHOBIC | flags,
@@ -540,7 +604,10 @@ mod tests {
         ]);
         let npcs = [ship(1, XENO, 0.0, 0.0), ship(2, RIVAL, 300.0, 0.0)];
         let around = Surroundings {
-            player: Some(player(0.0, -100.0)),
+            player: Some(PlayerSide {
+                blessing,
+                ..player(0.0, -100.0)
+            }),
             govts: &govts,
             system_govt: system,
             record,
@@ -1093,6 +1160,18 @@ mod tests {
         current: Option<ShipRef>,
         player_here: bool,
     ) -> Option<ShipRef> {
+        grudge_target_blessed(flags, grudge, spared, current, player_here, Blessing::NONE)
+    }
+
+    /// [`grudge_target`], the player blessed by `blessing`.
+    fn grudge_target_blessed(
+        flags: u16,
+        grudge: bool,
+        spared: bool,
+        current: Option<ShipRef>,
+        player_here: bool,
+        blessing: Blessing,
+    ) -> Option<ShipRef> {
         let govts = govts(0);
         let mut grudger = ship(1, ME, 0.0, 0.0);
         grudger.spared = spared;
@@ -1111,7 +1190,10 @@ mod tests {
         });
         let npcs = [grudger, ship(2, ENEMY, 0.0, 50.0)];
         let around = Surroundings {
-            player: player_here.then(|| player(0.0, -1000.0)),
+            player: player_here.then_some(PlayerSide {
+                blessing,
+                ..player(0.0, -1000.0)
+            }),
             govts: &govts,
             system_govt: Some(ME),
             ..Surroundings::new(&[], &npcs)
@@ -1213,6 +1295,17 @@ mod tests {
         player_here: bool,
         condition: Condition,
     ) -> Option<ShipRef> {
+        hunter_target_blessed(destroying, spared, player_here, condition, Blessing::NONE)
+    }
+
+    /// [`hunter_target`], the player blessed by `blessing`.
+    fn hunter_target_blessed(
+        destroying: bool,
+        spared: bool,
+        player_here: bool,
+        condition: Condition,
+        blessing: Blessing,
+    ) -> Option<ShipRef> {
         let govts = govts(0);
         let mut hunter = me();
         hunter.spared = spared;
@@ -1234,6 +1327,7 @@ mod tests {
         let npcs = [hunter, ship(2, ENEMY, 0.0, 50.0)];
         let mut at = player(0.0, -1000.0);
         at.condition = condition;
+        at.blessing = blessing;
         let around = Surroundings {
             player: player_here.then_some(at),
             govts: &govts,
@@ -1310,5 +1404,154 @@ mod tests {
             ..Surroundings::new(&[], &npcs)
         };
         assert_eq!(select_target(&npcs[0], None, &around), Some(P));
+    }
+
+    // The blessing.
+
+    /// [`chosen`], the player blessed by `blessing`.
+    fn chosen_blessed(
+        npcs: &[Npc],
+        record: i16,
+        (x, y): (f32, f32),
+        blessing: Blessing,
+    ) -> Option<ShipRef> {
+        let govts = govts(0);
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                blessing,
+                ..player(x, y)
+            }),
+            govts: &govts,
+            system_govt: Some(ME),
+            record,
+            ..Surroundings::new(&[], npcs)
+        };
+        select_target(&npcs[0], None, &around)
+    }
+
+    #[test]
+    fn a_blessed_player_is_no_xenophobes_candidate() {
+        for flags in [0, ALWAYS_ATTACKS_PLAYER] {
+            assert_eq!(
+                xenophobe_choice(flags, Some(ME), 1000),
+                Some(P),
+                "{flags:#x}: unblessed"
+            );
+            assert_eq!(
+                xenophobe_choice_blessed(flags, Some(ME), 1000, blessing_of(XENO)),
+                Some(n(2)),
+                "{flags:#x}: the nearest NPC enemy instead"
+            );
+        }
+    }
+
+    #[test]
+    fn helping_allies_passes_over_an_ally_fighting_a_blessed_player_or_a_ship_the_player_leads() {
+        let mut first = ship(2, ALLY, 1000.0, 0.0);
+        first.goal = Goal::Attack(P);
+        let mut second = ship(3, ALLY, 1500.0, 0.0);
+        second.goal = Goal::Attack(n(4));
+        let pirate = ship(4, NEUTRAL, 3000.0, 0.0);
+        let mut escort = ship(5, NEUTRAL, 2000.0, 0.0);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let npcs = [
+            me(),
+            first.clone(),
+            second.clone(),
+            pirate.clone(),
+            escort.clone(),
+        ];
+        let mut at_escort = npcs.clone();
+        at_escort[1].goal = Goal::Attack(n(5));
+        for (npcs, quarry, case) in [
+            (&npcs, P, "the player"),
+            (&at_escort, n(5), "a ship the player leads"),
+        ] {
+            assert_eq!(
+                chosen_blessed(npcs, 0, NEAR, Blessing::NONE),
+                Some(quarry),
+                "{case}: unblessed, the first ally's quarry"
+            );
+            assert_eq!(
+                chosen_blessed(npcs, 0, NEAR, blessing_of(ME)),
+                Some(n(4)),
+                "{case}: the second ally's"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blessing_government_never_finds_the_player_hostile() {
+        let far = (5000.0, 5000.0);
+        for (flags, system, record, at, case) in [
+            (0, Some(ME), -1000, NEAR, "at home, wanted"),
+            (0, Some(ENEMY), 1000, NEAR, "in an enemy's system"),
+            (NOSY, Some(NEUTRAL), -1000, NEAR, "nosy, elsewhere"),
+            (ALWAYS_ATTACKS_PLAYER, Some(ME), 1000, far, "Flags 0x0004"),
+            (XENOPHOBIC, Some(ENEMY), 1000, far, "a xenophobe"),
+        ] {
+            assert!(
+                hostile_blessed(flags, system, record, at, Blessing::NONE),
+                "{case}: unblessed"
+            );
+            assert!(
+                !hostile_blessed(flags, system, record, at, blessing_of(ME)),
+                "{case}"
+            );
+        }
+        let npcs = [me()];
+        assert_eq!(
+            chosen_blessed(&npcs, -1000, NEAR, Blessing::NONE),
+            Some(P),
+            "unblessed"
+        );
+        assert_eq!(chosen_blessed(&npcs, -1000, NEAR, blessing_of(ME)), None);
+    }
+
+    #[test]
+    fn only_the_deciding_ships_own_government_blesses() {
+        let other = blessing_of(ALLY);
+        assert!(hostile_blessed(0, Some(ME), -1000, NEAR, other));
+        assert!(hostile_blessed(
+            ALWAYS_ATTACKS_PLAYER,
+            Some(ME),
+            1000,
+            NEAR,
+            other
+        ));
+        assert_eq!(
+            xenophobe_choice_blessed(0, Some(ME), 1000, blessing_of(ME)),
+            Some(P),
+            "the xenophobe's own is 144"
+        );
+        let mut first = ship(2, ALLY, 1000.0, 0.0);
+        first.goal = Goal::Attack(P);
+        let npcs = [me(), first];
+        assert_eq!(chosen_blessed(&npcs, 0, NEAR, other), Some(P), "helping");
+        assert_eq!(chosen_blessed(&npcs[..1], -1000, NEAR, other), Some(P));
+    }
+
+    #[test]
+    fn a_grudge_or_a_shipbehav_0_hunter_takes_a_blessed_player() {
+        let blessed = blessing_of(ME);
+        assert_eq!(
+            grudge_target_blessed(crate::person::GRUDGE, true, false, None, true, blessed),
+            Some(P)
+        );
+        assert_eq!(
+            hunter_target_blessed(false, false, true, Condition::Intact, blessed),
+            Some(P)
+        );
+    }
+
+    #[test]
+    fn a_blessing_leaves_the_threat_step_its_npc_threat() {
+        let mut stranger = ship(2, NEUTRAL, 900.0, 0.0);
+        stranger.goal = Goal::Attack(n(1));
+        let npcs = [me(), stranger];
+        assert_eq!(chosen_blessed(&npcs, 0, NEAR, blessing_of(ME)), Some(n(2)));
     }
 }

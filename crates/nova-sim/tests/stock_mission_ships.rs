@@ -345,7 +345,7 @@ fn every_stock_missions_aux_ships_are_of_a_built_aux_ship_syst_and_a_dude_in_ran
             record.id,
             record.aux.syst
         );
-        let dude = nova_sim::mission::aux::aux_dude(&record.aux).expect("a düde in range");
+        let dude = nova_sim::mission::aux_ships::aux_dude(&record.aux).expect("a düde in range");
         assert!(data.dude(dude).is_some(), "{:?}: {dude:?}", record.id);
     }
 }

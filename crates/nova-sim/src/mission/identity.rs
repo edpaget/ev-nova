@@ -42,6 +42,21 @@ impl StellarMarks {
             _ => false,
         }
     }
+
+    /// Every marked stellar other than `stellar` that is
+    /// [`identical`](Self::identical) to it by `source`, by ascending ID:
+    /// the variants a stop at `stellar` is also reached at. None by the
+    /// Bible, and none for an unmarked stellar.
+    pub fn variants(
+        &self,
+        stellar: StellarId,
+        source: RuleSource,
+    ) -> impl Iterator<Item = StellarId> + '_ {
+        self.marks
+            .keys()
+            .copied()
+            .filter(move |&other| other != stellar && self.identical(stellar, other, source))
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +139,32 @@ mod tests {
         assert!(!engine(&marks, 128, 129));
         assert!(!engine(&marks, 129, 128));
         assert!(!engine(&marks, 129, 130));
+    }
+
+    fn variants(marks: &StellarMarks, stellar: i16, source: RuleSource) -> Vec<i16> {
+        marks
+            .variants(StellarId(stellar), source)
+            .map(|id| id.0)
+            .collect()
+    }
+
+    #[test]
+    fn the_variants_are_the_other_stellars_at_one_place_with_one_name_ascending() {
+        let marks = marks(&[
+            mark(448, (0, 0), "Tre'ar Zalom"),
+            mark(130, (0, 0), "Other"),
+            mark(227, (0, 0), "Tre'ar Zalom"),
+            mark(129, (0, 0), "Tre'ar Zalom"),
+            mark(131, (1, 0), "Tre'ar Zalom"),
+        ]);
+        assert_eq!(variants(&marks, 227, RuleSource::Engine), [129, 448]);
+        assert_eq!(variants(&marks, 130, RuleSource::Engine), [0_i16; 0]);
+        assert_eq!(variants(&marks, 227, RuleSource::Bible), [0_i16; 0]);
+        assert_eq!(
+            variants(&marks, 999, RuleSource::Engine),
+            [0_i16; 0],
+            "unmarked"
+        );
     }
 
     #[test]

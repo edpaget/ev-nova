@@ -17,6 +17,7 @@ use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::warp::SoundLength;
 
 /// A new pilot's start, from the first `chär`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -145,6 +146,9 @@ pub struct LandingSite {
     /// NPC comes out of it on when it is a hypergate or wormhole and the
     /// value is 0 to 359 ([`exit_heading`](crate::gate::exit_heading)).
     pub exit_angle: i16,
+    /// Its `Tribute`, raw: what it pays a day while dominated, as
+    /// [`tribute_of`](crate::player_info::tribute_of) reads it.
+    pub tribute: i16,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -154,10 +158,6 @@ pub struct LandingSite {
 pub struct GateSite {
     /// The `spöb`'s ID.
     pub id: StellarId,
-    /// The system it is in: the lowest-ID `sÿst` whose `NavDefs` list it,
-    /// as the original's `_FindSystemFromStellar` finds it when every
-    /// system is active.
-    pub system: SystemId,
     /// Its centre, `xPos` and `yPos`, in pixels from the system's centre.
     pub position: Vec2,
     /// Its `Flags2`, raw.
@@ -181,7 +181,11 @@ pub struct ListedStellar {
     /// Every `sÿst` that can be read and lists it, by ascending ID, each
     /// once: the galaxy refresh gives it to the lowest visible one not
     /// shadowed at its place
-    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)).
+    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)),
+    /// the player's system holds it when none does
+    /// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)),
+    /// and `_FindSystemFromStellar` finds it in the lowest visible one
+    /// ([`OverlaidGalaxy::find_system_from_stellar`](crate::story::OverlaidGalaxy::find_system_from_stellar)).
     pub systems: Vec<SystemId>,
     /// Its `Flags`.
     pub flags: u32,
@@ -369,7 +373,8 @@ pub struct ShipRecord {
     /// one in or leaves it for a captured ship.
     pub on_retire: Script,
     /// Its `Flags`, raw: 0x8000 marks a fighter the player can escape in
-    /// (see [`escape`](crate::escape)).
+    /// (see [`escape`](crate::escape)), and its jump-speed bits give its
+    /// warp factor ([`warp_factor`](crate::warp::warp_factor)).
     pub flags: u16,
     /// Its `Flags3`.
     pub flags3: u16,
@@ -752,7 +757,7 @@ pub struct MissionRecord {
 
 /// A mission's auxiliary ships, raw from its `mïsn`: ordinary traffic of
 /// its `AuxShipDude` that comes into the systems its `AuxShipSyst` allows
-/// on a countdown (see the [`mission::aux`](crate::mission::aux) module).
+/// on a countdown (see the [`mission::aux_ships`](crate::mission::aux_ships) module).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuxShip {
     /// Its `AuxShipCount`.
@@ -853,6 +858,27 @@ pub struct RankRecord {
     /// Its `PriceMod`, a percentage of the shipyard's prices at its
     /// government's stellars; 0 or below loads as 100 (@0x7db33-0x7db3a).
     pub price_mod: i16,
+}
+
+/// A nebula, from its `nëbu` as `_LoadObjectData` keeps it
+/// (@0x7cf44-0x7d025): the fields the [`nebula`](crate::nebula) module
+/// reads, which decides what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NebulaRecord {
+    /// The `nëbu`'s ID.
+    pub id: NebulaId,
+    /// Its `XPos`: the rectangle's left edge on the map.
+    pub left: i16,
+    /// Its `YPos`: the rectangle's top edge on the map.
+    pub top: i16,
+    /// Its `XSize`, raw.
+    pub width: i16,
+    /// Its `YSize`, raw.
+    pub height: i16,
+    /// Its `ActiveOn` control-bit test, parsed: blank holds.
+    pub active_on: Test,
+    /// Its `OnExplore`, run as an exploration first reaches it.
+    pub on_explore: Script,
 }
 
 /// What a mission's screens show of it, read from its `mïsn` and its
@@ -1075,6 +1101,9 @@ pub struct HullRecord {
     /// Its `KeyCarried`: the ship a weapon of `Flags2` 0x0080 needs
     /// aboard, raw; none for -1.
     pub key_carried: Option<ShipId>,
+    /// Its `Cost`, raw: -1 hides a ship of the type (see
+    /// [`HullSpec::hidden`](crate::combat::hull::HullSpec::hidden)).
+    pub cost: i32,
 }
 
 /// A government's penalties for crimes against its ships, raw from its
@@ -1268,8 +1297,10 @@ pub trait PilotCatalog {
     /// empty) when there is no `chär` or it does not decode.
     fn date_affixes(&self) -> DateAffixes;
     /// Every stellar some system that can be read lists, that can be read
-    /// itself, by ascending ID, with the system it is in: where a
-    /// hypergate or wormhole may lead.
+    /// itself, by ascending ID: where a hypergate or wormhole may lead. The
+    /// system each is in is resolved from the listed stellars
+    /// ([`PilotCatalog::listed_stellars`]), owner-first (see the
+    /// [`gate`](crate::gate) module).
     fn gate_sites(&self) -> Vec<GateSite>;
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
@@ -1298,6 +1329,15 @@ pub trait PilotCatalog {
     fn crons(&self) -> Vec<CronRecord>;
     /// Every `ränk` 128-255 that can be read, by ascending ID.
     fn ranks(&self) -> Vec<RankRecord>;
+    /// Every `nëbu` 128-159 that can be read, by ascending ID.
+    fn nebulae(&self) -> Vec<NebulaRecord>;
+    /// The length of the warp-up sound, `snd ` 128, which the warp's
+    /// clock reads its duration from
+    /// ([`sound_duration`](crate::warp::sound_duration)); none when there
+    /// is none or it cannot be read, as by default.
+    fn warp_sound(&self) -> Option<SoundLength> {
+        None
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1396,6 +1436,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn ranks(&self) -> Vec<RankRecord> {
         (**self).ranks()
+    }
+
+    fn nebulae(&self) -> Vec<NebulaRecord> {
+        (**self).nebulae()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        (**self).warp_sound()
     }
 }
 
@@ -1496,6 +1544,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn ranks(&self) -> Vec<RankRecord> {
         (**self).ranks()
+    }
+
+    fn nebulae(&self) -> Vec<NebulaRecord> {
+        (**self).nebulae()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        (**self).warp_sound()
     }
 }
 
@@ -1635,16 +1691,16 @@ mod tests {
                 dead_frame_size: Some((60, 60)),
                 type_counts_frames: true,
                 exit_angle: -1,
+                tribute: 0,
             }]
         }
 
-        /// Hypergate 1400 in system 130, linked to 1405.
+        /// Hypergate 1400, linked to 1405.
         fn gate_sites(&self) -> Vec<GateSite> {
             let mut links = [None; 8];
             links[0] = Some(StellarId(1405));
             vec![GateSite {
                 id: StellarId(1400),
-                system: SystemId(130),
                 position: Vec2::new(-70.0, 250.0),
                 flags2: 0x1200,
                 links,
@@ -1793,6 +1849,19 @@ mod tests {
                 ..crate::testkit::rank(140)
             }]
         }
+
+        /// Nebula 141, 300 wide.
+        fn nebulae(&self) -> Vec<NebulaRecord> {
+            vec![crate::testkit::nebula(141, (0, 0, 300, 10), "", "")]
+        }
+
+        /// A second at 22050 Hz.
+        fn warp_sound(&self) -> Option<SoundLength> {
+            Some(SoundLength {
+                frames: 22_050,
+                rate: 22_050,
+            })
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1828,6 +1897,8 @@ mod tests {
             format!("{:?}", catalog.crons()),
             format!("{:?}", catalog.ranks()),
             format!("{:?}", catalog.system_visibility()),
+            format!("{:?}", catalog.nebulae()),
+            format!("{:?}", catalog.warp_sound()),
         ]
     }
 
@@ -1877,6 +1948,12 @@ mod tests {
         assert!(direct[26].contains("salary: 200"), "{direct:?}");
         assert!(direct[27].contains("SystemId(130)"), "{direct:?}");
         assert!(direct[27].contains("Bit(5)"), "{direct:?}");
+        assert!(direct[28].contains("NebulaId(141)"), "{direct:?}");
+        assert!(direct[28].contains("width: 300"), "{direct:?}");
+        assert_eq!(
+            direct[29], "Some(SoundLength { frames: 22050, rate: 22050 })",
+            "forwarded, not a default"
+        );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
