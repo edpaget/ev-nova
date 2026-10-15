@@ -4411,7 +4411,17 @@ pub(super) mod tests {
         let catalog = two_types(0x0800, 0);
         let mut chance = Alternating::default();
         let mut session = accepted_drawing(&catalog, &mut chance);
-        // As a save from before the type was kept loads it.
+        forget_uniform_type(&mut session);
+        session.take_off(&catalog, &mut chance).expect("takes off");
+        let types = marked_types(&session);
+        assert_eq!(types.len(), 3);
+        assert!(types.iter().all(|ship| *ship == types[0]), "{types:?}");
+        assert_eq!(ships_of(&session).uniform_type, Some(types[0]), "kept");
+    }
+
+    /// Clears slot 0's kept type, as a save from before it was kept
+    /// loads it.
+    fn forget_uniform_type(session: &mut Session) {
         session
             .pilot
             .missions
@@ -4419,7 +4429,19 @@ pub(super) mod tests {
             .expect("held")
             .ships
             .uniform_type = None;
+    }
+
+    #[test]
+    fn a_0x0800_slot_without_a_type_draws_one_for_its_arrivals_and_keeps_it() {
+        let catalog = two_types(0x0800, 1);
+        let mut chance = Alternating::default();
+        let mut session = accepted_drawing(&catalog, &mut chance);
         session.take_off(&catalog, &mut chance).expect("takes off");
+        assert!(marked(&session).is_empty(), "none at setup");
+        forget_uniform_type(&mut session);
+        for _ in 0..199 {
+            session.tick_traffic(&catalog, &NovaAi::default(), &mut chance);
+        }
         let types = marked_types(&session);
         assert_eq!(types.len(), 3);
         assert!(types.iter().all(|ship| *ship == types[0]), "{types:?}");
@@ -4437,27 +4459,69 @@ pub(super) mod tests {
         assert_eq!(marked_types(&session), [ShipId(129)]);
     }
 
-    #[test]
-    fn a_0x0800_swap_whose_dude_lacks_the_persons_type_flies_the_accept_type() {
-        /// Every draw its first outcome.
-        struct First;
-        impl Chance for First {
-            fn fires(&mut self, _percent: u8) -> bool {
-                false
-            }
-            fn below(&mut self, _n: u32) -> u32 {
-                0
-            }
+    /// Every draw its first outcome.
+    struct First;
+
+    impl Chance for First {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
         }
+
+        fn below(&mut self, _n: u32) -> u32 {
+            0
+        }
+    }
+
+    /// [`hailing_ace`] for a [`swapping`] mission whose düde flies ship
+    /// 200 or ship 128, but not Ace's 129, with mission 140 accepted on
+    /// [`First`].
+    fn accepted_lacking_aces_type() -> (FakePilotCatalog, Session) {
         let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
         catalog.dudes[0].1.ships = vec![(ShipId(200), 50), (ShipId(128), 50)];
         let mut session = hailing_ace(&catalog);
         assert_eq!(session.accept_mission(MissionId(140), &mut First), Ok(0));
+        (catalog, session)
+    }
+
+    #[test]
+    fn a_0x0800_swap_whose_dude_lacks_the_persons_type_flies_the_accept_type() {
+        let (catalog, mut session) = accepted_lacking_aces_type();
         assert_eq!(ships_of(&session).uniform_type, Some(ShipId(200)));
         // The swap, drawing afresh, would give 128.
         settle(&mut session, &catalog);
         assert_eq!(marked_types(&session), [ShipId(200)]);
         assert_eq!(session.npcs()[0].state, ACE_AT, "swapped");
+    }
+
+    #[test]
+    fn a_0x0800_swap_without_a_kept_type_draws_one_from_the_dude_and_keeps_it() {
+        /// Draws as [`NeverFires`] does, but its first draw below 100,
+        /// the weights of the düde, gives 0: ship 200 first, 128 after.
+        #[derive(Default)]
+        struct FirstOnce {
+            drawn: bool,
+        }
+        impl Chance for FirstOnce {
+            fn fires(&mut self, percent: u8) -> bool {
+                NeverFires.fires(percent)
+            }
+            fn below(&mut self, n: u32) -> u32 {
+                if n != 100 || std::mem::replace(&mut self.drawn, true) {
+                    return NeverFires.below(n);
+                }
+                0
+            }
+            fn roll(&mut self, sides: u16) -> u16 {
+                NeverFires.roll(sides)
+            }
+        }
+        let (catalog, mut session) = accepted_lacking_aces_type();
+        forget_uniform_type(&mut session);
+        let _ = session.settle_script(&catalog, &mut FirstOnce::default());
+        assert_eq!(session.npcs()[0].state, ACE_AT, "swapped");
+        assert_eq!(ships_of(&session).uniform_type, Some(ShipId(200)), "kept");
+        // A ship drawing its own type after the slot's would give 128.
+        assert_eq!(marked_types(&session), [ShipId(200)]);
     }
 
     /// [`hailing_ace`], mission 140 refused or accepted as `accept` says,
