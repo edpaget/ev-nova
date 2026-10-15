@@ -34,7 +34,7 @@ pub mod recording;
 pub mod settings;
 pub mod table;
 
-pub use crate::core::{AudioCore, MUSIC_FADE_AT_FULL, music_fade};
+pub use crate::core::{AudioCore, music_fade};
 pub use crate::file::FileSettings;
 pub use crate::kira::{KiraAudio, OpenError, SoundBank};
 pub use port::{Audio, AudioCommand, Volume};

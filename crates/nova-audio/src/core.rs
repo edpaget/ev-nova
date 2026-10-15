@@ -8,7 +8,7 @@ use nova_view::Showing;
 use nova_view::sound::{SimSound, Sound, UiSound};
 
 use crate::port::{Audio, AudioCommand, Volume};
-use crate::settings::AudioSettings;
+use crate::settings::{AudioSettings, volume_level};
 use crate::table::SoundTable;
 
 /// Decides what plays: turns each frame's sound events and the screen
@@ -407,16 +407,13 @@ fn is_overlay(showing: Showing) -> bool {
     )
 }
 
-/// How long the music fades out over at full volume: 32 ticks.
-/// `_StopIntroMusic(1)` @0x61c82 starts at level x 32 and takes 8 off a
-/// tick until it reaches 0, so the fade lasts level x 4 ticks.
-pub const MUSIC_FADE_AT_FULL: Duration = Duration::from_nanos(1_000_000_000 * 32 / 60);
-
-/// How long the music at `volume` fades out over: [`MUSIC_FADE_AT_FULL`]
-/// scaled by the volume, as the original's fade is by the level.
+/// How long the music at `volume` fades out over: 4 ticks for each
+/// Preferences level, at the level nearest `volume` (28 ticks at the top
+/// level, 7). `_StopIntroMusic(1)` @0x61c82 starts at level x 32 and takes
+/// 8 off a tick until it reaches 0, so the fade lasts level x 4 ticks.
 #[must_use]
 pub fn music_fade(volume: Volume) -> Duration {
-    MUSIC_FADE_AT_FULL.mul_f32(volume.amplitude())
+    Duration::from_secs(4 * u64::from(volume_level(volume))) / 60
 }
 
 /// Whether music plays on `scene`: the main menu only, while the music is
@@ -1243,9 +1240,12 @@ mod tests {
     }
 
     #[test]
-    fn the_fade_scales_with_the_music_volume() {
-        assert_eq!(MUSIC_FADE_AT_FULL, Duration::from_secs(32) / 60);
-        assert_eq!(music_fade(Volume::FULL), MUSIC_FADE_AT_FULL);
+    fn the_fade_lasts_four_ticks_a_preferences_level() {
+        use crate::settings::level_volume;
+        assert_eq!(music_fade(level_volume(7)), Duration::from_secs(28) / 60);
+        assert_eq!(music_fade(Volume::FULL), Duration::from_secs(28) / 60);
+        assert_eq!(music_fade(level_volume(2)), Duration::from_secs(8) / 60);
+        assert_eq!(music_fade(level_volume(1)), Duration::from_secs(4) / 60);
         assert_eq!(music_fade(Volume::new(0.25)), Duration::from_secs(8) / 60);
         assert_eq!(music_fade(Volume::SILENT), Duration::ZERO);
         let (mut core, log) = original();
