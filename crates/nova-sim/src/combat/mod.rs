@@ -56,7 +56,9 @@
 //!    and hits no ship from then on. A player's homing missile not lost,
 //!    aimed at an NPC outside the player's fleet, locks on it as its age
 //!    passes [`LOCK_AGE`](projectile::LOCK_AGE): a strike of no damage
-//!    the NPC answers ([`Strike::lock`]).
+//!    the NPC answers ([`Strike::lock`]). Each shot of a weapon that fires
+//!    one shot at a time (`Flags3` 0x0004) holds its firer's reload for
+//!    it at its `Reload` ([`Armament::hold`]).
 //! 5. A point-defence shot that passed within
 //!    [`INTERCEPT_RADIUS`](defence::INTERCEPT_RADIUS) of a missile the
 //!    rules call hostile is spent on it; a missile hit after its
@@ -513,6 +515,7 @@ impl Combat {
             .iter()
             .filter_map(|shot| lock(shot, &sides))
             .collect();
+        self.hold_reloads(fighters);
         // Where each shot started the tick, by its number: `resolve`
         // rebuilds the shots.
         let from: Vec<(ShotId, Vec2)> = self
@@ -805,6 +808,31 @@ impl Combat {
             );
             if let Some((launch, missile)) = fired {
                 self.launch((side, ties), &state, launch, Some(missile), None);
+            }
+        }
+    }
+
+    /// Step 4's hold: each shot in flight of a weapon that fires one shot
+    /// at a time (`Flags3` 0x0004) holds its firer's reload for that
+    /// weapon at its whole `Reload` ([`Armament::hold`]), on every tick
+    /// it moves, the one that spends it or hits included. So its firer
+    /// fires it again `Reload` ticks after the shot is gone. A shot no
+    /// ship fired holds nothing.
+    ///
+    /// The original counts the player's reload down before `_HandleShot`
+    /// sets it and an NPC's after; here every reload counts down before
+    /// the hold, so an NPC fires a tick later than in the original, within
+    /// the fight's own order of firing and reloading.
+    fn hold_reloads(&mut self, fighters: &mut [Fighter]) {
+        for shot in self.shots.iter().filter(|shot| shot.weapon.one_at_a_time()) {
+            if !matches!(shot.source, Source::Ship(_)) {
+                continue;
+            }
+            if let Some(firer) = fighters
+                .iter_mut()
+                .find(|fighter| fighter.ship == shot.firer)
+            {
+                firer.armament.hold(shot.weapon.id);
             }
         }
     }
@@ -3779,6 +3807,61 @@ mod tests {
         let [missed, detonated] = after_slug(flak, DecayStep::EveryDecayPlusOne, (60.0, 25.0));
         assert_eq!(missed.armor.now, 30.0, "out of its reach");
         assert_eq!(detonated.armor.now, 20.0, "the expiry blast whole");
+    }
+
+    // One shot at a time (`Flags3` 0x0004, `_HandleShot` @0x35c09-0x35c42).
+
+    /// The ticks of the first `ticks` on which `ships[0]` fires.
+    fn fire_ticks(ships: &mut [Ship], ticks: u32) -> Vec<u32> {
+        let mut combat = Combat::default();
+        (0..ticks)
+            .filter(|_| {
+                tick(&mut combat, ships, &NovaDisable);
+                fired(&combat.take_events(), ships[0].id) > 0
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_one_at_a_time_weapon_fires_again_only_its_reload_after_its_shot_is_gone() {
+        // Reload 3, 10 pixels a tick for 10 ticks.
+        let single = |flags3| WeaponRecord {
+            reload: 3,
+            count: 10,
+            speed: 1000,
+            flags3,
+            ..weapon(128)
+        };
+        let at = |x| Ship::at(2, x, 0.0);
+        let firer = |flags3| Ship::at(1, 0.0, 0.0).armed(single(flags3));
+        assert_eq!(
+            fire_ticks(&mut [firer(0), at(900.0)], 14),
+            [0, 3, 6, 9, 12],
+            "every Reload ticks"
+        );
+        // Spent on tick 9, it holds the reload at 3 through it.
+        assert_eq!(
+            fire_ticks(&mut [firer(0x0004), at(900.0)], 27),
+            [0, 13, 26],
+            "Reload ticks after it is spent"
+        );
+        // It meets B, 60 pixels off, on tick 4.
+        assert_eq!(
+            fire_ticks(&mut [firer(0x0004), at(60.0)], 9),
+            [0, 8],
+            "Reload ticks after it hits"
+        );
+        let mut player = Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..firer(0x0004)
+        };
+        player.state.position = Vec2::ZERO;
+        assert_eq!(
+            fire_ticks(&mut [player, at(900.0)], 14),
+            [0, 13],
+            "the player's alike"
+        );
     }
 
     /// The Quad Light Blaster Turret: point defence firing every 5 ticks,

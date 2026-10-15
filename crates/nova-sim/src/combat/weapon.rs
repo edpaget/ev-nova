@@ -325,6 +325,10 @@ pub const SPARES_PLAYER: u16 = 0x0100;
 pub const DETONATES: u16 = 0x8000;
 /// `Flags3`: it uses ammo only at the end of a burst.
 pub const AMMO_AT_BURST_END: u16 = 0x0001;
+/// `Flags3`: one shot at a time: while a shot of it is in flight, its
+/// firer's reload for it is held at its `Reload` (`_HandleShot`
+/// @0x35c09-0x35c42).
+pub const ONE_AT_A_TIME: u16 = 0x0004;
 /// `Flags2`: hidden when out of ammo, so selecting a secondary skips it
 /// while it has no rounds.
 pub const HIDE_WHEN_EMPTY: u16 = 0x0800;
@@ -479,6 +483,12 @@ impl WeaponSpec {
     #[must_use]
     pub fn ammo_at_burst_end(&self) -> bool {
         self.flags3 & AMMO_AT_BURST_END != 0
+    }
+
+    /// Whether it fires one shot at a time ([`ONE_AT_A_TIME`]).
+    #[must_use]
+    pub fn one_at_a_time(&self) -> bool {
+        self.flags3 & ONE_AT_A_TIME != 0
     }
 
     /// Whether it is a planet-type weapon (`Flags2` 0x0400), whose shots

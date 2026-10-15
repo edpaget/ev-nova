@@ -65,6 +65,8 @@ enum Scope {
     Turret,
     /// Beams (Guidance 0, 3 and 10).
     Beam,
+    /// Weapons that fire shots: any but a beam or a fighter bay.
+    Shots,
 }
 
 impl Scope {
@@ -85,12 +87,13 @@ impl Scope {
                 guidance,
                 Guidance::Beam | Guidance::TurretBeam | Guidance::PointDefenceBeam
             ),
+            Self::Shots => !Self::Beam.covers(guidance) && guidance != Guidance::FighterBay,
         }
     }
 }
 
 use FlagField::{Flags, Flags2, Flags3, Seeker};
-use Scope::{Any, Beam, Guided, Turret};
+use Scope::{Any, Beam, Guided, Shots, Turret};
 use Status::{Implemented, Presentation, Unimplemented};
 
 /// Every documented bit: its field, the bit, which weapons it applies to,
@@ -170,8 +173,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags3, 0x0001, Any, Implemented),
     // Translucent shots.
     (Flags3, 0x0002, Any, Presentation),
-    // One shot at a time.
-    (Flags3, 0x0004, Any, Unimplemented),
+    // One shot at a time (`Combat::tick`'s hold); only `_HandleShot`
+    // reads it, so no beam does.
+    (Flags3, 0x0004, Shots, Implemented),
     // Fires from the exit point nearest the target.
     (Flags3, 0x0010, Any, Unimplemented),
     // Exclusive.
@@ -269,7 +273,7 @@ mod tests {
         (Flags2, 0x8000, [Unimplemented; 4]),
         (Flags3, 0x0001, [Implemented; 4]),
         (Flags3, 0x0002, [Presentation; 4]),
-        (Flags3, 0x0004, [Unimplemented; 4]),
+        (Flags3, 0x0004, [Implemented, NA, Implemented, Implemented]),
         (Flags3, 0x0010, [Unimplemented; 4]),
         (Flags3, 0x0020, [Unimplemented; 4]),
     ];
@@ -392,11 +396,11 @@ mod tests {
     #[test]
     fn every_unimplemented_bit_set_is_listed_in_the_tables_order() {
         assert_eq!(
-            unimplemented(&spec(-1, 0x0048, 0x8080, 0x0024)),
+            unimplemented(&spec(-1, 0x0048, 0x8080, 0x0034)),
             [
                 (Flags, 0x0040),
                 (Flags2, 0x8000),
-                (Flags3, 0x0004),
+                (Flags3, 0x0010),
                 (Flags3, 0x0020),
             ],
             "the guided-only 0x0008 left out"

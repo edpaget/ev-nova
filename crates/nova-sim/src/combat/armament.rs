@@ -608,6 +608,22 @@ impl Armament {
         true
     }
 
+    /// Holds the reload of `weapon`, if it carries it, at the weapon's
+    /// whole `Reload`, however many copies it carries: what a shot of a
+    /// weapon that fires one shot at a time does to its firer while it
+    /// flies (`Flags3` 0x0004; `_HandleShot` @0x35c09-0x35c42 sets the
+    /// ship's reload for the weapon's type, +0xf8, to the `wëap`'s
+    /// Reload, +0x30).
+    pub fn hold(&mut self, weapon: WeaponId) {
+        for mount in self
+            .mounts
+            .iter_mut()
+            .filter(|mount| mount.spec.id == weapon)
+        {
+            mount.reload = mount.spec.reload;
+        }
+    }
+
     /// Counts every weapon's reload timer down a tick.
     pub fn reload(&mut self) {
         for mount in &mut self.mounts {
@@ -1271,6 +1287,20 @@ mod tests {
             [0, 7, 14],
             "6.5 ticks is fired on the 7th"
         );
+    }
+
+    #[test]
+    fn a_held_weapon_reloads_its_whole_reload_whatever_its_copies() {
+        let mut armament = Armament::new([
+            (WeaponSpec::new(&blaster(128, 10)), 2),
+            (WeaponSpec::new(&blaster(129, 6)), 1),
+        ]);
+        armament.hold(WeaponId(128));
+        let reloads: Vec<f32> = armament.mounts().iter().map(|mount| mount.reload).collect();
+        assert_eq!(reloads, [10.0, 0.0], "Reload, not Reload over the copies");
+        armament.hold(WeaponId(130));
+        let reloads: Vec<f32> = armament.mounts().iter().map(|mount| mount.reload).collect();
+        assert_eq!(reloads, [10.0, 0.0], "a weapon it does not carry");
     }
 
     #[test]
