@@ -1527,6 +1527,32 @@ fn the_hire_screens_close_redraws_the_port_bar() {
 }
 
 #[test]
+fn the_hire_screens_info_panels_close_redraws_the_port_bar() {
+    let store = MemoryPilots::new();
+    let mut game = bought_the_racer(&store);
+    game.click_port(BAR);
+    game.tap(Key::Char('h'));
+    game.tap(Key::Char('i'));
+    let hire = game
+        .spaceport()
+        .open_bar()
+        .and_then(|bar| bar.hire_screen())
+        .expect("the hire screen");
+    assert!(hire.info_panel().is_some(), "the Info panel");
+    let shown = port_bar_texts(&game);
+    assert!(shown.contains(&"Dock".to_owned()), "held: {shown:?}");
+    game.tap(Key::Escape);
+    let hire = game
+        .spaceport()
+        .open_bar()
+        .and_then(|bar| bar.hire_screen())
+        .expect("the hire screen still open");
+    assert!(hire.info_panel().is_none(), "closed");
+    let shown = port_bar_texts(&game);
+    assert!(shown.contains(&"Pad".to_owned()), "@0x5bac2: {shown:?}");
+}
+
+#[test]
 fn an_outfitter_cancel_draws_the_nav_the_shipyards_close_restored() {
     let store = MemoryPilots::new();
     let mut game = bought_the_racer(&store);

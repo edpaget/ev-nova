@@ -9285,6 +9285,37 @@ pub(super) mod tests {
         }
     }
 
+    #[test]
+    fn player_infos_close_over_flight_without_its_dialog_redraws_nothing() {
+        /// [`Dialogs`] without "Player Info" (1017): the original, failing
+        /// to get it, neither shows the dialog nor redraws (@0x5a0a5).
+        struct NoPlayerInfo;
+
+        impl DialogResources for NoPlayerInfo {
+            fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+                if id == PLAYER_INFO_DIALOG {
+                    return Err(format!("no DLOG {id}"));
+                }
+                Dialogs.dialog_template(id)
+            }
+        }
+
+        let mut screen = AppScreen::new(barred_outfitting_data())
+            .with_dialogs(Rc::new(NoPlayerInfo), Rc::new(MonoMetrics));
+        fly(&mut screen);
+        stale_radar(&mut screen);
+        let held = radar_dots(&drawn(&screen));
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        screen.input(&key(PLAYER_INFO_KEY, false));
+        let info = screen.flight_player_info().expect("open");
+        assert!(info.problem().is_some(), "not laid out");
+        screen.input(&key(Key::Escape, true));
+        assert!(screen.flight_player_info().is_none(), "closed");
+        assert_eq!(radar_dots(&drawn(&screen)), held, "not redrawn");
+        screen.flight.as_mut().expect("flying").refresh_status();
+        assert_ne!(radar_dots(&drawn(&screen)), held, "stale as it closed");
+    }
+
     const TANK: OutfitId = OutfitId(133);
 
     /// How wide the fuel gauge's full colour is painted, at y 234 to 241
