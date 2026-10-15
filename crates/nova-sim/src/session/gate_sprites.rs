@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn a_gate_opens_while_a_ship_waits_and_bursts_out_of_it_then_closes() {
+    fn a_gate_opens_while_a_ship_waits_in_it_then_closes_once_it_bursts_out() {
         let catalog = gated();
         let mut session = flying(&catalog);
         emerging(&mut session, 10);
@@ -318,6 +318,53 @@ mod tests {
         assert_eq!(frames[59], 0, "closed once it is out: {frames:?}");
         let opened = frames.iter().position(|&f| f >= 3).expect("opened");
         assert!(frames[opened..].contains(&0), "{frames:?}");
+    }
+
+    #[test]
+    fn a_gate_lets_go_as_the_ship_coming_out_starts_its_burst() {
+        let catalog = gated();
+        let mut session = flying(&catalog);
+        // 12: the release tick shows frame 2 where held it would show 3.
+        emerging(&mut session, 12);
+        let gate = StellarId(300);
+        let site = *session.gate_site(gate).expect("a gate");
+        let stepped = |mut sprite: crate::gate_sprite::GateSprite, held: bool| {
+            sprite.step(&GateAnimation::of(&site), false, held, &mut NeverFires);
+            sprite
+        };
+        let mut released = false;
+        for tick in 0..40 {
+            let before = session.gate_sprites[&gate];
+            self::tick(&mut session, &catalog);
+            let after = session.gate_sprites[&gate];
+            match session.npcs()[0].mode {
+                // Waiting, or its wait just run out: goal still 0x15.
+                Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 } => {
+                    assert!(!released, "{tick}");
+                    assert_eq!(after, stepped(before, true), "{tick}: held");
+                }
+                // Its first burst tick: goal 8, +0x6c = -1 (@0x8dd8a-0x8dd93).
+                Mode::LeavingGate { tick: 1 } => {
+                    let held = stepped(before, true);
+                    let let_go = stepped(before, false);
+                    assert_eq!(after, let_go, "{tick}: released");
+                    let anim = GateAnimation::of(&site);
+                    assert_ne!(
+                        let_go.shown(&anim, false),
+                        held.shown(&anim, false),
+                        "{tick}: a meaningful release"
+                    );
+                    assert_eq!(session.gate_frame(gate), Some(2));
+                    released = true;
+                }
+                Mode::LeavingGate { .. } => {
+                    assert!(released, "{tick}");
+                    assert_eq!(after, stepped(before, false), "{tick}: released");
+                }
+                _ => break,
+            }
+        }
+        assert!(released, "it burst out");
     }
 
     #[test]
@@ -370,7 +417,7 @@ mod tests {
     fn a_gate_steps_after_the_ships_move_in_the_same_tick() {
         let catalog = gated();
         let mut session = flying(&catalog);
-        // Its wait ends this tick: it bursts out, still holding the gate.
+        // Its wait runs out this tick, its goal still 0x15: it still holds the gate.
         emerging(&mut session, 1);
         tick(&mut session, &catalog);
         assert_eq!(session.npcs()[0].mode, Mode::LeavingGate { tick: 0 });

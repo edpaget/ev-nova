@@ -79,10 +79,13 @@
 //!   lead's, the player's for a ship the player leads; see
 //!   [`emerge`](crate::traffic::emerge)), then flies its goal. A ship not
 //!   intact by then drifts instead of bursting, flying from there on.
-//!   Either way it is out of its gate ([`Npc::emerges_from`] cleared), as
-//!   `_AIMakeShipStopJumping` sets its travel stellar (+0x6c) to -1
-//!   (@0x82e9f); while it waits and bursts it holds the gate's sprite
-//!   open ([`gate_sprite`](crate::gate_sprite)). Hit while it waits and
+//!   It is out of its gate ([`Npc::emerges_from`] cleared) from its first
+//!   burst tick, as `_HighLevelAIHandler` sets its travel stellar (+0x6c)
+//!   to -1 in the pass that starts the burst (@0x8dd93), and
+//!   `_AIMakeShipStopJumping` sets it to -1 again as the burst ends
+//!   (@0x82eaa); a ship not intact drifts out still carrying it, cleared
+//!   as it flies. While it waits it holds the gate's sprite open
+//!   ([`gate_sprite`](crate::gate_sprite)). Hit while it waits and
 //!   answering the hit, its wait is cut to at most [`HIT_WAIT`] ticks; its
 //!   trigger, which may hold its point defence through the wait, is
 //!   released as it bursts out.
@@ -581,8 +584,14 @@ fn hold_at_gate(npc: &mut Npc, ticks_left: u32) {
 }
 
 /// Tick `tick` of `npc`'s burst out of a gate: along its heading at
-/// [`exit_speed`], ending as [`burst`] says.
+/// [`exit_speed`], ending as [`burst`] says. On its first tick it is out
+/// of its gate ([`Npc::emerges_from`] cleared, @0x8dd8a-0x8dd93).
 fn leave_gate(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Chance + ?Sized)) {
+    if tick == 0 {
+        // The pass that starts the burst sets goal 8 and +0x6c = -1
+        // (`_HighLevelAIHandler` @0x8dd8a-0x8dd93).
+        npc.emerges_from = None;
+    }
     if !burst(
         npc,
         exit_speed(npc.led_out, tick),
@@ -599,8 +608,7 @@ fn leave_gate(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Ch
 /// `next` tick's speed would be at or below its cap
 /// ([`TopSpeeds::burst_cap`]) the burst is over, and whether it is, the
 /// caller stepping the mode on while it is not. It keeps this tick's
-/// speed, and is out of its gate ([`Npc::emerges_from`]), as
-/// `_AIMakeShipStopJumping` sets its travel stellar to -1 (@0x82e9f). With a lead (`speeds.lead`: a fleet escort's, or the player
+/// speed. With a lead (`speeds.lead`: a fleet escort's, or the player
 /// for a ship the player leads) it flies on; with none it holds its
 /// course for [`POST_BURST_WAIT`] + `Rand(`[`POST_BURST_SPREAD`]`)`
 /// ticks first ([`Mode::Coasting`], @0x34d5c-0x34d8b), its trigger
@@ -617,7 +625,6 @@ fn burst(
     if next > speeds.burst_cap() {
         return false;
     }
-    npc.emerges_from = None;
     npc.mode = if speeds.lead.is_some() {
         Mode::Flying
     } else {
@@ -1325,6 +1332,21 @@ mod tests {
             })
             .expect("out");
         assert_eq!(ticks, 26, "30 down to 0.875");
+    }
+
+    #[test]
+    fn a_ship_bursting_out_of_its_gate_is_out_of_it_from_its_first_burst_tick() {
+        let sites = [planet(140, 0.0, 0.0)];
+        let mut ship = emerging(AVERAGE, 1);
+        ship.emerges_from = Some(StellarId(129));
+        fly(&mut ship, &sites, None);
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
+        assert_eq!(ship.emerges_from, Some(StellarId(129)), "goal still 0x15");
+        let before = ship.state.position;
+        fly(&mut ship, &sites, None);
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 1 });
+        assert_ne!(ship.state.position, before, "bursting");
+        assert_eq!(ship.emerges_from, None, "+0x6c = -1, @0x8dd93");
     }
 
     #[test]

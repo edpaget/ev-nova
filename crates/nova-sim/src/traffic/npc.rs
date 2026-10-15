@@ -117,7 +117,10 @@ pub enum Mode {
     /// Bursting out of the gate along its heading, on this tick of the
     /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed)
     /// from 30, or from 15 when [`led_out`](Npc::led_out): no steering and
-    /// no decisions.
+    /// no decisions. Tick 0 is the frame its wait runs out, its goal still
+    /// 0x15, so it still holds the gate's sprite open; from its first
+    /// moving tick it has goal 8 and is out of its gate (+0x6c = -1,
+    /// @0x8dd8a-0x8dd93), and lets go ([`Npc::holds_gate_open`]).
     LeavingGate {
         /// The tick of the burst.
         tick: u32,
@@ -285,11 +288,13 @@ pub struct Npc {
     /// its burst: decided at the emerge, as the original decides by the
     /// leader then and fixes the burst's start speed (+0x34) there.
     pub led_out: bool,
-    /// The gate it is coming out of, from its emerge until its burst is
-    /// over: the original's travel stellar (+0x6c), which
+    /// The gate it is coming out of, from its emerge until its burst
+    /// starts: the original's travel stellar (+0x6c), which
     /// `_AIMakeShipEmergeFromHyperGate` sets to the gate (@0x8954a) and
-    /// `_AIMakeShipStopJumping` sets to -1 (@0x82e9f). The gate's sprite
-    /// opens while it waits and bursts ([`Npc::holds_gate_open`]).
+    /// `_HighLevelAIHandler` sets to -1 in the pass that starts the burst
+    /// (@0x8dd93), or `_AIMakeShipAttackPlayer` as the ship is held at its
+    /// gate (@0x89d47). The gate's sprite opens while it waits
+    /// ([`Npc::holds_gate_open`]).
     pub emerges_from: Option<StellarId>,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself
@@ -561,15 +566,19 @@ impl Npc {
     }
 
     /// Whether it holds `gate`'s sprite open (`_HandleStellarSprites`
-    /// @0x2e884-0x2e8d7): coming out of it, waiting or bursting
+    /// @0x2e884-0x2e8d7): coming out of it, waiting or its wait just run
+    /// out ([`Mode::LeavingGate`] at tick 0)
     /// (`_AIShipIsEmergingFromHypergate` @0x7e2e8, goal 0x15, with its
     /// travel stellar +0x6c the gate), and neither disabled nor breaking
-    /// up (`_IsDisabled` @0x2e8a3). Holding its course after the burst its
-    /// goal is 0, so it no longer does.
+    /// up (`_IsDisabled` @0x2e8a3). From its first burst tick it has goal 8
+    /// and +0x6c = -1 (@0x8dd8a-0x8dd93), so it lets go.
     #[must_use]
     pub fn holds_gate_open(&self, gate: StellarId) -> bool {
         self.emerges_from == Some(gate)
-            && matches!(self.mode, Mode::Emerging { .. } | Mode::LeavingGate { .. })
+            && matches!(
+                self.mode,
+                Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 }
+            )
             && self.condition == Condition::Intact
     }
 
@@ -1116,7 +1125,8 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_holds_the_gate_it_comes_out_of_open_while_it_waits_and_bursts_intact() {
+    fn a_ship_holds_the_gate_it_comes_out_of_open_while_it_waits_intact_and_lets_go_as_its_burst_starts()
+     {
         let gate = StellarId(128);
         let ship = |mode, condition| Npc {
             mode,
@@ -1124,9 +1134,10 @@ mod tests {
             emerges_from: Some(gate),
             ..crate::testkit::npc(1, ShipStats::default())
         };
+        // Waiting, or its wait just run out (goal still 0x15).
         for mode in [
             Mode::Emerging { ticks_left: 3 },
-            Mode::LeavingGate { tick: 2 },
+            Mode::LeavingGate { tick: 0 },
         ] {
             assert!(
                 ship(mode, Condition::Intact).holds_gate_open(gate),
@@ -1147,7 +1158,12 @@ mod tests {
                 );
             }
         }
+        // Bursting it has goal 8 and +0x6c = -1 (@0x8dd8a-0x8dd93), so
+        // `_AIShipIsEmergingFromHypergate` (@0x7e2e8) no longer sees it,
+        // even with the gate still marked.
         for mode in [
+            Mode::LeavingGate { tick: 1 },
+            Mode::LeavingGate { tick: 2 },
             Mode::Coasting { ticks_left: 30 },
             Mode::Flying,
             Mode::JumpingIn { tick: 0 },

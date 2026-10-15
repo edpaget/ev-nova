@@ -15,7 +15,8 @@
 //!   or less or at least frames - 1. Frames 0 to `o` - 1 are the opening,
 //!   `o` to frames - 1 the open loop.
 //! - **Held open** ([`held_open`], @0x2e867-0x2e9b0): by an NPC coming out
-//!   of it ([`Npc::holds_gate_open`]), or by one heading in to enter it
+//!   of it ([`Npc::holds_gate_open`]): waiting in it (goal 0x15), not
+//!   bursting (goal 8, +0x6c = -1, @0x8dd8a-0x8dd93); or by one heading in to enter it
 //!   (@0x2e8dd-0x2e9a2, [`Npc::approaches_gate`]): an NPC, active and not
 //!   `_IsDisabled` (@0x2e884-0x2e8aa), whose goal is 1 or 0x14 with its
 //!   travel stellar this one (`_AIShipIsShipGoingToStellar` @0x895d6),
@@ -297,7 +298,8 @@ impl GateSprite {
 
 /// Whether `gate` is held open this tick: by any of `npcs` coming out of
 /// it ([`Npc::holds_gate_open`]; `_HandleStellarSprites`
-/// @0x2e884-0x2e8d7), or heading in to land on or enter it strictly
+/// @0x2e884-0x2e8d7), waiting in it (goal 0x15), not bursting (goal 8,
+/// +0x6c = -1, @0x8dd8a-0x8dd93), or heading in to land on or enter it strictly
 /// inside `reach` of it on both axes ([`Npc::approaches_gate`],
 /// @0x2e8dd-0x2e9a2; see [`approach_reach`]). The original tests the
 /// player's trigger first; see the module docs.
