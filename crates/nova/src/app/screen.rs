@@ -233,9 +233,9 @@ use nova_sim::board::MAX_ESCORTS;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
-    HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
-    RuleKey, Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
+    HailView, HireTerms, LegalCode, MissionInfo, NovaAi, NovaBits, NovaBoarding, NovaDisable,
+    NovaHire, NovaLaw, NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore,
+    PointDefenceRule, RuleKey, Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -1215,14 +1215,7 @@ impl AppScreen {
     fn missions_input(&mut self, input: &Input) -> ScreenAction {
         let missions = self.missions.as_mut().expect("open");
         missions.input(input);
-        if let Some(slot) = missions.take_abort() {
-            let flight = self.flight.as_mut().expect(ENTERED);
-            let _ = flight.abort_mission(slot);
-            let info = flight.mission_info();
-            if let Some(missions) = &mut self.missions {
-                missions.set_info(info);
-            }
-        }
+        abort_and_refresh(missions, self.flight.as_mut());
         self.load_flight_info_text();
         self.drop_closed_missions();
         ScreenAction::None
@@ -2187,11 +2180,7 @@ impl AppScreen {
         let accepted = spaceport.take_mission_accept();
         // An abort frees the slot, and the info goes back, closing once
         // nothing is left; a refusal (greyed) changes nothing.
-        if let Some(slot) = spaceport.take_mission_abort() {
-            let flight = self.flight.as_mut().expect(ENTERED);
-            let _ = flight.abort_mission(slot);
-            spaceport.set_mission_info(flight.mission_info());
-        }
+        abort_and_refresh(spaceport, self.flight.as_mut());
         // The bar draws the visit's news as it opens, before News can
         // show it; News shows what was drawn.
         if spaceport.take_bar_opened() {
@@ -2308,11 +2297,7 @@ impl AppScreen {
         {
             spaceport.show_computer_row(&row);
         }
-        if let Some(slot) = spaceport.take_info_text_request()
-            && let Some(text) = flight.show_info_row(slot)
-        {
-            spaceport.show_info_text(slot, &text);
-        }
+        load_info_text(spaceport, flight);
     }
 
     /// The mission info screen over flight's selected text, loaded
@@ -2322,11 +2307,7 @@ impl AppScreen {
         let (Some(missions), Some(flight)) = (&mut self.missions, &mut self.flight) else {
             return;
         };
-        if let Some(slot) = missions.take_info_text_request()
-            && let Some(text) = flight.show_info_row(slot)
-        {
-            missions.show_info_text(slot, &text);
-        }
+        load_info_text(missions, flight);
     }
 
     /// The outfitter and the hire screen closing, however they closed this
@@ -2557,6 +2538,86 @@ fn refresh_spaceport(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<G
     }
     if let Some(shipyard) = flight.shipyard() {
         spaceport.set_shipyard(shipyard);
+    }
+}
+
+/// An open mission info screen, as whatever holds one shows it: the
+/// spaceport, or the mission dialogs over flight. Its Abort and the text
+/// it asks for are answered through flight
+/// ([`abort_and_refresh`], [`load_info_text`]).
+trait MissionInfoHolder {
+    /// The slot the screen asked to abort since this was last taken,
+    /// once.
+    fn take_abort(&mut self) -> Option<u8>;
+    /// After an abort, the screen shows `info`, closing once nothing is
+    /// left.
+    fn set_info(&mut self, info: MissionInfo);
+    /// The slot whose `QuickBrief` the screen asked for since this was
+    /// last taken, once.
+    fn take_info_text_request(&mut self) -> Option<u8>;
+    /// Shows `text`, slot `slot`'s, while that slot is selected.
+    fn show_info_text(&mut self, slot: u8, text: &str);
+}
+
+impl MissionInfoHolder for SpaceportView {
+    fn take_abort(&mut self) -> Option<u8> {
+        self.take_mission_abort()
+    }
+
+    fn set_info(&mut self, info: MissionInfo) {
+        self.set_mission_info(info);
+    }
+
+    fn take_info_text_request(&mut self) -> Option<u8> {
+        SpaceportView::take_info_text_request(self)
+    }
+
+    fn show_info_text(&mut self, slot: u8, text: &str) {
+        SpaceportView::show_info_text(self, slot, text);
+    }
+}
+
+impl MissionInfoHolder for MissionDialogs {
+    fn take_abort(&mut self) -> Option<u8> {
+        MissionDialogs::take_abort(self)
+    }
+
+    fn set_info(&mut self, info: MissionInfo) {
+        MissionDialogs::set_info(self, info);
+    }
+
+    fn take_info_text_request(&mut self) -> Option<u8> {
+        MissionDialogs::take_info_text_request(self)
+    }
+
+    fn show_info_text(&mut self, slot: u8, text: &str) {
+        MissionDialogs::show_info_text(self, slot, text);
+    }
+}
+
+/// An Abort `holder`'s mission info screen asked for frees the slot
+/// through `flight`, and the screen shows the missions left, closing once
+/// nothing is left; a refusal (greyed) changes nothing. Flight is needed
+/// only once an Abort was asked for.
+fn abort_and_refresh(
+    holder: &mut impl MissionInfoHolder,
+    flight: Option<&mut FlightView<Rc<GameData>>>,
+) {
+    if let Some(slot) = holder.take_abort() {
+        let flight = flight.expect(ENTERED);
+        let _ = flight.abort_mission(slot);
+        holder.set_info(flight.mission_info());
+    }
+}
+
+/// The text `holder`'s mission info screen has shown selected, loaded
+/// through `flight` as the original loads a selected row's
+/// (`_MissionInfoFilter` @0x9d89f) and shown while still selected.
+fn load_info_text(holder: &mut impl MissionInfoHolder, flight: &mut FlightView<Rc<GameData>>) {
+    if let Some(slot) = holder.take_info_text_request()
+        && let Some(text) = flight.show_info_row(slot)
+    {
+        holder.show_info_text(slot, &text);
     }
 }
 
