@@ -1553,9 +1553,10 @@ fn beam_hits(spec: &WeaponSpec, x: f32) -> u32 {
 /// Each stock weapon in scope, fired from rest into empty space: a shot
 /// leaves at `Speed`/100 (a rocket at its firer's rest, closing on that),
 /// lives `Count` ticks and flies `Speed`/100 x `Count`, its own reach
-/// without its sub-munitions (a beam hits for
-/// `Count` ticks and reaches its `BeamLength` and the ship's radius), and
-/// it fires as often as item 7 of the plan says.
+/// without its sub-munitions (a beam hits for `Count` ticks, and 15 −
+/// `Falloff` more when it decays, and its cone reaches its `BeamLength`
+/// and half the ship's cone radius), and it fires as often as item 7 of
+/// the plan says.
 #[test]
 #[allow(clippy::float_cmp)]
 fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
@@ -1571,8 +1572,14 @@ fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
         ships[0].trigger = Trigger::default();
         if spec.guidance == Guidance::Beam {
             assert!((spec.range() - spec.beam_length).abs() < 1e-6, "{id}");
-            let reach = spec.beam_length + nova_sim::combat::hull::DEFAULT_HIT_RADIUS;
-            assert_eq!(beam_hits(&spec, reach - 0.5), spec.lifetime.max(1), "{id}");
+            // A placeholder hull's 75 pixels: trunc(trunc(0.66 x 75) / 2).
+            let reach = spec.beam_length + 24.0;
+            let fade = if spec.decay > 0 {
+                u32::try_from(15 - i32::from(spec.falloff)).unwrap_or(0)
+            } else {
+                0
+            };
+            assert_eq!(beam_hits(&spec, reach), spec.lifetime + fade, "{id}");
             assert_eq!(beam_hits(&spec, reach + 0.5), 0, "{id}: out of reach");
         } else {
             let shot = combat.shots()[0];
@@ -2335,6 +2342,109 @@ fn stock_shans_carry_their_exit_points_to_the_hull() {
     let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
     assert!(near(starts[0], Vec2::new(3.0, -5.1)), "{starts:?}");
     assert!(near(starts[1], Vec2::new(-3.0, -5.1)), "{starts:?}");
+}
+
+/// The only stock beams that decay, the Pulse Laser (146) and the Autumn
+/// Petal (173), say Falloff 0, which loads as 16 (`_LoadObjectData`
+/// @0x795e2-0x795f0), so neither fades: the Pulse Laser hits its Count,
+/// 15 ticks, and the Autumn Petal, fired every tick, keeps one beam at a
+/// time, hitting every tick.
+#[test]
+fn the_stock_pulse_laser_and_autumn_petal_never_fade() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let decaying: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.beam_length > 0.0 && spec.decay > 0)
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(decaying, [146, 173]);
+    let pulse = *arsenal.weapon(WeaponId(146)).expect("the Pulse Laser");
+    let petal = *arsenal.weapon(WeaponId(173)).expect("the Autumn Petal");
+    assert_eq!((pulse.falloff, petal.falloff), (16, 16));
+    assert_eq!(beam_hits(&pulse, 300.0), 15);
+    let mut ships = [aiming(&petal), sponge(100.0, 0.0)];
+    let mut combat = Combat::default();
+    let mut most = 0;
+    for tick in 0..20 {
+        let before = ships[1].reserves;
+        fight(&mut combat, &mut ships);
+        assert_ne!(ships[1].reserves, before, "tick {tick}");
+        assert!(combat.beams().iter().all(|beam| beam.fade == 0));
+        most = most.max(combat.beams().len());
+    }
+    assert_eq!(most, 1);
+}
+
+/// Draws its value, or the last below that, every time.
+struct Drawing(u32);
+
+impl nova_sim::Chance for Drawing {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0.min(n.saturating_sub(1))
+    }
+}
+
+/// The Thunderhead Lance (166, `Inaccuracy` 2), held ahead, and the Ion
+/// Cannon (142, `Inaccuracy` 4), a turret, each turn by `Rand(2i) − i`
+/// every tick of their life: along their frame or bearing, d − i off for
+/// each tick's draw d.
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_stock_thunderhead_lance_and_ion_cannon_jitter_every_tick() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let lance = *arsenal
+        .weapon(WeaponId(166))
+        .expect("the Thunderhead Lance");
+    assert_eq!((lance.inaccuracy, lance.lifetime), (2, 10));
+    let ion = WeaponSpec {
+        lifetime: 10,
+        ..*arsenal.weapon(WeaponId(142)).expect("the Ion Cannon")
+    };
+    assert_eq!(ion.inaccuracy, 4);
+    // The sponge lies straight up from the Ion Cannon, at bearing 0.
+    for (spec, sponge_at, aim) in [(lance, (300.0, 0.0), 90.0), (ion, (0.0, -100.0), 0.0)] {
+        let id = spec.id.0;
+        let mut ships = [aiming(&spec), sponge(sponge_at.0, sponge_at.1)];
+        let mut combat = Combat::default();
+        let mut headings = Vec::new();
+        for draw in [0, 3, 1, 2, 7, 5, 6, 4, 0, 1] {
+            let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+            combat.tick(
+                &mut fighters,
+                &Arsenal::default(),
+                &nova_sim::Governments::default(),
+                Rules::default(),
+                &mut [],
+                &mut Drawing(draw),
+            );
+            drop(fighters);
+            ships[0].trigger = Trigger::default();
+            let beam = combat.beams().first().copied().expect("a beam");
+            let inaccuracy = spec.inaccuracy;
+            headings.push(beam.heading - aim);
+            let off = f32::from(u16::try_from(draw.min(2 * inaccuracy - 1)).unwrap_or(0))
+                - inaccuracy as f32;
+            assert_eq!(beam.heading - aim, off, "{id}: draw {draw}");
+        }
+        assert!(
+            headings.iter().any(|&off| off != headings[0]),
+            "{id}: {headings:?}"
+        );
+    }
 }
 
 /// Only the stock Ion Cannons (142, 201) fire from the exit point nearest

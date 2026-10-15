@@ -3,13 +3,29 @@
 //!
 //! The original (`_SpawnBeam` and `_HandleBeams` in the `EV Nova`
 //! executable) keeps a beam for its weapon's `Count` ticks, following its
-//! firer, and every tick damages the nearest ship it may hit within its
-//! `BeamLength` plus the ship's hit radius, inside a cone about its
-//! heading. The simulation keeps that reach and swaps the cone for the
-//! beam's segment against each ship's circle: deterministic, and what the
-//! drawn beam shows. Which ships it may hit is `_HandleBeams`' own filter
-//! ([`Sides::beam_can_hit`]), not a shot's: no government test, and a
-//! breaking-up ship is hit, so a beam stops on a hulk.
+//! firer, and every tick damages the nearest ship it may hit inside a
+//! cone about its heading ([`cone`], @0x30dde-0x30f31): within its
+//! `BeamLength` plus half the ship's cone radius r, trunc(0.66 × its
+//! sprite's width), and within trunc(10r / 32) degrees of its heading,
+//! the nearest by its centre's squared distance, truncated, the first
+//! of equals. A hit ends trunc(dist − 0.2 × width) along the beam, where
+//! it explodes and where the beam is drawn to. Which ships it may hit is
+//! `_HandleBeams`' own filter ([`Sides::beam_can_hit`]), not a shot's: no
+//! government test, and a breaking-up ship is hit, so a beam stops on a
+//! hulk.
+//!
+//! How a beam finds its ship is the rulebook's
+//! [`RuleKey::BeamHitTest`](crate::RuleKey::BeamHitTest) ([`BeamHitTest`]):
+//! the original's cone by default, or the engine's earlier segment
+//! against each ship's hit circle, taking the ship it meets first and
+//! ending where it meets it. The segment is deterministic in what the
+//! drawn beam shows, a ship the line crosses; the cone hits ships the line
+//! misses and misses big ships whose edge it crosses. The cone's angle
+//! test is the original's plain difference between the whole-degree
+//! bearing and the beam's heading, with no 0/360 wrap, so a beam at 2
+//! degrees misses a ship at 358: that is fixed by default, and
+//! [`RuleKey::BeamConeQuirks`](crate::RuleKey::BeamConeQuirks)
+//! ([`ConeAngle`]) restores it.
 //!
 //! A beam lives its weapon's `Count` ticks, and a decaying one (`Decay`
 //! above none) fades 15 − `Falloff` ticks more, hitting all the while
@@ -39,13 +55,128 @@ use super::projectile::{Shot, ShotId, Target, contact};
 use super::sides::{Sides, Ties};
 use super::weapon::{Guidance, WeaponSpec};
 use crate::chance::Chance;
-use crate::flight::{ShipState, facing};
+use crate::flight::{ShipState, facing, normalized};
 use crate::geometry::Vec2;
+use crate::rulebook::RuleSource;
 use crate::trig::intercept_angle;
 
 /// The most a decaying beam's fade plus its `Falloff` may come to for it
 /// to fade a tick more (`_HandleBeams` @0x30352).
 pub const FADE_END: i64 = 15;
+
+/// A ship's cone radius per pixel of its sprite's width (the double 0.66
+/// @0xdd5b8).
+pub const CONE_RADIUS_PER_WIDTH: f64 = 0.66;
+/// How far short of a ship's centre a cone hit ends, per pixel of its
+/// sprite's width (the double -0.2 @0xdd5c0).
+pub const HIT_SHORT_PER_WIDTH: f64 = 0.2;
+/// The sprite width a ship with no sprite reads
+/// (`_GetMasterShipSpriteXSize` @0xadbe).
+pub const NO_SPRITE_WIDTH: f32 = 75.0;
+/// The cone's angle tolerance is its radius times this, over
+/// [`CONE_ANGLE_PER`] (@0x30eb8-0x30ed8).
+pub const CONE_ANGLE_TIMES: i64 = 10;
+/// See [`CONE_ANGLE_TIMES`].
+pub const CONE_ANGLE_PER: i64 = 32;
+
+/// How a beam finds the ship it hits, as the rulebook's
+/// [`RuleKey::BeamHitTest`](crate::RuleKey::BeamHitTest) says (see the
+/// module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BeamHitTest {
+    /// The original's cone ([`cone`]), the nearest centre: the engine's
+    /// reading and the default.
+    #[default]
+    Cone,
+    /// The beam's segment against each ship's hit circle, the first
+    /// contact: the other reading.
+    Segment,
+}
+
+impl From<RuleSource> for BeamHitTest {
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Cone,
+            RuleSource::Bible => Self::Segment,
+        }
+    }
+}
+
+/// How the cone measures a ship's bearing off the beam's heading, as the
+/// rulebook's [`RuleKey::BeamConeQuirks`](crate::RuleKey::BeamConeQuirks)
+/// says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConeAngle {
+    /// The short way round, the heading taken mod 360: the default, a
+    /// recorded departure from the original.
+    #[default]
+    Wrapped,
+    /// The plain difference, with no wrap, against the heading as its
+    /// jitter left it (@0x30ec4-0x30edd): the engine's reading.
+    Plain,
+}
+
+impl From<RuleSource> for ConeAngle {
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Plain,
+            RuleSource::Bible => Self::Wrapped,
+        }
+    }
+}
+
+/// How beams hit, as the rulebook says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BeamRules {
+    /// How a beam finds the ship it hits.
+    pub hit_test: BeamHitTest,
+    /// How the cone measures a ship's bearing.
+    pub angle: ConeAngle,
+}
+
+/// The cone radius of a ship whose sprite is `width` pixels wide:
+/// trunc(0.66 × width) (@0x30dfc-0x30e0a).
+#[must_use]
+pub fn cone_radius(width: f32) -> i64 {
+    (f64::from(width) * CONE_RADIUS_PER_WIDTH).trunc() as i64
+}
+
+/// Whether a beam from `start` along `heading`, in degrees, `length`
+/// pixels long, reaches a ship of cone radius `r` ([`cone_radius`])
+/// centred at `centre`, as `_HandleBeams` tests each ship
+/// (@0x30dde-0x30edd): its squared distance, if it is within
+/// `length` + trunc(r / 2) (inclusive) and its whole-degree bearing
+/// (`_CalcInterceptAngle`) is within trunc(10r / 32) degrees of
+/// `heading`, measured as `angle` says. The nearest such ship is taken
+/// by its squared distance truncated. An asteroid takes its sprite's
+/// height for r (`_HandleBeams` @0x316c2-0x31d54).
+#[must_use]
+pub fn cone(
+    start: Vec2,
+    heading: f32,
+    length: f32,
+    r: i64,
+    centre: Vec2,
+    angle: ConeAngle,
+) -> Option<f32> {
+    // A beam's length is a whole `i16`.
+    let reach = length as i64 + r / 2;
+    let off = centre - start;
+    let squared = off.x * off.x + off.y * off.y;
+    if squared > (reach * reach) as f32 {
+        return None;
+    }
+    let bearing = f32::from(intercept_angle(start, centre));
+    let off_heading = match angle {
+        ConeAngle::Plain => (bearing - heading).abs(),
+        ConeAngle::Wrapped => {
+            let apart = (bearing - normalized(heading)).abs();
+            apart.min(360.0 - apart)
+        }
+    };
+    let tolerance = r * CONE_ANGLE_TIMES / CONE_ANGLE_PER;
+    (off_heading <= tolerance as f32).then_some(squared)
+}
 
 /// What a beam is held on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,23 +351,51 @@ impl Beam {
         sides.beam_can_hit(self, target)
     }
 
-    /// The nearest of the ships among `sides` it can hit that it reaches,
-    /// and where it meets it.
+    /// The ship among `sides` it hits, of those it can hit, found as
+    /// `rules` say, and where the hit ends: by the cone, the nearest it
+    /// reaches ([`cone`]), the first of equals, the hit
+    /// trunc(dist − 0.2 × its width) along the beam (@0x30f9a-0x31051);
+    /// by the segment, the first it meets, where it meets it. A
+    /// point-defence beam hits no ship.
     #[must_use]
-    pub fn hit(&self, sides: &Sides) -> Option<(ShipRef, Vec2)> {
+    pub fn hit(&self, sides: &Sides, rules: BeamRules) -> Option<(ShipRef, Vec2)> {
         if let Aiming::Shot(_) = self.aiming {
             return None;
         }
-        sides
+        let targets = sides
             .targets
             .iter()
-            .filter(|target| self.can_hit(target, sides))
-            .filter_map(|target| {
-                let t = contact(self.start, self.end, target.position, target.radius)?;
-                Some((t, target.ship))
-            })
-            .min_by(|(a, _), (b, _)| a.total_cmp(b))
-            .map(|(t, ship)| (ship, self.start + (self.end - self.start) * t))
+            .filter(|target| self.can_hit(target, sides));
+        match rules.hit_test {
+            BeamHitTest::Cone => targets
+                .filter_map(|target| {
+                    let r = cone_radius(target.sprite_x);
+                    let length = self.weapon.beam_length;
+                    let squared = cone(
+                        self.start,
+                        self.heading,
+                        length,
+                        r,
+                        target.position,
+                        rules.angle,
+                    )?;
+                    Some((squared, target))
+                })
+                .min_by_key(|(squared, _)| squared.trunc() as i64)
+                .map(|(squared, target)| {
+                    let width = f64::from(target.sprite_x);
+                    let distance = f64::from(squared).sqrt();
+                    let along = width.mul_add(-HIT_SHORT_PER_WIDTH, distance).trunc() as f32;
+                    (target.ship, self.start + facing(self.heading) * along)
+                }),
+            BeamHitTest::Segment => targets
+                .filter_map(|target| {
+                    let t = contact(self.start, self.end, target.position, target.radius)?;
+                    Some((t, target.ship))
+                })
+                .min_by(|(a, _), (b, _)| a.total_cmp(b))
+                .map(|(t, ship)| (ship, self.start + (self.end - self.start) * t)),
+        }
     }
 
     /// Spends a tick of its life, as `_HandleBeams` does before the beam
@@ -554,35 +713,161 @@ mod tests {
             position: Vec2::new(x, y),
             velocity: Vec2::ZERO,
             radius: 8.0,
+            sprite_x: 24.0,
             condition: Condition::Intact,
         }
     }
 
     #[test]
-    fn a_beam_hits_the_nearest_ship_it_reaches() {
+    fn by_the_segment_a_beam_hits_the_first_ship_it_meets() {
         let beam = Beam::launch(laser(), FIRER, FIRER, &at(10.0, 5.0, 90.0), Aiming::Ahead);
         let (ship, point) = beam
-            .hit(&among(&[
-                target(2, 90.0, 5.0),
-                target(3, 50.0, 8.0),
-                target(4, 70.0, 4.0),
-            ]))
+            .hit(
+                &among(&[
+                    target(2, 90.0, 5.0),
+                    target(3, 50.0, 8.0),
+                    target(4, 70.0, 4.0),
+                ]),
+                SEGMENT,
+            )
             .expect("a hit");
         assert_eq!(ship, ShipRef::Npc(NpcId(3)));
         assert!(point.x > 40.0 && point.x < 44.0, "{point:?}");
         assert!((point.y - 5.0).abs() < 1e-3, "on the beam: {point:?}");
-        assert_eq!(beam.hit(&among(&[])), None);
+        assert_eq!(beam.hit(&among(&[]), SEGMENT), None);
     }
 
     #[test]
-    fn a_beam_reaches_its_length_and_the_ships_radius_and_no_further() {
+    fn by_the_segment_a_beam_reaches_its_length_and_the_ships_radius_and_no_further() {
         let beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
-        let one = |x, y| beam.hit(&among(&[target(2, x, y)])).map(|(ship, _)| ship);
+        let one = |x, y| {
+            beam.hit(&among(&[target(2, x, y)]), SEGMENT)
+                .map(|(ship, _)| ship)
+        };
         assert_eq!(one(107.9, 0.0), Some(ShipRef::Npc(NpcId(2))));
         assert_eq!(one(108.1, 0.0), None, "beyond its length and the radius");
         assert_eq!(one(50.0, 7.9), Some(ShipRef::Npc(NpcId(2))));
         assert_eq!(one(50.0, 8.1), None, "beside it");
         assert_eq!(one(-9.0, 0.0), None, "behind it");
+    }
+
+    const SEGMENT: BeamRules = BeamRules {
+        hit_test: BeamHitTest::Segment,
+        angle: ConeAngle::Wrapped,
+    };
+
+    /// Ship `id`, `x` pixels wide, its hit radius a third of that, at
+    /// (`cx`, `cy`).
+    fn sized(id: u32, cx: f32, cy: f32, x: f32) -> Target {
+        Target {
+            sprite_x: x,
+            radius: x * 0.33,
+            ..target(id, cx, cy)
+        }
+    }
+
+    #[test]
+    fn a_ships_cone_radius_is_two_thirds_of_its_width_truncated() {
+        assert_eq!(cone_radius(48.0), 31);
+        assert_eq!(cone_radius(75.0), 49);
+        assert_eq!(cone_radius(1.0), 0);
+    }
+
+    #[test]
+    fn the_cone_reaches_beam_length_and_half_of_r() {
+        let reach = |r, x| {
+            cone(
+                Vec2::ZERO,
+                90.0,
+                100.0,
+                r,
+                Vec2::new(x, 0.0),
+                ConeAngle::Wrapped,
+            )
+        };
+        assert_eq!(reach(31, 115.0), Some(13_225.0), "100 + 15");
+        assert_eq!(reach(31, 115.4), None, "15 of 31, truncated");
+        assert_eq!(reach(31, 116.0), None);
+        assert_eq!(reach(31, 10.0), Some(100.0));
+        assert_eq!(reach(30, 115.0), Some(13_225.0));
+        assert_eq!(reach(29, 115.0), None, "14 of 29");
+        let behind = cone(
+            Vec2::ZERO,
+            90.0,
+            100.0,
+            31,
+            Vec2::new(-10.0, 0.0),
+            ConeAngle::Wrapped,
+        );
+        assert_eq!(behind, None);
+    }
+
+    #[test]
+    fn the_cone_takes_ships_within_trunc_10r_over_32_degrees() {
+        // r 31: 310 / 32 is 9.69, so 9 degrees.
+        let off = |heading| {
+            let centre = Vec2::new(50.0, 0.0);
+            cone(Vec2::ZERO, heading, 100.0, 31, centre, ConeAngle::Wrapped).is_some()
+        };
+        assert!(off(81.0) && off(99.0) && off(90.0));
+        assert!(!off(80.0) && !off(100.0) && !off(80.5));
+    }
+
+    #[test]
+    fn the_cone_wraps_0_360_unless_the_quirks_are_on() {
+        // Bearings 358 and 2 from the origin.
+        let (at_358, at_2) = (Vec2::new(-2.0, -50.0), Vec2::new(2.0, -50.0));
+        let hit = |heading, centre, angle| cone(Vec2::ZERO, heading, 100.0, 31, centre, angle);
+        for heading in [2.0, -2.0] {
+            assert!(
+                hit(heading, at_358, ConeAngle::Wrapped).is_some(),
+                "{heading}"
+            );
+            assert_eq!(hit(heading, at_358, ConeAngle::Plain), None, "{heading}");
+        }
+        assert!(hit(358.0, at_2, ConeAngle::Wrapped).is_some());
+        assert_eq!(hit(358.0, at_2, ConeAngle::Plain), None);
+        assert!(hit(362.0, at_2, ConeAngle::Wrapped).is_some());
+        assert_eq!(hit(362.0, at_2, ConeAngle::Plain), None);
+        assert!(
+            hit(-2.0, at_2, ConeAngle::Plain).is_some(),
+            "4 off, unwrapped"
+        );
+    }
+
+    #[test]
+    fn the_cone_takes_the_nearest_centre_not_the_first_contact() {
+        let beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
+        let targets = [sized(2, 60.0, 50.0, 200.0), sized(3, 40.0, 0.0, 20.0)];
+        let first = |rules| beam.hit(&among(&targets), rules).map(|(ship, _)| ship);
+        assert_eq!(
+            first(BeamRules::default()),
+            Some(npc(3)),
+            "the nearer centre"
+        );
+        assert_eq!(first(SEGMENT), Some(npc(2)), "the first contact");
+    }
+
+    #[test]
+    fn the_cone_takes_the_first_of_ships_as_near_to_the_pixel() {
+        let beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
+        let targets = [sized(2, 50.001, 0.0, 24.0), sized(3, 50.0, 0.0, 24.0)];
+        let first = beam.hit(&among(&targets), BeamRules::default());
+        assert_eq!(first.map(|(ship, _)| ship), Some(npc(2)));
+    }
+
+    #[test]
+    fn a_cone_hit_ends_at_trunc_dist_less_a_fifth_of_x() {
+        let beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
+        let end = |target| {
+            let (_, at) = beam
+                .hit(&among(&[target]), BeamRules::default())
+                .expect("a hit");
+            (at.x.round(), at.y.round())
+        };
+        assert_eq!(end(sized(2, 100.0, 0.0, 48.0)), (90.0, 0.0), "100 - 9.6");
+        assert_eq!(end(sized(2, 100.5, 0.0, 48.0)), (90.0, 0.0), "truncated");
+        assert_eq!(end(sized(2, 100.0, 0.0, 75.0)), (85.0, 0.0));
     }
 
     const TARGET: ShipRef = ShipRef::Npc(NpcId(2));
@@ -708,7 +993,10 @@ mod tests {
             close(beam.end, Vec2::new(0.0, 100.0)),
             "at shot 5: {beam:?}"
         );
-        assert_eq!(beam.hit(&among(&[target(2, 0.0, 50.0)])), None);
+        assert_eq!(
+            beam.hit(&among(&[target(2, 0.0, 50.0)]), BeamRules::default()),
+            None
+        );
         assert!(
             !follow(&mut beam, at(0.0, 0.0, 0.0), &[], &shots[..1]),
             "its shot gone"
@@ -738,13 +1026,17 @@ mod tests {
             condition: Condition::Destroyed,
             ..target(3, 30.0, 0.0)
         };
-        assert_eq!(beam.hit(&among(&[firer, destroyed])), None);
+        assert_eq!(
+            beam.hit(&among(&[firer, destroyed]), BeamRules::default()),
+            None
+        );
         let disabled = Target {
             condition: Condition::Disabled,
             ..target(4, 50.0, 0.0)
         };
         assert_eq!(
-            beam.hit(&among(&[firer, disabled])).map(|(ship, _)| ship),
+            beam.hit(&among(&[firer, disabled]), BeamRules::default())
+                .map(|(ship, _)| ship),
             Some(ShipRef::Npc(NpcId(4)))
         );
     }
@@ -799,7 +1091,7 @@ mod tests {
             govts,
             pass_through,
         };
-        beam.hit(&sides).map(|(ship, _)| ship)
+        beam.hit(&sides, BeamRules::default()).map(|(ship, _)| ship)
     }
 
     /// As [`beam_by`], by the original's reading and no governments.

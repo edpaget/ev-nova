@@ -248,6 +248,7 @@ pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
         position: at.position,
         velocity: at.velocity,
         radius: 0.0,
+        sprite_x: 0.0,
         condition: crate::combat::hull::Condition::Intact,
     };
     lead(&npc.state, &target, speed)

@@ -375,6 +375,7 @@ mod tests {
             position: Vec2::ZERO,
             velocity: Vec2::ZERO,
             radius: 5.0,
+            sprite_x: 15.0,
             condition: Condition::Intact,
         }
     }

@@ -80,6 +80,12 @@ pub struct Target {
     pub velocity: Vec2,
     /// Its hit radius.
     pub radius: f32,
+    /// Its sprite's width, in pixels, as `_GetMasterShipSpriteXSize`
+    /// reads it, which a beam's cone sizes it by
+    /// ([`cone`](super::beam::cone)): its `shän`'s `BaseXSize`, which every
+    /// stock sheet's frame width equals, or
+    /// [`NO_SPRITE_WIDTH`](super::beam::NO_SPRITE_WIDTH) with none.
+    pub sprite_x: f32,
     /// How it is holding up.
     pub condition: Condition,
 }
@@ -696,6 +702,7 @@ mod tests {
             position: Vec2::new(x, y),
             velocity: Vec2::ZERO,
             radius: 5.0,
+            sprite_x: 15.0,
             condition,
         }
     }

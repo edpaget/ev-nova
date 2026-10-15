@@ -1479,6 +1479,10 @@ impl Session {
             .set_exit_compression(rules.source_for(RuleKey::ExitCompression));
         self.combat
             .set_pd_exit_step(rules.source_for(RuleKey::PdExitStep));
+        self.combat
+            .set_beam_hit_test(rules.source_for(RuleKey::BeamHitTest));
+        self.combat
+            .set_beam_cone_quirks(rules.source_for(RuleKey::BeamConeQuirks));
         self.rules = rules;
         self
     }
@@ -14539,6 +14543,22 @@ pub(super) mod tests {
         once.set_pd_exit_step(RuleSource::Bible);
         let other = Rulebook::default().with_override(RuleKey::PdExitStep, RuleSource::Bible);
         assert_eq!(session(other).combat, once);
+    }
+
+    #[test]
+    fn the_rulebook_says_how_beams_hit() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        let mut segment = Combat::default();
+        segment.set_beam_hit_test(RuleSource::Bible);
+        let other = Rulebook::default().with_override(RuleKey::BeamHitTest, RuleSource::Bible);
+        assert_eq!(session(other).combat, segment);
+        let mut quirks = Combat::default();
+        quirks.set_beam_cone_quirks(RuleSource::Engine);
+        let engine = Rulebook::default().with_override(RuleKey::BeamConeQuirks, RuleSource::Engine);
+        assert_eq!(session(engine).combat, quirks);
+        assert_ne!(segment, Combat::default());
+        assert_ne!(quirks, Combat::default());
     }
 
     #[test]

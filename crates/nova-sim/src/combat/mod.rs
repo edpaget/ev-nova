@@ -94,8 +94,10 @@
 //!    age is past it. A shot whose move this tick spent its life is not
 //!    tested: at the end of its life it detonates (blasting the same way)
 //!    or vanishes, and releases its sub-munitions at the ship its damage
-//!    is aimed at. A beam damages the nearest ship it may hit along it,
-//!    every tick, until its life is over. Shots, beams and blasts reach a
+//!    is aimed at. A beam damages the nearest ship it may hit in its
+//!    cone, or the first its segment meets, as the fight's rules say
+//!    ([`beam`]), every tick until its life is over, and ends where it
+//!    hit. Shots, beams and blasts reach a
 //!    ship breaking up as they do any other not destroyed; a hit on it is
 //!    a [`Strike`] that downs nothing, and its countdown goes on. The hits
 //!    land one at a time, each taken as [`damage::take`] says: a
@@ -187,7 +189,7 @@ use std::collections::BTreeMap;
 
 use aim::Pointing;
 use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
-use beam::{Aiming, Beam};
+use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
 use damage::{Blast, Hit};
 use defence::{INTERCEPT_RADIUS, PointDefenceRule, Side};
 use exits::{Compression, ExitCursors, ExitPoints, drawn_frame, frame_angle};
@@ -531,6 +533,9 @@ pub struct Combat {
     /// How many exits a point-defence shot moves its cursor on
     /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)).
     pd_exit_step: RuleSource,
+    /// How beams hit ([`RuleKey::BeamHitTest`](crate::RuleKey::BeamHitTest),
+    /// [`RuleKey::BeamConeQuirks`](crate::RuleKey::BeamConeQuirks)).
+    beam_rules: BeamRules,
 }
 
 impl Combat {
@@ -745,6 +750,19 @@ impl Combat {
     /// the engine's, two exits a shot.
     pub fn set_pd_exit_step(&mut self, source: RuleSource) {
         self.pd_exit_step = source;
+    }
+
+    /// Has a beam find the ship it hits as `source` says
+    /// ([`BeamHitTest`]): by default, the engine's cone.
+    pub fn set_beam_hit_test(&mut self, source: RuleSource) {
+        self.beam_rules.hit_test = BeamHitTest::from(source);
+    }
+
+    /// Has the beam cone measure a ship's bearing as `source` says
+    /// ([`ConeAngle`]): by default, the other reading's wrap, the engine's
+    /// plain difference restored by [`RuleSource::Engine`].
+    pub fn set_beam_cone_quirks(&mut self, source: RuleSource) {
+        self.beam_rules.angle = ConeAngle::from(source);
     }
 
     /// The next shot's number.
@@ -1276,8 +1294,10 @@ impl Combat {
         for (parent, target) in released {
             self.release(&parent, target, sides, arsenal, chance);
         }
+        let beam_rules = self.beam_rules;
         for beam in &mut self.beams {
-            if let Some((ship, at)) = beam.hit(sides) {
+            if let Some((ship, at)) = beam.hit(sides, beam_rules) {
+                beam.end = at;
                 let meant = beam.aimed_at.or_else(|| {
                     fighters
                         .iter()
@@ -1642,6 +1662,7 @@ impl Fighter<'_> {
             position: self.state.position,
             velocity: self.state.velocity,
             radius: self.hull.hit_radius,
+            sprite_x: self.hull.sprite_size.unwrap_or(beam::NO_SPRITE_WIDTH),
             condition: *self.condition,
         }
     }
@@ -3112,8 +3133,76 @@ mod tests {
         );
     }
 
+    /// The ships `combat` has the laser of a ship at (0, 0) facing
+    /// `heading` hit on its first tick, among `ships`.
+    fn beamed(mut combat: Combat, heading: f32, ships: Vec<Ship>) -> Vec<ShipRef> {
+        let firer = Ship::at(1, 0.0, 0.0).facing(heading).armed(laser());
+        let mut ships: Vec<Ship> = std::iter::once(firer).chain(ships).collect();
+        tick(&mut combat, &mut ships, &NovaDisable);
+        combat
+            .take_strikes()
+            .iter()
+            .map(|strike| strike.ship)
+            .collect()
+    }
+
+    /// NPC `id` at (`x`, `y`), `width` pixels wide or of no sprite, its
+    /// hit radius a third of that.
+    fn wide(id: u32, x: f32, y: f32, width: Option<f32>) -> Ship {
+        let mut ship = Ship::at(id, x, y);
+        ship.hull.sprite_size = width;
+        ship.hull.hit_radius = width.map_or(ship.hull.hit_radius, |width| width * 0.33);
+        ship
+    }
+
     #[test]
-    fn a_beam_explodes_where_it_meets_the_ship_every_tick_it_touches_it() {
+    fn a_ship_of_no_sprite_reads_75_wide_to_a_beams_cone() {
+        // 200 + trunc(49 / 2), and 200 + trunc(31 / 2).
+        let reached =
+            |x, width| !beamed(Combat::default(), 90.0, vec![wide(2, x, 0.0, width)]).is_empty();
+        assert!(reached(224.0, None) && !reached(225.0, None));
+        assert!(reached(215.0, Some(48.0)) && !reached(216.0, Some(48.0)));
+    }
+
+    #[test]
+    fn the_beam_hit_test_and_quirk_keys_change_which_ship_a_beam_hits() {
+        let big_and_small = || {
+            vec![
+                wide(2, 60.0, 50.0, Some(200.0)),
+                wide(3, 40.0, 0.0, Some(20.0)),
+            ]
+        };
+        assert_eq!(
+            beamed(Combat::default(), 90.0, big_and_small()),
+            [ShipRef::Npc(NpcId(3))],
+            "the cone's nearest centre"
+        );
+        let mut segment = Combat::default();
+        segment.set_beam_hit_test(RuleSource::Bible);
+        assert_eq!(
+            beamed(segment, 90.0, big_and_small()),
+            [ShipRef::Npc(NpcId(2))],
+            "the segment's first contact"
+        );
+        // Bearing 358 from the firer, which faces 2.
+        let at_358 = || vec![wide(2, -4.0, -100.0, None)];
+        assert_eq!(
+            beamed(Combat::default(), 2.0, at_358()),
+            [ShipRef::Npc(NpcId(2))]
+        );
+        let mut quirks = Combat::default();
+        quirks.set_beam_cone_quirks(RuleSource::Engine);
+        assert_eq!(beamed(quirks, 2.0, at_358()), [], "no wrap");
+        let mut fixed = Combat::default();
+        fixed.set_beam_cone_quirks(RuleSource::Bible);
+        assert_eq!(fixed, Combat::default());
+        let mut cone = Combat::default();
+        cone.set_beam_hit_test(RuleSource::Engine);
+        assert_eq!(cone, Combat::default());
+    }
+
+    #[test]
+    fn a_beam_explodes_where_it_meets_the_ship_every_tick_it_touches_it_and_is_drawn_to_there() {
         let flamer = WeaponRecord {
             explod_type: 0,
             ..laser()
@@ -3123,8 +3212,10 @@ mod tests {
         target.reserves.shield = Gauge::full(100.0);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(flamer), target];
         let mut explosions = Vec::new();
+        let mut ends = Vec::new();
         for _ in 0..5 {
             tick(&mut combat, &mut ships, &NovaDisable);
+            ends.extend(combat.beams().iter().map(|beam| beam.end));
             explosions.push(
                 combat
                     .take_events()
@@ -3140,12 +3231,14 @@ mod tests {
             boom: BoomId(128),
             extra: false,
         };
-        let edge = Vec2::new(84.0, 0.0);
+        // 100 less a fifth of a placeholder hull's 75 pixels.
+        let edge = Vec2::new(85.0, 0.0);
         for (tick_no, exploded) in explosions.iter().enumerate() {
             if tick_no < 3 {
                 assert_eq!(exploded.len(), 1, "tick {tick_no}: {exploded:?}");
                 let (at, explosion) = exploded[0];
                 assert!((at - edge).length() < 1e-3, "tick {tick_no}: {at:?}");
+                assert_eq!(ends[tick_no], at, "drawn to it");
                 assert_eq!(explosion, boom);
             } else {
                 assert_eq!(exploded, &[], "tick {tick_no}: the beam is over");
@@ -3228,7 +3321,7 @@ mod tests {
 
     #[test]
     fn a_beam_whose_firer_is_destroyed_or_gone_stays_where_it_was_until_its_life_ends() {
-        let there = vec![(Vec2::ZERO, Vec2::new(200.0, 0.0))];
+        let there = vec![(Vec2::ZERO, Vec2::new(85.0, 0.0))];
         let stays = [
             (there.clone(), 90.0),
             (there.clone(), 85.0),
@@ -3722,7 +3815,10 @@ mod tests {
         ships[1].state.position = Vec2::new(100.0, 0.0);
         tick(&mut combat, &mut ships, &NovaDisable);
         let end = combat.beams()[0].end;
-        assert!((end - Vec2::new(300.0, 0.0)).length() < 1e-3, "{end:?}");
+        assert!(
+            (end - Vec2::new(85.0, 0.0)).length() < 1e-3,
+            "at its hit: {end:?}"
+        );
         assert_eq!(ships[1].reserves.shield.now, 8.0, "hit both ticks");
         ships[1].condition = Condition::Dying {
             ticks_left: 9,
@@ -6456,8 +6552,9 @@ mod tests {
         // A whole degree from the exit: 196.7 truncates to 196.
         let toward = crate::trig::intercept_angle(beam.start, Vec2::new(0.0, 100.0));
         assert_eq!((toward, beam.heading), (196, 196.0), "{beam:?}");
+        // To its hit, trunc(104.4 - 15) along.
         let along = crate::flight::facing(beam.heading);
-        assert!(close_to(beam.end, beam.start + along * 300.0), "{beam:?}");
+        assert!(close_to(beam.end, beam.start + along * 89.0), "{beam:?}");
     }
 
     /// Beam exits: one ahead (up 25), one 30 to starboard, one behind
