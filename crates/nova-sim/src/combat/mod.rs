@@ -7357,6 +7357,21 @@ mod tests {
     }
 
     #[test]
+    fn a_heavy_tractor_takes_its_targets_lock_from_an_earlier_holder_and_touches_it() {
+        // The original writes T +0xc8dc = S and T +0xb4 = TickCount
+        // whatever T held (@0x3125e-0x31272).
+        let mut held = of_mass(Ship::at(2, 100.0, 0.0), 100.0);
+        held.tractor = Some(TractorLock {
+            holder: C,
+            ticks_since_touch: 7,
+        });
+        let mut ships = [tractor_firer(200.0, 90.0), held];
+        tractored(&mut ships);
+        assert_eq!(ships[1].tractor, Some(TractorLock::by(A)));
+        assert_eq!(ships[0].tractor, None);
+    }
+
+    #[test]
     fn a_light_firer_holds_itself_unless_held_and_is_touched_either_way() {
         let mut held = tractor_firer(6.0, 90.0);
         held.tractor = Some(TractorLock {
