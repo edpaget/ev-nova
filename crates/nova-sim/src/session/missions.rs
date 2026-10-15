@@ -674,6 +674,24 @@ impl Session {
     /// the daily step; with `Flags` 0x0008, a jump's fuel taken; with
     /// `Flags2` 0x0002, its pay; then the slot freed and the offers'
     /// stellar forgotten, with no second `OnAbort`.
+    ///
+    /// Its ships go as `_AbortMission`, the last call (@0x99d0e), lets
+    /// them. Docked (the original's `_portDialog` is set from @0x5fa30 to
+    /// @0x60251, covering `_MissionLandCheck` and the mission computer
+    /// and bar accepts), the slot's ships are taken out at once
+    /// (@0x99b17-0x99b24), so none keep the freed slot's mark for a later
+    /// mission in that slot to count. In flight, including the take-off's
+    /// setup, where `_portDialog` is already 0 (cleared at @0x60251 before
+    /// `_SetupShipsInSystem` @0x674c2), it leaves them marked: the next
+    /// tick's `unmark_inactive_mission_ships` (the `_AIDispatch` sweep
+    /// @0x8fbcd-0x8fc96) clears their marks, sends a `ShipBehav` 1 escort
+    /// away and keeps them as traffic.
+    ///
+    /// That one-tick lag is deliberate. `_AbortMission` clears the marks at
+    /// once (@0x99ac7), but the lag crosses no boundary the player sees,
+    /// and it keeps the setup's auto-abort from re-forming the formation
+    /// in the middle of `populate_as`, before `enter_escorts` and
+    /// `snap_mission_escorts`.
     pub(super) fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
         let Some(pay) = self.pilot.missions.get(slot).map(|active| active.pay) else {
             return;
@@ -688,6 +706,9 @@ impl Session {
         }
         if record.flags2 & AUTO_ABORT_PAYS != 0 {
             self.apply_pay(pay);
+        }
+        if self.landed.is_some() {
+            self.release_mission_ships(slot);
         }
         self.ending.remove(&slot);
         self.close_slot(slot, record.id);

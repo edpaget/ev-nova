@@ -2268,6 +2268,22 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_auto_abort_while_docked_takes_its_ships_out_at_once() {
+        let catalog = ships_catalog(shipping(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0], "still there while docked");
+        let record = catalog.missions[0].clone();
+        session.auto_abort(0, &record, &mut NeverFires);
+        assert!(
+            session.npcs().is_empty(),
+            "removed under the port dialog (@0x99b22)"
+        );
+    }
+
+    #[test]
     fn an_abort_leaves_another_slots_ships_marked() {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
@@ -3361,6 +3377,9 @@ pub(super) mod tests {
         assert_eq!(bits(&session), Vec::<u16>::new());
     }
 
+    /// The take-off's pin: `_portDialog` is cleared at @0x60251, before
+    /// `_SetupShipsInSystem` @0x674c2, so `_AbortMission` skips the
+    /// removal at @0x99b20 and the ships stay as traffic.
     #[test]
     fn a_flag_0x0001_mission_aborts_once_its_ships_are_set_up_on_take_off() {
         let catalog = returning(0, 0x0001);
