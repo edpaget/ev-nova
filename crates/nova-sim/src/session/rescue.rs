@@ -271,7 +271,7 @@ impl Session {
         self.target = None;
         self.nav_target = None;
         self.secondary = None;
-        self.jumped_from = None;
+        self.pilot.jumped_from = None;
         self.pilot.course.clear();
         self.pilot.cargo.clear();
         self.pilot.paint = None;
@@ -920,7 +920,7 @@ mod tests {
         session.pilot.course = vec![SystemId(131), SystemId(132)];
         session.pilot.paint = Some(crate::Rgb15 { r: 1, g: 2, b: 3 });
         session.secondary = Some(WeaponId(128));
-        session.jumped_from = Some(SystemId(133));
+        session.pilot.jumped_from = Some(SystemId(133));
         session.red_alert.check(true, false, true);
         session.red_alert.step(0);
         assert!(session.red_alert_icon().is_some(), "the alert is up");
@@ -941,7 +941,7 @@ mod tests {
         assert_eq!(session.pilot.course(), []);
         assert_eq!(session.pilot.paint, None);
         assert_eq!(session.secondary, None);
-        assert_eq!(session.jumped_from, None);
+        assert_eq!(session.pilot.jumped_from, None);
         assert_eq!(session.red_alert, RedAlert::default(), "threat and icon");
         assert_eq!(session.recent_rank, None);
         assert_eq!(session.queued.sound, None);

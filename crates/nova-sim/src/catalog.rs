@@ -1338,6 +1338,14 @@ pub trait PilotCatalog {
     fn warp_sound(&self) -> Option<SoundLength> {
         None
     }
+    /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
+    /// of `Flags` 0x0800 draws its ships' one type from at accept (see
+    /// [`SpecialShips::uniform_type`](crate::mission::SpecialShips::uniform_type)).
+    /// None when it cannot be read, as by default: the type is then drawn
+    /// at the ships' first spawn.
+    fn mission_dude(&self, _id: DudeId) -> Option<DudeRecord> {
+        None
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1444,6 +1452,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn warp_sound(&self) -> Option<SoundLength> {
         (**self).warp_sound()
+    }
+
+    fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+        (**self).mission_dude(id)
     }
 }
 
@@ -1552,6 +1564,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn warp_sound(&self) -> Option<SoundLength> {
         (**self).warp_sound()
+    }
+
+    fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+        (**self).mission_dude(id)
     }
 }
 
@@ -1862,6 +1878,17 @@ mod tests {
                 rate: 22_050,
             })
         }
+
+        /// Düde 150 flies ship 128.
+        fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+            (id == DudeId(150)).then(|| DudeRecord {
+                ai_type: 2,
+                govt: None,
+                ships: vec![(ShipId(128), 40)],
+                booty: 0,
+                info_types: 0,
+            })
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1899,6 +1926,7 @@ mod tests {
             format!("{:?}", catalog.system_visibility()),
             format!("{:?}", catalog.nebulae()),
             format!("{:?}", catalog.warp_sound()),
+            format!("{:?}", catalog.mission_dude(DudeId(150))),
         ]
     }
 
@@ -1954,6 +1982,7 @@ mod tests {
             direct[29], "Some(SoundLength { frames: 22050, rate: 22050 })",
             "forwarded, not a default"
         );
+        assert!(direct[30].contains("ShipId(128), 40"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

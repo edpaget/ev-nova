@@ -733,7 +733,8 @@ impl Traffic {
     /// Adds `ships`, numbering each and pointing each escort at its lead; a
     /// person flies its fitted ship, holding a grudge when `grudges` say;
     /// a ship set up derelict ([`NewShip::derelict`]) starts disabled, its
-    /// shield gone and its armour cut ([`derelict_armor`]).
+    /// shield gone and its armour cut ([`derelict_armor`]); a ship set up
+    /// held ([`NewShip::held`]) starts holding ([`Goal::Hold`]).
     fn add(&mut self, ships: Vec<NewShip>, grudges: &BTreeSet<PersonId>) {
         let first = self.next_id;
         for ship in ships {
@@ -748,7 +749,7 @@ impl Traffic {
             let mut condition = person.map_or(Condition::Intact, |person| person.condition);
             if ship.derelict {
                 reserves.shield.now = 0.0;
-                reserves.armor.now = derelict_armor(kind.stats.armor, kind.hull.tough);
+                reserves.armor.now = derelict_armor(kind.base_armor, kind.hull.tough);
                 condition = Condition::Disabled;
             }
             let traits = person
@@ -782,6 +783,8 @@ impl Traffic {
                 },
                 goal: if hunts {
                     Goal::Attack(ShipRef::Player)
+                } else if ship.held {
+                    Goal::Hold
                 } else {
                     Goal::Idle
                 },
@@ -795,7 +798,7 @@ impl Traffic {
                 aggression: ship.aggression,
                 inspected: None,
                 booty: ship.booty,
-                boarded: false,
+                boarded: ship.boarded,
                 info_types: ship.info_types,
                 spared: false,
                 assisting: 0,
@@ -927,6 +930,7 @@ mod tests {
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
                     self_repair: false,
+                    base_armor: 45.0,
                 },
             )]),
             ..SpawnTable::default()
@@ -2611,6 +2615,8 @@ mod tests {
                 formation: None,
             }),
             derelict: false,
+            held: false,
+            boarded: false,
             cloaked: false,
             aux: None,
         }
@@ -2688,6 +2694,37 @@ mod tests {
             assert_eq!(npcs[1].condition, Condition::Intact);
             assert_eq!(npcs[1].reserves, npcs[1].stats.full());
         }
+    }
+
+    #[test]
+    fn a_ship_set_up_boarded_is_added_boarded() {
+        let mut traffic = Traffic::new();
+        traffic.enter_with(table(0), World::new(&[]), Vec::new(), &mut Draws::of(&[]));
+        traffic.bring_in(vec![
+            NewShip {
+                derelict: true,
+                boarded: true,
+                ..mission_ship(-1, 0.0)
+            },
+            mission_ship(-1, 1.0),
+        ]);
+        let boarded: Vec<bool> = traffic.npcs().iter().map(|npc| npc.boarded).collect();
+        assert_eq!(boarded, [true, false]);
+    }
+
+    #[test]
+    fn a_held_ship_is_brought_in_holding() {
+        let mut traffic = Traffic::new();
+        traffic.enter_with(table(0), World::new(&[]), Vec::new(), &mut Draws::of(&[]));
+        traffic.bring_in(vec![
+            NewShip {
+                held: true,
+                ..mission_ship(-1, 0.0)
+            },
+            mission_ship(-1, 1.0),
+        ]);
+        let goals: Vec<Goal> = traffic.npcs().iter().map(|npc| npc.goal).collect();
+        assert_eq!(goals, [Goal::Hold, Goal::Idle]);
     }
 
     // Cloaks.

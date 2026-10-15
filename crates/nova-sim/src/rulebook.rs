@@ -76,6 +76,7 @@
 //! | [`OutfitSaleCargo`](RuleKey::OutfitSaleCargo) | `outfit_sale_cargo` | an outfit sale that leaves the fleet's holds below the cargo trims the commodities, as the sale's resets do (`_DoOutfitDialog` @0x5cff6, @0x5cffb; `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; [`Session`](crate::Session)) | no reset through the sale trims: the cargo stays past the hold until the next reset after it\* |
 //! | [`ReleaseCargoShare`](RuleKey::ReleaseCargoShare) | `release_cargo_share` | an escort released by hail takes its share of the fleet's cargo whatever its ship type, as the release tests no `InherentAI` (`_DoCommDialog` @0x96864, `_DoEscortDialog` @0x9549d, @0x9561d; [`Session`](crate::Session)) | only a trader takes a share, as for every other escort lost\* |
 //! | [`CaptureCargo`](RuleKey::CaptureCargo) | `capture_cargo` | Use As My Ship leaves the commodities with the old ship, the player taking the captured ship's, which carries none (`_DoShipCapture` @0x412e6-0x412fe, @0x41762-0x41779; [`Session`](crate::Session)) | the player keeps every commodity; either way the reset (@0x41a3e) trims them to the new fleet's holds\* |
+//! | [`LeaderlessSwapHold`](RuleKey::LeaderlessSwapHold) | `leaderless_swap_hold` | a ship swapped in for a person by a `ShipGoal` 3 mission, neither hunting nor escorting the player, holds goal 10 with no leader: it coasts with no thrust and no fire, picks no destination, target or ship to inspect, and leaves the hold only when provoked, at its government's word, or as a plundering warship (`_AIMakeEscortFlyInForm` @0x89b8e-0x89c3d, `_HighLevelAIHandler` @0x8ed18-0x8ed31; see [`Goal::Hold`](crate::ai::Goal::Hold)) | it decides as its `düde`'s AI from the start, landing or jumping out\* |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
@@ -111,6 +112,12 @@
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
 //! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
 //! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux_ships`](crate::mission::aux_ships)) | the exit restarts them as a jump does: "-1: any system" |
+//! | [`AuxAbortFallThrough`](RuleKey::AuxAbortFallThrough) | `aux_abort_fall_through` | after a `Flags` 0x0001 mission auto-aborts as its auxiliary ships all come, the special-ship part runs on the freed slot's stale record: when its appear timer runs out that frame the special ships come, marked with the freed slot, and the mission auto-aborts again, its script, days, fuel and pay over again (`_EnterMoreShips` @0x4373a-0x43752, @0x43757-0x43ad4; see [`mission::aux_ships`](crate::mission::aux_ships)) | the freed slot is skipped\* |
+//! | [`PlainBoardCounts`](RuleKey::PlainBoardCounts) | `plain_board_counts` | a board or rescue goal's ship counts as boarded only on the assist path (`ShipGoal` 2 or 5, `Flags` 0x0001, one ship left) or on a `PickupMode` 2 pickup; a plain board only marks it boarded, so a goal with neither path is never met (`_HandlePlayerBoardAttempt` @0x653a7, @0x65575-0x65762; see [`mission::goals`](crate::mission::goals)) | any board of a board or rescue goal's ship counts, as the Bible's "board them" and "rescue them" read |
+//! | [`HiddenLossFails`](RuleKey::HiddenLossFails) | `hidden_loss_fails` | a hidden mission (`Flags` 0x0400) is not failed at once when one of its ships is destroyed or disabled, so a hidden board or rescue mission whose ship is destroyed never ends (`_HandleShipDisplay` @0x2db27, `_DamageShip` @0x3aede; see [`mission::goals`](crate::mission::goals)) | the first loss fails it as any other, but with no message\* |
+//! | [`ShipDoneOnce`](RuleKey::ShipDoneOnce) | `ship_done_once` | every time a mission's goals go from unmet to met, its `ShipDoneText` is shown and its `OnShipDone` runs, so an escort goal's run again each time its ships come back to the player (`_MissionObjectivesCheck` @0x9ec70-0x9ed87; see [`mission::goals`](crate::mission::goals)) | the moment's text, script and auto-abort happen only the first time\* |
+//! | [`SwapArrives`](RuleKey::SwapArrives) | `swap_arrives` | the ship swapped in for a person raises no arrived count and leaves the appear timer running, so for a `ShipStart` of 1 or more the timer still brings another ship in beside it (`_HandlePlayerCommunication` @0x6244b-0x6252f, `_EnterMoreShips` @0x437ec-0x43aa5; see [`mission::ships`](crate::mission::ships)) | the swapped ship counts as the timer's arrival: the timer stops, and for `ShipStart` 1 the arrived count goes up by one\* |
+//! | [`SmugglingShipName`](RuleKey::SmugglingShipName) | `smuggling_ship_name` | the smuggling notice names the scanner by the found mission's drawn ship name whenever that name is not empty, whoever the scanner is (`_ScanPlayer` @0x7e7ce; see [`scan`](crate::scan)) | by the mission's ship name only when the scanner is that mission's special ship, else by its class\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
@@ -166,6 +173,11 @@
 //! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
 //! `route_rewrite`, `scan_outfits_past_junk`, `gate_escorts`,
 //! `lost_cargo_share`, `outfit_sale_cargo`, `release_cargo_share`, `capture_cargo`,
+//! `leaderless_swap_hold`,
+//! `hidden_loss_fails`,
+//! `ship_done_once`,
+//! `swap_arrives`,
+//! `smuggling_ship_name`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor` or
@@ -1085,6 +1097,21 @@ rule_keys! {
     /// alternative, not anything the Bible says (see
     /// [`Session::assign`](crate::Session::assign)).
     CaptureCargo => "capture_cargo",
+    /// What a ship swapped in for a person by a `ShipGoal` 3 mission
+    /// does when it neither hunts nor escorts the player. By the engine,
+    /// it holds, as the original's goal 10 with no leader: the swap calls
+    /// `_AIMakeEscortFlyInForm` (@0x624f6-0x62509), which gives a ship
+    /// with leader -1 goal 10 (@0x89bbd-0x89bcd), and no goal block of
+    /// `_HighLevelAIHandler` flies goal 10 without a leader
+    /// (@0x8ed18-0x8ed31). It coasts with no thrust and no fire, and keeps
+    /// the hold until provoked, until its government's word turns it on
+    /// the player, or, for a warship of a plundering government, at its
+    /// first think (see [`Goal::Hold`](crate::ai::Goal::Hold)). By the
+    /// other reading it decides as its `düde`'s AI from the start. The
+    /// Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see the session's
+    /// `mission_ships` module).
+    LeaderlessSwapHold => "leaderless_swap_hold",
     /// How a `jünk` of negative or zero price is traded. By the engine,
     /// `_DoTradeDialog` stores a `jünk`'s high price (@0x5dddb) and low
     /// price (@0x5de2f) in 16 bits with no floor, and every reader takes
@@ -1549,6 +1576,71 @@ rule_keys! {
     /// "-1: any system": the exit restarts them as a jump does (see
     /// [`mission::aux_ships`](crate::mission::aux_ships)).
     AuxGate => "aux_gate",
+    /// What `_EnterMoreShips` does after a mission of `Flags` 0x0001
+    /// auto-aborts once its auxiliary ships have all come. By the engine,
+    /// as the original: the call to `_AutoAbortMission` (@0x4373a-0x43752)
+    /// falls into the special-ship part (@0x43757) with no new test of
+    /// the slot's active byte, and `_AbortMission` clears none of the
+    /// slot's record, so the special part runs on the freed slot's stale
+    /// state. When its appear timer runs out that frame, the special ships
+    /// come, marked with the freed slot, and the mission auto-aborts a
+    /// second time (@0x43abc-0x43ad4): its abort script runs again, the
+    /// days pass again, the fuel is taken again and it pays again. By the
+    /// other reading the freed slot is skipped. The Bible says nothing of
+    /// it, so the other reading is the intended behaviour, not anything
+    /// the Bible says (see the session's `aux_ships` module).
+    AuxAbortFallThrough => "aux_abort_fall_through",
+    /// Which boards of a board or rescue goal's special ship (`ShipGoal` 2
+    /// or 5) count it boarded. By the engine, as the original: only the
+    /// assist path (`_HandlePlayerBoardAttempt` @0x65575-0x65762: `Flags`
+    /// 0x0001 and one ship left) or a `PickupMode` 2 pickup (@0x653a7)
+    /// counts it; a plain board only marks the ship boarded, so a goal with
+    /// neither path can never be met. By the other reading, the Bible's
+    /// "board them" and "rescue them": any board of such a ship counts it
+    /// (see [`mission::goals`](crate::mission::goals)).
+    PlainBoardCounts => "plain_board_counts",
+    /// Whether a hidden mission (`Flags` 0x0400) fails at once on the
+    /// first loss of one of its ships. By the engine, as the original: the
+    /// hidden test (`_HandleShipDisplay` @0x2db27, `_DamageShip` @0x3aede)
+    /// skips both the message and the failure, so a hidden board or rescue
+    /// mission whose ship is destroyed never ends. By the other reading the
+    /// first loss fails it as it does any other mission, but quietly: no
+    /// message, as a hidden mission shows nothing of itself. The Bible says
+    /// nothing of it, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see [`mission::goals`](crate::mission::goals)).
+    HiddenLossFails => "hidden_loss_fails",
+    /// How often a mission's goals-met moment shows and runs. By the
+    /// engine, as the original: every time its goals go from unmet to met
+    /// (`_MissionObjectivesCheck` @0x9ec70-0x9ed87), its `ShipDoneText` is
+    /// shown and its `OnShipDone` runs, so an escort goal's run again each
+    /// time its ships come back to the player. By the other reading the
+    /// moment's `ShipDoneText`, `OnShipDone` and auto-abort happen only the
+    /// first time ([`SpecialShips::ship_done`](crate::mission::SpecialShips::ship_done));
+    /// later moments still update the goals met but show and run nothing.
+    /// The Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see
+    /// [`mission::goals`](crate::mission::goals)).
+    ShipDoneOnce => "ship_done_once",
+    /// What the ship swapped in for a person counts. By the engine, as the
+    /// original's swap (`_HandlePlayerCommunication` @0x6244b-0x6252f): no
+    /// count of the slot changes and the appear timer runs on, so for a
+    /// `ShipStart` of 1 or more the timer still brings another ship in beside
+    /// the swapped one (`_EnterMoreShips` @0x437ec-0x43aa5). By the other
+    /// reading the swapped ship counts as the timer's arrival: the timer
+    /// stops, as after the timer's own arrival, and for `ShipStart` 1 the
+    /// arrived count goes up by one. The Bible says nothing of it, so the
+    /// other reading is the intended behaviour, not anything the Bible says
+    /// (see [`mission::ships`](crate::mission::ships)).
+    SwapArrives => "swap_arrives",
+    /// Which name the smuggling notice gives the scanner. By the engine, as
+    /// the original (`_ScanPlayer` @0x7e7ce reads the found slot's drawn
+    /// ship name, never the scanner's mark): the found mission's ship name
+    /// whenever it is not empty, whoever the scanner is. By the other
+    /// reading, that name only when the scanner is that mission's own
+    /// special ship; any other scanner is named by its class. The Bible says
+    /// nothing of it, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see [`scan`](crate::scan)).
+    SmugglingShipName => "smuggling_ship_name",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -2095,7 +2187,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2135,7 +2227,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(53),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2157,7 +2249,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2182,7 +2274,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2208,7 +2300,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(50),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2228,7 +2320,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2248,7 +2340,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2268,8 +2360,16 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::LandedLeaves)
+        );
+    }
+
+    #[test]
+    fn the_leaderless_swap_hold_rule_reads_the_engine() {
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::LeaderlessSwapHold),
+            RuleSource::Engine
         );
     }
 
@@ -2282,7 +2382,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2504,7 +2604,109 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(37), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(43), Some(&RuleKey::AuxGate));
+    }
+
+    #[test]
+    fn the_aux_abort_fall_through_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AuxAbortFallThrough.key(), "aux_abort_fall_through");
+        assert_eq!(
+            RuleKey::from_key("aux_abort_fall_through"),
+            Some(RuleKey::AuxAbortFallThrough)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AuxAbortFallThrough),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(42),
+            Some(&RuleKey::AuxAbortFallThrough)
+        );
+    }
+
+    #[test]
+    fn the_plain_board_counts_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PlainBoardCounts.key(), "plain_board_counts");
+        assert_eq!(
+            RuleKey::from_key("plain_board_counts"),
+            Some(RuleKey::PlainBoardCounts)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PlainBoardCounts),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(41),
+            Some(&RuleKey::PlainBoardCounts)
+        );
+    }
+
+    #[test]
+    fn the_hidden_loss_fails_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::HiddenLossFails.key(), "hidden_loss_fails");
+        assert_eq!(
+            RuleKey::from_key("hidden_loss_fails"),
+            Some(RuleKey::HiddenLossFails)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::HiddenLossFails),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(40),
+            Some(&RuleKey::HiddenLossFails)
+        );
+    }
+
+    #[test]
+    fn the_ship_done_once_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ShipDoneOnce.key(), "ship_done_once");
+        assert_eq!(
+            RuleKey::from_key("ship_done_once"),
+            Some(RuleKey::ShipDoneOnce)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ShipDoneOnce),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(39),
+            Some(&RuleKey::ShipDoneOnce)
+        );
+    }
+
+    #[test]
+    fn the_swap_arrives_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::SwapArrives.key(), "swap_arrives");
+        assert_eq!(
+            RuleKey::from_key("swap_arrives"),
+            Some(RuleKey::SwapArrives)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::SwapArrives),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(38),
+            Some(&RuleKey::SwapArrives)
+        );
+    }
+
+    #[test]
+    fn the_smuggling_ship_name_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::SmugglingShipName.key(), "smuggling_ship_name");
+        assert_eq!(
+            RuleKey::from_key("smuggling_ship_name"),
+            Some(RuleKey::SmugglingShipName)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::SmugglingShipName),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(37),
+            Some(&RuleKey::SmugglingShipName)
+        );
     }
 
     #[test]
@@ -2543,7 +2745,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2919,6 +3121,11 @@ mod tests {
             RuleKey::from_key("capture_cargo"),
             Some(RuleKey::CaptureCargo)
         );
+        assert_eq!(RuleKey::LeaderlessSwapHold.key(), "leaderless_swap_hold");
+        assert_eq!(
+            RuleKey::from_key("leaderless_swap_hold"),
+            Some(RuleKey::LeaderlessSwapHold)
+        );
         assert_eq!(RuleKey::EventPrice.key(), "event_price");
         assert_eq!(RuleKey::from_key("event_price"), Some(RuleKey::EventPrice));
         assert_eq!(RuleKey::RaisedMax.key(), "raised_max");
@@ -2943,7 +3150,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3058,6 +3265,7 @@ mod tests {
                 RuleKey::OutfitSaleCargo,
                 RuleKey::ReleaseCargoShare,
                 RuleKey::CaptureCargo,
+                RuleKey::LeaderlessSwapHold,
                 RuleKey::JunkPrice,
                 RuleKey::JunkTrade,
                 RuleKey::OutfitLimit,
@@ -3094,6 +3302,12 @@ mod tests {
                 RuleKey::LandedLeaves,
                 RuleKey::GateFollow,
                 RuleKey::AuxGate,
+                RuleKey::AuxAbortFallThrough,
+                RuleKey::PlainBoardCounts,
+                RuleKey::HiddenLossFails,
+                RuleKey::ShipDoneOnce,
+                RuleKey::SwapArrives,
+                RuleKey::SmugglingShipName,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,

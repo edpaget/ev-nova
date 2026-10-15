@@ -21,7 +21,7 @@ use crate::mission::cargo::{
     JettisonMessage, PICKUP_BOARDING, PickupFacts, ScanOutcome, drops_off, jettison,
     loads_at_accept, picks_up_at_destination, pickup_checks, scan,
 };
-use crate::rulebook::RuleKey;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::scan::{self, Contraband};
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
@@ -325,12 +325,16 @@ impl Session {
                 self.set_on_player(id);
             }
             ScanOutcome::Fined { slot, credits } => {
-                let ship_name = self
-                    .pilot
-                    .missions
-                    .get(slot)
-                    .map(|active| active.ships.name.clone())
-                    .filter(|name| !name.is_empty());
+                let marked = self
+                    .npcs()
+                    .iter()
+                    .find(|npc| npc.id == id)
+                    .and_then(|npc| npc.mission)
+                    .map(|mark| mark.slot);
+                let source = self.rules.source_for(RuleKey::SmugglingShipName);
+                let ship_name = self.pilot.missions.get(slot).and_then(|active| {
+                    smuggling_ship_name(&active.ships.name, slot, marked, source)
+                });
                 self.set_on_player(id);
                 self.take_scan_fine(credits);
                 self.sounds.push(SimSound::Smuggling);
@@ -395,6 +399,23 @@ impl Session {
             }
         }
     }
+}
+
+/// The name the smuggling notice gives a scanner marked with slot
+/// `scanner` (none for a ship of no mission) when its scan found the
+/// cargo of the mission in slot `found`, whose drawn ship name is
+/// `name`, the rule ([`RuleKey::SmugglingShipName`]) read as `source`:
+/// `name` when it is not empty and, by the other reading, only when the
+/// scanner is that mission's own ship; by the engine for any scanner
+/// (`_ScanPlayer` @0x7e7ce). None names the scanner by its class.
+fn smuggling_ship_name(
+    name: &str,
+    found: u8,
+    scanner: Option<u8>,
+    source: RuleSource,
+) -> Option<String> {
+    let names = source == RuleSource::Engine || scanner == Some(found);
+    (names && !name.is_empty()).then(|| name.to_owned())
 }
 
 #[cfg(test)]
@@ -1381,6 +1402,72 @@ mod tests {
                 [SimMessage::Smuggling {
                     scanner: ShipId(129),
                     ship_name: Some("Rover".to_owned()),
+                    fine: 500
+                }],
+                "{scanner_slot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_the_found_missions_ship_name_names_any_scanner() {
+        for scanner in [None, Some(0), Some(1)] {
+            assert_eq!(
+                smuggling_ship_name("Rover", 0, scanner, RuleSource::Engine),
+                Some("Rover".to_owned()),
+                "{scanner:?}"
+            );
+            assert_eq!(
+                smuggling_ship_name("", 0, scanner, RuleSource::Engine),
+                None,
+                "{scanner:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_only_the_found_missions_own_ship_is_named_by_its_ship_name() {
+        assert_eq!(
+            smuggling_ship_name("Rover", 0, Some(0), RuleSource::Bible),
+            Some("Rover".to_owned())
+        );
+        assert_eq!(smuggling_ship_name("", 0, Some(0), RuleSource::Bible), None);
+        for scanner in [None, Some(1)] {
+            assert_eq!(
+                smuggling_ship_name("Rover", 0, scanner, RuleSource::Bible),
+                None,
+                "{scanner:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_only_the_missions_own_ship_is_named_by_its_ship_name() {
+        let catalog = policed(vec![masked(140, 0x0004, 0), masked(141, 0x0001, 0)], 500);
+        for (scanner_slot, ship_name) in [(None, None), (Some(1), None), (Some(0), Some("Rover"))] {
+            let mut session = inspected(&catalog, &[140, 141], Some(GovtId(128))).with_rules(
+                crate::Rulebook::default()
+                    .with_override(crate::RuleKey::SmugglingShipName, RuleSource::Bible),
+            );
+            for (slot, name) in [(0, "Rover"), (1, "Ace")] {
+                if let Some(active) = session.pilot.missions.get_mut(slot) {
+                    active.ships.name = name.to_owned();
+                }
+            }
+            if let Some(police) = session.traffic.npcs_mut().last_mut() {
+                police.mission = scanner_slot.map(|slot| crate::traffic::npc::MissionMark {
+                    order: None,
+                    slot,
+                    behav: crate::mission::ships::ShipBehav::Own,
+                    formation: None,
+                });
+            }
+            looked_over(&mut session, &catalog, 0);
+            assert_eq!(
+                session.take_messages(),
+                [SimMessage::Smuggling {
+                    scanner: ShipId(129),
+                    ship_name: ship_name.map(str::to_owned),
                     fine: 500
                 }],
                 "{scanner_slot:?}"

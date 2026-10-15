@@ -426,10 +426,10 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonId,
-    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId,
-    StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    CombatCatalog, CronRecord, DateAffixes, DudeId, GateSite, GovtId, JunkId, LandingSite,
+    ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord,
+    PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError,
+    StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -498,7 +498,7 @@ use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
-use crate::traffic::table::SpawnTable;
+use crate::traffic::table::{SpawnDude, SpawnTable};
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
 use crate::warp;
@@ -714,10 +714,6 @@ pub struct Session {
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     traffic_due: bool,
-    /// The system the player last jumped from (the original's player
-    /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
-    /// from. None until the session's first jump.
-    jumped_from: Option<SystemId>,
     /// Every weapon and ship type's combat fields, read when the session
     /// starts.
     arsenal: Arsenal,
@@ -950,6 +946,11 @@ pub struct Session {
     fallback_frame: Option<(u32, u32)>,
     /// Every `mïsn`, read when the session starts.
     missions: Vec<MissionRecord>,
+    /// The `düde`s of every `mïsn` of `Flags` 0x0800 with a `ShipDude`
+    /// that can be read, read when the session starts: what such a
+    /// mission draws its ships' one type from at accept (see the
+    /// `mission_ships` module).
+    uniform_dudes: BTreeMap<DudeId, SpawnDude>,
     /// Every `crön`, read when the session starts, shared so the daily
     /// pass holds them while their scripts run (see the `crons` module).
     crons: Rc<[CronRecord]>,
@@ -1211,6 +1212,7 @@ impl Session {
         // A crön the data no longer has is inactive (`_LoadPilotData`
         // @0x75fbc-0x76025; see the `crons` module).
         let crons: Rc<[CronRecord]> = catalog.crons().into();
+        let missions = catalog.missions();
         pilot
             .crons
             .retain(|id, _| crons.iter().any(|record| record.id == *id));
@@ -1270,7 +1272,6 @@ impl Session {
             date_affixes: catalog.date_affixes(),
             traffic: Traffic::new(),
             traffic_due: true,
-            jumped_from: None,
             arsenal,
             govts,
             // Refitted below, from the ship and the outfits the pilot owns.
@@ -1340,7 +1341,8 @@ impl Session {
             destroying: BTreeSet::new(),
             rebuilt: Rebuilt::default(),
             fallback_frame: catalog.fallback_frame_size(),
-            missions: catalog.missions(),
+            uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
+            missions,
             crons,
             ranks,
             recent_rank: None,
@@ -2912,7 +2914,7 @@ impl Session {
         {
             self.emit(SessionEvent::GalaxyChanged);
         }
-        self.jumped_from = Some(from);
+        self.pilot.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).

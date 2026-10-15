@@ -166,7 +166,9 @@ pub struct Hail<'a> {
     pub mood: f32,
     /// What its government and type make of hails.
     pub dispositions: Dispositions,
-    /// Whether it is busy: fighting, assisting, or under attack.
+    /// Whether it is busy: fighting, assisting, keeping formation, holding
+    /// ([`Goal::Hold`], goal 10 to `_AIIsShipBusy` @0x82fac-0x82fe4), or
+    /// under attack.
     pub busy: bool,
     /// Whether it is already assisting the player.
     pub assisting_player: bool,
@@ -286,7 +288,7 @@ impl<'a> Hail<'a> {
             dispositions,
             busy: npc.goal.fights()
                 || assisting_player
-                || matches!(npc.goal, Goal::Formation { .. })
+                || matches!(npc.goal, Goal::Formation { .. } | Goal::Hold)
                 || attacked,
             assisting_player,
             player_threatened: around
@@ -865,6 +867,12 @@ mod tests {
             hailing(&hunting, &plain, 0, &talk()).attitude,
             Attitude::Hostile
         );
+    }
+
+    #[test]
+    fn a_held_ship_is_busy() {
+        let npcs = [flying(1, Goal::Hold)];
+        assert!(hailing(&npcs, &plain(), 0, &talk()).busy);
     }
 
     #[test]

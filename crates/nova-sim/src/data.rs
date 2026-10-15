@@ -595,6 +595,10 @@ impl PilotCatalog for GameData {
             .collect()
     }
 
+    fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+        TrafficCatalog::dude(self, id)
+    }
+
     fn warp_sound(&self) -> Option<SoundLength> {
         let snd = self.resource(SND, WARP_UP_SOUND)?;
         let pcm = decode_snd(snd.resource.data()).ok()?;
@@ -3245,6 +3249,26 @@ mod tests {
         );
         assert_eq!(data.dude(DudeId(130)), None, "undecodable");
         assert_eq!(data.dude(DudeId(131)), None, "missing");
+    }
+
+    #[test]
+    fn a_missions_dude_is_read_as_the_traffic_reads_it() {
+        let data = store(&[(
+            Dude::TYPE,
+            128,
+            dude(3, 129, &[(140, 60), (-1, 30), (141, -10)]),
+        )]);
+        assert_eq!(
+            PilotCatalog::mission_dude(&data, DudeId(128)),
+            Some(DudeRecord {
+                ai_type: 3,
+                govt: Some(GovtId(129)),
+                ships: vec![(ShipId(140), 60), (ShipId(141), -10)],
+                booty: 0,
+                info_types: 0,
+            })
+        );
+        assert_eq!(PilotCatalog::mission_dude(&data, DudeId(129)), None);
     }
 
     #[test]

@@ -39,6 +39,9 @@
 //!   [`FORMATION_NUDGE`] ticks' acceleration off is pulled that much
 //!   towards it. Within the carrier's reach on both axes it docks, and
 //!   leaves the system ([`Outcome::Docked`]).
+//! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
+//!   the thrust @0x851f1, and has no handler for state 0): it coasts on
+//!   the velocity it has, under its top speed's cap.
 //! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead, player or
 //!   carrier that is not there): it brakes to a stop.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
@@ -246,6 +249,7 @@ pub fn fly(
             Err(outcome) => return outcome,
         },
         Goal::Idle => brake(&state, &handling),
+        Goal::Hold => Controls::default(),
     };
     flight::step(&mut npc.state, &handling, controls);
     Outcome::Flying
@@ -1376,6 +1380,22 @@ mod tests {
         fly(&mut ship, &[], None);
         fly(&mut idle, &[], None);
         assert_eq!(ship.state, idle.state, "gone, from afar");
+    }
+
+    #[test]
+    fn a_held_ship_coasts_with_no_thrust_or_turn() {
+        let mut ship = npc(AVERAGE, Goal::Hold, at(10.0, 20.0, 2.0, -1.0, 30.0));
+        for _ in 0..10 {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
+        }
+        assert_eq!(ship.state.velocity, Vec2::new(2.0, -1.0), "velocity kept");
+        assert_eq!(ship.state.heading, 30.0, "no turn");
+        assert_eq!(ship.state.position, Vec2::new(30.0, 10.0), "it coasts");
+        let mut fast = npc(AVERAGE, Goal::Hold, at(0.0, 0.0, 10.0, 0.0, 30.0));
+        fly(&mut fast, &[], None);
+        let speed = fast.state.velocity.length();
+        assert!(speed <= 3.0 + 1e-3, "capped at its top speed: {speed}");
+        assert!(fast.state.velocity.y.abs() < 1e-3, "along its course");
     }
 
     #[test]

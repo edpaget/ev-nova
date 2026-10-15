@@ -14908,7 +14908,7 @@ mod tests {
             "goals_met": true,
             "aboard": true,
             "failed": null,
-            "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0},
+            "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0, "uniform_type": null, "ship_done": false},
             "aux": {"countdown": 0, "arrived": 0, "left": 0},
         }]);
         let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");

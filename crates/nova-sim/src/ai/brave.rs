@@ -88,6 +88,20 @@ mod tests {
     }
 
     #[test]
+    fn a_provoked_held_brave_trader_fights_within_1250_or_flees() {
+        let held = |x, y| {
+            let mut npcs = provoked(x, y);
+            npcs[0].goal = Goal::Hold;
+            npcs
+        };
+        assert_eq!(decided(&held(1250.0, -1250.0)), Goal::Attack(n(2)));
+        assert_eq!(decided(&held(1251.0, 0.0)), Goal::Flee(n(2)));
+        let mut calm = held(0.0, 0.0);
+        calm[0].provoked = 0.0;
+        assert_eq!(decided(&calm), Goal::Hold, "unprovoked, it holds");
+    }
+
+    #[test]
     fn a_brave_trader_fights_back_within_1250_on_both_axes_and_flees_beyond() {
         assert_eq!(decided(&provoked(1250.0, -1250.0)), Goal::Attack(n(2)));
         assert_eq!(decided(&provoked(-1250.0, 1250.0)), Goal::Attack(n(2)));

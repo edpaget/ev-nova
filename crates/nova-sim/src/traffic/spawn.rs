@@ -114,7 +114,11 @@
 //! `_MissionDudeSpawn` (@0x3cd3b, [`mission_ships`],
 //! [`arriving_mission_ships`], [`swapped_mission_ship`]): a ship drawn from the mission's `düde`,
 //! its government, `Booty`, `InfoTypes` and AI, aimed at the player for
-//! `ShipBehav` 0 (`_AIMakeShipAttackPlayer` @0x3d099-0x3d0bb).
+//! `ShipBehav` 0 (`_AIMakeShipAttackPlayer` @0x3d099-0x3d0bb). Each
+//! draws its own ship type, but under mission `Flags` 0x0800 every ship
+//! of the slot, on every path, flies the one type drawn at accept and
+//! kept on the slot ([`MissionSpawn::preset`], the slot's +0x56,
+//! @0x3cdea-0x3cdf3).
 //!
 //! - **At setup** (`_SetupShipsInSystem` @0x42dc4-0x43194), before the
 //!   system's own passes, none of which they use up: each slot in order
@@ -131,8 +135,10 @@
 //!   then to its nav slot's stellar for -1 to -16. A rescue goal's ship
 //!   (`ShipGoal` 5) first draws a heading `Rand(360)`, after its own
 //!   draws, and starts still and derelict: shields 0 and its armour cut
-//!   just below where it is disabled (@0x42f35-0x42fdc). The other two
-//!   paths give it no such placement.
+//!   just below where it is disabled (@0x42f35-0x42fdc); of a mission
+//!   whose time has run out, it starts boarded too (@0x42fe1-0x42ffa,
+//!   [`MissionSpawn::expired`]). The other two paths give it no such
+//!   placement.
 //! - **On the appear timer** (`_EnterMoreShips` @0x43757-0x43ad9): every
 //!   tick in flight a slot whose ships are in the system with any to come
 //!   counts its timer down, and at 0 they come in by hyperspace, uncloaked,
@@ -147,8 +153,14 @@
 //!   accepted on its hail, with one of its ships left, is swapped for that
 //!   one ship, which takes the person's position, velocity and heading.
 //!   With mission `Flags` 0x0800 it flies the person's own type when the
-//!   `düde` lists it, drawing no type. No count changes: it is the slot's
-//!   one ship left (see the session's `mission_ships` module).
+//!   `düde` lists it, drawing no type, and that type becomes the slot's,
+//!   so later setups bring it too; else it flies the slot's type. No
+//!   count changes: it is the slot's
+//!   one ship left (see the session's `mission_ships` module). For a
+//!   `ShipGoal` 3 mission, `_AIMakeEscortFlyInForm` gives it goal 10 with
+//!   no leader (@0x89bbd-0x89bcd), and it holds there, coasting
+//!   ([`NewShip::held`], [`Goal::Hold`](crate::ai::Goal::Hold)), unless
+//!   it hunts or escorts the player.
 //!
 //! A `ShipBehav` 1 ship joins the player's formation as a mission escort
 //! as it comes by any of the three paths (see the session's
@@ -225,7 +237,9 @@ use crate::traffic::emerge::{
     EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, emerge_stellar,
 };
 use crate::traffic::npc::{AiType, MissionMark};
-use crate::traffic::table::{ShipKind, SpawnDude, SpawnPerson, SpawnTable, pick};
+use crate::traffic::table::{
+    ShipKind, SpawnDude, SpawnPerson, SpawnTable, appearing_ship_types, dude_ship_type, pick,
+};
 
 /// `Rand(7) == 0`: a person, rather than anything else, by the engine
 /// (see [`person`](crate::person)).
@@ -301,6 +315,9 @@ impl Stellars<'static> {
 }
 
 /// A ship to add to the system.
+// Each flag is its own part of how the ship starts, set and read on its
+// own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NewShip {
     /// Its ship type.
@@ -333,9 +350,17 @@ pub struct NewShip {
     /// cut just below where it is disabled, and disabled. A rescue
     /// mission's ship set up in the system starts so ([`mission_ships`]).
     pub derelict: bool,
+    /// Whether it starts holding ([`Goal::Hold`](crate::ai::Goal::Hold),
+    /// the original's goal 10 with no leader): a ship swapped in for a
+    /// person by a `ShipGoal` 3 mission, unless it escorts or hunts the
+    /// player ([`swapped_mission_ship`]).
+    pub held: bool,
     /// Whether it starts cloaking (`_DoShipCloak`): a `ShipStart` 2
     /// mission's ship set up in the system does ([`mission_ships`]).
     pub cloaked: bool,
+    /// Whether it starts boarded (+0xb9): a rescue ship of an expired
+    /// mission set up in the system does ([`mission_ships`]).
+    pub boarded: bool,
 }
 
 /// The persons' side of a system's spawning: their world, and the names
@@ -420,6 +445,8 @@ impl<'a> PersonDraw<'a> {
             person: Some(id),
             mission: None,
             derelict: false,
+            held: false,
+            boarded: false,
             cloaked: false,
             aux: None,
         })
@@ -484,6 +511,8 @@ pub fn initial(
                 person: None,
                 mission: None,
                 derelict: false,
+                held: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             });
@@ -621,6 +650,8 @@ fn hyper_ship(
             person: None,
             mission: None,
             derelict: false,
+            held: false,
+            boarded: false,
             cloaked: false,
             aux: None,
         });
@@ -655,13 +686,22 @@ pub struct MissionSpawn<'a> {
     /// The system's `NavDefs` slots, in order: each its stellar's
     /// position, none for an empty slot.
     pub nav: &'a [Option<Vec2>],
+    /// The one ship type every ship flies (the slot's +0x56, its
+    /// [`uniform_type`](crate::mission::SpecialShips::uniform_type)),
+    /// drawing none; none to draw one for each.
+    pub preset: Option<ShipId>,
+    /// Whether its time has run out: its days left 0 (the slot's +0x48 in
+    /// -31999..=0, which only 0 reaches, @0x42fe1-0x42ffa). Only the setup
+    /// reads it ([`mission_ships`]), so a rescue ship set up then starts
+    /// boarded.
+    pub expired: bool,
 }
 
 /// One of `spawn`'s ships as `_MissionDudeSpawn` (@0x3cd3b) brings it in:
 /// placed as any ship at setup, its aggression drawn first, then x and y
 /// (`_GenericRandomShipSpawn` @0x3c89f), with no heading drawn; then its
-/// ship type: `preset` when given, drawing nothing (the slot's +0x56,
-/// @0x3cdea-0x3cdf3); else drawn from the `düde` by `Probability` among
+/// ship type: `preset` when given, else `spawn`'s, drawing nothing (the
+/// slot's +0x56, @0x3cdea-0x3cdf3); else drawn from the `düde` by `Probability` among
 /// the ship types whose `AppearOn` holds by `gate`, or, with none, among
 /// them all (`_SelectShipFieldFromDude` with 0, then 1, @0x3cdf5-0x3ce36). It
 /// carries the `düde`'s government, `Booty` and `InfoTypes`, the `düde`'s
@@ -675,6 +715,7 @@ fn mission_dude_ship(
     gate: Gate,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<NewShip> {
+    let preset = preset.or(spawn.preset);
     let ship = specific_dude_ship(table, spawn.dude, preset, Fallback::AllShips, gate, chance)?;
     Some(NewShip {
         mission: Some(MissionMark {
@@ -717,19 +758,15 @@ fn specific_dude_ship(
     let x = spread(SPAWN_SPREAD, chance);
     let y = spread(SPAWN_SPREAD, chance);
     let dude = table.dude_records.get(&dude)?;
-    let ship = if let Some(ship) = preset {
-        ship
-    } else {
-        let appearing: Vec<(ShipId, u32)> = dude
-            .ships
-            .iter()
-            .copied()
-            .filter(|(ship, _)| appears(table, *ship, gate))
-            .collect();
-        match fallback {
-            Fallback::AllShips => pick(&appearing, chance).or_else(|| pick(&dude.ships, chance))?,
-            Fallback::Fails => pick(&appearing, chance)?,
+    let ship = match (preset, fallback) {
+        (Some(ship), _) => ship,
+        (None, Fallback::AllShips) => {
+            dude_ship_type(dude, |ship| table.appear_on(ship), gate, chance)?
         }
+        (None, Fallback::Fails) => pick(
+            &appearing_ship_types(dude, |ship| table.appear_on(ship), gate),
+            chance,
+        )?,
     };
     let inherent_ai = table.ships.get(&ship).map_or(0, |kind| kind.inherent_ai);
     let ai_type = if dude.ai_type > 0 {
@@ -754,6 +791,8 @@ fn specific_dude_ship(
         person: None,
         mission: None,
         derelict: false,
+        held: false,
+        boarded: false,
         cloaked: false,
         aux: None,
     })
@@ -766,7 +805,17 @@ fn specific_dude_ship(
 /// ([`ESCORTED_SETUP_SPREAD`], @0x42ed8-0x42f33); for a rescue goal
 /// (`ShipGoal` 5) then
 /// facing a heading `Rand(360)`, still, and set up derelict
-/// ([`NewShip::derelict`]: shields 0, armour cut, @0x42f35-0x42fdc);
+/// ([`NewShip::derelict`]: shields 0, armour cut, @0x42f35-0x42fdc),
+/// and boarded when `spawn` has [`expired`](MissionSpawn::expired)
+/// ([`NewShip::boarded`]). The original's check (@0x42fe1-0x42ffa,
+/// `w + 0x7cff` unsigned `<= 0x7cff`) is a range -31999..=0 on the slot's
+/// +0x48, its `TimeLimit` days left: set to -32000 at load for no limit
+/// (@0xa0f40-0xa0f47) and counted down daily only while above 0
+/// (@0xb590-0xb5b6), it is in range only at 0, the time run out. The
+/// setup never reads the failed flag, so an unabortable mission failed
+/// by its deadline sets its rescue ships up boarded, never held disabled
+/// and never boardable; an abortable one does so only as it arrives or
+/// takes off on its last day, and then fails;
 /// with a `ShipStart` of -1 to -16 then moved to that nav slot's stellar,
 /// unless the slot is empty (@0x4300a-0x43091); with `ShipStart` 2,
 /// cloaking ([`NewShip::cloaked`], `_DoShipCloak` @0x43114-0x43121). The
@@ -798,6 +847,7 @@ pub fn mission_ships(
                 ship.state.heading = chance.below(DEGREES) as f32;
                 ship.state.velocity = Vec2::ZERO;
                 ship.derelict = true;
+                ship.boarded = spawn.expired;
             }
             Some(ship)
         })
@@ -910,7 +960,13 @@ pub fn arriving_aux_ships(
 /// given ([`swapped_ship_type`](crate::mission::ships::swapped_ship_type)),
 /// then given the person's `state` (position +0x18, velocity +0x20,
 /// heading +0x44), not gliding in and never cloaked. `spawn`'s count and
-/// start are not read. `None`, after the place's draws, when the `düde`
+/// start are not read. For a `ShipGoal` 3 it is [`held`](NewShip::held):
+/// `_AIMakeEscortFlyInForm` (@0x624f6-0x62509, @0x89b8e-0x89c3d) gives it
+/// goal 10 with no leader. A `ShipBehav` 0 ship isn't held, since its
+/// mission block lifts the hold on the next frame and it hunts the
+/// player as before (a one-frame gap the player never sees), nor a
+/// `ShipBehav` 1 ship, which `_AIDispatch` makes the player's escort at
+/// its next think (@0x8fc03-0x8fc22). `None`, after the place's draws, when the `düde`
 /// has no record or no ship.
 pub fn swapped_mission_ship(
     table: &SpawnTable,
@@ -921,7 +977,16 @@ pub fn swapped_mission_ship(
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<NewShip> {
     let ship = mission_dude_ship(table, spawn, preset, gate, chance)?;
-    Some(NewShip { state, ..ship })
+    let held = spawn.goal == ShipGoal::Escort
+        && !matches!(
+            spawn.behav,
+            ShipBehav::AttackPlayer | ShipBehav::EscortPlayer
+        );
+    Some(NewShip {
+        state,
+        held,
+        ..ship
+    })
 }
 
 /// A `düde` ship: a `düde` by weight, a ship of it by `Probability`
@@ -934,12 +999,7 @@ fn dude_ship<'a>(
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<(ShipId, &'a SpawnDude, AiType, &'a ShipKind)> {
     let dude = table.dude_records.get(&pick(&table.dudes, chance)?)?;
-    let appearing: Vec<(ShipId, u32)> = dude
-        .ships
-        .iter()
-        .copied()
-        .filter(|(ship, _)| appears(table, *ship, gate))
-        .collect();
+    let appearing = appearing_ship_types(dude, |ship| table.appear_on(ship), gate);
     let ship = pick(&appearing, chance)?;
     let kind = table.ships.get(&ship)?;
     let ai_type = if dude.ai_type > 0 {
@@ -1017,6 +1077,8 @@ pub fn fleet(
         person: None,
         mission: None,
         derelict: false,
+        held: false,
+        boarded: false,
         cloaked: false,
         aux: None,
     });
@@ -1055,6 +1117,8 @@ pub fn fleet(
                 person: None,
                 mission: None,
                 derelict: false,
+                held: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             });
@@ -1203,15 +1267,6 @@ pub fn aggression(chance: &mut (impl Chance + ?Sized)) -> u8 {
 /// A draw of `Rand(spread) - spread / 2`.
 fn spread(spread: u32, chance: &mut (impl Chance + ?Sized)) -> f32 {
     chance.below(spread) as f32 - (spread / 2) as f32
-}
-
-/// Whether ship type `ship` may appear by `gate`: its `AppearOn` holds,
-/// or it has no record (and so spawns nothing).
-fn appears(table: &SpawnTable, ship: ShipId, gate: Gate) -> bool {
-    table
-        .ships
-        .get(&ship)
-        .is_none_or(|kind| gate.allows(&kind.appear_on))
 }
 
 /// Whether a ship of `kind` can come by hyperspace: it has fuel capacity.
@@ -1470,6 +1525,8 @@ mod tests {
                 person: None,
                 mission: None,
                 derelict: false,
+                held: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             }]
@@ -2599,6 +2656,8 @@ mod tests {
                 person: Some(PersonId(510)),
                 mission: None,
                 derelict: false,
+                held: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             }]
@@ -2984,6 +3043,8 @@ mod tests {
             start: ShipStart::from_code(start),
             behav: ShipBehav::AttackPlayer,
             nav: &NAV,
+            preset: None,
+            expired: false,
         }
     }
 
@@ -3025,9 +3086,53 @@ mod tests {
                     formation: None,
                 }),
                 derelict: false,
+                held: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             }]
+        );
+    }
+
+    #[test]
+    fn every_ship_of_a_preset_spawn_flies_it_drawing_no_type() {
+        let table = with_mission_dude();
+        let preset = MissionSpawn {
+            preset: Some(ShipId(203)),
+            ..mission_spawn(3, 0)
+        };
+        // Each draw 0: a type drawn would be 202.
+        let mut chance = Draws::of(&[0; 32]);
+        let ships = mission_ships(&table, &preset, mission_gate(), &mut chance);
+        assert_eq!(
+            ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
+            [ShipId(203); 3],
+            "set up"
+        );
+        assert!(!chance.asked.contains(&100), "no type drawn");
+
+        let mut chance = Draws::of(&[0; 32]);
+        let ships = arriving_mission_ships(&table, &preset, None, mission_gate(), &mut chance);
+        assert_eq!(
+            ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
+            [ShipId(203); 3],
+            "arriving"
+        );
+        assert!(!chance.asked.contains(&100), "no type drawn");
+
+        let mut chance = Draws::of(&[0; 32]);
+        let ship = swapped_mission_ship(
+            &table,
+            &preset,
+            ShipState::default(),
+            Some(ShipId(202)),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(
+            ship.map(|ship| ship.ship),
+            Some(ShipId(202)),
+            "a swap's own type first"
         );
     }
 
@@ -3161,6 +3266,49 @@ mod tests {
         MissionSpawn {
             goal,
             ..mission_spawn(count, start)
+        }
+    }
+
+    /// Whether each of `spawn`'s ships set up starts boarded.
+    fn boarded_at_setup(spawn: &MissionSpawn) -> Vec<bool> {
+        mission_ships(
+            &with_mission_dude(),
+            spawn,
+            mission_gate(),
+            &mut Draws::of(&[0; 40]),
+        )
+        .iter()
+        .map(|ship| ship.boarded)
+        .collect()
+    }
+
+    #[test]
+    fn a_rescue_ship_of_an_expired_mission_is_set_up_boarded() {
+        for expired in [false, true] {
+            let spawn = MissionSpawn {
+                expired,
+                ..goal_spawn(2, 0, ShipGoal::Rescue)
+            };
+            assert_eq!(boarded_at_setup(&spawn), [expired; 2], "{expired}");
+        }
+    }
+
+    #[test]
+    fn only_a_rescue_ship_starts_boarded_when_expired() {
+        for goal in [
+            ShipGoal::None,
+            ShipGoal::Destroy,
+            ShipGoal::Disable,
+            ShipGoal::Board,
+            ShipGoal::Escort,
+            ShipGoal::Observe,
+            ShipGoal::ChaseOff,
+        ] {
+            let spawn = MissionSpawn {
+                expired: true,
+                ..goal_spawn(2, 0, goal)
+            };
+            assert_eq!(boarded_at_setup(&spawn), [false; 2], "{goal:?}");
         }
     }
 
@@ -3569,6 +3717,8 @@ mod tests {
                     formation: None,
                 }),
                 derelict: false,
+                held: false,
+                boarded: false,
                 cloaked: false,
                 aux: None,
             })
@@ -3625,6 +3775,35 @@ mod tests {
             Some(AiType::Interceptor),
             "ship 202's InherentAI 4"
         );
+    }
+
+    #[test]
+    fn a_swapped_escort_goal_ship_is_held_unless_it_escorts_or_hunts_the_player() {
+        let held = |goal: ShipGoal, behav: ShipBehav| {
+            swapped_mission_ship(
+                &with_mission_dude(),
+                &MissionSpawn {
+                    goal,
+                    behav,
+                    ..mission_spawn(1, 0)
+                },
+                PERSON_AT,
+                Some(ShipId(202)),
+                mission_gate(),
+                &mut Draws::of(&[0, 0, 0]),
+            )
+            .expect("a ship")
+            .held
+        };
+        for behav in [ShipBehav::Own, ShipBehav::AttackStellars] {
+            assert!(held(ShipGoal::Escort, behav), "{behav:?}");
+        }
+        for behav in [ShipBehav::AttackPlayer, ShipBehav::EscortPlayer] {
+            assert!(!held(ShipGoal::Escort, behav), "{behav:?}");
+        }
+        for goal in [ShipGoal::Destroy, ShipGoal::Observe, ShipGoal::Rescue] {
+            assert!(!held(goal, ShipBehav::Own), "{goal:?}");
+        }
     }
 
     #[test]
