@@ -450,6 +450,7 @@ use crate::chance::Chance;
 use crate::combat::armament::{
     Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
+use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
@@ -1542,6 +1543,9 @@ impl Session {
         ));
         self.combat
             .set_breakup(Breakup::from(rules.source_for(RuleKey::BreakupStall)));
+        self.combat.set_asteroid_fuse(AsteroidFuse::from(
+            rules.source_for(RuleKey::FuseIgnoresAsteroids),
+        ));
         self.rules = rules;
         self
     }

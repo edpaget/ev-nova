@@ -929,6 +929,25 @@ mod tests {
     }
 
     #[test]
+    fn a_flags2_0x0004_fuse_takes_an_asteroid_by_the_engine_and_passes_it_by_the_bible() {
+        for (rules, hit) in [
+            (Rulebook::default(), true),
+            (other(RuleKey::FuseIgnoresAsteroids), false),
+        ] {
+            let gun = WeaponRecord {
+                flags2: 0x0004,
+                ..fused_gun()
+            };
+            let catalog = rocky_arming(gun, npc_gun(), vec![rock_type(0, 100, 10)]);
+            let mut session = flying(&catalog).with_rules(rules);
+            let at = put(&mut session, 0, 100, 35.0, -80.0);
+            shoot_once(&mut session, 6);
+            assert_eq!(slot(&session, at).strength < 100, hit, "{rules:?}");
+            assert_eq!(session.shots().is_empty(), hit, "{rules:?}");
+        }
+    }
+
+    #[test]
     fn a_ship_that_sets_the_fuse_off_takes_the_shot_and_leaves_the_asteroids_whole() {
         let catalog = rocky_arming(fused_gun(), npc_gun(), vec![rock_type(0, 100, 10)]);
         // The NPC at (48, -90): within 9.9 + 40 of the shot's way to
