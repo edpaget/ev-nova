@@ -34,8 +34,12 @@
 //! ([`MissionValues::offered`]) or a slot's ([`MissionValues::active`]),
 //! resolved, never the `mïsn`'s encodings; a free slot's is the default,
 //! every mission tag [`UNSET`]. With no mission at all, as in a person's
-//! hail quote ([`expand_tags`](crate::person::expand_tags)), the mission
-//! tags are left as written. Where the engine reads otherwise:
+//! hail quote ([`expand_tags`](crate::person::expand_tags)), a `Q`
+//! message outside a mission's script or a `RefuseText`, the mission tags
+//! follow [`RuleKey::MissionlessTags`](crate::RuleKey::MissionlessTags):
+//! by the engine [`UNSET`], as `_MungeBriefing` with index -1 leaves them
+//! (@0x9c83f-0x9c843 → 0x9ce14); by the other reading left as written.
+//! Where the engine reads otherwise:
 //!
 //! - `<DSY>` and `<RSY>` read the stop's stellar's system live, through
 //!   the port ([`TagNames::stellar_system`]), not the system the offer
@@ -63,8 +67,7 @@
 //!   leaves it ([`MissionTags::other_pay`]).
 //!
 //! The original's quirks not reproduced here (the crossed `<PRKnnn>`/`<SRKnnn>` governments, a stale
-//! `<OSN>`, the `l33t` mode, `'STR '` 9100+ cargo name patches, and
-//! `"[Error]"` for the mission tags with no mission) are
+//! `<OSN>`, the `l33t` mode and `'STR '` 9100+ cargo name patches) are
 //! rdm:phase/missions/phase-13-text-substitution-quirks.
 
 use crate::catalog::{DateAffixes, GovtId, StellarId, SystemId};
@@ -273,6 +276,9 @@ pub struct TagRules {
     /// What a slot's `<PAY>` of any other pay reads
     /// ([`RuleKey::PaySlotOffset`](crate::RuleKey::PaySlotOffset)).
     pub pay_slot_offset: RuleSource,
+    /// What a text with no mission reads for the mission tags
+    /// ([`RuleKey::MissionlessTags`](crate::RuleKey::MissionlessTags)).
+    pub missionless: RuleSource,
 }
 
 impl TagRules {
@@ -282,6 +288,7 @@ impl TagRules {
         use crate::rulebook::RuleKey;
         Self {
             pay_slot_offset: rules.source_for(RuleKey::PaySlotOffset),
+            missionless: rules.source_for(RuleKey::MissionlessTags),
         }
     }
 }
@@ -324,6 +331,12 @@ fn or_else(value: String, fallback: &str) -> String {
         value
     }
 }
+
+/// The mission tags, in the table's order (0xdb198), as
+/// [`mission_values`] gives them.
+const MISSION_TAGS: [&str; 9] = [
+    "<DST>", "<DSY>", "<RST>", "<RSY>", "<CT>", "<CQ>", "<SN>", "<DL>", "<PAY>",
+];
 
 /// The mission tags' values, in the table's order (@0x9c38a-0x9cdb6).
 fn mission_values(
@@ -400,13 +413,15 @@ fn fill_ranked<'a>(text: &str, prefix: &str, rank: impl Fn(GovtId) -> &'a str) -
 /// `_MungeBriefing` (@0x9c11d) fills them: one tag at a time in the
 /// table's order (0xdb198), every occurrence, case-sensitively, so a
 /// value naming a later tag has it filled too; any other tag is left as
-/// written. With no mission, the mission tags are left as written too.
+/// written. With no mission, the mission tags read as
+/// [`TagRules::missionless`] says.
 #[must_use]
 pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)) -> String {
-    let mission = context
-        .mission
-        .as_ref()
-        .map(|mission| mission_values(mission, context.rules, names));
+    let mission = match (&context.mission, context.rules.missionless) {
+        (Some(mission), _) => Some(mission_values(mission, context.rules, names)),
+        (None, RuleSource::Engine) => Some(MISSION_TAGS.map(|tag| (tag, UNSET.to_owned()))),
+        (None, RuleSource::Bible) => None,
+    };
     let (early, pay) = match &mission {
         Some([early @ .., pay]) => (early.as_slice(), Some(pay)),
         None => (&[][..], None),
@@ -1055,11 +1070,27 @@ mod tests {
     }
 
     #[test]
-    fn with_no_mission_the_mission_tags_are_left_as_written() {
+    fn by_the_engine_a_missionless_texts_mission_tags_read_unset() {
         assert_eq!(
             expand(
                 "<DST> <DSY> <RST> <RSY> <CT> <CQ> <SN> <DL> <PAY> <PN> <PRK>",
                 &context(None),
+                &names()
+            ),
+            "[Error] [Error] [Error] [Error] [Error] [Error] [Error] [Error] [Error] Stock \
+             captain",
+            "index -1 (@0x9c83f-0x9c843 -> 0x9ce14)"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_missionless_texts_mission_tags_are_left_as_written() {
+        let mut tags = context(None);
+        tags.rules.missionless = RuleSource::Bible;
+        assert_eq!(
+            expand(
+                "<DST> <DSY> <RST> <RSY> <CT> <CQ> <SN> <DL> <PAY> <PN> <PRK>",
+                &tags,
                 &names()
             ),
             "<DST> <DSY> <RST> <RSY> <CT> <CQ> <SN> <DL> <PAY> Stock captain"

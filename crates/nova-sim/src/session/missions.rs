@@ -1323,7 +1323,7 @@ impl Session {
     /// `text` with its tags filled with no mission, as the original's
     /// `RefuseText`, comm dialog and hail quotes are (`_MungeBriefing`
     /// with index -1; see [`text_tags`](crate::text_tags)): the mission
-    /// tags are left as written.
+    /// tags read as [`RuleKey::MissionlessTags`] says.
     #[must_use]
     pub fn plain_text(&self, text: &str) -> String {
         text_tags::expand(text, &self.tag_context(None, None), self)
@@ -4150,11 +4150,19 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_text_fills_the_player_tags_and_leaves_the_mission_tags() {
+    fn a_plain_text_fills_the_player_tags_and_its_mission_tags_by_the_missionless_rule() {
         let catalog = briefed();
         let session = stocks(&catalog);
         assert_eq!(
             session.plain_text("<PN> of the <PSN>, a <PST>, <PRK>: <DST> <PAY> <OSN>"),
+            "Stock of the Kestrel, a Ship 128, captain: [Error] [Error] [Error]",
+            "by the engine"
+        );
+        let other = session.with_rules(
+            Rulebook::default().with_override(RuleKey::MissionlessTags, RuleSource::Bible),
+        );
+        assert_eq!(
+            other.plain_text("<PN> of the <PSN>, a <PST>, <PRK>: <DST> <PAY> <OSN>"),
             "Stock of the Kestrel, a Ship 128, captain: <DST> <PAY> [Error]"
         );
     }

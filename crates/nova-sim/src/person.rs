@@ -234,7 +234,8 @@ pub struct QuoteTags<'a> {
 /// `text` with its tags read as `tags` say, through the one substitution
 /// path ([`text_tags::expand`]) with no mission: `<OSN>`, `<PN>`,
 /// `<PNN>`, `<PST>` and `<PSN>`, the rank tags from the ranks and `<REG>`
-/// as empty; the mission tags, and any other tag, stay as written.
+/// as empty; the mission tags as [`RuleKey::MissionlessTags`] says, and
+/// any other tag as written.
 #[must_use]
 pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
     let context = TagContext {
@@ -1314,14 +1315,36 @@ mod tests {
             expand_tags("Yes, <PRK>. No, <SRK>.", &tags),
             "Yes, captain. No, captain."
         );
-        assert_eq!(expand_tags("Off to <DSY>.", &tags), "Off to <DSY>.", "kept");
         assert_eq!(expand_tags("No tags.", &tags), "No tags.");
+        assert_eq!(NO_RANK, "captain");
+    }
+
+    #[test]
+    fn a_quotes_mission_tags_read_unset_by_the_engine_and_are_left_by_the_other_reading() {
+        let mut tags = QuoteTags {
+            person: "Bounty Hunter",
+            pilot: "Stock",
+            ship_type: "Shuttle",
+            ship_name: "Kestrel",
+            ranks: RankNames::none(),
+            rules: TagRules::default(),
+        };
         assert_eq!(
-            expand_tags("<RRK> [<REG>] <PRK130> <PAY> <DL>", &tags),
-            "captain [] captain <PAY> <DL>",
+            expand_tags("Off to <DSY>.", &tags),
+            "Off to [Error].",
+            "_ShowPersonHailQuote munges with index -1 (@0x44605)"
+        );
+        assert_eq!(
+            expand_tags("<RRK> [<REG>] <PAY> <DL>", &tags),
+            "captain [] [Error] [Error]"
+        );
+        tags.rules.missionless = RuleSource::Bible;
+        assert_eq!(expand_tags("Off to <DSY>.", &tags), "Off to <DSY>.", "kept");
+        assert_eq!(
+            expand_tags("<RRK> [<REG>] <PAY> <DL>", &tags),
+            "captain [] <PAY> <DL>",
             "the mission tags kept"
         );
-        assert_eq!(NO_RANK, "captain");
     }
 
     #[test]

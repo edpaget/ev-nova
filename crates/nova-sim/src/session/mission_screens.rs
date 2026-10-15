@@ -698,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_shows_its_refuse_text_unfilled_before_on_refuse_runs() {
+    fn a_refusal_shows_its_refuse_text_with_no_mission_before_on_refuse_runs() {
         let catalog = screens(
             vec![
                 MissionRecord {
@@ -728,9 +728,10 @@ mod tests {
         assert_eq!(
             session.take_mission_texts(),
             [
-                text(MissionTextKind::Refuse, 130, "No trip to <DST>."),
+                text(MissionTextKind::Refuse, 130, "No trip to [Error]."),
                 text(MissionTextKind::Brief, 131, "Off to Mars."),
-            ]
+            ],
+            "_OfferOneMission munges it with index -1 (@0xa2eba-0xa2ec9)"
         );
     }
 
