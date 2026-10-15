@@ -115,7 +115,7 @@ use std::collections::BTreeMap;
 
 use super::ShipRef;
 use super::ai_fire;
-use super::aim::Aim;
+use super::aim::{Aim, Pointing};
 use super::exits::ExitCursors;
 use super::hull::{Condition, HullSpec};
 use super::projectile::ShotId;
@@ -128,7 +128,7 @@ use crate::catalog::{
     CombatCatalog, HullRecord, OutfitId, OutfitRecord, ShipId, StockWeapon, WeaponId, WeaponRecord,
 };
 use crate::chance::Chance;
-use crate::flight::normalized;
+use crate::flight::{ShipState, normalized};
 use crate::pilot::tally;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
@@ -476,14 +476,24 @@ impl Mount {
 pub struct Launch {
     /// The weapon.
     pub weapon: WeaponSpec,
-    /// The heading it leaves along, its inaccuracy included, in degrees.
-    pub heading: f32,
-    /// Its inaccuracy, in degrees: how far off its aim it leaves. The
-    /// fight turns a lead or a point-defence bearing it works out again
-    /// from the exit point by as much (see [`exits`](super::exits)).
-    pub offset: f32,
+    /// Which way it points, from wherever it leaves, before its
+    /// inaccuracy.
+    pub pointing: Pointing,
+    /// Its inaccuracy, in degrees: how far off its pointing it leaves.
+    pub inaccuracy: f32,
     /// The ship it is fired at, if any.
     pub target: Option<ShipRef>,
+}
+
+impl Launch {
+    /// The heading it leaves `origin` along, in degrees: its pointing
+    /// from there ([`Pointing::heading_from`]) turned by its inaccuracy.
+    /// The fight gives the exit point it leaves from, or its ship's
+    /// centre (see [`exits`](super::exits)).
+    #[must_use]
+    pub fn heading_from(&self, origin: &ShipState) -> f32 {
+        normalized(self.pointing.heading_from(origin) + self.inaccuracy)
+    }
 }
 
 /// What an NPC's pick fired in one call ([`Armament::fire_pick`]): its
@@ -647,12 +657,12 @@ impl Armament {
             if !paid {
                 continue;
             }
-            let offset = inaccuracy(mount.spec.inaccuracy, chance);
+            let inaccuracy = inaccuracy(mount.spec.inaccuracy, chance);
             mount.discharge(rounds, fuel, reports, shooter.npc, false);
             launches.push(Launch {
                 weapon: mount.spec,
-                heading: normalized(aimed.heading + offset),
-                offset,
+                pointing: aimed.pointing,
+                inaccuracy,
                 target: aimed.target,
             });
         }
@@ -721,11 +731,10 @@ impl Armament {
             let aimed = spawn(&spec);
             if let Some(aimed) = aimed {
                 reports.fired(&spec);
-                let offset = inaccuracy(spec.inaccuracy, chance);
                 launches.push(Launch {
                     weapon: spec,
-                    heading: normalized(aimed.heading + offset),
-                    offset,
+                    pointing: aimed.pointing,
+                    inaccuracy: inaccuracy(spec.inaccuracy, chance),
                     target: aimed.target,
                 });
             }
@@ -816,7 +825,7 @@ impl Armament {
     /// `rounds` and `fuel`, the inaccuracy drawn on `chance`: the ready
     /// point-defence weapon `shooter` has the ammunition for
     /// ([`Armament::has_ammo`], `_HandleShipPointDefense` @0x3933b) with
-    /// the lowest ID, at the heading and missile `pick` gives it, if any.
+    /// the lowest ID, pointing as `pick` says at the missile it gives, if any.
     /// Nothing fires, and nothing is spent, when `pick` gives none. What it
     /// reports goes to `reports`.
     // Each is a separate borrow the fight holds, as for `fire`.
@@ -829,7 +838,7 @@ impl Armament {
         fuel: &mut Gauge,
         chance: &mut dyn Chance,
         reports: &mut Reports,
-        pick: &mut dyn FnMut(&WeaponSpec) -> Option<(f32, ShotId)>,
+        pick: &mut dyn FnMut(&WeaponSpec) -> Option<(Pointing, ShotId)>,
     ) -> Option<(Launch, ShotId)> {
         if condition != Condition::Intact {
             return None;
@@ -848,8 +857,8 @@ impl Armament {
             .min_by_key(|(_, mount)| mount.spec.id)?
             .0;
         let mount = &mut self.mounts[index];
-        let (bearing, missile) = pick(&mount.spec)?;
-        let offset = if mount.spec.guidance == Guidance::PointDefenceBeam {
+        let (pointing, missile) = pick(&mount.spec)?;
+        let inaccuracy = if mount.spec.guidance == Guidance::PointDefenceBeam {
             0.0
         } else {
             inaccuracy(mount.spec.inaccuracy, chance)
@@ -857,8 +866,8 @@ impl Armament {
         mount.discharge(rounds, fuel, reports, shooter.npc, true);
         let launch = Launch {
             weapon: mount.spec,
-            heading: normalized(bearing + offset),
-            offset,
+            pointing,
+            inaccuracy,
             target: None,
         };
         Some((launch, missile))
@@ -1437,9 +1446,13 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
     use crate::combat::flags::FlagField;
-    use crate::flight::ShipState;
     use crate::testkit::{Draws, hull, outfit, weapon};
     use crate::traffic::npc::NpcId;
+
+    /// The heading `launch` leaves a ship at the centre along.
+    fn leaves(launch: &Launch) -> f32 {
+        launch.heading_from(&ShipState::default())
+    }
 
     /// A blaster reloading every `reload` ticks, unlimited and accurate.
     fn blaster(id: i16, reload: i16) -> WeaponRecord {
@@ -1508,10 +1521,7 @@ mod tests {
     /// Every weapon fires straight up, at nothing.
     #[allow(clippy::unnecessary_wraps)]
     fn ahead(_spec: &WeaponSpec) -> Option<Aim> {
-        Some(Aim {
-            heading: 0.0,
-            target: None,
-        })
+        Some(Aim::along(0.0, None))
     }
 
     // Selecting the secondary.
@@ -1912,10 +1922,7 @@ mod tests {
     /// Every weapon fires at 100 degrees, at NPC 7.
     #[allow(clippy::unnecessary_wraps)]
     fn at_seven(_spec: &WeaponSpec) -> Option<Aim> {
-        Some(Aim {
-            heading: 100.0,
-            target: Some(SEVEN),
-        })
+        Some(Aim::along(100.0, Some(SEVEN)))
     }
 
     const SEVEN: ShipRef = ShipRef::Npc(NpcId(7));
@@ -1939,7 +1946,7 @@ mod tests {
                 &mut Reports::default(),
                 &mut at_seven,
             );
-            assert_eq!(launches[0].heading, heading, "{draw}");
+            assert_eq!(leaves(&launches[0]), heading, "{draw}");
             assert_eq!(launches[0].target, Some(SEVEN), "{draw}");
             assert_eq!(chance.asked, [18]);
         }
@@ -1955,7 +1962,7 @@ mod tests {
             &mut Reports::default(),
             &mut at_seven,
         );
-        assert_eq!(launches[0].heading, 100.0);
+        assert_eq!(leaves(&launches[0]), 100.0);
         assert!(chance.asked.is_empty(), "never asked");
         let mut wrapping = mounted(wild, 1);
         let launches = wrapping.fire(
@@ -1968,7 +1975,7 @@ mod tests {
             &mut Reports::default(),
             &mut ahead,
         );
-        assert_eq!(launches[0].heading, 351.0, "wrapped");
+        assert_eq!(leaves(&launches[0]), 351.0, "wrapped");
     }
 
     #[test]
@@ -1987,7 +1994,7 @@ mod tests {
             &mut Reports::default(),
             &mut at_seven,
         );
-        assert_eq!((launches[0].offset, launches[0].heading), (-7.0, 93.0));
+        assert_eq!((launches[0].inaccuracy, leaves(&launches[0])), (-7.0, 93.0));
         let volley = mounted(wild, 1)
             .fire_pick(
                 WeaponId(128),
@@ -2004,7 +2011,7 @@ mod tests {
                 &mut at_seven,
             )
             .expect("a volley");
-        assert_eq!(volley.launches[0].offset, 8.0);
+        assert_eq!(volley.launches[0].inaccuracy, 8.0);
         let (launch, _) = defend(
             &mut mounted(defence(161, 9, 4, 9), 1),
             &mut Supplies::none(),
@@ -2013,7 +2020,7 @@ mod tests {
             &mut Vec::new(),
         )
         .expect("point defence fires");
-        assert_eq!((launch.offset, launch.heading), (-9.0, 21.0));
+        assert_eq!((launch.inaccuracy, leaves(&launch)), (-9.0, 21.0));
         let (beam, _) = defend(
             &mut mounted(defence(150, 10, 4, 9), 1),
             &mut Supplies::none(),
@@ -2022,7 +2029,7 @@ mod tests {
             &mut Vec::new(),
         )
         .expect("a point-defence beam fires");
-        assert_eq!(beam.offset, 0.0, "a beam draws none");
+        assert_eq!(beam.inaccuracy, 0.0, "a beam draws none");
     }
 
     // An NPC's pick (`_FireAIShipWeapon`).
@@ -2523,7 +2530,7 @@ mod tests {
             &mut supplies.reports,
             &mut |spec: &WeaponSpec| {
                 asked.push(spec.id);
-                pick
+                pick.map(|(heading, missile)| (Pointing::Along(heading), missile))
             },
         )
     }
@@ -2553,7 +2560,7 @@ mod tests {
         .expect("fires");
         assert_eq!(asked, [WeaponId(133)], "the lowest ID, asked alone");
         assert_eq!(
-            (launch.weapon.id, launch.heading, launch.target),
+            (launch.weapon.id, leaves(&launch), launch.target),
             (WeaponId(133), 30.0, None)
         );
         assert_eq!(shot, ShotId(4));
@@ -2623,7 +2630,7 @@ mod tests {
             &mut asked,
         )
         .expect("fires");
-        assert_eq!(launch.heading, 70.0, "its inaccuracy");
+        assert_eq!(leaves(&launch), 70.0, "its inaccuracy");
         assert_eq!(chance.asked, [40]);
         assert_eq!(supplies.rounds.slot(WeaponId(155)), 1, "a round");
         assert_eq!(armament.mounts()[0].burst, 1, "a shot of its burst");
@@ -2660,7 +2667,7 @@ mod tests {
             &mut Vec::new(),
         )
         .expect("fires");
-        assert_eq!(launch.heading, 45.0);
+        assert_eq!(leaves(&launch), 45.0);
         assert!(chance.asked.is_empty());
     }
 
@@ -2682,7 +2689,7 @@ mod tests {
                 &mut supplies.fuel,
                 &mut NeverFires,
                 &mut supplies.reports,
-                &mut |_: &WeaponSpec| Some((0.0, ShotId(0))),
+                &mut |_: &WeaponSpec| Some((Pointing::Along(0.0), ShotId(0))),
             );
             assert_eq!(fired, None, "{condition:?}");
         }

@@ -180,6 +180,7 @@ pub mod weapon;
 
 use std::collections::BTreeMap;
 
+use aim::Pointing;
 use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use beam::{Aiming, Beam};
 use damage::{Blast, Hit};
@@ -792,8 +793,10 @@ impl Combat {
     ///
     /// - A weapon of `Flags3` 0x0010 takes the exit nearest the ship its
     ///   damage is aimed at, `_SpawnShot`'s and `_SpawnBeam`'s target.
-    /// - A turret that leads its target (4, 7 and 8) leads it again from
-    ///   the exit (`_CalcLeadAngle` @0x3ecdc), turned by its inaccuracy.
+    /// - A shot's heading is worked out once, from where it leaves
+    ///   ([`Launch::heading_from`]): a turret that leads its target (4, 7
+    ///   and 8) leads it from the exit (`_CalcLeadAngle` @0x3ecdc), turned
+    ///   by its inaccuracy. A beam's and a fighter's are from the centre.
     /// - A point-defence shot steps its cursor twice by the engine, as
     ///   `_HandleShipPointDefense` sets its shot from `_SpawnShot`'s exit
     ///   back to the centre and takes the next (@0x396e5, @0x39707-0x3976c),
@@ -839,7 +842,7 @@ impl Combat {
                 bay: weapon.id,
                 ship: carried,
                 from,
-                heading: launch.heading,
+                heading: launch.heading_from(&from),
                 target: launch.target,
             });
         } else if weapon.is_beam() {
@@ -851,7 +854,14 @@ impl Combat {
             let mut beam = Beam {
                 ties,
                 aimed_at,
-                ..Beam::launch(weapon, ship, fleet, &from, launch.heading, aiming)
+                ..Beam::launch(
+                    weapon,
+                    ship,
+                    fleet,
+                    &from,
+                    launch.heading_from(&from),
+                    aiming,
+                )
             };
             if let Some((points, kind)) = exits {
                 let toward = toward.filter(|_| quarry.is_none());
@@ -871,12 +881,12 @@ impl Combat {
             let missile = quarry
                 .and_then(|id| self.shots.iter().find(|shot| shot.id == id))
                 .map(|shot| shot.position);
-            let (start, heading, side_of_exit) =
-                self.shot_exit(muzzle, &launch, missile, toward, targets);
+            let (start, side_of_exit) = self.shot_exit(muzzle, &launch, missile, toward);
             let leaving = ShipState {
                 position: start,
                 ..from
             };
+            let heading = launch.heading_from(&leaving);
             let mut shot = Shot {
                 id: self.next_id(),
                 target: launch.target,
@@ -892,24 +902,21 @@ impl Combat {
         }
     }
 
-    /// Where a shot of `launch` leaves `muzzle` from, the heading it
-    /// leaves along, and the side of the exit it leaves from
-    /// ([`ExitPoints::side`]): from the centre, as aimed and on no side
-    /// without an exit; else from the exit its cursor or the nearest to
-    /// `toward` gives, a point-defence shot at its `missile` taking two
-    /// steps by the engine, and aimed again from there ([`aimed_from`];
-    /// see `Combat::launch`).
+    /// Where a shot of `launch` leaves `muzzle` from, and the side of the
+    /// exit it leaves from ([`ExitPoints::side`]): from the centre, on no
+    /// side, without an exit; else from the exit its cursor or the nearest
+    /// to `toward` gives, a point-defence shot at its `missile` taking two
+    /// steps by the engine (see `Combat::launch`).
     fn shot_exit(
         &self,
         muzzle: &mut Muzzle,
         launch: &Launch,
         missile: Option<Vec2>,
         toward: Option<Vec2>,
-        targets: &[Target],
-    ) -> (Vec2, f32, f32) {
+    ) -> (Vec2, f32) {
         let from = muzzle.from;
         let Some((points, kind)) = muzzle.exits.zip(launch.weapon.exit) else {
-            return (from.position, launch.heading, 0.0);
+            return (from.position, 0.0);
         };
         let toward = if missile.is_some() {
             if self.pd_exit_step == RuleSource::Engine {
@@ -935,12 +942,7 @@ impl Combat {
             toward,
             self.compression,
         );
-        let leaving = ShipState {
-            position: start,
-            ..from
-        };
-        let heading = aimed_from(&leaving, launch, missile, targets);
-        (start, heading, points.side(kind, index))
+        (start, points.side(kind, index))
     }
 
     /// Step 1: each ship fires what its trigger holds, aimed at its target
@@ -1057,7 +1059,7 @@ impl Combat {
                 &mut self.reports,
                 &mut |spec| {
                     let missile = defence::choose(side, &state, &hull, spec, shots, rule, govts)?;
-                    Some((aim::bearing(state.position, missile.position), missile.id))
+                    Some((Pointing::At(missile.position), missile.id))
                 },
             );
             if let Some((launch, missile)) = fired {
@@ -1695,29 +1697,6 @@ fn position_of(targets: &[Target], ship: ShipRef) -> Option<Vec2> {
         .iter()
         .find(|target| target.ship == ship)
         .map(|target| target.position)
-}
-
-/// The heading `launch` leaves along from an exit, `leaving` it: at its
-/// `missile` from there for point defence (`_CalcInterceptAngle`
-/// @0x39790), leading its target from there for a turret that leads
-/// ([`aim::leads`], `_CalcLeadAngle` @0x3ecdc), each turned by its
-/// inaccuracy; as aimed otherwise.
-fn aimed_from(
-    leaving: &ShipState,
-    launch: &Launch,
-    missile: Option<Vec2>,
-    targets: &[Target],
-) -> f32 {
-    if let Some(missile) = missile {
-        return normalized(aim::bearing(leaving.position, missile) + launch.offset);
-    }
-    let led = launch
-        .target
-        .filter(|_| aim::leads(launch.weapon.guidance))
-        .and_then(|ship| targets.iter().find(|target| target.ship == ship));
-    led.map_or(launch.heading, |target| {
-        normalized(aim::lead(leaving, target, launch.weapon.speed) + launch.offset)
-    })
 }
 
 /// The shield and armour `reserves` hold, together: what a hit takes is

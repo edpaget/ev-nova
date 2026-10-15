@@ -30,6 +30,10 @@
 //!   - 9 and 10 never fire on the trigger: only point defence fires them
 //!     (see [`defence`](super::defence)).
 //!   - A turret that does not fire spends nothing.
+//! - Whether a turret fires, by its blind spots and arcs, is judged from
+//!   the ship's centre; the lead angle and the bearing it fires along are
+//!   measured once, from where the shot leaves, its exit point or the
+//!   centre ([`Pointing`]).
 
 use super::ShipRef;
 use super::hull::HullSpec;
@@ -54,10 +58,56 @@ pub const BLIND_REAR: u16 = 0x4000;
 /// Which way a weapon fires, and at what.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aim {
-    /// The heading it fires along, in degrees, before its inaccuracy.
-    pub heading: f32,
+    /// Which way it points, from wherever it leaves, before its
+    /// inaccuracy.
+    pub pointing: Pointing,
     /// The ship it fires at, if any.
     pub target: Option<ShipRef>,
+}
+
+impl Aim {
+    /// Fired along `heading`, in degrees, at `target`.
+    #[must_use]
+    pub const fn along(heading: f32, target: Option<ShipRef>) -> Self {
+        Self {
+            pointing: Pointing::Along(heading),
+            target,
+        }
+    }
+}
+
+/// Which way a weapon points from where it leaves its ship: the ship's
+/// centre, or the exit point it fires from
+/// ([`exits`](super::exits)). The fight works the heading out once it
+/// knows that origin ([`Pointing::heading_from`]), as `_SpawnShot` leads
+/// from the shot's exit (@0x3ecdc) and `_HandleShipPointDefense` aims at
+/// its missile from it (`_CalcInterceptAngle` @0x39790).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pointing {
+    /// Along this heading, in degrees, wherever it leaves from.
+    Along(f32),
+    /// At this point: the bearing to it from where it leaves.
+    At(Vec2),
+    /// At `target`'s lead angle for a shot of `speed` pixels a tick, from
+    /// where it leaves ([`lead`]).
+    Leading {
+        /// The ship it leads, as it was when it was aimed at.
+        target: Target,
+        /// The shot's speed.
+        speed: f32,
+    },
+}
+
+impl Pointing {
+    /// The heading it points along from `origin`, before any inaccuracy.
+    #[must_use]
+    pub fn heading_from(&self, origin: &ShipState) -> f32 {
+        match self {
+            Self::Along(heading) => *heading,
+            Self::At(point) => bearing(origin.position, *point),
+            Self::Leading { target, speed } => lead(origin, target, *speed),
+        }
+    }
 }
 
 /// The heading from `from` to `to`; none for a point on top of `from`.
@@ -118,17 +168,6 @@ pub fn blind(blind_spots: u16, off: f32) -> bool {
     blind_spots & sector != 0
 }
 
-/// Whether a shot of `guidance` fired at a target leads it: a turret (4)
-/// and a quadrant turret (7, 8), as `_SpawnShot` sets its lead for them
-/// (@0x3e685-0x3e6cf) and leads from the shot's exit point (@0x3ecdc).
-#[must_use]
-pub fn leads(guidance: Guidance) -> bool {
-    matches!(
-        guidance,
-        Guidance::Turret | Guidance::FrontTurret | Guidance::RearTurret
-    )
-}
-
 /// The lead angle from `firer` to `target` for a shot of `speed` pixels a
 /// tick (see the module docs).
 #[must_use]
@@ -150,10 +189,7 @@ pub fn aim(
     hull: &HullSpec,
     target: Option<&Target>,
 ) -> Option<Aim> {
-    let ahead = Aim {
-        heading: firer.heading,
-        target: None,
-    };
+    let ahead = Aim::along(firer.heading, None);
     let blind_spots = spec.flags | hull.blind_spots;
     // The target, its bearing's angle off the nose, and whether it is in a
     // blind spot.
@@ -161,10 +197,6 @@ pub fn aim(
         let off = angle_off(firer.heading, bearing(firer.position, target.position));
         (target, off, blind(blind_spots, off))
     });
-    let led = |target: &Target| Aim {
-        heading: lead(firer, target, spec.speed),
-        target: Some(target.ship),
-    };
     match spec.guidance {
         Guidance::Homing | Guidance::FighterBay => Some(Aim {
             target: target.map(|target| target.ship),
@@ -172,26 +204,45 @@ pub fn aim(
         }),
         Guidance::TurretBeam => sighted
             .filter(|&(_, _, blind)| !blind)
-            .map(|(target, _, _)| Aim {
-                heading: bearing(firer.position, target.position),
-                target: Some(target.ship),
-            }),
+            .map(|(target, _, _)| on_bearing(target)),
         Guidance::Turret => sighted
             .filter(|&(_, _, blind)| !blind)
-            .map(|(target, _, _)| led(target)),
+            .map(|(target, _, _)| led(spec, target)),
         Guidance::FrontTurret => match sighted {
-            Some((target, off, blind)) if off <= FRONT_ARC => (!blind).then(|| led(target)),
+            Some((target, off, blind)) if off <= FRONT_ARC => (!blind).then(|| led(spec, target)),
             _ => Some(ahead),
         },
         Guidance::RearTurret => sighted
             .filter(|&(_, off, blind)| off >= 180.0 - FRONT_ARC && !blind)
-            .map(|(target, _, _)| led(target)),
+            .map(|(target, _, _)| led(spec, target)),
         Guidance::PointDefence | Guidance::PointDefenceBeam => None,
         Guidance::Unguided
         | Guidance::Beam
         | Guidance::FreefallBomb
         | Guidance::Rocket
         | Guidance::Other(_) => Some(ahead),
+    }
+}
+
+/// A turret of `spec` fired at `target`, leading it from where the shot
+/// leaves (4, 7 and 8; `_SpawnShot` @0x3e685-0x3e6cf, @0x3ecdc).
+#[must_use]
+pub fn led(spec: &WeaponSpec, target: &Target) -> Aim {
+    Aim {
+        pointing: Pointing::Leading {
+            target: *target,
+            speed: spec.speed,
+        },
+        target: Some(target.ship),
+    }
+}
+
+/// A turreted beam (3) fired at `target`, along the bearing to it.
+#[must_use]
+pub fn on_bearing(target: &Target) -> Aim {
+    Aim {
+        pointing: Pointing::At(target.position),
+        target: Some(target.ship),
     }
 }
 
@@ -256,9 +307,13 @@ mod tests {
 
     #[test]
     fn only_turrets_4_7_and_8_lead() {
-        let leading: Vec<i16> = (-1..=10)
-            .filter(|&raw| leads(spec(raw, 0).guidance))
-            .collect();
+        let leads = |raw| {
+            [0.0, 180.0].into_iter().any(|heading| {
+                aimed(&spec(raw, 0), heading, 0, true)
+                    .is_some_and(|aim| matches!(aim.pointing, Pointing::Leading { .. }))
+            })
+        };
+        let leading: Vec<i16> = (-1..=10).filter(|&raw| leads(raw)).collect();
         assert_eq!(leading, [4, 7, 8]);
     }
 
@@ -354,16 +409,18 @@ mod tests {
         20.0_f32.atan2(100.0).to_degrees()
     }
 
+    /// The heading `aim` points along from the firer at the centre.
+    fn pointed(aim: &Aim) -> f32 {
+        aim.pointing.heading_from(&firer(0.0))
+    }
+
     #[test]
     fn unguided_weapons_beams_bombs_and_rockets_fire_ahead_at_nothing() {
         for raw in [-1, 0, 5, 6] {
             for with_target in [false, true] {
                 assert_eq!(
                     aimed(&spec(raw, 0), 30.0, 0, with_target),
-                    Some(Aim {
-                        heading: 30.0,
-                        target: None
-                    }),
+                    Some(Aim::along(30.0, None)),
                     "{raw}"
                 );
             }
@@ -379,19 +436,10 @@ mod tests {
         });
         assert_eq!(
             aimed(&bay, 30.0, BLIND_FRONT, true),
-            Some(Aim {
-                heading: 30.0,
-                target: Some(TARGET)
-            }),
+            Some(Aim::along(30.0, Some(TARGET))),
             "no blind spot"
         );
-        assert_eq!(
-            aimed(&bay, 200.0, 0, false),
-            Some(Aim {
-                heading: 200.0,
-                target: None
-            })
-        );
+        assert_eq!(aimed(&bay, 200.0, 0, false), Some(Aim::along(200.0, None)));
     }
 
     #[test]
@@ -399,32 +447,19 @@ mod tests {
         let homing = spec(1, 0);
         assert_eq!(
             aimed(&homing, 30.0, 0, true),
-            Some(Aim {
-                heading: 30.0,
-                target: Some(TARGET)
-            })
+            Some(Aim::along(30.0, Some(TARGET)))
         );
-        assert_eq!(
-            aimed(&homing, 30.0, 0, false),
-            Some(Aim {
-                heading: 30.0,
-                target: None
-            })
-        );
+        assert_eq!(aimed(&homing, 30.0, 0, false), Some(Aim::along(30.0, None)));
     }
 
     #[test]
     fn a_turret_fires_at_the_lead_angle_and_a_turreted_beam_along_the_bearing() {
         let turret = aimed(&spec(4, 0), 180.0, 0, true).expect("fires");
-        assert!(close(turret.heading, led()), "{turret:?}");
+        assert!(close(pointed(&turret), led()), "{turret:?}");
         assert_eq!(turret.target, Some(TARGET));
-        assert_eq!(
-            aimed(&spec(3, 0), 180.0, 0, true),
-            Some(Aim {
-                heading: 0.0,
-                target: Some(TARGET)
-            })
-        );
+        let beam = aimed(&spec(3, 0), 180.0, 0, true).expect("fires");
+        assert_eq!(beam.pointing, Pointing::At(Vec2::new(0.0, -100.0)));
+        assert_eq!((pointed(&beam), beam.target), (0.0, Some(TARGET)));
         for raw in [3, 4] {
             assert_eq!(
                 aimed(&spec(raw, 0), 180.0, 0, false),
@@ -465,17 +500,14 @@ mod tests {
     fn a_front_quadrant_turret_leads_a_target_within_45_degrees_and_otherwise_fires_ahead() {
         let front = spec(7, 0);
         let at_45 = aimed(&front, 45.0, 0, true).expect("fires");
-        assert!(close(at_45.heading, led()), "{at_45:?}");
+        assert!(close(pointed(&at_45), led()), "{at_45:?}");
         assert_eq!(at_45.target, Some(TARGET));
         let at_315 = aimed(&front, 315.0, 0, true).expect("fires");
-        assert!(close(at_315.heading, led()), "the other side: {at_315:?}");
+        assert!(close(pointed(&at_315), led()), "the other side: {at_315:?}");
         for (heading, with_target) in [(46.0, true), (314.0, true), (0.0, false)] {
             assert_eq!(
                 aimed(&front, heading, 0, with_target),
-                Some(Aim {
-                    heading,
-                    target: None
-                }),
+                Some(Aim::along(heading, None)),
                 "{heading} {with_target}"
             );
         }
@@ -487,7 +519,7 @@ mod tests {
         let rear = spec(8, 0);
         for heading in [135.0, 180.0, 225.0] {
             let fired = aimed(&rear, heading, 0, true).expect("fires");
-            assert!(close(fired.heading, led()), "{heading}: {fired:?}");
+            assert!(close(pointed(&fired), led()), "{heading}: {fired:?}");
             assert_eq!(fired.target, Some(TARGET));
         }
         for heading in [134.0, 226.0, 0.0] {

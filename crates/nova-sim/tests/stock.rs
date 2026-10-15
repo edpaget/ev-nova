@@ -4551,7 +4551,7 @@ fn stock_classes_carrying_the_hail_and_storm_chainguns_keep_separate_rounds() {
                 &mut fuel,
                 &mut NeverFires,
                 &mut Reports::default(),
-                &mut |_| Some((0.0, ShotId(1))),
+                &mut |_| Some((nova_sim::combat::aim::Pointing::Along(0.0), ShotId(1))),
             );
             shots += u32::from(fired.is_some());
             armament.reload();

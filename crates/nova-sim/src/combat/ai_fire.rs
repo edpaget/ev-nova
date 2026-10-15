@@ -48,7 +48,9 @@
 //!   the heading (@0x88af7, @0x88b13, @0x88f46) and `_CalcInterceptAngle`'s
 //!   table, as `ai::fire` leaves them; and the 16-bit cap on the copies.
 
-use super::aim::{Aim, FRONT_ARC, bearing, blind, lead, quadrant_off, quadrant_reference};
+use super::aim::{
+    Aim, FRONT_ARC, bearing, blind, led, on_bearing, quadrant_off, quadrant_reference,
+};
 use super::armament::{GUN_RANGE_MARGIN, Rounds};
 use super::hull::HullSpec;
 use super::projectile::Target;
@@ -141,14 +143,7 @@ pub fn spawn(
     target: Option<&Target>,
     arc: RuleSource,
 ) -> Option<Aim> {
-    let ahead = Aim {
-        heading: firer.heading,
-        target: None,
-    };
-    let led = |target: &Target| Aim {
-        heading: lead(firer, target, spec.speed),
-        target: Some(target.ship),
-    };
+    let ahead = Aim::along(firer.heading, None);
     match (spec.guidance, target) {
         (Guidance::TurretBeam | Guidance::Turret, Some(target)) => {
             let bearing = bearing(firer.position, target.position);
@@ -157,19 +152,16 @@ pub fn spawn(
                 return None;
             }
             Some(if spec.guidance == Guidance::TurretBeam {
-                Aim {
-                    heading: bearing,
-                    target: Some(target.ship),
-                }
+                on_bearing(target)
             } else {
-                led(target)
+                led(spec, target)
             })
         }
         (Guidance::FrontTurret | Guidance::RearTurret, Some(target)) => {
             let bearing = bearing(firer.position, target.position);
             let reference = quadrant_reference(spec.guidance, firer.heading);
             (in_box(spec, firer, target) && quadrant_off(reference, bearing, arc) <= FRONT_ARC)
-                .then(|| led(target))
+                .then(|| led(spec, target))
         }
         (Guidance::Homing, Some(target)) => Some(Aim {
             target: Some(target.ship),
@@ -226,7 +218,7 @@ mod tests {
     use super::*;
     use crate::catalog::{ShipId, WeaponId, WeaponRecord};
     use crate::combat::ShipRef;
-    use crate::combat::aim::BLIND_REAR;
+    use crate::combat::aim::{BLIND_REAR, lead};
     use crate::combat::armament::LauncherRounds;
     use crate::combat::hull::Condition;
     use crate::combat::sides::Ties;
@@ -284,31 +276,25 @@ mod tests {
         // box, strictly.
         let turret = guided(4);
         let corner = at(231.0, -231.0);
+        let pointed =
+            |aim: Option<Aim>| aim.map(|aim| (aim.pointing.heading_from(&firer()), aim.target));
+        assert_eq!(fires(&turret, Some(&corner)), Some(led(&turret, &corner)));
         assert_eq!(
-            fires(&turret, Some(&corner)),
-            Some(Aim {
-                heading: lead(&firer(), &corner, turret.speed),
-                target: Some(B)
-            })
+            pointed(fires(&turret, Some(&corner))),
+            Some((lead(&firer(), &corner, turret.speed), Some(B)))
         );
         assert_eq!(fires(&turret, Some(&at(232.0, 0.0))), None, "on the edge");
         assert_eq!(fires(&turret, Some(&at(0.0, -232.0))), None);
         assert_eq!(
-            fires(&turret, Some(&at(0.0, 231.9))),
-            Some(Aim {
-                heading: 180.0,
-                target: Some(B)
-            })
+            pointed(fires(&turret, Some(&at(0.0, 231.9)))),
+            Some((180.0, Some(B)))
         );
         // A turreted beam reaches its length and the margin, along the
         // bearing.
         let beam = guided(3);
         assert_eq!(
-            fires(&beam, Some(&at(131.0, 0.0))),
-            Some(Aim {
-                heading: 90.0,
-                target: Some(B)
-            })
+            pointed(fires(&beam, Some(&at(131.0, 0.0)))),
+            Some((90.0, Some(B)))
         );
         assert_eq!(fires(&beam, Some(&at(132.0, 0.0))), None);
     }
@@ -394,13 +380,7 @@ mod tests {
 
     #[test]
     fn with_no_target_only_a_front_quadrant_turret_fires_and_it_fires_ahead_at_nothing() {
-        assert_eq!(
-            fires(&guided(7), None),
-            Some(Aim {
-                heading: 0.0,
-                target: None
-            })
-        );
+        assert_eq!(fires(&guided(7), None), Some(Aim::along(0.0, None)));
         for guidance in [3, 4, 8, 1] {
             assert_eq!(fires(&guided(guidance), None), None, "{guidance}");
         }
@@ -410,10 +390,7 @@ mod tests {
     fn guns_rockets_and_beams_fire_with_no_range_test() {
         let far = at(5000.0, 5000.0);
         for guidance in [-1, 0, 6] {
-            let ahead = Aim {
-                heading: 0.0,
-                target: None,
-            };
+            let ahead = Aim::along(0.0, None);
             assert_eq!(
                 fires(&guided(guidance), Some(&far)),
                 Some(ahead),
@@ -423,10 +400,7 @@ mod tests {
         }
         assert_eq!(
             fires(&guided(1), Some(&far)),
-            Some(Aim {
-                heading: 0.0,
-                target: Some(B)
-            }),
+            Some(Aim::along(0.0, Some(B))),
             "homing: along the heading at its target"
         );
     }

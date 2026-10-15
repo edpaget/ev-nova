@@ -1190,12 +1190,7 @@ mod tests {
             &mut fuel,
             &mut crate::chance::NeverFires,
             &mut crate::combat::report::Reports::default(),
-            &mut |_| {
-                Some(crate::combat::aim::Aim {
-                    heading: 0.0,
-                    target: None,
-                })
-            },
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
         );
         assert_eq!(
             fired(&reloading, 0.0, -300.0, 50.0),
@@ -1833,12 +1828,7 @@ mod tests {
             &mut fuel,
             &mut crate::chance::NeverFires,
             &mut crate::combat::report::Reports::default(),
-            &mut |_| {
-                Some(crate::combat::aim::Aim {
-                    heading: 0.0,
-                    target: None,
-                })
-            },
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
         );
         assert_eq!(fired(&slow, 0.0, -100.0, 50.0), None, "reloading");
     }
@@ -2273,12 +2263,7 @@ mod tests {
             &mut fuel,
             &mut crate::chance::NeverFires,
             &mut crate::combat::report::Reports::default(),
-            &mut |_| {
-                Some(crate::combat::aim::Aim {
-                    heading: 0.0,
-                    target: None,
-                })
-            },
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
         );
         assert_eq!(fired(&reloading, 0.0, -300.0, 50.0), None);
     }
