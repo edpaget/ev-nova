@@ -1475,6 +1475,38 @@ mod tests {
         assert_eq!(drain(&log), []);
     }
 
+    /// The original cancels the music on entering the game and opening
+    /// About whatever the Music checkbox says (`_CancelMusicThread` from
+    /// @0x19ec6 and @0x15fbf), so stopped music is spent too.
+    #[test]
+    fn music_off_on_the_main_menu_is_still_spent_by_leaving_it() {
+        for leave in [Showing::Flight, Showing::About] {
+            let (mut core, log) = original();
+            core.update(Some(Showing::MainMenu), &[]);
+            core.set_music(false);
+            assert_eq!(
+                drain(&log),
+                [start_music(MUSIC), AudioCommand::StopMusic],
+                "{leave:?}"
+            );
+            core.update(Some(leave), &[]);
+            assert_eq!(drain(&log), [], "{leave:?}: no fade while stopped");
+            core.update(Some(Showing::MainMenu), &[]);
+            core.set_music(true);
+            assert_eq!(drain(&log), [], "{leave:?}: spent, nothing starts");
+        }
+    }
+
+    #[test]
+    fn a_game_scene_before_the_main_menu_spends_the_music() {
+        for scene in [Showing::Flight, Showing::ShipBrowser] {
+            let (mut core, log) = original();
+            core.update(Some(scene), &[]);
+            core.update(Some(Showing::MainMenu), &[]);
+            assert_eq!(drain(&log), [], "{scene:?} first");
+        }
+    }
+
     #[test]
     fn the_menu_dialogs_keep_the_music() {
         let (mut core, log) = original();
