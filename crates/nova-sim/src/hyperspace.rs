@@ -268,7 +268,9 @@ pub enum JumpRefusal {
     Landed,
     /// The ship is disabled, breaking up or destroyed. The
     /// [`Session`](crate::Session) gives this before [`check_jump`] is
-    /// asked.
+    /// asked. The player is never told of it: the original's J skips the
+    /// jump block for a disabled ship (`_HandlePlayer` @0x6b0f5 →
+    /// 0x6bada), with no message and no beep.
     Disabled,
     /// No destination has been chosen, or it has been reached.
     NoDestination,

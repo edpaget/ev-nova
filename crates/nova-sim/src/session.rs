@@ -2564,6 +2564,13 @@ impl Session {
         self.condition
     }
 
+    /// Sets the player's condition directly, for
+    /// [`fixture::set_player_condition`](crate::fixture::set_player_condition).
+    #[cfg(feature = "fixture")]
+    pub(crate) fn set_player_condition(&mut self, to: Condition) {
+        self.condition = to;
+    }
+
     /// Where the player's ship is in its lifecycle: its condition, whether
     /// it exploded on the latest fight tick, how far the game's end has
     /// got since, and the escape pod's countdown.

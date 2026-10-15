@@ -556,7 +556,7 @@ pub struct FlightOverlays {
 /// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
 /// the abandoned fighters on arrival (@0x6c46d). It is also the time of
 /// the messages the original does not have ([`TAKE_OFF_FIRST`],
-/// [`JUMP_DISABLED`], [`IN_HYPERSPACE`], [`REPELLED`], [`NO_STELLARS`] on
+/// [`IN_HYPERSPACE`], [`REPELLED`], [`NO_STELLARS`] on
 /// L) and of the defection notice, which the original
 /// shows in a dialog (`_DoEscortPayment` @0x40301).
 pub const MESSAGE_TICKS: u16 = 240;
@@ -594,7 +594,9 @@ pub const OLD_SHIP_TICKS: u16 = 360;
 
 /// How long the message for `refusal` stays: [`JUMP_REFUSAL_TICKS`] too
 /// close or with no destination, 240 short of fuel (`_HandlePlayer`
-/// @0x6baac), and [`MESSAGE_TICKS`] for the engine's own refusals.
+/// @0x6baac), and [`MESSAGE_TICKS`] for the engine's own refusals. A
+/// disabled ship's refusal shows no message ([`jump_refusal_message`]),
+/// so its time is never used.
 #[must_use]
 pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
     match refusal {
@@ -1093,9 +1095,6 @@ pub const NO_FUEL: &str = "Insufficient energy for hyperspace jump.";
 /// Not the original's, which never flies a landed ship: worded after
 /// `STR#` 2002 #42 and #73 ("Disengage cloaking device first.").
 pub const TAKE_OFF_FIRST: &str = "Can't initiate hyperspace jump - take off first.";
-/// Not the original's, whose disabled ship takes no keys: worded after
-/// `STR#` 2002 #42.
-pub const JUMP_DISABLED: &str = "Can't initiate hyperspace jump - your ship is disabled.";
 
 /// `STR#` 2002 #22: the land hint's lead for a station.
 pub const TUTORIAL_DOCK: &str = "Welcome to Nova - it would be a good idea to start by docking at";
@@ -1746,15 +1745,16 @@ fn pay_said(notes: &[PayNote]) -> Vec<(String, u16)> {
 }
 
 /// What the player is told when `refusal` stops a jump: the original's
-/// words for it.
+/// words for it, or none for a disabled ship, whose J the original
+/// ignores (`_HandlePlayer` @0x6b0f5 → 0x6bada).
 #[must_use]
-pub fn jump_refusal_message(refusal: &JumpRefusal) -> &'static str {
+pub fn jump_refusal_message(refusal: &JumpRefusal) -> Option<&'static str> {
     match refusal {
-        JumpRefusal::NoDestination => NO_DESTINATION,
-        JumpRefusal::TooClose { .. } => TOO_CLOSE,
-        JumpRefusal::NoFuel { .. } => NO_FUEL,
-        JumpRefusal::Landed => TAKE_OFF_FIRST,
-        JumpRefusal::Disabled => JUMP_DISABLED,
+        JumpRefusal::NoDestination => Some(NO_DESTINATION),
+        JumpRefusal::TooClose { .. } => Some(TOO_CLOSE),
+        JumpRefusal::NoFuel { .. } => Some(NO_FUEL),
+        JumpRefusal::Landed => Some(TAKE_OFF_FIRST),
+        JumpRefusal::Disabled => None,
     }
 }
 
@@ -2777,8 +2777,10 @@ impl<
                 self.start_streak_if_jumping();
             }
             Err(refusal) => {
-                if session.jump_refusal_told(&refusal) {
-                    self.say_for(jump_refusal_message(&refusal), jump_refusal_ticks(&refusal));
+                if session.jump_refusal_told(&refusal)
+                    && let Some(text) = jump_refusal_message(&refusal)
+                {
+                    self.say_for(text, jump_refusal_ticks(&refusal));
                 }
             }
         }
@@ -8582,7 +8584,6 @@ mod tests {
             (JumpRefusal::TooClose { distance: 1.0 }, 360),
             (JumpRefusal::NoFuel { fuel: 1.0 }, 240),
             (JumpRefusal::Landed, 240),
-            (JumpRefusal::Disabled, 240),
         ];
         for (refusal, ticks) in jump {
             assert_eq!(jump_refusal_ticks(&refusal), ticks, "{refusal:?}");
@@ -9264,6 +9265,39 @@ mod tests {
     }
 
     #[test]
+    fn j_while_disabled_is_silent() {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: false,
+            },
+        ] {
+            let mut view = new_pilot(flight());
+            let Ok(session) = &mut view.session else {
+                panic!("flying");
+            };
+            nova_sim::fixture::set_player_condition(session, condition);
+            view.input(&key(JUMP, true));
+            assert_eq!(view.message(), None, "{condition:?}");
+            let session = view.session().expect("flying");
+            assert_eq!(session.preparing_jump(), None, "{condition:?}");
+            assert!(
+                !view.take_sounds().contains(&REFUSED),
+                "{condition:?}: no beep"
+            );
+            // Made intact again, the same J is told: the gate, not a dead key.
+            let Ok(session) = &mut view.session else {
+                panic!("flying");
+            };
+            nova_sim::fixture::set_player_condition(session, Condition::Intact);
+            view.input(&key(JUMP, true));
+            assert_eq!(view.take_sounds(), [REFUSED], "{condition:?}");
+            assert_eq!(view.message(), Some(NO_DESTINATION), "{condition:?}");
+        }
+    }
+
+    #[test]
     fn a_new_pilots_j_with_nothing_selected_says_no_destination_for_360() {
         let mut view = new_pilot(flight());
         view.input(&key(JUMP, true));
@@ -9422,22 +9456,21 @@ mod tests {
     fn every_jump_refusal_has_its_string() {
         assert_eq!(
             jump_refusal_message(&JumpRefusal::NoDestination),
-            NO_DESTINATION
+            Some(NO_DESTINATION)
         );
         assert_eq!(
             jump_refusal_message(&JumpRefusal::TooClose { distance: 1.0 }),
-            TOO_CLOSE
+            Some(TOO_CLOSE)
         );
         assert_eq!(
             jump_refusal_message(&JumpRefusal::NoFuel { fuel: 1.0 }),
-            NO_FUEL
+            Some(NO_FUEL)
         );
-        assert_eq!(jump_refusal_message(&JumpRefusal::Landed), TAKE_OFF_FIRST);
-        assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), JUMP_DISABLED);
         assert_eq!(
-            JUMP_DISABLED,
-            "Can't initiate hyperspace jump - your ship is disabled."
+            jump_refusal_message(&JumpRefusal::Landed),
+            Some(TAKE_OFF_FIRST)
         );
+        assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), None);
         assert_eq!(
             [NO_DESTINATION, TOO_CLOSE, NO_FUEL, TAKE_OFF_FIRST],
             [

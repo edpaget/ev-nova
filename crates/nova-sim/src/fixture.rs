@@ -4,6 +4,7 @@
 //! mission chain from a script of [`Step`]s (see the `walker` module); and
 //! [`bits_allowing`], the control bits that make a test hold, for setting
 //! a pilot up directly; [`disable`], for disabling a ship directly;
+//! [`set_player_condition`], for downing or repairing the player directly;
 //! [`cloak`], for setting a ship's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; and
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
@@ -39,6 +40,13 @@ pub fn disable(session: &mut Session, id: NpcId) {
         npc.reserves.armor.now = 1.0;
         npc.condition = Condition::Disabled;
     }
+}
+
+/// Sets the player's condition in `session` to `to`: for a test that
+/// needs the player disabled or breaking up, or made intact again,
+/// without a fight.
+pub fn set_player_condition(session: &mut Session, to: Condition) {
+    session.set_player_condition(to);
 }
 
 /// Sets NPC `id`'s cloak in `session` to `to`, if it is in the system:
