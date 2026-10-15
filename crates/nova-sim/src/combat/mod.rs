@@ -117,6 +117,7 @@
 
 pub mod aim;
 pub mod armament;
+pub mod asteroid_hit;
 pub mod beam;
 pub mod damage;
 pub mod defence;

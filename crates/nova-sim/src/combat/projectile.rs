@@ -239,6 +239,13 @@ impl Shot {
         guided && target.hittable_by(self.firer, self.fleet)
     }
 
+    /// Whether its proximity fuse is armed: it has flown past its
+    /// weapon's `ProxSafety` (@0x371fc-0x3721e, @0x3720e-0x3721e).
+    #[must_use]
+    pub fn fuse_armed(&self) -> bool {
+        self.age > self.weapon.prox_safety
+    }
+
     /// Whether it has flown its life.
     #[must_use]
     pub fn expired(&self) -> bool {
@@ -343,6 +350,24 @@ mod tests {
             -4.0,
         );
         assert!((back.heading - 356.0).abs() < 1e-4, "{back:?}");
+    }
+
+    #[test]
+    fn a_shots_fuse_is_armed_once_it_has_flown_past_its_prox_safety() {
+        let mut shot = Shot::launch(
+            WeaponSpec::new(&WeaponRecord {
+                prox_safety: 3,
+                ..weapon(128)
+            }),
+            FIRER,
+            FIRER,
+            &state(0.0, 0.0, 0.0, 0.0, 0.0),
+            0.0,
+        );
+        for (age, armed) in [(0, false), (3, false), (4, true), (40, true)] {
+            shot.age = age;
+            assert_eq!(shot.fuse_armed(), armed, "{age}");
+        }
     }
 
     #[test]

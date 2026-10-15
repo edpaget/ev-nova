@@ -86,6 +86,14 @@ pub const KINDS: usize = 16;
 /// it is culled (@0x364e4-0x3661b).
 pub const CULL_MARGIN: f32 = 32.0;
 
+/// The width and height `_DestroyAsteroid` takes for an asteroid with
+/// no sprite (32, @0xaea7-0xaf3a).
+pub const NO_SPRITE_SIZE: f32 = 32.0;
+
+/// The hit radius of an asteroid with no sprite: half of
+/// [`NO_SPRITE_SIZE`].
+pub const NO_SPRITE_RADIUS: f32 = NO_SPRITE_SIZE / 2.0;
+
 /// What `_screenCenter` is widened by for a spawn's spread and ring
 /// (@0x3a3a1, @0x3a553).
 const SPREAD_MARGIN: i32 = 128;
@@ -201,6 +209,20 @@ impl AsteroidType {
             part_color: record.part_color,
             mass: record.mass,
             explosion: Explosion::decode(record.explode_type),
+        }
+    }
+
+    /// Its hit radius, in pixels: half the larger of its frame's width
+    /// and height, or [`NO_SPRITE_RADIUS`] with no sprite. The original
+    /// tests a shot against its sprite pixel by pixel; the engine has no
+    /// masks, and takes the disc the sprite fills.
+    #[must_use]
+    pub fn radius(&self) -> f32 {
+        let (width, height) = self.size;
+        if width <= 0.0 && height <= 0.0 {
+            NO_SPRITE_RADIUS
+        } else {
+            width.max(height) / 2.0
         }
     }
 
@@ -737,6 +759,19 @@ mod tests {
         assert_eq!(missing.fragments, [None, None]);
         assert_eq!((missing.frag_count, missing.part_count), (0, 0));
         assert_eq!((missing.mass, missing.explosion), (0, None));
+    }
+
+    #[test]
+    fn a_types_radius_is_half_its_larger_side_or_16_without_a_sprite() {
+        let sized = |size| AsteroidType {
+            size,
+            ..AsteroidType::MISSING
+        };
+        assert_eq!(sized((40.0, 30.0)).radius(), 20.0);
+        assert_eq!(sized((30.0, 48.0)).radius(), 24.0);
+        assert_eq!(sized((0.0, 0.0)).radius(), 16.0);
+        assert_eq!(AsteroidType::MISSING.radius(), NO_SPRITE_RADIUS);
+        assert_eq!(NO_SPRITE_RADIUS, 16.0);
     }
 
     #[test]
