@@ -421,9 +421,11 @@
 //!   fight and the answer to its hits, [`Session::answer_strikes`]),
 //!   shown in the message line for
 //!   [`HAIL_QUOTE_TICKS`], the last one said winning.
-//! - Each step's last session work is the asteroid field's
-//!   ([`Session::tick_asteroids`]): a spawn at the field's edge and the
-//!   field stepped, on the flight's chance. Before any step, and so
+//! - Each step's fight starts with the asteroid field's work
+//!   ([`Session::tick_asteroids`], which [`Session::tick_combat`] runs
+//!   first): a spawn at the field's edge and the field stepped, on the
+//!   flight's chance, so the shots meet the asteroids where they are
+//!   drawn. Before any step, and so
 //!   before the first frame is drawn, a session started or loaded in
 //!   flight places its field as its rules say
 //!   ([`Session::settle_asteroid_field`]).
@@ -2883,9 +2885,6 @@ impl<
                         session.answer_strikes(&*self.behaviour);
                         session.tick_quotes(&self.catalog, &mut self.chance);
                         quotes.extend(session.take_quotes());
-                        // The pass's last session work, as the second
-                        // pass's ([`Session::tick_again`]).
-                        session.tick_asteroids(&mut self.chance);
                     }
                     let player = point(session.player().position);
                     let dying = dying(session, &self.sheet, &self.npc_sheets);

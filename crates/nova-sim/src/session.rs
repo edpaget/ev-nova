@@ -2336,8 +2336,14 @@ impl Session {
     /// (see the `eject` module), both before the scans. The player's
     /// "Ship disabled." and "Ship destroyed." lines are spoken as the
     /// fight's hits leave it (see the `player_downed` module), before the
-    /// eject on a breakup's first tick takes it into a new ship.
+    /// eject on a breakup's first tick takes it into a new ship. Before
+    /// all of it, landed or jumping, the pass's asteroid work runs
+    /// ([`Session::tick_asteroids`]), so the shots meet the asteroids
+    /// where they are this pass.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
+        // The pass's asteroid work comes first, landed or jumping (see the
+        // `asteroids` module).
+        self.tick_asteroids(&mut *chance);
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
             // The fight stands still, but a scan a lead-in step's traffic

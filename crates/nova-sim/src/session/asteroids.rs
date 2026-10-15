@@ -6,14 +6,21 @@
 //!
 //! **The pass.** [`Session::tick_asteroids`] is one pass's asteroid work:
 //! `_DoPlayGameWork`'s edge spawn (@0x44243) and `_HandleAsteroids`
-//! (@0x444f5). The view runs it at the end of the advance pass, after
-//! the fight and the quotes, and [`Session::tick_again`] at the end of
-//! the second. The original spawns before the AI, the ships and the
-//! shots, and steps after `_HandleBoxes`; here both come after the
-//! fight. Nothing reads the asteroids yet, so the order changes nothing
-//! the player sees; once shots hit them
-//! (rdm:phase/asteroids/phase-2-shoot-and-break-asteroids), the pass
-//! must move ahead of the fight.
+//! (@0x444f5). [`Session::tick_combat`] runs it first, landed or jumping,
+//! so it steps the field through a jump's lead-in, and
+//! [`Session::tick_again`] runs it ahead of the second pass's fight. The
+//! original spawns before the AI, the ships and the shots, as here, so
+//! the shots meet the asteroids where they are this pass. It steps them
+//! after `_HandleBoxes`, after the shots; here the step comes with the
+//! spawn, before them, so a shot meets an asteroid a pass's drift
+//! further on than the original's does. The fight's hits and the frame
+//! drawn both see the asteroids where the step left them, so no boundary
+//! the player sees falls between the two orders.
+//!
+//! **The shots** (see [`asteroid_hit`](crate::combat::asteroid_hit)).
+//! The fight hands its tick the field's asteroids
+//! ([`Session::asteroid_targets`]), keeps what the shots leave of them,
+//! and destroys those they broke ([`Session::settle_asteroid_hits`]).
 //!
 //! **The kill.** Every way into a system but the escape pod's rescue kills
 //! the field: a jump's arrival (@0x6c4fc), a hypergate (@0x63f47), a
@@ -1144,6 +1151,77 @@ mod tests {
                 (made.velocity - Vec2::new(0.0, -0.12)).length() < 1e-5,
                 "{made:?}"
             );
+        }
+    }
+
+    // The pass ahead of the fight.
+
+    /// A gun whose shots stand still where they were fired, for 100
+    /// ticks.
+    fn still_gun() -> WeaponRecord {
+        WeaponRecord {
+            speed: 0,
+            count: 100,
+            ..blaster()
+        }
+    }
+
+    /// An asteroid of type 0 (20 across) 30 left of the player, drifting
+    /// 25 a tick toward it: 5 off it after a step.
+    fn drifting_in(session: &mut Session) -> usize {
+        let at = put(session, 0, 100, -30.0, 0.0);
+        session.asteroids.get_mut(at).expect("there").velocity = Vec2::new(25.0, 0.0);
+        at
+    }
+
+    #[test]
+    fn the_fights_pass_steps_the_field_first_so_a_shot_meets_an_asteroid_where_it_now_is() {
+        let catalog = rocky_arming(still_gun(), npc_gun(), vec![rock_type(0, 100, 20)]);
+        let mut session = flying(&catalog);
+        let at = drifting_in(&mut session);
+        session.hold_fire(true, false);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let rock = slot(&session, at);
+        assert_eq!(rock.position, Vec2::new(-5.0, 0.0), "stepped once");
+        assert_eq!(rock.strength, 95, "met where it now is");
+    }
+
+    #[test]
+    fn the_second_pass_steps_the_field_before_its_fight_too() {
+        let catalog = rocky_arming(still_gun(), npc_gun(), vec![rock_type(0, 100, 20)]);
+        let mut session = flying(&catalog);
+        session.hold_fire(true, false);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_fire(false, false);
+        assert_eq!(session.shots().len(), 1, "one still shot");
+        let at = drifting_in(&mut session);
+        session.set_double_time_key(true);
+        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        assert_eq!(slot(&session, at).strength, 95);
+    }
+
+    #[test]
+    fn the_fights_pass_spawns_nothing_while_landed() {
+        let catalog = rocky(catalog());
+        let mut session = flying(&catalog);
+        land_now(&mut session).expect("lands");
+        for _ in 0..3 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.asteroids().count(), 0);
+    }
+
+    #[test]
+    fn the_fights_pass_spawns_and_steps_the_field_through_a_jumps_lead_in() {
+        let catalog = rocky(catalog());
+        let mut session = flying(&catalog);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        assert!(session.jumping().is_some());
+        for count in 1..=3 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            assert_eq!(session.asteroids().count(), count);
         }
     }
 }
