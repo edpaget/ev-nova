@@ -2852,9 +2852,9 @@ impl Screen for AppScreen {
     /// dismisses it and flight shows. Escape in flight goes back to the menu, saving
     /// the pilot and putting it away. Escape quits at once; Quit quits
     /// after [`QUIT_DELAY`] ([`Screen::take_quit`]), and its key first
-    /// waits for its click, as every main-menu key does (see
-    /// [`MenuHold`]): input meanwhile is held and replayed after, and
-    /// input during the delay is dropped. I and P work
+    /// waits for its click, as every main-menu key does
+    /// ([`Screen::keyed_click_ended`]): input meanwhile is held and
+    /// replayed after, and input during the delay is dropped. I and P work
     /// on the menu, and Tab goes to the ship browser; on the ship browser
     /// and the galaxy map, Escape goes back to the menu instead of
     /// quitting.
