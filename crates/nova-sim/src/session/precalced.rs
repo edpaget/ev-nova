@@ -8,7 +8,9 @@
 //! `jünk` latches the tribbles and perishables step reads from the `jünk`
 //! held (@0xc404, @0xc452, @0xc524-0xc570; see
 //! [`market::JunkLatches`]), at every reset, a set expression's and a
-//! ship purchase's included, trims the
+//! ship purchase's included, caches the sabotage flag and restarts its
+//! clock (`_playerSabotaged`, `_sabotageCounter`, @0xc3ff-0xc769; see
+//! [`sabotage`](crate::sabotage)), trims the
 //! commodities to the fleet's holds (@0xc7d8-0xc887), and takes the
 //! active ranks the blessing table is built from (@0xc8be-0xc981; see
 //! the `ranks` module). The trim is not idempotent: it cuts only the
@@ -42,6 +44,9 @@
 //! | `_DestroyPartialFleetCargo`'s tail @0xcff6, from `_DamageShip` @0x3b013 and `_HandleShip` @0x350e6 | a trader escort lost, or a trader mission escort breaking up, once out of the fleet (`Session::lose_cargo_share`) |
 //! | the same, from `_DoEscortPayment` @0x40240 | a trader defecting on pay day, still in the fleet |
 //! | the same, from `_DoCommDialog` @0x96864 (and `_DoEscortDialog` @0x9549d, @0x9561d) | an escort released by hail, still in the fleet, of any ship type as [`RuleKey::ReleaseCargoShare`] reads |
+//! | `_ShipStatsToSystemInfo`'s tail jump @0xcce7, from the eject @0x6f8bb | the player's eject, once the new class is boarded (see the `eject` module); the eject still leaves whether a save is due as it found it |
+//! | `_HandlePlayer` @0x69a05 | the onboard bombs, after their outfit loop (see the `sabotage` module): no bomb is left, so the sabotage flag clears |
+//! | `_ResetPlayer`'s tail call, from the rescue @0x68f2f | the escape pod's rescue, the cargo already emptied (see the `rescue` module) |
 //! | `_EvalCurrentMissionBitSetString` @0x99a85, `_EvalMissionBitSetString` @0x99dea | the end of every set expression whose text is not empty, one of only spaces or one that did not parse included (`Session::run_ops`): a hook, a mission's script, a crön, an `OnExplore`, a story subscription's |
 //!
 //! *Ordering against the original.* The original runs a take-off's, a
@@ -93,7 +98,8 @@ impl Session {
     /// Runs every part of `_ResetPlayerPrecalcedValues` the engine models,
     /// in the original's order (see the module docs): re-arms
     /// `_ScanPlayer`'s contraband latches (@0xc3ef-0xc5a3, @0xc7b0),
-    /// trims the commodities to the fleet's holds (@0xc7d8-0xc887), and
+    /// sets the `jünk` latches, refreshes the sabotage clock
+    /// (@0xc3ff-0xc769, `Session::refresh_sabotage`), trims the commodities to the fleet's holds (@0xc7d8-0xc887), and
     /// takes the active ranks the blessing table is built from
     /// (@0xc8be-0xc981).
     ///
@@ -117,6 +123,7 @@ impl Session {
     pub(super) fn reset_precalced_for(&mut self, cause: ResetCause) {
         self.scan_latches = Latches::ARMED;
         self.junk_latches = market::JunkLatches::of(&self.goods, &self.pilot.cargo);
+        self.refresh_sabotage();
         if self.trims(cause) {
             self.trim_to_holds();
         }

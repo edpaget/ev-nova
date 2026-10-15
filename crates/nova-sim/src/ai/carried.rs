@@ -140,7 +140,10 @@ mod tests {
         assert_eq!(decide(&npcs), Goal::Attack(n(3)), "its own is gone");
         let mut wreck = trader();
         wreck.id = NpcId(4);
-        wreck.condition = crate::combat::hull::Condition::Dying { ticks_left: 2 };
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 2,
+            starting: false,
+        };
         let npcs = [
             carrier(Goal::Attack(n(3))),
             fighter(Goal::Attack(n(4)), Some(n(4))),
@@ -205,6 +208,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 10.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(
             CarriedAi::default().react(&attacking, &strike, &around),

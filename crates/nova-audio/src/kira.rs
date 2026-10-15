@@ -151,10 +151,14 @@ pub struct KiraAudio<B: Backend = DefaultBackend> {
     /// The soundtrack's bytes, until they turn out not to decode.
     music: Option<Arc<[u8]>>,
     warnings: Box<dyn Write>,
-    /// The one-shot effects started, until they finish.
-    effects: Vec<(StaticSoundHandle, Decibels)>,
-    /// The mission sound last played on its one channel, playing or not.
-    mission: Option<StaticSoundHandle>,
+    /// The one-shot effects started, until they finish, each with its
+    /// level and its `snd `.
+    effects: Vec<(StaticSoundHandle, Decibels, SoundId)>,
+    /// The mission sound last played on its one channel, playing or not,
+    /// and its `snd `.
+    mission: Option<(StaticSoundHandle, SoundId)>,
+    /// Each sound last played unless it was playing, playing or not.
+    single: HashMap<SoundId, StaticSoundHandle>,
     /// The engine loop last started, stopped or not.
     engine: Option<StaticSoundHandle>,
     /// The level last applied to the engine loop.
@@ -193,6 +197,7 @@ impl<B: Backend> KiraAudio<B> {
             warnings: Box::new(io::stderr()),
             effects: Vec::new(),
             mission: None,
+            single: HashMap::new(),
             engine: None,
             engine_level: None,
             track: None,
@@ -214,20 +219,27 @@ impl<B: Backend> KiraAudio<B> {
     pub fn effect_states(&self) -> Vec<PlaybackState> {
         self.effects
             .iter()
-            .map(|(handle, _)| handle.state())
+            .map(|(handle, _, _)| handle.state())
             .collect()
     }
 
     /// The level each one-shot effect still kept was played at.
     #[must_use]
     pub fn effect_levels(&self) -> Vec<Decibels> {
-        self.effects.iter().map(|&(_, level)| level).collect()
+        self.effects.iter().map(|&(_, level, _)| level).collect()
     }
 
     /// The state of the mission sound last played, if any.
     #[must_use]
     pub fn mission_state(&self) -> Option<PlaybackState> {
-        self.mission.as_ref().map(StaticSoundHandle::state)
+        self.mission.as_ref().map(|(handle, _)| handle.state())
+    }
+
+    /// The state of `sound` as last played unless it was playing, if it
+    /// has been.
+    #[must_use]
+    pub fn single_state(&self, sound: SoundId) -> Option<PlaybackState> {
+        self.single.get(&sound).map(StaticSoundHandle::state)
     }
 
     /// The state of the engine loop last started, if any.
@@ -265,11 +277,11 @@ impl<B: Backend> KiraAudio<B> {
     /// finished. More sounds at once than kira has room for are dropped.
     fn play(&mut self, sound: SoundId, level: Decibels) {
         self.effects
-            .retain(|(handle, _)| handle.state() != PlaybackState::Stopped);
+            .retain(|(handle, _, _)| handle.state() != PlaybackState::Stopped);
         if let Some(data) = self.sound(sound)
             && let Ok(handle) = self.manager.play(data.volume(level))
         {
-            self.effects.push((handle, level));
+            self.effects.push((handle, level, sound));
         }
     }
 
@@ -279,6 +291,23 @@ impl<B: Backend> KiraAudio<B> {
         let playing = self
             .mission
             .as_ref()
+            .is_some_and(|(handle, _)| handle.state() != PlaybackState::Stopped);
+        if playing {
+            return;
+        }
+        if let Some(data) = self.sound(sound)
+            && let Ok(handle) = self.manager.play(data.volume(level))
+        {
+            self.mission = Some((handle, sound));
+        }
+    }
+
+    /// Plays `sound` once at `level`, unless it is still playing from the
+    /// last time it was played so.
+    fn play_unless_playing(&mut self, sound: SoundId, level: Decibels) {
+        let playing = self
+            .single
+            .get(&sound)
             .is_some_and(|handle| handle.state() != PlaybackState::Stopped);
         if playing {
             return;
@@ -286,7 +315,25 @@ impl<B: Backend> KiraAudio<B> {
         if let Some(data) = self.sound(sound)
             && let Ok(handle) = self.manager.play(data.volume(level))
         {
-            self.mission = Some(handle);
+            self.single.insert(sound, handle);
+        }
+    }
+
+    /// Stops every instance of `sound` playing: the one-shot effects, the
+    /// mission sound and the one played unless playing.
+    fn halt(&mut self, sound: SoundId) {
+        for (effect, _, id) in &mut self.effects {
+            if *id == sound {
+                effect.stop(Tween::default());
+            }
+        }
+        if let Some((mission, id)) = &mut self.mission
+            && *id == sound
+        {
+            mission.stop(Tween::default());
+        }
+        if let Some(single) = self.single.get_mut(&sound) {
+            single.stop(Tween::default());
         }
     }
 
@@ -350,6 +397,9 @@ impl<B: Backend> Audio for KiraAudio<B> {
             AudioCommand::PlayExclusive { sound, volume } => {
                 self.play_exclusive(sound, decibels(volume));
             }
+            AudioCommand::PlayUnlessPlaying { sound, volume } => {
+                self.play_unless_playing(sound, decibels(volume));
+            }
             AudioCommand::StartLoop { sound, volume } => self.start_loop(sound, decibels(volume)),
             AudioCommand::SetLoopVolume(volume) => {
                 let level = decibels(volume);
@@ -368,12 +418,16 @@ impl<B: Backend> Audio for KiraAudio<B> {
                 }
             }
             AudioCommand::StopMusic => self.stop_music(),
+            AudioCommand::Halt { sound } => self.halt(sound),
             AudioCommand::StopEffects => {
-                for (effect, _) in &mut self.effects {
+                for (effect, _, _) in &mut self.effects {
                     effect.stop(Tween::default());
                 }
-                if let Some(mission) = &mut self.mission {
+                if let Some((mission, _)) = &mut self.mission {
                     mission.stop(Tween::default());
+                }
+                for single in self.single.values_mut() {
+                    single.stop(Tween::default());
                 }
                 self.stop_loop();
             }
@@ -800,6 +854,145 @@ mod tests {
         assert_eq!(audio.mission_state(), Some(PlaybackState::Stopped));
         run(&mut audio, exclusive(3));
         assert_eq!(warnings.text(), "nova: no snd 3 to play\n");
+    }
+
+    fn unless_playing(id: i16) -> AudioCommand {
+        AudioCommand::PlayUnlessPlaying {
+            sound: SoundId(id),
+            volume: Volume::new(0.5),
+        }
+    }
+
+    #[test]
+    fn a_sound_still_playing_is_not_started_again() {
+        let (mut audio, warnings) = adapter(None);
+        assert_eq!(audio.single_state(SoundId(1)), None);
+        run(&mut audio, unless_playing(1));
+        assert_eq!(audio.single_state(SoundId(1)), Some(PlaybackState::Playing));
+        assert_eq!(audio.effect_states(), [], "not an effect");
+        assert_eq!(audio.manager.main_track().num_sounds(), 1);
+        run(&mut audio, unless_playing(1));
+        assert_eq!(audio.manager.main_track().num_sounds(), 1, "dropped");
+        run(&mut audio, unless_playing(3));
+        assert_eq!(
+            warnings.text(),
+            "nova: no snd 3 to play\n",
+            "another is tried"
+        );
+        assert_eq!(audio.single_state(SoundId(1)), Some(PlaybackState::Playing));
+        run(&mut audio, exclusive(1));
+        run(&mut audio, play(1, 1.0));
+        assert_eq!(
+            audio.manager.main_track().num_sounds(),
+            3,
+            "the others play"
+        );
+    }
+
+    #[test]
+    fn once_it_is_over_it_plays_again() {
+        let short = FakeBank {
+            sounds: vec![(SoundId(1), mono(vec![0x80; 2]))],
+            ..FakeBank::default()
+        };
+        let (audio, _) = adapter(None);
+        let mut audio = KiraAudio::with_manager(audio.manager, short, None);
+        run(&mut audio, unless_playing(1));
+        assert_eq!(
+            audio.single_state(SoundId(1)),
+            Some(PlaybackState::Stopped),
+            "over"
+        );
+        // Started, before the backend has played any of it.
+        audio.run(unless_playing(1));
+        assert_eq!(
+            audio.single_state(SoundId(1)),
+            Some(PlaybackState::Playing),
+            "again"
+        );
+    }
+
+    #[test]
+    fn stopping_the_effects_stops_it() {
+        let (mut audio, _) = adapter(None);
+        run(&mut audio, unless_playing(1));
+        run(&mut audio, AudioCommand::StopEffects);
+        assert!(
+            stopped(audio.single_state(SoundId(1))),
+            "{:?}",
+            audio.single_state(SoundId(1))
+        );
+    }
+
+    fn halt(id: i16) -> AudioCommand {
+        AudioCommand::Halt { sound: SoundId(id) }
+    }
+
+    #[test]
+    fn halt_stops_every_playing_instance_of_that_sound_only() {
+        let five = FakeBank {
+            sounds: vec![
+                (SoundId(1), mono(vec![0x80; 11_127])),
+                (SoundId(5), mono(vec![0x80; 11_127])),
+            ],
+            ..FakeBank::default()
+        };
+        let (audio, _) = adapter(None);
+        let warnings = Warnings::default();
+        let mut audio =
+            KiraAudio::with_manager(audio.manager, five, None).with_warnings(warnings.clone());
+        run(&mut audio, play(1, 1.0));
+        run(&mut audio, play(1, 1.0));
+        run(&mut audio, play(5, 1.0));
+        run(&mut audio, unless_playing(5));
+        run(&mut audio, exclusive(5));
+        run(&mut audio, start_loop(1, 1.0));
+        run(&mut audio, halt(7));
+        let playing = |audio: &Adapter| {
+            (
+                audio.effect_states(),
+                audio.single_state(SoundId(5)),
+                audio.mission_state(),
+            )
+        };
+        assert_eq!(
+            playing(&audio),
+            (
+                vec![PlaybackState::Playing; 3],
+                Some(PlaybackState::Playing),
+                Some(PlaybackState::Playing)
+            ),
+            "halting a sound not playing changes nothing"
+        );
+        assert_eq!(warnings.text(), "", "nor reads it");
+        run(&mut audio, halt(1));
+        let states = audio.effect_states();
+        assert!(
+            stopped(Some(states[0])) && stopped(Some(states[1])),
+            "{states:?}"
+        );
+        assert_eq!(states[2], PlaybackState::Playing, "5 plays on");
+        assert_eq!(audio.single_state(SoundId(5)), Some(PlaybackState::Playing));
+        assert_eq!(audio.mission_state(), Some(PlaybackState::Playing));
+        assert_eq!(
+            audio.loop_state(),
+            Some(PlaybackState::Playing),
+            "the engine is not an effect it halts"
+        );
+        run(&mut audio, halt(5));
+        let states = audio.effect_states();
+        assert!(states.iter().all(|&s| stopped(Some(s))), "{states:?}");
+        assert!(stopped(audio.single_state(SoundId(5))));
+        assert!(stopped(audio.mission_state()));
+        assert_eq!(audio.loop_state(), Some(PlaybackState::Playing));
+    }
+
+    #[test]
+    fn halt_leaves_the_music_alone() {
+        let (mut audio, _) = adapter(Some(silent_mp3(40)));
+        run(&mut audio, start_music(1.0));
+        run(&mut audio, halt(1));
+        assert_eq!(audio.music_state(), Some(PlaybackState::Playing));
     }
 
     fn start_music(volume: f32) -> AudioCommand {

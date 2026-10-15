@@ -28,7 +28,10 @@
 //!   @0x68652-0x686f9).
 //! - **Hits** ([`Session::cloak_hits`], `_DamageShip`): each strike on an
 //!   NPC may cloak it (`Flags2` 0x4000, by a ship it is not attacking) and
-//!   uncloak it (a cloak that decloaks when hit), in that order.
+//!   uncloak it (a cloak that decloaks when hit), in that order. A death
+//!   shockwave's strike does neither ([`Strike::provokes`]): both sit
+//!   in `_DamageShip`'s blocks that its arg +0x20 skips (@0x3b44d,
+//!   @0x3bf1f).
 
 use super::Session;
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
@@ -146,7 +149,7 @@ impl Session {
     /// Each of `strikes` on an NPC, as its cloak takes it (see the module
     /// docs).
     pub(super) fn cloak_hits(&mut self, strikes: &[Strike]) {
-        for strike in strikes {
+        for strike in strikes.iter().filter(|strike| strike.provokes) {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };

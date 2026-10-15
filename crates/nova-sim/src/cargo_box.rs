@@ -223,7 +223,7 @@ fn reversed(angle: i32) -> i32 {
 /// `_Accel`'s push (@0x2ade6): `magnitude` along `angle` whole degrees,
 /// taken mod 360 as the original's `(angle) mod 360` is, every angle
 /// here being no less than 0.
-fn accel(angle: i32, magnitude: f32) -> Vec2 {
+pub(crate) fn accel(angle: i32, magnitude: f32) -> Vec2 {
     // In 0..360.
     #[allow(clippy::cast_precision_loss)]
     let angle = angle.rem_euclid(360) as f32;

@@ -37,9 +37,6 @@ pub enum UiSound {
     /// The bar's news dialog closed: `_DoNewsDialog` plays `_beepSnd[2]`
     /// as it closes (@0x4814e).
     NewsClosed,
-    /// The player info key was refused in flight, during a jump:
-    /// `_HandlePlayer` plays `_beepSnd[3]` (`PlaySound` @0x7039a-0x703bd).
-    PlayerInfoRefused,
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

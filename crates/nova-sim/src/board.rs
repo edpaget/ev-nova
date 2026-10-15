@@ -833,7 +833,10 @@ mod tests {
     fn an_intact_dying_or_gone_ship_cannot_be_boarded() {
         for condition in [
             Condition::Intact,
-            Condition::Dying { ticks_left: 4 },
+            Condition::Dying {
+                ticks_left: 4,
+                starting: false,
+            },
             Condition::Destroyed,
         ] {
             let target = BoardTarget {
@@ -876,7 +879,13 @@ mod tests {
 
     #[test]
     fn a_player_not_intact_cannot_board() {
-        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 1 }] {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 1,
+                starting: false,
+            },
+        ] {
             assert_eq!(
                 check_board(&over(), condition, Some(quarry())),
                 Err(BoardRefusal::CantBoard),

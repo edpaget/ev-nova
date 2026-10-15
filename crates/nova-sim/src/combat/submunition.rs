@@ -228,7 +228,10 @@ mod tests {
             ship(NEAR, 100.0, -50.0),
             ship(FIRER, 100.0, 60.0),
             Target {
-                condition: Condition::Dying { ticks_left: 3 },
+                condition: Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
                 ..ship(ShipRef::Npc(NpcId(4)), 110.0, 50.0)
             },
         ];

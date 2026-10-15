@@ -242,7 +242,13 @@ mod tests {
         };
         assert_eq!(of(Condition::Intact), Some(Hover::Ship(NpcId(1))));
         assert_eq!(of(Condition::Disabled), Some(Hover::Ship(NpcId(1))));
-        assert_eq!(of(Condition::Dying { ticks_left: 5 }), None);
+        assert_eq!(
+            of(Condition::Dying {
+                ticks_left: 5,
+                starting: false
+            }),
+            None
+        );
         assert_eq!(of(Condition::Destroyed), None);
     }
 

@@ -121,8 +121,10 @@
 //! ([`next_frame`]), so four due frames fall 250 frames apart and the
 //! next 25 frames later: 5 steps every 1025 ticks, about 34 s. Each tick
 //! in flight moves it on, a jump's too, but not a landed one; a take-off
-//! sets it to [`AFTER_TAKE_OFF_FRAME`], so the first step comes on the
-//! 15th tick of flight, and a destroyed player's ticks do not step. The
+//! or a gate's exit sets it to [`AFTER_TAKE_OFF_FRAME`] (the dock
+//! request's tail, which both run; see the session's `takeoff_grace`
+//! module), so the first step comes on the 15th tick of flight, and a
+//! destroyed player's ticks do not step. The
 //! original's double time, which steps a due frame twice, is not
 //! modelled.
 //!

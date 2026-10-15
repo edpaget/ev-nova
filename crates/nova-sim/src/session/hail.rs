@@ -827,7 +827,10 @@ mod tests {
             warp: 0,
         });
         let mut dying = Box::new(targeting(&catalog));
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let mut destroyed = Box::new(targeting(&catalog));
         destroyed.condition = Condition::Destroyed;
         for mut session in [untargeted, landed, jumping, dying, destroyed] {
@@ -1156,6 +1159,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 5.0,
             downed: None,
+            provokes: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert_eq!(npc.goal, Goal::Flee(ShipRef::Player), "hit, it flees");
@@ -1772,6 +1776,7 @@ mod tests {
             by: ShipRef::Player,
             damage: 5.0,
             downed: None,
+            provokes: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert!(!matches!(npc.goal, Goal::Assist(_)), "{:?}", npc.goal);

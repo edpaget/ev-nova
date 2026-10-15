@@ -1562,7 +1562,13 @@ mod tests {
             ..intact.clone()
         };
         assert_eq!(eligible(&arriving, quoting(0), VIEW), Eligible::No);
-        for condition in [Condition::Dying { ticks_left: 2 }, Condition::Destroyed] {
+        for condition in [
+            Condition::Dying {
+                ticks_left: 2,
+                starting: false,
+            },
+            Condition::Destroyed,
+        ] {
             let dying = npc_of(condition, IDLE);
             assert_eq!(
                 eligible(&dying, quoting(QUOTE_IF_DISABLED), VIEW),

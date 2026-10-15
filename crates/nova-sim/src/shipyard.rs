@@ -1335,15 +1335,21 @@ pub struct ShipNaming {
 /// The prompt for naming a new ship of class `record`, its default's
 /// digits drawn on `chance`, as the module says.
 pub(crate) fn naming(record: &ShipRecord, chance: &mut dyn Chance) -> ShipNaming {
-    let mut default = format!("{} ", record.name);
-    for _ in 0..3 {
-        default.push_str(&(chance.roll(9) + 1).to_string());
-    }
     ShipNaming {
         ship: record.id,
         prompt: format!("{NAME_PROMPT} {}: ", record.long_name),
-        default,
+        default: numbered_name(&record.name, 3, chance),
     }
+}
+
+/// `name`, a space and `digits` digits each 1 to 9, drawn on `chance`: the
+/// shipyard's default name (three) and the escape pod rescue's (four).
+pub(crate) fn numbered_name(name: &str, digits: usize, chance: &mut dyn Chance) -> String {
+    let mut numbered = format!("{name} ");
+    for _ in 0..digits {
+        numbered.push_str(&(chance.roll(9) + 1).to_string());
+    }
+    numbered
 }
 
 /// `name` as the original keeps a ship's name (`_CullNameString`

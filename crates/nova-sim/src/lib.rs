@@ -75,6 +75,9 @@
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
 //!   a day for each day a jump takes, and [`date::date_text`], how it is
 //!   displayed.
+//! - [`escape`]: the player's escape: the escape pod and auto-eject
+//!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
+//!   and where the escape pod is taken.
 //! - [`escort`]: the player's escorts: their [`EscortClass`], the
 //!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
 //!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
@@ -177,6 +180,9 @@
 //!   the fleet of [`Escort`]s, the control bits and the player's
 //!   [`Gender`] and its ship's paint and name, starting from the first
 //!   `chär`.
+//! - [`player_fate`]: the player's lifecycle, a [`PlayerFate`] read off
+//!   its [`Condition`], and each fate's [`FateRow`]: how much of the ship
+//!   is [`Drawn`].
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
@@ -277,6 +283,7 @@ pub mod course;
 pub mod cron;
 pub mod data;
 pub mod date;
+pub mod escape;
 pub mod escort;
 pub mod exploration;
 #[cfg(any(test, feature = "fixture"))]
@@ -307,6 +314,7 @@ pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
 pub mod pilot;
+pub mod player_fate;
 pub mod player_info;
 pub mod pre_jump;
 pub mod rank;
@@ -316,6 +324,7 @@ pub mod red_alert;
 pub mod reserves;
 pub mod rulebook;
 pub mod rules;
+pub mod sabotage;
 pub mod save;
 pub mod saves;
 pub mod scan;
@@ -414,6 +423,9 @@ pub use person::{
     PersonWorld, QuoteTags, expand_tags,
 };
 pub use pilot::{Escort, Gender, Pilot};
+pub use player_fate::{
+    Drawn, Ending, FateRow, HOLD_TICKS, POD_TICKS, PlayerCommand, PlayerFate, Takes,
+};
 pub use player_info::PlayerInfo;
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use red_alert::{
@@ -422,20 +434,21 @@ pub use red_alert::{
 };
 pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
+pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage_flag};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
-    AbortError, AcceptError, ComputerRefusal, ComputerRow, Hailed, HookRules, InfoRow, LandPress,
-    MissionComputer, MissionInfo, MissionText, MissionTextKind, NotOffered, OfferPrompt,
-    PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
-    ShipChangeRules, StellarPick, VenueOffer,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, ESCAPE_POD_SHIP, Hailed, HookRules,
+    InfoRow, LandPress, MissionComputer, MissionInfo, MissionText, MissionTextKind, NotOffered,
+    OfferPrompt, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
+    ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{
     Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
     StockLine,
 };
-pub use sound::SimSound;
+pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};
 pub use stats::ShipStats;
 pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};

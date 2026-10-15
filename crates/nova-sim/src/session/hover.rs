@@ -124,7 +124,10 @@ mod tests {
         session.target = Some(NpcId(99));
         session.condition = Condition::Disabled;
         assert_eq!(session.hover(far, &AllAt(far)), Some(Hover::Player));
-        session.condition = Condition::Dying { ticks_left: 3 };
+        session.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         assert_eq!(session.hover(far, &AllAt(far)), None, "dying");
         session.condition = Condition::Destroyed;
         assert_eq!(session.hover(far, &AllAt(far)), None, "destroyed");

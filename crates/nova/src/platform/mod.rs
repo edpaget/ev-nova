@@ -136,10 +136,13 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
         // Either Command (Super, the Windows key, off a Mac): what flight's
-        // jettison key needs held.
+        // jettison and eject keys need held.
         PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
         // Flight's jettison key, by position: K on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
+        // Flight's eject key, by position: X on a US-layout keyboard, the
+        // original's default (keycode 0x07).
+        PhysicalKey::Code(KeyCode::KeyX) => Key::Char('x'),
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, it reaches
         // flight as Nav Off, the original's default.
@@ -229,6 +232,7 @@ mod tests {
             (KeyCode::ShiftRight, Key::Shift),
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::KeyK, Key::Char('k')),
+            (KeyCode::KeyX, Key::Char('x')),
             (KeyCode::SuperLeft, Key::Command),
             (KeyCode::SuperRight, Key::Command),
             (KeyCode::Backquote, Key::Char('`')),
@@ -257,7 +261,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 31] = [
+    const GAME_CHARACTER_KEYS: [Key; 32] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -271,6 +275,7 @@ mod tests {
         nova_view::flight::view::HYPER_SELECT_KEY,
         nova_view::flight::view::NAV_OFF_KEY,
         nova_view::flight::view::JETTISON_KEY,
+        nova_view::flight::view::EJECT_KEY,
         nova_view::flight::view::STELLAR_SLOT_KEYS[0][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[1][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[2][0],
@@ -307,6 +312,7 @@ mod tests {
             'r' => KeyCode::KeyR,
             's' => KeyCode::KeyS,
             'w' => KeyCode::KeyW,
+            'x' => KeyCode::KeyX,
             '1' => KeyCode::Digit1,
             '2' => KeyCode::Digit2,
             '3' => KeyCode::Digit3,

@@ -641,7 +641,7 @@ impl Session {
     /// hooks unregistered; and the offers' stellar is forgotten. Nothing
     /// when the slot holds another mission, or is ending already, so an
     /// `A` of the mission inside its own `OnAbort` does not end it twice.
-    fn end_mission(
+    pub(super) fn end_mission(
         &mut self,
         slot: u8,
         record: &MissionRecord,
@@ -1332,6 +1332,7 @@ mod tests {
     fn offering() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.star_map[1].links.push(SystemId(130));
+        catalog.systems.push(SystemId(132));
         catalog
             .sites
             .push((SystemId(132), vec![planet(150, 0.0, 0.0)]));
@@ -1446,6 +1447,7 @@ mod tests {
         // 133 at 130's place, holding 160: distant only by the other
         // reading, and owned by 133 only while it stands for itself.
         catalog.star_map[3].position = Vec2::ZERO;
+        catalog.systems.push(SystemId(133));
         catalog
             .sites
             .push((SystemId(133), vec![planet(160, 0.0, 0.0)]));

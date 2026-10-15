@@ -19,11 +19,36 @@
 //! - A blast reaches every ship within the square `radius` on each side of
 //!   it, but the one hit directly and the firer, unless the firer is the
 //!   player and the weapon's blast does not spare the player.
+//!
+//! **Spared hits** ([`apply_spared`]). `_DamageShip`'s arguments +0x28 and
+//! +0x2c keep a hit from destroying or newly disabling its ship, on
+//! either path (shields first, or armour-direct):
+//!
+//! - **It never destroys** (+0x28: @0x3ac3a-0x3ac64 after the shield
+//!   path, @0x3abd6 on the armour-direct one): armour above none that the
+//!   hit takes to none or below is left at [`SPARED_ARMOR`].
+//! - **It never newly disables** (+0x2c, @0x3acc2-0x3ad4a): a ship not
+//!   disabled before the hit (`_IsDisabled` @0x3a9ad) that is after it
+//!   has its armour set to what a self-repair leaves
+//!   ([`repaired_armor`], the same 0.3333, 0.1 and 1.0). That clears the
+//!   disabled line only while the ship holds 33,333 armour or less: a
+//!   non-`TOUGH` hull that holds more is left disabled, and counts as
+//!   newly disabled.
+//!
+//! The caller says whether the ship was disabled before the hit: a
+//! shockwave reads it from the ship's condition, a sabotage bomb from its
+//! armour.
 
 use super::ShipRef;
+use super::hull::{DisableRule, HullSpec};
 use super::weapon::WeaponSpec;
 use crate::geometry::Vec2;
-use crate::reserves::Reserves;
+use crate::reserves::{Gauge, Reserves};
+use crate::self_repair::repaired_armor;
+
+/// The armour a spared hit leaves a ship it would destroy (0x3f800000
+/// @0x3ac64, @0x3abd6).
+pub const SPARED_ARMOR: f32 = 1.0;
 
 /// How far below none a shield can be driven, as a fraction of what it
 /// holds.
@@ -67,6 +92,34 @@ pub fn apply(reserves: &mut Reserves, hit: Hit) {
     if reserves.armor.max <= 0.0 {
         reserves.armor.now = reserves.armor.now.max(0.0);
     }
+}
+
+/// Takes `hit` off `reserves` as [`apply`] does, with the floors that keep
+/// it from destroying or newly disabling the ship of `hull`, which
+/// `was_disabled` before it or not (see the module docs' **Spared
+/// hits**); `rule` says when a ship is disabled.
+pub fn apply_spared(
+    reserves: &mut Reserves,
+    hit: Hit,
+    hull: &HullSpec,
+    rule: &dyn DisableRule,
+    was_disabled: bool,
+) {
+    let whole = reserves.armor.now > 0.0;
+    apply(reserves, hit);
+    let armor = &mut reserves.armor;
+    if whole && armor.now <= 0.0 {
+        armor.now = SPARED_ARMOR;
+    }
+    if !was_disabled && disabled(*armor, hull, rule) {
+        armor.now = repaired_armor(armor.max, hull.tough);
+    }
+}
+
+/// Whether a ship of `hull` with `armor` is disabled, as `rule` says: never
+/// one that holds no armour.
+pub(crate) fn disabled(armor: Gauge, hull: &HullSpec, rule: &dyn DisableRule) -> bool {
+    armor.max > 0.0 && rule.disabled(armor, hull)
 }
 
 /// Where a blast goes off and whose it is.
@@ -115,8 +168,69 @@ impl Blast {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::reserves::Gauge;
+    use crate::combat::hull::NovaDisable;
     use crate::traffic::npc::NpcId;
+
+    /// What an armour-direct spared hit of `mass` leaves of 50 of 100
+    /// shields and `armor` of 300 armour, on a hull `tough` or not that
+    /// `was_disabled` or not.
+    fn spared(armor: f32, mass: f32, tough: bool, was_disabled: bool) -> (f32, f32) {
+        let mut reserves = Reserves {
+            shield: Gauge {
+                now: 50.0,
+                max: 100.0,
+            },
+            armor: Gauge {
+                now: armor,
+                max: 300.0,
+            },
+            fuel: Gauge::full(100.0),
+        };
+        let hull = HullSpec {
+            tough,
+            ..HullSpec::default()
+        };
+        let hit = Hit {
+            mass,
+            energy: 0.0,
+            passes_shields: true,
+        };
+        apply_spared(&mut reserves, hit, &hull, &NovaDisable, was_disabled);
+        (reserves.shield.now, reserves.armor.now)
+    }
+
+    #[test]
+    fn an_armour_direct_spared_hit_leaves_shields_alone_and_armour_at_the_repair_share() {
+        let (shield, armor) = spared(300.0, 450.0, false, false);
+        assert_eq!(shield, 50.0);
+        assert!((armor - 100.99).abs() < 1e-4, "300 x 0.3333 + 1: {armor}");
+        assert_eq!(
+            spared(300.0, 100.0, false, false),
+            (50.0, 200.0),
+            "a hit that leaves it intact is taken whole"
+        );
+    }
+
+    #[test]
+    fn an_armour_direct_spared_hit_on_a_tough_hull_ends_at_31() {
+        assert_eq!(spared(300.0, 300.0, true, false), (50.0, 31.0));
+    }
+
+    #[test]
+    fn an_armour_direct_spared_hit_on_an_already_disabled_ship_ends_at_1() {
+        assert_eq!(spared(90.0, 300.0, false, true), (50.0, SPARED_ARMOR));
+        assert_eq!(
+            spared(90.0, 30.0, false, true),
+            (50.0, 60.0),
+            "a disabled ship stays as the hit leaves it"
+        );
+        assert_eq!(
+            spared(-5.0, 30.0, false, true),
+            (50.0, -35.0),
+            "a dying ship takes it unfloored"
+        );
+        assert_eq!(SPARED_ARMOR, 1.0);
+    }
 
     /// 30 of 30 shields and 45 of 45 armour, with fuel.
     fn full() -> Reserves {

@@ -421,7 +421,10 @@ mod tests {
         let npcs = [hunter.clone(), neutral.clone()];
         assert_eq!(decided(&npcs, 0), Goal::Attack(n(3)), "kept");
         let mut dying = neutral.clone();
-        dying.condition = Condition::Dying { ticks_left: 2 };
+        dying.condition = Condition::Dying {
+            ticks_left: 2,
+            starting: false,
+        };
         assert_eq!(
             decided(&[hunter.clone(), dying], 0),
             Goal::Land(StellarId(128))
@@ -608,6 +611,7 @@ mod tests {
             by: P,
             damage: 1.0,
             downed: None,
+            provokes: true,
         };
         let victim = ship(9, TRADERS, AiType::WimpyTrader, 900.0, 0.0);
         let npcs = [ship(1, POLICE, AiType::Warship, 0.0, 0.0), victim];
@@ -917,7 +921,13 @@ mod tests {
     fn a_government_that_always_attacks_the_player_turns_an_unprovoked_warship_on_it_and_lets_a_disabled_player_go_without_destroying_weapons()
      {
         let npcs = [attacking(n(2)), pirate()];
-        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 3 }] {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        ] {
             assert_eq!(
                 worded(ALWAYS, &npcs, Some(condition)),
                 IDLE,
@@ -938,7 +948,14 @@ mod tests {
             "it finishes the player off"
         );
         assert_eq!(
-            worded(ALWAYS, &armed, Some(Condition::Dying { ticks_left: 3 })),
+            worded(
+                ALWAYS,
+                &armed,
+                Some(Condition::Dying {
+                    ticks_left: 3,
+                    starting: false
+                })
+            ),
             IDLE,
             "breaking up, the player is gone"
         );

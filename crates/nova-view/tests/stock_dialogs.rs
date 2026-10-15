@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use nova_data::graphics::{Image, PICT, decode_pict};
 use nova_data::records::dialog::Dlog;
+use nova_data::records::string_list::StrList;
 use nova_data::{GameData, InterfaceData, Record};
 use nova_view::Prefs;
 use nova_view::geometry::{Bounds, Point};
@@ -20,6 +21,10 @@ use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
 use nova_view::ui::new_pilot::{
     CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome,
     OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
+};
+use nova_view::ui::note::{
+    LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog, OK_ITEM as NOTE_OK_ITEM,
+    TEXT_ITEM as NOTE_TEXT_ITEM,
 };
 use nova_view::ui::prefs::{
     HYPERSPACE_EFFECTS_ITEM, HYPERSPACE_EFFECTS_LABEL, KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM,
@@ -119,6 +124,68 @@ fn desc_dialog_is_centred_with_its_button_and_text_box_where_recorded() {
         assert_eq!(template.placement, Placement::Center);
         assert_eq!(template.items[0].bounds, rect(173.0, 281.0, 99.0, 25.0));
         assert_eq!(template.items[2].bounds, rect(11.0, 10.0, 417.0, 262.0));
+    }
+}
+
+#[test]
+fn the_note_dialog_lays_out_from_dlog_3000_with_ok_and_its_text() {
+    for (dir, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(NOTE_DIALOG)
+            .expect("converts");
+        assert_eq!(
+            (template.bounds.width(), template.bounds.height()),
+            (357.0, 150.0)
+        );
+        assert_eq!(template.items[0].bounds, rect(282.0, 118.0, 70.0, 20.0));
+        assert_eq!(template.items[0].kind, ItemSpec::Button("OK".to_owned()));
+        assert_eq!(template.items[2].bounds, rect(52.0, 5.0, 295.0, 99.0));
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let mut note = NoteDialog::new(
+            &template,
+            LOAD_FALLBACK_NOTE,
+            data.button_style(),
+            Rc::new(MonoMetrics),
+        );
+        let dialog = note.dialog();
+        let origin = dialog.bounds().min;
+        assert_eq!(
+            dialog.item_bounds(NOTE_OK_ITEM),
+            Some(rect(282.0, 118.0, 70.0, 20.0).offset(origin))
+        );
+        let text = dialog.text(NOTE_TEXT_ITEM).expect("the text item");
+        assert_eq!(text.rect(), rect(52.0, 5.0, 295.0, 99.0).offset(origin));
+        assert_eq!(
+            text.lines().concat().replace(' ', ""),
+            LOAD_FALLBACK_NOTE.replace(' ', "")
+        );
+        assert!(!dialog.item_shown(2), "the parked picture");
+        note.input(&Input::Key {
+            key: Key::Enter,
+            pressed: true,
+            repeat: false,
+        });
+        assert!(note.closed(), "{}", path.display());
+    }
+}
+
+#[test]
+fn str_140_52_is_the_load_fallback_note() {
+    for (_, path) in builds() {
+        let ui = interface(&path);
+        let res = ui
+            .resources()
+            .get(StrList::TYPE, 140)
+            .expect("STR# 140 is in the interface file");
+        let list = nova_data::decode_bytes::<StrList>(res.data())
+            .expect("decodes")
+            .record;
+        assert_eq!(
+            list.strings[51].as_str(),
+            LOAD_FALLBACK_NOTE,
+            "{}",
+            path.display()
+        );
     }
 }
 

@@ -207,11 +207,11 @@ pub const INIT_FRAMES: ShipId = ShipId(128);
 /// `_HandleShipDisplay` clones a slot's base sprite from its ship's type
 /// each frame it shows the ship (`_SWCloneFramesFromMaster` @0x2b824),
 /// and [`Session::lay_out_ships`](crate::Session) records that here.
-/// `_HandlePlayer`'s escape-pod path clones two more ship slots' base
-/// sprites, the derelict it leaves to the player's old type (@0x6f3f5)
-/// and the player's slot to the escape pod, `shïp` index 0x2ff
-/// (@0x6f768). The engine has no escape pod, so neither has a
-/// counterpart here.
+/// `_HandlePlayer`'s eject clones two more ship slots' base sprites, the
+/// hulk it leaves to the player's old type (@0x6f3f5) and the player's
+/// slot to the type it becomes, the escape pod (`shïp` index 0x2ff) or
+/// the escape ship (@0x6f768), and the session's eject records both here
+/// (see its `eject` module).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SlotFrames {
     /// The slots cloned since launch, each with the type it last cloned.
@@ -395,7 +395,10 @@ mod tests {
     fn only_an_intact_ship_is_not_disabled() {
         assert!(!disabled(Condition::Intact));
         assert!(disabled(Condition::Disabled));
-        assert!(disabled(Condition::Dying { ticks_left: 1 }));
+        assert!(disabled(Condition::Dying {
+            ticks_left: 1,
+            starting: false
+        }));
         assert!(disabled(Condition::Destroyed));
     }
 }

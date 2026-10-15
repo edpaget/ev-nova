@@ -1485,7 +1485,7 @@ mod tests {
         bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x48, &[1129]);
-        bytes[0x4A..0x4C].copy_from_slice(&0x8002_u16.to_be_bytes());
+        bytes[0x4A..0x4C].copy_from_slice(&0x8012_u16.to_be_bytes());
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
         put_i16s(&mut bytes, 0x732, &[2]);
         bytes[0x26A..0x26E].copy_from_slice(b"b300");
@@ -1524,7 +1524,7 @@ mod tests {
             require: 0x0000_0002_0000_0001,
             availability: Test::parse("b422"),
             appear_on: Test::parse("!b17"),
-            flags: 0x8002,
+            flags: 0x8012,
             flags3: 0x4100,
             disp_weight: 25,
             max_gun: 4,

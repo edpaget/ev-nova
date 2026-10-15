@@ -713,7 +713,10 @@ mod tests {
         let npcs = [ship(1, XENO, 0.0, 0.0), ship(2, RIVAL, 300.0, 0.0)];
         let around = Surroundings {
             player: Some(PlayerSide {
-                condition: Condition::Dying { ticks_left: 3 },
+                condition: Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
                 ..player(0.0, -100.0)
             }),
             govts: &govts,
@@ -787,7 +790,10 @@ mod tests {
         };
         assert!(!hostile_to_player(&npcs[0], &around));
         around.player = Some(PlayerSide {
-            condition: Condition::Dying { ticks_left: 2 },
+            condition: Condition::Dying {
+                ticks_left: 2,
+                starting: false,
+            },
             ..player(0.0, -100.0)
         });
         assert!(!hostile_to_player(&npcs[0], &around));
@@ -835,7 +841,10 @@ mod tests {
         assert_eq!(chosen(0, &npcs, Some(n(3)), 0, NEAR), Some(n(3)));
         assert_eq!(chosen(0, &npcs, Some(n(9)), 0, NEAR), Some(n(2)), "gone");
         let mut dying = npcs.clone();
-        dying[2].condition = Condition::Dying { ticks_left: 3 };
+        dying[2].condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         assert_eq!(chosen(0, &dying, Some(n(3)), 0, NEAR), Some(n(2)));
     }
 
@@ -1038,7 +1047,10 @@ mod tests {
     #[test]
     fn the_dying_and_the_arriving_are_never_candidates() {
         let mut dying = ship(2, ENEMY, 100.0, 0.0);
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let mut arriving = ship(3, ENEMY, 150.0, 0.0);
         arriving.mode = Mode::JumpingIn { ticks_left: 3 };
         let mut emerging = ship(5, ENEMY, 120.0, 0.0);
@@ -1096,7 +1108,10 @@ mod tests {
         let mut wreck = ship(2, ENEMY, 100.0, 0.0);
         wreck.condition = Condition::Disabled;
         let mut dying = ship(3, ENEMY, 100.0, 0.0);
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let ally = ship(4, ALLY, 100.0, 0.0);
         let kin = ship(5, ME, 100.0, 0.0);
         let mut escort = ship(6, NEUTRAL, 100.0, 0.0);
@@ -1343,7 +1358,10 @@ mod tests {
 
     #[test]
     fn a_ship_behav_0_ship_without_destroying_weapons_takes_nothing_while_the_player_breaks_up() {
-        let dying = Condition::Dying { ticks_left: 3 };
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         assert_eq!(hunter_target(false, false, true, dying), None);
         assert_eq!(
             hunter_target(true, false, true, dying),

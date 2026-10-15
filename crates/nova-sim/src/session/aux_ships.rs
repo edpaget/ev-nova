@@ -381,6 +381,8 @@ mod tests {
         catalog
             .sites
             .push((SystemId(132), vec![crate::testkit::planet(140, 0.0, 0.0)]));
+        // Only a system the catalog can read lists its stellars.
+        catalog.systems.push(SystemId(132));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         jump_to(&mut session, &catalog, 131);

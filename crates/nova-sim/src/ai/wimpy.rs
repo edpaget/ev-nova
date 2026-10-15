@@ -168,6 +168,7 @@ mod tests {
             by: n(2),
             damage: 7.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(
             WimpyTrader::default().react(&npcs[0], &strike, &around),

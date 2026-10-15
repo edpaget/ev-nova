@@ -62,7 +62,11 @@
 //! that is not empty, an outfit bought or sold, a ship bought or taken
 //! as the player's, a
 //! jettison, the plunder dialog closing, a mission cargo pickup or
-//! drop-off, and an escort's share of the cargo destroyed. So a `K` or
+//! drop-off, an escort's share of the cargo destroyed, the player's
+//! eject (@0x6f8bb), the onboard bombs (@0x69a05) and the escape pod's
+//! rescue. The same reset caches the sabotage flag and restarts its
+//! clock (see [`sabotage`](crate::sabotage)), so every site reaches it
+//! too. So a `K` or
 //! `L` blesses, or stops blessing, as its set
 //! expression ends, and a crime's rank loss (`Session::lose_ranks_to`,
 //! `_SlapWithPenalty`'s pass, which reaches no reset) only at the next

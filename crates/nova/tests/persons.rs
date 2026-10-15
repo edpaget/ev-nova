@@ -477,8 +477,11 @@ impl Game {
             let pilot = Pilot::new(data.as_ref(), "Pilot").expect("a pilot");
             keeper.save(&pilot).expect("saved");
         }
-        let chance: Rc<RefCell<dyn Chance>> =
-            Rc::new(RefCell::new(Script(draws.iter().copied().collect())));
+        // The load's heading first: 0, facing up.
+        let heading = std::iter::once(0);
+        let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(
+            heading.chain(draws.iter().copied()).collect(),
+        )));
         let screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
             .with_dialogs(Rc::new(interface()), Rc::new(MonoMetrics))

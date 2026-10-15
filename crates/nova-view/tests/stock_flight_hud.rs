@@ -248,6 +248,33 @@ fn a_grants_message_reads_its_stock_strings() {
     );
 }
 
+/// The sabotage notices are built from `STR#` 2002 #38-#41, as the stock
+/// strings read.
+#[test]
+fn the_sabotage_notices_read_their_stock_strings() {
+    use nova_view::flight::view::{BOMB_EXPLODED_ONBOARD, HAS_EXPLODED, HAVE_EXPLODED, YOUR};
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(
+        [&strings[37], &strings[38], &strings[39], &strings[40]],
+        [BOMB_EXPLODED_ONBOARD, YOUR, HAS_EXPLODED, HAVE_EXPLODED]
+    );
+}
+
+/// A disabled player's jump collapse says `STR#` 2002 #35, as the stock
+/// string reads.
+#[test]
+fn the_jump_collapse_notice_reads_its_stock_string() {
+    use nova_view::flight::view::JUMP_COLLAPSED;
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(strings[34], JUMP_COLLAPSED);
+}
+
 /// A scan's notices are built from `STR#` 2002 #375-#380, as the stock
 /// strings read ("posession" as they spell it).
 #[test]

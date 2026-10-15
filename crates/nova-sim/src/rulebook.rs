@@ -5,7 +5,8 @@
 //! the engine does another, the rule is written both ways and the player
 //! chooses. A [`Rulebook`] holds a [`RuleSource`] for every such rule
 //! (each key's own default, [`RuleKey::default_source`]: the engine's but
-//! for the two cron holdoff keys, unless chosen otherwise) and an
+//! for the two cron holdoff keys and the breakup stall, unless chosen
+//! otherwise) and an
 //! override for any single rule, named by its [`RuleKey`]. A rule asks the rulebook
 //! [`Rulebook::source_for`] its key, and the rule's implementation makes
 //! the decision. The settings file names the default `"rules"` and the
@@ -151,6 +152,10 @@
 //! | [`QuadrantTurretArc`](RuleKey::QuadrantTurretArc) | `quadrant_turret_arc` | an NPC's quadrant turret fires only while the angle to its target less the heading (front, 7) or `(heading + 180) mod 360` (rear, 8), absolute and mod 360 with no fold, is at most 45, so one whose reference sits near 0 holds fire across the seam (`_AIFireTurret` @0x80c3d-0x80cf3; [`NovaAi`](crate::NovaAi)) | the angle folds and the arc wraps\* |
 //! | [`HiddenShips`](RuleKey::HiddenShips) | `hidden_ships` | a ship whose type's `Cost` is -1 is hidden, the player too, and its slot keeps its draw-layer place, as `_HandleShipDisplay` skips its showing and layer block (@0x2b7f3 → @0x2cc6b; see [`Session::draw_order`](crate::Session::draw_order)) | drawn and laid out as any other ship\* |
 //! | [`HiddenShipHoverBox`](RuleKey::HiddenShipHoverBox) | `hidden_ship_hover_box` | while `hidden_ships` reads the engine, the pointer hovers a hidden ship by the box of the frames its slot last cloned, its last shown type's or `shïp` 128's in a slot nothing shown has used, as `_HandleShipDisplay` skips `_SWCloneFramesFromMaster` (@0x2b824) and `_HandleMouse` boxes the stale sprite (@0x38171; `_InitSprites` @0x1f193; see [`Session::framed_by`](crate::Session::framed_by)) | the box of its own type's sheet\* |
+//! | [`BreakupStall`](RuleKey::BreakupStall) | `breakup_stall` | a breakup whose death timer never rises above 0 by the display check (`DeathDelay` 0 or less, or 1 for an NPC) is set again every frame and never explodes (`_HandleShipDisplay` @0x2d80d-0x2d83d; the decrements @0x6d7e6, @0x35083; see [`Breakup`](crate::combat::hull::Breakup)): for the player, a soft-lock | it is destroyed on its breakup tick (0 or less) or the tick after (an NPC's 1): **the default — a deliberate departure from the original**†††††††††† |
+//! | [`EjectVelocity`](RuleKey::EjectVelocity) | `eject_velocity` | as the player ejects, its new ship's x velocity takes the y velocity's value, the hulk keeping the true velocity, before the push of its top speed along its heading (`_HandlePlayer` @0x6f782-0x6f788; see [`escape`](crate::escape)) | the new ship keeps the velocity it had\* |
+//! | [`RescueArmor`](RuleKey::RescueArmor) | `rescue_armor` | the escape pod's rescue sets the armour to the shield capacity, `_ShipShieldCapacity` a second time (`_HandlePlayer` @0x690db-0x69100; see the session's `rescue` module), so it may stand above the armour's most | the armour is filled to its own capacity\* |
+//! | [`UnlistedStellar`](RuleKey::UnlistedStellar) | `unlisted_stellar` | a loaded pilot whose saved stellar no system lists resumes in the lowest system that exists, which needn't hold the stellar (`_LoadPilotData` @0x752d6-0x75318; see [`Session::load`](crate::Session::load)) | it keeps its saved system: **the default — a deliberate departure from the original**††††††††††† |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -175,7 +180,8 @@
 //! `smuggling_ship_name`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
-//! price), `hidden_ship_hover_box` or `comm_quote`
+//! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor` or
+//! `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count` and `nebula_explore_once`
 //! ("the explored state of the nebulae isn't saved from game to game ...
@@ -386,9 +392,10 @@
 //! taken is the port's choice, not anything the Bible says (see
 //! [`rank`](crate::rank)).
 //!
-//! †††††††† `cron_zero_duration_holdoff` and `cron_post_holdoff` are the
-//! only keys whose default is the other reading, not the engine's
-//! ([`RuleKey::default_source`]): the user decided so on 2026-10-11, so
+//! †††††††† `cron_zero_duration_holdoff` and `cron_post_holdoff`, with
+//! `breakup_stall` (††††††††††) and `unlisted_stellar` (†††††††††††), are the only keys whose default is the
+//! other reading, not the engine's ([`RuleKey::default_source`]): for
+//! the two cron keys the user decided so on 2026-10-11, so
 //! that the rare border-change storylines of stock crons 184, 185 and
 //! 192 re-arm after their `PostHoldoff` and their news comes down. The
 //! Bible gives `PostHoldoff` as the days after the end before the crön
@@ -399,6 +406,18 @@
 //! every time based on the systems the player has explored", which covers
 //! a new pilot's start system: the other reading of `nebula_new_pilot`
 //! takes that wording (see [`nebula`](crate::nebula)).
+//! †††††††††† `breakup_stall` follows the other reading by default too:
+//! the original's stall leaves a player whose ship has a `DeathDelay` of
+//! 0 or less breaking up for good, a soft-lock with no way on, and no
+//! stock ship is touched by either reading (the lowest stock `DeathDelay`
+//! is 3). The Bible says nothing of it; the other reading is the
+//! countdown without the original's per-frame reset.
+//!
+//! ††††††††††† `unlisted_stellar` follows the other reading by default too:
+//! the original moves the pilot into the first system that exists, one
+//! that doesn't hold the stellar the pilot was saved at, while the saved
+//! system is where the pilot last was. `STR#` 140 #52 warns of the
+//! missing data under both readings. The Bible says nothing of it.
 //!
 //! # Adding a rule
 //!
@@ -1902,6 +1921,47 @@ rule_keys! {
     /// of it, so the other reading is the intended behaviour, not
     /// anything the Bible says.
     HiddenShipHoverBox => "hidden_ship_hover_box",
+    /// What becomes of a breakup whose death timer never rises above 0 by
+    /// the time `_HandleShipDisplay` checks it: a `DeathDelay` of 0 or
+    /// less for any ship, or of 1 for an NPC (see
+    /// [`Breakup`](crate::combat::hull::Breakup)). By the engine, the
+    /// timer is set again every frame (`_HandleShipDisplay`
+    /// @0x2d80d-0x2d83d) and the decrements skip it (@0x6d7e6, @0x35083),
+    /// so the ship breaks up for good and never explodes: for the player,
+    /// a soft-lock. By the other reading, it is destroyed on its breakup
+    /// tick (d <= 0) or the tick after (an NPC's d = 1). No stock ship has
+    /// such a `DeathDelay`: the lowest is 3. The other reading is the
+    /// default (see the module docs).
+    BreakupStall => "breakup_stall",
+    /// What becomes of the player's velocity as it ejects (see
+    /// [`escape`](crate::escape)). By the engine, as `_HandlePlayer` does
+    /// (@0x6f782-0x6f788), the new ship's x velocity takes the y
+    /// velocity's value, so the hulk keeps the true velocity and the new
+    /// ship's x is lost, before the push of its top speed along its
+    /// heading. By the other reading, the new ship keeps the velocity it
+    /// had. The Bible says nothing of it, so the other reading is the
+    /// intended behaviour, not anything the Bible says.
+    EjectVelocity => "eject_velocity",
+    /// What the escape pod's rescue sets the armour to (see the session's
+    /// `rescue` module). By the engine, as `_HandlePlayer` does
+    /// (@0x690db-0x69100), the shield capacity, `_ShipShieldCapacity`
+    /// read a second time where the armour's is meant, so the armour may
+    /// stand above its most, which nothing takes away. By the other
+    /// reading, the armour's own capacity. The Bible says nothing of it,
+    /// so the other reading is the intended behaviour, not anything the
+    /// Bible says.
+    RescueArmor => "rescue_armor",
+    /// Where a loaded pilot resumes when its saved stellar is one no
+    /// system lists, so the loaded data doesn't place it (see
+    /// [`Session::load`](crate::Session::load)). By the engine, as
+    /// `_LoadPilotData` falls back when `_FindSystemFromStellar` finds no
+    /// system (@0x752d6-0x75318), in the first system with +0x1ed set:
+    /// the lowest that exists, which needn't hold the stellar. By the
+    /// other reading, the default and a recorded departure, it keeps its
+    /// saved system. Under both, the stellar is forgotten, the pilot
+    /// starts undocked at the centre, and the load reports the repair
+    /// ([`Session::load_repaired`](crate::Session::load_repaired)).
+    UnlistedStellar => "unlisted_stellar",
 }
 
 impl RuleKey {
@@ -1919,13 +1979,16 @@ impl RuleKey {
     }
 
     /// The source this rule follows when the settings choose none: the
-    /// engine's, but for the two cron holdoff keys, which follow the
-    /// intended reading as a recorded departure from the original (see
-    /// the module docs).
+    /// engine's, but for the two cron holdoff keys, the breakup stall and
+    /// the unlisted stellar, which follow the other reading as recorded departures from the
+    /// original (see the module docs).
     #[must_use]
     pub const fn default_source(self) -> RuleSource {
         match self {
-            Self::CronZeroDurationHoldoff | Self::CronPostHoldoff => RuleSource::Bible,
+            Self::CronZeroDurationHoldoff
+            | Self::CronPostHoldoff
+            | Self::BreakupStall
+            | Self::UnlistedStellar => RuleSource::Bible,
             _ => RuleSource::Engine,
         }
     }
@@ -1941,7 +2004,8 @@ pub struct Rulebook {
 }
 
 /// Every rule following its own default, overriding none: the engine's,
-/// but for the two cron holdoff keys. (Written out, as `Default` derives
+/// but for the two cron holdoff keys, the breakup stall and the unlisted
+/// stellar. (Written out, as `Default` derives
 /// only for arrays of up to 32 rules.)
 impl Default for Rulebook {
     fn default() -> Self {
@@ -1992,7 +2056,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_rule_follows_its_default_the_engines_but_the_two_cron_holdoffs() {
+    fn every_rule_follows_its_default_the_engines_but_the_cron_holdoffs_the_breakup_stall_and_the_unlisted_stellar()
+     {
         assert_eq!(RuleSource::default(), RuleSource::Engine);
         let rulebook = Rulebook::default();
         assert_eq!(rulebook.global_source(), None);
@@ -2006,7 +2071,12 @@ mod tests {
             .collect();
         assert_eq!(
             bible,
-            [RuleKey::CronZeroDurationHoldoff, RuleKey::CronPostHoldoff]
+            [
+                RuleKey::CronZeroDurationHoldoff,
+                RuleKey::CronPostHoldoff,
+                RuleKey::BreakupStall,
+                RuleKey::UnlistedStellar
+            ]
         );
     }
 
@@ -2117,7 +2187,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2157,7 +2227,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(49),
+            RuleKey::ALL.iter().rev().nth(53),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2179,7 +2249,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2204,7 +2274,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2230,7 +2300,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(50),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2250,7 +2320,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2270,7 +2340,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2290,7 +2360,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2312,7 +2382,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2329,7 +2399,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -2346,7 +2416,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -2363,7 +2433,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::NonStrictSpeed)
         );
     }
@@ -2380,7 +2450,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::HunterBribe)
         );
     }
@@ -2397,7 +2467,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::ShipOverlap)
         );
     }
@@ -2414,7 +2484,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::QuadrantTurretArc)
         );
     }
@@ -2431,7 +2501,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::HiddenShips)
         );
     }
@@ -2447,7 +2517,83 @@ mod tests {
             Rulebook::default().source_for(RuleKey::HiddenShipHoverBox),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::HiddenShipHoverBox));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(4),
+            Some(&RuleKey::HiddenShipHoverBox)
+        );
+    }
+
+    #[test]
+    fn the_breakup_stall_rule_is_found_by_its_key_and_defaults_to_the_other_reading() {
+        assert_eq!(RuleKey::BreakupStall.key(), "breakup_stall");
+        assert_eq!(
+            RuleKey::from_key("breakup_stall"),
+            Some(RuleKey::BreakupStall)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::BreakupStall),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Engine).source_for(RuleKey::BreakupStall),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(3),
+            Some(&RuleKey::BreakupStall)
+        );
+    }
+
+    #[test]
+    fn the_eject_velocity_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::EjectVelocity.key(), "eject_velocity");
+        assert_eq!(
+            RuleKey::from_key("eject_velocity"),
+            Some(RuleKey::EjectVelocity)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::EjectVelocity),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::EjectVelocity)
+        );
+    }
+
+    #[test]
+    fn the_rescue_armor_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::RescueArmor.key(), "rescue_armor");
+        assert_eq!(
+            RuleKey::from_key("rescue_armor"),
+            Some(RuleKey::RescueArmor)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::RescueArmor),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::RescueArmor)
+        );
+    }
+
+    #[test]
+    fn the_unlisted_stellar_rule_is_found_by_its_key_and_defaults_to_the_other_reading() {
+        assert_eq!(RuleKey::UnlistedStellar.key(), "unlisted_stellar");
+        assert_eq!(
+            RuleKey::from_key("unlisted_stellar"),
+            Some(RuleKey::UnlistedStellar)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::UnlistedStellar),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Engine).source_for(RuleKey::UnlistedStellar),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::UnlistedStellar));
     }
 
     #[test]
@@ -2458,7 +2604,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(39), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(43), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2473,7 +2619,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -2490,7 +2636,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -2507,7 +2653,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -2524,7 +2670,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(35),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -2541,7 +2687,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -2558,7 +2704,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -2572,7 +2718,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(32),
+            RuleKey::ALL.iter().rev().nth(36),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -2586,7 +2732,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -2599,7 +2745,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2617,7 +2763,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(33),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -2634,7 +2780,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(28),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -2651,10 +2797,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(26), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(30), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -2669,7 +2815,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -2688,15 +2834,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -2713,7 +2859,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -2727,11 +2873,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -2752,11 +2898,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -2770,11 +2916,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::BlessingLanding)
         );
     }
@@ -2794,7 +2940,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::BlessingAlwaysAttacks)
         );
     }
@@ -2811,7 +2957,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::ExploredByPlace)
         );
     }
@@ -2828,7 +2974,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::RouteRewrite)
         );
     }
@@ -2845,7 +2991,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::NebulaExploreOnce)
         );
     }
@@ -2862,7 +3008,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::NebulaNewPilot)
         );
     }
@@ -2876,11 +3022,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::ScanOutfitsPastJunk)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::OutfitScanFine)
         );
     }
@@ -3004,7 +3150,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(52),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3194,7 +3340,11 @@ mod tests {
                 RuleKey::ShipOverlap,
                 RuleKey::QuadrantTurretArc,
                 RuleKey::HiddenShips,
-                RuleKey::HiddenShipHoverBox
+                RuleKey::HiddenShipHoverBox,
+                RuleKey::BreakupStall,
+                RuleKey::EjectVelocity,
+                RuleKey::RescueArmor,
+                RuleKey::UnlistedStellar
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
@@ -3223,6 +3373,11 @@ mod tests {
         assert_eq!(RuleKey::EscortAi.key(), "escort_ai");
         assert_eq!(RuleKey::EscortOrders.key(), "escort_orders");
         assert_eq!(RuleKey::ShipInfoRounding.key(), "ship_info_rounding");
+        assert_eq!(RuleKey::UnlistedStellar.key(), "unlisted_stellar");
+        assert_eq!(
+            RuleKey::from_key("unlisted_stellar"),
+            Some(RuleKey::UnlistedStellar)
+        );
         for rule in RuleKey::ALL {
             assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
         }

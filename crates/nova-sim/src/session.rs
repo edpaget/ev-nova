@@ -9,9 +9,11 @@
 //! it as the rules below say; the session itself keeps only what a flight
 //! needs on top.
 //!
-//! Landing, taking off and each change made in the spaceport
-//! ([`Session::transact`]) make a save due ([`Session::take_save_due`]):
-//! whoever saves the pilot takes it after each input and saves then.
+//! Landing, taking off, each change made in the spaceport
+//! ([`Session::transact`]) and a Strict Play pilot's rescue from the
+//! escape pod ([`Session::rescue_if_due`]) make a save due
+//! ([`Session::take_save_due`]): whoever saves the pilot takes it after
+//! each input and saves then.
 //! Arriving in a system explores it.
 //!
 //! The ship lands on a stellar of its system, on the land key's second
@@ -180,7 +182,11 @@
 //! the warp's lead-in, and its shots and beams are gone once the
 //! player lands or arrives elsewhere. An NPC destroyed is taken out of the
 //! system. The player's ship, once it is not intact, ignores the controls
-//! and drifts, cannot land or jump, and once destroyed stays where it is.
+//! and drifts, slowing a little each tick, cannot land or jump, and once destroyed stays where it is.
+//! Disabled or dying, it may eject into an escape pod or an escape ship,
+//! leaving a hulk behind (see the `eject` module); the pod flies itself
+//! until its countdown ends and the player is rescued (see the `rescue`
+//! module).
 //!
 //! The player's crimes change its legal records as the fight's
 //! [`LegalCode`] says: disabling an NPC, and breaking one up (which is
@@ -345,6 +351,7 @@ mod control;
 mod course;
 mod crons;
 mod edit;
+mod eject;
 mod entry;
 mod escorts;
 mod events;
@@ -356,6 +363,7 @@ mod hail;
 mod hire;
 mod hooks;
 mod hover;
+mod jump_collapse;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_screens;
@@ -372,12 +380,15 @@ mod precalced;
 mod radar;
 mod ranks;
 mod red_alert;
+mod rescue;
+mod sabotage;
 mod script_effects;
 mod self_repair;
 mod ship_change;
 mod status_cargo;
 mod stellars;
 mod story;
+mod takeoff_grace;
 mod target_panel;
 
 pub use hooks::HookRules;
@@ -396,6 +407,7 @@ pub use missions::{AbortError, NotOffered};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{ScriptEffectRules, Settled};
+pub use takeoff_grace::TAKEOFF_GRACE_TICKS;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -424,11 +436,11 @@ use crate::combat::armament::{
     Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
 use crate::combat::beam::Beam;
-use crate::combat::hull::{Condition, DisableRule, HullSpec};
+use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::weapon::Ammo;
-use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
+use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Shove, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
@@ -466,6 +478,7 @@ use crate::outfitter::{
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
+use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
@@ -489,6 +502,66 @@ use crate::traffic::table::{SpawnDude, SpawnTable};
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
 use crate::warp;
+
+pub use crate::combat::hull::ESCAPE_POD_SHIP;
+
+/// What [`Session::tick_combat`] works out for a ship's [`Fighter`]
+/// beyond what the ship carries.
+#[derive(Clone, Copy, Debug)]
+struct FightTerms {
+    /// Whether it is held disabled.
+    held_disabled: bool,
+    /// Its class's top speed, its `Speed` alone.
+    class_speed: f32,
+    /// Its top speed.
+    top_speed: f32,
+}
+
+impl FightTerms {
+    /// `npc` in the fight, on these terms. Its jump is never under way:
+    /// an NPC's jump out has no stage here, as it leaves on the tick it
+    /// reaches its jump distance.
+    fn fighter(self, npc: &mut Npc) -> Fighter<'_> {
+        let fleet = npc.fleet();
+        let Npc {
+            id,
+            ship,
+            govt,
+            stats,
+            state,
+            hull,
+            trigger,
+            target,
+            reserves,
+            condition,
+            armament,
+            rounds,
+            cloak,
+            ..
+        } = npc;
+        Fighter {
+            ship: ShipRef::Npc(*id),
+            ship_type: *ship,
+            fleet,
+            govt: *govt,
+            state: *state,
+            hull: *hull,
+            shield_regen: stats.shield_regen,
+            armor_regen: stats.armor_regen,
+            trigger: *trigger,
+            target: *target,
+            reserves,
+            condition,
+            held_disabled: self.held_disabled,
+            cloaked: cloak.is_cloaked(),
+            class_speed: self.class_speed,
+            top_speed: self.top_speed,
+            jumping: false,
+            armament,
+            rounds,
+        }
+    }
+}
 
 /// A jump, from J being accepted until the ship arrives.
 ///
@@ -655,6 +728,40 @@ pub struct Session {
     armament: Armament,
     /// How the player's ship is holding up.
     condition: Condition,
+    /// Whether the player's ship was destroyed on the latest
+    /// [`Session::tick_combat`], the tick the fight raised its
+    /// `CombatEvent::Destroyed`; read by [`Session::player_fate`]. It stays
+    /// set until the next `tick_combat`, so every interpolated view frame
+    /// drawn after that tick sees [`PlayerFate::Exploded`]: the original hides
+    /// on its own frame boundary, so this crosses no boundary the player
+    /// can see.
+    player_exploded_this_tick: bool,
+    /// How far the game's end has got since the player's ship exploded:
+    /// set to the hold's start on the explosion tick, counted down by
+    /// [`Session::tick`]'s dead branch, then moved on by
+    /// [`Session::begin_fade`] and [`Session::end_play`]. Read only while
+    /// the ship is destroyed, and never saved: the session is dropped
+    /// when play ends.
+    player_end: Option<Ending>,
+    /// Whether the hold ran out on a tick since
+    /// [`Session::take_hold_expired`] was last asked.
+    hold_expiry_due: bool,
+    /// The escape pod's countdown, the ticks still to run before the
+    /// rescue, while the player is in the pod: the original's +0xc908
+    /// while it is above 0, set to [`POD_TICKS`](crate::POD_TICKS) by the
+    /// eject (@0x6f669) and counted down by the pod's flight
+    /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
+    /// it runs ([`crate::FateRow::saves`]).
+    pod: Option<u32>,
+    /// Whether the pod countdown has run out and the rescue is due (see
+    /// the `rescue` module); never saved.
+    rescue_due: bool,
+    /// Whether the rescue's dësc is still to show (see the `rescue`
+    /// module); never saved.
+    rescue_desc_due: bool,
+    /// Whether the player holds the eject chord, Command and the eject
+    /// key together (see the `eject` module); never saved.
+    eject_held: bool,
     /// The fire command the player holds.
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
@@ -754,9 +861,14 @@ pub struct Session {
     /// The original's frame counter, which times the tribbles and
     /// perishables step (see [`market`]). The original's value when a
     /// flight starts depends on how long the program has run, so 0 here
-    /// is a choice; a take-off sets it anyway. Not saved, as the
+    /// is a choice; a take-off or a gate's exit sets it anyway. Not
+    /// saved, as the
     /// original's pilot file does not keep it.
     frame: i16,
+    /// The take-off grace's ticks still to run (see the `takeoff_grace`
+    /// module); not saved, as the original's pilot file does not keep its
+    /// frame counter.
+    takeoff_grace: u32,
     /// The Red Alert's state (see the `red_alert` module); not saved, as
     /// the original's pilot file does not keep it.
     red_alert: RedAlert,
@@ -869,6 +981,11 @@ pub struct Session {
     /// [`scan::Latches`](crate::scan::Latches)). Never saved, as the
     /// original's are globals.
     scan_latches: crate::scan::Latches,
+    /// The sabotage clock, `_sabotageCounter` with the cached
+    /// `_playerSabotaged`, refreshed at each reset
+    /// ([`Session::reset_precalced`]; see the `sabotage` module). Never
+    /// saved, as the original's are globals.
+    sabotage: crate::sabotage::SabotageClock,
     /// The `jünk` latches the tribbles and perishables step reads, set
     /// only at each reset ([`Session::reset_precalced`]; see
     /// [`market::JunkLatches`]). Both clear until the first. Never saved,
@@ -936,6 +1053,9 @@ pub struct Session {
     /// The offer from a ship the offer dialog shows, until the player
     /// answers it (see the `person_offers` module); never saved.
     offering: Option<person_offers::Offering>,
+    /// Whether the load had to fall back for data the save references
+    /// and the catalog lacks ([`Session::load_repaired`]); never saved.
+    load_repaired: bool,
 }
 
 impl Session {
@@ -975,7 +1095,11 @@ impl Session {
     /// for every visible explored system, by ascending ID: the load's
     /// sweep (see the `nebulae` module).
     ///
-    /// A pilot last landed on a stellar of its system resumes docked there,
+    /// A pilot last landed on a stellar that some system lists resumes in
+    /// the system that stellar decides (`resume_system`), not the one it
+    /// was saved in, as `_LoadPilotData` sets the system from the stellar
+    /// alone (@0x7525b-0x75316); one whose stellar no system lists keeps
+    /// its saved system. It resumes docked at that stellar,
     /// silently, as the original resumes a pilot at its last planet, the
     /// spaceport opening with its ranks' price multipliers (see the
     /// `ranks` module); so
@@ -986,21 +1110,59 @@ impl Session {
     /// the pilot then forgets) the ship starts at rest at the system's
     /// centre, facing up.
     ///
+    /// [`Session::load`] under [`Rulebook::default`]: see there for the
+    /// fallbacks a save whose data is missing takes. The session's own
+    /// rule set is [`Rulebook::default`] until [`Session::with_rules`].
+    ///
     /// # Errors
     ///
-    /// When the ship cannot be read, or the system no longer exists.
-    #[allow(clippy::too_many_lines)] // one line for each of the session's fields
+    /// When the ship cannot be read, or no system exists at all.
     pub fn fly(
         catalog: &(impl PilotCatalog + CombatCatalog),
+        pilot: Pilot,
+    ) -> Result<Self, StartError> {
+        Self::load(catalog, pilot, &Rulebook::default())
+    }
+
+    /// `pilot`'s session as [`Session::fly`] builds it, the load's
+    /// fallbacks reading `rules`, and [`Session::load_repaired`] saying
+    /// whether one applied, as `_LoadPilotData` returns -0x2e when it set
+    /// its warning flag (@0x7648b-0x76498), the load otherwise complete:
+    ///
+    /// - A pilot whose stellar no system lists, so the loaded data doesn't
+    ///   place it, resumes as [`RuleKey::UnlistedStellar`] reads: by the
+    ///   engine in the lowest system that exists, as `_LoadPilotData` takes
+    ///   the first with +0x1ed set when `_FindSystemFromStellar` finds none
+    ///   (@0x752d6-0x75318), by the other reading (the default) in its
+    ///   saved system. Either way the stellar is forgotten, as the system
+    ///   doesn't list it, and the ship starts at the centre: the original's
+    ///   position at the stellar's x/y in a system that doesn't hold it
+    ///   (@0x75329-0x75354) isn't copied.
+    /// - A pilot whose system no longer exists, its stellar unlisted or
+    ///   `None`, resumes in the lowest system that exists, at the centre,
+    ///   under either reading. The original has no such case, as it takes
+    ///   the system from the stellar alone; the engine's saved system is
+    ///   its own, and refusing the pilot would strand one a removed
+    ///   plug-in's system held.
+    ///
+    /// A pilot never landed, its stellar `None`, is not repaired: the
+    /// original's stellar -1 fallback (@0x751e9-0x75255) is left out, as
+    /// the engine's `None` stellar doesn't mean missing data.
+    ///
+    /// # Errors
+    ///
+    /// When the ship cannot be read, or no system exists at all
+    /// ([`StartError::NoSystem`] with the pilot's saved system).
+    #[allow(clippy::too_many_lines)] // one line for each of the session's fields
+    pub fn load(
+        catalog: &(impl PilotCatalog + CombatCatalog),
         mut pilot: Pilot,
+        rules: &Rulebook,
     ) -> Result<Self, StartError> {
         let ship = pilot.ship;
         let fields = catalog
             .ship_fields(ship)
             .map_err(|reason| StartError::Ship(ship, reason))?;
-        if !catalog.system_exists(pilot.system) {
-            return Err(StartError::NoSystem(pilot.system));
-        }
         // The explored nebulae are never saved: a load forgets them, as
         // `_ResetPlayer` does (@0x1da86), but for those the once-a-pilot
         // reading kept fired (see the `nebulae` module).
@@ -1008,7 +1170,31 @@ impl Session {
         for kept in nebula::kept(&pilot.story_fired) {
             pilot.galaxy.set_nebula_explored(kept, true);
         }
+        // Built first, from the star map and the saved overlay alone: the
+        // resume reads the saved visibility, as `leave_hidden` does, both
+        // standing in for the load's first refresh (@0x751ca, @0x751cf).
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
+        let listed = catalog.listed_stellars();
+        let saved = pilot.system;
+        let mut load_repaired = false;
+        if let Some(stellar) = pilot.stellar {
+            if let Some(system) = listed
+                .iter()
+                .find(|listed| listed.id == stellar)
+                .and_then(|listed| resume_system(&galaxy, &listed.systems))
+            {
+                pilot.system = system;
+            } else {
+                load_repaired = true;
+                if rules.source_for(RuleKey::UnlistedStellar) == RuleSource::Engine {
+                    pilot.system = lowest_system(&galaxy, catalog).unwrap_or(pilot.system);
+                }
+            }
+        }
+        if !catalog.system_exists(pilot.system) {
+            pilot.system = lowest_system(&galaxy, catalog).ok_or(StartError::NoSystem(saved))?;
+            load_repaired = true;
+        }
         // A load is one of the original's refresh points: a pilot in a
         // hidden system flies from the one standing for it, silently.
         story::leave_hidden(&mut pilot, &mut galaxy);
@@ -1092,6 +1278,13 @@ impl Session {
             hull: HullSpec::default(),
             armament: Armament::default(),
             condition: Condition::Intact,
+            player_exploded_this_tick: false,
+            player_end: None,
+            hold_expiry_due: false,
+            pod: None,
+            rescue_due: false,
+            rescue_desc_due: false,
+            eject_held: false,
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
@@ -1119,6 +1312,7 @@ impl Session {
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
+            takeoff_grace: 0,
             red_alert: RedAlert::default(),
             nav_fly_in: crate::brackets::FlyIn::default(),
             target_fly_in: crate::brackets::FlyIn::default(),
@@ -1159,13 +1353,14 @@ impl Session {
                 junk: false,
                 outfits: false,
             },
+            sabotage: crate::sabotage::SabotageClock::default(),
             junk_latches: market::JunkLatches::default(),
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
                 .map(|texts| (texts.id, texts))
                 .collect(),
-            listed_stellars: catalog.listed_stellars(),
+            listed_stellars: listed,
             visibility: catalog.system_visibility().into(),
             nebulae: catalog.nebulae().into(),
             galaxy_stale: false,
@@ -1182,6 +1377,7 @@ impl Session {
             ship_offers: person_offers::ShipOffers::new(),
             offering: None,
             script_slot: None,
+            load_repaired,
             pilot,
         };
         session.register_offer_roll();
@@ -1217,6 +1413,25 @@ impl Session {
         Ok(session)
     }
 
+    /// Whether the load had to fall back because the save references data
+    /// the catalog lacks: a stellar no system lists, or a system that no
+    /// longer exists (see [`Session::load`]). It stands for
+    /// `_LoadPilotData`'s -0x2e result (@0x7648b-0x76498), on which
+    /// `_MainScreenChoice` shows `STR#` 140 #52 (@0x1a840-0x1a85b).
+    #[must_use]
+    pub fn load_repaired(&self) -> bool {
+        self.load_repaired
+    }
+
+    /// Turns the player's ship to a whole degree from 0 to 359 drawn on
+    /// `chance`, as `_LoadPilotData` faces every pilot it loads, docked or
+    /// not, with `Rand(0x168)` (@0x7535b-0x75372). For a pilot opened from
+    /// a save, after [`Session::fly`]; a new pilot keeps facing up. Taking
+    /// off keeps the heading.
+    pub fn face_on_load(&mut self, chance: &mut dyn Chance) {
+        self.player.heading = f32::from(chance.roll(360));
+    }
+
     /// This session with every disputed rule reading as `rules` says
     /// ([`Rulebook::source_for`]): by default, [`Rulebook::default`], every
     /// rule the engine's. The whole rule set is replaced, so a session is
@@ -1234,6 +1449,8 @@ impl Session {
         self.galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
+        self.combat
+            .set_breakup(Breakup::from(rules.source_for(RuleKey::BreakupStall)));
         self.rules = rules;
         self
     }
@@ -1364,21 +1581,29 @@ impl Session {
     /// sounds (see the `script_effects` module). Any tick ends a gate's pending entry: the
     /// original's hypergate map is modal, so nothing ticks between the
     /// land key and the pick. A ship that is not intact ignores the
-    /// controls and drifts, giving up a jump it was turning and braking
-    /// for, and a destroyed one stays where it is.
+    /// controls and drifts, slowing by [`crate::flight::DISABLED_DRAG`] a
+    /// tick before it moves, its pre-jump collapsing first (see the
+    /// `jump_collapse` module), and a destroyed one stays where it is, letting go of its
+    /// targets and counting the hold after its explosion down (see
+    /// `dead_tick`).
     ///
-    /// Each tick in flight, a jump's included, moves the frame counter on,
+    /// Each tick in flight, a jump's and the pod's included, counts the
+    /// take-off grace down (see the `takeoff_grace` module). Each tick in
+    /// flight, a jump's included, moves the frame counter on,
     /// and on a due frame ([`market::junk_step_due`]) steps the held
     /// tribbles and perishables in the space the goods and the mission
     /// cargo aboard leave, unless the player is destroyed. It then
     /// runs the Red Alert on that frame (see the `red_alert` module) and
     /// flies the target brackets in (see the `brackets` module). A
-    /// landed tick moves none of them.
+    /// landed tick moves none of them. While the escape pod's countdown
+    /// runs, the pod flies itself in place of the controls, the jump and
+    /// the fuel (see the `eject` module's `pod_tick`).
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
             return;
         }
+        self.takeoff_grace_tick();
         self.sound_script();
         let frame = self.frame;
         self.frame = market::next_frame(frame);
@@ -1396,17 +1621,20 @@ impl Session {
         self.red_alert_tick(frame);
         self.brackets_tick();
         self.boxes_tick();
+        if self.pod.is_some() {
+            self.pod_tick();
+            return;
+        }
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
-                if matches!(self.jump, Some(Jump::PreJump { .. })) {
-                    self.jump = None;
-                }
+                self.collapse_jump();
                 Controls::default()
             }
             Condition::Destroyed => {
                 self.stop_thrust();
                 self.player.velocity = Vec2::ZERO;
+                self.dead_tick();
                 return;
             }
         };
@@ -1414,6 +1642,9 @@ impl Session {
             None => {
                 self.thrust(controls.thrust);
                 let handling = self.flying_handling();
+                if self.player_fate().row().drag {
+                    crate::flight::drag(&mut self.player);
+                }
                 step(&mut self.player, &handling, controls);
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
@@ -1433,6 +1664,85 @@ impl Session {
             }
         }
         regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+    }
+
+    /// `_HandlePlayer`'s dead branch (0x6870d-0x6888c), on each tick of a
+    /// destroyed player: it lets go of the player's ship target and nav
+    /// target (+0x70 @0x68712, +0x6c @0x68718), and counts the hold down a
+    /// tick (`subss` @0x68727). On the tick after the last, the hold
+    /// expires (`jbe` @0x68725): once, which
+    /// [`Session::take_hold_expired`] reports. The rest of that tick still
+    /// runs, as the original finishes the frame it sets `gPause` in.
+    fn dead_tick(&mut self) {
+        self.target = None;
+        self.nav_target = None;
+        let ending = self.player_end.get_or_insert(Ending::Holding {
+            ticks_left: HOLD_TICKS,
+        });
+        match ending {
+            Ending::Holding { ticks_left: 0 } => {
+                *ending = Ending::Expired;
+                self.hold_expiry_due = true;
+            }
+            Ending::Holding { ticks_left } => *ticks_left -= 1,
+            Ending::Expired | Ending::Fading | Ending::GameOver => {}
+        }
+    }
+
+    /// Whether the hold after the player's explosion has run out, now or
+    /// on an earlier tick: true from the expiry's tick on, through the fade
+    /// and game over. Asking leaves it as it is; the flight view stops
+    /// stepping on it.
+    #[must_use]
+    pub fn hold_expired(&self) -> bool {
+        self.condition == Condition::Destroyed && self.player_end.is_some_and(Ending::expired)
+    }
+
+    /// Whether the hold ran out since this was last asked: the seam at the
+    /// countdown's expiry, before the original's `gPause = 1` (0x68838),
+    /// where the sabotage dialogs show over the flight scene
+    /// ([`Session::sabotage_death_descs`]).
+    /// True once.
+    pub fn take_hold_expired(&mut self) -> bool {
+        std::mem::take(&mut self.hold_expiry_due)
+    }
+
+    /// Begins the fade to black after an expired hold: `_PlayGame`'s exit
+    /// (0x465eb) and `_FadeScreenOut` (0x465f7). Nothing happens at any
+    /// other stage.
+    pub fn begin_fade(&mut self) {
+        if self.condition == Condition::Destroyed && self.player_end == Some(Ending::Expired) {
+            self.player_end = Some(Ending::Fading);
+        }
+    }
+
+    /// Ends play once the fade is over, for the main screen to return
+    /// (0x4664a, `_EnterGameFromMainScreen` 0x1a471). Nothing happens at
+    /// any other stage.
+    pub fn end_play(&mut self) {
+        if self.condition == Condition::Destroyed && self.player_end == Some(Ending::Fading) {
+            self.player_end = Some(Ending::GameOver);
+        }
+    }
+
+    /// Whether the pilot may be saved now: only while the player is not
+    /// dying or dead ([`crate::FateRow::saves`]).
+    #[must_use]
+    pub fn may_save(&self) -> bool {
+        self.player_fate().row().saves
+    }
+
+    /// Whether ending play now deletes the pilot: `_EnterGameFromMainScreen`'s
+    /// gate after `_PlayGame` returns (@0x1a4ab-0x1a4e1). A strict-play
+    /// pilot whose player is dying (`_IsDying` @0x253d, which the fate
+    /// table's [`crate::FateRow::saves`] already answers) and is not in
+    /// the [`ESCAPE_POD_SHIP`] has its pilot file deleted
+    /// (`_DeletePilotFile` @0x1a4d9). The original also writes a crash log
+    /// line there (`_crashlog` @0x1a4cd), a debugging aid the engine has no
+    /// use for, so it is left out. The gate makes no sound.
+    #[must_use]
+    pub fn deletes_pilot_on_ending_play(&self) -> bool {
+        self.pilot.strict_play() && !self.may_save() && self.pilot.ship != ESCAPE_POD_SHIP
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
@@ -1512,17 +1822,6 @@ impl Session {
         self.aboard = None;
         self.talk = None;
         self.clear_lost_target();
-    }
-
-    /// Fills the system as it is entered `how`, by a way in whose
-    /// enter-system hook is still to run (see [`Session::populate_as`]).
-    pub(super) fn populate_entering(
-        &mut self,
-        catalog: &(impl TrafficCatalog + ?Sized),
-        how: Entrance,
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        self.populate_as(catalog, chance, Some(how));
     }
 
     /// What the system's traffic is drawn from, read from `catalog`: its
@@ -1745,8 +2044,8 @@ impl Session {
     /// mission's ship not yet boarded fights held disabled
     /// ([`Session::mission_ship_held`]; see the `mission_ships` module).
     /// The player is convicted of disabling and destroying an NPC, but
-    /// not a mission's special ship (see `punish`). First, unless the
-    /// ship is landed, each NPC that looked the player over in the
+    /// not a mission's special ship (see `punish`). Before the fight,
+    /// unless the ship is landed, each NPC that looked the player over in the
     /// traffic tick scans it, convicting by `rules`' law (see the
     /// `mission_cargo` module), jumping or not: past the warp's lead-in
     /// the scan itself is held, as `_ScanPlayer`'s jump-timing check holds
@@ -1756,18 +2055,33 @@ impl Session {
     /// while the ship jumps. The stellars
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
-    /// module).
+    /// module). While the player's ship breaks up, the klaxon sounds
+    /// first among the tick's sounds (see `sound_the_klaxon`), and on the
+    /// player's explosion tick a [`SimSound::Halt`] of the klaxon and the
+    /// warp sounds follows it
+    /// ([`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)). A heavy
+    /// ship's final explosion, the player's too, sends out a shockwave
+    /// ([`shockwave`](crate::combat::shockwave)) that sets the velocity of
+    /// each ship it pushes; the player's is not pushed while its jump is
+    /// under way, the pre-jump stage included. Before anything else,
+    /// unless landed or jumping, the sabotage clock ticks, and what it sets
+    /// off goes off (see the `sabotage` module), and the eject is checked
+    /// (see the `eject` module), both before the scans.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        if !self.take_scans(rules.law, &mut &mut *chance) {
+        self.player_exploded_this_tick = false;
+        if self.landed.is_some() || self.jumping().is_some() {
+            // The fight stands still, but a scan a lead-in step's traffic
+            // tick queued still settles (see `take_scans`).
+            self.take_scans(rules.law, &mut &mut *chance);
             return;
         }
+        self.sabotage_tick(rules, &mut &mut *chance);
+        self.eject_before_fight(&mut &mut *chance);
+        let was_destroyed = self.condition == Condition::Destroyed;
+        let was_dying = matches!(self.condition, Condition::Dying { .. });
+        self.take_scans(rules.law, &mut &mut *chance);
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
-        let held: Vec<bool> = self
-            .traffic
-            .npcs()
-            .iter()
-            .map(|npc| self.mission_ship_held(npc))
-            .collect();
+        let (player_terms, terms) = self.fight_terms();
         let mut stellars = self.stellar_targets();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
@@ -1783,52 +2097,24 @@ impl Session {
             hull: self.hull,
             shield_regen: self.stats.shield_regen,
             armor_regen: self.stats.armor_regen,
-            trigger: player_trigger(self.trigger),
+            trigger: if self.pod.is_some() {
+                Trigger::default()
+            } else {
+                player_trigger(self.trigger)
+            },
             target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,
             held_disabled: false,
             cloaked: false,
+            class_speed: player_terms.class_speed,
+            top_speed: player_terms.top_speed,
+            jumping: self.jump.is_some(),
             armament: &mut self.armament,
             rounds: &mut rounds,
         }];
-        for (npc, held_disabled) in self.traffic.npcs_mut().iter_mut().zip(held) {
-            let fleet = npc.fleet();
-            let Npc {
-                id,
-                ship,
-                govt,
-                stats,
-                state,
-                hull,
-                trigger,
-                target,
-                reserves,
-                condition,
-                armament,
-                rounds,
-                cloak,
-                ..
-            } = npc;
-            fighters.push(Fighter {
-                ship: ShipRef::Npc(*id),
-                ship_type: *ship,
-                fleet,
-                govt: *govt,
-                state: *state,
-                hull: *hull,
-                shield_regen: stats.shield_regen,
-                armor_regen: stats.armor_regen,
-                trigger: *trigger,
-                target: *target,
-                reserves,
-                condition,
-                held_disabled,
-                cloaked: cloak.is_cloaked(),
-                armament,
-                rounds,
-            });
-        }
+        let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
+        fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
         self.combat.tick(
             &mut fighters,
             &self.arsenal,
@@ -1837,14 +2123,21 @@ impl Session {
             &mut stellars,
             chance,
         );
+        self.take_shoves();
+        self.eject_on_breakup(&mut &mut *chance);
+        self.player_exploded_this_tick = !was_destroyed && self.condition == Condition::Destroyed;
+        if self.player_exploded_this_tick {
+            self.player_end = Some(Ending::Holding {
+                ticks_left: HOLD_TICKS,
+            });
+        }
+        self.sound_the_klaxon(was_dying);
+        if self.player_exploded_this_tick {
+            self.sounds
+                .push(SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS));
+        }
         self.raise_disabled(&was, &mut &mut *chance);
-        let mut strikes = self.combat.take_strikes();
-        self.refill_invincible(&mut strikes);
-        self.hold_grudges(&strikes);
-        self.punish(&strikes, &was, rules.law);
-        self.credit_kills(&strikes, &was);
-        self.cloak_hits(&strikes);
-        self.strikes.extend(strikes);
+        self.answer_strikes(&was, rules.law);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties);
         self.sync_fleet();
@@ -1857,6 +2150,101 @@ impl Session {
         self.strike_stellars(&stellars, rules.law, chance);
         self.see_stellars();
         self.lay_out_ships();
+    }
+
+    /// Raises [`SimSound::Klaxon`] while the player's ship breaks up, as
+    /// `_HandlePlayer` plays `_klaxxonSnd` (@0x6f1e4-0x6f227) while the
+    /// death timer, after its decrement, is above 1.0: on every tick of
+    /// the countdown but the one it is set on (`starting`), and on the
+    /// explosion tick of a ship that `was_dying` before it, whose timer
+    /// came down to 2.0. The original's `> 1.0` test always holds for a
+    /// countdown that is not starting: a timer at
+    /// [`EXPLOSION_BAND`](crate::combat::hull::EXPLOSION_BAND) or below
+    /// explodes, so one still counting down is at 3 or more. No klaxon
+    /// sounds on the breakup tick, nor on a stalled breakup's ticks, each
+    /// of which sets the timer again.
+    ///
+    /// It comes straight after the fight, ahead of every other sound of
+    /// the tick, so that on the explosion tick the
+    /// [`SimSound::Halt`] of [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)
+    /// that [`Session::tick_combat`] raises next comes after it and wins,
+    /// as `_HandlePlayer` (@0x43e19) runs before `_HandleShipDisplay`
+    /// (@0x43e29). The view puts the session's sounds before the fight's,
+    /// so the explosion's booms come after it too.
+    fn sound_the_klaxon(&mut self, was_dying: bool) {
+        let counting_down = matches!(
+            self.condition,
+            Condition::Dying {
+                starting: false,
+                ..
+            }
+        );
+        if counting_down || (self.player_exploded_this_tick && was_dying) {
+            self.sounds.push(SimSound::Klaxon);
+        }
+    }
+
+    /// What the fight needs of the player's ship and of each NPC, in
+    /// order, that the ship does not carry: whether it is held disabled
+    /// ([`Session::mission_ship_held`]; the player never is), and its
+    /// class and top speeds, which a shockwave pushes it against.
+    fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
+        let player = FightTerms {
+            held_disabled: false,
+            class_speed: self.class_speed(self.pilot.ship),
+            top_speed: self.top_speed(),
+        };
+        let led_speed = self.led_speed();
+        let npcs = self
+            .traffic
+            .npcs()
+            .iter()
+            .map(|npc| FightTerms {
+                held_disabled: self.mission_ship_held(npc),
+                class_speed: self.class_speed(npc.ship),
+                top_speed: npc.top_speed(led_speed),
+            })
+            .collect();
+        (player, npcs)
+    }
+
+    /// Sets the velocity of each ship the fight's shockwaves pushed this
+    /// tick ([`Combat::take_shoves`]), which takes effect on its next
+    /// movement.
+    fn take_shoves(&mut self) {
+        for Shove { ship, velocity } in self.combat.take_shoves() {
+            match ship {
+                ShipRef::Player => self.player.velocity = velocity,
+                ShipRef::Npc(id) => {
+                    let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
+                    if let Some(npc) = npc {
+                        npc.state.velocity = velocity;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ship class `ship`'s top speed, its `Speed` alone
+    /// ([`ShipFields::class_speed`](crate::handling::ShipFields::class_speed));
+    /// none without a record.
+    fn class_speed(&self, ship: ShipId) -> f32 {
+        self.ship_record(ship)
+            .map_or(0.0, |record| record.fields.class_speed())
+    }
+
+    /// Answers the fight's strikes this tick, against what each NPC `was`
+    /// before it: refilling the invincible, holding persons' grudges,
+    /// convicting the player by `law`, crediting kills and letting each
+    /// hit NPC's cloak take its hit; then keeps them for the app.
+    fn answer_strikes(&mut self, was: &[NpcBefore], law: &dyn LegalCode) {
+        let mut strikes = self.combat.take_strikes();
+        self.refill_invincible(&mut strikes);
+        self.hold_grudges(&strikes);
+        self.punish(&strikes, was, law);
+        self.credit_kills(&strikes, was);
+        self.cloak_hits(&strikes);
+        self.strikes.extend(strikes);
     }
 
     /// Takes each NPC destroyed out of the system, raising
@@ -2060,6 +2448,30 @@ impl Session {
         self.condition
     }
 
+    /// Where the player's ship is in its lifecycle: its condition, whether
+    /// it exploded on the latest fight tick, how far the game's end has
+    /// got since, and the escape pod's countdown.
+    #[must_use]
+    pub fn player_fate(&self) -> PlayerFate {
+        PlayerFate::of(
+            self.condition,
+            self.player_exploded_this_tick,
+            self.player_end,
+            self.pod,
+        )
+    }
+
+    /// Whether the session takes the player's `command` now: its
+    /// [`PlayerFate`]'s row decides ([`crate::FateRow::input`]), and for
+    /// [`TAKEOFF_GRACE_TICKS`] after a take-off or a gate's exit the map
+    /// and the mission info are refused too (see the `takeoff_grace`
+    /// module). The flight view asks before it acts on a key, and does
+    /// nothing when refused.
+    #[must_use]
+    pub fn takes(&self, command: PlayerCommand) -> bool {
+        self.player_fate().row().input.takes(command) && !self.takeoff_grace_refuses(command)
+    }
+
     /// The shots in flight.
     #[must_use]
     pub fn shots(&self) -> &[Shot] {
@@ -2124,6 +2536,14 @@ impl Session {
         ships.sort_unstable();
         ships.dedup();
         ships
+    }
+
+    /// Ship type `ship`'s shipyard long name, as its [`ShipRecord`] gives
+    /// it, if the session has its record.
+    #[must_use]
+    pub fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
+        let record = self.ships.iter().find(|record| record.id == ship)?;
+        Some(&record.long_name)
     }
 
     /// Ship type `ship`'s name, as its [`ShipRecord`] gives it, if the
@@ -2680,13 +3100,31 @@ impl Session {
     /// and makes no sound, and gives [`LandPress::AtGate`]. The entry
     /// then awaits [`Session::enter_hypergate`] or
     /// [`Session::enter_wormhole`], until the next tick.
+    ///
+    /// A disabled ship's press goes as far as `_HandlePlayerDockRequest`
+    /// does for it and no further: with no target it selects one, starting
+    /// its fly-in, as the land key does before the dock request
+    /// (@0x6a8fb-0x6a932); a target that can't be landed on, or none, is
+    /// refused as an intact ship's is (@0x66977-0x669aa). Then the dock
+    /// request's `_IsDisabled` test (@0x66af7) goes to its bare epilogue
+    /// (0x67eef): [`LandingRefusal::Disabled`], said nothing of, before
+    /// the range and speed checks (@0x67838) and the clearance
+    /// (@0x67903-0x67a05), so the selection gives no clearance reply, and
+    /// the ship neither docks nor enters a gate. A breaking-up or
+    /// destroyed ship's press is refused the same way before it selects
+    /// anything, as the land key's breakup-timer gate refuses it
+    /// (@0x6a8cb).
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
         if self.jump.is_some() {
             return Err(LandingRefusal::Jumping);
         }
-        if self.condition != Condition::Intact {
-            return Err(LandingRefusal::Disabled);
-        }
+        let disabled = match self.condition {
+            Condition::Intact => false,
+            Condition::Disabled => true,
+            Condition::Dying { .. } | Condition::Destroyed => {
+                return Err(LandingRefusal::Disabled);
+            }
+        };
         let blessing = self.blessing();
         let reading = self.rules.source_for(RuleKey::BlessingLanding);
         let outcome = land_or_select(
@@ -2695,7 +3133,21 @@ impl Session {
             &self.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.landing_reach(site),
-        )?;
+        );
+        if disabled {
+            return match outcome {
+                Ok(LandOutcome::Selected { stellar, .. }) => {
+                    self.nav_target = Some(stellar);
+                    self.nav_fly_in.start();
+                    Err(LandingRefusal::Disabled)
+                }
+                Err(
+                    refusal @ (LandingRefusal::NotLandable { .. } | LandingRefusal::NoStellars),
+                ) => Err(refusal),
+                Ok(LandOutcome::Landed(_)) | Err(_) => Err(LandingRefusal::Disabled),
+            };
+        }
+        let outcome = outcome?;
         match outcome {
             LandOutcome::Selected { stellar, .. } => {
                 self.nav_target = Some(stellar);
@@ -2858,7 +3310,9 @@ impl Session {
     /// module): those that follow come out of the exit gate after the
     /// player, or where it arrived like a jump. Last, every ship the
     /// player leads comes out of the exit gate after it, as
-    /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module).
+    /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module). The
+    /// exit then starts the take-off grace, as the take-off's path ends
+    /// (see the `takeoff_grace` module).
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -2924,6 +3378,9 @@ impl Session {
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
         self.emerge_followers(exit.position, catalog, chance);
         self.lead_out_of_gate(exit.position, chance);
+        // The tail the take-off's path ends in (@0x67673; see the
+        // `takeoff_grace` module).
+        self.start_takeoff_grace();
     }
 
     /// Docks the ship at `stellar`, one of the system's, takes the ranks'
@@ -3021,6 +3478,10 @@ impl Session {
     /// restarted on `chance` (@0x634df-0x6353c; see the `aux_ships`
     /// module), then the escort-strength timer is armed on it (see
     /// [`strength`], @0x6706f), and the population rolls on it last.
+    ///
+    /// The take-off starts the take-off grace: for
+    /// [`TAKEOFF_GRACE_TICKS`] the map, mission info and player info keys
+    /// are refused (see the `takeoff_grace` module).
     pub fn take_off(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -3039,7 +3500,9 @@ impl Session {
         if stay_days {
             self.pass_days(stay.leaving_days(), chance);
         }
-        self.frame = market::AFTER_TAKE_OFF_FRAME;
+        // The dock request's tail (@0x67673; see the `takeoff_grace`
+        // module).
+        self.start_takeoff_grace();
         if let Some(sites) = self.next_sites.take()
             && self.set_player_system(self.pilot.system, sites, Dock::AsItWas)
         {
@@ -3882,9 +4345,9 @@ impl Session {
         self.stats
     }
 
-    /// Whether the pilot should be saved: it has landed, taken off or
-    /// changed in the spaceport since this was last taken. Taking it clears
-    /// it.
+    /// Whether the pilot should be saved: it has landed, taken off,
+    /// changed in the spaceport or, playing strictly, been rescued from the
+    /// escape pod since this was last taken. Taking it clears it.
     pub fn take_save_due(&mut self) -> bool {
         std::mem::take(&mut self.save_due)
     }
@@ -4094,6 +4557,7 @@ impl Session {
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
+            provokes: true,
         });
         if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
             return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
@@ -4741,6 +5205,7 @@ impl Session {
             by: ShipRef::Player,
             damage: 1.0,
             downed: None,
+            provokes: true,
         }];
         self.target = Some(npc);
         self.aboard = Some(Aboard {
@@ -4815,6 +5280,51 @@ fn listed(outfitter: Option<&Outfitter>) -> Vec<OutfitId> {
     outfitter.map_or_else(Vec::new, |outfitter| {
         outfitter.rows.iter().map(|row| row.id).collect()
     })
+}
+
+/// The system a pilot resumes in from the stellar it last landed on,
+/// which `listers` list (its
+/// [`ListedStellar::systems`](crate::catalog::ListedStellar::systems), by
+/// ascending ID), as `_LoadPilotData` sets the player's system from the
+/// stellar's +0x14 alone (@0x7525b-0x75316); `None` when no system lists
+/// it. The first that applies:
+///
+/// 1. Its owner ([`OverlaidGalaxy::owner`]), as `_PropagateMissionBitEffects`
+///    gives it at the load's first refresh (@0x751ca, @0x99684-0x997bd).
+/// 2. System 128 when it lists the stellar, hidden or shadowed: the first
+///    refresh's `_HandleStellarSystemVisibility` gives an unowned stellar
+///    the player's system's ID when that system lists it, before any
+///    visibility test (@0x32c58-0x32ca1), and `_ResetPlayer` has just set
+///    that system to 128 (@0x1d485). A 128 the catalog lacks lists
+///    nothing, so it needs no existence test.
+/// 3. The lowest visible lister, shadowed or not, and
+/// 4. the lowest of any kind, even hidden: `_FindSystemFromStellar`'s two
+///    passes (@0x7edc-0x7f56).
+fn resume_system(galaxy: &OverlaidGalaxy, listers: &[SystemId]) -> Option<SystemId> {
+    const RESET_SYSTEM: SystemId = SystemId(128);
+    galaxy
+        .owner(listers)
+        .or_else(|| listers.contains(&RESET_SYSTEM).then_some(RESET_SYSTEM))
+        .or_else(|| {
+            listers
+                .iter()
+                .copied()
+                .find(|&system| galaxy.exists(system) && galaxy.visible(system))
+        })
+        .or_else(|| listers.first().copied())
+}
+
+/// The lowest system on `galaxy`'s map that `catalog` can read: where a
+/// load falls back to, as `_LoadPilotData` takes the first system with
+/// +0x1ed set (@0x752ea-0x75316).
+fn lowest_system(
+    galaxy: &OverlaidGalaxy,
+    catalog: &(impl PilotCatalog + ?Sized),
+) -> Option<SystemId> {
+    galaxy
+        .map()
+        .systems()
+        .find(|&system| catalog.system_exists(system))
 }
 
 /// Where `pilot`, flown among its system's stellars `here`, resumes
@@ -6098,7 +6608,7 @@ pub(super) mod tests {
 
     /// A session on course for 131, due east on the map, with the ship
     /// put at `position`, moving at `velocity` and facing `heading`.
-    fn bound_for_131(
+    pub(super) fn bound_for_131(
         catalog: &FakePilotCatalog,
         position: Vec2,
         velocity: Vec2,
@@ -6115,7 +6625,7 @@ pub(super) mod tests {
     }
 
     /// Far enough out to jump, below the centre.
-    const OUT: Vec2 = Vec2 { x: 0.0, y: 1200.0 };
+    pub(super) const OUT: Vec2 = Vec2 { x: 0.0, y: 1200.0 };
 
     #[test]
     fn a_jump_begun_facing_away_turns_at_the_turn_rate_and_begins_facing_the_bearing() {
@@ -6696,6 +7206,22 @@ pub(super) mod tests {
         assert!(!session.take_save_due(), "a jump alone saves nothing");
     }
 
+    #[test]
+    fn a_strict_play_pilots_jump_makes_no_save_due() {
+        let catalog = edge_lander();
+        let mut session = landed_at_the_edge(&catalog);
+        session.pilot = session.pilot.clone().with_strict_play(true);
+        session.take_off(&catalog, &mut NeverFires);
+        session.take_save_due();
+        begin_jump_now(&mut session).expect("jumps from the edge");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.pilot().system(), SystemId(132));
+        assert!(
+            !session.take_save_due(),
+            "the original saves on no jump arrival, strict or not"
+        );
+    }
+
     /// A pilot landed on planet 128 in system 130, with 7 credits and a
     /// day gone by, taken from a session.
     fn landed_pilot(catalog: &FakePilotCatalog) -> Pilot {
@@ -6733,17 +7259,330 @@ pub(super) mod tests {
         assert_eq!(session.pilot().stellar(), None);
     }
 
+    /// [`landed_pilot`] moved to system 131 and last landed on stellar
+    /// 999, which no system lists.
+    fn unlisted_pilot(catalog: &FakePilotCatalog) -> Pilot {
+        let mut pilot = landed_pilot(catalog);
+        pilot.system = SystemId(131);
+        pilot.stellar = Some(StellarId(999));
+        pilot
+    }
+
+    fn engine_unlisted() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::UnlistedStellar, RuleSource::Engine)
+    }
+
+    /// Asserts `session` flies undocked at its system's centre, having
+    /// forgotten its stellar.
+    fn assert_undocked_at_centre(session: &Session) {
+        assert_eq!(session.landed(), None);
+        assert_eq!(*session.player(), ShipState::default());
+        assert_eq!(session.pilot().stellar(), None);
+    }
+
     #[test]
-    fn flying_a_pilot_in_a_system_that_no_longer_exists_is_an_error() {
-        let pilot = landed_pilot(&catalog());
+    fn loading_a_pilot_whose_stellar_no_system_lists_keeps_its_system_by_default_and_says_so() {
+        let catalog = catalog();
+        let session =
+            Session::load(&catalog, unlisted_pilot(&catalog), &Rulebook::default()).expect("loads");
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_undocked_at_centre(&session);
+        assert!(session.load_repaired());
+    }
+
+    #[test]
+    fn loading_an_unlisted_stellar_by_the_engines_reading_moves_to_the_lowest_system() {
+        let catalog = catalog();
+        let session =
+            Session::load(&catalog, unlisted_pilot(&catalog), &engine_unlisted()).expect("loads");
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(session.pilot().system(), SystemId(130));
+        assert_undocked_at_centre(&session);
+        assert!(session.load_repaired());
+    }
+
+    #[test]
+    fn loading_a_never_landed_pilot_repairs_nothing_under_either_reading() {
+        let catalog = catalog();
+        let mut pilot = Session::start(&catalog).expect("starts").pilot().clone();
+        pilot.system = SystemId(131);
+        assert_eq!(pilot.stellar(), None);
+        for rules in [Rulebook::default(), engine_unlisted()] {
+            let session = Session::load(&catalog, pilot.clone(), &rules).expect("loads");
+            assert_eq!(session.system(), SystemId(131), "{rules:?}");
+            assert!(!session.load_repaired(), "{rules:?}");
+        }
+    }
+
+    #[test]
+    fn loading_a_pilot_whose_system_is_gone_moves_to_the_lowest_that_exists() {
+        // 130 is gone with its stellars, so no system lists 128 either;
+        // the star map still has 130, 132 and 133, none of which exists.
         let gone = FakePilotCatalog {
             systems: vec![SystemId(131)],
+            sites: vec![(SystemId(131), vec![planet(140, 0.0, 0.0)])],
             ..catalog()
         };
+        let mut never_landed = Session::start(&catalog()).expect("starts").pilot().clone();
+        never_landed.stellar = None;
+        let mut unlisted = landed_pilot(&catalog());
+        unlisted.stellar = Some(StellarId(999));
+        for pilot in [never_landed, unlisted] {
+            assert_eq!(pilot.system(), SystemId(130));
+            for rules in [Rulebook::default(), engine_unlisted()] {
+                let session = Session::load(&gone, pilot.clone(), &rules).expect("loads");
+                assert_eq!(session.system(), SystemId(131), "{rules:?}");
+                assert_eq!(session.pilot().system(), SystemId(131), "{rules:?}");
+                assert_undocked_at_centre(&session);
+                assert!(session.load_repaired(), "{rules:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn loading_with_no_system_at_all_is_still_no_system() {
+        let pilot = landed_pilot(&catalog());
+        let none = FakePilotCatalog {
+            systems: vec![],
+            ..catalog()
+        };
+        for rules in [Rulebook::default(), engine_unlisted()] {
+            assert_eq!(
+                Session::load(&none, pilot.clone(), &rules),
+                Err(StartError::NoSystem(SystemId(130)))
+            );
+        }
+        let mut moved = pilot;
+        moved.stellar = Some(StellarId(999));
         assert_eq!(
-            Session::fly(&gone, pilot),
-            Err(StartError::NoSystem(SystemId(130)))
+            Session::load(&none, moved, &engine_unlisted()),
+            Err(StartError::NoSystem(SystemId(130))),
+            "the saved system, not one a fallback chose"
         );
+    }
+
+    #[test]
+    fn loading_a_pilot_whose_system_is_gone_but_whose_stellar_is_listed_resumes_as_phase_13_places_it()
+     {
+        let catalog = catalog();
+        let mut pilot = landed_pilot(&catalog);
+        pilot.system = SystemId(133);
+        pilot.stellar = Some(StellarId(140));
+        for rules in [Rulebook::default(), engine_unlisted()] {
+            let session = Session::load(&catalog, pilot.clone(), &rules).expect("loads");
+            assert_eq!(session.system(), SystemId(131), "{rules:?}");
+            assert_eq!(session.landed(), Some(StellarId(140)), "{rules:?}");
+            assert!(!session.load_repaired(), "{rules:?}");
+        }
+    }
+
+    #[test]
+    fn a_normal_load_repairs_nothing() {
+        let catalog = catalog();
+        let pilot = landed_pilot(&catalog);
+        for rules in [Rulebook::default(), engine_unlisted()] {
+            let session = Session::load(&catalog, pilot.clone(), &rules).expect("loads");
+            assert_eq!(session.landed(), Some(StellarId(128)));
+            assert!(!session.load_repaired());
+        }
+        assert!(!Session::start(&catalog).expect("starts").load_repaired());
+    }
+
+    #[test]
+    fn fly_reads_the_default_rulebook() {
+        let catalog = catalog();
+        let session = Session::fly(&catalog, unlisted_pilot(&catalog)).expect("flies");
+        assert_eq!(session.system(), SystemId(131));
+        assert!(session.load_repaired());
+    }
+
+    /// [`catalog`] with 131's planet 140 at (50, 60), off its centre.
+    fn off_centre() -> FakePilotCatalog {
+        FakePilotCatalog {
+            sites: vec![
+                (
+                    SystemId(130),
+                    vec![planet(128, 30.0, -40.0), planet(129, 2000.0, 0.0)],
+                ),
+                (SystemId(131), vec![planet(140, 50.0, 60.0)]),
+            ],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn flying_a_pilot_whose_stellar_another_system_owns_resumes_docked_there() {
+        let catalog = off_centre();
+        let mut pilot = landed_pilot(&catalog);
+        pilot.stellar = Some(StellarId(140));
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.player().position, Vec2::new(50.0, 60.0));
+        session.assert_docked_among_shown();
+    }
+
+    #[test]
+    fn flying_a_pilot_whose_system_is_gone_resumes_in_its_stellars_owner() {
+        let mut catalog = off_centre();
+        let mut pilot = landed_pilot(&catalog);
+        pilot.stellar = Some(StellarId(140));
+        catalog.systems = vec![SystemId(131)];
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.player().position, Vec2::new(50.0, 60.0));
+        session.assert_docked_among_shown();
+    }
+
+    #[test]
+    fn a_stellar_its_saved_system_lists_but_another_owns_resumes_at_the_owner() {
+        // 130 lists 140 too, at its own place, lower than 131.
+        let catalog = FakePilotCatalog {
+            sites: vec![
+                (
+                    SystemId(130),
+                    vec![planet(128, 30.0, -40.0), planet(140, 70.0, 80.0)],
+                ),
+                (SystemId(131), vec![planet(140, 50.0, 60.0)]),
+            ],
+            ..catalog()
+        };
+        let mut pilot = landed_pilot(&catalog);
+        pilot.system = SystemId(131);
+        pilot.stellar = Some(StellarId(140));
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(130));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.player().position, Vec2::new(70.0, 80.0));
+        session.assert_docked_among_shown();
+    }
+
+    /// `systems`, each `(id, place)`, with every system the overlay
+    /// hides in `hidden`.
+    fn galaxy_of(systems: &[(i16, (f32, f32))], hidden: &[i16]) -> OverlaidGalaxy {
+        let mut overlay = crate::story::GalaxyOverlay::default();
+        for &system in hidden {
+            overlay.set_visible(SystemId(system), Some(false));
+        }
+        OverlaidGalaxy::new(
+            systems
+                .iter()
+                .map(|&(id, place)| star(id, place, &[]))
+                .collect(),
+            overlay,
+        )
+    }
+
+    fn systems(ids: &[i16]) -> Vec<SystemId> {
+        ids.iter().copied().map(SystemId).collect()
+    }
+
+    #[test]
+    fn resume_system_takes_the_owner_first() {
+        let both = galaxy_of(&[(128, (0.0, 0.0)), (200, (100.0, 0.0))], &[]);
+        assert_eq!(
+            resume_system(&both, &systems(&[128, 200])),
+            Some(SystemId(128))
+        );
+        let hidden_128 = galaxy_of(&[(128, (0.0, 0.0)), (129, (50.0, 0.0))], &[128]);
+        assert_eq!(
+            resume_system(&hidden_128, &systems(&[128, 129])),
+            Some(SystemId(129)),
+            "the owner over a 128 that doesn't own it"
+        );
+        let shadowed_128 = galaxy_of(
+            &[(127, (0.0, 0.0)), (128, (0.0, 0.0)), (129, (50.0, 0.0))],
+            &[],
+        );
+        assert_eq!(
+            resume_system(&shadowed_128, &systems(&[128, 129])),
+            Some(SystemId(129))
+        );
+    }
+
+    #[test]
+    fn resume_system_takes_128_for_an_unowned_stellar_hidden_or_shadowed() {
+        // 200 is visible but shadowed by 199 at its place: no owner.
+        let hidden_128 = galaxy_of(
+            &[(128, (0.0, 0.0)), (199, (100.0, 0.0)), (200, (100.0, 0.0))],
+            &[128],
+        );
+        assert_eq!(
+            resume_system(&hidden_128, &systems(&[128, 200])),
+            Some(SystemId(128))
+        );
+        let shadowed_128 = galaxy_of(&[(127, (0.0, 0.0)), (128, (0.0, 0.0))], &[]);
+        assert_eq!(
+            resume_system(&shadowed_128, &systems(&[128])),
+            Some(SystemId(128))
+        );
+    }
+
+    #[test]
+    fn resume_system_takes_the_lowest_visible_lister_next() {
+        let galaxy = galaxy_of(
+            &[(150, (0.0, 0.0)), (200, (100.0, 0.0)), (201, (100.0, 0.0))],
+            &[150],
+        );
+        assert_eq!(
+            resume_system(&galaxy, &systems(&[150, 201])),
+            Some(SystemId(201)),
+            "the shadowed 201 over the lower hidden 150"
+        );
+        let gone = galaxy_of(&[(200, (100.0, 0.0)), (201, (100.0, 0.0))], &[]);
+        assert_eq!(
+            resume_system(&gone, &systems(&[150, 201])),
+            Some(SystemId(201)),
+            "a lister not in the galaxy is not visible"
+        );
+    }
+
+    #[test]
+    fn resume_system_takes_the_lowest_lister_of_any_kind_last() {
+        let galaxy = galaxy_of(&[(150, (0.0, 0.0)), (160, (100.0, 0.0))], &[150, 160]);
+        assert_eq!(
+            resume_system(&galaxy, &systems(&[150, 160])),
+            Some(SystemId(150))
+        );
+    }
+
+    #[test]
+    fn resume_system_has_none_without_listers() {
+        let galaxy = galaxy_of(&[(128, (0.0, 0.0))], &[]);
+        assert_eq!(resume_system(&galaxy, &[]), None);
+    }
+
+    #[test]
+    fn facing_on_load_turns_a_docked_pilot_to_the_drawn_heading() {
+        let catalog = catalog();
+        let mut session = Session::fly(&catalog, landed_pilot(&catalog)).expect("flies");
+        let mut chance = Scripted::rolling(&[359]);
+        session.face_on_load(&mut chance);
+        assert_eq!(session.player().heading, 359.0);
+        assert_eq!(chance.sides_asked, [360], "a whole degree, 0 to 359");
+        assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
+    }
+
+    #[test]
+    fn facing_on_load_turns_an_undocked_pilot_too() {
+        let catalog = catalog();
+        for draw in [0, 123] {
+            let mut session = Session::start(&catalog).expect("starts");
+            let mut chance = Scripted::rolling(&[draw]);
+            session.face_on_load(&mut chance);
+            assert_eq!(session.player().heading, f32::from(draw));
+            assert_eq!(chance.sides_asked, [360]);
+        }
+    }
+
+    #[test]
+    fn flying_alone_leaves_the_heading_at_0() {
+        let catalog = catalog();
+        let session = Session::fly(&catalog, landed_pilot(&catalog)).expect("flies");
+        assert_eq!(session.player().heading, 0.0);
     }
 
     #[test]
@@ -13150,8 +13989,9 @@ pub(super) mod tests {
         }
     }
 
-    /// Ship `id` armed with one of `weapon`, 30 pixels across, breaking
-    /// up for 2 ticks before `bööm` 133 destroys it.
+    /// Ship `id` armed with one of `weapon`, 30 pixels across, of
+    /// `DeathDelay` 2: an NPC breaks up for a tick before `bööm` 133
+    /// destroys it, the player for 4.
     fn armed_hull(id: i16, weapon: i16) -> HullRecord {
         HullRecord {
             weapons: vec![StockWeapon {
@@ -13364,7 +14204,7 @@ pub(super) mod tests {
 
     /// Every NPC idles and holds its trigger.
     #[derive(Debug)]
-    struct Firing;
+    pub(super) struct Firing;
 
     impl Behaviour for Firing {
         fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
@@ -13512,7 +14352,7 @@ pub(super) mod tests {
         }
     }
 
-    const DISABLING: Rules = Rules {
+    pub(super) const DISABLING: Rules = Rules {
         disable: &Disabling,
         defence: &Allegiance,
         law: &NovaLaw {
@@ -13711,8 +14551,13 @@ pub(super) mod tests {
             [
                 (Some(Condition::Intact), [0, 0, 0, 0]),
                 (Some(Condition::Disabled), [-3, -3, 4, 10]),
-                (Some(Condition::Dying { ticks_left: 1 }), [-10, -10, 9, 20]),
-                (Some(Condition::Dying { ticks_left: 0 }), [-10, -10, 9, 20]),
+                (
+                    Some(Condition::Dying {
+                        ticks_left: 2,
+                        starting: true
+                    }),
+                    [-10, -10, 9, 20]
+                ),
                 (None, [-10, -10, 9, 20]),
             ],
             "hits that leave it intact change nothing; by the engine's law, the neutral gains"
@@ -14142,8 +14987,13 @@ pub(super) mod tests {
             [
                 (Some(Condition::Intact), 0),
                 (Some(Condition::Disabled), 0),
-                (Some(Condition::Dying { ticks_left: 1 }), 10),
-                (Some(Condition::Dying { ticks_left: 0 }), 10),
+                (
+                    Some(Condition::Dying {
+                        ticks_left: 2,
+                        starting: true
+                    }),
+                    10
+                ),
                 (None, 10),
             ],
             "disabling credits nothing, the break-up 50 / 5, its destruction nothing"
@@ -14238,6 +15088,7 @@ pub(super) mod tests {
             by,
             damage: 9.0,
             downed: Some(Downed::BreakingUp),
+            provokes: true,
         };
         session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
         let by_the_police = session.pilot().combat_rating();
@@ -14285,6 +15136,7 @@ pub(super) mod tests {
                 by: ShipRef::Npc(fighter),
                 damage: 9.0,
                 downed: Some(Downed::BreakingUp),
+                provokes: true,
             }],
             &was,
         );
@@ -14311,6 +15163,7 @@ pub(super) mod tests {
             by: ShipRef::Player,
             damage: 9.0,
             downed,
+            provokes: true,
         };
         session.credit_kills(
             &[
@@ -14364,8 +15217,13 @@ pub(super) mod tests {
             [
                 (Some(Condition::Intact), 0),
                 (Some(Condition::Disabled), 1),
-                (Some(Condition::Dying { ticks_left: 1 }), 1),
-                (Some(Condition::Dying { ticks_left: 0 }), 1),
+                (
+                    Some(Condition::Dying {
+                        ticks_left: 2,
+                        starting: true
+                    }),
+                    1
+                ),
                 (None, 2),
             ]
         );
@@ -14773,6 +15631,237 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_shockwave_neither_cloaks_nor_uncloaks_the_ship_it_hits() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let shockwave = Strike {
+            ship: ShipRef::Npc(NpcId(0)),
+            by: ShipRef::Player,
+            damage: 32.0,
+            downed: None,
+            provokes: false,
+        };
+        session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
+            flags2: crate::cloak::CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        session.cloak_hits(&[shockwave]);
+        assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            decloaks_when_hit: true,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        session.cloak_hits(&[shockwave]);
+        assert_eq!(session.npcs()[0].cloak, CLOAKED);
+    }
+
+    // The death shockwave.
+
+    /// [`lawful`], with the player's ship 128 a fast one.
+    fn shockwave_catalog() -> FakePilotCatalog {
+        let mut catalog = lawful();
+        catalog.ship_records.push(crate::testkit::ship(128, FAST));
+        catalog
+    }
+
+    /// `catalog`'s session with the player at rest at the centre and
+    /// NPC 0 at rest 40 pixels above it, both of `Mass` 200 and
+    /// regenerating nothing.
+    fn beside_a_heavy_npc(catalog: &FakePilotCatalog) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        session.player.position = Vec2::ZERO;
+        session.player.velocity = Vec2::ZERO;
+        session.hull.mass = 200.0;
+        session.stats.shield_regen = 0.0;
+        session.stats.armor_regen = 0.0;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.state.position = Vec2::new(0.0, -40.0);
+        npc.hull.mass = 200.0;
+        npc.hull.tough = false;
+        npc.stats.shield_regen = 0.0;
+        npc.stats.armor_regen = 0.0;
+        session
+    }
+
+    /// Breaks up a ship of `reserves` and `condition` to the last tick
+    /// before its final explosion, which the next fight tick sets off.
+    fn on_its_last_tick(reserves: &mut Reserves, condition: &mut Condition) {
+        reserves.armor.now = -1.0;
+        *condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+    }
+
+    /// Shields down and `armor` of `armor_max` armour.
+    fn bare(reserves: &mut Reserves, armor: f32, armor_max: f32) {
+        reserves.shield = crate::reserves::Gauge { now: 0.0, max: 0.0 };
+        reserves.armor = crate::reserves::Gauge {
+            now: armor,
+            max: armor_max,
+        };
+    }
+
+    fn near(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    #[test]
+    fn the_players_heavy_hull_exploding_damages_and_pushes_npcs_but_not_itself() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        session.traffic.npcs_mut()[0].reserves = Reserves::full(100.0, 300.0, 100.0);
+        on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+        let player = session.pilot.reserves;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.player_condition(), Condition::Destroyed);
+        let npc = &session.npcs()[0];
+        assert_eq!(
+            (npc.reserves.shield.now, npc.reserves.armor.now),
+            (68.0, 300.0)
+        );
+        assert!(
+            near(npc.state.velocity, Vec2::new(0.0, -3.75)),
+            "{:?}",
+            npc.state.velocity
+        );
+        assert_eq!(
+            session.pilot.reserves, player,
+            "its own shockwave spares it"
+        );
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_ship_drifting_away_is_pushed_short_of_its_class_speed_and_not_past_it() {
+        let catalog = shockwave_catalog();
+        for (drift, after) in [(-2.0, -5.75), (-6.0, -6.0)] {
+            let mut session = beside_a_heavy_npc(&catalog);
+            session.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.0, drift);
+            on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let velocity = session.npcs()[0].state.velocity;
+            assert!(
+                near(velocity, Vec2::new(0.0, after)),
+                "class speed 6, from {drift}: {velocity:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_exploding_heavy_npc_damages_and_pushes_the_player() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        session.pilot.reserves.shield = crate::reserves::Gauge::full(100.0);
+        session.pilot.reserves.armor = crate::reserves::Gauge::full(300.0);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        on_its_last_tick(&mut npc.reserves, &mut npc.condition);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.npcs(), [], "the wreck is taken out");
+        let reserves = session.pilot.reserves;
+        assert_eq!((reserves.shield.now, reserves.armor.now), (68.0, 300.0));
+        assert!(
+            near(session.player().velocity, Vec2::new(0.0, 3.75)),
+            "{:?}",
+            session.player().velocity
+        );
+    }
+
+    #[test]
+    fn a_player_braking_for_its_jump_is_hit_by_a_shockwave_but_not_pushed() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        session.pilot.reserves.shield = crate::reserves::Gauge::full(100.0);
+        session.jump = Some(Jump::PreJump {
+            to: SystemId(131),
+            bearing: None,
+            warp: None,
+        });
+        let npc = &mut session.traffic.npcs_mut()[0];
+        on_its_last_tick(&mut npc.reserves, &mut npc.condition);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot.reserves.shield.now, 68.0, "hit");
+        assert_eq!(session.player().velocity, Vec2::ZERO, "not pushed");
+    }
+
+    #[test]
+    fn the_players_shockwave_on_a_300_armour_ship_convicts_of_nothing_and_credits_no_kill() {
+        let catalog = shockwave_catalog();
+        for (armor, before, after) in [
+            (110.0, Condition::Intact, 100.99),
+            (20.0, Condition::Disabled, 1.0),
+        ] {
+            let mut session = beside_a_heavy_npc(&catalog);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            bare(&mut npc.reserves, armor, 300.0);
+            npc.condition = before;
+            on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+            let rating = session.pilot.combat_rating;
+            let witness = Witness::default();
+            let rules = Rules {
+                law: &witness,
+                ..Rules::default()
+            };
+            session.tick_combat(rules, &mut NeverFires);
+            let npc = &session.npcs()[0];
+            assert!(
+                (npc.reserves.armor.now - after).abs() < 1e-4,
+                "{armor}: {:?}",
+                npc.reserves
+            );
+            assert_eq!(npc.condition, before, "{armor}");
+            assert_eq!(witness.seen.take(), [], "{armor}");
+            assert_eq!(session.pilot.combat_rating, rating, "{armor}");
+        }
+    }
+
+    #[test]
+    fn the_players_shockwave_disabling_a_40000_armour_ship_convicts_once() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        bare(
+            &mut session.traffic.npcs_mut()[0].reserves,
+            13_350.0,
+            40_000.0,
+        );
+        on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let npc = &session.npcs()[0];
+        assert_eq!(npc.reserves.armor.now, 13_333.0, "floored, still disabled");
+        assert_eq!(npc.condition, Condition::Disabled);
+        assert_eq!(
+            records(&session),
+            [-3, -3, 4, 10],
+            "convicted of disabling it"
+        );
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(records(&session), [-3, -3, 4, 10], "once");
+    }
+
+    #[test]
+    fn an_npcs_shockwave_convicts_the_player_of_nothing() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        let mut victim = session.npcs()[0].clone();
+        victim.state.position = Vec2::new(30.0, -40.0);
+        bare(&mut victim.reserves, 13_350.0, 40_000.0);
+        let victim = session.traffic.add_npc(victim);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        on_its_last_tick(&mut npc.reserves, &mut npc.condition);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let victim = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == victim)
+            .expect("still here");
+        assert_eq!(victim.condition, Condition::Disabled);
+        assert_eq!(victim.reserves.armor.now, 13_333.0);
+        assert_eq!(records(&session), [0, 0, 0, 0]);
+    }
+
+    #[test]
     fn a_watched_ship_coming_out_of_a_gate_is_observed_once_it_is_out() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
@@ -14895,13 +15984,89 @@ pub(super) mod tests {
             reverse: false,
         });
         let drifted = *session.player();
-        assert_eq!(drifted.velocity, moving.velocity, "no thrust");
+        assert_eq!(
+            drifted.velocity,
+            moving.velocity * crate::flight::DISABLED_DRAG,
+            "no thrust, only drag"
+        );
         assert_eq!(drifted.heading, moving.heading, "no turn");
-        assert_eq!(drifted.position, moving.position + moving.velocity);
+        assert_eq!(
+            drifted.position,
+            moving.position + moving.velocity * crate::flight::DISABLED_DRAG,
+            "moved by the damped velocity"
+        );
         assert_eq!(session.take_sounds(), [SimSound::ThrustStopped]);
         session.hold_trigger(FIRE);
         session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.shots(), [], "nor fires");
+    }
+
+    /// A session whose player has thrust once and is then disabled.
+    fn disabled_moving_player(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.tick(Controls {
+            thrust: true,
+            ..Controls::default()
+        });
+        session.tick_combat(DISABLING, &mut NeverFires);
+        assert_eq!(session.player_condition(), Condition::Disabled);
+        session
+    }
+
+    #[test]
+    fn a_disabled_player_slows_by_0_995_a_tick() {
+        let catalog = armed();
+        let mut session = disabled_moving_player(&catalog);
+        let start = session.player().velocity;
+        let mut expected = start;
+        for _ in 0..10 {
+            session.tick(Controls::default());
+            expected = expected * crate::flight::DISABLED_DRAG;
+        }
+        assert_eq!(session.player().velocity, expected);
+        assert!(expected.length() < start.length() * 0.96);
+    }
+
+    #[test]
+    fn a_breaking_up_player_slows_by_0_995_a_tick() {
+        let catalog = armed();
+        let mut session = disabled_moving_player(&catalog);
+        session.condition = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        let before = *session.player();
+        session.tick(Controls::default());
+        let damped = before.velocity * crate::flight::DISABLED_DRAG;
+        assert_eq!(session.player().velocity, damped);
+        assert_eq!(session.player().position, before.position + damped);
+    }
+
+    #[test]
+    fn an_intact_player_coasting_keeps_its_velocity() {
+        let catalog = armed();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.tick(Controls {
+            thrust: true,
+            ..Controls::default()
+        });
+        let moving = *session.player();
+        session.tick(Controls::default());
+        assert_eq!(session.player().velocity, moving.velocity);
+    }
+
+    #[test]
+    fn a_disabled_player_drags_once_a_tick_across_a_full_session_tick() {
+        let catalog = armed();
+        let mut session = disabled_moving_player(&catalog);
+        let start = session.player().velocity;
+        session.tick(Controls::default());
+        session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(
+            session.player().velocity,
+            start * crate::flight::DISABLED_DRAG
+        );
     }
 
     #[test]
@@ -14926,9 +16091,118 @@ pub(super) mod tests {
         assert_eq!(session.take_sounds(), [], "a refusal emits nothing");
     }
 
+    // A disabled player's land key (`_HandlePlayerDockRequest`'s silent
+    // refusal at 0x66af7).
+
+    /// [`catalog`]'s session with the player disabled, its sounds and
+    /// save taken.
+    fn disabled(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.condition = Condition::Disabled;
+        let _ = session.take_sounds();
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn a_disabled_players_l_with_no_target_selects_the_nearest_stellar_and_says_nothing() {
+        let mut session = disabled(&catalog());
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.nav_target(), Some(StellarId(128)), "@0x6a901");
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn a_disabled_players_l_over_its_cleared_target_neither_lands_nor_says_why() {
+        let mut session = disabled(&catalog());
+        session.select_stellar(StellarPick::Slot(0));
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.landed(), None);
+        assert_eq!(session.nav_target(), Some(StellarId(128)), "kept");
+        assert_eq!(session.take_sounds(), [], "no landing sound");
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_disabled_players_l_too_far_or_denied_says_nothing_either() {
+        let mut session = disabled(&catalog());
+        session.select_stellar(StellarPick::Slot(1));
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::Disabled),
+            "too far: the range test comes after (@0x67838)"
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(129)), "kept");
+        let catalog = governed([Some(WANTED), Some(LAWFUL)], None);
+        let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
+        session.condition = Condition::Disabled;
+        session.select_stellar(StellarPick::Slot(0));
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::Disabled),
+            "denied: the clearance comes after (@0x67903)"
+        );
+    }
+
+    #[test]
+    fn a_disabled_players_l_on_an_unlandable_target_says_why_as_an_intact_one_does() {
+        let mut catalog = catalog();
+        catalog.sites[0].1[0].flags = 0;
+        let mut session = disabled(&catalog);
+        session.select_stellar(StellarPick::Slot(0));
+        let refusal = Err(LandingRefusal::NotLandable {
+            stellar: StellarId(128),
+            station: false,
+        });
+        assert_eq!(session.land(), refusal, "@0x66977");
+        session.condition = Condition::Intact;
+        assert_eq!(session.land(), refusal, "the same refusal");
+    }
+
+    #[test]
+    fn a_disabled_players_l_in_a_system_with_no_stellars_says_so_as_an_intact_one_does() {
+        let empty = FakePilotCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        };
+        let mut session = disabled(&empty);
+        assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x669aa");
+        session.condition = Condition::Intact;
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NoStellars),
+            "the same refusal"
+        );
+    }
+
+    #[test]
+    fn a_disabled_players_l_over_a_hypergate_does_not_enter_it() {
+        let catalog = gated();
+        let mut session = disabled(&catalog);
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.nav_target(), Some(StellarId(300)));
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Err(GateRefusal::NotAtGate),
+            "no entry"
+        );
+    }
+
+    #[test]
+    fn a_breaking_up_players_l_selects_nothing() {
+        let mut session = disabled(&catalog());
+        session.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.nav_target(), None, "the breakup gate @0x6a8cb");
+    }
+
     /// An NPC one shot of whose disables, breaks up and destroys the
     /// player at once: no shield, armour gone.
-    fn deadly() -> FakePilotCatalog {
+    pub(super) fn deadly() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.weapons = vec![WeaponRecord {
             mass_dmg: 100,
@@ -14966,6 +16240,571 @@ pub(super) mod tests {
         assert_eq!(session.player().velocity, Vec2::ZERO);
         assert_eq!(session.land(), Err(LandingRefusal::Disabled));
         assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn the_players_fate_is_exploded_only_on_the_tick_it_is_destroyed_then_holding() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        let mut broke_up = false;
+        let mut exploded = false;
+        for _ in 0..40 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let events = session.take_combat_events();
+            let destroyed = events.iter().any(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Destroyed {
+                        ship: ShipRef::Player,
+                        ..
+                    }
+                )
+            });
+            if destroyed {
+                assert_eq!(session.player_fate(), PlayerFate::Exploded);
+                exploded = true;
+                break;
+            }
+            if session.player_condition() != Condition::Intact {
+                assert!(
+                    matches!(session.player_fate(), PlayerFate::BreakingUp { .. }),
+                    "{:?}",
+                    session.player_fate()
+                );
+                broke_up = true;
+            }
+        }
+        assert!(
+            broke_up && exploded,
+            "broke up {broke_up}, exploded {exploded}"
+        );
+        for _ in 0..3 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            assert!(
+                matches!(session.player_fate(), PlayerFate::Holding { .. }),
+                "{:?}",
+                session.player_fate()
+            );
+        }
+    }
+
+    /// One whole tick of `session`, as the flight view steps it: flight,
+    /// then the traffic under `catalog`'s firing NPC, then the fight.
+    fn full_tick(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.tick(Controls::default());
+        session.tick_traffic(catalog, &Firing, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+
+    /// Steps `session` under fire from `catalog`'s NPC until the player's
+    /// ship explodes, and returns with it on the explosion's tick.
+    fn until_exploded(session: &mut Session, catalog: &FakePilotCatalog) {
+        for _ in 0..60 {
+            full_tick(session, catalog);
+            if session.player_fate() == PlayerFate::Exploded {
+                return;
+            }
+        }
+        panic!("the player's ship never exploded");
+    }
+
+    #[test]
+    fn the_hold_runs_242_ticks_after_the_explosion_and_expires_on_the_243rd() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        until_exploded(&mut session, &catalog);
+        assert!(!session.hold_expired());
+        for tick in 1..=HOLD_TICKS {
+            full_tick(&mut session, &catalog);
+            assert_eq!(
+                session.player_fate(),
+                PlayerFate::Holding {
+                    ticks_left: HOLD_TICKS - tick
+                },
+                "dead tick {tick}"
+            );
+            assert!(!session.hold_expired(), "dead tick {tick}");
+            assert!(!session.take_hold_expired(), "dead tick {tick}");
+        }
+        full_tick(&mut session, &catalog);
+        assert_eq!(session.player_fate(), PlayerFate::Holding { ticks_left: 0 });
+        assert!(session.hold_expired(), "on the 243rd dead tick");
+        assert!(session.take_hold_expired());
+        assert!(!session.take_hold_expired(), "taken once");
+        assert!(session.hold_expired(), "taking it leaves the stage alone");
+        full_tick(&mut session, &catalog);
+        assert!(!session.take_hold_expired(), "it expires once");
+        assert!(session.hold_expired());
+    }
+
+    #[test]
+    fn every_dead_tick_lets_go_of_the_players_target_and_nav_target() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.condition = Condition::Destroyed;
+        for ticks_left in [5, 1, 0] {
+            session.player_end = Some(Ending::Holding { ticks_left });
+            session.target = Some(NpcId(0));
+            session.nav_target = Some(StellarId(128));
+            session.tick(Controls::default());
+            assert_eq!(session.target, None, "{ticks_left} left");
+            assert_eq!(session.nav_target(), None, "{ticks_left} left");
+        }
+        assert!(session.hold_expired(), "the last was the expiry's tick");
+        session.target = Some(NpcId(0));
+        session.nav_target = Some(StellarId(128));
+        session.tick(Controls::default());
+        assert_eq!(
+            (session.target, session.nav_target()),
+            (None, None),
+            "and after it"
+        );
+    }
+
+    #[test]
+    fn a_destroyed_player_with_no_ending_recorded_starts_the_hold() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.condition = Condition::Destroyed;
+        session.tick(Controls::default());
+        assert_eq!(
+            session.player_fate(),
+            PlayerFate::Holding {
+                ticks_left: HOLD_TICKS - 1
+            }
+        );
+    }
+
+    #[test]
+    fn the_scene_runs_on_during_the_hold() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        until_exploded(&mut session, &catalog);
+        session.take_combat_events();
+        session.npc_mut(NpcId(0)).expect("the NPC").state.velocity = Vec2::new(1.0, 0.0);
+        let before = session.npcs()[0].state.position;
+        let mut fired = false;
+        for _ in 0..40 {
+            full_tick(&mut session, &catalog);
+            assert!(matches!(session.player_fate(), PlayerFate::Holding { .. }));
+            fired |= session.take_combat_events().iter().any(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Fired {
+                        ship: ShipRef::Npc(NpcId(0)),
+                        ..
+                    }
+                )
+            });
+        }
+        assert_ne!(session.npcs()[0].state.position, before, "the NPC moves");
+        assert!(fired, "the NPC fires");
+    }
+
+    /// A session whose player has exploded and whose hold has run out.
+    fn expired_hold() -> Session {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.condition = Condition::Destroyed;
+        session.player_end = Some(Ending::Holding { ticks_left: 0 });
+        session.tick(Controls::default());
+        assert!(session.hold_expired());
+        session
+    }
+
+    #[test]
+    fn begin_fade_moves_only_an_expired_hold_to_fading() {
+        let catalog = deadly();
+        let mut flying = facing_an_npc(&catalog, 180);
+        flying.begin_fade();
+        assert_eq!(flying.player_fate(), PlayerFate::Flying);
+        let mut holding = facing_an_npc(&catalog, 180);
+        holding.condition = Condition::Destroyed;
+        holding.player_end = Some(Ending::Holding { ticks_left: 3 });
+        holding.begin_fade();
+        assert_eq!(holding.player_fate(), PlayerFate::Holding { ticks_left: 3 });
+        let mut session = expired_hold();
+        session.begin_fade();
+        assert_eq!(session.player_fate(), PlayerFate::Fading);
+        session.tick(Controls::default());
+        assert_eq!(session.player_fate(), PlayerFate::Fading, "ticks keep it");
+        session.end_play();
+        session.begin_fade();
+        assert_eq!(session.player_fate(), PlayerFate::GameOver, "not back");
+    }
+
+    #[test]
+    fn end_play_moves_fading_to_game_over() {
+        let mut session = expired_hold();
+        session.end_play();
+        assert_eq!(
+            session.player_fate(),
+            PlayerFate::Holding { ticks_left: 0 },
+            "not before the fade"
+        );
+        session.begin_fade();
+        session.end_play();
+        assert_eq!(session.player_fate(), PlayerFate::GameOver);
+        assert!(session.hold_expired());
+        session.tick(Controls::default());
+        assert_eq!(session.player_fate(), PlayerFate::GameOver);
+    }
+
+    #[test]
+    fn a_dying_or_dead_player_may_not_be_saved() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.may_save(), "flying");
+        session.condition = Condition::Disabled;
+        assert!(session.may_save(), "disabled");
+        session.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        assert!(!session.may_save(), "breaking up");
+        session.condition = Condition::Destroyed;
+        session.player_exploded_this_tick = true;
+        assert!(!session.may_save(), "exploded");
+        session.player_exploded_this_tick = false;
+        for ending in [
+            Ending::Holding { ticks_left: 9 },
+            Ending::Expired,
+            Ending::Fading,
+            Ending::GameOver,
+        ] {
+            session.player_end = Some(ending);
+            assert!(!session.may_save(), "{ending:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_strict_pilot_ending_play_dying_outside_the_pod_is_deleted() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        let breaking_up = |starting| Condition::Dying {
+            ticks_left: 9,
+            starting,
+        };
+        // Each fate, set up directly, and whether the player is dying in
+        // it (`_IsDying`).
+        let fates = [
+            (Condition::Intact, false, None, PlayerFate::Flying, false),
+            (
+                Condition::Disabled,
+                false,
+                None,
+                PlayerFate::Disabled,
+                false,
+            ),
+            (
+                breaking_up(true),
+                false,
+                None,
+                PlayerFate::BreakingUp {
+                    ticks_left: 9,
+                    starting: true,
+                },
+                true,
+            ),
+            (
+                breaking_up(false),
+                false,
+                None,
+                PlayerFate::BreakingUp {
+                    ticks_left: 9,
+                    starting: false,
+                },
+                true,
+            ),
+            (Condition::Destroyed, true, None, PlayerFate::Exploded, true),
+            (
+                Condition::Destroyed,
+                false,
+                Some(Ending::Holding { ticks_left: 9 }),
+                PlayerFate::Holding { ticks_left: 9 },
+                true,
+            ),
+            (
+                Condition::Destroyed,
+                false,
+                Some(Ending::Expired),
+                PlayerFate::Holding { ticks_left: 0 },
+                true,
+            ),
+            (
+                Condition::Destroyed,
+                false,
+                Some(Ending::Fading),
+                PlayerFate::Fading,
+                true,
+            ),
+            (
+                Condition::Destroyed,
+                false,
+                Some(Ending::GameOver),
+                PlayerFate::GameOver,
+                true,
+            ),
+        ];
+        // The escape ship keeps a real class (`_EscapeShipType` @0x6f4bb);
+        // only the pod is spared.
+        for (condition, exploded, ending, fate, dying) in fates {
+            for strict in [false, true] {
+                for (ship, pod) in [
+                    (ShipId(128), false),
+                    (ShipId(144), false),
+                    (ESCAPE_POD_SHIP, true),
+                ] {
+                    session.condition = condition;
+                    session.player_exploded_this_tick = exploded;
+                    session.player_end = ending;
+                    session.pilot.strict_play = strict;
+                    session.pilot.ship = ship;
+                    assert_eq!(session.player_fate(), fate);
+                    assert_eq!(
+                        session.deletes_pilot_on_ending_play(),
+                        strict && dying && !pod,
+                        "{fate:?} strict {strict} {ship:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_escape_pod_is_ship_895() {
+        assert_eq!(ESCAPE_POD_SHIP, ShipId(895));
+    }
+
+    #[test]
+    fn a_strict_pilot_ending_play_in_the_pod_is_not_deleted_nor_saved() {
+        let mut session = Session::start(&armed()).expect("starts");
+        session.pilot.strict_play = true;
+        session.pilot.ship = ESCAPE_POD_SHIP;
+        session.pod = Some(crate::POD_TICKS);
+        assert_eq!(
+            session.player_fate(),
+            PlayerFate::Ejected {
+                ticks_left: crate::POD_TICKS
+            }
+        );
+        assert!(!session.may_save());
+        assert!(!session.deletes_pilot_on_ending_play());
+    }
+
+    #[test]
+    fn the_players_explosion_halts_the_klaxon_and_warp_sounds_after_the_klaxon() {
+        // DeathDelay 2: a timer of 6, exploding 4 ticks after the breakup.
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        let seen = from_the_breakup(&mut session, &catalog, 9);
+        let halt = SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS);
+        let explosion = seen
+            .iter()
+            .position(|(condition, _)| *condition == Condition::Destroyed)
+            .expect("it explodes");
+        assert_eq!(
+            seen[explosion].1,
+            [SimSound::Klaxon, halt],
+            "the halt follows the klaxon, once"
+        );
+        for (tick, (_, sounds)) in seen.iter().enumerate() {
+            if tick != explosion {
+                assert!(!sounds.contains(&halt), "tick {tick}: {sounds:?}");
+            }
+        }
+        assert!(seen.len() > explosion + 3, "the hold is watched too");
+    }
+
+    #[test]
+    fn the_player_explosions_halts_name_the_klaxon_and_the_warp_sounds() {
+        assert_eq!(
+            crate::sound::PLAYER_EXPLOSION_HALTS,
+            [SoundId(371), SoundId(128), SoundId(129), SoundId(130)]
+        );
+    }
+
+    #[test]
+    fn an_npcs_explosion_raises_no_halt() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let mut sounds = Vec::new();
+        for _ in 0..200 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            sounds.extend(session.take_sounds());
+            if session.npcs().is_empty() {
+                break;
+            }
+        }
+        assert_eq!(session.npcs(), [], "the NPC is destroyed");
+        assert!(
+            !sounds
+                .iter()
+                .any(|sound| matches!(sound, SimSound::Halt(_))),
+            "{sounds:?}"
+        );
+    }
+
+    #[test]
+    fn the_session_takes_the_commands_of_the_players_fate() {
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.takes(PlayerCommand::Map));
+        from_the_breakup(&mut session, &catalog, 1);
+        assert!(matches!(
+            session.player_fate(),
+            PlayerFate::BreakingUp { .. }
+        ));
+        assert!(!session.takes(PlayerCommand::Map));
+        assert!(session.takes(PlayerCommand::Target));
+        while session.player_condition() != Condition::Destroyed {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert!(!session.takes(PlayerCommand::Target));
+    }
+
+    #[test]
+    fn a_new_session_flies() {
+        let session = Session::start(&armed()).expect("starts");
+        assert_eq!(session.player_fate(), PlayerFate::Flying);
+    }
+
+    /// [`deadly`] with the player's ship of `DeathDelay` `death_delay`.
+    pub(super) fn deadly_in(death_delay: i16) -> FakePilotCatalog {
+        let mut catalog = deadly();
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.death_delay = death_delay;
+            }
+        }
+        catalog
+    }
+
+    /// The player's condition and the sounds of each fight tick from the
+    /// one its armour goes on, under fire from `catalog`'s NPC, for up to
+    /// `ticks` ticks; the traffic's own sounds are dropped.
+    pub(super) fn from_the_breakup(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        ticks: usize,
+    ) -> Vec<(Condition, Vec<SimSound>)> {
+        let mut seen = Vec::new();
+        for _ in 0..200 {
+            session.tick_traffic(catalog, &Firing, &mut NeverFires);
+            session.take_sounds();
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let sounds = session.take_sounds();
+            let condition = session.player_condition();
+            if !seen.is_empty() || !matches!(condition, Condition::Intact | Condition::Disabled) {
+                seen.push((condition, sounds));
+            }
+            if seen.len() == ticks {
+                break;
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn the_player_breaking_up_raises_the_klaxon_from_the_tick_after_to_the_explosion() {
+        // DeathDelay 2: a timer of 6, exploding 4 ticks after the breakup.
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        let seen = from_the_breakup(&mut session, &catalog, 7);
+        let klaxon = || vec![SimSound::Klaxon];
+        let dying = |ticks_left| Condition::Dying {
+            ticks_left,
+            starting: false,
+        };
+        assert_eq!(
+            seen[..4],
+            [
+                (
+                    Condition::Dying {
+                        ticks_left: 6,
+                        starting: true
+                    },
+                    vec![]
+                ),
+                (dying(5), klaxon()),
+                (dying(4), klaxon()),
+                (dying(3), klaxon()),
+            ],
+            "none on the breakup tick, then one each tick"
+        );
+        let (exploded, sounds) = &seen[4];
+        assert_eq!(*exploded, Condition::Destroyed);
+        assert_eq!(
+            sounds.first(),
+            Some(&SimSound::Klaxon),
+            "first on the explosion's tick"
+        );
+        assert_eq!(
+            seen[5..],
+            [
+                (Condition::Destroyed, vec![]),
+                (Condition::Destroyed, vec![])
+            ],
+            "none after"
+        );
+    }
+
+    #[test]
+    fn an_npc_breaking_up_raises_no_klaxon() {
+        let mut catalog = armed();
+        for hull in &mut catalog.hulls {
+            hull.death_delay = 10;
+        }
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let mut sounds = Vec::new();
+        let mut broke_up = false;
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            sounds.extend(session.take_sounds());
+            broke_up |= session
+                .npcs()
+                .first()
+                .is_some_and(|npc| matches!(npc.condition, Condition::Dying { .. }));
+        }
+        assert!(broke_up);
+        assert_eq!(session.npcs(), [], "destroyed");
+        assert_eq!(session.player_condition(), Condition::Intact);
+        assert!(!sounds.contains(&SimSound::Klaxon), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_session_given_the_originals_breakup_rule_never_explodes_a_player_without_a_death_delay() {
+        let catalog = deadly_in(0);
+        let by_default = facing_an_npc(&catalog, 180);
+        let mut session = by_default.clone();
+        assert_eq!(
+            from_the_breakup(&mut session, &catalog, 1),
+            [(
+                Condition::Destroyed,
+                vec![SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS)]
+            )],
+            "by default, destroyed as it breaks up, halting its sounds"
+        );
+        let mut session = by_default.with_rules(
+            crate::rulebook::Rulebook::default()
+                .with_override(RuleKey::BreakupStall, RuleSource::Engine),
+        );
+        let seen = from_the_breakup(&mut session, &catalog, 100);
+        assert_eq!(seen.len(), 100);
+        assert!(
+            seen.iter().all(|(condition, sounds)| *condition
+                == Condition::Dying {
+                    ticks_left: 0,
+                    starting: true
+                }
+                && sounds.is_empty()),
+            "{seen:?}"
+        );
     }
 
     #[test]
@@ -17032,6 +18871,7 @@ pub(super) mod tests {
                 by: ShipRef::Player,
                 damage: 0.0,
                 downed: None,
+                provokes: true,
             }]
         );
         session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);

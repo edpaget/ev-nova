@@ -356,6 +356,7 @@ mod tests {
             by: P,
             damage: 3.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(
             Interceptor::default()

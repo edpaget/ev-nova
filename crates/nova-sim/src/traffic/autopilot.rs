@@ -67,7 +67,8 @@
 //!   intact by then drifts instead of bursting, flying from there on.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
-//!   never lands or jumps.
+//!   never lands or jumps. A disabled or breaking-up one also slows by
+//!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
 
 use crate::ai::{Goal, fire};
 use crate::bay::DOCK_TURN_SLACK;
@@ -406,6 +407,9 @@ fn unsteered(npc: &mut Npc, handling: &Handling, burst_cap: f32) -> bool {
         (mode, false) => {
             if let Mode::LeavingGate { .. } = mode {
                 npc.mode = Mode::Flying;
+            }
+            if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
+                flight::drag(&mut npc.state);
             }
             flight::step(&mut npc.state, handling, Controls::default());
         }
@@ -878,7 +882,10 @@ mod tests {
         let sites = [planet(140, 0.0, 0.0)];
         for condition in [
             Condition::Disabled,
-            Condition::Dying { ticks_left: 4 },
+            Condition::Dying {
+                ticks_left: 4,
+                starting: false,
+            },
             Condition::Destroyed,
         ] {
             let mut lander = npc(
@@ -900,18 +907,60 @@ mod tests {
             let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
             jumper.condition = condition;
             assert_eq!(fly(&mut jumper, &sites, None), Outcome::Flying);
-            assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
+            assert_eq!(jumper.state, drifted(condition), "drifting");
+        }
+    }
+
+    /// Where a ship of `condition` at (0, -2000) moving (1, -2), heading
+    /// 90°, is one drifting tick later: slowed first when disabled or
+    /// breaking up, coasting when destroyed.
+    fn drifted(condition: Condition) -> ShipState {
+        let v = if condition == Condition::Destroyed {
+            Vec2::new(1.0, -2.0)
+        } else {
+            Vec2::new(1.0, -2.0) * flight::DISABLED_DRAG
+        };
+        at(v.x, -2000.0 + v.y, v.x, v.y, 90.0)
+    }
+
+    #[test]
+    fn a_disabled_or_breaking_up_ship_slows_by_0_995_a_tick_before_it_moves() {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 4,
+                starting: false,
+            },
+        ] {
+            let mut ship = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
+            ship.condition = condition;
+            fly(&mut ship, &[], None);
+            let damped = Vec2::new(1.0, -2.0) * flight::DISABLED_DRAG;
+            assert_eq!(ship.state.velocity, damped, "{condition:?}");
+            assert_eq!(ship.state.position, Vec2::new(0.0, -2000.0) + damped);
+            let mut expected = damped;
+            for _ in 1..10 {
+                fly(&mut ship, &[], None);
+                expected = expected * flight::DISABLED_DRAG;
+            }
+            assert_eq!(ship.state.velocity, expected, "{condition:?}");
         }
     }
 
     #[test]
     fn a_ship_breaking_up_or_destroyed_jumping_in_drifts_with_no_glide() {
-        for condition in [Condition::Dying { ticks_left: 4 }, Condition::Destroyed] {
+        for condition in [
+            Condition::Dying {
+                ticks_left: 4,
+                starting: false,
+            },
+            Condition::Destroyed,
+        ] {
             let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
             jumper.condition = condition;
             jumper.mode = Mode::JumpingIn { ticks_left: 3 };
             assert_eq!(fly(&mut jumper, &[], None), Outcome::Flying);
-            assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
+            assert_eq!(jumper.state, drifted(condition), "drifting");
             assert_eq!(jumper.mode, Mode::JumpingIn { ticks_left: 3 }, "no glide");
         }
     }
@@ -1006,8 +1055,14 @@ mod tests {
             super::fly(&mut wreck, &[], None, raised);
             wreck.state.velocity.length()
         };
-        assert!((drifting(4.0) - 4.0).abs() < 1e-4, "under 4.5: kept");
-        assert!((drifting(10.0) - 4.5).abs() < 1e-4, "capped at 4.5");
+        assert!(
+            (drifting(4.0) - 4.0 * flight::DISABLED_DRAG).abs() < 1e-4,
+            "under 4.5: kept, but for the drag"
+        );
+        assert!(
+            (drifting(10.0) - 4.5).abs() < 1e-4,
+            "dragged, then capped at 4.5"
+        );
     }
 
     #[test]

@@ -547,9 +547,12 @@ impl Traffic {
         self.add(fleet, world.persons.grudges);
     }
 
-    /// Each flying, intact NPC answers each of `strikes` in `world`, as
-    /// `behaviour` says, all against the NPCs as they were before.
+    /// Each flying, intact NPC answers each of `strikes` in `world` that
+    /// provokes ([`Strike::provokes`]: not a death shockwave, which skips
+    /// `_DamageShip`'s reaction block @0x3b44d), as `behaviour` says, all
+    /// against the NPCs as they were before.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
+        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.provokes).collect();
         if strikes.is_empty() {
             return;
         }
@@ -1410,9 +1413,19 @@ mod tests {
         assert_eq!(behaviour.take(), [], "no decisions");
         assert_eq!(traffic.departed(), []);
         assert_eq!(traffic.npcs().len(), 2);
-        assert_eq!(traffic.npcs()[0].state.position, Vec2::new(1.0, 0.0));
+        // Each tick slows the drift by the drag before it moves.
+        let mut expected = Vec2::ZERO;
+        let mut velocity = Vec2::new(0.25, 0.0);
+        for _ in 0..4 {
+            velocity = velocity * crate::flight::DISABLED_DRAG;
+            expected = expected + velocity;
+        }
+        assert_eq!(traffic.npcs()[0].state.position, expected);
         assert_eq!(traffic.npcs()[1].goal, Goal::JumpOut);
-        traffic.npcs_mut()[0].condition = Condition::Dying { ticks_left: 2 };
+        traffic.npcs_mut()[0].condition = Condition::Dying {
+            ticks_left: 2,
+            starting: false,
+        };
         traffic.tick(&behaviour, &sites, &mut Draws::of(&[]));
         assert_eq!(behaviour.take(), []);
     }
@@ -1823,6 +1836,7 @@ mod tests {
             by: ShipRef::Player,
             damage,
             downed: None,
+            provokes: true,
         }
     }
 
@@ -1849,6 +1863,34 @@ mod tests {
         );
         assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
         assert_eq!(traffic.npcs()[1].provoked, 4.0, "kept while it fights");
+    }
+
+    #[test]
+    fn a_strike_that_provokes_nothing_is_answered_by_no_one() {
+        let mut traffic = populated(2, 1);
+        let fighting = Fighting::deciding(Goal::Idle);
+        let shockwave = Strike {
+            provokes: false,
+            ..struck(1, 4.0)
+        };
+        traffic.tick_in(
+            &fighting,
+            World::new(&[]),
+            &[shockwave, struck(0, 2.0)],
+            &mut Draws::of(&[]),
+        );
+        let reacted: Vec<String> = fighting
+            .log
+            .borrow()
+            .iter()
+            .filter(|line| line.starts_with("react"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            reacted,
+            ["react 0 Npc(NpcId(0))", "react 1 Npc(NpcId(0))"],
+            "only the attack is answered"
+        );
     }
 
     #[test]
@@ -2073,6 +2115,19 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(reacted, ["react 0 Npc(NpcId(0))"]);
+    }
+
+    #[test]
+    fn a_disabled_npc_drags_once_per_traffic_tick() {
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].condition = Condition::Disabled;
+        traffic.npcs[1].state.velocity = Vec2::new(1.0, -2.0);
+        let idle = Fighting::deciding(Goal::Idle);
+        traffic.tick_in(&idle, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs()[1].state.velocity,
+            Vec2::new(1.0, -2.0) * crate::flight::DISABLED_DRAG
+        );
     }
 
     #[test]

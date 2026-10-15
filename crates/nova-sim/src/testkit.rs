@@ -823,11 +823,14 @@ impl PilotCatalog for FakePilotCatalog {
 
     /// Every stellar of [`FakePilotCatalog::sites`], with every system
     /// listing it ([`listed_stellars`](crate::fixture::listed_stellars)),
-    /// and the gates of [`FakePilotCatalog::gate_listers`].
+    /// and the gates of [`FakePilotCatalog::gate_listers`]; the sites of
+    /// systems outside [`FakePilotCatalog::systems`] are left out.
     fn listed_stellars(&self) -> Vec<ListedStellar> {
+        // Only the systems that can be read list, as the port says.
         let mut listed = crate::fixture::listed_stellars(
             self.sites
                 .iter()
+                .filter(|(system, _)| self.systems.contains(system))
                 .map(|(system, sites)| (*system, sites.as_slice())),
         );
         crate::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
@@ -1146,5 +1149,36 @@ pub(crate) struct AllowAll;
 impl ControlBits for AllowAll {
     fn allows(&self, _test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_fake_lists_a_stellar_only_under_the_systems_it_holds() {
+        let fake = FakePilotCatalog {
+            systems: vec![SystemId(131)],
+            sites: vec![
+                (SystemId(130), vec![planet(140, 0.0, 0.0)]),
+                (SystemId(131), vec![planet(140, 0.0, 0.0)]),
+            ],
+            ..catalog()
+        };
+        let listed = fake.listed_stellars();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, StellarId(140));
+        assert_eq!(listed[0].systems, [SystemId(131)]);
+    }
+
+    #[test]
+    fn the_fake_lists_no_stellar_whose_every_lister_is_gone() {
+        let fake = FakePilotCatalog {
+            systems: vec![SystemId(131)],
+            sites: vec![(SystemId(130), vec![planet(140, 0.0, 0.0)])],
+            ..catalog()
+        };
+        assert_eq!(fake.listed_stellars(), []);
     }
 }
