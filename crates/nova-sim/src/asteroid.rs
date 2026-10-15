@@ -42,6 +42,14 @@
 //!   its top likewise with the height (@0x364e4-0x3661b): asteroids
 //!   never wrap round.
 //!
+//! - **The destruction** ([`Asteroids::destroy`], `_DestroyAsteroid`
+//!   @0xadc9-0xb028): a shot that leaves an asteroid's strength below 0
+//!   destroys it at once (`_HandleAsteroidHit` @0x3691a, see
+//!   [`asteroid_hit`](crate::combat::asteroid_hit)). It drops scoopable
+//!   boxes, throws off its particles, explodes and breaks into fragments
+//!   ([`Asteroids::spawn_fragment`], `_SpawnSubAsteroid`
+//!   @0x3fbc7-0x3fd21), and its slot is freed ([`Remains`]).
+//!
 //! The randomness is the engine's (see the `chance` module): a type is
 //! one roll over the set bits of `AstTypes`, where the original rolls
 //! `Rand(16)` until it lands on one, which picks as evenly and can never
@@ -54,10 +62,12 @@
 //! - The slot-0 refill while `_miningShipsActive` is set
 //!   (@0x361b5-0x3624b), which moves the first active asteroid into slot
 //!   0: rdm:phase/asteroids/phase-5-ai-mining.
-//! - The cull of an asteroid whose strength is −32000 or less, the
-//!   destroyed marker (@0x362c4):
-//!   rdm:phase/asteroids/phase-2-shoot-and-break-asteroids, which adds
-//!   destruction.
+//! - The cull of an asteroid whose strength is −32000 or less
+//!   (@0x362c4): nothing in the original writes that marker to an
+//!   asteroid's strength. The compare in `_HandleAsteroids` (@0x362ca) is
+//!   its only read, and each −32000 written elsewhere (@0x9ad1, @0xc3d9,
+//!   @0x97c64) is to another table. A hit below 0 destroys the asteroid
+//!   at once, so the cull is moot.
 //! - `_HandleSpriteMurkiness` (@0x36446): the engine draws no sprite
 //!   murky (the cargo boxes leave it out too).
 //! - The `_gameFrozen` skip (@0x36300-0x3636f) and the frozen game's call
@@ -71,6 +81,7 @@
 use crate::catalog::AsteroidTypeRecord;
 use crate::chance::Chance;
 use crate::cloak::Area;
+use crate::combat::ParticleBurst;
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
 
@@ -97,6 +108,28 @@ pub const NO_SPRITE_RADIUS: f32 = NO_SPRITE_SIZE / 2.0;
 /// What `_screenCenter` is widened by for a spawn's spread and ring
 /// (@0x3a3a1, @0x3a553).
 const SPREAD_MARGIN: i32 = 128;
+
+/// The sides of a fragment's velocity draw on each axis, `Rand(200) −
+/// 100` hundredths of a pixel a tick (@0x3fbc7-0x3fd21).
+const FRAGMENT_SPEED_SIDES: u16 = 200;
+
+/// The sides of the box count's draw: `YieldQty × (Rand(101) + 50)`
+/// hundredths (@0xadc9-0xae73).
+const YIELD_SIDES: u16 = 101;
+
+/// The least of the box count's draw, in hundredths of `YieldQty`.
+const YIELD_BASE: u16 = 50;
+
+/// A destroyed asteroid's particles' speed, in pixels a tick
+/// (@0xaea7-0xaf3a).
+const DEBRIS_SPEED: f32 = 0.2;
+
+/// How far, in percent, a destroyed asteroid's particles' speed varies
+/// either way.
+const DEBRIS_VARIATION: u32 = 40;
+
+/// A destroyed asteroid's particles' least and most life, in ticks.
+const DEBRIS_LIFE: (u32, u32) = (240, 480);
 
 /// The edge ring's share of the widened screen centre (@0x3a3c9).
 const RING_SCALE: f32 = 0.7;
@@ -307,6 +340,24 @@ pub struct Asteroid {
     pub kind: u8,
 }
 
+/// What a destroyed asteroid leaves, for the session to put in space
+/// (`_DestroyAsteroid` @0xadc9-0xb028, see [`Asteroids::destroy`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Remains {
+    /// Where it was.
+    pub at: Vec2,
+    /// How many scoopable boxes it drops.
+    pub boxes: u32,
+    /// What they hold: its type's `YieldType`.
+    pub contents: Option<i16>,
+    /// Their graphic: its kind / 4, plus 1, so 1-4 (@0xae52-0xae5f).
+    pub graphic: u16,
+    /// The particles it throws off, if its type has a `PartCount`.
+    pub particles: Option<ParticleBurst>,
+    /// Its type's explosion, if any.
+    pub explosion: Option<Explosion>,
+}
+
 /// The asteroid field: [`SLOTS`] slots, each holding an asteroid or
 /// free.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -324,6 +375,22 @@ impl Asteroids {
     #[must_use]
     pub fn active(&self) -> usize {
         self.iter().count()
+    }
+
+    /// The asteroids in the field, each with its slot, in slot order.
+    pub fn indexed(&self) -> impl Iterator<Item = (usize, &Asteroid)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, asteroid)| Some((slot, asteroid.as_ref()?)))
+    }
+
+    /// Puts `asteroid` in the first free slot, and gives the slot; none
+    /// when the field is full.
+    pub(crate) fn place(&mut self, asteroid: Asteroid) -> Option<usize> {
+        let slot = self.first_free()?;
+        self.slots[slot] = Some(asteroid);
+        Some(slot)
     }
 
     /// Empties the field.
@@ -377,9 +444,7 @@ impl Asteroids {
             }
         };
         let frame = f32::from(chance.roll(kind_type.frames));
-        let size = f32::from(chance.roll(SPIN_SIDES) + SPIN_BASE) * 0.01;
-        let spin = kind_type.spin * size;
-        let spin = if chance.roll(2) == 0 { -spin } else { spin };
+        let spin = spun(kind_type, chance);
         self.slots[slot] = Some(Asteroid {
             position: player + offset,
             velocity,
@@ -388,6 +453,128 @@ impl Asteroids {
             strength: kind_type.strength,
             kind,
         });
+    }
+
+    /// Spawns a fragment of `kind` at `at`, with the types `types`,
+    /// drawing on `chance`: `_SpawnSubAsteroid` (@0x3fbc7-0x3fd21). It
+    /// takes the first free slot, and is dropped when there is none; it
+    /// moves `(Rand(200) − 100)` hundredths of a pixel a tick on each
+    /// axis, its own and not its parent's, from a frame `Rand(frames)`,
+    /// spinning and as strong as a spawn of its type.
+    pub fn spawn_fragment(
+        &mut self,
+        at: Vec2,
+        kind: u8,
+        types: &[AsteroidType; KINDS],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if self.first_free().is_none() {
+            return;
+        }
+        let kind_type = type_of(types, kind);
+        let mut speed = || {
+            (f32::from(chance.roll(FRAGMENT_SPEED_SIDES)) - f32::from(FRAGMENT_SPEED_SIDES / 2))
+                * 0.01
+        };
+        let velocity = Vec2::new(speed(), speed());
+        let frame = f32::from(chance.roll(kind_type.frames));
+        let spin = spun(kind_type, chance);
+        self.place(Asteroid {
+            position: at,
+            velocity,
+            frame,
+            spin,
+            strength: kind_type.strength,
+            kind,
+        });
+    }
+
+    /// Destroys the asteroid in `slot`, with the types `types`, drawing on
+    /// `chance`: `_DestroyAsteroid` (@0xadc9-0xb028). What it leaves,
+    /// none for an empty slot:
+    ///
+    /// - `trunc(YieldQty × (Rand(101) + 50) × 0.01)` boxes, 50-150 % of
+    ///   its `YieldQty`, holding its `YieldType`, of graphic kind / 4 + 1
+    ///   (@0xae52-0xae73);
+    /// - with a `PartCount`, as many particles at 0.2 a tick ± 40 %,
+    ///   living 240-480 ticks, of its `PartColor`, spread over a third of
+    ///   its frame's width, whole, or of 32 with no sprite
+    ///   (@0xaea7-0xaf3a);
+    /// - its explosion (@0xaf7f).
+    ///
+    /// With a `FragCount`, `FragCount / 2 + Rand(FragCount)` fragments are
+    /// spawned where it was ([`Asteroids::spawn_fragment`]), each of
+    /// `FragType1` or `FragType2` by `Rand(2)` when both are set, the one
+    /// set when one is, and none when neither is (@0xaf8f-0xaffc); its own
+    /// slot is still held as they spawn. Then its slot is freed
+    /// (@0xb008-0xb01c).
+    pub fn destroy(
+        &mut self,
+        slot: usize,
+        types: &[AsteroidType; KINDS],
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<Remains> {
+        let asteroid = (*self.slots.get(slot)?)?;
+        let kind_type = type_of(types, asteroid.kind);
+        let at = asteroid.position;
+        let boxes = if kind_type.yield_qty > 0 {
+            let share =
+                u32::from(kind_type.yield_qty) * u32::from(chance.roll(YIELD_SIDES) + YIELD_BASE);
+            // Whole, at most 32,767 × 1.5.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                (f64::from(share) * 0.01).trunc() as u32
+            }
+        } else {
+            0
+        };
+        let particles = u32::try_from(kind_type.part_count)
+            .ok()
+            .filter(|&count| count > 0)
+            .map(|count| {
+                let width = if kind_type.size.0 > 0.0 {
+                    kind_type.size.0
+                } else {
+                    NO_SPRITE_SIZE
+                };
+                ParticleBurst {
+                    at,
+                    speed: DEBRIS_SPEED,
+                    variation: DEBRIS_VARIATION,
+                    life: DEBRIS_LIFE,
+                    color: kind_type.part_color,
+                    count,
+                    spread: (width / 3.0).trunc(),
+                }
+            });
+        if let Ok(count) = u16::try_from(kind_type.frag_count)
+            && count > 0
+        {
+            let fragments = count / 2 + chance.roll(count);
+            for _ in 0..fragments {
+                let kind = match kind_type.fragments {
+                    [Some(first), Some(second)] => {
+                        if chance.roll(2) == 0 {
+                            first
+                        } else {
+                            second
+                        }
+                    }
+                    [Some(kind), None] | [None, Some(kind)] => kind,
+                    [None, None] => break,
+                };
+                self.spawn_fragment(at, kind, types, chance);
+            }
+        }
+        self.slots[slot] = None;
+        Some(Remains {
+            at,
+            boxes,
+            contents: kind_type.yield_type,
+            graphic: u16::from(asteroid.kind >> 2) + 1,
+            particles,
+            explosion: kind_type.explosion,
+        })
     }
 
     /// Places `spec`'s field about `player` in `area`, with the types
@@ -454,6 +641,15 @@ fn type_of(types: &[AsteroidType; KINDS], kind: u8) -> AsteroidType {
         .get(usize::from(kind))
         .copied()
         .unwrap_or(AsteroidType::MISSING)
+}
+
+/// A spawn's spin of `kind_type`'s, drawn on `chance`: its spin ×
+/// `(Rand(41) + 80)` / 100, negated on `Rand(2)` 0 (@0x3a6c4-0x3a721,
+/// @0x3fbc7-0x3fd21).
+fn spun(kind_type: AsteroidType, chance: &mut (impl Chance + ?Sized)) -> f32 {
+    let size = f32::from(chance.roll(SPIN_SIDES) + SPIN_BASE) * 0.01;
+    let spin = kind_type.spin * size;
+    if chance.roll(2) == 0 { -spin } else { spin }
 }
 
 /// One of the kinds `types` sets a bit for, drawn on `chance` with one
@@ -1231,5 +1427,231 @@ mod tests {
         field.clear();
         assert_eq!(field.active(), 0);
         assert_eq!(field.first_free(), Some(0));
+    }
+
+    // Destruction.
+
+    /// [`types()`] with kind 4 yielding `YieldQty` 4 of `jünk` 1003,
+    /// throwing off 12 orange particles, breaking into 4 fragments of
+    /// kinds 1 and 2, exploding as `bööm` 131, and of `Mass` 30.
+    fn breakable() -> [AsteroidType; KINDS] {
+        let mut table = types();
+        table[4] = AsteroidType {
+            yield_qty: 4,
+            yield_type: Some(1003),
+            fragments: [Some(1), Some(2)],
+            frag_count: 4,
+            part_count: 12,
+            part_color: 0x00FF_8000,
+            mass: 30,
+            explosion: Explosion::decode(3),
+            ..table[4]
+        };
+        table
+    }
+
+    fn rock(kind: u8, at: Vec2) -> Asteroid {
+        Asteroid {
+            position: at,
+            velocity: Vec2::new(1.5, -0.5),
+            frame: 3.0,
+            spin: 0.5,
+            strength: -2,
+            kind,
+        }
+    }
+
+    /// A field holding `rock` in slot `slot`.
+    fn holding(slot: usize, rock: Asteroid) -> Asteroids {
+        let mut field = Asteroids::default();
+        field.slots[slot] = Some(rock);
+        field
+    }
+
+    #[test]
+    fn placing_takes_the_first_free_slot_until_the_field_is_full() {
+        let mut field = holding(0, rock(0, PLAYER));
+        assert_eq!(field.place(rock(1, PLAYER)), Some(1));
+        field.slots[0] = None;
+        assert_eq!(field.place(rock(2, PLAYER)), Some(0));
+        for _ in 2..SLOTS {
+            assert!(field.place(rock(3, PLAYER)).is_some());
+        }
+        assert_eq!(field.place(rock(3, PLAYER)), None, "full");
+        assert_eq!(field.active(), SLOTS);
+        assert_eq!(field.slots[1].map(|r| r.kind), Some(1));
+        assert_eq!(
+            field.indexed().next().map(|(slot, r)| (slot, r.kind)),
+            Some((0, 2))
+        );
+    }
+
+    #[test]
+    fn a_fragment_takes_the_first_free_slot_at_the_point_given_with_its_own_velocity() {
+        let at = Vec2::new(40.0, -60.0);
+        for (chance, velocity, frame, spin) in [
+            (
+                Box::new(NeverFires) as Box<dyn Chance>,
+                Vec2::new(-1.0, -1.0),
+                0.0,
+                -0.8 * types()[2].spin,
+            ),
+            (
+                Box::new(Last),
+                Vec2::new(0.99, 0.99),
+                35.0,
+                1.2 * types()[2].spin,
+            ),
+        ] {
+            let mut chance = chance;
+            let mut field = holding(0, rock(4, PLAYER));
+            field.spawn_fragment(at, 2, &types(), &mut *chance);
+            let made = field.slots[1].expect("slot 1");
+            assert_eq!((made.position, made.kind), (at, 2));
+            assert!((made.velocity - velocity).length() < 1e-6, "{made:?}");
+            assert_eq!(made.frame, frame);
+            assert!((made.spin - spin).abs() < 1e-6, "{made:?}");
+            assert_eq!(made.strength, types()[2].strength);
+        }
+    }
+
+    #[test]
+    fn a_fragment_is_dropped_when_the_field_is_full() {
+        let mut field = Asteroids::default();
+        for _ in 0..SLOTS {
+            field.place(rock(0, PLAYER));
+        }
+        field.spawn_fragment(PLAYER, 2, &types(), &mut NeverFires);
+        assert!(field.iter().all(|made| made.kind == 0));
+    }
+
+    #[test]
+    fn destroying_an_empty_slot_leaves_nothing() {
+        let mut field = Asteroids::default();
+        assert_eq!(field.destroy(3, &breakable(), &mut NeverFires), None);
+    }
+
+    #[test]
+    fn a_destroyed_asteroid_drops_half_to_one_and_a_half_times_its_yield_qty_in_boxes() {
+        for (mut chance, boxes) in [
+            (Box::new(NeverFires) as Box<dyn Chance>, 2),
+            (Box::new(Last), 6),
+        ] {
+            let mut field = holding(5, rock(4, PLAYER));
+            let remains = field
+                .destroy(5, &breakable(), &mut *chance)
+                .expect("remains");
+            assert_eq!(remains.boxes, boxes);
+            assert_eq!(remains.contents, Some(1003));
+            assert_eq!(remains.at, PLAYER);
+        }
+        let mut table = breakable();
+        table[4].yield_qty = 0;
+        let mut field = holding(5, rock(4, PLAYER));
+        let remains = field.destroy(5, &table, &mut Last).expect("remains");
+        assert_eq!(remains.boxes, 0);
+    }
+
+    #[test]
+    fn a_destroyed_asteroids_boxes_are_graphic_its_kind_over_4_plus_1() {
+        for (kind, graphic) in [(0, 1), (3, 1), (4, 2), (7, 2), (8, 3), (15, 4)] {
+            let mut field = holding(0, rock(kind, PLAYER));
+            let remains = field
+                .destroy(0, &types(), &mut NeverFires)
+                .expect("remains");
+            assert_eq!(remains.graphic, graphic, "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_destroyed_asteroid_throws_off_its_particles_a_third_of_its_width_out() {
+        let mut field = holding(0, rock(4, PLAYER));
+        let remains = field
+            .destroy(0, &breakable(), &mut NeverFires)
+            .expect("remains");
+        assert_eq!(
+            remains.particles,
+            Some(ParticleBurst {
+                at: PLAYER,
+                speed: 0.2,
+                variation: 40,
+                life: (240, 480),
+                color: 0x00FF_8000,
+                count: 12,
+                // A third of 40, whole.
+                spread: 13.0,
+            })
+        );
+        let mut table = breakable();
+        table[4].size = (0.0, 0.0);
+        let mut field = holding(0, rock(4, PLAYER));
+        let remains = field.destroy(0, &table, &mut NeverFires).expect("remains");
+        assert_eq!(remains.particles.map(|p| p.spread), Some(10.0), "32 / 3");
+        table[4].part_count = 0;
+        let mut field = holding(0, rock(4, PLAYER));
+        let remains = field.destroy(0, &table, &mut NeverFires).expect("remains");
+        assert_eq!(remains.particles, None);
+    }
+
+    #[test]
+    fn a_destroyed_asteroid_explodes_as_its_type_says() {
+        let mut field = holding(0, rock(4, PLAYER));
+        let remains = field
+            .destroy(0, &breakable(), &mut NeverFires)
+            .expect("remains");
+        assert_eq!(remains.explosion, Explosion::decode(3));
+        let mut field = holding(0, rock(3, PLAYER));
+        let remains = field
+            .destroy(0, &breakable(), &mut NeverFires)
+            .expect("remains");
+        assert_eq!(remains.explosion, None);
+    }
+
+    #[test]
+    fn a_destroyed_asteroid_breaks_into_half_its_frag_count_plus_a_draw_of_it() {
+        for (mut chance, count, kind) in [
+            (Box::new(NeverFires) as Box<dyn Chance>, 2, 1),
+            (Box::new(Last), 5, 2),
+        ] {
+            let mut field = holding(0, rock(4, PLAYER));
+            field.destroy(0, &breakable(), &mut *chance);
+            assert_eq!(field.active(), count);
+            assert!(field.slots[0].is_none(), "the parent's slot freed");
+            assert!(field.iter().all(|made| made.kind == kind));
+            assert!(field.iter().all(|made| made.position == PLAYER));
+        }
+    }
+
+    #[test]
+    fn a_fragment_is_the_one_type_set_and_none_without_either() {
+        for (fragments, kinds) in [
+            ([None, Some(7)], vec![7, 7]),
+            ([Some(9), None], vec![9, 9]),
+            ([None, None], vec![]),
+        ] {
+            let mut table = breakable();
+            table[4].fragments = fragments;
+            let mut field = holding(0, rock(4, PLAYER));
+            field.destroy(0, &table, &mut NeverFires);
+            let made: Vec<u8> = field.iter().map(|made| made.kind).collect();
+            assert_eq!(made, kinds, "{fragments:?}");
+        }
+        let mut table = breakable();
+        table[4].frag_count = 0;
+        let mut field = holding(0, rock(4, PLAYER));
+        field.destroy(0, &table, &mut Last);
+        assert_eq!(field.active(), 0, "no FragCount, no fragments");
+    }
+
+    #[test]
+    fn a_full_field_takes_no_fragments_and_frees_the_parents_slot() {
+        let mut field = holding(0, rock(4, PLAYER));
+        for _ in 1..SLOTS {
+            field.place(rock(0, PLAYER));
+        }
+        field.destroy(0, &breakable(), &mut Last);
+        assert_eq!(field.active(), SLOTS - 1);
+        assert_eq!(field.first_free(), Some(0));
+        assert!(field.iter().all(|made| made.kind == 0));
     }
 }
