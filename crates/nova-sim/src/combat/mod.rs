@@ -2430,6 +2430,67 @@ mod tests {
         assert_eq!(combat.take_events(), [], "not newly disabled");
     }
 
+    /// A hit of `mass` through shields, which may kill, never newly
+    /// disabling its ship when `cant_disable`.
+    fn armour_hit(mass: f32, cant_disable: bool) -> Hit {
+        Hit {
+            mass,
+            passes_shields: true,
+            cant_disable,
+            ..Hit::default()
+        }
+    }
+
+    /// The armour `ship` is left with once each of `hits`, from A, has
+    /// landed on it in turn in one tick, as [`NovaDisable`] says.
+    fn landed_armour(mut ship: Ship, hits: &[Hit]) -> f32 {
+        let mut combat = Combat::default();
+        let landed = hits
+            .iter()
+            .map(|&hit| Landed {
+                ship: ship.id,
+                by: A,
+                hit,
+                direct: true,
+                intended: true,
+            })
+            .collect();
+        combat.land(&mut [ship.fighter()], landed, &NovaDisable);
+        ship.reserves.armor.now
+    }
+
+    #[test]
+    fn a_cant_disable_hit_sets_an_intact_ship_it_newly_disables_back_to_the_repair_share() {
+        let armour = landed_armour(Ship::at(2, 0.0, 0.0), &[armour_hit(25.0, true)]);
+        assert_eq!(armour, crate::self_repair::repaired_armor(30.0, false));
+    }
+
+    #[test]
+    fn a_cant_disable_hit_leaves_a_held_ship_where_it_took_it() {
+        let mut held = Ship::at(2, 0.0, 0.0);
+        held.held_disabled = true;
+        let armour = landed_armour(held, &[armour_hit(25.0, true)]);
+        assert_eq!(armour, 5.0, "held disabled at full armour, so not newly");
+    }
+
+    #[test]
+    fn a_cant_disable_hit_leaves_a_ship_not_intact_where_it_took_it() {
+        let mut disabled = Ship::at(2, 0.0, 0.0);
+        disabled.condition = Condition::Disabled;
+        disabled.reserves.armor.now = 20.0;
+        let armour = landed_armour(disabled, &[armour_hit(15.0, true)]);
+        assert_eq!(armour, 5.0, "disabled above a third, so not newly");
+    }
+
+    #[test]
+    fn a_cant_disable_hit_leaves_a_ship_an_earlier_hit_this_tick_disabled_where_it_took_it() {
+        let armour = landed_armour(
+            Ship::at(2, 0.0, 0.0),
+            &[armour_hit(25.0, false), armour_hit(1.0, true)],
+        );
+        assert_eq!(armour, 4.0, "disabled by the first hit, still intact");
+    }
+
     #[test]
     fn shields_regenerate_to_their_most_and_stop() {
         let mut combat = Combat::default();
