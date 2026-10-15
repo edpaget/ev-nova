@@ -572,6 +572,24 @@ pub(super) mod tests {
         // `_AIMakeShipEmergeFromHyperGate` rolls `Rand(360)` for an exit
         // angle outside 0-359 (@0x8958e-0x895a5), but loop B overwrites
         // the heading with the player's (@0x67453-0x67456).
+        /// The player's `Rand(360)` gives 123, a heading no other
+        /// `Rand(360)` here gives: every other draw is its last outcome.
+        struct PlayerRolls123 {
+            rolled: bool,
+        }
+        impl Chance for PlayerRolls123 {
+            fn fires(&mut self, _percent: u8) -> bool {
+                false
+            }
+            fn below(&mut self, n: u32) -> u32 {
+                if n == 360 && !self.rolled {
+                    self.rolled = true;
+                    123
+                } else {
+                    n - 1
+                }
+            }
+        }
         let mut catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
         for site in &mut catalog.gates {
             site.exit_angle = -1;
@@ -582,10 +600,10 @@ pub(super) mod tests {
             &mut session,
             &catalog,
             GateKind::Hypergate,
-            &mut Draws::of(&[]),
+            &mut PlayerRolls123 { rolled: false },
         );
         let heading = session.player().heading;
-        assert_ne!(heading, 90.0, "the exit's angle is not used");
+        assert_eq!(heading, 123.0, "the player's roll, not the exit's angle");
         let ships = specials(&session);
         assert_eq!(ships.len(), 2);
         for ship in ships {
