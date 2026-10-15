@@ -3525,10 +3525,14 @@ pub(super) mod tests {
         bytes
     }
 
-    /// The About text's `dësc`: ten short lines.
+    /// The About text's `dësc`: ten short lines, the third holding a pilot
+    /// and a mission tag that the briefing munge would replace.
     fn about_text() -> Vec<u8> {
         let mut bytes: Vec<u8> = (0..10)
-            .map(|n| format!("line {n}"))
+            .map(|n| match n {
+                2 => "line 2 <PN> <DST>".to_owned(),
+                n => format!("line {n}"),
+            })
             .collect::<Vec<_>>()
             .join("\r")
             .into_bytes();
@@ -5711,6 +5715,11 @@ pub(super) mod tests {
         screen.input(&key(Key::Char('a'), true));
         screen.keyed_click_ended();
         assert_eq!(about(&screen).lines()[..2], ["line 0", "line 1"]);
+        assert_eq!(
+            about(&screen).lines()[2],
+            "line 2 <PN> <DST>",
+            "the About text is shown unmunged"
+        );
         screen.input(&key(Key::Char('a'), false));
         screen.input(&key(Key::Enter, true));
         screen.input(&key(Key::Enter, false));
