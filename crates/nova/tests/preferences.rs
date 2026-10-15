@@ -200,12 +200,27 @@ impl Harness {
 
     /// The game started over `store`, its audio core playing `table`.
     fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
+        Self::build(store, table, false)
+    }
+
+    /// The game started over `store` on the main menu, where the music
+    /// plays.
+    fn on_main_menu(store: &MemorySettings) -> Self {
+        Self::build(store, SoundTable::ORIGINAL, true)
+    }
+
+    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool) -> Self {
         let data = game_data();
         let (keeper, settings, warning) =
             game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
         assert_eq!(warning, None);
         let keeper = keeper.expect("a keeper");
-        let screen = start_screen(Rc::clone(&data))
+        let mut screen = start_screen(Rc::clone(&data));
+        if main_menu {
+            let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
+            screen = screen.with_pilots(None, metrics);
+        }
+        let screen = screen
             .with_dialogs(
                 Rc::new(prefs_fixture::interface()),
                 Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
@@ -452,6 +467,50 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
             music_level: 5,
         }
     );
+}
+
+/// The real Preferences dialog over the main menu, where the music plays,
+/// drives the audio core: the music starts at the seeded level, a new
+/// music level changes its volume, and the Music checkbox off stops it.
+#[test]
+fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
+    let store = seeded();
+    let mut harness = Harness::on_main_menu(&store);
+    assert_eq!(harness.showing(), Showing::MainMenu);
+    harness.frame();
+    assert_eq!(
+        harness.played(),
+        [AudioCommand::StartMusic {
+            volume: level_volume(6)
+        }],
+        "the seeded music level"
+    );
+
+    // A lower music level turns the music down.
+    harness.press(Key::Char('p'));
+    assert_eq!(harness.showing(), Showing::Preferences);
+    for _ in 0..5 {
+        harness.press(Key::Tab);
+    }
+    harness.press(Key::Down);
+    assert_eq!(harness.dialog().prefs().sound.music_level, 5);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::MainMenu);
+    harness.frame();
+    assert_eq!(
+        harness.played(),
+        [AudioCommand::SetMusicVolume(level_volume(5))]
+    );
+
+    // The Music checkbox off stops it.
+    harness.press(Key::Char('p'));
+    let music = harness.dialog().music().rect().center();
+    harness.click(music);
+    assert!(!harness.dialog().prefs().sound.music);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::MainMenu);
+    harness.frame();
+    assert_eq!(harness.played(), [AudioCommand::StopMusic]);
 }
 
 #[test]
