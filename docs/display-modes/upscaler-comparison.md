@@ -25,9 +25,10 @@ outputs were throwaway and are not in the repo.
 - **Scales.** 2x, and the two real display cases, both 1.875x: a 4:3 view
   at 1024x768 → 1920x1440 and the widened flight layer at 1365x768 →
   2560x1440.
-- **Integer-only scalers** (xBRZ, ScaleFX, MMPX, hqx) reached 1.875x by
-  scaling to the next integer factor and then going down with bilinear, the
-  engine's linear sampler.
+- **Integer-only scalers** (xBRZ, ScaleFX, MMPX, hqx) scaled to an integer
+  factor and then went down with bilinear, the engine's linear sampler.
+  ScaleFX used its libretro preset's fixed 3x, at 2x as well as 1.875x;
+  xBRZ, MMPX and hqx (hq2x) used the next integer factor, 2x.
 
 ## Candidates and tools
 
