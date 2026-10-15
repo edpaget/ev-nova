@@ -214,13 +214,23 @@ pub fn dude_ship_type<'t>(
     gate: Gate,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<ShipId> {
-    let appearing: Vec<(ShipId, u32)> = dude
-        .ships
+    let appearing = appearing_ship_types(dude, appear_on, gate);
+    pick(&appearing, chance).or_else(|| pick(&dude.ships, chance))
+}
+
+/// The ship types of `dude`, each with its `Probability`, whose `AppearOn`
+/// (`appear_on`, none for a type with no `shïp` record, which appears)
+/// holds by `gate`.
+pub fn appearing_ship_types<'t>(
+    dude: &SpawnDude,
+    appear_on: impl Fn(ShipId) -> Option<&'t Test>,
+    gate: Gate,
+) -> Vec<(ShipId, u32)> {
+    dude.ships
         .iter()
         .copied()
         .filter(|&(ship, _)| appear_on(ship).is_none_or(|test| gate.allows(test)))
-        .collect();
-    pick(&appearing, chance).or_else(|| pick(&dude.ships, chance))
+        .collect()
 }
 
 /// A ship type the traffic can spawn: how it performs, with its default
@@ -305,6 +315,14 @@ pub struct SpawnTable {
 }
 
 impl SpawnTable {
+    /// Ship type `ship`'s `AppearOn`, as [`dude_ship_type`] and
+    /// [`appearing_ship_types`] read it: none when the table has no
+    /// record of it.
+    #[must_use]
+    pub fn appear_on(&self, ship: ShipId) -> Option<&Test> {
+        self.ships.get(&ship).map(|kind| &kind.appear_on)
+    }
+
     /// System `system`'s table, governed by `system_govt`, read from
     /// `catalog`, its fleets' links matched with the relations in
     /// `govts`, with each ship type's stats from its record in `ships`
@@ -1237,6 +1255,20 @@ mod tests {
         };
         assert_eq!(kind(&gated, &[], &arsenal()).appear_on, Test::parse("b7"));
         assert_eq!(ShipKind::default().appear_on, Test::default(), "blank");
+    }
+
+    #[test]
+    fn a_tables_appear_on_is_its_listed_ship_types_and_none_for_the_rest() {
+        let mut table = SpawnTable::default();
+        table.ships.insert(
+            ShipId(204),
+            ShipKind {
+                appear_on: Test::parse("b7"),
+                ..ShipKind::default()
+            },
+        );
+        assert_eq!(table.appear_on(ShipId(204)), Some(&Test::parse("b7")));
+        assert_eq!(table.appear_on(ShipId(205)), None, "unlisted");
     }
 
     #[test]

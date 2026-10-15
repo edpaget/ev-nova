@@ -604,12 +604,7 @@ impl Session {
         }
         let table = table.unwrap_or_else(|| self.traffic.table());
         let dude = table.dude_records.get(&record.ships.dude?)?;
-        let drawn = dude_ship_type(
-            dude,
-            |ship| table.ships.get(&ship).map(|kind| &kind.appear_on),
-            self.gate(),
-            chance,
-        );
+        let drawn = dude_ship_type(dude, |ship| table.appear_on(ship), self.gate(), chance);
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.ships.uniform_type = drawn;
         }
