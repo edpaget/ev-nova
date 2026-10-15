@@ -374,7 +374,9 @@ pub enum HailRefusal {
     NoTarget,
     /// "No response." (`STR#` 2002 #53): the target is disabled, even
     /// while still jumping in (@0x62610-0x62644), or mute (see
-    /// [`Dispositions`]).
+    /// [`Dispositions`]), or an escape pod, the player's escort or not
+    /// ([`ESCAPE_POD_SHIP`](crate::combat::hull::ESCAPE_POD_SHIP),
+    /// @0x62145).
     NoResponse,
     /// "Unable to send hail - target ship is entering hyperspace."
     /// (`STR#` 2002 #54): the target is still jumping in and not disabled

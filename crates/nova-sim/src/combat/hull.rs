@@ -40,6 +40,12 @@ use crate::bay::FIRST_SHIP;
 use crate::catalog::{HullRecord, ShipId};
 use crate::reserves::Gauge;
 
+/// The escape pod's ship class, `shïp` 895 "Escape Pod": the original's
+/// class index 0x2ff (the ID less 128). Only the pod branch of the
+/// player's eject sets it (@0x6f64a), but data may name it for any NPC,
+/// and a hail counts a target of it mute (@0x62145).
+pub const ESCAPE_POD_SHIP: ShipId = ShipId(895);
+
 /// The hit radius of a ship type without a `shän`, in pixels: a
 /// placeholder.
 pub const DEFAULT_HIT_RADIUS: f32 = 16.0;

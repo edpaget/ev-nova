@@ -65,7 +65,7 @@ use crate::catalog::{CommCatalog, MissionId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
-use crate::combat::hull::{Condition, DisableRule};
+use crate::combat::hull::{Condition, DisableRule, ESCAPE_POD_SHIP};
 use crate::hail::{
     Ask, Attitude, CommNote, Conversation, Deed, Dispositions, EscortStatus, Haggle, Hail,
     HailButton, HailOptions, HailRefusal, HailView, Help, MissionHail, Reply, Settled, assist,
@@ -194,7 +194,8 @@ impl Session {
     /// still jumping in, unless it is disabled; and
     /// [`HailRefusal::NoResponse`] for a disabled one, jumping in or not,
     /// or a mute one that has arrived, an escort answering whatever its
-    /// government says.
+    /// government says but not in an escape pod ([`ESCAPE_POD_SHIP`],
+    /// class 0x2ff, mute whoever leads it, @0x62145).
     pub(super) fn answering(&self) -> Result<&Npc, HailRefusal> {
         let flying = !matches!(
             self.condition,
@@ -218,8 +219,13 @@ impl Session {
                 HailRefusal::InHyperspace
             });
         }
+        // The escape pod's class is mute whoever leads it: the class test
+        // (@0x62145) follows the escort shortcut (@0x620a2-0x620bb).
         let mute = self.dispositions(npc).mute;
-        if npc.condition != Condition::Intact || (mute && npc.escort.is_none()) {
+        if npc.ship == ESCAPE_POD_SHIP
+            || npc.condition != Condition::Intact
+            || (mute && npc.escort.is_none())
+        {
             return Err(HailRefusal::NoResponse);
         }
         Ok(npc)
@@ -946,6 +952,53 @@ mod tests {
             hailed,
             Err(HailRefusal::InHyperspace),
             "the government is read after the hyperspace state"
+        );
+    }
+
+    /// `catalog`'s targeted ship flying the escape pod, `shïp` 895.
+    fn in_a_pod(catalog: &FakePilotCatalog) -> Session {
+        let mut session = targeting(catalog);
+        npc(&mut session).ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        session
+    }
+
+    #[test]
+    fn an_escape_pod_gives_no_response_and_beeps_once() {
+        let catalog = hailable();
+        let mut session = in_a_pod(&catalog);
+        session.take_sounds();
+        let hailed = open_hail_with(&mut session, &catalog);
+        assert_eq!(hailed, Err(HailRefusal::NoResponse), "@0x62145");
+        assert_eq!(session.take_sounds(), [crate::SimSound::HailRefused]);
+    }
+
+    #[test]
+    fn an_escape_pod_escorting_the_player_still_gives_no_response() {
+        let catalog = hailable();
+        let mut session = in_a_pod(&catalog);
+        npc(&mut session).escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
+        assert_eq!(
+            hailed,
+            Err(HailRefusal::NoResponse),
+            "the class test follows the escort shortcut (@0x620a2-0x620bb)"
+        );
+        assert!(asked.is_empty(), "{asked:?}");
+    }
+
+    #[test]
+    fn an_escape_pod_still_jumping_in_is_entering_hyperspace() {
+        let catalog = hailable();
+        let mut session = in_a_pod(&catalog);
+        npc(&mut session).mode = Mode::JumpingIn { tick: 0 };
+        let (hailed, _) = hail_with(&mut session, &catalog, &opening(0));
+        assert_eq!(
+            hailed,
+            Err(HailRefusal::InHyperspace),
+            "the arrival test comes first (@0x62098)"
         );
     }
 
