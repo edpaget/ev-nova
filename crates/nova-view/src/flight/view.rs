@@ -3759,11 +3759,12 @@ impl<C> FlightView<C> {
         self.redraw_status();
     }
 
-    /// A port dialog (the outfitter, exchange, shipyard or mission
-    /// computer) opens: the nav is saved ([`Session::save_port_nav`]), as
-    /// each of the original's saves +0x6a and +0x6c as it opens (the
-    /// outfitter @0x5bafc-0x5bb12, the exchange @0x5dbed-0x5dc08, the
-    /// shipyard @0x5e70f-0x5e71e, the computer @0x5ffc0-0x5ffd0). A
+    /// A port dialog (the outfitter, exchange, shipyard, the bar's hire
+    /// screen or the mission computer) opens: the nav is saved
+    /// ([`Session::save_port_nav`]), as each of the original's saves +0x6a
+    /// and +0x6c as it opens (the outfitter @0x5bafc-0x5bb12, the exchange
+    /// @0x5dbed-0x5dc08, the shipyard and the hire screen
+    /// @0x5e70f-0x5e71e, the computer @0x5ffc0-0x5ffd0). A
     /// session that failed has no nav to save.
     pub fn open_port_dialog(&mut self) {
         if let Ok(session) = &mut self.session {
@@ -3792,7 +3793,8 @@ impl<C> FlightView<C> {
     ///   input. Nothing a docked session holds changes while its texts
     ///   show, so ours' redraw there draws what is already shown: an
     ///   ordering difference no frame crosses, not filed.
-    /// - The shipyard: the bar keeps what its close drew, before the
+    /// - The shipyard, and the bar's hire screen, the same function in
+    ///   hire mode: the bar keeps what its close drew, before the
     ///   restore, as no `_DrawStatus` follows it in the port
     ///   (@0x5ff85-0x5ffa3 marks only `_statusRedraw[2]`). Its restore
     ///   marks nav (`_statusRedraw[0]` @0x5f8fe), drawn at the port's next
@@ -3804,7 +3806,7 @@ impl<C> FlightView<C> {
         if let Ok(session) = &mut self.session {
             session.restore_port_nav();
         }
-        if dialog == PortDialog::Shipyard {
+        if matches!(dialog, PortDialog::Shipyard | PortDialog::Hire) {
             self.nav_marked = true;
         } else {
             self.retake_nav();
@@ -12414,12 +12416,18 @@ mod tests {
                 assert_eq!(view.outfit_order(sell, 0).run.done, 0);
             }),
         ];
-        for (steps, shown) in [(&draws[..], "Earth"), (&refused[..], "Proxima")] {
-            for (what, step) in steps {
-                let mut view = m_inside(PortDialog::Shipyard);
-                assert_eq!(port_nav(&view), naming("Proxima"), "{what}: the close's");
-                step(&mut view);
-                assert_eq!(port_nav(&view), naming(shown), "{what}");
+        for dialog in [PortDialog::Shipyard, PortDialog::Hire] {
+            for (steps, shown) in [(&draws[..], "Earth"), (&refused[..], "Proxima")] {
+                for (what, step) in steps {
+                    let mut view = m_inside(dialog);
+                    assert_eq!(
+                        port_nav(&view),
+                        naming("Proxima"),
+                        "{dialog:?}, {what}: the close's"
+                    );
+                    step(&mut view);
+                    assert_eq!(port_nav(&view), naming(shown), "{dialog:?}, {what}");
+                }
             }
         }
     }

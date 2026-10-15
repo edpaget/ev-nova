@@ -208,6 +208,13 @@ pub enum PortDialog {
     Shipyard,
     /// The mission computer.
     MissionComputer,
+    /// The bar's hire screen: `_DoShipyardDialog` in hire mode
+    /// (`_shipBuyMode` = 1, @0x49226-0x49230), which saves the nav as it
+    /// opens (@0x5e70f-0x5e71e), and as it closes restores it
+    /// (@0x5f8d9-0x5f8f5) and marks it (`_statusRedraw[0]` @0x5f8fe), as
+    /// the shipyard does. With nothing for hire it returns before the
+    /// save (@0x5e8da → @0x5f906), so it is no port dialog then.
+    Hire,
 }
 
 /// A screen open over the spaceport.
