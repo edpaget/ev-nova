@@ -1286,22 +1286,11 @@ impl Session {
     }
 
     /// The player as availability reads it, its legal record the one in
-    /// `system`, as the [`LegalRecords`](RuleKey::LegalRecords) rule reads
-    /// it: by the engine the system's own, by the Bible the one with its
-    /// government.
+    /// `system`, as [`Session::record_in`] reads it.
     fn mission_player(&self, system: SystemId) -> Player {
         let ship = self.ship_record(self.pilot.ship);
         Player {
-            // `_IsMissionAvailable` reads the system's slot (@0x9b59d,
-            // @0x9b5bf); by the Bible, the record with its government.
-            record: match self.rules.source_for(RuleKey::LegalRecords) {
-                RuleSource::Engine => self.pilot.system_record(system),
-                RuleSource::Bible => self
-                    .galaxy
-                    .map()
-                    .govt(system)
-                    .map_or(0, |govt| self.pilot.legal_record(govt)),
-            },
+            record: self.record_in(system, None),
             rating: self.pilot.combat_rating,
             ship: self.pilot.ship,
             inherent_ai: ship.map_or(0, |ship| ship.inherent_ai),
@@ -2267,6 +2256,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["AvailRecord"],
             "by the Bible, govt 128's -5"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_in_a_hidden_system_avail_record_reads_the_markups_record() {
+        use crate::catalog::GovtId;
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let mut catalog = offering();
+        catalog.star_map[0].govt = Some(GovtId(128));
+        catalog.missions = vec![MissionRecord {
+            avail_record: 3,
+            ..mission(140)
+        }];
+        let session = landed(&catalog, &mut NeverFires);
+        let mut session = session.with_rules(
+            Rulebook::default().with_override(RuleKey::LegalRecords, RuleSource::Bible),
+        );
+        session.pilot.set_legal_record(GovtId(128), 5);
+        // Hidden under the player directly: a refresh would move the
+        // player out (`leave_hidden`), but every reader must still agree.
+        let mut overlay = session.galaxy.overlay().clone();
+        assert!(overlay.set_visible(SystemId(130), Some(false)));
+        session.galaxy.set_overlay(overlay);
+        assert!(!session.galaxy().visible(SystemId(130)), "hidden");
+        assert_eq!(session.system_record(), 5, "govt 128's, though hidden");
+        assert_eq!(
+            session.offer_refusals(MissionId(140)),
+            Some(vec![]),
+            "the same 5"
         );
     }
 

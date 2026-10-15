@@ -3650,17 +3650,31 @@ impl Session {
         )
     }
 
-    /// The player's legal record in the current system, as the
-    /// [`LegalRecords`](RuleKey::LegalRecords) rule reads it: by the
-    /// engine the system's own; by the Bible the record with its
-    /// government, 0 in an independent system.
+    /// The player's legal record in the current system, as
+    /// [`Session::record_in`] reads it.
     fn system_record(&self) -> i16 {
+        self.record_in(self.pilot.system, None)
+    }
+
+    /// The player's legal record in `system`, at `site` when landing
+    /// there, as the [`LegalRecords`](RuleKey::LegalRecords) rule reads
+    /// it; the one place the rule is read. By the engine the system's own,
+    /// whatever the stellar's government (`_IsMissionAvailable` @0x9b59d,
+    /// @0x9b5bf; `_HandlePlayerDockRequest` @0x67903). By the Bible the
+    /// record with the system's government (hidden or not), 0 in an
+    /// independent system; at `site`,
+    /// [`landing_record`](crate::landing::landing_record).
+    fn record_in(&self, system: SystemId, site: Option<&LandingSite>) -> i16 {
         match self.rules.source_for(RuleKey::LegalRecords) {
-            RuleSource::Engine => self.pilot.system_record(self.pilot.system),
-            RuleSource::Bible => self
-                .galaxy
-                .govt(self.pilot.system)
-                .map_or(0, |govt| self.pilot.legal_record(govt)),
+            RuleSource::Engine => self.pilot.system_record(system),
+            RuleSource::Bible => {
+                let govt = self.galaxy.govt(system);
+                let record = |govt| self.pilot.legal_record(govt);
+                site.map_or_else(
+                    || govt.map_or(0, record),
+                    |site| crate::landing::landing_record(site, govt, record),
+                )
+            }
         }
     }
 
@@ -3689,18 +3703,9 @@ impl Session {
     }
 
     /// The player's legal record that `site`'s `MinStatus` is checked
-    /// against: by the engine the record in the current system, whatever
-    /// the stellar's government (`_HandlePlayerDockRequest` @0x67903); by
-    /// the Bible [`landing_record`](crate::landing::landing_record).
+    /// against, as [`Session::record_in`] reads it at `site`.
     fn landing_record(&self, site: &LandingSite) -> i16 {
-        match self.rules.source_for(RuleKey::LegalRecords) {
-            RuleSource::Engine => self.pilot.system_record(self.pilot.system),
-            RuleSource::Bible => {
-                crate::landing::landing_record(site, self.galaxy.govt(self.pilot.system), |govt| {
-                    self.pilot.legal_record(govt)
-                })
-            }
-        }
+        self.record_in(self.pilot.system, Some(site))
     }
 
     /// Trades on the exchange as `order` asks, on its row at that row's
