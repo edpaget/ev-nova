@@ -4164,6 +4164,27 @@ pub(super) mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // whole numbers
+    fn a_rescue_ship_on_a_hull_with_default_armour_starts_at_its_base_armours_cut() {
+        let mut catalog = goal_catalog(5, 0);
+        catalog.outfits.push(crate::testkit::outfit(
+            300,
+            &[(crate::stats::MORE_ARMOR, 500)],
+        ));
+        catalog.ship_records[1].defaults = vec![(crate::catalog::OutfitId(300), 1)];
+        let session = in_flight(&catalog);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2]);
+        for npc in session.npcs() {
+            assert_eq!(npc.stats.armor, f32::from(FAST.armor) + 500.0);
+            assert!(
+                (npc.reserves.armor.now - f32::from(FAST.armor).mul_add(0.33, -1.0)).abs() < 1e-4,
+                "{}",
+                npc.reserves.armor.now
+            );
+        }
+    }
+
+    #[test]
     #[allow(clippy::float_cmp)] // the reserves are set to these exact values
     fn a_rescue_ship_set_up_in_flight_starts_derelict_and_stays_disabled_once_boarded() {
         let catalog = goal_catalog(5, 0);
@@ -4173,7 +4194,8 @@ pub(super) mod tests {
             assert_eq!(npc.reserves.shield.now, 0.0);
             assert_eq!(
                 npc.reserves.armor.now,
-                crate::person::derelict_armor(npc.stats.armor, npc.hull.tough)
+                crate::person::derelict_armor(f32::from(FAST.armor), npc.hull.tough),
+                "from the ship type's base Armor"
             );
         }
         for npc in session.traffic.npcs_mut() {

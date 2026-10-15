@@ -261,6 +261,11 @@ pub struct ShipKind {
     /// class's: the original reads the class's items (+0x76,
     /// `_ShipCanSelfRepair` @0x91e5-0x922d).
     pub self_repair: bool,
+    /// The `shïp`'s own `Armor` (+0x60), before its default items: what a
+    /// derelict's armour is cut from ([`derelict_armor`](crate::person::derelict_armor)).
+    /// A person's fitted ship keeps its ship type's, unscaled by its
+    /// `ShieldMod` (+0x76 → +0x60).
+    pub base_armor: f32,
 }
 
 /// A person as the traffic spawns it: its record, whether its `LinkSyst`
@@ -544,6 +549,7 @@ pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arse
         appear_on: record.appear_on.clone(),
         cloak: CloakGear::of(record.fields.flags2, &defaults, outfits),
         self_repair: self_repair::has_gear(&defaults, outfits),
+        base_armor: f32::from(record.fields.armor.max(0)),
     }
 }
 
@@ -1245,6 +1251,18 @@ mod tests {
             EscortClass::Medium,
             "by its mass"
         );
+    }
+
+    #[test]
+    fn a_kinds_base_armor_leaves_out_its_default_items() {
+        let plated = ShipRecord {
+            fields: ShipFields { armor: 100, ..FAST },
+            defaults: vec![(OutfitId(300), 1)],
+            ..ship(204, FAST)
+        };
+        let outfits = [outfit(300, &[(crate::stats::MORE_ARMOR, 50)])];
+        let kind = kind(&plated, &outfits, &arsenal());
+        assert_eq!((kind.stats.armor, kind.base_armor), (150.0, 100.0));
     }
 
     #[test]

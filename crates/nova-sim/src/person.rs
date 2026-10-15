@@ -495,7 +495,7 @@ pub fn fit(
     }
     let condition = if derelict {
         reserves.shield.now = 0.0;
-        reserves.armor.now = derelict_armor(kind.stats.armor, kind.hull.tough);
+        reserves.armor.now = derelict_armor(kind.base_armor, kind.hull.tough);
         Condition::Disabled
     } else {
         Condition::Intact
@@ -511,9 +511,11 @@ pub fn fit(
 
 /// A derelict's armour, of a ship type holding `armor`, its hull `tough`
 /// or not: a third of it (a tenth for a tough hull), less one, just below
-/// where it is disabled (@0xdd568, @0xdd110, @0xdd0c0). The original reads
-/// the `shïp`'s own `Armor` (+0x60); `armor` here carries its default
-/// outfits' armour too.
+/// where it is disabled (@0xdd568, @0xdd110, @0xdd0c0). `armor` is the
+/// `shïp`'s own `Armor` (+0x60, [`ShipKind::base_armor`]), without its
+/// default outfits' armour: both derelict paths read it there, the rescue
+/// setup (@0x42fae-0x42fdc) and `_SpawnPerson`'s derelict person
+/// (@0x40ff6-0x41020), the tough hull being `Flags` 0x10 (+0x9e8).
 #[must_use]
 pub fn derelict_armor(armor: f32, tough: bool) -> f32 {
     let share = if tough {
@@ -1198,6 +1200,10 @@ mod tests {
 
     #[test]
     fn a_derelict_person_starts_disabled_with_no_shield_and_a_third_of_its_armour() {
+        let armed = || ShipKind {
+            base_armor: 45.0,
+            ..armed()
+        };
         let (kind, reserves, condition) =
             fit(&armed(), &person(128, 128), &arsenal(), ENGINE, true);
         assert_eq!(condition, Condition::Disabled);
@@ -1221,6 +1227,31 @@ mod tests {
             ],
             [0.33, 0.1, 1.0]
         );
+    }
+
+    #[test]
+    fn a_derelict_persons_armour_comes_from_its_ship_types_base_armor() {
+        for (tough, share) in [(false, 0.33), (true, 0.1)] {
+            let plated = ShipKind {
+                stats: ShipStats {
+                    armor: 150.0,
+                    ..ShipStats::new(FAST, &[])
+                },
+                hull: HullSpec {
+                    tough,
+                    ..HullSpec::default()
+                },
+                base_armor: 100.0,
+                ..armed()
+            };
+            let (kind, reserves, _) = fit(&plated, &person(128, 128), &arsenal(), ENGINE, true);
+            assert!(
+                (reserves.armor.now - (100.0f32).mul_add(share, -1.0)).abs() < 1e-4,
+                "tough {tough}: {}",
+                reserves.armor.now
+            );
+            assert_eq!(kind.base_armor, 100.0, "carried through the fit");
+        }
     }
 
     #[test]

@@ -745,7 +745,7 @@ impl Traffic {
             let mut condition = person.map_or(Condition::Intact, |person| person.condition);
             if ship.derelict {
                 reserves.shield.now = 0.0;
-                reserves.armor.now = derelict_armor(kind.stats.armor, kind.hull.tough);
+                reserves.armor.now = derelict_armor(kind.base_armor, kind.hull.tough);
                 condition = Condition::Disabled;
             }
             let traits = person
@@ -924,6 +924,7 @@ mod tests {
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
                     self_repair: false,
+                    base_armor: 45.0,
                 },
             )]),
             ..SpawnTable::default()
