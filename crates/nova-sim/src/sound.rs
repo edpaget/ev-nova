@@ -22,7 +22,12 @@ pub enum SimSound {
     /// when the ship needed none: the warp-up, `snd ` 128 (`_HandlePlayer`
     /// @0x6b60d-0x6b690), before the turn to the jump's bearing.
     JumpBegan,
-    /// A jump ended in the next system.
+    /// A jump ended in the next system: the warp-out, `snd ` 130
+    /// (`_HandlePlayer` @0x6bbd3-0x6bc08; the hypergate @0x63e57 and the
+    /// wormhole @0x6443d play it too). The original may start it up to a
+    /// frame before the system switch, from the end of the warp-up
+    /// (`_WarpUpCallback` @0x31ff3, the fallback @0x6c62a-0x6c706); that
+    /// lag isn't visible to the player.
     Arrived,
     /// The player became threatened: the Red Alert, `snd ` 370
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see

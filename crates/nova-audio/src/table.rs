@@ -102,10 +102,16 @@ impl SoundTable {
     /// - `take_off`: none. The guide lists none, and the `NovaSwift` remake
     ///   (github.com/SirStig/NovaSwift, `Game/GameScene.swift`) notes that
     ///   "lifting off a planet is silent in the original".
-    /// - `jump`: 128, "Warp up" (the guide: "128 Warp up"). 129 "Warp up
+    /// - `jump`: 128, "Warp up" (the guide: "128 Warp up"),
+    ///   `_warpUpSnd[0]`, which `_HandlePlayer` plays as the warp stage
+    ///   begins (@0x6b60d-0x6b690). 129 "Warp up
     ///   x2" is for a warp begun in double time, which the warp does not
     ///   model yet (rdm:phase/hud-fidelity/phase-20-audio-double-speed-warp).
-    /// - `arrival`: 130, "Warp out" (the guide: "130 Warp out").
+    /// - `arrival`: 130, "Warp out" (the guide: "130 Warp out"),
+    ///   `_warpOutSnd` (loaded @0x1c152-0x1c16a), which `_HandlePlayer`
+    ///   plays as the jump ends and the next system is set up
+    ///   (@0x6bbd3-0x6bc08, or the fallback @0x6c6fc-0x6c706), and which
+    ///   the hypergate (@0x63e57) and the wormhole (@0x6443d) play as well.
     /// - `button_down`: 600, "Menu button down" (the resource's name, and
     ///   the guide's).
     /// - `button_up`: 601, "Menu button up" (likewise).
@@ -255,8 +261,16 @@ mod tests {
         assert_eq!(table.engine, None, "the original thrusts in silence");
         assert_eq!(table.landing, Some(SoundId(151)), "Beep2");
         assert_eq!(table.take_off, None, "the original takes off in silence");
-        assert_eq!(table.jump, Some(SoundId(128)), "Warp up");
-        assert_eq!(table.arrival, Some(SoundId(130)), "Warp out");
+        assert_eq!(
+            table.jump,
+            Some(SoundId(128)),
+            "Warp up, _warpUpSnd[0] @0x6b690"
+        );
+        assert_eq!(
+            table.arrival,
+            Some(SoundId(130)),
+            "Warp out, _warpOutSnd @0x6bc08"
+        );
         assert_eq!(table.button_down, Some(SoundId(600)), "Menu button down");
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
         assert_eq!(table.alert, None, "the system's alert");
