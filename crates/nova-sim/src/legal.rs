@@ -31,10 +31,22 @@
 //! them again the same way, from each government's `InitialRec` alone,
 //! hidden systems included, and sets the record with each government to
 //! it too (`_HandlePlayer` @0x69257-0x69290; the session's `rescue`
-//! module). The `chär`'s statuses spread to allied and enemy systems
-//! (`_ActivateCharResource` @0x76dc0) and the readers the engine lacks
-//! belong to
-//! rdm:phase/missions-fidelity/phase-23-legal-record-other-readers-and-writers.
+//! module).
+//!
+//! A new pilot's `chär` statuses spread, by the engine's reading of the
+//! [`Rulebook`]'s [`RuleKey::CharacterStatusSpread`] entry, as
+//! `_DoNewPilot`'s `_ActivateCharResource` spreads them (@0x76dc0-0x76e6e)
+//! after `_ResetPlayerRecord`: each to the systems of its government's
+//! allies, and negated to its enemies' (a xenophobe's to the independent
+//! systems too), and to the records with those governments
+//! ([`spread_statuses`]). The session's `begin` spreads them, once, for
+//! a pilot just created: the flight that derives the records in each
+//! system is built before the rules are given. By the Bible's reading,
+//! each status stays with its own government and its systems. A loaded
+//! pilot is never spread, and `_ResetPlayerRecord`'s floor at each
+//! `InitialRec` (@0x1db70) changes nothing the player sees: its new-pilot
+//! call follows a seed already at the floor, and each open-pilot call
+//! comes before the load overwrites every record (@0x7650e, @0x7674a).
 //!
 //! The mission writers (success, failure, abort and the cleaning pay,
 //! see [`mission`](crate::mission)) change the record in every system of
@@ -390,7 +402,56 @@ pub fn systems_from_govts(
         .collect()
 }
 
-/// Applies one conviction to `pilot`: `govt_changes` to its records with
+/// Spreads a new pilot's `chär` statuses (`Govt1-4` with `Status1-4`,
+/// `slots`) as `_ActivateCharResource` does (@0x76dc0-0x76e6e): for each
+/// slot in order, every one of `systems` (all of them, hidden or not,
+/// with each one's government) whose government is allied with the
+/// slot's G, G itself included (`_GovtAllies` @0x4e4e), takes the status
+/// as its record, and every one whose government is G's enemy takes the
+/// status negated, so a xenophobic G's reaches the independent systems
+/// too (`_GovtEnemies(-1, G)` @0x505d-0x507c); any other is left as it
+/// is. A later slot overwrites an earlier one, and a status of 0 still
+/// writes 0. The record with each government in `govts` takes the same
+/// rule, so the two stores agree (see the module docs). Each record is
+/// held within [`RECORD_LIMIT`]; the original's word wrap of a negated
+/// -32768 isn't kept. The spread plays no sound.
+pub fn spread_statuses(
+    pilot: &mut Pilot,
+    systems: impl IntoIterator<Item = (SystemId, Option<GovtId>)>,
+    slots: &[Option<(GovtId, i16)>],
+    govts: &Governments,
+) {
+    let spread = |owner: Option<GovtId>| {
+        slots
+            .iter()
+            .flatten()
+            .fold(None, |record, &(govt, status)| {
+                let status = i32::from(status);
+                if govts.allies(owner, Some(govt)) {
+                    Some(status)
+                } else if govts.enemies(owner, Some(govt)) {
+                    Some(-status)
+                } else {
+                    record
+                }
+            })
+    };
+    let held =
+        |record: i32| i16::try_from(record.clamp(-RECORD_LIMIT, RECORD_LIMIT)).unwrap_or_default();
+    for (system, owner) in systems {
+        if let Some(record) = spread(owner) {
+            pilot.set_system_record(system, held(record));
+        }
+    }
+    let owners: Vec<GovtId> = govts.ids().collect();
+    for govt in owners {
+        if let Some(record) = spread(Some(govt)) {
+            pilot.set_legal_record(govt, held(record));
+        }
+    }
+}
+
+/// Applies one conviction to `pilot`:`govt_changes` to its records with
 /// each government, and `system_changes` (a [`LegalCode`]'s walk) to its
 /// record in each system. A system's new record is its record plus the
 /// change in single precision, truncated (`cvttss2si` of the float sum,
@@ -1106,6 +1167,124 @@ mod tests {
             "the government's record, else its InitialRec; the independent, \
              the zero InitialRec and the record of 0 over an InitialRec of 7 \
              left out as none"
+        );
+    }
+
+    /// [`four`] and a xenophobe, each of whose systems starts at its
+    /// `InitialRec`.
+    fn five() -> Governments {
+        let mut records: Vec<GovtRecord> = [VICTIM, ALLY, ENEMY, NEUTRAL]
+            .into_iter()
+            .map(|id| four().get(id).expect("one of four").clone())
+            .collect();
+        records.push(GovtRecord {
+            flags: XENOPHOBIC,
+            ..govt(134)
+        });
+        for record in &mut records {
+            record.initial_rec = 9;
+        }
+        Governments::new(records)
+    }
+
+    /// A pilot whose systems 130-134 are governed as their IDs say and
+    /// 139 is independent, each seeded from its government's
+    /// `InitialRec` as a new pilot's are.
+    fn seeded(govts: &Governments) -> (Pilot, Vec<(SystemId, Option<GovtId>)>) {
+        let mut pilot = Pilot::new(&crate::testkit::catalog(), "").expect("a pilot");
+        let systems: Vec<(SystemId, Option<GovtId>)> = (130..=134)
+            .map(|id| (SystemId(id), Some(GovtId(id))))
+            .chain([(SystemId(139), None)])
+            .collect();
+        pilot.system_legal = Some(systems_from_govts(
+            systems.iter().copied(),
+            &BTreeMap::new(),
+            govts,
+        ));
+        (pilot, systems)
+    }
+
+    fn system_records(pilot: &Pilot) -> Vec<i16> {
+        [130, 131, 132, 133, 134, 139]
+            .map(|id| pilot.system_record(SystemId(id)))
+            .to_vec()
+    }
+
+    #[test]
+    fn a_status_spreads_to_its_allies_systems_and_negated_to_its_enemies() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(&mut pilot, systems, &[Some((VICTIM, 25)), None], &govts);
+        assert_eq!(
+            system_records(&pilot),
+            [25, 25, -25, 9, -25, 0],
+            "its own and its ally's; its enemy's and the xenophobe's negated; \
+             the neutral's InitialRec and the independent untouched"
+        );
+    }
+
+    #[test]
+    fn a_xenophobes_status_reaches_the_independent_systems_negated() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(&mut pilot, systems, &[Some((XENOPHOBE, 4))], &govts);
+        assert_eq!(
+            system_records(&pilot),
+            [-4, -4, -4, -4, 4, -4],
+            "_GovtEnemies(-1, G) holds for a xenophobic G (@0x505d-0x507c)"
+        );
+    }
+
+    #[test]
+    fn a_later_status_overwrites_an_earlier_and_a_status_of_0_still_writes() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(
+            &mut pilot,
+            systems,
+            &[Some((VICTIM, 25)), Some((ENEMY, 0)), Some((NEUTRAL, 3))],
+            &govts,
+        );
+        assert_eq!(
+            system_records(&pilot),
+            [0, 25, 0, 3, -3, 0],
+            "the enemy's 0 clears the victim's systems and its own; the ally \
+             isn't the enemy's enemy, so keeps 25; the neutral's 3 last, \
+             negated for the xenophobe"
+        );
+    }
+
+    #[test]
+    fn a_spread_status_is_held_within_32000() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(&mut pilot, systems, &[Some((VICTIM, i16::MIN))], &govts);
+        assert_eq!(pilot.system_record(SystemId(130)), -32_000);
+        assert_eq!(pilot.system_record(SystemId(132)), 32_000, "no wrap");
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(&mut pilot, systems, &[Some((VICTIM, i16::MAX))], &govts);
+        assert_eq!(pilot.system_record(SystemId(131)), 32_000);
+        assert_eq!(pilot.system_record(SystemId(132)), -32_000);
+    }
+
+    #[test]
+    fn the_record_with_each_government_takes_the_same_spread() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        pilot.set_legal_record(NEUTRAL, 6);
+        spread_statuses(
+            &mut pilot,
+            systems,
+            &[None, Some((VICTIM, 25)), None, None],
+            &govts,
+        );
+        let records: Vec<i16> = [VICTIM, ALLY, ENEMY, NEUTRAL, XENOPHOBE]
+            .map(|govt| pilot.legal_record(govt))
+            .to_vec();
+        assert_eq!(
+            records,
+            [25, 25, -25, 6, -25],
+            "every government in the catalog, the neutral left alone"
         );
     }
 

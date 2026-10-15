@@ -138,7 +138,8 @@
 //!   through the [`CrimeMap`] from system to system, Nova's [`NovaLaw`],
 //!   [`legal::convict`], which applies it, and
 //!   [`legal::systems_from_govts`], which derives the records in each
-//!   system.
+//!   system, and [`legal::spread_statuses`], which spreads a new pilot's
+//!   `chär` statuses.
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
