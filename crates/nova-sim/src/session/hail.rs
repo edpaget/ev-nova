@@ -30,7 +30,9 @@
 //!   else deciding as its idle block does, which lands; its target and
 //!   fire command are gone, and so is its provocation.
 //! - **Attack** (a bribe declined, `_AIMakeShipAttackPlayer` @0x89c3e):
-//!   it attacks the player.
+//!   it attacks the player, a person of `Flags` 0x0010 not already
+//!   threatening it saying its hail quote at once
+//!   ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote)).
 //! - **Release**: the player's escort leaves the fleet once the channel
 //!   closes ([`Session::hang_up`]), as the original's dialog does when it
 //!   closes (@0x96852): its AI type its `InherentAI`, of no government
@@ -519,6 +521,15 @@ impl Session {
         if deed == Deed::Join {
             self.enlist_person(id);
             return;
+        }
+        if deed == Deed::Attack {
+            // `_AIMakeShipAttackPlayer` (@0x9621f) asks its quote's gate
+            // before it sets the goal (@0x89c50-0x89c9b).
+            let dying = matches!(
+                self.condition,
+                Condition::Dying { .. } | Condition::Destroyed
+            );
+            self.traffic.turn_with_quote(id, dying);
         }
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
@@ -1604,6 +1615,41 @@ mod tests {
         assert_eq!(session.npcs()[0].target, Some(ShipRef::Player));
         assert_eq!(session.pilot().cash, 100_000);
         assert_eq!(press(&mut session, &catalog, 1, 99).asking, Some(4000));
+    }
+
+    #[test]
+    fn a_person_declined_its_bribe_says_its_attack_quote() {
+        // `_DoCommDialog` calls `_AIMakeShipAttackPlayer` (@0x9621f), whose
+        // gate reads the ship before it sets goal 4 (@0x89c50-0x89c9b).
+        let declined = |attacking: bool| {
+            let catalog = hailable();
+            let mut session = pirate(&catalog, PIRATES);
+            hail(&mut session, &catalog);
+            press(&mut session, &catalog, 1, 36);
+            let ship = npc(&mut session);
+            ship.person = Some(crate::traffic::npc::NpcPerson {
+                id: crate::catalog::PersonId(151),
+                flags: crate::person::QUOTE_ON_ATTACK,
+                coward: 0,
+                comm_quote: -1,
+                hail_quote: 1,
+                mission: false,
+                portrait: None,
+                invincible: false,
+                grudge: false,
+                quoted: false,
+                quoted_at: None,
+            });
+            if !attacking {
+                ship.goal = Goal::Idle;
+                ship.target = None;
+            }
+            let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
+            assert_eq!(view.reply, "What? How dare you! Prepare to die!");
+            session.traffic.take_attack_quotes()
+        };
+        assert_eq!(declined(false), [NpcId(0)]);
+        assert_eq!(declined(true), [], "already attacking the player");
     }
 
     #[test]

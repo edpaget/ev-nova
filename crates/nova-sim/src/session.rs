@@ -13109,6 +13109,80 @@ pub(super) mod tests {
         assert!(fired > 0, "once out it fires at the player");
     }
 
+    /// [`armed`], `STR#` 7101 #1 "Prepare to die!".
+    fn quoting_armed() -> FakePilotCatalog {
+        FakePilotCatalog {
+            strings: vec![(7101, vec!["Prepare to die!".to_owned()])],
+            ..armed()
+        }
+    }
+
+    /// NPC 0 of `session` becomes a warship flown by a person of `Flags`
+    /// 0x0010, saying `STR#` 7101 #1.
+    fn make_quoting_warship(session: &mut Session) {
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.ai_type = crate::traffic::npc::AiType::Warship;
+        npc.person = Some(crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(151),
+            flags: crate::person::QUOTE_ON_ATTACK,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: 1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: false,
+            quoted: false,
+            quoted_at: None,
+        });
+    }
+
+    /// The fight's ticks with the trigger held until NPC 0's shield drops.
+    fn shoot_until_hit(session: &mut Session) {
+        session.hold_trigger(FIRE);
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].reserves.shield.now < 30.0 {
+                return;
+            }
+        }
+        panic!("never hit");
+    }
+
+    /// The hail quotes said this quote tick, and whether one beeped.
+    fn quotes_said(session: &mut Session, catalog: &FakePilotCatalog) -> (Vec<String>, bool) {
+        session.tick_quotes(catalog, &mut NeverFires);
+        let said = session.take_quotes().into_iter().map(|quote| quote.text);
+        let beeped = session.take_sounds().contains(&SimSound::HailQuote);
+        (said.collect(), beeped)
+    }
+
+    #[test]
+    fn the_players_hit_on_a_person_says_its_quote_and_beeps() {
+        // A flying ship the player hits targets it (`_DamageShip` +0x70
+        // @0x3bcf6) before `_AIMakeShipAttackPlayer` asks
+        // `_ExtendedIsThreatToPlayer` (@0x89c53), so the quote is
+        // `_HandleShip`'s, said as it threatens the player (@0x33d38).
+        let catalog = quoting_armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        make_quoting_warship(&mut session);
+        session.take_sounds();
+        shoot_until_hit(&mut session);
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        assert_eq!(
+            quotes_said(&mut session, &catalog),
+            (vec!["Prepare to die!".to_owned()], true)
+        );
+        let person = session.npcs()[0].person.expect("a person");
+        assert!(person.quoted);
+        assert!(person.quoted_at.is_some(), "`_HandleShip`'s quote");
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            assert_eq!(quotes_said(&mut session, &catalog), (vec![], false));
+        }
+    }
+
     #[test]
     fn by_the_other_reading_a_ship_the_player_hits_in_its_gate_waits_on_unseen() {
         use crate::traffic::npc::Mode;

@@ -60,6 +60,8 @@ pub struct SoundTable {
     pub hail_refused: Option<SoundId>,
     /// Plays as a person offers its mission on its hail.
     pub hail_offer: Option<SoundId>,
+    /// Plays as a person says its hail quote in flight.
+    pub hail_quote: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -134,6 +136,8 @@ impl SoundTable {
     /// - `hail_offer`: 154, `_beepSnd[4]`, which
     ///   `_HandlePlayerCommunication` plays as a person offers its mission
     ///   on its hail (@0x62232-0x6223d).
+    /// - `hail_quote`: 154, `_beepSnd[4]`, which `_ShowPersonHailQuote`
+    ///   plays with every person's hail quote (@0x44586-0x445ad).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -159,6 +163,7 @@ impl SoundTable {
         fleet_quote: Some(SoundId(154)),
         hail_refused: Some(SoundId(153)),
         hail_offer: Some(SoundId(154)),
+        hail_quote: Some(SoundId(154)),
     };
 }
 
@@ -193,5 +198,6 @@ mod tests {
         assert_eq!(table.fleet_quote, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.hail_offer, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.hail_quote, Some(SoundId(154)), "_beepSnd[4]");
     }
 }

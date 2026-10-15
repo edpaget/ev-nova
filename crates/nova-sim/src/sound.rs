@@ -69,4 +69,10 @@ pub enum SimSound {
     /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
     /// @0x62232-0x6223d).
     HailOffer,
+    /// A person's hail quote was said in flight, by its own filters
+    /// (`_HandleShip` @0x33f9e) or as it turned on the player
+    /// (`_AIMakeShipAttackPlayer` @0x89ce1): `_beepSnd[4]`, `snd ` 154
+    /// (`_ShowPersonHailQuote` @0x44586-0x445ad), for every hail quote
+    /// said, even when its line is empty.
+    HailQuote,
 }
