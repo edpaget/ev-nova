@@ -240,7 +240,7 @@ mod tests {
         with_aux,
     };
     use crate::story::StoryEvent;
-    use crate::testkit::{Draws, FakePilotCatalog, land_now};
+    use crate::testkit::{Draws, FAST, FakePilotCatalog, land_now, ship};
     use crate::traffic::npc::Mode;
 
     /// Mission 140's auxiliary ships.
@@ -754,6 +754,17 @@ mod tests {
     }
 
     fn fall_through(appear: i16, reading: RuleSource) -> FellThrough {
+        fall_through_with(appear, reading, |_| {}, |_| {})
+    }
+
+    /// [`fall_through`] with `edit` applied to its catalog, and `before`
+    /// to the session just before the frame.
+    fn fall_through_with(
+        appear: i16,
+        reading: RuleSource,
+        edit: impl FnOnce(&mut FakePilotCatalog),
+        before: impl FnOnce(&mut Session),
+    ) -> FellThrough {
         let mut catalog = aux_catalog(
             shipping(-1, 1),
             aux_ships(2, -1),
@@ -764,6 +775,7 @@ mod tests {
         record.date_post_inc = 1;
         record.flags2 = crate::mission::active::AUTO_ABORT_PAYS;
         record.pay_val = 1000;
+        edit(&mut catalog);
         let mut session = accepted(&catalog)
             .with_rules(Rulebook::default().with_override(RuleKey::AuxAbortFallThrough, reading));
         take_off(&mut session, &catalog);
@@ -785,6 +797,7 @@ mod tests {
             session.reserves().fuel.now,
             session.pilot().date(),
         );
+        before(&mut session);
         tick(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
         assert_eq!(aux_here(&session), 2, "its aux ships stay");
@@ -829,6 +842,33 @@ mod tests {
         tick(&mut session, &catalog);
         assert_eq!(special_here(&session), 2, "they stay as traffic");
         assert_eq!(session.npcs().len(), 4);
+    }
+
+    #[test]
+    fn a_0x0800_mission_falling_through_brings_its_special_ships_of_the_kept_type() {
+        // A draw on `NeverFires` gives ship 129, the düde's last type;
+        // 200 is kept.
+        let FellThrough { session, .. } = fall_through_with(
+            1,
+            RuleSource::Engine,
+            |catalog| {
+                catalog.ship_records.push(ship(129, FAST));
+                catalog.dudes[0].1.ships = vec![(ShipId(200), 20), (ShipId(129), 17)];
+                catalog.missions[0].flags |= 0x0800;
+            },
+            |session| {
+                if let Some(active) = session.pilot.missions.get_mut(0) {
+                    active.ships.uniform_type = Some(ShipId(200));
+                }
+            },
+        );
+        let special: Vec<ShipId> = session
+            .npcs()
+            .iter()
+            .map(|npc| npc.ship)
+            .filter(|ship| *ship != ShipId(201))
+            .collect();
+        assert_eq!(special, [ShipId(200); 2], "the kept type, not a draw");
     }
 
     #[test]
