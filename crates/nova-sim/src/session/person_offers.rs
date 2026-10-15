@@ -14,7 +14,10 @@
 //! (+0x6c, @0xa151f-0xa1526), is read as
 //! [`RuleKey::PersonMissionStellar`] says: by the engine the navigation
 //! target, or no stellar with none; by the other reading the first
-//! stellar the player's system lists.
+//! stellar the player's system lists, or spöb 128 when it lists none
+//! (the `_offeringFromShip`-set branch, @0xa14e8-0xa1518). `_SpawnPerson`
+//! never runs with `_offeringFromShip` set, so the original always takes
+//! the navigation target.
 //!
 //! **The answer** (`_HandlePlayerCommunication` @0x622b6-0x62547,
 //! `_HandlePlayerBoardAttempt` @0x65982-0x65f6d; see
@@ -108,12 +111,20 @@ impl Session {
     /// The stellar a person's mission is offered from, as
     /// [`RuleKey::PersonMissionStellar`] reads the player ship's stellar
     /// target: by the engine the navigation target; by the other reading
-    /// the first stellar the player's system lists.
+    /// the first stellar the player's system lists, or spöb 128 with none.
     pub(super) fn person_mission_stellar(&self) -> Option<StellarId> {
         match self.rules.source_for(RuleKey::PersonMissionStellar) {
             RuleSource::Engine => self.nav_target,
-            RuleSource::Bible => self.sites.first().map(|site| site.id),
+            RuleSource::Bible => Some(self.first_listed_stellar()),
         }
+    }
+
+    /// The first stellar the player's system lists, or spöb 128 when it
+    /// lists none, as `_RandomizeOneMission` reads the origin with
+    /// `_offeringFromShip` set (@0xa14e8-0xa1518: the first nav slot not
+    /// -1, else index 0 @0xa1514).
+    pub(super) fn first_listed_stellar(&self) -> StellarId {
+        self.sites.first().map_or(StellarId(128), |site| site.id)
     }
 
     /// The stellar whose being a mission's destination counts it reached
@@ -447,6 +458,37 @@ mod tests {
             Rulebook::default().with_override(RuleKey::PersonMissionStellar, RuleSource::Bible);
         let session = populated(&catalog, rules, Some(129));
         assert_eq!(offered_to(&session), Some(StellarId(128)));
+    }
+
+    /// `catalog` with its linked person's traffic in system 133, which
+    /// lists no stellar, and the character starting there.
+    fn in_an_empty_system(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+        catalog.systems.push(SystemId(133));
+        catalog.traffic[0].0 = SystemId(133);
+        if let Ok(start) = &mut catalog.character {
+            start.systems[0] = Some(SystemId(133));
+        }
+        catalog
+    }
+
+    #[test]
+    fn by_the_other_reading_a_system_with_no_stellar_resolves_from_128() {
+        let catalog = in_an_empty_system(linked(0));
+        let rules =
+            Rulebook::default().with_override(RuleKey::PersonMissionStellar, RuleSource::Bible);
+        let session = populated(&catalog, rules, None);
+        assert_eq!(session.system(), SystemId(133));
+        assert!(session.sites.is_empty());
+        assert_eq!(offered_to(&session), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn by_the_engine_a_system_with_no_stellar_resolves_from_no_stellar() {
+        let catalog = in_an_empty_system(linked(0));
+        let session = populated(&catalog, Rulebook::default(), None);
+        assert_eq!(session.system(), SystemId(133));
+        assert!(session.sites.is_empty());
+        assert_eq!(offered_to(&session), None);
     }
 
     #[test]

@@ -1128,10 +1128,7 @@ impl Session {
         if !restarts && !self.pilot.missions.holding(mission).is_empty() {
             return;
         }
-        let origin = self
-            .landed
-            .or_else(|| self.sites.first().map(|site| site.id))
-            .unwrap_or(StellarId(128));
+        let origin = self.landed.unwrap_or_else(|| self.first_listed_stellar());
         let today = self.pilot.date;
         let offer = self.in_world(|world| {
             mission::resolve(
