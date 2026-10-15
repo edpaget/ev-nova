@@ -21978,6 +21978,32 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        assert!(
+            (over.x - VIEW_CENTER.x).abs() > 64.0 || (over.y - VIEW_CENTER.y).abs() > 64.0,
+            "the NPC at {over:?} sits clear of the player's ship"
+        );
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(id));
+        view.take_sounds();
+        // The camera centres on the player, so its ship is drawn at the centre.
+        click(&mut view, VIEW_CENTER);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetCleared)]);
+    }
+
+    #[test]
+    fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
+        let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        view.take_sounds();
+        click(&mut view, VIEW_CENTER);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
     fn a_click_on_a_ship_targets_it_during_a_jump() {
         // A still NPC at (0, -750), where the ship flies out past.
         let mut catalog = trafficked(&[130], 1, 129, 3);
