@@ -3604,7 +3604,7 @@ impl<
             Ok(session) => session.outfit_counted(order, count, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
         };
-        self.after_outfit_order(before.as_ref(), done.is_ok_and(|done| done > 0));
+        self.after_outfit_order(before.as_ref(), done.is_ok());
         done
     }
 
@@ -3616,7 +3616,8 @@ impl<
     pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
         let before = self.interface_now();
         let run = self.run_outfit_order(order, count);
-        self.after_outfit_order(before.as_ref(), run.run.done > 0);
+        let passed = run.run.done > 0 || run.run.stopped.is_none();
+        self.after_outfit_order(before.as_ref(), passed);
         run
     }
 
@@ -3640,7 +3641,8 @@ impl<
 
     /// Redraws the bar after an outfitter order, given the `ïntf` the
     /// ship flew under before it ([`FlightView::interface_now`]) and
-    /// whether any of it went through (`done`).
+    /// whether it passed its button's own check (`passed`): any of it
+    /// went through, or a count of none, a Cancel's, asked for nothing.
     ///
     /// The order's `OnPurchase` (`_EvalMissionBitSetString` @0x5c2cb) or
     /// `OnSell` (@0x5cff6) runs inside it. When its `C`, `E` or `H`
@@ -3665,11 +3667,13 @@ impl<
     /// @0x5c09f-0x5c0a2) jumps past the buy's draw to @0x5c5ca, and a
     /// sell with nothing to sell (the flag at 0xded1c, @0x5c5d5-0x5c5dd)
     /// past the sell's to @0x5d351. A run stopped after its first pass
-    /// still reaches them.
-    fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>, done: bool) {
+    /// still reaches them, and so does a Cancel's count of 0 once the
+    /// button's check passed, as the loop then runs no pass and falls
+    /// through to the draw (`_DoQuantityDialog` @0x5c1aa, @0x5c2fc-0x5c2ff).
+    fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>, passed: bool) {
         if self.interface_now().as_ref() == before {
             self.retake_radar();
-            if done {
+            if passed {
                 self.draw_marked_nav();
             }
         } else {
@@ -12333,7 +12337,7 @@ mod tests {
     #[test]
     fn a_landed_m_in_the_shipyard_is_undone_but_its_close_shows_it_until_the_next_draw_status() {
         type Step = fn(&mut View);
-        let draws: [(&str, Step); 7] = [
+        let draws: [(&str, Step); 9] = [
             ("a trade", |view| {
                 assert_eq!(view.trade(BUY_FOOD), Ok(10));
             }),
@@ -12349,6 +12353,13 @@ mod tests {
             }),
             ("an outfitter run", |view| {
                 assert_eq!(view.outfit_order(BUY_PLAIN_TANK, 1).run.done, 1);
+            }),
+            ("a counted order's Cancel", |view| {
+                assert_eq!(view.outfit_counted(BUY_PLAIN_TANK, 0), Ok(0));
+            }),
+            ("an outfitter run's Cancel", |view| {
+                let run = view.outfit_order(BUY_PLAIN_TANK, 0).run;
+                assert_eq!((run.done, run.stopped), (0, None));
             }),
             ("a ship purchase", |view| {
                 view.buy_ship(ShipId(129), "Kestrel").expect("bought");
