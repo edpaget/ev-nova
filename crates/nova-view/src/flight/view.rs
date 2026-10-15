@@ -1894,6 +1894,36 @@ impl Chance for SharedChance {
     }
 }
 
+/// How long the take-off's held nav lasts ([`FlightView::took_off`]): it
+/// shows in the first frame drawn after the take-off, and on to the end of
+/// the tick that frame lands in, so about one tick and never less than a
+/// frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NavFlash {
+    /// Held by the take-off, before any tick has advanced the HUD.
+    Held,
+    /// Shown from the given tick, the first frame's, through to its end.
+    Through(u128),
+    /// Shown already, under a mission text's dialog
+    /// ([`FlightView::take_mission_texts`]), whose closing redraws the
+    /// bar: the next advance ends it.
+    UnderText,
+}
+
+impl NavFlash {
+    /// The flash after the HUD advances to tick `now`: stamped with `now`
+    /// on the first advance after the take-off, which comes before the
+    /// first frame is drawn; ended on the first advance past that tick, or
+    /// on the first after a mission text showed over it.
+    fn advance(self, now: u128) -> Option<Self> {
+        match self {
+            Self::Held => Some(Self::Through(now)),
+            Self::Through(tick) => (now <= tick).then_some(self),
+            Self::UnderText => None,
+        }
+    }
+}
+
 /// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
@@ -2049,10 +2079,9 @@ pub struct FlightView<C> {
     /// showed it for, which it shows until the next under
     /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
     nav_scene: Option<(NavMode, NavDisplay)>,
-    /// The tick the take-off held the nav area's snapshot from before its
-    /// deselect ([`FlightView::took_off`]), which it shows until the
-    /// first tick past it; `None` when none is held.
-    nav_flash: Option<u128>,
+    /// How long the nav area shows the take-off's snapshot from before its
+    /// deselect ([`FlightView::took_off`]); `None` when none is held.
+    nav_flash: Option<NavFlash>,
     /// Whether the nav area is marked to redraw at the port's next
     /// `_DrawStatus`, as the shipyard's restore leaves it
     /// (`_statusRedraw[0]` @0x5f8fe; see [`FlightView::close_port_dialog`]).
@@ -3338,9 +3367,13 @@ impl<
     /// The whole bar is redrawn once the take-off has let go of the nav
     /// selection. Under [`RuleKey::HudCadence`]'s engine reading, the nav
     /// area then shows the nav as the take-off began
-    /// ([`Session::take_takeoff_nav`]) until the first tick past it
-    /// ([`FlightView::advance_hud`]), when that differs from the nav now,
+    /// ([`Session::take_takeoff_nav`]) in the first frame drawn after it
+    /// and to the end of that frame's tick ([`NavFlash`],
+    /// [`FlightView::advance_hud`]), when that differs from the nav now,
     /// as after a landed `M`: built by operator decision on 2026-10-15.
+    /// The flash isn't timed from the take-off's own tick: the take-off
+    /// comes between frames, and the next frame's tick may already be
+    /// past it.
     ///
     /// The original redraws the whole bar after the port closes
     /// (`_PlayerLandOnStellar` @0x63399-0x633a0, `_RedrawStatus(1)`) with
@@ -3352,7 +3385,8 @@ impl<
     /// call (@0x66f29 → @0x67669). No game frame passes between the two
     /// redraws: the flash lasts from one flush to the next, at least one
     /// display refresh, under one of ours' 30 Hz ticks. Ours holds it for
-    /// one presented frame of ours, up to 1/30 s. Stock reaches it after
+    /// at least one presented frame of ours, up to 1/30 s past that
+    /// frame's start. Stock reaches it after
     /// the seven finales' `M472 Q25048` ("Our Spiel").
     ///
     /// Only a set expression run in that window could hold the bar
@@ -3389,7 +3423,7 @@ impl<
             && held != self.nav_mode()
         {
             self.nav_scene = Some((held, self.nav_display(held)));
-            self.nav_flash = Some(ticks(self.elapsed));
+            self.nav_flash = Some(NavFlash::Held);
             self.nav_texts = nav_texts;
         }
         let (greeting, rest): (Vec<_>, Vec<_>) = messages
@@ -4151,7 +4185,9 @@ impl<C> FlightView<C> {
     /// drawn, and [`FlightView::nav_shown`] shows a changed mode at once
     /// anyway, so no boundary is crossed. While the take-off's held nav
     /// lasts ([`FlightView::took_off`]) the area is not taken; the first
-    /// tick past it ends it. The target panel's is taken
+    /// advance after the take-off stamps it with its tick, and the first
+    /// past that tick ends it ([`NavFlash::advance`]). The target panel's
+    /// is taken
     /// afresh as [`retake_target`] says: on a change of target, on its
     /// 45-tick redraw, and on a radar refresh once its shield or ship type
     /// has changed. The crossing test may settle the 45-tick redraw a
@@ -4171,7 +4207,9 @@ impl<C> FlightView<C> {
         if refresh.radar {
             self.retake_radar();
         }
-        self.nav_flash = self.nav_flash.filter(|&held| u128::from(now) <= held);
+        self.nav_flash = self
+            .nav_flash
+            .and_then(|flash| flash.advance(u128::from(now)));
         if self.nav_flash.is_none() && (refresh.nav || !self.nav_mode_shown()) {
             self.retake_nav();
         }
@@ -4218,8 +4256,8 @@ impl<C> FlightView<C> {
     /// 0` (@0x4c88a-0x4c8b6), recorded and not built (see the `cadence`
     /// module). A write held in port shows at the next redraw ours
     /// models, or the take-off lets go of it. The take-off's own held nav
-    /// shows in flight whatever the mode, until the first tick past it
-    /// ([`FlightView::took_off`]).
+    /// shows in flight whatever the mode, in the first frame drawn after
+    /// it and to the end of that frame's tick ([`FlightView::took_off`]).
     fn nav_shown(&self) -> NavDisplay {
         let docked = self
             .session
@@ -4770,7 +4808,9 @@ impl<C> FlightView<C> {
     /// than the session's shows live anyway ([`FlightView::nav_shown`]),
     /// so this matters only while docked, and while the take-off's held
     /// nav lasts, under which a text queued in the take-off's days shows
-    /// ([`FlightView::took_off`]).
+    /// ([`FlightView::took_off`]). The dialog has then shown the held nav,
+    /// and its closing redraws the bar, so the flash ends at the next tick
+    /// ([`NavFlash::UnderText`]).
     pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
         let Ok(session) = &mut self.session else {
             return Vec::new();
@@ -4783,6 +4823,9 @@ impl<C> FlightView<C> {
             self.redraw_status();
             if let Some(noted) = noted {
                 self.nav_scene = Some((noted, self.nav_display(noted)));
+            }
+            if self.nav_flash.is_some() {
+                self.nav_flash = Some(NavFlash::UnderText);
             }
         }
         texts
@@ -13126,6 +13169,34 @@ mod tests {
                 view.nav_shown(),
                 NavDisplay::Stellar(None),
                 "{what}: by the bible"
+            );
+        }
+    }
+
+    #[test]
+    fn the_take_offs_held_nav_shows_in_the_first_frame_drawn_after_it_whatever_the_rate() {
+        for fps in [120, 60, 30, 20] {
+            let frame = Duration::from_secs(1) / fps;
+            let mut view = told(docked_at_earth(port(), RuleSource::Engine));
+            run_set(&mut view, "M131");
+            view.settle_script();
+            view.elapsed = Duration::from_nanos(333_333_329); // ten ticks less 1 ns
+            assert_eq!(
+                crate::time::ticks(view.elapsed + Duration::from_nanos(1)),
+                10
+            );
+            assert_eq!(view.take_off(), Some(StellarId(128)));
+            view.tick(frame);
+            assert_eq!(
+                view.nav_shown(),
+                flashing("Proxima"),
+                "{fps} fps: the first frame drawn, though it crosses a tick"
+            );
+            view.tick(TICK);
+            assert_eq!(
+                view.nav_shown(),
+                NavDisplay::Stellar(None),
+                "{fps} fps: a tick on"
             );
         }
     }
