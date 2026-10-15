@@ -54,6 +54,8 @@ fn the_original_tables_sounds_are_the_named_stock_sounds_and_decode() {
         (table.arrival, "Warp out"),
         (table.button_down, "Menu button down"),
         (table.button_up, "Menu button up"),
+        (table.map_open, "Beep3"),
+        (table.map_close, "Beep1"),
     ];
     let (mut cache, mut warnings) = (SoundCache::default(), Warnings::default());
     for (sound, name) in named {

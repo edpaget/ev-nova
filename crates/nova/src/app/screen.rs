@@ -3807,6 +3807,31 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_flight_maps_beeps_come_through_the_router_escape_closing_it_too() {
+        let mut screen = AppScreen::new(data());
+        open_flight_map(&mut screen);
+        let ui = |sounds: Vec<Sound>| -> Vec<Sound> {
+            sounds
+                .into_iter()
+                .filter(|sound| matches!(sound, Sound::Ui(_)))
+                .collect()
+        };
+        assert_eq!(
+            ui(screen.take_sounds()),
+            [Sound::Ui(UiSound::MapOpened)],
+            "opened"
+        );
+        screen.input(&key(MAP, false));
+        screen.input(&key(Key::Escape, true));
+        assert!(!flight(&screen).map_open());
+        assert_eq!(
+            ui(screen.take_sounds()),
+            [Sound::Ui(UiSound::MapClosed)],
+            "Escape closed it"
+        );
+    }
+
+    #[test]
     fn m_in_flight_opens_its_map_and_escape_closes_it_back_into_flight() {
         let mut screen = AppScreen::new(data());
         open_flight_map(&mut screen);

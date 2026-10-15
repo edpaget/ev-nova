@@ -179,6 +179,8 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
                 Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
                 Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
+                Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
+                Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
                 Sound::Combat(fight) => {
                     let gain = distance_gain(fight.offset);
                     let volume = self.settings.effects_volume.amplitude() * gain;
@@ -861,6 +863,35 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
+    }
+
+    #[test]
+    fn the_course_map_beeps_as_it_opens_and_closes() {
+        const MAP: [Sound; 2] = [Sound::Ui(UiSound::MapOpened), Sound::Ui(UiSound::MapClosed)];
+        let (mut core, log) = original();
+        core.update(None, &MAP);
+        assert_eq!(drain(&log), [play(152, 1.0), play(150, 1.0)]);
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(152, 0.5), play(150, 0.5)],
+            "at the effects volume"
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &MAP);
+        assert_eq!(drain(&log), [], "sound off");
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            map_open: Some(SoundId(300)),
+            map_close: Some(SoundId(301)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(None, &MAP);
+        assert_eq!(drain(&log), [play(300, 1.0), play(301, 1.0)], "the table's");
     }
 
     #[test]

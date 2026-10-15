@@ -87,6 +87,10 @@ pub struct SoundTable {
     /// Plays as a key's action is refused, whether or not the player is
     /// told why.
     pub refused: Option<SoundId>,
+    /// Plays as M opens the course map in flight.
+    pub map_open: Option<SoundId>,
+    /// Plays as the course map closes in flight.
+    pub map_close: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -212,6 +216,15 @@ impl SoundTable {
     ///   `_HandlePlayerCommunication` plays with every refusal of a hail,
     ///   with no target too (@0x626cf, @0x6206c, @0x6261c, @0x6264e). The
     ///   original plays it at priority 5, not modelled.
+    /// - `map_open`: 152, "Beep3", `_beepSnd[2]`, which `_HandlePlayer`
+    ///   plays as the map key's press passes every gate, just before it
+    ///   calls `_DoSystemMap` (`PlaySound` @0x6a7e4-0x6a809). A refused
+    ///   press plays nothing (every gate jumps past it, to @0x6a89f).
+    /// - `map_close`: 150, "Beep1", `_beepSnd[0]`, which `_HandlePlayer`
+    ///   plays with no condition once `_DoSystemMap` returns
+    ///   (@0x6a842-0x6a85a), however the map closed. The hypergate's map
+    ///   plays neither: `_PlayerEnterHypergate` calls `_DoSystemMap`
+    ///   (@0x6385b) with no `PlaySound` before or after it.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -248,6 +261,8 @@ impl SoundTable {
         onboard_explosion: Some(SoundId(300)),
         jump_collapsed: Some(SoundId(151)),
         refused: Some(SoundId(153)),
+        map_open: Some(SoundId(152)),
+        map_close: Some(SoundId(150)),
     };
 }
 
@@ -305,5 +320,7 @@ mod tests {
         assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");
         assert_eq!(table.jump_collapsed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.map_open, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.map_close, Some(SoundId(150)), "_beepSnd[0]");
     }
 }

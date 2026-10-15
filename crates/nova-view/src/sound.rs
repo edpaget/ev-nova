@@ -2,8 +2,8 @@
 //! The audio side decides which `snd ` each one plays, if any.
 //!
 //! - [`UiSound`]: the interface's own, a button pressed and released,
-//!   the alert as something is refused, the news dialog's beeps, and the
-//!   beep of the player info refused.
+//!   the alert as something is refused, the news dialog's beeps, the
+//!   course map's beeps, and the beep of the player info refused.
 //! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
 //! - [`Sound`]: any of them, as a screen reports it through
@@ -37,6 +37,14 @@ pub enum UiSound {
     /// The bar's news dialog closed: `_DoNewsDialog` plays `_beepSnd[2]`
     /// as it closes (@0x4814e).
     NewsClosed,
+    /// M opened the course map in flight: `_HandlePlayer` plays
+    /// `_beepSnd[2]` before it calls `_DoSystemMap` (`PlaySound`
+    /// @0x6a809). The hypergate's map does not raise it.
+    MapOpened,
+    /// The course map closed in flight, by M or Escape: `_HandlePlayer`
+    /// plays `_beepSnd[0]` once `_DoSystemMap` returns (`PlaySound`
+    /// @0x6a85a). The hypergate's map does not raise it.
+    MapClosed,
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

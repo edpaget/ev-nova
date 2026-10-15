@@ -202,7 +202,11 @@
 //!   of the flight keys. While it is open flight is paused, as in the
 //!   original, only the map is drawn and every input goes to it, except
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
-//!   router's Escape). As it opens it selects the system the original's
+//!   router's Escape). It beeps as M opens it ([`UiSound::MapOpened`],
+//!   `_beepSnd[2]`, `_HandlePlayer` @0x6a809) and as it closes
+//!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says
+//!   nothing, and the hypergate map neither opens nor closes with a beep.
+//!   As it opens it selects the system the original's
 //!   `_DoSystemMap` does ([`Session::map_preselection`]): the one
 //!   selected in nav mode 3, or the current system in any other mode,
 //!   and its panel shows that system. It draws the system selected in
@@ -3318,12 +3322,17 @@ impl<
     /// with the Hyperspace Effects preference off); with no pick, the jump
     /// is cancelled ([`HYPERGATE_CANCELLED`]). Closing the course map cues
     /// the course's next hop ([`Session::cue_course`]), as the original's
-    /// map does unless it is the hypergate's (`_DoSystemMap` @0x13c16).
+    /// map does unless it is the hypergate's (`_DoSystemMap` @0x13c16),
+    /// and beeps [`UiSound::MapClosed`], as `_HandlePlayer` does once
+    /// `_DoSystemMap` returns (@0x6a85a). The hypergate map closes
+    /// silently: `_PlayerEnterHypergate` plays no beep around it
+    /// (@0x6385b).
     pub fn close_map(&mut self) {
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
         if self.map.mode() != MapMode::Hypergate {
+            self.ui_sounds.push(UiSound::MapClosed);
             if let Ok(session) = &mut self.session {
                 session.cue_course();
             }
@@ -5119,6 +5128,9 @@ impl<
                 }
             }
             Some(MAP_KEY) => {
+                // `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
+                // not the map's: the hypergate's map opens without it.
+                self.ui_sounds.push(UiSound::MapOpened);
                 self.open_map();
                 return ScreenAction::None;
             }
@@ -20400,6 +20412,94 @@ mod tests {
         );
         assert_eq!(HYPERGATE_CANCELLED, "Hypergate jump cancelled.");
         assert_eq!(HYPERGATE_DENIED, "Hypergate usage denied.");
+    }
+
+    /// The course map's sounds `view` holds, taken with the rest.
+    fn map_sounds(view: &mut View) -> Vec<UiSound> {
+        ui_sounds(view)
+            .into_iter()
+            .filter(|sound| matches!(sound, UiSound::MapOpened | UiSound::MapClosed))
+            .collect()
+    }
+
+    #[test]
+    fn m_beeps_as_it_opens_and_closes_the_course_map() {
+        let mut view = flight();
+        view.take_sounds();
+        tap(&mut view, MAP);
+        assert!(view.map_open());
+        assert_eq!(ui_sounds(&mut view), [UiSound::MapOpened], "opened");
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(ui_sounds(&mut view), [UiSound::MapClosed], "closed");
+    }
+
+    #[test]
+    fn escape_closing_the_course_map_beeps_its_close() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        view.take_sounds();
+        view.close_map();
+        assert_eq!(ui_sounds(&mut view), [UiSound::MapClosed]);
+    }
+
+    #[test]
+    fn the_course_map_makes_no_map_sound_on_its_own_input_or_ms_repeats() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        view.take_sounds();
+        view.input(&held(MAP));
+        view.input(&key(MAP, false));
+        for k in [Key::Up, Key::Down, Key::Left, Key::Right] {
+            tap(&mut view, k);
+        }
+        let somewhere = on_map(&view, 131);
+        click(&mut view, somewhere);
+        assert!(view.map_open());
+        assert_eq!(map_sounds(&mut view), []);
+    }
+
+    #[test]
+    fn a_refused_m_makes_no_map_sound() {
+        let mut view = breaking_up();
+        view.take_sounds();
+        tap(&mut view, MAP_KEY);
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), [], "breaking up");
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            view.take_sounds();
+            tap(&mut view, MAP);
+            assert!(!view.map_open(), "{stage}");
+            assert_eq!(map_sounds(&mut view), [], "{stage}");
+        }
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        view.take_sounds();
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), [], "the take-off grace");
+    }
+
+    #[test]
+    fn the_hypergate_map_makes_no_map_sound() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_eq!(map_sounds(&mut view), [], "opened");
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(map_sounds(&mut view), [], "closed on a pick");
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        view.take_sounds();
+        view.close_map();
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+        assert_eq!(map_sounds(&mut view), [], "cancelled");
     }
 
     #[test]
