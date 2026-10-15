@@ -376,7 +376,10 @@ pub enum HailRefusal {
     /// while still jumping in (@0x62610-0x62644), or mute (see
     /// [`Dispositions`]), or an escape pod, the player's escort or not
     /// ([`ESCAPE_POD_SHIP`](crate::combat::hull::ESCAPE_POD_SHIP),
-    /// @0x62145).
+    /// @0x62145); or the navigation stellar hailed, with no ship target
+    /// or Option held, does not answer
+    /// ([`landing::answers_hail`](crate::landing::answers_hail)) or is
+    /// not shown in the system (@0x6261c).
     NoResponse,
     /// "Unable to send hail - target ship is entering hyperspace."
     /// (`STR#` 2002 #54): the target is still jumping in and not disabled

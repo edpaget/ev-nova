@@ -1172,6 +1172,19 @@ mod tests {
     }
 
     #[test]
+    fn option_held_with_a_nav_stellar_that_cannot_answer_gives_no_response_over_the_ship() {
+        let catalog = hailable();
+        let flags = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
+        let mut session = at_stellar(&catalog, flags, 0);
+        session.target = Some(NpcId(0));
+        let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
+        assert_eq!(hailed, Err(HailRefusal::NoResponse), "@0x6261c");
+        assert!(asked.is_empty(), "the ship is not hailed: {asked:?}");
+        assert_eq!(sounds, [crate::SimSound::HailRefused]);
+        assert!(session.hailing(&catalog, &HailOptions::default()).is_none());
+    }
+
+    #[test]
     fn option_held_with_no_nav_stellar_has_nothing_to_hail_whatever_the_ship_target() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
