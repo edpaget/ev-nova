@@ -372,11 +372,13 @@ pub enum HailRefusal {
     /// jumping or breaking up. Nothing is said. (With no ship target the
     /// original hails the navigation planet; that is not done here.)
     NoTarget,
-    /// "No response." (`STR#` 2002 #53): the target is disabled, or mute
-    /// (see [`Dispositions`]).
+    /// "No response." (`STR#` 2002 #53): the target is disabled, even
+    /// while still jumping in (@0x62610-0x62644), or mute (see
+    /// [`Dispositions`]).
     NoResponse,
     /// "Unable to send hail - target ship is entering hyperspace."
-    /// (`STR#` 2002 #54): the target is still jumping in.
+    /// (`STR#` 2002 #54): the target is still jumping in and not disabled
+    /// (@0x6264e-0x62676), mute or not.
     InHyperspace,
 }
 

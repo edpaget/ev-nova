@@ -664,6 +664,14 @@ mod tests {
             hail(&mut session, &catalog),
             (Err(HailRefusal::InHyperspace), vec![])
         );
+        let mut session = targeting_ace(&catalog);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
+        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        assert_eq!(
+            hail(&mut session, &catalog),
+            (Err(HailRefusal::NoResponse), vec![]),
+            "disabled, still jumping in (@0x62610-0x62644)"
+        );
     }
 
     #[test]

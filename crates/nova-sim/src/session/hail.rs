@@ -122,8 +122,9 @@ impl Session {
     /// The [`HailRefusal`] that applies, drawing nothing:
     /// [`HailRefusal::NoTarget`] with no target, or while landed, jumping
     /// or breaking up; [`HailRefusal::InHyperspace`] for a target still
-    /// jumping in; and [`HailRefusal::NoResponse`] for a disabled or mute
-    /// one.
+    /// jumping in, unless it is disabled; and [`HailRefusal::NoResponse`]
+    /// for a disabled or mute one, a mute one still jumping in being in
+    /// hyperspace (@0x62089-0x6209c, @0x62610-0x62676).
     pub fn hail(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
@@ -172,8 +173,10 @@ impl Session {
     /// The player's target, when it answers a hail, drawing nothing:
     /// otherwise [`HailRefusal::NoTarget`] with no target, or while landed,
     /// jumping or breaking up; [`HailRefusal::InHyperspace`] for a target
-    /// still jumping in; and [`HailRefusal::NoResponse`] for a disabled or
-    /// mute one, an escort answering whatever its government says.
+    /// still jumping in, unless it is disabled; and
+    /// [`HailRefusal::NoResponse`] for a disabled one, jumping in or not,
+    /// or a mute one that has arrived, an escort answering whatever its
+    /// government says.
     pub(super) fn answering(&self) -> Result<&Npc, HailRefusal> {
         let flying = !matches!(
             self.condition,
@@ -184,12 +187,18 @@ impl Session {
         }
         let npc = self.target().ok_or(HailRefusal::NoTarget)?;
         // `_HandlePlayerCommunication` refuses a target whose hyperspace
-        // state (+0x50) is above 0 (@0x62089-0x6209c, @0x6264e-0x62676).
+        // state (+0x50) is above 0 (@0x62089-0x6209c) before it reads the
+        // government: "No response." if it is disabled (`_IsDisabled`
+        // @0x62610-0x62644), else "entering hyperspace" (@0x6264e-0x62676).
         // `_AIMakeShipStopJumping` zeroes it before a leaderless ship's
         // wait (+0x4c), which the hail does not read, so a ship holding
         // its course after its glide ([`Mode::Coasting`]) answers.
         if !npc.arrived() {
-            return Err(HailRefusal::InHyperspace);
+            return Err(if npc.condition == Condition::Disabled {
+                HailRefusal::NoResponse
+            } else {
+                HailRefusal::InHyperspace
+            });
         }
         let mute = self.dispositions(npc).mute;
         if npc.condition != Condition::Intact || (mute && npc.escort.is_none()) {
@@ -895,6 +904,31 @@ mod tests {
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
         assert_eq!(hailed, Err(HailRefusal::InHyperspace));
         assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn a_disabled_target_still_jumping_in_gives_no_response() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        npc(&mut session).mode = Mode::JumpingIn { tick: 0 };
+        npc(&mut session).condition = Condition::Disabled;
+        let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
+        assert_eq!(hailed, Err(HailRefusal::NoResponse), "@0x62610-0x62644");
+        assert!(asked.is_empty(), "{asked:?}");
+    }
+
+    #[test]
+    fn a_mute_target_still_jumping_in_is_entering_hyperspace() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        npc(&mut session).mode = Mode::JumpingIn { tick: 0 };
+        npc(&mut session).govt = Some(MUTED);
+        let (hailed, _) = hail_with(&mut session, &catalog, &opening(0));
+        assert_eq!(
+            hailed,
+            Err(HailRefusal::InHyperspace),
+            "the government is read after the hyperspace state"
+        );
     }
 
     #[test]
