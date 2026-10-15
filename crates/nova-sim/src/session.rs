@@ -1468,6 +1468,7 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
@@ -1614,6 +1615,7 @@ impl Session {
             targeted: &targeted,
             type_widths: &type_widths,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
         };
         f(&mut self.traffic, world);
     }
@@ -1676,6 +1678,7 @@ impl Session {
             targeted: &crate::ai::NO_AIMED_DAMAGE,
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
         }
     }
 
@@ -13046,6 +13049,74 @@ pub(super) mod tests {
             }
         }
         assert!(hit, "shot while it waits");
+    }
+
+    /// The session facing a warship waiting 60 ticks in a gate 100 above
+    /// the player, read by `arrival_hits`, after the player's shots have
+    /// hit it and the traffic has ticked once since.
+    fn the_player_hits_a_ship_in_its_gate(arrival_hits: RuleSource) -> Session {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.rules = Rulebook::default().with_override(RuleKey::ArrivalHits, arrival_hits);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        npc.ai_type = crate::traffic::npc::AiType::Warship;
+        session.hold_trigger(FIRE);
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].reserves.shield.now < 30.0 {
+                break;
+            }
+        }
+        assert!(session.npcs()[0].reserves.shield.now < 30.0, "hit");
+        session.hold_trigger(Trigger::default());
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        session
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_can_be_targeted_and_once_out_fires_at_the_player() {
+        // `_DamageShip` calls `_AIMakeShipAttackPlayer` (@0x3be66-0x3be69):
+        // goal 4, so `_ShipVisibleToShip` (@0x972d) sees it.
+        use crate::traffic::npc::Mode;
+        let catalog = armed();
+        let mut session = the_player_hits_a_ship_in_its_gate(RuleSource::Engine);
+        assert!(
+            matches!(session.npcs()[0].mode, Mode::HeldAtGate { .. }),
+            "{:?}",
+            session.npcs()[0].mode
+        );
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+        let mut fired = 0;
+        for _ in 0..120 {
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            let npc = &session.npcs()[0];
+            let held = matches!(npc.mode, Mode::HeldAtGate { .. });
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let shots = session
+                .take_combat_events()
+                .iter()
+                .filter(|event| {
+                    matches!(event, CombatEvent::Fired { ship, .. } if *ship == ShipRef::Npc(NpcId(0)))
+                })
+                .count();
+            if held {
+                assert_eq!(shots, 0, "it fires nothing held");
+            }
+            fired += shots;
+        }
+        assert_eq!(session.npcs()[0].mode, Mode::Flying);
+        assert!(fired > 0, "once out it fires at the player");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_ship_the_player_hits_in_its_gate_waits_on_unseen() {
+        use crate::traffic::npc::Mode;
+        let mut session = the_player_hits_a_ship_in_its_gate(RuleSource::Bible);
+        assert_eq!(session.npcs()[0].mode, Mode::Emerging { ticks_left: 59 });
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Next), None);
     }
 
     /// The fight's 60 ticks of the player and NPC 0, 100 above it, firing

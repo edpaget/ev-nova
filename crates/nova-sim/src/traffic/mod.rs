@@ -47,20 +47,27 @@
 //!    below the [`World`]'s spawn reserve, 8 of the 64 by the engine
 //!    ([`SPAWN_RESERVE`]), and one that finds none does not come: a
 //!    fleet's lead with none brings no escorts and no quote;
-//! 2. each flying, intact NPC answers the fight's strikes since the last
-//!    tick ([`Behaviour::react`]): the ship it targets, its provocation,
-//!    and any goal it takes at once;
+//! 2. each intact NPC answers the fight's strikes since the last tick
+//!    ([`Behaviour::react`]), one still coming in too unless the
+//!    [`World::arrival_hits`] say otherwise: the ship it targets, its
+//!    provocation, and any goal it takes at once; one hit in its gate has
+//!    its wait cut, and the player's hit there holds it at the gate (see
+//!    the traffic's `react`);
 //! 3. an NPC not intact loses its provocation;
 //! 4. the decisions due on the AI timer, never for a ship still jumping
-//!    in or emerging from a gate (waiting there or bursting out of it),
-//!    one entering a gate to leave, one that is not intact, or one
-//!    assisting the player while
+//!    in or emerging from a gate (waiting there or bursting out of it,
+//!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
+//!    gate to leave, one that is not intact, or one assisting the player
+//!    while
 //!    unprovoked (until it is done, or provoked): first every goal, then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
 //!    its provocation, and one that stops inspecting a ship remembers it,
 //!    and, the player within its reach, has scanned the player
-//!    ([`Traffic::take_scans`]);
+//!    ([`Traffic::take_scans`]). Then each ship waiting in its gate or held
+//!    at it holds only its point defence, if it is an escort or fighter
+//!    with a target still intact, dropping a target that is not
+//!    (`_AIEscortFireUnprovoked`), and nothing else;
 //! 5. every NPC's cloak ([`cloak`]): a flying NPC's think
 //!    cloaks or uncloaks it, one cloaked that can no longer cloak
 //!    uncloaks, and its fade steps;
@@ -115,6 +122,7 @@ use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::mission::ships::ShipBehav;
 use crate::person::{PersonWorld, derelict_armor};
+use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
 use npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
@@ -186,6 +194,11 @@ pub struct World<'a> {
     /// 0 by the Bible
     /// ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)).
     pub spawn_reserve: u32,
+    /// Which ships answer a hit ([`Traffic::tick_in`]'s reactions): every
+    /// intact one by the engine, as `_DamageShip` has it, or only those
+    /// that have arrived ([`Npc::arrived`]) by the other reading
+    /// ([`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits)).
+    pub arrival_hits: RuleSource,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -211,6 +224,7 @@ impl<'a> World<'a> {
             targeted: bare.targeted,
             type_widths: &NO_TYPE_WIDTHS,
             spawn_reserve: SPAWN_RESERVE,
+            arrival_hits: RuleSource::Engine,
         }
     }
 
@@ -507,7 +521,7 @@ impl Traffic {
             .npcs
             .iter()
             .map(|npc| {
-                npc.mode == Mode::Flying
+                matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
                     && npc.condition == Condition::Intact
                     && !(matches!(npc.goal, Goal::Assist(_)) && npc.provoked <= 0.0)
                     && decision_due(self.ticks, npc.id, self.interval)
@@ -539,6 +553,23 @@ impl Traffic {
             if let Some((trigger, target)) = command {
                 npc.trigger = trigger;
                 npc.target = target;
+            }
+        }
+        let around = world.around(&self.npcs);
+        let waits: Vec<Option<(Trigger, bool)>> = self
+            .npcs
+            .iter()
+            .map(|npc| {
+                matches!(npc.mode, Mode::Emerging { .. } | Mode::HeldAtGate { .. })
+                    .then(|| Self::gate_wait_trigger(npc, &around))
+            })
+            .collect();
+        for (npc, wait) in self.npcs.iter_mut().zip(waits) {
+            if let Some((trigger, drops)) = wait {
+                npc.trigger = trigger;
+                if drops {
+                    npc.target = None;
+                }
             }
         }
         let states: Vec<(NpcId, ShipState)> =
@@ -771,12 +802,32 @@ impl Traffic {
         self.add(fleet, world.persons.grudges, Some(world.spawn_reserve));
     }
 
-    /// Each arrived ([`Npc::arrived`]), intact NPC answers each of
-    /// `strikes` in `world`, as `behaviour` says, all against the NPCs as
-    /// they were before. One holding its course after its glide or burst
-    /// answers as a flying one does, and a hit on it that it answers
-    /// (taking a target) cuts its wait ([`autopilot::cut_wait`],
-    /// `_DamageShip` @0x3be6e-0x3be7c).
+    /// Each intact NPC answers each of `strikes` in `world`, as
+    /// `behaviour` says, all against the NPCs as they were before; by the
+    /// other reading of [`World::arrival_hits`] only those that have
+    /// arrived ([`Npc::arrived`]) do. A hit on it that it answers (taking
+    /// a target) cuts its wait, in its gate or holding its course
+    /// ([`autopilot::cut_wait`], `_DamageShip` @0x3be6e-0x3be7c).
+    ///
+    /// A ship still coming in answers as `_DamageShip` has it (see the
+    /// [`ai::react`](crate::ai::react) module):
+    ///
+    /// - Waiting in its gate ([`Mode::Emerging`]), it keeps waiting,
+    ///   hidden, with its new target and provocation, unless the player
+    ///   hit it, or a goal is given it (a Good Samaritan's): then
+    ///   `_AIMakeShipAttackPlayer` (@0x3be66-0x3be69) or
+    ///   `_DoGoodSamaritan` (@0x82b82-0x82b97) sets goal 4, and it is held
+    ///   at its gate attacking the player ([`Npc::hold_at_gate`]).
+    /// - Gliding in or bursting out ([`Mode::JumpingIn`],
+    ///   [`Mode::LeavingGate`]), it takes its target and provocation, but
+    ///   no goal: `_AIDispatch` puts goal 8 back on the next frame while
+    ///   +0x50 is below -900 (@0x8fcf5-0x8fd18), and nothing reads the
+    ///   goal 4 before it does.
+    ///
+    /// The strikes are the fight's since the last tick, so a ship the
+    /// player hit in its gate is held, and seen, on the next traffic tick
+    /// after the hit: one frame after the original shows it. That lag is
+    /// filed.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
         if strikes.is_empty() {
             return;
@@ -786,7 +837,11 @@ impl Traffic {
             .npcs
             .iter()
             .map(|npc| {
-                if !npc.arrived() || npc.condition != Condition::Intact {
+                let answers = match world.arrival_hits {
+                    RuleSource::Engine => true,
+                    RuleSource::Bible => npc.arrived(),
+                };
+                if !answers || npc.condition != Condition::Intact {
                     return Vec::new();
                 }
                 strikes
@@ -797,18 +852,57 @@ impl Traffic {
             .collect();
         for (npc, reactions) in self.npcs.iter_mut().zip(reactions) {
             for (reaction, strike) in reactions.into_iter().zip(strikes) {
+                let mut attacks_player = false;
                 if let Some(target) = reaction.target {
                     npc.target = Some(target);
                     if strike.ship == ShipRef::Npc(npc.id) {
                         autopilot::cut_wait(npc);
+                        attacks_player = strike.by == ShipRef::Player;
                     }
                 }
                 npc.provoked += reaction.provoked;
-                if let Some(goal) = reaction.goal {
-                    npc.goal = goal;
+                match npc.mode {
+                    Mode::JumpingIn { .. } | Mode::LeavingGate { .. } => {}
+                    Mode::Emerging { .. } if attacks_player || reaction.goal.is_some() => {
+                        npc.hold_at_gate();
+                    }
+                    _ => {
+                        if let Some(goal) = reaction.goal {
+                            npc.goal = goal;
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// The trigger each NPC waiting in its gate or held at it holds this
+    /// tick, and whether it drops its target: `_LowLevelAIHandler` at
+    /// sub-goal 0 calls `_AIEscortFireUnprovoked` every frame
+    /// (@0x8521e-0x85236). For a ship of AI type above 4 (the player's
+    /// escorts and fighters, its mission escorts and an NPC carrier's
+    /// fighters, which [`NovaAi`](crate::ai::NovaAi) routes to the
+    /// escorts' and fighters' AIs; @0x80e59) with a target (@0x80e63), it
+    /// tail-calls `_AIFireTurret` while the target is active and intact
+    /// (+0xb8, `_IsDisabled`, @0x80e98), and drops the target otherwise
+    /// (+0x70 = -1, @0x80e9d). `_AIFireTurret` runs the point defence
+    /// first unless the shooter is disabled (@0x80afa-0x80b0d); its turret
+    /// fire flag (+0xba, @0x80e40) is never read, as `_HandleShip` skips
+    /// the fire step while the wait runs (@0x34a54-0x34a72). Any other
+    /// ship fires nothing.
+    fn gate_wait_trigger(npc: &Npc, around: &Surroundings) -> (Trigger, bool) {
+        let escort_ai = npc.escorts_player() || npc.carrier.is_some();
+        let Some(target) = npc.target.filter(|_| escort_ai) else {
+            return (Trigger::default(), false);
+        };
+        if around.condition_of(target) != Some(Condition::Intact) {
+            return (Trigger::default(), true);
+        }
+        let trigger = Trigger {
+            point_defence: npc.condition == Condition::Intact,
+            ..Trigger::default()
+        };
+        (trigger, false)
     }
 
     /// The NPCs, in the order they appeared.
@@ -1174,6 +1268,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::hail::Help;
     use crate::person::PersonWorld;
+    use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, planet, weapon};
     use crate::traffic::npc::{AiType, NpcPerson};
@@ -2524,141 +2619,393 @@ mod tests {
         assert_eq!(traffic.npcs()[0].target, Some(ShipRef::Player));
     }
 
-    #[test]
-    fn only_an_arrived_intact_npc_answers_a_strike() {
-        let mut traffic = populated(4, 1);
+    /// Who reacts to a strike on NPC 0, by `arrival_hits`, among a flying
+    /// ship, a disabled one, and ships jumping in, holding their course,
+    /// waiting in a gate, held at it and bursting out of it.
+    fn reacting(arrival_hits: RuleSource) -> Vec<String> {
+        let mut traffic = populated(7, 1);
         traffic.npcs[1].condition = Condition::Disabled;
         traffic.npcs[2].mode = Mode::JumpingIn { tick: 0 };
         traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30 };
+        traffic.npcs[4].mode = Mode::Emerging { ticks_left: 30 };
+        traffic.npcs[5].mode = Mode::HeldAtGate { ticks_left: 30 };
+        traffic.npcs[6].mode = Mode::LeavingGate { tick: 0 };
         let fighting = Fighting::deciding(Goal::Idle);
-        traffic.tick_in(
-            &fighting,
-            World::new(&[]),
-            &[struck(0, 1.0)],
-            &mut Draws::of(&[]),
-        );
-        let reacted: Vec<String> = fighting
+        let world = World {
+            arrival_hits,
+            ..World::new(&[])
+        };
+        traffic.tick_in(&fighting, world, &[struck(0, 1.0)], &mut Draws::of(&[]));
+        fighting
             .log
             .borrow()
             .iter()
             .filter(|line| line.starts_with("react"))
             .cloned()
-            .collect();
-        assert_eq!(reacted, ["react 0 Npc(NpcId(0))", "react 3 Npc(NpcId(0))"]);
+            .collect()
     }
 
     #[test]
-    fn a_ship_hit_while_holding_its_course_takes_its_attacker_and_waits_at_most_20_more_ticks() {
-        // `_DamageShip` sets the victim's target (+0x70, @0x3bcf6) and
-        // cuts its AI wait (+0x4c) to 20 (@0x3be6e-0x3be7c).
-        let mut traffic = populated(3, 1);
-        traffic.npcs[1].mode = Mode::Coasting { ticks_left: 45 };
-        traffic.npcs[2].mode = Mode::Coasting { ticks_left: 10 };
-        let around = World::new(&[]).around(traffic.npcs());
-        for coasting in &traffic.npcs()[1..] {
-            assert!(around.live(ShipRef::Npc(coasting.id)), "{:?}", coasting.id);
-            assert!(
-                crate::targeting::targetable(coasting, false),
-                "{:?}",
-                coasting.id
-            );
+    fn every_intact_npc_answers_a_strike_by_the_engine() {
+        // `_DamageShip` drops a reaction only while +0x50 is above 0, a
+        // ship jumping out (@0x3b4b0-0x3b4c2).
+        assert_eq!(World::new(&[]).arrival_hits, RuleSource::Engine);
+        assert_eq!(
+            reacting(RuleSource::Engine),
+            [0, 2, 3, 4, 5, 6].map(|id| format!("react {id} Npc(NpcId(0))"))
+        );
+    }
+
+    #[test]
+    fn only_an_arrived_intact_npc_answers_a_strike_by_the_other_reading() {
+        assert_eq!(
+            reacting(RuleSource::Bible),
+            [0, 3, 5].map(|id| format!("react {id} Npc(NpcId(0))"))
+        );
+    }
+
+    /// A strike of `damage` on NPC `ship` by NPC `by`.
+    fn struck_by(ship: u32, by: u32, damage: f32) -> Strike {
+        Strike {
+            by: ShipRef::Npc(NpcId(by)),
+            ..struck(ship, damage)
         }
+    }
+
+    #[test]
+    fn a_ship_an_npc_hits_in_its_gate_takes_it_as_target_and_comes_out_early_still_hidden() {
+        // `_DamageShip` sets the target (+0x70, @0x3bcf6) and provocation
+        // (+0x96, @0x3bcc0-0x3bcf0) and cuts the wait (@0x3be6e-0x3be7c),
+        // its goal 0x15 kept.
+        let mut traffic = populated(2, 1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].emerges_from = Some(GATE);
         let fighting = Fighting::deciding(Goal::Idle);
         traffic.tick_in(
             &fighting,
             World::new(&[]),
-            &[struck(1, 5.0), struck(2, 3.0)],
+            &[struck_by(0, 1, 5.0)],
             &mut Draws::of(&[]),
         );
-        let hit = &traffic.npcs()[1];
-        assert_eq!(hit.target, Some(ShipRef::Player));
+        let hit = &traffic.npcs()[0];
+        assert_eq!(hit.target, Some(ShipRef::Npc(NpcId(1))));
         assert_eq!(hit.provoked, 5.0);
-        assert_eq!(
-            hit.mode,
-            Mode::Coasting { ticks_left: 19 },
-            "20, less this tick"
-        );
-        assert_eq!(
-            traffic.npcs()[2].mode,
-            Mode::Coasting { ticks_left: 9 },
-            "a shorter wait is kept"
-        );
-        let mut waited = 1;
-        while traffic.npcs()[1].mode != Mode::Flying {
+        assert_eq!(hit.mode, Mode::Emerging { ticks_left: 19 });
+        assert!(hit.emerging(), "still hidden");
+        assert!(hit.holds_gate_open(GATE));
+        let mut ticks = 1;
+        while traffic.npcs()[0].mode != Mode::Flying {
+            let npc = &traffic.npcs()[0];
+            assert_eq!(npc.target, Some(ShipRef::Npc(NpcId(1))), "{:?}", npc.mode);
+            assert_eq!(npc.provoked, 5.0, "{:?}", npc.mode);
+            assert!(!matches!(npc.mode, Mode::HeldAtGate { .. }));
             traffic.tick_in(&fighting, World::new(&[]), &[], &mut Draws::of(&[]));
-            waited += 1;
-            assert!(waited < 100, "flies");
+            ticks += 1;
+            assert!(ticks < 200, "flies");
         }
-        let decided: Vec<String> = fighting
-            .log
-            .borrow()
-            .iter()
-            .filter(|line| line.starts_with("decide 1"))
-            .cloned()
-            .collect();
-        assert_eq!(waited, 20);
-        assert!(
-            decided.is_empty(),
-            "no decision while it waits: {decided:?}"
-        );
-        traffic.tick_in(&fighting, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert!(
-            fighting
-                .log
-                .borrow()
-                .iter()
-                .any(|line| line.starts_with("decide 1 Some(Player) 5")),
-            "then it decides, its attacker its target"
-        );
+        assert!(ticks > 20, "it burst out after its wait");
+    }
+
+    /// Keeps its goal and fires its primaries whatever it does, targeting
+    /// its goal's quarry, and answers a hit on itself as [`Fighting`]
+    /// does, recording who decided.
+    #[derive(Debug, Default)]
+    struct Firing {
+        decided: RefCell<Vec<NpcId>>,
+    }
+
+    const PRIMARY: Trigger = Trigger {
+        primary: true,
+        secondary: None,
+        only: None,
+        turrets_only: false,
+        bays: false,
+        point_defence: false,
+    };
+
+    const POINT_DEFENCE: Trigger = Trigger {
+        primary: false,
+        secondary: None,
+        only: None,
+        turrets_only: false,
+        bays: false,
+        point_defence: true,
+    };
+
+    impl Behaviour for Firing {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.decided.borrow_mut().push(npc.id);
+            npc.goal
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            PRIMARY
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.goal.quarry()
+        }
+
+        fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
+            Reaction {
+                target: (strike.ship == ShipRef::Npc(npc.id)).then_some(strike.by),
+                provoked: if strike.ship == ShipRef::Npc(npc.id) {
+                    strike.damage
+                } else {
+                    0.0
+                },
+                goal: None,
+            }
+        }
     }
 
     #[test]
-    fn a_lead_answering_a_hit_on_its_escort_keeps_its_wait() {
-        // `_DamageShip` cuts the wait of the ship hit only (`%edi`,
-        // @0x3be6e-0x3be7c), not of the lead that answers for its escort
-        // (@0x3bcfa-0x3bd79).
-        /// Has ship 0 answer a strike on ship 1, its escort, as a strike on
-        /// itself, and ship 1 answer its own.
+    fn a_ship_the_player_hits_in_its_gate_is_held_there_seen_and_then_flies_at_the_player() {
+        // `_AIMakeShipAttackPlayer` (@0x3be66-0x3be69): goal 4, travel
+        // stellar -1 and target the player (@0x89d3e-0x89d4d). Its cut
+        // wait runs on with no steering or fire (@0x34a54-0x34a72), its
+        // per-type AI running (@0x8ff26-0x90016).
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].emerges_from = Some(GATE);
+        let at = traffic.npcs[0].state.position;
+        let world = World {
+            player: Some(player_at(0.0, -300.0)),
+            ..World::new(&[])
+        };
+        let firing = Firing::default();
+        traffic.tick_in(&firing, world, &[struck(0, 5.0)], &mut Draws::of(&[]));
+        let held = &traffic.npcs()[0];
+        assert_eq!(held.mode, Mode::HeldAtGate { ticks_left: 19 });
+        assert_eq!(held.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(held.target, Some(ShipRef::Player));
+        assert_eq!(held.provoked, 5.0);
+        assert_eq!(held.emerges_from, None);
+        assert!(!held.holds_gate_open(GATE));
+        assert!(world.around(traffic.npcs()).live(ShipRef::Npc(NpcId(0))));
+        assert!(crate::targeting::targetable(held, false));
+        assert_eq!(firing.decided.take(), [NpcId(0)], "decides while held");
+        let mut ticks = 1;
+        while traffic.npcs()[0].mode != Mode::Flying {
+            let npc = &traffic.npcs()[0];
+            assert_eq!(npc.trigger, Trigger::default(), "fires nothing held");
+            assert_eq!(npc.state.position, at, "still");
+            assert_eq!(npc.state.velocity, Vec2::ZERO);
+            traffic.tick_in(&firing, world, &[], &mut Draws::of(&[]));
+            ticks += 1;
+        }
+        assert_eq!(ticks, 20, "held for its cut wait");
+        assert_eq!(firing.decided.take().len(), 19, "every tick of the hold");
+        traffic.tick_in(&firing, world, &[], &mut Draws::of(&[]));
+        let flying = &traffic.npcs()[0];
+        assert_eq!(flying.trigger, PRIMARY, "it fires once out");
+        assert_eq!(flying.target, Some(ShipRef::Player));
+        assert_ne!(flying.state.position, at, "it flies");
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_gliding_in_or_bursting_out_keeps_its_mode_and_goal() {
+        // `_AIDispatch` puts goal 8 and sub-goal 0xa back every frame
+        // while +0x50 < -900 (@0x8fcf5-0x8fd18): the goal 4 is undone.
+        let mut traffic = populated(2, 1);
+        traffic.npcs[0].mode = Mode::JumpingIn { tick: 0 };
+        traffic.npcs[1].mode = Mode::LeavingGate { tick: 0 };
+        traffic.npcs[1].emerges_from = Some(GATE);
+        traffic.tick_in(
+            &Turning,
+            World::new(&[]),
+            &[struck(0, 3.0), struck(1, 4.0)],
+            &mut Draws::of(&[]),
+        );
+        for (npc, (mode, provoked)) in traffic.npcs().iter().zip([
+            (Mode::JumpingIn { tick: 1 }, 3.0),
+            (Mode::LeavingGate { tick: 1 }, 4.0),
+        ]) {
+            assert_eq!(npc.target, Some(ShipRef::Player), "{:?}", npc.id);
+            assert_eq!(npc.provoked, provoked, "{:?}", npc.id);
+            assert_eq!(npc.goal, Goal::Idle, "{:?}", npc.id);
+            assert_eq!(npc.mode, mode, "{:?}", npc.id);
+        }
+    }
+
+    #[test]
+    fn a_good_samaritan_waiting_in_its_gate_is_held_there_and_one_gliding_in_keeps_its_goal() {
+        // `_DoGoodSamaritan` sets goal 4 and target the player
+        // (@0x82b82-0x82b97) whatever +0x50 or goal 0x15 say; the wait of
+        // a ship not hit is not cut.
+        /// Attacks the player as soon as another is hit, targeting its
+        /// goal's quarry.
         #[derive(Debug)]
-        struct Guarding;
-        impl Behaviour for Guarding {
+        struct Samaritan;
+        impl Behaviour for Samaritan {
             fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
                 npc.goal
             }
+            fn target(&self, npc: &Npc, _: &Surroundings) -> Option<ShipRef> {
+                npc.goal.quarry()
+            }
             fn react(&self, npc: &Npc, strike: &Strike, _: &Surroundings) -> Reaction {
-                let answers = strike.ship == ShipRef::Npc(npc.id)
-                    || (npc.id == NpcId(0) && strike.ship == ShipRef::Npc(NpcId(1)));
+                if strike.ship == ShipRef::Npc(npc.id) {
+                    return Reaction::default();
+                }
                 Reaction {
-                    target: answers.then_some(strike.by),
+                    target: Some(ShipRef::Player),
                     provoked: 0.0,
-                    goal: None,
+                    goal: Some(Goal::Attack(ShipRef::Player)),
                 }
             }
         }
-        let mut traffic = populated(2, 1);
-        traffic.npcs[1].leader = Some(NpcId(0));
-        traffic.npcs[0].mode = Mode::Coasting { ticks_left: 45 };
-        traffic.npcs[1].mode = Mode::Coasting { ticks_left: 45 };
+        let mut traffic = populated(3, 1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].emerges_from = Some(GATE);
+        traffic.npcs[1].mode = Mode::JumpingIn { tick: 0 };
         traffic.tick_in(
-            &Guarding,
+            &Samaritan,
             World::new(&[]),
-            &[struck(1, 5.0)],
+            &[struck(2, 1.0)],
             &mut Draws::of(&[]),
         );
-        let lead = &traffic.npcs()[0];
-        assert_eq!(lead.target, Some(ShipRef::Player), "the lead answers");
-        assert_eq!(
-            lead.mode,
-            Mode::Coasting { ticks_left: 44 },
-            "the lead's wait only drops by the tick"
-        );
-        let escort = &traffic.npcs()[1];
-        assert_eq!(escort.target, Some(ShipRef::Player));
-        assert_eq!(
-            escort.mode,
-            Mode::Coasting { ticks_left: 19 },
-            "the escort hit: 20, less this tick"
-        );
+        let waiting = &traffic.npcs()[0];
+        assert_eq!(waiting.mode, Mode::HeldAtGate { ticks_left: 59 });
+        assert_eq!(waiting.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(waiting.target, Some(ShipRef::Player));
+        assert_eq!(waiting.emerges_from, None);
+        let gliding = &traffic.npcs()[1];
+        assert_eq!(gliding.mode, Mode::JumpingIn { tick: 1 });
+        assert_eq!(gliding.goal, Goal::Idle);
+        assert_eq!(gliding.target, Some(ShipRef::Player));
+    }
+
+    /// NPC 0 waiting 30 ticks in a gate beside NPC 1, as `setup` makes
+    /// them, struck by `hit` in `world`: its mode, and the trigger and
+    /// target it holds, on each tick until it is out of its wait.
+    fn waiting_point_defence(
+        setup: impl Fn(&mut [Npc]),
+        world: &World,
+        hit: Strike,
+    ) -> Vec<(Mode, Trigger, Option<ShipRef>)> {
+        let mut traffic = populated(2, 1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30 };
+        setup(&mut traffic.npcs);
+        let mut held = Vec::new();
+        let mut strikes = vec![hit];
+        while matches!(
+            traffic.npcs[0].mode,
+            Mode::Emerging { .. } | Mode::HeldAtGate { .. }
+        ) {
+            traffic.tick_in(&Firing::default(), *world, &strikes, &mut Draws::of(&[]));
+            strikes.clear();
+            let npc = &traffic.npcs[0];
+            held.push((npc.mode, npc.trigger, npc.target));
+        }
+        held
+    }
+
+    /// NPC 0 the player's escort.
+    fn players_escort(npcs: &mut [Npc]) {
+        npcs[0].escort = Some(duty(2));
+    }
+
+    /// NPC 0 a fighter NPC 1 launched.
+    fn npc_carriers_fighter(npcs: &mut [Npc]) {
+        npcs[0].leader = Some(NpcId(1));
+        npcs[0].carrier = Some(launched_from(ShipRef::Npc(NpcId(1))));
+    }
+
+    #[test]
+    fn an_escort_or_fighter_waiting_in_its_gate_with_a_target_runs_its_point_defence() {
+        // `_LowLevelAIHandler` at sub-goal 0 calls
+        // `_AIEscortFireUnprovoked` (@0x8521e-0x85236), which for AI type
+        // above 4 with an active, intact target tail-calls `_AIFireTurret`
+        // (@0x80e98), whose point defence runs (@0x80b0d).
+        let world = World {
+            player: Some(player_at(0.0, -300.0)),
+            ..World::new(&[])
+        };
+        for who in [players_escort, npc_carriers_fighter] {
+            let held = waiting_point_defence(who, &world, struck_by(0, 1, 2.0));
+            let (out, waiting) = held.split_last().expect("ticks");
+            assert_eq!(waiting.len(), 19, "its cut wait");
+            for &(mode, trigger, target) in waiting {
+                assert!(matches!(mode, Mode::Emerging { .. }), "{mode:?}");
+                assert_eq!(trigger, POINT_DEFENCE, "{mode:?}");
+                assert_eq!(target, Some(ShipRef::Npc(NpcId(1))), "{mode:?}");
+            }
+            assert_eq!(out.0, Mode::LeavingGate { tick: 0 });
+            assert_eq!(out.1, Trigger::default(), "none in the burst");
+        }
+        // Held at its gate by the player's hit, it runs it too.
+        let held = waiting_point_defence(npc_carriers_fighter, &world, struck(0, 2.0));
+        let (out, waiting) = held.split_last().expect("ticks");
+        assert_eq!(waiting.len(), 19);
+        for &(mode, trigger, target) in waiting {
+            assert!(matches!(mode, Mode::HeldAtGate { .. }), "{mode:?}");
+            assert_eq!(trigger, POINT_DEFENCE, "{mode:?}");
+            assert_eq!(target, Some(ShipRef::Player), "{mode:?}");
+        }
+        assert_eq!(out.0, Mode::Flying);
+    }
+
+    #[test]
+    fn a_waiting_escort_whose_target_is_down_or_gone_drops_it_and_runs_nothing() {
+        // `_AIEscortFireUnprovoked` sets +0x70 to -1 (@0x80e9d).
+        let world = World {
+            player: Some(player_at(0.0, -300.0)),
+            ..World::new(&[])
+        };
+        let downed = |npcs: &mut [Npc]| {
+            players_escort(npcs);
+            npcs[1].condition = Condition::Disabled;
+        };
+        for (held, case) in [
+            (
+                waiting_point_defence(downed, &world, struck_by(0, 1, 2.0)),
+                "down",
+            ),
+            (
+                waiting_point_defence(players_escort, &world, struck_by(0, 9, 2.0)),
+                "gone",
+            ),
+        ] {
+            let &(mode, trigger, target) = held.first().expect("a tick");
+            assert!(matches!(mode, Mode::Emerging { .. }), "{case}");
+            assert_eq!((trigger, target), (Trigger::default(), None), "{case}");
+        }
+    }
+
+    #[test]
+    fn a_waiting_warship_or_a_disabled_escort_runs_no_point_defence() {
+        // AI type 4 or below never reaches `_AIFireTurret` (@0x80e59), and
+        // a disabled shooter runs no point defence (@0x80afa).
+        let world = World {
+            player: Some(player_at(0.0, -300.0)),
+            ..World::new(&[])
+        };
+        let warship = |npcs: &mut [Npc]| npcs[0].ai_type = AiType::Warship;
+        let disabled = |npcs: &mut [Npc]| {
+            players_escort(npcs);
+            npcs[0].condition = Condition::Disabled;
+            npcs[0].target = Some(ShipRef::Npc(NpcId(1)));
+        };
+        for (held, case) in [
+            (
+                waiting_point_defence(warship, &world, struck_by(0, 1, 2.0)),
+                "a warship",
+            ),
+            (
+                waiting_point_defence(disabled, &world, struck_by(0, 1, 2.0)),
+                "disabled",
+            ),
+        ] {
+            assert!(!held.is_empty(), "{case}");
+            assert!(
+                held.iter()
+                    .all(|&(_, trigger, _)| trigger == Trigger::default()),
+                "{case}: {held:?}"
+            );
+        }
+        let held = waiting_point_defence(disabled, &world, struck_by(0, 1, 2.0));
+        assert_eq!(held[0].2, Some(ShipRef::Npc(NpcId(1))), "its target kept");
     }
 
     #[test]

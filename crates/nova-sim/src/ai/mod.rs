@@ -286,6 +286,8 @@ impl<'a> Surroundings<'a> {
     /// unfought while it bursts out, as during the glide). A ship holding
     /// its course after its glide or burst ([`Mode::Coasting`](crate::traffic::npc::Mode::Coasting)) is here:
     /// its goal is 0, which `_ShipVisibleToShip` sees ([`Npc::arrived`]).
+    /// So is one held at its gate ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)),
+    /// its goal 4.
     #[must_use]
     pub fn live(&self, ship: ShipRef) -> bool {
         let jumping_in = match ship {

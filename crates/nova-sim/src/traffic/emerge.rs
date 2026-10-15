@@ -62,10 +62,18 @@
 //!   out, `_HighLevelAIHandler` turns goal 0x15 into the jump-in goal 8
 //!   (@0x8dd61-0x8dd93) with sub-goal 0xa (@0x8f3c8-0x8f3d9), whose
 //!   `_LowLevelAIHandler` block calls no `_AIFire*` (@0x88114-0x88140).
-//!   Here no decision is due outside [`Mode::Flying`](crate::traffic::npc::Mode::Flying),
-//!   and an arrival out of a gate starts with no trigger; a ship sent to a
-//!   gate from flight has its trigger released and its target cleared
-//!   there ([`Npc::emerge_from_gate`](crate::traffic::npc::Npc::emerge_from_gate)).
+//!   Here no decision is due while it waits or bursts, and an arrival out
+//!   of a gate starts with no trigger; a ship sent to a gate from flight
+//!   has its trigger released and its target cleared there
+//!   ([`Npc::emerge_from_gate`](crate::traffic::npc::Npc::emerge_from_gate)).
+//!   One exception: a hit gives the waiting ship a target, and an escort
+//!   or fighter with an intact target then runs its point defence every
+//!   tick of the wait, as `_AIEscortFireUnprovoked` reaches
+//!   `_AIFireTurret` (@0x80e98, @0x80b0d); its trigger is released as it
+//!   bursts out. A hit by the player, or a Good Samaritan's answer, holds
+//!   the ship at its gate instead ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)):
+//!   seen and deciding, but still and firing only that point defence
+//!   until its wait is out.
 //!
 //! The radar and the shots do not read the emerging state: an emerging
 //! ship shows on the radar at its gate and can be hit.
