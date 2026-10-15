@@ -19,6 +19,11 @@
 //! Both are active and saved. Taking off and landing again completes the
 //! run, at its destination, and its `CompText` shows over the spaceport.
 //!
+//! A run whose `OnSuccess` moves the player (`M129`, to Beta and its
+//! Dock) with no `Q`: under its `CompText` the port's status bar names
+//! the Pad, landed on, and once the Trade Center has opened and closed
+//! it names the Dock.
+//!
 //! The bar: a quarter second after the bar opens, the offer dialog shows
 //! the bar job's text, filled, and "I'm in". Return accepts it, and its
 //! `BriefText` shows. After the gap, the second is offered, and N refuses
@@ -203,9 +208,15 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 /// Alpha: a `sÿst` at the map's centre listing the Pad; independent,
 /// with no traffic.
 fn system() -> Vec<u8> {
+    listing(128)
+}
+
+/// A `sÿst` at the map's centre listing `stellar` alone; independent,
+/// with no traffic.
+fn listing(stellar: i16) -> Vec<u8> {
     let mut bytes = vec![0; System::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x04, &[-1; 32]);
-    put_i16s(&mut bytes, 0x24, &[128]);
+    put_i16s(&mut bytes, 0x24, &[stellar]);
     put_i16s(&mut bytes, 0x44, &[-1; 8]);
     put_i16s(&mut bytes, 0x64, &[0, -1]);
     bytes
@@ -214,9 +225,14 @@ fn system() -> Vec<u8> {
 /// The Pad: a `spöb` at the centre that can be landed on, with a bar
 /// (`Flags` 0x41), drawn from `spïn` 1004.
 fn pad() -> Vec<u8> {
+    flagged_pad(0x41)
+}
+
+/// [`pad`] with these `Flags`.
+fn flagged_pad(flags: u32) -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
-    bytes[0x06..0x0A].copy_from_slice(&0x41_u32.to_be_bytes());
+    bytes[0x06..0x0A].copy_from_slice(&flags.to_be_bytes());
     put_i16s(&mut bytes, 0x14, &[-1]);
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
     bytes
@@ -334,14 +350,24 @@ fn game_data_with(bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
 
 /// [`game_data`] with this run, mission 128, and this bar job, mission
 /// 130, and its offer text.
-fn game_data_from(run: &[u8], (bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<GameData> {
-    let mut fork = ForkBuilder::new()
+fn game_data_from(run: &[u8], bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
+    game_data_around(run, bar_job, &pad(), ForkBuilder::new())
+}
+
+/// [`game_data_from`] with this Pad, over the resources `fork` holds.
+fn game_data_around(
+    run: &[u8],
+    (bar_job, bar_job_offer): (Vec<u8>, &str),
+    pad: &[u8],
+    fork: ForkBuilder,
+) -> Rc<GameData> {
+    let mut fork = fork
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system())
-        .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad())
+        .resource(Stellar::TYPE, 128, Some(b"Pad"), pad)
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
         .resource(Mission::TYPE, 128, Some(b"Run to <DST>;courier"), run)
@@ -506,10 +532,37 @@ fn mission_dialogs() -> [[(ResType, i16, Vec<u8>); 2]; 5] {
     [computer, info, bar, offer, text]
 }
 
-/// The interface file: stock "Spaceport" (`DLOG` 1000), the mission
-/// computer (1006), the mission info screen (1012), "Bar" (1013), the
-/// offer dialog (1016) and "Desc Dialog" (3003), each with its items as
-/// stock has them.
+/// "Trade" (`DLOG` 1001), with its items as stock has them.
+fn trade_dialog() -> [(ResType, i16, Vec<u8>); 2] {
+    dialog(
+        1001,
+        (426, 252),
+        &[
+            ((272, 221, 99, 25), true),
+            ((129, 299, 68, 30), false),
+            ((38, 9, 352, 17), false),
+            ((38, 25, 352, 13), true),
+            ((38, 37, 352, 13), true),
+            ((38, 49, 352, 13), true),
+            ((38, 61, 352, 13), true),
+            ((38, 73, 352, 13), true),
+            ((38, 85, 352, 14), true),
+            ((38, 98, 352, 14), true),
+            ((38, 111, 352, 14), true),
+            ((38, 124, 352, 60), false),
+            ((60, 221, 99, 25), true),
+            ((166, 221, 99, 25), true),
+            ((41, 190, 346, 24), false),
+            ((212, 304, 68, 30), false),
+            ((178, 339, 68, 30), false),
+        ],
+    )
+}
+
+/// The interface file: stock "Spaceport" (`DLOG` 1000), "Trade" (1001),
+/// the mission computer (1006), the mission info screen (1012), "Bar"
+/// (1013), the offer dialog (1016) and "Desc Dialog" (3003), each with its
+/// items as stock has them.
 fn interface() -> InterfaceData {
     let spaceport = dialog(
         1000,
@@ -532,7 +585,8 @@ fn interface() -> InterfaceData {
             ((605, 548, 32, 32), false),
         ],
     );
-    let fork = std::iter::once(spaceport)
+    let fork = [spaceport, trade_dialog()]
+        .into_iter()
         .chain(mission_dialogs())
         .flatten()
         .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
@@ -953,6 +1007,77 @@ fn the_mission_computer_lists_offers_accepts_them_and_their_texts_show() {
         Showing::Spaceport,
         "Escape went to the text"
     );
+}
+
+/// [`game_data`] where the run's `OnSuccess` moves the player to Beta
+/// (`M129`), with no `Q` after it, Beta listing the Dock (129) alone, and
+/// the Pad has a trade center too (`Flags` 0x43).
+fn moving_run_data() -> Rc<GameData> {
+    let mut run = timed(mission(128, 200, 201));
+    let on_success = b"M129\0";
+    run[0x359..0x359 + on_success.len()].copy_from_slice(on_success);
+    let fork = ForkBuilder::new()
+        .resource(System::TYPE, 129, Some(b"Beta"), &listing(129))
+        .resource(Stellar::TYPE, 129, Some(b"Dock"), &pad());
+    game_data_around(&run, bar_job(), &flagged_pad(0x43), fork)
+}
+
+/// The texts of flight's status bar as the spaceport draws it beside
+/// itself.
+fn port_bar_texts(game: &Game) -> Vec<String> {
+    let mut bar = nova_view::DrawList::new();
+    game.app
+        .screen()
+        .flight_view()
+        .expect("flying")
+        .draw_status_bar(&mut bar);
+    bar.iter()
+        .filter_map(|command| match command {
+            nova_view::DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_comp_text_shows_the_stellar_landed_on_and_a_shop_closing_on_successs_move() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), moving_run_data());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.accept();
+    game.tap(Key::Enter);
+    for _ in 0..3 {
+        if game.showing() == Showing::Spaceport {
+            game.tap(Key::Escape);
+        }
+    }
+    assert_eq!(game.showing(), Showing::Flight);
+
+    // Landing at the run's return completes it: OnSuccess's M129 selects
+    // the Dock, but under the CompText the port's bar names the Pad.
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
+    assert!(!texts(&game.frame()).contains(&"Dock".to_owned()));
+    game.tap(Key::Escape);
+    assert_eq!(game.shown_text(), None);
+    assert!(!texts(&game.frame()).contains(&"Dock".to_owned()), "held");
+
+    // The Trade Center's close redraws it: the Dock.
+    game.click_port(7);
+    assert!(game.spaceport().open_trade().is_some(), "trading");
+    game.tap(Key::Escape);
+    assert!(game.spaceport().open_trade().is_none(), "closed");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
+    assert!(texts(&game.frame()).contains(&"Dock".to_owned()));
 }
 
 #[test]
