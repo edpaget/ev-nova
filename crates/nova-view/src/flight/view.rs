@@ -23556,6 +23556,20 @@ mod tests {
     }
 
     #[test]
+    fn another_key_pressed_while_option_backquote_is_held_leaves_the_target_to_the_tick() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        view.input(&key(Key::Alt, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        alt_tap(&mut view, NEAREST_KEY);
+        view.input(&key(Key::Alt, true));
+        let picked = target_of(&view);
+        assert!(picked.is_some());
+        tap(&mut view, Key::Char('z'));
+        assert_eq!(target_of(&view), picked, "no press of the block");
+    }
+
+    #[test]
     fn option_backquote_held_blocks_h_but_not_its_map_nor_with_h_held_its_target() {
         let mut view = fighting(armed(2, &[]), &two_npcs());
         view.input(&key(Key::Alt, true));
