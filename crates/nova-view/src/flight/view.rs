@@ -12337,7 +12337,7 @@ mod tests {
     #[test]
     fn a_landed_m_in_the_shipyard_is_undone_but_its_close_shows_it_until_the_next_draw_status() {
         type Step = fn(&mut View);
-        let draws: [(&str, Step); 9] = [
+        let draws: [(&str, Step); 10] = [
             ("a trade", |view| {
                 assert_eq!(view.trade(BUY_FOOD), Ok(10));
             }),
@@ -12353,6 +12353,11 @@ mod tests {
             }),
             ("an outfitter run", |view| {
                 assert_eq!(view.outfit_order(BUY_PLAIN_TANK, 1).run.done, 1);
+            }),
+            ("an outfitter run stopped after its first pass", |view| {
+                let run = view.outfit_order(BUY_PLAIN_TANK, 10_000).run;
+                assert!(run.done > 0, "{run:?}");
+                assert!(run.stopped.is_some(), "{run:?}");
             }),
             ("a counted order's Cancel", |view| {
                 assert_eq!(view.outfit_counted(BUY_PLAIN_TANK, 0), Ok(0));
