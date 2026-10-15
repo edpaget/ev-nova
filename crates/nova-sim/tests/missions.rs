@@ -26,6 +26,17 @@ struct Courier {
 /// The courier carrying nothing.
 const COURIER: Courier = Courier { drop_off: None };
 
+/// No asteroids anywhere.
+impl nova_sim::AsteroidCatalog for Courier {
+    fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+        Vec::new()
+    }
+
+    fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+        Vec::new()
+    }
+}
+
 /// Unarmed and ungoverned.
 impl CombatCatalog for Courier {
     fn weapons(&self) -> Vec<WeaponRecord> {

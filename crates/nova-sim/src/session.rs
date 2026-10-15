@@ -350,6 +350,7 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod asteroids;
 mod aux_ships;
 mod brackets;
 mod buoys;
@@ -440,10 +441,10 @@ use crate::board::{
     check_board,
 };
 use crate::catalog::{
-    CombatCatalog, CronRecord, DateAffixes, DudeId, GateSite, GovtId, JunkId, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord,
-    PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError,
-    StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DudeId, GateSite, GovtId, JunkId,
+    LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId,
+    OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord,
+    StartError, StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -793,6 +794,23 @@ pub struct Session {
     /// The cargo boxes jettisons left in space (see the `cargo_boxes`
     /// module); never saved, as the original saves none.
     boxes: crate::cargo_box::CargoBoxes,
+    /// The asteroid field about the player (see the `asteroids` module);
+    /// never saved, as the original saves none.
+    asteroids: crate::asteroid::Asteroids,
+    /// Every asteroid type, by kind, read when the session starts.
+    asteroid_types: Rc<[crate::asteroid::AsteroidType; crate::asteroid::KINDS]>,
+    /// Every system's asteroid field, read when the session starts; a
+    /// system not here holds none.
+    asteroid_fields: BTreeMap<SystemId, crate::asteroid::FieldSpec>,
+    /// The pass frame a kill of the asteroid field holds through, as
+    /// `_killAsteroids` holds to the frame's end (see the `asteroids`
+    /// module); never saved.
+    asteroid_kill: Option<i16>,
+    /// Whether a session started or loaded in flight is still to place
+    /// its asteroid field, as the other reading of
+    /// [`RuleKey::AsteroidEntryField`] places it (see the `asteroids`
+    /// module); never saved.
+    asteroid_field_due: bool,
     /// What the session reports outside combat.
     reports: Reports,
     /// The NPC the player targets, if any.
@@ -1111,7 +1129,9 @@ pub struct Session {
 impl Session {
     /// A new pilot's session, read from `catalog`: an unnamed
     /// [`Pilot::new`], flown.
-    pub fn start(catalog: &(impl PilotCatalog + CombatCatalog)) -> Result<Self, StartError> {
+    pub fn start(
+        catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
+    ) -> Result<Self, StartError> {
         Self::fly(catalog, Pilot::new(catalog, "")?)
     }
 
@@ -1168,7 +1188,7 @@ impl Session {
     ///
     /// When the ship cannot be read, or no system exists at all.
     pub fn fly(
-        catalog: &(impl PilotCatalog + CombatCatalog),
+        catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
         pilot: Pilot,
     ) -> Result<Self, StartError> {
         Self::load(catalog, pilot, &Rulebook::default())
@@ -1205,7 +1225,7 @@ impl Session {
     /// ([`StartError::NoSystem`] with the pilot's saved system).
     #[allow(clippy::too_many_lines)] // one line for each of the session's fields
     pub fn load(
-        catalog: &(impl PilotCatalog + CombatCatalog),
+        catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
         mut pilot: Pilot,
         rules: &Rulebook,
     ) -> Result<Self, StartError> {
@@ -1341,6 +1361,16 @@ impl Session {
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
+            asteroids: crate::asteroid::Asteroids::default(),
+            asteroid_types: Rc::new(crate::asteroid::AsteroidType::table(
+                &catalog.asteroid_types(),
+            )),
+            asteroid_fields: asteroids::fields(&catalog.asteroid_fields()),
+            asteroid_kill: None,
+            // A session started or loaded in flight, as `_DoNewPilot`
+            // (@0x19384) and the main screen's entries (@0x1a8cf,
+            // @0x1aff0) place a field (see the `asteroids` module).
+            asteroid_field_due: landed.is_none(),
             reports: Reports::default(),
             target: None,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
@@ -3725,8 +3755,10 @@ impl Session {
         self.pilot.stellar = Some(stellar);
         self.bar_news = None;
         self.combat.clear();
-        // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
+        // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40) and
+        // `_killAsteroids` (@0x66f57).
         self.clear_boxes();
+        self.kill_asteroids();
         self.target = None;
         self.talk = None;
         self.leave_with_fighters(true);

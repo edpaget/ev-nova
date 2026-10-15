@@ -26,6 +26,17 @@ struct Home {
     lives: Vec<StellarLife>,
 }
 
+/// No asteroids anywhere.
+impl nova_sim::AsteroidCatalog for Home {
+    fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+        Vec::new()
+    }
+
+    fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+        Vec::new()
+    }
+}
+
 /// Ungoverned; its one weapon, `wëap` 128, a planet-type gun firing
 /// every tick and doing 60 damage.
 impl CombatCatalog for Home {

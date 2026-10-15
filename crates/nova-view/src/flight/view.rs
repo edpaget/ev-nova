@@ -467,17 +467,17 @@ use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
-    ALERT_CICN, Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule,
-    Chance, ClassRow, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
-    DockKind, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId, Haggle,
-    HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
-    LandingRefusal, LegalCode, Market, NavMode, NeverFires, NovaAi, NovaBoarding, NovaDisable,
-    NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot,
-    PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey,
-    RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal,
-    ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take,
-    Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
-    flight::shortest_turn, glow_level, lights_level,
+    ALERT_CICN, Allegiance, Assigned, Assignment, AsteroidCatalog, Behaviour, BoardRefusal,
+    Boarding, BoardingRule, Chance, ClassRow, CombatCatalog, CommCatalog, CommNote, Condition,
+    Controls, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal,
+    Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal,
+    LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires, NovaAi,
+    NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal,
+    OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal,
+    Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming,
+    ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId,
+    StellarPick, Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog,
+    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
@@ -2030,6 +2030,7 @@ impl<
     C: PilotCatalog
         + TrafficCatalog
         + CombatCatalog
+        + AsteroidCatalog
         + CommCatalog
         + CombatLooks
         + SystemCatalog
@@ -5079,6 +5080,7 @@ impl<
     C: PilotCatalog
         + TrafficCatalog
         + CombatCatalog
+        + AsteroidCatalog
         + CommCatalog
         + CombatLooks
         + SystemCatalog
@@ -5704,6 +5706,10 @@ mod tests {
         box_sheet: Result<EffectSheet, String>,
         /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
         cursor_sheet: Result<EffectSheet, String>,
+        /// The asteroid types: none, by default.
+        asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
+        /// Each system's asteroid field: none, by default.
+        asteroid_fields: Vec<nova_sim::AsteroidFieldRecord>,
         /// The string lists: none, by default.
         strings: Vec<(i16, Vec<String>)>,
         /// The persons: none, by default.
@@ -5828,6 +5834,8 @@ mod tests {
                 image_id: 651,
                 frames: NonZeroU16::new(8).expect("non-zero"),
             }),
+            asteroid_types: Vec::new(),
+            asteroid_fields: Vec::new(),
             strings: Vec::new(),
             persons: Vec::new(),
             defaults: Vec::new(),
@@ -6094,6 +6102,17 @@ mod tests {
 
         fn governments(&self) -> Vec<nova_sim::GovtRecord> {
             self.govts.clone()
+        }
+    }
+
+    /// The asteroid types and fields given.
+    impl AsteroidCatalog for FakeCatalog {
+        fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+            self.asteroid_types.clone()
+        }
+
+        fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+            self.asteroid_fields.clone()
         }
     }
 

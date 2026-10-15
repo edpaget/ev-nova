@@ -1,17 +1,18 @@
-//! A canned [`PilotCatalog`], [`TrafficCatalog`], [`CombatCatalog`] and
-//! [`CommCatalog`] for the crate's own tests.
+//! A canned [`PilotCatalog`], [`TrafficCatalog`], [`CombatCatalog`],
+//! [`AsteroidCatalog`] and [`CommCatalog`] for the crate's own tests.
 
 use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
-    HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
-    MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
-    PersonRecord, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
-    StartDate, StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, CharacterStart,
+    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DisasterRecord,
+    DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
+    LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId,
+    NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
+    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemTraffic, SystemVisibility,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -122,6 +123,10 @@ pub(crate) struct FakePilotCatalog {
     /// The double-time warp-up sound's length: none, by default, so the
     /// warp's clock takes 350 Mac ticks in double time too.
     pub(crate) warp_sound_double_time: Option<SoundLength>,
+    /// Every `röid`, with its sprite's frames and size: none, by default.
+    pub(crate) asteroid_types: Vec<AsteroidTypeRecord>,
+    /// Every system's asteroid field: none, by default.
+    pub(crate) asteroid_fields: Vec<AsteroidFieldRecord>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -614,6 +619,8 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         nebulae: Vec::new(),
         warp_sound: None,
         warp_sound_double_time: None,
+        asteroid_types: Vec::new(),
+        asteroid_fields: Vec::new(),
     }
 }
 
@@ -949,6 +956,17 @@ impl CombatCatalog for FakePilotCatalog {
 
     fn governments(&self) -> Vec<GovtRecord> {
         self.govts.clone()
+    }
+}
+
+/// No asteroids unless a test sets them.
+impl AsteroidCatalog for FakePilotCatalog {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        self.asteroid_types.clone()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        self.asteroid_fields.clone()
     }
 }
 

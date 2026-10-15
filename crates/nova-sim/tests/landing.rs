@@ -18,6 +18,17 @@ struct Pilot {
     sites: Vec<LandingSite>,
 }
 
+/// No asteroids anywhere.
+impl nova_sim::AsteroidCatalog for Pilot {
+    fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+        Vec::new()
+    }
+
+    fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+        Vec::new()
+    }
+}
+
 /// Unarmed and ungoverned.
 impl CombatCatalog for Pilot {
     fn weapons(&self) -> Vec<WeaponRecord> {

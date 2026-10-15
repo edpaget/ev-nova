@@ -190,7 +190,8 @@ impl Session {
         }
         self.move_traffic_again(&mut *chance);
         self.before_fight(rules, &mut &mut *chance);
-        self.fight(GamePass::Again, rules, chance);
+        self.fight(GamePass::Again, rules, &mut *chance);
+        self.tick_asteroids(chance);
     }
 
     /// The traffic's part of the second pass, drawing on `chance`: the NPCs

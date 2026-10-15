@@ -1,8 +1,8 @@
-//! The pilot, traffic, combat and comm catalogs over the game data: a
-//! thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
-//! `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt` and `mïsn` records, its
-//! string lists and its stellar sprites; and a `shän`'s blink fields as a
-//! [`Blink`].
+//! The pilot, traffic, combat, asteroid and comm catalogs over the game
+//! data: a thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`,
+//! `wëap`, `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt`,
+//! `mïsn` and `röid` records, its string lists and its stellar and
+//! asteroid sprites; and a `shän`'s blink fields as a [`Blink`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,6 +19,7 @@ use nova_data::records::nebula::Nebula;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
 use nova_data::records::rank::Rank;
+use nova_data::records::roid::Roid;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -31,23 +32,32 @@ use nova_data::sound::decode_snd;
 use nova_data::{GameData, Record, stellar_spin_id};
 use nova_rsrc::ResType;
 
+use crate::asteroid::KINDS;
 use crate::blink::Blink;
 use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
-    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
-    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, CharacterStart,
+    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DisasterId,
+    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
+    GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
+    MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord,
+    SiteAnimation, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark,
+    StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId,
+    WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::nebula;
 use crate::warp::SoundLength;
+
+/// The `spïn` of asteroid type 0's master sprite: type `n`'s is 800 +
+/// `n` (`_LoadSprites` @0x20bb7).
+pub const FIRST_ASTEROID_SPIN: i16 = 800;
+
+/// The first `röid`, asteroid type 0's.
+const FIRST_ROID: i16 = 128;
 
 /// The `snd ` resource type.
 const SND: ResType = ResType::new(*b"snd ");
@@ -689,13 +699,25 @@ fn counts_frames(data: &GameData, graphic: i16) -> bool {
 /// `yTiles` as [`counts_frames`] reckons it: 0 when it does not read or is
 /// not above 0, and at most `u16::MAX`.
 fn frame_count(data: &GameData, graphic: i16) -> u16 {
-    tiles(data, graphic).map_or(0, |tiles| u16::try_from(tiles.max(0)).unwrap_or(u16::MAX))
+    stellar_spin_id(graphic).map_or(0, |spin_id| spin_frame_count(data, spin_id))
+}
+
+/// `spïn` `spin_id`'s frame count in `data`, its `xTiles` × `yTiles` in
+/// 32 bits: 0 when it does not read or is not above 0, and at most
+/// `u16::MAX`.
+fn spin_frame_count(data: &GameData, spin_id: i16) -> u16 {
+    spin_tiles(data, spin_id).map_or(0, |tiles| u16::try_from(tiles.max(0)).unwrap_or(u16::MAX))
 }
 
 /// Graphic type `graphic`'s `spïn`'s `xTiles` × `yTiles` in 32 bits, when
 /// it reads.
 fn tiles(data: &GameData, graphic: i16) -> Option<i32> {
-    let spin = data.get::<Spin>(stellar_spin_id(graphic)?)?.ok()?;
+    spin_tiles(data, stellar_spin_id(graphic)?)
+}
+
+/// `spïn` `spin_id`'s `xTiles` × `yTiles` in 32 bits, when it reads.
+fn spin_tiles(data: &GameData, spin_id: i16) -> Option<i32> {
+    let spin = data.get::<Spin>(spin_id)?.ok()?;
     Some(i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles))
 }
 
@@ -960,6 +982,43 @@ impl CombatCatalog for GameData {
     }
 }
 
+/// Reads the records afresh on every call; a session asks once, when it
+/// starts.
+impl AsteroidCatalog for GameData {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (0..KINDS as u8)
+            .filter_map(|kind| {
+                let roid = self.get::<Roid>(FIRST_ROID + i16::from(kind))?.ok()?.record;
+                let spin_id = FIRST_ASTEROID_SPIN + i16::from(kind);
+                let frame_size = self
+                    .spin_sheet(spin_id)
+                    .ok()
+                    .map(|spin| (spin.sheet.frame_width(), spin.sheet.frame_height()));
+                Some(AsteroidTypeRecord {
+                    kind,
+                    strength: roid.strength,
+                    spin_rate: roid.spin_rate,
+                    frames: spin_frame_count(self, spin_id),
+                    frame_size,
+                })
+            })
+            .collect()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let record = system.ok()?.record;
+                Some(AsteroidFieldRecord {
+                    system: SystemId(id),
+                    count: record.asteroids,
+                    types: record.ast_types.bits(),
+                })
+            })
+            .collect()
+    }
+}
+
 /// Reads the string list afresh on every call.
 impl CommCatalog for GameData {
     fn string_list(&self, id: i16) -> Vec<String> {
@@ -1158,6 +1217,7 @@ mod tests {
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::disaster::Disaster;
     use nova_data::records::junk::Junk;
+    use nova_data::records::roid::Roid;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
     use nova_data::records::string_list::StrList;
@@ -1168,8 +1228,9 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
-        StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
+        AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, DisasterId, GateSite, GovtId,
+        GovtRecord, HullRecord, JunkId, Penalties, StarSystem, StartDate, StellarId, StockWeapon,
+        SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test, TestExpr};
@@ -2336,6 +2397,95 @@ mod tests {
             (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
         ]);
         assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
+    }
+
+    /// A `röid` of this `Strength` and `SpinRate`.
+    fn roid(strength: i16, spin_rate: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Roid::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[strength, spin_rate]);
+        bytes
+    }
+
+    /// A `spïn` naming `rlëD` `image`, `x_tiles` across and `y_tiles` down.
+    fn spin_tiled(image: i16, x_tiles: i16, y_tiles: i16) -> Vec<u8> {
+        let mut bytes = spin(image);
+        put_i16s(&mut bytes, 0x08, &[x_tiles, y_tiles]);
+        bytes
+    }
+
+    #[test]
+    fn the_asteroid_types_are_each_roid_with_its_spins_frames_and_size() {
+        let data = store(&[
+            (Roid::TYPE, 128, roid(0, 120)),
+            (Roid::TYPE, 132, roid(250, -40)),
+            // Past the 16 types.
+            (Roid::TYPE, 144, roid(9, 9)),
+            (Spin::TYPE, 800, spin_tiled(1800, 6, 6)),
+            (RLED, 1800, sheet(48, 40)),
+            // Frames, but no sheet to size them.
+            (Spin::TYPE, 804, spin_tiled(1804, 2, 3)),
+        ]);
+        assert_eq!(
+            data.asteroid_types(),
+            [
+                AsteroidTypeRecord {
+                    kind: 0,
+                    strength: 0,
+                    spin_rate: 120,
+                    frames: 36,
+                    frame_size: Some((48, 40)),
+                },
+                AsteroidTypeRecord {
+                    kind: 4,
+                    strength: 250,
+                    spin_rate: -40,
+                    frames: 6,
+                    frame_size: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_asteroid_type_with_no_spin_has_no_frames_and_no_size() {
+        let data = store(&[(Roid::TYPE, 143, roid(5, 100))]);
+        assert_eq!(
+            data.asteroid_types(),
+            [AsteroidTypeRecord {
+                kind: 15,
+                strength: 5,
+                spin_rate: 100,
+                frames: 0,
+                frame_size: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_asteroid_fields_are_each_systems_asteroids_and_ast_types() {
+        let mut rocky = system();
+        put_i16s(&mut rocky, 0x6A, &[12]);
+        rocky[0x94..0x96].copy_from_slice(&0x8011_u16.to_be_bytes());
+        let data = store(&[
+            (System::TYPE, 130, system()),
+            (System::TYPE, 131, rocky),
+            (System::TYPE, 132, short(system())),
+        ]);
+        assert_eq!(
+            data.asteroid_fields(),
+            [
+                AsteroidFieldRecord {
+                    system: SystemId(130),
+                    count: 0,
+                    types: 0,
+                },
+                AsteroidFieldRecord {
+                    system: SystemId(131),
+                    count: 12,
+                    types: 0x8011,
+                },
+            ]
+        );
     }
 
     #[test]
