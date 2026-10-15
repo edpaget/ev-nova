@@ -295,7 +295,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         for (npc, mark) in npcs.iter().zip(&marks) {
             let ship = mark.ship();
@@ -365,7 +366,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         for npc in &npcs {
             assert_eq!(
@@ -571,7 +573,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         [&npcs[1], &npcs[2]].map(|npc| ai.react(npc, &hit, &around).goal)
     }
@@ -671,7 +674,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 1.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 7.0);
         assert_eq!(
@@ -728,7 +732,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 1.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 9.0);
         assert!(mark.asked.borrow().is_empty(), "not its type's");

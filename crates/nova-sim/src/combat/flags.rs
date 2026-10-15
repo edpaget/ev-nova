@@ -157,8 +157,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags2, 0x0400, Any, Unimplemented),
     // Not selectable or shown out of ammo.
     (Flags2, 0x0800, Any, Presentation),
-    // Disables but never destroys.
-    (Flags2, 0x1000, Any, Unimplemented),
+    // Disables but never destroys: its shots, blasts and beams can't kill
+    // (`Shot::disable_only`, `Beam::disable_only`, `damage::take`).
+    (Flags2, 0x1000, Any, Implemented),
     // Beam drawn under ships.
     (Flags2, 0x2000, Beam, Presentation),
     // Fires while cloaked, and nothing else does (`Armament::has_ammo`).
@@ -262,7 +263,7 @@ mod tests {
         (Flags2, 0x0200, [Presentation; 4]),
         (Flags2, 0x0400, [Unimplemented; 4]),
         (Flags2, 0x0800, [Presentation; 4]),
-        (Flags2, 0x1000, [Unimplemented; 4]),
+        (Flags2, 0x1000, [Implemented; 4]),
         (Flags2, 0x2000, [NA, Presentation, NA, NA]),
         (Flags2, 0x4000, [Implemented; 4]),
         (Flags2, 0x8000, [Unimplemented; 4]),
@@ -391,10 +392,10 @@ mod tests {
     #[test]
     fn every_unimplemented_bit_set_is_listed_in_the_tables_order() {
         assert_eq!(
-            unimplemented(&spec(-1, 0x0048, 0x1080, 0x0024)),
+            unimplemented(&spec(-1, 0x0048, 0x8080, 0x0024)),
             [
                 (Flags, 0x0040),
-                (Flags2, 0x1000),
+                (Flags2, 0x8000),
                 (Flags3, 0x0004),
                 (Flags3, 0x0020),
             ],
@@ -441,7 +442,7 @@ mod tests {
         // and fires from the exit point nearest the target.
         assert_eq!(
             unimplemented(&guided(3, 0x4010, 0, 0x1200, 0x0011)),
-            [(Flags2, 0x1000), (Flags3, 0x0010)]
+            [(Flags3, 0x0010)]
         );
         // The Polaron Multi-Torp: point defence can't target it, and its
         // sub-munitions seek the nearest; it fires while cloaked.
@@ -450,10 +451,7 @@ mod tests {
             [(Seeker, 0x0001)]
         );
         // A rear-blind Fusion Pulse Turret that disables.
-        assert_eq!(
-            unimplemented(&guided(4, 0x4001, 0, 0x1200, 0x0002)),
-            [(Flags2, 0x1000)]
-        );
+        assert_eq!(unimplemented(&guided(4, 0x4001, 0, 0x1200, 0x0002)), []);
         // The Nanites turret's Seeker bit does not apply to it.
         assert_eq!(unimplemented(&guided(4, 0x0021, 0x0001, 0x0010, 0)), []);
     }

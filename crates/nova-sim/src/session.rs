@@ -4562,12 +4562,15 @@ impl Session {
             legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
             self.lose_ranks_to(Crime::Board, npc.govt);
         }
+        // A direct, intended strike of no damage: `_HandlePlayerBoardAttempt`
+        // calls `_DoGoodSamaritan` itself, with no aim to test.
         self.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         });
         if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
             return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
@@ -5215,7 +5218,8 @@ impl Session {
             by: ShipRef::Player,
             damage: 1.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         }];
         self.target = Some(npc);
         self.aboard = Some(Aboard {
@@ -15098,7 +15102,8 @@ pub(super) mod tests {
             by,
             damage: 9.0,
             downed: Some(Downed::BreakingUp),
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
         let by_the_police = session.pilot().combat_rating();
@@ -15146,7 +15151,8 @@ pub(super) mod tests {
                 by: ShipRef::Npc(fighter),
                 damage: 9.0,
                 downed: Some(Downed::BreakingUp),
-                provokes: true,
+                direct: true,
+                intended: true,
             }],
             &was,
         );
@@ -15173,7 +15179,8 @@ pub(super) mod tests {
             by: ShipRef::Player,
             damage: 9.0,
             downed,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         session.credit_kills(
             &[
@@ -15641,15 +15648,17 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_shockwave_neither_cloaks_nor_uncloaks_the_ship_it_hits() {
+    fn a_blast_or_a_shockwave_neither_cloaks_nor_uncloaks_the_ship_it_hits() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
+        // A blast's strike and a shockwave's alike: no direct hit.
         let shockwave = Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by: ShipRef::Player,
             damage: 32.0,
             downed: None,
-            provokes: false,
+            direct: false,
+            intended: false,
         };
         session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
@@ -18593,6 +18602,57 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_blast_on_a_bystander_provokes_nothing_and_the_direct_hit_does() {
+        // Two traders 100 ahead of the player, side by side; the player's
+        // blaster blasts 40 pixels about its hit.
+        let mut catalog = skirmish(&[(1, 140, 129), (1, 143, 129)], None);
+        catalog.weapons[0].blast_radius = 40;
+        let (victim, bystander) = (NpcId(0), NpcId(1));
+        // Each trader's target, goal, provocation and shield after the
+        // player fires once, or not.
+        let after = |fires: bool| {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.populate(
+                &catalog,
+                &mut placing(2, &[(0, 0, -100, 0), (1, 35, -100, 0)]),
+            );
+            stop_npcs(&mut session);
+            session.target = Some(victim);
+            if fires {
+                session.hold_trigger(FIRE);
+            }
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.hold_trigger(Trigger::default());
+            for _ in 0..10 {
+                fight(&mut session, &catalog);
+            }
+            [victim, bystander].map(|id| {
+                let npc = session
+                    .npcs()
+                    .iter()
+                    .find(|npc| npc.id == id)
+                    .expect("there");
+                (npc.target, npc.goal, npc.provoked, npc.reserves.shield.now)
+            })
+        };
+        let [_, (target, goal, provoked, full)] = after(false);
+        let [
+            hit,
+            (blasted_target, blasted_goal, blasted_provoked, shield),
+        ] = after(true);
+        assert!(shield < full, "the bystander was blasted: {shield}");
+        assert_eq!(
+            (blasted_target, blasted_goal, blasted_provoked),
+            (target, goal, provoked),
+            "and answers nothing"
+        );
+        let (target, goal, provoked, _) = hit;
+        assert_eq!(target, Some(ShipRef::Player), "the victim answers");
+        assert_eq!(goal, Goal::Flee(ShipRef::Player));
+        assert!(provoked > 0.0, "{provoked}");
+    }
+
+    #[test]
     fn a_neutral_warship_hunts_a_player_wanted_below_its_tolerance() {
         let catalog = skirmish(&[(3, 143, 132)], Some(143));
         for (record, hunted) in [(-6, false), (-7, true)] {
@@ -19001,7 +19061,8 @@ pub(super) mod tests {
                 by: ShipRef::Player,
                 damage: 0.0,
                 downed: None,
-                provokes: true,
+                direct: true,
+                intended: true,
             }]
         );
         session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);

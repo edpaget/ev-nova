@@ -218,6 +218,27 @@ mod tests {
     }
 
     #[test]
+    fn a_sub_munition_is_disable_only_as_its_own_weapon_is() {
+        let disabling = WeaponSpec::new(&WeaponRecord {
+            flags2: 0x1000,
+            ..weapon(148)
+        });
+        let mut chance = Draws::of(&[]);
+        for (parent_flags2, sub, disable_only) in [
+            (0x1000, sub(-1), false),
+            (0, disabling, true),
+            (0x1000, disabling, true),
+        ] {
+            let parent = parent(-1, 2, 0, 0, parent_flags2);
+            let subs = release(&parent, &sub, None, &among(&[]), &mut chance);
+            assert_eq!(subs.len(), 2);
+            for shot in &subs {
+                assert_eq!(shot.disable_only, disable_only, "{parent_flags2:#x}");
+            }
+        }
+    }
+
+    #[test]
     fn a_positive_theta_turns_each_within_it_either_way() {
         let mut chance = Draws::of(&[0, 45, 90]);
         let subs = release(

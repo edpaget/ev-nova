@@ -331,6 +331,10 @@ pub const PROXIMITY_BY_OTHERS: u16 = 0x0008;
 pub const SUBS_SEEK_NEAREST: u16 = 0x0010;
 /// `Flags2`: its shots release no sub-munitions at the end of their life.
 pub const NO_SUBS_ON_EXPIRY: u16 = 0x0020;
+/// `Flags2`: a disable-only weapon, whose shots, blasts and beams never
+/// destroy a ship (`_WeaponDisableOnly` @0x704c; see
+/// [`Hit::cant_kill`](super::damage::Hit::cant_kill)).
+pub const DISABLE_ONLY: u16 = 0x1000;
 /// `Flags2`: a planet-type weapon, whose shots can hit a destroyable
 /// stellar (see [`combat`](super)'s "Stellars").
 pub const PLANET_TYPE: u16 = 0x0400;
@@ -476,6 +480,13 @@ impl WeaponSpec {
         self.flags2 & PLANET_TYPE != 0
     }
 
+    /// Whether it is disable-only (`Flags2` 0x1000): its shots, blasts
+    /// and beams never destroy a ship.
+    #[must_use]
+    pub fn disable_only(&self) -> bool {
+        self.flags2 & DISABLE_ONLY != 0
+    }
+
     /// Whether it is hidden while out of ammo.
     #[must_use]
     pub fn hides_when_empty(&self) -> bool {
@@ -541,6 +552,27 @@ mod tests {
                 ..light_blaster()
             };
             assert_eq!(WeaponSpec::new(&record).prox_safety, ticks, "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_disable_only_weapon_has_flags2_0x1000_whatever_its_other_bits() {
+        for (flags2, disable_only) in [
+            (0x1000, true),
+            (0x1200, true),
+            (0xffff, true),
+            (0, false),
+            (!0x1000, false),
+        ] {
+            let record = WeaponRecord {
+                flags2,
+                ..light_blaster()
+            };
+            assert_eq!(
+                WeaponSpec::new(&record).disable_only(),
+                disable_only,
+                "{flags2:#x}"
+            );
         }
     }
 

@@ -768,7 +768,8 @@ mod tests {
             by: n(2),
             damage: 10.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         assert_eq!(
             ENGINE.react(&npcs[0], &strike, &around),

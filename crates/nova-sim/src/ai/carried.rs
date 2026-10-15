@@ -208,7 +208,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 10.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         assert_eq!(
             CarriedAi::default().react(&attacking, &strike, &around),

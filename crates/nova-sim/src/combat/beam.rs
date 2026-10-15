@@ -59,6 +59,15 @@ pub struct Beam {
     pub end: Vec2,
     /// The ticks it has lasted.
     pub age: u32,
+    /// The ship it was fired at, if any (the original's beam +0x18,
+    /// `_SpawnBeam` @0x45253: its firer's target as it fired), which
+    /// decides whether a hit is intended
+    /// ([`Strike::intended`](super::Strike::intended)).
+    pub aimed_at: Option<ShipRef>,
+    /// Whether it never destroys the ships it hits (the original's beam
+    /// +0x20): its weapon's [`disable_only`](WeaponSpec::disable_only),
+    /// set at launch (`_SpawnBeam` @0x45260).
+    pub disable_only: bool,
 }
 
 impl Beam {
@@ -83,6 +92,8 @@ impl Beam {
             start: Vec2::ZERO,
             end: Vec2::ZERO,
             age: 0,
+            aimed_at: None,
+            disable_only: weapon.disable_only(),
         };
         beam.point(from.position, heading);
         beam
@@ -198,6 +209,26 @@ mod tests {
 
     fn close(a: Vec2, b: Vec2) -> bool {
         (a - b).length() < 1e-3
+    }
+
+    #[test]
+    fn a_beam_is_disable_only_as_its_weapon_is_and_aimed_at_nothing_until_told() {
+        for (flags2, disable_only) in [(0x1000, true), (0, false)] {
+            let weapon = WeaponSpec::new(&WeaponRecord {
+                flags2,
+                ..laser_record()
+            });
+            let beam = Beam::launch(
+                weapon,
+                FIRER,
+                FIRER,
+                &at(0.0, 0.0, 90.0),
+                90.0,
+                Aiming::Ahead,
+            );
+            assert_eq!(beam.disable_only, disable_only, "{flags2:#x}");
+            assert_eq!(beam.aimed_at, None);
+        }
     }
 
     #[test]

@@ -548,11 +548,12 @@ impl Traffic {
     }
 
     /// Each flying, intact NPC answers each of `strikes` in `world` that
-    /// provokes ([`Strike::provokes`]: not a death shockwave, which skips
-    /// `_DamageShip`'s reaction block @0x3b44d), as `behaviour` says, all
-    /// against the NPCs as they were before.
+    /// was a direct hit ([`Strike::direct`]: a shot's or beam's, not a
+    /// blast's or a death shockwave's, which skip `_DamageShip`'s reaction
+    /// block @0x3b44d), as `behaviour` says, all against the NPCs as they
+    /// were before.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
-        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.provokes).collect();
+        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.direct).collect();
         if strikes.is_empty() {
             return;
         }
@@ -1836,7 +1837,8 @@ mod tests {
             by: ShipRef::Player,
             damage,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         }
     }
 
@@ -1870,7 +1872,8 @@ mod tests {
         let mut traffic = populated(2, 1);
         let fighting = Fighting::deciding(Goal::Idle);
         let shockwave = Strike {
-            provokes: false,
+            direct: false,
+            intended: false,
             ..struck(1, 4.0)
         };
         traffic.tick_in(

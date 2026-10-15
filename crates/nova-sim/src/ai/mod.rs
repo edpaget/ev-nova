@@ -607,7 +607,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 30.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         assert_eq!(
             Peaceful.react(&npcs[0], &strike, &around),

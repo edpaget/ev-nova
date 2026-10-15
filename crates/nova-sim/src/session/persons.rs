@@ -261,12 +261,12 @@ impl Session {
     /// Each person of `Flags` 0x0001 that a shot of the player's hit among
     /// `strikes` holds a grudge against it from now on, on the pilot too
     /// (`_DamageShip` @0x3be83-0x3beb3); an escort's shot does not count,
-    /// nor does the player's death shockwave, which provokes nothing
-    /// ([`Strike::provokes`]). No save is due.
+    /// nor does a blast or the player's death shockwave, which is no
+    /// direct hit ([`Strike::direct`]). No save is due.
     pub(super) fn hold_grudges(&mut self, strikes: &[Strike]) {
         for strike in strikes
             .iter()
-            .filter(|strike| strike.by == ShipRef::Player && strike.provokes)
+            .filter(|strike| strike.by == ShipRef::Player && strike.direct)
         {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
@@ -694,7 +694,8 @@ mod tests {
             by,
             damage: 1.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         session.hold_grudges(&[hit(ShipRef::Npc(NpcId(7)))]);
         assert!(!session.pilot().grudge(PersonId(600)));
@@ -703,15 +704,17 @@ mod tests {
     }
 
     #[test]
-    fn the_players_shockwave_holds_no_grudge() {
+    fn the_players_blast_or_shockwave_holds_no_grudge() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
+        // A blast's strike and a shockwave's alike: no direct hit.
         session.hold_grudges(&[Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by: ShipRef::Player,
             damage: 32.0,
             downed: None,
-            provokes: false,
+            direct: false,
+            intended: false,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
@@ -741,7 +744,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 9.0,
             downed: Some(crate::combat::Downed::Disabled),
-            provokes: true,
+            direct: true,
+            intended: true,
         };
         let mut strikes = [
             downed(ShipRef::Npc(NpcId(0))),

@@ -36,8 +36,8 @@
 //! (`_CreateExplosion` @0x698ef; the view plays a `bööm`'s sound for any
 //! [`CombatEvent::Exploded`](crate::combat::CombatEvent::Exploded)); every
 //! copy is removed (@0x698f7); and the player takes [`bomb_damage`] to
-//! its armour alone, a spared hit
-//! ([`apply_spared`](crate::combat::damage::apply_spared): `_DamageShip`
+//! its armour alone, a hit that can neither kill nor disable
+//! ([`take`](crate::combat::damage::take): `_DamageShip`
 //! @0x699b2 with +0x28, +0x2c and +0x30 set and no source), the player
 //! counted disabled before it as its armour then says (`_IsDisabled`
 //! @0x3a9ad), so a second bomb sees the first's damage. The damage is at
@@ -60,7 +60,7 @@
 use super::Session;
 use crate::chance::Chance;
 use crate::combat::Rules;
-use crate::combat::damage::{Hit, apply_spared};
+use crate::combat::damage::{Hit, take};
 use crate::combat::hull::{Condition, DisableRule};
 use crate::message::SimMessage;
 use crate::sabotage::{Sabotage, bomb_damage, bombs, kill_notice};
@@ -120,8 +120,10 @@ impl Session {
                 mass: bomb_damage(armor.max, chance),
                 energy: 0.0,
                 passes_shields: true,
+                cant_kill: true,
+                cant_disable: true,
             };
-            apply_spared(
+            take(
                 &mut self.pilot.reserves,
                 hit,
                 &self.hull,

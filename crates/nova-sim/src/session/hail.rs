@@ -1159,7 +1159,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 5.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert_eq!(npc.goal, Goal::Flee(ShipRef::Player), "hit, it flees");
@@ -1776,7 +1777,8 @@ mod tests {
             by: ShipRef::Player,
             damage: 5.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert!(!matches!(npc.goal, Goal::Assist(_)), "{:?}", npc.goal);

@@ -10,7 +10,8 @@
 //!   jumping in, or they already attack another ship nearer than half the
 //!   attacker's distance ([`FOCUS`] of its distance squared) while facing
 //!   within [`FOCUS_ANGLE`] of it: then the hit changes nothing.
-//! - **A Good Samaritan**: for a hit by the player, every warship or
+//! - **A Good Samaritan**: for a hit by the player on the ship it was
+//!   meant for ([`Strike::intended`], @0x3bed2), every warship or
 //!   interceptor W not already attacking takes the player as its target
 //!   and attacks at once, unless W is an NPC enemy of the victim, or the
 //!   victim's government is xenophobic and not W's; the victim's
@@ -29,8 +30,9 @@
 //!   @0x829a0-0x829b2, never arises.) There is no limit on range. The original calls the same `_DoGoodSamaritan`
 //!   when the player boards a ship, after the crime
 //!   (`_HandlePlayerBoardAttempt`), so the session queues a strike of no
-//!   damage for a boarding ([`Session::board`](crate::Session::board)),
-//!   which the blessing holds back alike.
+//!   damage, direct and intended, for a boarding
+//!   ([`Session::board`](crate::Session::board)), which the blessing
+//!   holds back alike.
 //!   The Bible's "piracy police" are the interceptors alone: "acts as
 //!   'piracy police' by attacking any ship that fires on or attempts to
 //!   board another, non-enemy ship" (`düde` AI type 4). Which applies is
@@ -88,7 +90,8 @@ pub fn answer(
         RuleSource::Engine => true,
         RuleSource::Bible => npc.ai_type == AiType::Interceptor,
     };
-    if strike.by == ShipRef::Player && polices && good_samaritan(npc, strike.ship, around) {
+    let samaritans = strike.by == ShipRef::Player && strike.intended;
+    if samaritans && polices && good_samaritan(npc, strike.ship, around) {
         return Reaction {
             target: Some(ShipRef::Player),
             provoked: 0.0,
@@ -229,7 +232,8 @@ mod tests {
             by,
             damage: 12.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         }
     }
 
@@ -421,6 +425,35 @@ mod tests {
                 "{ai_type:?}"
             );
         }
+    }
+
+    #[test]
+    fn no_samaritan_answers_the_players_unintended_hit() {
+        let govts = relations(0, 0);
+        let npcs = [
+            ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0),
+            ship(2, Some(POLICE), AiType::Warship, 3000.0),
+        ];
+        let hit = strike(n(1), ShipRef::Player);
+        assert_eq!(answered(&govts, &npcs, 1, &hit), ANSWERS, "intended");
+        let stray = Strike {
+            intended: false,
+            ..hit
+        };
+        assert_eq!(
+            answered(&govts, &npcs, 1, &stray),
+            Reaction::default(),
+            "a stray hit on a ship the player wasn't aiming at (@0x3bed2)"
+        );
+        assert_eq!(
+            answered(&govts, &npcs, 0, &stray),
+            Reaction {
+                target: Some(ShipRef::Player),
+                provoked: 12.0,
+                goal: None,
+            },
+            "the victim still answers it"
+        );
     }
 
     #[test]

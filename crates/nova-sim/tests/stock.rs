@@ -2052,14 +2052,15 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
     }
     // The Zephyr family's `Flags2` 0x4000 (183-185, 199) fires while
     // cloaked, which `Armament::has_ammo` does, so it reports nothing.
-    let rows: [Row; 9] = [
+    // The disable-only `Flags2` 0x1000 (142, 201, 233, 234) never
+    // destroys, which `damage::take` does, so it reports nothing.
+    let rows: [Row; 8] = [
         (&[134, 136], &[(Seeker, 0x2)]),
         (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
         (&[137], &[(Seeker, 0x1), (Seeker, 0x8)]),
         (&[148, 182, 184, 185, 199, 229], &[(Seeker, 0x1)]),
-        (&[142, 201], &[(Flags2, 0x1000), (Flags3, 0x10)]),
-        (&[233], &[(Flags2, 0x1000)]),
-        (&[234], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x1000)]),
+        (&[142, 201], &[(Flags3, 0x10)]),
+        (&[234], &[(Seeker, 0x2), (Seeker, 0x8)]),
         (&[196, 197, 198], &[(Flags2, 0x8000)]),
         (&[230], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x8000)]),
     ];
@@ -2077,9 +2078,64 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
             })
         })
         .collect();
-    assert_eq!(expected.len(), 28);
-    assert_eq!(diagnostics.len(), 28, "each once: {diagnostics:?}");
+    assert_eq!(expected.len(), 24);
+    assert_eq!(diagnostics.len(), 24, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
+}
+
+/// Each stock disable-only weapon (`Flags2` 0x1000): the Ion Cannons
+/// (142, 201, turreted beams), the Fusion Pulse Turret (233) and the
+/// Radar Missile (234, both blasting 20 pixels), fired again and again at
+/// a ship with no shields and little armour, and a bystander beside it
+/// for the blasting two: each is left at 1 armour, disabled, and never
+/// breaks up (`_DamageShip` @0x3abd6, @0x3ac64).
+#[test]
+#[allow(clippy::float_cmp)]
+fn every_stock_disable_only_weapon_leaves_its_victims_at_1_armour() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let bystander = ShipRef::Npc(nova_sim::NpcId(1));
+    let frail = |id, x, y| Combatant {
+        id,
+        hull: HullSpec {
+            hit_radius: 10.0,
+            ..HullSpec::default()
+        },
+        reserves: Reserves::full(0.0, 20.0, 0.0),
+        ..sponge(x, y)
+    };
+    for (id, blasts) in [(142, false), (201, false), (233, true), (234, true)] {
+        let spec = *arsenal.weapon(WeaponId(id)).expect("a stock weapon");
+        assert!(spec.disable_only(), "wëap {id}");
+        assert_eq!(spec.blast_radius > 0.0, blasts, "wëap {id}");
+        let mut ships = vec![aiming(&spec), frail(QUARRY, 100.0, 0.0)];
+        if blasts {
+            ships.push(Combatant {
+                hull: HullSpec::default(),
+                ..frail(bystander, 100.0, 15.0)
+            });
+        }
+        let mut combat = Combat::default();
+        let mut events = Vec::new();
+        for _ in 0..600 {
+            fight_with(&mut combat, &mut ships, &arsenal);
+            events.extend(combat.take_events());
+        }
+        for victim in &ships[1..] {
+            assert_eq!(victim.reserves.armor.now, 1.0, "wëap {id}: {:?}", victim.id);
+            assert_eq!(victim.condition, Condition::Disabled, "wëap {id}");
+        }
+        let downed = events.iter().any(|event| {
+            matches!(
+                event,
+                CombatEvent::BreakingUp { .. } | CombatEvent::Destroyed { .. }
+            )
+        });
+        assert!(!downed, "wëap {id}: {events:?}");
+    }
 }
 
 /// Every stock weapon that releases sub-munitions, fired alone again and
@@ -2314,6 +2370,16 @@ fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
             Some((trader, police))
         })
         .expect("a seed brings a Civvies trader with a crew and the Federation");
+    // The player targets the trader, as a player would: only a hit on the
+    // ship it means to hit brings the police (`_DamageShip` @0x3bed2).
+    session.select_target(nova_sim::TargetPick::Nearest);
+    for _ in 0..session.npcs().len() {
+        if session.target().is_some_and(|npc| npc.id == trader) {
+            break;
+        }
+        session.select_target(nova_sim::TargetPick::Next);
+    }
+    assert_eq!(session.target().map(|npc| npc.id), Some(trader), "targeted");
     let (mut fled, mut answered, mut disabled) = (false, false, false);
     for _ in 0..3000 {
         let Some(quarry) = npc_of(&session, trader) else {

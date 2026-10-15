@@ -154,6 +154,11 @@ pub struct Shot {
     /// How many releases of sub-munitions it is from a ship's firing: 0
     /// for a shot a ship fired.
     pub generation: u32,
+    /// Whether it never destroys the ships it hits, directly or by its
+    /// blast (the original's shot +0x44): its weapon's
+    /// [`disable_only`](WeaponSpec::disable_only), set at launch
+    /// (`_SpawnShot` @0x3e7e2), a sub-munition's from its own weapon.
+    pub disable_only: bool,
 }
 
 impl Shot {
@@ -190,6 +195,7 @@ impl Shot {
             lost: false,
             durability: weapon.durability,
             generation: 0,
+            disable_only: weapon.disable_only(),
         }
     }
 
@@ -344,6 +350,19 @@ mod tests {
         assert!(close(shot.velocity, Vec2::new(16.0, -2.0)), "{shot:?}");
         assert_eq!((shot.heading, shot.age), (90.0, 0));
         assert_eq!((shot.firer, shot.fleet), (FIRER, FIRER));
+    }
+
+    #[test]
+    fn a_shot_is_disable_only_as_its_weapon_is() {
+        let from = state(0.0, 0.0, 0.0, 0.0, 90.0);
+        for (flags2, disable_only) in [(0x1000, true), (0, false)] {
+            let weapon = WeaponSpec::new(&WeaponRecord {
+                flags2,
+                ..weapon(128)
+            });
+            let shot = Shot::launch(weapon, FIRER, FIRER, &from, 90.0);
+            assert_eq!(shot.disable_only, disable_only, "{flags2:#x}");
+        }
     }
 
     #[test]

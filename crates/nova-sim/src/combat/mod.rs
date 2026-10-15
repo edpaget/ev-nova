@@ -64,7 +64,12 @@
 //!    nearest ship it may hit along it, every tick, until its life is
 //!    over. Shots, beams and blasts reach a ship breaking up as they do
 //!    any other not destroyed; a hit on it is a [`Strike`] that downs
-//!    nothing, and its countdown goes on.
+//!    nothing, and its countdown goes on. The hits land one at a time,
+//!    each taken as [`damage::take`] says: a disable-only weapon's shot,
+//!    blast or beam never destroys ([`Shot::disable_only`],
+//!    [`Beam::disable_only`]), and a ship counts as disabled before a hit
+//!    when it is held disabled, not intact, or disabled by its armour as
+//!    the hits before it this tick left it (`_IsDisabled` @0x3a9ad).
 //!
 //!    7b. Each planet-type shot still in flight, past its `ProxSafety`,
 //!    that met a stellar still standing among those the session hands
@@ -106,9 +111,11 @@
 //! Each hit on a ship (a shot's, a beam's, a blast's, a shockwave's) is
 //! kept as a [`Strike`] by the ship whose it was, with the shield and
 //! armour it took; the last on a ship disabled or breaking up that tick
-//! says so ([`Downed`]), and a shockwave's provokes nothing
-//! ([`Strike::provokes`]). The session takes them ([`Combat::take_strikes`]) for
-//! the player's crimes and the NPCs' answers.
+//! says so ([`Downed`]); only a shot's or beam's is direct, which the hit
+//! ship may answer ([`Strike::direct`]), and intended when it is on the
+//! ship it was meant for ([`Strike::intended`]). The session takes them
+//! ([`Combat::take_strikes`]) for the player's crimes and the NPCs'
+//! answers.
 //!
 //! Each step is reported as a [`CombatEvent`] for the view to show, and
 //! each unimplemented weapon feature once as a
@@ -246,12 +253,25 @@ pub struct Strike {
     /// How it left the ship, for the last hit on a ship whose condition
     /// changed that tick; none otherwise.
     pub downed: Option<Downed>,
-    /// Whether it was an attack of `by`'s, which the ship hit may answer:
-    /// the original's `_DamageShip` arg +0x20. A shot, beam, blast or
-    /// boarding is; a death shockwave is not ([`shockwave`]), so it raises
-    /// no grudge, uncloaks no ship and provokes no AI (the block @0x3b44d
-    /// skips), though the player is still convicted of what it does.
-    pub provokes: bool,
+    /// Whether it was a direct hit, which the ship hit may answer: the
+    /// original's `_DamageShip` arg +0x20 ("real"). A shot's or beam's hit
+    /// is (`_HandleShipHit` @0x36c43, `_HandleBeams` @0x314be), and a
+    /// boarding; a blast's, whether it went off on a hit or as its shot
+    /// expired (@0x36e80, @0x360cb), and a death shockwave's
+    /// ([`shockwave`]) are not. So only a direct hit raises a grudge,
+    /// cloaks or uncloaks its ship and provokes an AI (the reaction block
+    /// @0x3b44d and the decloak @0x3bf1f skip the rest), though the player
+    /// is convicted of what any hit does (@0x3ad4f-0x3ae53).
+    pub direct: bool,
+    /// Whether the ship hit is the one it was meant for: `_DamageShip`'s
+    /// arg +0x24. A shot's direct hit is on the ship its damage is aimed
+    /// at ([`Shot::aimed_at`], shot +0x2a, @0x36bc5-0x36c37); a beam's on
+    /// the ship it was fired at ([`Beam::aimed_at`], beam +0x18), or, for
+    /// one fired at nothing, its firer's target at the hit (+0x70,
+    /// @0x31463-0x315b4); a boarding always is. No blast or shockwave is.
+    /// Only an intended strike by the player calls the Good Samaritans
+    /// (@0x3bed2, see [`answer`](crate::ai::react::answer)).
+    pub intended: bool,
 }
 
 /// A fighter launched from a bay this tick, for the session to put in
@@ -370,6 +390,21 @@ impl Default for Rules<'static> {
     }
 }
 
+/// A hit that landed on a ship in step 7, before it is taken.
+#[derive(Clone, Copy, Debug)]
+struct Landed {
+    /// The ship hit.
+    ship: ShipRef,
+    /// The ship whose shot, blast or beam it was.
+    by: ShipRef,
+    /// What it does.
+    hit: Hit,
+    /// Whether it was a shot's or beam's own hit ([`Strike::direct`]).
+    direct: bool,
+    /// Whether it is on the ship it was meant for ([`Strike::intended`]).
+    intended: bool,
+}
+
 /// The share of a shot's mass and energy damage that counts as aimed at
 /// its ship (0.5 @0xdd128, `_CalculateTargetedDamage`).
 pub const AIMED_DAMAGE_SHARE: f64 = 0.5;
@@ -449,7 +484,14 @@ impl Combat {
         self.intercept(&was, &mut gone, rules.defence, govts);
         self.hold_on_missiles(&mut gone);
         let first_strike = self.strikes.len();
-        self.resolve(fighters, &sides, &was, &gone, arsenal, chance);
+        self.resolve(
+            fighters,
+            &sides,
+            (&was, &gone),
+            arsenal,
+            rules.disable,
+            chance,
+        );
         self.strike_stellars(stellars, &from);
         for fighter in fighters.iter_mut() {
             let downed = self.update_condition(fighter, rules.disable);
@@ -471,8 +513,8 @@ impl Combat {
     /// order they were destroyed ([`shockwave`]). It reaches every ship
     /// not destroyed, breaking up or not, within the wreck's
     /// [`HullSpec::death_size`] on each axis, the wreck spared; each takes
-    /// [`shockwave::hit`] as a [`Strike`] by the wreck that provokes
-    /// nothing, and is pushed as [`shockwave::shove`] says, reported as a
+    /// [`shockwave::hit`] as a [`Strike`] by the wreck, neither direct nor
+    /// intended, and is pushed as [`shockwave::shove`] says, reported as a
     /// [`Shove`]. Then each intact or disabled ship hit settles its
     /// condition as step 8 does, its strike marked when it is newly
     /// disabled; a breaking-up one is not counted down again.
@@ -541,7 +583,8 @@ impl Combat {
                     by: wreck,
                     damage: before - taken(fighter.reserves),
                     downed,
-                    provokes: false,
+                    direct: false,
+                    intended: false,
                 });
             }
         }
@@ -633,6 +676,7 @@ impl Combat {
             };
             let beam = Beam {
                 ties,
+                aimed_at,
                 ..Beam::launch(launch.weapon, ship, fleet, from, launch.heading, aiming)
             };
             self.beams.push(beam);
@@ -793,18 +837,18 @@ impl Combat {
 
     /// Step 7: hits, blasts, expiries and sub-munitions, the shots having
     /// flown from `was`, those `gone` taken out first; each sub-munition's
-    /// weapon is read from `arsenal`, its spread drawn on `chance`.
+    /// weapon is read from `arsenal`, its spread drawn on `chance`; `rule`
+    /// says when a ship is disabled.
     fn resolve(
         &mut self,
         fighters: &mut [Fighter],
         sides: &Sides,
-        was: &[Vec2],
-        gone: &[bool],
+        (was, gone): (&[Vec2], &[bool]),
         arsenal: &Arsenal,
+        rule: &dyn DisableRule,
         chance: &mut dyn Chance,
     ) {
-        // Each ship hit, by whom, and the hit.
-        let mut hits: Vec<(ShipRef, ShipRef, Hit)> = Vec::new();
+        let mut hits: Vec<Landed> = Vec::new();
         let mut kept = Vec::with_capacity(self.shots.len());
         let mut released: Vec<(Shot, Option<ShipRef>)> = Vec::new();
         let flown = self.shots.drain(..).zip(was).zip(gone);
@@ -812,8 +856,18 @@ impl Combat {
             if gone {
                 continue;
             }
+            let hit = Hit {
+                cant_kill: shot.disable_only,
+                ..Hit::of(&shot.weapon)
+            };
             let (blast, subs) = if let Some((ship, at)) = shot.hit(from, sides) {
-                hits.push((ship, shot.firer, Hit::of(&shot.weapon)));
+                hits.push(Landed {
+                    ship,
+                    by: shot.firer,
+                    hit,
+                    direct: true,
+                    intended: shot.aimed_at == Some(ship),
+                });
                 shot.position = at;
                 (Some(shot.blast(Some(ship))), Some(Some(ship)))
             } else if shot.expired() {
@@ -831,11 +885,13 @@ impl Combat {
                     });
                 }
                 let reached = reached(&blast, sides.targets);
-                hits.extend(
-                    reached
-                        .into_iter()
-                        .map(|ship| (ship, shot.firer, Hit::of(&shot.weapon))),
-                );
+                hits.extend(reached.into_iter().map(|ship| Landed {
+                    ship,
+                    by: shot.firer,
+                    hit,
+                    direct: false,
+                    intended: false,
+                }));
             }
             if let Some(target) = subs {
                 released.push((shot, target));
@@ -847,7 +903,22 @@ impl Combat {
         }
         for beam in &mut self.beams {
             if let Some((ship, at)) = beam.hit(sides) {
-                hits.push((ship, beam.firer, Hit::of(&beam.weapon)));
+                let meant = beam.aimed_at.or_else(|| {
+                    fighters
+                        .iter()
+                        .find(|fighter| fighter.ship == beam.firer)
+                        .and_then(|firer| firer.target)
+                });
+                hits.push(Landed {
+                    ship,
+                    by: beam.firer,
+                    hit: Hit {
+                        cant_kill: beam.disable_only,
+                        ..Hit::of(&beam.weapon)
+                    },
+                    direct: true,
+                    intended: meant == Some(ship),
+                });
                 if let Some(explosion) = beam.weapon.explosion {
                     self.events.push(CombatEvent::Exploded { at, explosion });
                 }
@@ -855,23 +926,40 @@ impl Combat {
             beam.age();
         }
         self.beams.retain(|beam| !beam.expired());
+        self.land(fighters, hits, rule);
+    }
+
+    /// Takes each of `hits` in turn off the ship it landed on among
+    /// `fighters`, as `rule` says when a ship is disabled, keeping each as
+    /// a [`Strike`] (see the module docs' step 7).
+    fn land(&mut self, fighters: &mut [Fighter], hits: Vec<Landed>, rule: &dyn DisableRule) {
         // A shot passes through the escape pod and every class after it
         // (`_ShotCanHitShip` @0x447b3-0x447d9), and a beam through the pod
         // itself (@0x30dd2); a blast still reaches it, or a beam a later
         // class, and `_DamageShip` then does nothing to it ([`immune`]).
-        for (ship, by, hit) in hits {
+        for landed in hits {
             let fighter = fighters
                 .iter_mut()
-                .find(|fighter| fighter.ship == ship && !immune(fighter.ship_type));
+                .find(|fighter| fighter.ship == landed.ship && !immune(fighter.ship_type));
             if let Some(fighter) = fighter {
                 let before = taken(fighter.reserves);
-                damage::apply(fighter.reserves, hit);
+                let was_disabled = fighter.held_disabled
+                    || *fighter.condition != Condition::Intact
+                    || damage::disabled(fighter.reserves.armor, &fighter.hull, rule);
+                damage::take(
+                    fighter.reserves,
+                    landed.hit,
+                    &fighter.hull,
+                    rule,
+                    was_disabled,
+                );
                 self.strikes.push(Strike {
-                    ship,
-                    by,
+                    ship: landed.ship,
+                    by: landed.by,
                     damage: before - taken(fighter.reserves),
                     downed: None,
-                    provokes: true,
+                    direct: landed.direct,
+                    intended: landed.intended,
                 });
             }
         }
@@ -2036,7 +2124,8 @@ mod tests {
                 by: WRECK,
                 damage: 32.0,
                 downed: None,
-                provokes: false,
+                direct: false,
+                intended: false,
             }]
         );
     }
@@ -2123,14 +2212,16 @@ mod tests {
                     by: WRECK,
                     damage: 32.0,
                     downed: None,
-                    provokes: false,
+                    direct: false,
+                    intended: false,
                 },
                 Strike {
                     ship: B,
                     by: WRECK,
                     damage: 17.0,
                     downed: Some(Downed::Disabled),
-                    provokes: false,
+                    direct: false,
+                    intended: false,
                 },
             ]
         );
@@ -2652,6 +2743,201 @@ mod tests {
             assert_eq!(exploded, blasted, "{flags:#x}");
             assert_eq!(ships[1].reserves.shield.now < 10.0, blasted, "{flags:#x}");
         }
+    }
+
+    /// `Flags2` 0x1000: a disable-only weapon, as stock 142, 201, 233 and
+    /// 234.
+    const DISABLE_ONLY: u16 = 0x1000;
+
+    /// Whether `events` hold a breakup or destruction of any of `ships`.
+    fn broke_up(events: &[CombatEvent], ships: &[ShipRef]) -> bool {
+        events.iter().any(|event| match *event {
+            CombatEvent::BreakingUp { ship, .. } | CombatEvent::Destroyed { ship, .. } => {
+                ships.contains(&ship)
+            }
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn a_disable_only_shot_its_blast_and_a_beam_leave_their_victims_at_1_armour_never_breaking_up()
+    {
+        let shell = WeaponRecord {
+            blast_radius: 30,
+            mass_dmg: 50,
+            energy_dmg: 50,
+            flags2: DISABLE_ONLY,
+            ..blaster()
+        };
+        let flak = WeaponRecord {
+            count: 3,
+            speed: 1000,
+            blast_radius: 40,
+            mass_dmg: 50,
+            energy_dmg: 50,
+            flags: 0x8000,
+            flags2: DISABLE_ONLY,
+            ..blaster()
+        };
+        let ion = WeaponRecord {
+            mass_dmg: 50,
+            energy_dmg: 50,
+            flags2: DISABLE_ONLY,
+            ..laser()
+        };
+        let cases = [
+            (
+                "a direct shot and its blast",
+                shell,
+                vec![(2, 100.0, 0.0), (3, 100.0, 25.0)],
+            ),
+            ("an expiry detonation", flak, vec![(3, 30.0, 35.0)]),
+            ("a beam", ion, vec![(2, 100.0, 0.0)]),
+        ];
+        for (case, record, victims) in cases {
+            let mut combat = Combat::default();
+            let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
+            ships.extend(victims.iter().map(|&(id, x, y)| Ship::at(id, x, y)));
+            let mut events = Vec::new();
+            for _ in 0..40 {
+                tick(&mut combat, &mut ships, &NovaDisable);
+                events.extend(combat.take_events());
+            }
+            for victim in &ships[1..] {
+                assert_eq!(victim.reserves.armor.now, damage::SPARED_ARMOR, "{case}");
+                assert_eq!(victim.condition, Condition::Disabled, "{case}");
+            }
+            let ids: Vec<ShipRef> = victims
+                .iter()
+                .map(|&(id, ..)| ShipRef::Npc(NpcId(id)))
+                .collect();
+            assert!(!broke_up(&events, &ids), "{case}: {events:?}");
+        }
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(WeaponRecord { flags2: 0, ..shell }),
+            Ship::at(2, 100.0, 0.0),
+            Ship::at(3, 100.0, 25.0),
+        ];
+        let mut events = Vec::new();
+        for _ in 0..40 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            events.extend(combat.take_events());
+        }
+        assert!(broke_up(&events, &[B]), "without the flag it kills");
+        assert!(broke_up(&events, &[C]), "and its blast too");
+    }
+
+    #[test]
+    fn a_blast_strike_is_neither_direct_nor_intended_and_a_direct_hit_is_direct() {
+        let shell = WeaponRecord {
+            blast_radius: 30,
+            ..blaster()
+        };
+        let struck = |target: ShipRef| {
+            let mut combat = Combat::default();
+            let mut ships = [
+                Ship::at(1, 0.0, 0.0).armed(shell).targeting(target),
+                Ship::at(2, 100.0, 0.0),
+                Ship::at(3, 100.0, 25.0),
+                Ship::at(4, 0.0, 500.0),
+            ];
+            let mut strikes = Vec::new();
+            for _ in 0..8 {
+                tick(&mut combat, &mut ships, &NovaDisable);
+                ships[0].trigger = QUIET;
+                strikes.extend(combat.take_strikes());
+            }
+            strikes
+                .iter()
+                .map(|strike| (strike.ship, strike.direct, strike.intended))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            struck(B),
+            [(B, true, true), (C, false, false)],
+            "the aimed-at ship hit, and a bystander blasted"
+        );
+        let far = ShipRef::Npc(NpcId(4));
+        assert_eq!(
+            struck(far),
+            [(B, true, false), (C, false, false)],
+            "a ship crossing the shot's path is hit directly, but not intended"
+        );
+        assert_eq!(
+            struck(C),
+            [(B, true, false), (C, false, false)],
+            "blasted, so not intended"
+        );
+    }
+
+    #[test]
+    fn an_expiry_detonation_strike_is_neither_direct_nor_intended() {
+        let flak = WeaponRecord {
+            count: 3,
+            speed: 1000,
+            blast_radius: 40,
+            flags: 0x8000,
+            ..blaster()
+        };
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(flak).targeting(C),
+            Ship::at(3, 30.0, 35.0),
+        ];
+        let mut strikes = Vec::new();
+        for _ in 0..3 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            strikes.extend(combat.take_strikes());
+        }
+        let flags: Vec<_> = strikes
+            .iter()
+            .map(|strike| (strike.ship, strike.direct, strike.intended))
+            .collect();
+        assert_eq!(flags, [(C, false, false)]);
+    }
+
+    #[test]
+    fn a_beam_hit_is_intended_only_on_its_firers_target() {
+        let far = ShipRef::Npc(NpcId(4));
+        // Each tick's firer target, the beam fired on the first.
+        let intended = |targets: [Option<ShipRef>; 3]| {
+            let mut combat = Combat::default();
+            let mut ships = [
+                Ship::at(1, 0.0, 0.0).armed(laser()),
+                Ship::at(2, 100.0, 0.0),
+                Ship::at(4, 0.0, 500.0),
+            ];
+            ships[1].reserves.shield = Gauge::full(100.0);
+            let mut seen = Vec::new();
+            for target in targets {
+                ships[0].target = target;
+                tick(&mut combat, &mut ships, &NovaDisable);
+                ships[0].trigger = QUIET;
+                let strikes = combat.take_strikes();
+                assert_eq!(strikes.len(), 1, "{strikes:?}");
+                assert_eq!((strikes[0].ship, strikes[0].direct), (B, true));
+                seen.push(strikes[0].intended);
+            }
+            seen
+        };
+        assert_eq!(intended([Some(B); 3]), [true; 3], "on its target");
+        assert_eq!(
+            intended([Some(far); 3]),
+            [false; 3],
+            "across another's path"
+        );
+        assert_eq!(
+            intended([Some(far), Some(B), Some(B)]),
+            [false; 3],
+            "the beam's own target is the one it was fired at (beam +0x18)"
+        );
+        assert_eq!(
+            intended([None, Some(B), None]),
+            [false, true, false],
+            "a beam fired at nothing reads its firer's target at each hit"
+        );
     }
 
     #[test]
@@ -3517,7 +3803,7 @@ mod tests {
     fn a_shot_that_hits_strikes_by_its_firer_with_the_shield_and_armour_it_took() {
         let mut combat = Combat::default();
         let mut ships = [
-            Ship::at(1, 0.0, 0.0).armed(blaster()),
+            Ship::at(1, 0.0, 0.0).armed(blaster()).targeting(B),
             Ship::at(2, 100.0, 0.0),
         ];
         let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
@@ -3528,7 +3814,8 @@ mod tests {
                 by: A,
                 damage: 14.0,
                 downed: None,
-                provokes: true,
+                direct: true,
+                intended: true,
             }],
             "10 off the shield, then 4 off the armour"
         );
@@ -3541,7 +3828,8 @@ mod tests {
                 by: A,
                 damage: 5.0,
                 downed: None,
-                provokes: true,
+                direct: true,
+                intended: true,
             }],
             "the shield down to its floor, a tenth below none, then 4 off the armour"
         );
@@ -3552,7 +3840,7 @@ mod tests {
         let mut combat = Combat::default();
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield = Gauge::full(100.0);
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser()), target];
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser()).targeting(B), target];
         let mut struck = Vec::new();
         for _ in 0..5 {
             tick(&mut combat, &mut ships, &NovaDisable);
@@ -3563,7 +3851,8 @@ mod tests {
             by: A,
             damage: 5.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
         }];
         assert_eq!(struck, [hit.clone(), hit.clone(), hit, vec![], vec![]]);
     }
@@ -3588,15 +3877,21 @@ mod tests {
             }),
             1,
         )]);
+        ships[0].target = Some(B);
         let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
-        let of = |ship| Strike {
+        let of = |ship, direct| Strike {
             ship,
             by: A,
             damage: 14.0,
             downed: None,
-            provokes: true,
+            direct,
+            intended: direct,
         };
-        assert_eq!(strikes, [of(B), of(C)], "the hit, then the blast");
+        assert_eq!(
+            strikes,
+            [of(B, true), of(C, false)],
+            "the hit, then the blast"
+        );
     }
 
     #[test]
@@ -3626,8 +3921,10 @@ mod tests {
                 by: A,
                 damage: 3.0,
                 downed: None,
-                provokes: true,
-            }]
+                direct: true,
+                intended: false,
+            }],
+            "released at no target"
         );
     }
 
@@ -3704,14 +4001,16 @@ mod tests {
                     by: A,
                     damage: 5.0,
                     downed: None,
-                    provokes: true,
+                    direct: true,
+                    intended: false,
                 },
                 Strike {
                     ship: B,
                     by: C,
                     damage: 4.0,
                     downed: Some(Downed::Disabled),
-                    provokes: true,
+                    direct: true,
+                    intended: false,
                 }
             ],
             "12 armour less 8 is below a third of 30"

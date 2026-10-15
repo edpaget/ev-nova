@@ -14,12 +14,11 @@
 //!   ([`DAMAGE_PER_TON`] @0xdd598, [`DAMAGE_BASE`] @0xdd5a0, in doubles,
 //!   `cvttsd2si` 0x2d96f), the same to shields and armour, with no
 //!   falloff. It is taken as any hit that does not pass shields
-//!   ([`damage::apply`](super::damage::apply), `_DamageShip`'s plain
-//!   path @0x3ac00).
+//!   (`_DamageShip`'s plain path @0x3ac00).
 //! - **It never destroys** (arg +0x28, @0x3ac3a-0x3ac64) **and never
-//!   newly disables** (arg +0x2c, @0x3acc2-0x3ad4a): it is a spared hit
-//!   ([`damage::apply_spared`], whose module docs give the floors), a
-//!   ship in any condition but intact counting as disabled before it.
+//!   newly disables** (arg +0x2c, @0x3acc2-0x3ad4a): a [`Hit`] with both
+//!   floors ([`damage::take`], whose module docs give them), a ship in
+//!   any condition but intact counting as disabled before it.
 //! - **A dying ship** was disabled before and has no armour above none,
 //!   so it takes the hit with neither floor.
 //! - **The push** ([`shove`], @0x3aa6e-0x3ab7f): a ship whose jump is not
@@ -34,7 +33,7 @@
 //!   `ship-handling-fidelity/phase-6-afterburner`.
 //!
 //! The hit is no attack of the wreck's (arg +0x20 is 0): nothing answers
-//! it (see [`Strike::provokes`](super::Strike::provokes)). It makes no
+//! it (see [`Strike::direct`](super::Strike::direct)). It makes no
 //! sound of its own.
 
 use super::aim;
@@ -81,8 +80,10 @@ pub fn hit(
         mass: damage,
         energy: damage,
         passes_shields: false,
+        cant_kill: true,
+        cant_disable: true,
     };
-    damage::apply_spared(reserves, hit, hull, rule, condition != Condition::Intact);
+    damage::take(reserves, hit, hull, rule, condition != Condition::Intact);
 }
 
 /// The velocity a shockwave centred on `centre` leaves a ship of `hull`
