@@ -9551,4 +9551,174 @@ pub(super) mod tests {
         assert_eq!(fate(&screen), nova_sim::PlayerFate::Fading);
         assert_eq!(screen.take_warnings().len(), 1);
     }
+
+    // The picture variants, as the router lays them out.
+
+    use nova_data::graphics::PICT;
+    use nova_data::graphics::fixture::{DirectBits, PictBuilder};
+    use nova_data::records::person::Person;
+    use nova_view::ui::Dialog;
+
+    /// A `dësc` `Graphic` above 127, so the picture variants show.
+    const SHOWN_GRAPHIC: i16 = 5008;
+
+    /// The picture variant of [`offer_template`], told apart by its size:
+    /// 400 x 250, its graphic (8) at (290, 10).
+    fn picture_offer_template() -> DialogTemplate {
+        let mut template = offer_template();
+        template.bounds = Bounds::at(Point::new(0.0, 0.0), 400.0, 250.0);
+        template.items.resize(8, template.items[3].clone());
+        template.items[7].bounds = Bounds::at(Point::new(290.0, 10.0), 100.0, 100.0);
+        template
+    }
+
+    /// The picture variant of [`bar_template`], told apart by its size:
+    /// 266 x 306, its picture (8) above the text.
+    fn picture_bar_template() -> DialogTemplate {
+        let mut template = bar_template();
+        template.bounds = Bounds::at(Point::new(0.0, 0.0), 266.0, 306.0);
+        template.items[7].bounds = Bounds::at(Point::new(16.0, 120.0), 230.0, 100.0);
+        template
+    }
+
+    /// [`PastTheHoldsDialogs`], with the picture variants of the offer
+    /// (1020) and the bar (1021) too.
+    struct PictureDialogs;
+
+    impl DialogResources for PictureDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            match id {
+                PICTURE_OFFER_DIALOG => Ok(picture_offer_template()),
+                PICTURE_BAR_DIALOG => Ok(picture_bar_template()),
+                _ => PastTheHoldsDialogs.dialog_template(id),
+            }
+        }
+    }
+
+    /// A 2 x 2 `PICT` of one colour.
+    fn small_pict() -> Vec<u8> {
+        let frame = [0, 0, 2, 2];
+        PictBuilder::new(frame)
+            .direct_bits(&DirectBits::rgb888(frame, &[[90, 90, 90]; 4]))
+            .end()
+            .build()
+    }
+
+    /// The first `chär` flies ship 128 in system 128, whose one Person
+    /// slot, at 100 %, holds `përs` 128, independent, in ship 129, of
+    /// `Flags` 0x0040, so hailing it offers its `LinkMission` 128 (offered
+    /// from a ship on every visit) in place of the comm dialog; the
+    /// mission's offer text, `dësc` 4000, has `Graphic` [`SHOWN_GRAPHIC`].
+    fn person_offer_data() -> Rc<GameData> {
+        let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
+            for (i, value) in values.iter().enumerate() {
+                bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
+            }
+        };
+        let ship = |crew| {
+            let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
+            put(&mut bytes, 0x00, &[0, 0, 300, 300, 10, 300, 0, 100]);
+            put(&mut bytes, 0x12, &[-1; 4]);
+            put(&mut bytes, 0x42, &[1, crew]);
+            put(&mut bytes, 0x4E, &[-1; 4]);
+            put(&mut bytes, 0x370, &[-1; 4]);
+            put(&mut bytes, 0x6CE, &[-1; 4]);
+            bytes
+        };
+        let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
+        put(&mut anim, 0x00, &[1000, 0, 1]);
+        put(&mut anim, 0x34, &[4]);
+        let sheet = (0..4)
+            .fold(RledBuilder::new(1, 1), |sheet, _| {
+                sheet.frame(|f| f.line().pixels(&[0x7C00]))
+            })
+            .build();
+        let mut character = vec![0; Character::SIZE.expect("fixed")];
+        put(&mut character, 0x04, &[128, 128, -1, -1, -1]);
+        put(&mut character, 0x0E, &[-1; 4]);
+        let mut system = vec![0; System::SIZE.expect("fixed")];
+        put(&mut system, 0x04, &[-1; 32]);
+        put(&mut system, 0x44, &[-1; 8]);
+        put(&mut system, 0x64, &[0, -1]);
+        put(&mut system, 0x6E, &[128, -1, -1, -1, -1, -1, -1, -1]);
+        put(&mut system, 0x7E, &[100]);
+        let mut person = vec![0; Person::SIZE.expect("fixed")];
+        put(&mut person, 0x00, &[-2, -1, 3, 2, 0, 129]);
+        put(&mut person, 0x0C, &[-1; 4]);
+        put(&mut person, 0x2A, &[-1, -1, -1, 128]);
+        person[0x32..0x34].copy_from_slice(&0x0040_u16.to_be_bytes());
+        let mut mission = vec![0; Mission::SIZE.expect("fixed")];
+        put(&mut mission, 0x04, &[2]);
+        put(&mut mission, 0x0A, &[100]);
+        put(&mut mission, 0x34, &[-1]);
+        put(&mut mission, 0x58, &[-1]);
+        let fork = ForkBuilder::new()
+            .resource(Ship::TYPE, 128, Some(b"First"), &ship(10))
+            .resource(Ship::TYPE, 129, Some(b"Hauler"), &ship(3))
+            .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
+            .resource(ShipAnim::TYPE, 128, None, &anim)
+            .resource(ShipAnim::TYPE, 129, None, &anim)
+            .resource(RLED, 1000, None, &sheet)
+            .resource(System::TYPE, 128, Some(b"Alpha"), &system)
+            .resource(Person::TYPE, 128, Some(b"Merchant"), &person)
+            .resource(Mission::TYPE, 128, Some(b"Ride"), &mission)
+            .resource(
+                Desc::TYPE,
+                128 + 3872,
+                Some(b"Offer"),
+                &pictured_desc_of("Ride along.", SHOWN_GRAPHIC),
+            );
+        loaded(&fork)
+    }
+
+    #[test]
+    fn a_persons_offer_with_a_graphic_above_127_opens_over_flight_in_1020() {
+        let mut screen = AppScreen::new(person_offer_data())
+            .with_dialogs(Rc::new(PictureDialogs), Rc::new(MonoMetrics))
+            .with_behaviour(Rc::new(Idle));
+        fly(&mut screen);
+        hail(&mut screen);
+        assert_eq!(screen.showing(), Showing::Offer, "over the paused flight");
+        let dialog = screen.offer().expect("open");
+        assert_eq!(dialog.prompt().mission, MissionId(128));
+        assert_eq!(dialog.prompt().graphic, Some(SHOWN_GRAPHIC));
+        assert_eq!(dialog.problem(), None);
+        assert_eq!(
+            dialog.dialog().map(Dialog::bounds),
+            Some(picture_offer_template().bounds),
+            "laid out by DLOG 1020"
+        );
+        assert!(
+            screen
+                .take_sounds()
+                .contains(&Sound::Sim(SimSound::PersonOfferHailed)),
+            "the hail's sound (@0x6223d)"
+        );
+    }
+
+    #[test]
+    fn a_bar_desc_whose_graphic_is_above_127_and_whose_pict_exists_opens_in_1021() {
+        let fork = game_data_fork(true, true, true, 100, b"", b"", None)
+            .resource(
+                Desc::TYPE,
+                10_000,
+                None,
+                &pictured_desc_of("A smoky bar.", SHOWN_GRAPHIC),
+            )
+            .resource(PICT, SHOWN_GRAPHIC, None, &small_pict());
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(loaded(&fork))
+            .with_dialogs(Rc::new(PictureDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 10);
+        let bar = spaceport(&screen).open_bar().expect("in the bar");
+        assert_eq!(bar.problem(), None);
+        assert_eq!(
+            bar.dialog().map(Dialog::bounds),
+            Some(picture_bar_template().bounds),
+            "laid out by DLOG 1021"
+        );
+    }
 }
