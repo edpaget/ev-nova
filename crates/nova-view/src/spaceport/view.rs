@@ -104,14 +104,14 @@ use nova_sim::{
 };
 
 use super::bar::MISSION_INFO_KEY;
-use super::bar::{BarScreen, Hiring};
+use super::bar::{BarScreen, BarTemplates, Hiring};
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
     RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, service_item,
 };
 use super::missions::{MissionComputerScreen, MissionInfoScreen};
-use super::offer::{OfferChoice, OfferDialog, VenueOffers};
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
 use super::shipyard::{InfoTemplates, ShipOrder, ShipyardCatalog, ShipyardScreen};
@@ -127,7 +127,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
-use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog};
+use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 #[cfg(doc)]
 use crate::ui::player_info::PLAYER_INFO_KEY;
@@ -285,7 +285,7 @@ impl std::fmt::Debug for Shipbuying {
 /// fleet has room.
 #[derive(Clone, Debug)]
 struct Barkeeping {
-    template: Result<DialogTemplate, String>,
+    templates: BarTemplates,
     /// The news dialog's template, or why there is none.
     news: Result<DialogTemplate, String>,
     hiring: Hiring,
@@ -302,12 +302,14 @@ struct Missioning {
     computer: Result<DialogTemplate, String>,
     /// The mission info screen's.
     info: Result<DialogTemplate, String>,
-    /// The offer dialog's, which every venue's offers show in.
-    offer: Result<DialogTemplate, String>,
+    /// The offer dialog's, both variants, which every venue's offers show
+    /// in.
+    offer: OfferTemplates,
     /// The spaceport's own offer, asked for once, as it is landed on.
     landing: VenueOffers,
-    /// The "Desc Dialog"'s, which the mission texts show in.
-    text: Result<DialogTemplate, String>,
+    /// The "Desc Dialog"'s, both variants, which the mission texts show
+    /// in.
+    text: DescTemplates,
     /// Whether Mission BBS has asked for the mission computer since this
     /// was last taken.
     requested: bool,
@@ -716,7 +718,8 @@ impl SpaceportView {
     }
 
     /// The spaceport with the stellar's bar, which the Bar opens laid out
-    /// by `template`, the bar dialog (or saying why there is none), its
+    /// by `templates`, the bar dialog's variants (or saying why there is
+    /// none), its
     /// text and the ships' pictures and descriptions read from `catalog`;
     /// its news is laid out by `news_template`, the news dialog, and its
     /// hire screen by `hire_template`, the "Shipyard" dialog, with its
@@ -726,7 +729,7 @@ impl SpaceportView {
     #[must_use]
     pub fn with_bar(
         self,
-        template: Result<DialogTemplate, String>,
+        templates: BarTemplates,
         news_template: Result<DialogTemplate, String>,
         hire_template: Result<DialogTemplate, String>,
         info_template: InfoTemplates,
@@ -735,7 +738,7 @@ impl SpaceportView {
     ) -> Self {
         Self {
             barkeeping: Some(Barkeeping {
-                template,
+                templates,
                 news: news_template,
                 hiring: Hiring {
                     template: hire_template,
@@ -839,17 +842,18 @@ impl SpaceportView {
     /// there is none); [`MISSION_INFO_KEY`] asks for the mission info
     /// screen, laid out by `info`; the spaceport, and the trade center,
     /// outfitter, shipyard and bar when given, offer missions in the offer
-    /// dialog laid out by `offer`, the spaceport asking for its offer at
-    /// once; and the mission texts show in "Desc Dialog", laid out by
-    /// `text` (and do not show without it). Without them, Mission BBS
+    /// dialog of each offer's variant laid out by `offer`, the spaceport
+    /// asking for its offer at once; and the mission texts show in "Desc
+    /// Dialog" of each text's variant, laid out by `text` (and do not show
+    /// without it). Without them, Mission BBS
     /// opens its placeholder and nothing offers missions.
     #[must_use]
     pub fn with_missions(
         self,
         computer: Result<DialogTemplate, String>,
         info: Result<DialogTemplate, String>,
-        offer: Result<DialogTemplate, String>,
-        text: Result<DialogTemplate, String>,
+        offer: OfferTemplates,
+        text: DescTemplates,
     ) -> Self {
         Self {
             missioning: Some(Missioning {
@@ -969,7 +973,7 @@ impl SpaceportView {
         let computer = match computer {
             Ok(computer) => computer,
             Err(refusal) => {
-                self.show_text(&refusal.message());
+                self.show_text(&refusal.message(), None);
                 return;
             }
         };
@@ -1054,7 +1058,7 @@ impl SpaceportView {
     /// it closes (`_ShowTextDialog` @0x5a752).
     pub fn show_mission_texts(&mut self, texts: Vec<MissionText>) {
         for text in texts {
-            self.show_text(&text.text);
+            self.show_text(&text.text, text.graphic);
         }
     }
 
@@ -1185,23 +1189,19 @@ impl SpaceportView {
         self.texts.front()
     }
 
-    /// Queues `text` to show in "Desc Dialog", when there is one.
-    fn show_text(&mut self, text: &str) {
-        let (
-            Ok(port),
-            Some(Missioning {
-                text: Ok(template), ..
-            }),
-        ) = (&self.port, &self.missioning)
-        else {
+    /// Queues `text` to show in "Desc Dialog", in the variant `graphic`
+    /// picks ([`DescTemplates::open`]), when there is one.
+    fn show_text(&mut self, text: &str, graphic: Option<i16>) {
+        let (Ok(port), Some(missioning)) = (&self.port, &self.missioning) else {
             return;
         };
-        self.texts.push_back(DescDialog::new(
-            template,
-            text,
-            port.style,
-            Rc::clone(&port.metrics.0),
-        ));
+        if let Ok(dialog) =
+            missioning
+                .text
+                .open(text, graphic, port.style, Rc::clone(&port.metrics.0))
+        {
+            self.texts.push_back(dialog);
+        }
     }
 
     /// The stellar landed on.
@@ -1283,10 +1283,7 @@ impl SpaceportView {
         let port = &*port;
         let metrics = Rc::clone(&port.metrics.0);
         if let (Some(barkeeping), Service::Bar) = (&mut self.barkeeping, service) {
-            let layout = barkeeping
-                .template
-                .clone()
-                .map(|template| (template, metrics));
+            let layout = Ok((barkeeping.templates.clone(), metrics));
             let mut bar = BarScreen::new(
                 layout,
                 self.stellar,
@@ -3258,7 +3255,7 @@ mod tests {
     fn drinking(room: bool) -> SpaceportView {
         let art: Rc<dyn ShipyardCatalog> = Rc::new(catalog());
         earth().with_bar(
-            Ok(bar_template()),
+            plain_bar(Ok(bar_template())),
             Ok(news_template()),
             Ok(shipyard_template()),
             no_info(),
@@ -3427,6 +3424,24 @@ mod tests {
         }
     }
 
+    /// The picture variants' shape, wider than [`text_template`]: 300 x
+    /// 120 at (0, 0), fixed, with Done (1), the picture (2) and the text
+    /// box (3).
+    fn picture_template() -> Template {
+        Template {
+            bounds: rect(0.0, 0.0, 300.0, 120.0),
+            ..text_template()
+        }
+    }
+
+    /// The bar's templates: `plain`, and no picture variant.
+    fn plain_bar(plain: Result<Template, String>) -> BarTemplates {
+        BarTemplates {
+            plain,
+            picture: Err("no DLOG 1021".to_owned()),
+        }
+    }
+
     /// "Desc Dialog"'s shape, smaller: 200 x 120 at (0, 0), fixed, with
     /// Done (1) and a 60 x 36 text box (3).
     fn text_template() -> Template {
@@ -3447,14 +3462,28 @@ mod tests {
     }
 
     /// Earth with its mission screens given, its offers laid out by the
-    /// text's shape.
+    /// text's shape, and both picture variants by [`picture_template`].
     fn missioned() -> SpaceportView {
         earth().with_missions(
             Ok(computer_template()),
             Ok(info_template()),
-            Ok(text_template()),
-            Ok(text_template()),
+            pictured_offers(),
+            pictured_texts(),
         )
+    }
+
+    fn pictured_offers() -> OfferTemplates {
+        OfferTemplates {
+            plain: Ok(text_template()),
+            picture: Ok(picture_template()),
+        }
+    }
+
+    fn pictured_texts() -> DescTemplates {
+        DescTemplates {
+            plain: Ok(text_template()),
+            picture: Ok(picture_template()),
+        }
     }
 
     fn offers() -> MissionComputer {
@@ -3637,8 +3666,14 @@ mod tests {
         let mut view = earth().with_missions(
             Ok(computer_template()),
             Err("no DLOG 1012".to_owned()),
-            Err("no DLOG 1016".to_owned()),
-            Err("no DLOG 3003".to_owned()),
+            OfferTemplates {
+                plain: Err("no DLOG 1016".to_owned()),
+                picture: Err("no DLOG 1020".to_owned()),
+            },
+            DescTemplates {
+                plain: Err("no DLOG 3003".to_owned()),
+                picture: Err("no DLOG 3004".to_owned()),
+            },
         );
         view.open_mission_computer(Err(ComputerRefusal::SlotsFull));
         assert!(view.mission_text().is_none());
@@ -3657,7 +3692,7 @@ mod tests {
     fn drinking_with_offers() -> SpaceportView {
         let art: Rc<dyn ShipyardCatalog> = Rc::new(catalog());
         missioned().with_bar(
-            Ok(bar_template()),
+            plain_bar(Ok(bar_template())),
             Ok(news_template()),
             Ok(shipyard_template()),
             no_info(),
@@ -3711,7 +3746,7 @@ mod tests {
                 Rc::clone(&ships),
             )
             .with_bar(
-                Ok(bar_template()),
+                plain_bar(Ok(bar_template())),
                 Ok(news_template()),
                 Ok(shipyard_template()),
                 no_info(),
@@ -3721,8 +3756,8 @@ mod tests {
             .with_missions(
                 Ok(computer_template()),
                 Ok(info_template()),
-                Ok(text_template()),
-                Ok(text_template()),
+                pictured_offers(),
+                pictured_texts(),
             )
     }
 
@@ -3904,6 +3939,66 @@ mod tests {
         view.rearm_offers(ms(500));
         view.tick(ms(500));
         assert_eq!(view.take_offer_request(), Some(BAR));
+    }
+
+    #[test]
+    fn a_pictured_offer_opens_in_the_picture_variant_at_the_bar_and_the_spaceport() {
+        let pictured = || OfferPrompt {
+            graphic: Some(5008),
+            ..offered()
+        };
+        let width = |view: &SpaceportView| {
+            view.offer_dialog()
+                .and_then(OfferDialog::dialog)
+                .map(|dialog| dialog.bounds().width())
+        };
+        let mut view = drinking_with_offers();
+        assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+        view.open_offer(pictured());
+        assert_eq!(
+            width(&view),
+            Some(300.0),
+            "the spaceport's, in 1020's shape"
+        );
+        view.input(&key(Key::Char('n')));
+        let _ = view.take_offer_choice();
+        click_item(&mut view, 10);
+        view.tick(ms(250));
+        assert_eq!(view.take_offer_request(), Some(BAR));
+        view.open_offer(pictured());
+        assert_eq!(width(&view), Some(300.0), "the bar's, in 1020's shape");
+        view.input(&key(Key::Char('n')));
+        let _ = view.take_offer_choice();
+        view.rearm_offers(ms(0));
+        view.tick(ms(1));
+        assert_eq!(view.take_offer_request(), Some(BAR));
+        view.open_offer(offered());
+        assert_eq!(width(&view), Some(200.0), "no graphic, 1016's shape");
+    }
+
+    #[test]
+    fn a_mission_text_with_a_graphic_shows_in_the_picture_variant() {
+        let mut view = missioned();
+        let text = |graphic| MissionText {
+            kind: MissionTextKind::Brief,
+            mission: MissionId(130),
+            text: "Off you go.".to_owned(),
+            graphic,
+        };
+        view.show_mission_texts(vec![text(Some(5008)), text(Some(127)), text(None)]);
+        let mut shown = Vec::new();
+        while let Some(dialog) = view.mission_text() {
+            shown.push((dialog.dialog().bounds().width(), dialog.picture()));
+            done(&mut view);
+        }
+        assert_eq!(shown, [(300.0, Some(5008)), (200.0, None), (200.0, None)]);
+        let mut view = missioned();
+        view.open_mission_computer(Err(ComputerRefusal::SlotsFull));
+        assert_eq!(
+            view.mission_text().map(DescDialog::picture),
+            Some(None),
+            "a refusal is no dësc"
+        );
     }
 
     #[test]

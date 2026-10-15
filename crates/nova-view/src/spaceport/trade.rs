@@ -52,7 +52,7 @@ use std::time::Duration;
 use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order};
 
 use super::layout::DONE_LABEL;
-use super::offer::{OfferChoice, OfferDialog, VenueOffers};
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -223,14 +223,14 @@ impl TradeScreen {
         screen
     }
 
-    /// The trade center with mission offers, each shown in the offer dialog laid
-    /// out by `template` (or saying why there is none): it asks for the
+    /// The trade center with mission offers, each shown in the offer dialog of
+    /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed
     /// ([`TradeScreen::rearm`]), as the original's does ([`TRADE_CENTER`](nova_sim::mission::screens::TRADE_CENTER)).
     #[must_use]
-    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+    pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(template)),
+            offering: Some(VenueOffers::asking(templates)),
             ..self
         }
     }
@@ -1707,7 +1707,7 @@ mod tests {
     // The trade center's mission offers.
 
     use crate::spaceport::offer::OfferChoice;
-    use crate::spaceport::offer::fixture::{prompt, template as offer_template};
+    use crate::spaceport::offer::fixture::{prompt, templates as offer_templates};
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -1715,7 +1715,7 @@ mod tests {
 
     /// The trade center, its offers given.
     fn offering() -> TradeScreen {
-        screen().with_offers(Ok(offer_template()))
+        screen().with_offers(offer_templates())
     }
 
     #[test]

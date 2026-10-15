@@ -148,7 +148,7 @@ use super::credits::{self, comma_tons_text, credits_text, draw_amount_rows};
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
-use super::offer::{OfferChoice, OfferDialog, VenueOffers};
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
 use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -557,14 +557,14 @@ impl OutfitterScreen {
         screen
     }
 
-    /// The outfitter with mission offers, each shown in the offer dialog laid
-    /// out by `template` (or saying why there is none): it asks for the
+    /// The outfitter with mission offers, each shown in the offer dialog of
+    /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`OutfitterScreen::rearm`]), as
     /// the original's does ([`OUTFITTER`](nova_sim::mission::screens::OUTFITTER)).
     #[must_use]
-    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+    pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(template)),
+            offering: Some(VenueOffers::asking(templates)),
             ..self
         }
     }
@@ -3706,7 +3706,7 @@ mod tests {
     // The outfitter's mission offers.
 
     use crate::spaceport::offer::OfferChoice;
-    use crate::spaceport::offer::fixture::{prompt, template as offer_template};
+    use crate::spaceport::offer::fixture::{prompt, templates as offer_templates};
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -3714,7 +3714,7 @@ mod tests {
 
     /// The outfitter, its offers given.
     fn offering() -> OutfitterScreen {
-        counting_screen().with_offers(Ok(offer_template()))
+        counting_screen().with_offers(offer_templates())
     }
 
     #[test]

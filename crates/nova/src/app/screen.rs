@@ -245,11 +245,13 @@ use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
-use nova_view::spaceport::bar::BAR_DIALOG;
+use nova_view::spaceport::bar::{BAR_DIALOG, BarTemplates, PICTURE_BAR_DIALOG};
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG, MissionInfoScreen};
 use nova_view::spaceport::news::NEWS_DIALOG;
-use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice, OfferDialog};
+use nova_view::spaceport::offer::{
+    OFFER_DIALOG, OfferChoice, OfferDialog, OfferTemplates, PICTURE_OFFER_DIALOG,
+};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{
     InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
@@ -258,8 +260,9 @@ use nova_view::spaceport::trade::TRADE_DIALOG;
 use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog};
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
+use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
-use nova_view::ui::desc::DESC_DIALOG;
+use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
 use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog};
 use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG};
@@ -1175,7 +1178,10 @@ impl AppScreen {
         if self.missions.is_none() {
             let dialogs = self.dialogs.as_ref()?;
             self.missions = Some(FlightMissionDialogs::new(
-                dialogs.resources.dialog_template(DESC_DIALOG),
+                DescTemplates {
+                    plain: dialogs.resources.dialog_template(DESC_DIALOG),
+                    picture: dialogs.resources.dialog_template(PICTURE_DESC_DIALOG),
+                },
                 dialogs.resources.dialog_template(INFO_DIALOG),
                 Rc::clone(&dialogs.metrics),
                 self.data.button_style(),
@@ -1265,14 +1271,17 @@ impl AppScreen {
 
     /// Opens the offer dialog on `prompt`, a person's mission offered on
     /// its hail or boarding, over flight, which pauses: the interface
-    /// file's, or, without it or the metrics to lay it out, the dialog's
-    /// own note that Return accepts it.
+    /// file's, in the variant its graphic picks
+    /// ([`OfferTemplates::layout`]), or, without it or the metrics to lay
+    /// it out, the dialog's own note that Return accepts it.
     fn open_offer(&mut self, prompt: OfferPrompt) {
         let layout = match (&self.dialogs, self.metrics()) {
-            (Some(dialogs), Some(metrics)) => dialogs
-                .resources
-                .dialog_template(OFFER_DIALOG)
-                .map(|template| (template, metrics)),
+            (Some(dialogs), Some(metrics)) => OfferTemplates {
+                plain: dialogs.resources.dialog_template(OFFER_DIALOG),
+                picture: dialogs.resources.dialog_template(PICTURE_OFFER_DIALOG),
+            }
+            .layout(prompt.graphic)
+            .map(|template| (template, metrics)),
             _ => Err(NO_INTERFACE.to_owned()),
         };
         self.offer = Some(OfferDialog::new(layout, prompt, self.data.button_style()));
@@ -1582,7 +1591,10 @@ impl AppScreen {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport
                 .with_bar(
-                    template_of(BAR_DIALOG),
+                    BarTemplates {
+                        plain: template_of(BAR_DIALOG),
+                        picture: template_of(PICTURE_BAR_DIALOG),
+                    },
                     template_of(NEWS_DIALOG),
                     template_of(SHIPYARD_DIALOG),
                     info_templates(),
@@ -1592,8 +1604,14 @@ impl AppScreen {
                 .with_missions(
                     template_of(COMPUTER_DIALOG),
                     template_of(INFO_DIALOG),
-                    template_of(OFFER_DIALOG),
-                    template_of(DESC_DIALOG),
+                    OfferTemplates {
+                        plain: template_of(OFFER_DIALOG),
+                        picture: template_of(PICTURE_OFFER_DIALOG),
+                    },
+                    DescTemplates {
+                        plain: template_of(DESC_DIALOG),
+                        picture: template_of(PICTURE_DESC_DIALOG),
+                    },
                 );
         }
         spaceport =
@@ -1683,7 +1701,7 @@ impl AppScreen {
         let mut texts = Vec::new();
         for id in flight.sabotage_death_descs() {
             match self.data.description(id) {
-                Ok(text) => texts.push(text),
+                Ok(text) => texts.push((text, self.data.description_graphic(id))),
                 Err(reason) => self.warnings.push(format!(
                     "nova: cannot show the sabotage dësc {id}: {reason}"
                 )),
@@ -1696,12 +1714,16 @@ impl AppScreen {
     }
 
     /// Shows the escape pod's rescue's `dësc` `id` over flight, as
-    /// `_HandlePlayer`'s `_ShowTextDialog` does (@0x68e80-0x68eac); one that
-    /// cannot be read is a warning. The rescue settled before it, and
-    /// flight goes on once it closes: no fade follows, unlike the death's.
+    /// `_HandlePlayer`'s `_ShowTextDialog` does (@0x68e80-0x68eac), in the
+    /// variant its `Graphic` picks; one that cannot be read is a warning.
+    /// The rescue settled before it, and flight goes on once it closes: no
+    /// fade follows, unlike the death's.
     fn show_rescue_desc(&mut self, id: i16) {
         match self.data.description(id) {
-            Ok(text) => self.show_over_flight(vec![text]),
+            Ok(text) => {
+                let graphic = self.data.description_graphic(id);
+                self.show_over_flight(vec![(text, graphic)]);
+            }
             Err(reason) => self
                 .warnings
                 .push(format!("nova: cannot show the rescue dësc {id}: {reason}")),
@@ -1865,14 +1887,20 @@ impl AppScreen {
         else {
             return;
         };
-        self.show_over_flight(texts.into_iter().map(|text| text.text).collect());
+        self.show_over_flight(
+            texts
+                .into_iter()
+                .map(|text| (text.text, text.graphic))
+                .collect(),
+        );
     }
 
-    /// Shows `texts` over flight in "Desc Dialog", one after another,
+    /// Shows `texts`, each a text and its `dësc`'s `Graphic`, over flight
+    /// in "Desc Dialog" of the variant each picks, one after another,
     /// first cancelling flight's pointer gesture and letting go of its
     /// keys (their releases will go to the texts), as any dialog over
     /// flight does. Without dialogs they are dropped.
-    fn show_over_flight(&mut self, texts: Vec<String>) {
+    fn show_over_flight(&mut self, texts: Vec<(String, Option<i16>)>) {
         if self.flight_missions().is_none() {
             return;
         }
@@ -3888,11 +3916,13 @@ pub(super) mod tests {
                     ],
                 });
             }
-            if id != DESC_DIALOG {
+            if id != DESC_DIALOG && id != PICTURE_DESC_DIALOG {
                 return Err(format!("no DLOG {id}"));
             }
+            // The picture variant is wider.
+            let width = if id == DESC_DIALOG { 200.0 } else { 300.0 };
             Ok(DialogTemplate {
-                bounds: Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
+                bounds: Bounds::at(Point::new(0.0, 0.0), width, 100.0),
                 placement: Placement::Fixed,
                 items: vec![
                     item(100.0, 70.0, 99.0, 25.0, ItemSpec::User),
@@ -8524,9 +8554,14 @@ pub(super) mod tests {
 
     /// A `dësc` of `text`.
     fn desc_of(text: &str) -> Vec<u8> {
+        pictured_desc_of(text, -1)
+    }
+
+    /// A `dësc` of `text` whose `Graphic` is `graphic`.
+    fn pictured_desc_of(text: &str, graphic: i16) -> Vec<u8> {
         let mut bytes = text.as_bytes().to_vec();
         bytes.push(0);
-        bytes.extend([0xFF; 2]);
+        bytes.extend(graphic.to_be_bytes());
         bytes.extend([0; 34]);
         bytes
     }
@@ -8775,8 +8810,13 @@ pub(super) mod tests {
     /// slot names, and that `dësc`'s text, if it has one.
     type Saboteur<'a> = (i16, i16, Option<&'a str>);
 
+    /// The sabotage `dësc` that shows a picture, and its `Graphic`: the
+    /// others show none.
+    const PICTURED_SABOTAGE: (i16, i16) = (5000, 300);
+
     /// [`deadly_data`], the player's ship carrying one of each of
-    /// `saboteurs` as its default items.
+    /// `saboteurs` as its default items, their `dësc`s pictured as
+    /// [`PICTURED_SABOTAGE`] says.
     fn deadly_data_with(saboteurs: &[Saboteur]) -> Rc<GameData> {
         let items: Vec<(i16, [i16; 3])> = saboteurs
             .iter()
@@ -8786,7 +8826,14 @@ pub(super) mod tests {
             saboteurs
                 .iter()
                 .fold(deadly_fork(&items), |fork, &(_, desc, text)| match text {
-                    Some(text) => fork.resource(Desc::TYPE, desc, None, &desc_of(text)),
+                    Some(text) => {
+                        let graphic = if desc == PICTURED_SABOTAGE.0 {
+                            PICTURED_SABOTAGE.1
+                        } else {
+                            -1
+                        };
+                        fork.resource(Desc::TYPE, desc, None, &pictured_desc_of(text, graphic))
+                    }
                     None => fork,
                 });
         loaded(&fork)
@@ -8869,6 +8916,9 @@ pub(super) mod tests {
     /// The rescue's `dësc` text in [`pod_data`].
     const RESCUE_TEXT: &str = "After several weeks of sensory deprivation";
 
+    /// The rescue's `dësc`'s `Graphic` in [`pod_data`].
+    const RESCUE_GRAPHIC: i16 = 400;
+
     /// [`deadly_data`] where the player's ship carries an escape pod
     /// (`oütf` 200, `ModType` 11) and auto-eject (201, `ModType` 20), with
     /// the pod's class (`shïp` 895) and, when `desc` says, the rescue's
@@ -8892,7 +8942,12 @@ pub(super) mod tests {
             &pod,
         );
         if desc {
-            loaded(&fork.resource(Desc::TYPE, 13999, None, &desc_of(RESCUE_TEXT)))
+            loaded(&fork.resource(
+                Desc::TYPE,
+                13999,
+                None,
+                &pictured_desc_of(RESCUE_TEXT, RESCUE_GRAPHIC),
+            ))
         } else {
             loaded(&fork)
         }
@@ -8944,6 +8999,11 @@ pub(super) mod tests {
         });
         assert_eq!(ticks, nova_sim::POD_TICKS, "on the countdown's last tick");
         assert_eq!(shown_text(&screen).as_deref(), Some(RESCUE_TEXT));
+        assert_eq!(
+            shown_picture(&screen),
+            Some((300.0, Some(RESCUE_GRAPHIC))),
+            "DLOG 3004, its graphic shown"
+        );
         assert_eq!(fate(&screen), nova_sim::PlayerFate::Flying);
         let at = ship(&screen);
         screen.tick(Duration::from_secs(2));
@@ -9372,6 +9432,13 @@ pub(super) mod tests {
             .map(|text| text.lines().join(" "))
     }
 
+    /// The width of the text dialog shown over flight, and its picture.
+    fn shown_picture(screen: &AppScreen) -> Option<(f32, Option<i16>)> {
+        screen
+            .flight_mission_text()
+            .map(|text| (text.dialog().bounds().width(), text.picture()))
+    }
+
     /// [`landed_and_took_off`] over [`deadly_data_with`] `saboteurs`.
     fn sabotaged_and_took_off(store: &MemoryPilots, saboteurs: &[Saboteur]) -> AppScreen {
         let mut screen = with_dialogs(deadly_data_with(saboteurs))
@@ -9411,6 +9478,11 @@ pub(super) mod tests {
             shown_text(&screen).as_deref(),
             Some("Your ship was sabotaged.")
         );
+        assert_eq!(
+            shown_picture(&screen),
+            Some((300.0, Some(PICTURED_SABOTAGE.1))),
+            "DLOG 3004, its graphic shown"
+        );
         let held = nova_sim::PlayerFate::Holding { ticks_left: 0 };
         assert_eq!(fate(&screen), held, "not fading under the dialog");
         assert!(flight(&screen).session().expect("flying").hold_expired());
@@ -9420,6 +9492,7 @@ pub(super) mod tests {
         assert_eq!(black_over(&screen), None);
         screen.input(&key(Key::Enter, true));
         assert_eq!(shown_text(&screen).as_deref(), Some("Twice over."));
+        assert_eq!(shown_picture(&screen), Some((200.0, None)), "no graphic");
         assert_eq!(fate(&screen), held, "one dialog left");
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::Flight, "the last closed");

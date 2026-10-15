@@ -5,10 +5,14 @@
 //! router routes to them and answers the info screen's Abort.
 //!
 //! The same queue shows the `dësc`s a sabotaged player sees as it dies
-//! (`_HandlePlayer` @0x68739-0x68832), plain text with no mission behind
-//! it ([`FlightMissionDialogs::show_descs`]). Those are text only: the
-//! `DLOG` 3004 variant with the `dësc`'s graphic, and its movie, are left
-//! to `missions-fidelity/phase-4-offer-pictures-and-movies`.
+//! (`_HandlePlayer` @0x68739-0x68832) and the rescue's, with no mission
+//! behind them ([`FlightMissionDialogs::show_descs`]).
+//!
+//! Each shows in the variant its `dësc`'s `Graphic` picks
+//! ([`DescTemplates::open`]): above 127, `DLOG` 3004 with the graphic, as
+//! every one of these callers allows a picture (`_ShowTextDialog`'s third
+//! argument 1). A `dësc`'s movie is
+//! rdm:phase/missions-fidelity/phase-28-mission-desc-movies.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -23,15 +27,15 @@ use crate::sound::Sound;
 use crate::spaceport::missions::MissionInfoScreen;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
-use crate::ui::desc::DescDialog;
+use crate::ui::desc::{DescDialog, DescTemplates};
 use crate::ui::dialog::DialogTemplate;
 
 /// The mission texts shown over flight, one after another, and the
 /// mission info screen, under them.
 #[derive(Clone)]
 pub struct FlightMissionDialogs {
-    /// "Desc Dialog"'s template, or why there is none.
-    text: Result<DialogTemplate, String>,
+    /// "Desc Dialog"'s templates, both variants, or why each is missing.
+    text: DescTemplates,
     /// The mission info screen's template, or why there is none.
     info_template: Result<DialogTemplate, String>,
     metrics: Rc<dyn TextMetrics>,
@@ -54,13 +58,13 @@ impl std::fmt::Debug for FlightMissionDialogs {
 }
 
 impl FlightMissionDialogs {
-    /// The dialogs laid out from `text` ("Desc Dialog", `DLOG` 3003) and
-    /// `info` (the mission info screen, `DLOG` 1012), or why each cannot
-    /// be, their text measured by `metrics`, their buttons labelled in
-    /// `style`. Nothing is open.
+    /// The dialogs laid out from `text` ("Desc Dialog", `DLOG` 3003, and
+    /// its picture variant, 3004) and `info` (the mission info screen,
+    /// `DLOG` 1012), or why each cannot be, their text measured by
+    /// `metrics`, their buttons labelled in `style`. Nothing is open.
     #[must_use]
     pub fn new(
-        text: Result<DialogTemplate, String>,
+        text: DescTemplates,
         info: Result<DialogTemplate, String>,
         metrics: Rc<dyn TextMetrics>,
         style: ButtonStyle,
@@ -76,26 +80,29 @@ impl FlightMissionDialogs {
         }
     }
 
-    /// Queues each of `texts` to show in "Desc Dialog", one after another
-    /// as Done closes each. Without the dialog's template they are
-    /// dropped, as the spaceport drops them.
+    /// Queues each of `texts` to show in "Desc Dialog", in the variant
+    /// its graphic picks, one after another as Done closes each. Without
+    /// that variant's template it is dropped, as the spaceport drops it.
     pub fn show_texts(&mut self, texts: Vec<MissionText>) {
-        self.show_descs(texts.into_iter().map(|text| text.text).collect());
+        self.show_descs(
+            texts
+                .into_iter()
+                .map(|text| (text.text, text.graphic))
+                .collect(),
+        );
     }
 
-    /// Queues each of `texts`, plain text with no mission behind it,
-    /// to show as [`show_texts`](Self::show_texts) shows mission texts.
-    pub fn show_descs(&mut self, texts: Vec<String>) {
-        let Ok(template) = &self.text else {
-            return;
-        };
-        for text in texts {
-            self.texts.push_back(DescDialog::new(
-                template,
-                &text,
-                self.style,
-                Rc::clone(&self.metrics),
-            ));
+    /// Queues each of `texts`, a `dësc`'s text and its `Graphic` with no
+    /// mission behind it, to show as [`show_texts`](Self::show_texts)
+    /// shows mission texts.
+    pub fn show_descs(&mut self, texts: Vec<(String, Option<i16>)>) {
+        for (text, graphic) in texts {
+            if let Ok(dialog) = self
+                .text
+                .open(&text, graphic, self.style, Rc::clone(&self.metrics))
+            {
+                self.texts.push_back(dialog);
+            }
         }
     }
 
@@ -275,9 +282,24 @@ mod tests {
         }
     }
 
+    /// The picture variant's shape: [`text_template`], 300 wide.
+    fn picture_template() -> DialogTemplate {
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 300.0, 120.0),
+            ..text_template()
+        }
+    }
+
+    fn texts(plain: Result<DialogTemplate, String>) -> DescTemplates {
+        DescTemplates {
+            plain,
+            picture: Ok(picture_template()),
+        }
+    }
+
     fn dialogs() -> FlightMissionDialogs {
         FlightMissionDialogs::new(
-            Ok(text_template()),
+            texts(Ok(text_template())),
             Ok(info_template()),
             Rc::new(MonoMetrics),
             ButtonStyle::STOCK,
@@ -374,7 +396,10 @@ mod tests {
     #[test]
     fn plain_texts_show_one_after_another_and_close_on_done() {
         let mut dialogs = dialogs();
-        dialogs.show_descs(vec!["Sabotaged.".to_owned(), "Again.".to_owned()]);
+        dialogs.show_descs(vec![
+            ("Sabotaged.".to_owned(), None),
+            ("Again.".to_owned(), None),
+        ]);
         assert!(dialogs.is_open());
         assert_eq!(shown(&dialogs).as_deref(), Some("Sabotaged."));
         assert!(drawn(&dialogs).contains(&"Sabotaged.".to_owned()));
@@ -444,7 +469,7 @@ mod tests {
     #[test]
     fn without_its_template_the_info_screen_says_why_and_closes_on_return() {
         let mut dialogs = FlightMissionDialogs::new(
-            Ok(text_template()),
+            texts(Ok(text_template())),
             Err("no DLOG 1012".to_owned()),
             Rc::new(MonoMetrics),
             ButtonStyle::STOCK,
@@ -533,7 +558,7 @@ mod tests {
     #[test]
     fn without_a_text_template_texts_are_dropped() {
         let mut dialogs = FlightMissionDialogs::new(
-            Err("no DLOG 3003".to_owned()),
+            texts(Err("no DLOG 3003".to_owned())),
             Ok(info_template()),
             Rc::new(MonoMetrics),
             ButtonStyle::STOCK,
@@ -541,5 +566,37 @@ mod tests {
         dialogs.show_texts(vec![brief(128, "Lost.")]);
         assert!(dialogs.text().is_none());
         assert!(!dialogs.is_open());
+    }
+
+    fn widths(dialogs: &mut FlightMissionDialogs) -> Vec<(f32, Option<i16>)> {
+        let mut shown = Vec::new();
+        while let Some(text) = dialogs.text() {
+            shown.push((text.dialog().bounds().width(), text.picture()));
+            dialogs.input(&key(Key::Enter));
+        }
+        shown
+    }
+
+    #[test]
+    fn a_mission_text_with_a_graphic_shows_in_3004_over_flight() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![
+            MissionText {
+                graphic: Some(5008),
+                ..brief(128, "Pictured.")
+            },
+            brief(129, "Plain."),
+        ]);
+        assert_eq!(widths(&mut dialogs), [(300.0, Some(5008)), (200.0, None)]);
+    }
+
+    #[test]
+    fn a_desc_with_a_graphic_shows_in_3004_over_flight() {
+        let mut dialogs = dialogs();
+        dialogs.show_descs(vec![
+            ("Sabotaged.".to_owned(), Some(200)),
+            ("Rescued.".to_owned(), Some(127)),
+        ]);
+        assert_eq!(widths(&mut dialogs), [(300.0, Some(200)), (200.0, None)]);
     }
 }

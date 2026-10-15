@@ -9,7 +9,8 @@
 //! 131, "Second", with an offer text, a `RefuseText` and an `OnRefuse`
 //! setting bit 7) and a synthetic interface file holding the "Spaceport",
 //! the mission computer (`DLOG` 1006), the mission info screen (1012),
-//! "Bar" (1013), the offer dialog (1016) and "Desc Dialog" (3003), driven
+//! "Bar" (1013), the offer dialog (1016, and 1020 with a picture) and
+//! "Desc Dialog" (3003, and 3004 with a picture), driven
 //! only by window events, with pilots kept in the in-memory store.
 //!
 //! The mission computer: the pilot lands, and Mission BBS lists "Run to
@@ -51,6 +52,10 @@
 //! the message line says "Time limit exceeded - mission failed.", and
 //! the bar job its `S` accepted shows its `BriefText` over the paused
 //! flight until Done.
+//!
+//! Pictures: with the bar job's offer `dësc` and `BriefText` showing
+//! `PICT` 5008, the bar's offer opens in the offer dialog's picture
+//! variant (`DLOG` 1020), and the `BriefText` in "Desc Dialog"'s (3004).
 //!
 //! I in flight: with no mission, the message line says "You have no
 //! active missions."; with the run and the errand held, it opens the
@@ -271,9 +276,14 @@ fn bar_mission(brief: i16, refuse: i16, accept_label: &[u8], on_refuse: &[u8]) -
 
 /// A `dësc` of `text`.
 fn desc(text: &str) -> Vec<u8> {
+    pictured_desc(text, -1)
+}
+
+/// A `dësc` of `text` whose `Graphic` is `graphic`.
+fn pictured_desc(text: &str, graphic: i16) -> Vec<u8> {
     let mut bytes = text.as_bytes().to_vec();
     bytes.push(0);
-    bytes.extend([0xFF; 2]);
+    bytes.extend(graphic.to_be_bytes());
     bytes.extend([0; 34]);
     bytes
 }
@@ -343,8 +353,20 @@ fn game_data_from(run: &[u8], bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
 /// resources added.
 fn game_data_built(
     run: &[u8],
+    bar_job: (Vec<u8>, &str),
+    run_offer: &str,
+    more: impl FnOnce(ForkBuilder) -> ForkBuilder,
+) -> Rc<GameData> {
+    game_data_pictured(run, bar_job, run_offer, -1, more)
+}
+
+/// [`game_data_built`] with the bar job's offer `dësc` and `BriefText`
+/// showing `graphic`.
+fn game_data_pictured(
+    run: &[u8],
     (bar_job, bar_job_offer): (Vec<u8>, &str),
     run_offer: &str,
+    graphic: i16,
     more: impl FnOnce(ForkBuilder) -> ForkBuilder,
 ) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
@@ -371,9 +393,19 @@ fn game_data_built(
             Some(b"Second"),
             &bar_mission(-1, 203, b"\0", b"b7\0"),
         )
-        .resource(Desc::TYPE, 4002, None, &desc(bar_job_offer))
+        .resource(
+            Desc::TYPE,
+            4002,
+            None,
+            &pictured_desc(bar_job_offer, graphic),
+        )
         .resource(Desc::TYPE, 4003, None, &desc("One more job."))
-        .resource(Desc::TYPE, 202, None, &desc("Welcome aboard."))
+        .resource(
+            Desc::TYPE,
+            202,
+            None,
+            &pictured_desc("Welcome aboard.", graphic),
+        )
         .resource(Desc::TYPE, 203, None, &desc("Suit yourself."))
         .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
         .resource(Desc::TYPE, 4000, None, &desc(run_offer))
@@ -388,7 +420,7 @@ fn game_data_built(
         .resource(PICT, 700, Some(b"Status Bar"), &pict(194, 16, [66, 66, 66]));
     fork = more(fork);
     for id in [
-        8500, 8501, 8503, 8505, 8517, 8521, 8522, 8523, 8524, 8525, 8526, 10_004,
+        5008, 8500, 8501, 8503, 8505, 8517, 8521, 8522, 8523, 8524, 8525, 8526, 8527, 8528, 10_004,
     ] {
         fork = fork.resource(PICT, id, None, &pict(6, 5, [40, 40, 40]));
     }
@@ -519,6 +551,40 @@ fn mission_dialogs() -> [[(ResType, i16, Vec<u8>); 2]; 5] {
     [computer, info, bar, offer, text]
 }
 
+/// The picture variants of the offer dialog (`DLOG` 1020) and "Desc
+/// Dialog" (3004), each with its items as stock has them.
+fn picture_dialogs() -> [[(ResType, i16, Vec<u8>); 2]; 2] {
+    let picture_offer = dialog(
+        1020,
+        (651, 244),
+        &[
+            ((221, 213, 99, 25), false),
+            ((115, 213, 99, 25), false),
+            ((13, 7, 413, 200), false),
+            ((147, 319, 32, 32), false),
+            ((194, 322, 32, 32), false),
+            ((170, 213, 99, 25), false),
+            ((169, 333, 32, 32), false),
+            ((441, 7, 200, 200), false),
+            ((340, 214, 23, 23), false),
+            ((373, 214, 23, 23), false),
+        ],
+    );
+    let picture_text = dialog(
+        3004,
+        (648, 245),
+        &[
+            ((173, 214, 99, 25), true),
+            ((439, 7, 200, 200), false),
+            ((12, 7, 415, 201), false),
+            ((70, 345, 78, 25), true),
+            ((330, 215, 23, 23), false),
+            ((363, 215, 23, 23), false),
+        ],
+    );
+    [picture_offer, picture_text]
+}
+
 /// The interface file: stock "Spaceport" (`DLOG` 1000), the mission
 /// computer (1006), the mission info screen (1012), "Bar" (1013), the
 /// offer dialog (1016) and "Desc Dialog" (3003), each with its items as
@@ -547,6 +613,7 @@ fn interface() -> InterfaceData {
     );
     let fork = std::iter::once(spaceport)
         .chain(mission_dialogs())
+        .chain(picture_dialogs())
         .flatten()
         .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
             fork.resource(ty, id, None, &bytes)
@@ -1111,6 +1178,43 @@ fn an_offer_refused_for_want_of_a_slot_stays_suppressed_until_the_ship_lands_aga
     game.land();
     game.click_port(BAR);
     assert_eq!(game.await_offer(), Some(MissionId(130)));
+}
+
+#[test]
+fn a_bar_job_whose_dëscs_have_a_picture_shows_the_picture_variants() {
+    let store = MemoryPilots::new();
+    let data = game_data_pictured(
+        &timed(mission(128, 200, 201)),
+        bar_job(),
+        "Take this to <DST>.",
+        5008,
+        |fork| fork,
+    );
+    let mut game = Game::with_data(&store, &ada(), data);
+    game.frame();
+    game.land();
+    game.click_port(BAR);
+
+    // The offer opens in DLOG 1020, 651 wide, its picture PICT 5008.
+    assert_eq!(game.await_offer(), Some(MissionId(130)));
+    let offer = game.offer().expect("open");
+    assert_eq!(offer.prompt().graphic, Some(5008));
+    assert_eq!(
+        offer.dialog().map(|dialog| dialog.bounds().width()),
+        Some(651.0)
+    );
+    let shown = texts(&game.frame());
+    for text in ["Ada, join us.", "I'm in", "No"] {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+
+    // Return accepts it, and its BriefText shows in DLOG 3004.
+    game.tap(Key::Enter);
+    assert_eq!(game.shown_text().as_deref(), Some("Welcome aboard."));
+    let text = game.spaceport().mission_text().expect("shown");
+    assert_eq!(text.picture(), Some(5008));
+    assert_eq!(Some(text.dialog().bounds().width()), Some(648.0));
+    game.frame();
 }
 
 #[test]

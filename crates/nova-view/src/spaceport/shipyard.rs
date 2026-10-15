@@ -134,7 +134,7 @@ use super::grid::{
 };
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
-use super::offer::{OfferChoice, OfferDialog, VenueOffers};
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -205,8 +205,9 @@ pub const TITLE_BASELINE: f32 = 18.0;
 /// @0x50fd0-0x51043).
 pub const PANEL_GRAPHIC_ITEM: usize = 7;
 /// The highest description `Graphic` that shows no picture: the engine
-/// shows one only above it (`_DoShipyardDescription` @0x5b6db-0x5b6e4).
-pub const LAST_UNSHOWN_GRAPHIC: i16 = 127;
+/// shows one only above it (`_DoShipyardDescription` @0x5b6db-0x5b6e4),
+/// as it does for every `dësc`.
+pub use crate::ui::desc::LAST_UNSHOWN_GRAPHIC;
 
 /// Buys the selected ship, as Buy Ship does: the original's default.
 pub const BUY_KEY: Key = Key::Char('b');
@@ -999,14 +1000,14 @@ impl ShipyardScreen {
         screen
     }
 
-    /// The shipyard with mission offers, each shown in the offer dialog laid
-    /// out by `template` (or saying why there is none): it asks for the
+    /// The shipyard with mission offers, each shown in the offer dialog of
+    /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`ShipyardScreen::rearm`]), as
     /// the original's does ([`SHIPYARD`](nova_sim::mission::screens::SHIPYARD)).
     #[must_use]
-    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+    pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(template)),
+            offering: Some(VenueOffers::asking(templates)),
             ..self
         }
     }
@@ -3750,7 +3751,7 @@ mod tests {
     // The shipyard's mission offers.
 
     use crate::spaceport::offer::OfferChoice;
-    use crate::spaceport::offer::fixture::{prompt, template as offer_template};
+    use crate::spaceport::offer::fixture::{prompt, templates as offer_templates};
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -3758,7 +3759,7 @@ mod tests {
 
     /// The shipyard, its offers given.
     fn offering() -> ShipyardScreen {
-        screen().with_offers(Ok(offer_template()))
+        screen().with_offers(offer_templates())
     }
 
     #[test]

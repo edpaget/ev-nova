@@ -14,8 +14,16 @@
 //! The original shrinks `DLOG` 1016 to its text's height, at least 48,
 //! moving the buttons up (@0xa2548-0xa2816), and widens the buttons to the
 //! wider label + 40, at least 100 (@0xa2a29-0xa2b46); this dialog keeps
-//! the template's height and widths. The picture variant (`DLOG` 1020) is
-//! rdm:phase/missions/phase-16-offer-pictures-and-movies.
+//! the template's height and widths.
+//!
+//! An offer whose `dësc` `Graphic` is above 127 shows in the picture
+//! variant, `DLOG` 1020 ([`OfferTemplates::layout`], @0xa2344-0xa2373),
+//! chosen on the ID alone: 651 x 244, centred, the text in item 3, the
+//! buttons in items 1, 2 and 6 as in 1016, over the single frame `PICT`
+//! 8528, with the graphic stretched into item 8. The original never
+//! shrinks 1020 (`jg` past the shrink @0xa255b-0xa2564), so its template
+//! height is its own. A `dësc`'s movie, played around the dialog, is
+//! rdm:phase/missions-fidelity/phase-28-mission-desc-movies.
 //!
 //! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
 //! accept label's first letter accepts and, when the mission can be
@@ -46,7 +54,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
+use crate::ui::desc::{BODY_COLOR, BODY_SIZE, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
 use crate::ui::player_info::is_player_info_press;
 
@@ -61,6 +69,45 @@ pub const REFUSE_ITEM: usize = 2;
 pub const TEXT_ITEM: usize = 3;
 /// The one button's item, for a mission that cannot be refused.
 pub const SINGLE_ITEM: usize = 6;
+
+/// The picture variant's `DLOG` (and `DITL`) ID ("Single mission + pict",
+/// `GetNewDialog` 0x3fc @0xa235a).
+pub const PICTURE_OFFER_DIALOG: i16 = 1020;
+
+/// The picture variant's picture item (`GetDialogItem` 8 @0x98c03).
+pub const OFFER_PICTURE_ITEM: usize = 8;
+
+/// The picture variant's frame, one picture over the whole dialog: `PICT`
+/// 8528, "Single mission + pict" (0x2150 @0xa239d).
+pub const PICTURE_FRAME: ImageKey = ImageKey::picture(8528);
+
+/// Both offer dialog templates, or why each is missing: `DLOG` 1016's and
+/// `DLOG` 1020's.
+#[derive(Clone, Debug)]
+pub struct OfferTemplates {
+    /// The offer dialog ([`OFFER_DIALOG`]).
+    pub plain: Result<DialogTemplate, String>,
+    /// The offer dialog with a picture ([`PICTURE_OFFER_DIALOG`]).
+    pub picture: Result<DialogTemplate, String>,
+}
+
+impl OfferTemplates {
+    /// The template of the variant an offer whose `dësc` `Graphic` is
+    /// `graphic` shows in, or why it is missing: 1020 above
+    /// [`LAST_UNSHOWN_GRAPHIC`](crate::ui::desc::LAST_UNSHOWN_GRAPHIC),
+    /// on the ID alone (@0xa2344), else 1016.
+    ///
+    /// # Errors
+    ///
+    /// Why that variant's template is missing.
+    pub fn layout(&self, graphic: Option<i16>) -> Result<DialogTemplate, String> {
+        if shown_graphic(graphic).is_some() {
+            self.picture.clone()
+        } else {
+            self.plain.clone()
+        }
+    }
+}
 
 /// The game's mission offer frame (`PICT`s 8521 to 8523, 441 wide), which
 /// the offer dialog is drawn over.
@@ -92,19 +139,25 @@ pub struct OfferDialog {
     answered: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info: bool,
+    /// The picture variant's graphic, drawn in item 8 over
+    /// [`PICTURE_FRAME`]; none for the plain dialog over [`FRAME`].
+    picture: Option<i16>,
     sounds: Vec<Sound>,
 }
 
 impl OfferDialog {
-    /// `prompt`, laid out by `layout`: the offer dialog's template and the
-    /// metrics its text is measured by, or why there are none; its
-    /// buttons drawn in `style`.
+    /// `prompt`, laid out by `layout`: the template of the variant its
+    /// graphic picks ([`OfferTemplates::layout`]) and the metrics its text
+    /// is measured by, or why there are none; its buttons drawn in
+    /// `style`. A graphic above 127 draws the picture variant: the frame
+    /// [`PICTURE_FRAME`] and the graphic in item 8.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
         prompt: OfferPrompt,
         style: ButtonStyle,
     ) -> Self {
+        let picture = shown_graphic(prompt.graphic);
         let laid = layout.map(|(mut template, metrics)| {
             let single = prompt.labels.refuse.is_none();
             let buttons: &[usize] = if single {
@@ -139,11 +192,15 @@ impl OfferDialog {
                     (REFUSE_ITEM, Role::Hidden),
                 ]),
             }
-            Dialog::new(&template, &roles, metrics)
-                .with_frame(FRAME)
+            let dialog = Dialog::new(&template, &roles, metrics)
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(None)
-                .with_cancel(None)
+                .with_cancel(None);
+            if picture.is_some() {
+                dialog
+            } else {
+                dialog.with_frame(FRAME)
+            }
         });
         Self {
             laid,
@@ -151,6 +208,7 @@ impl OfferDialog {
             choice: None,
             answered: false,
             player_info: false,
+            picture,
             sounds: Vec::new(),
         }
     }
@@ -257,9 +315,31 @@ impl Screen for OfferDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
+    /// The plain dialog draws its frame under its items. The picture
+    /// variant draws [`PICTURE_FRAME`] stretched over the dialog, as
+    /// `_SingleMissionDialogUpdate` fills the port with it, then the
+    /// items, then the graphic stretched into item 8 (@0x98bdd-0x98c53);
+    /// a graphic whose `PICT` is missing leaves item 8 empty, as
+    /// `GetPicture` finds nothing to draw.
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
-            Ok(dialog) => dialog.draw(list),
+            Ok(dialog) => {
+                let Some(graphic) = self.picture else {
+                    dialog.draw(list);
+                    return;
+                };
+                let bounds = dialog.bounds();
+                list.stretched_picture(PICTURE_FRAME, bounds.min, bounds.width(), bounds.height());
+                dialog.draw(list);
+                if let Some(item) = dialog.item_bounds(OFFER_PICTURE_ITEM) {
+                    list.stretched_picture(
+                        ImageKey::picture(graphic),
+                        item.min,
+                        item.width(),
+                        item.height(),
+                    );
+                }
+            }
             Err(reason) => {
                 list.text(
                     format!("Cannot show the mission offer: {reason}. Press Return to accept it."),
@@ -284,11 +364,11 @@ impl Screen for OfferDialog {
     }
 }
 
-/// A venue's mission offers: the offer dialog's template (or why there is
-/// none), the wait before it next asks, and the offer open over it.
+/// A venue's mission offers: the offer dialog's templates (or why there
+/// are none), the wait before it next asks, and the offer open over it.
 #[derive(Clone, Debug)]
 pub(crate) struct VenueOffers {
-    template: Result<DialogTemplate, String>,
+    templates: OfferTemplates,
     /// How long until the venue asks for an offer: none while it waits to
     /// be rearmed.
     wait: Option<Duration>,
@@ -303,9 +383,9 @@ pub(crate) struct VenueOffers {
 impl VenueOffers {
     /// Offers that ask for the first after `first`, as the bar does
     /// (`_DoBarDialog` @0x48f51-0x48f5f).
-    pub(crate) fn waiting(template: Result<DialogTemplate, String>, first: Duration) -> Self {
+    pub(crate) fn waiting(templates: OfferTemplates, first: Duration) -> Self {
         Self {
-            template,
+            templates,
             wait: Some(first),
             requested: false,
             dialog: None,
@@ -317,11 +397,11 @@ impl VenueOffers {
     /// ask as they open (`_DoPortDialog` @0x5fc37, `_DoTradeDialog`
     /// @0x5df7f, `_DoShipyardDialog` @0x5e8eb, `_DoOutfitDialog`
     /// @0x5bd92).
-    pub(crate) fn asking(template: Result<DialogTemplate, String>) -> Self {
+    pub(crate) fn asking(templates: OfferTemplates) -> Self {
         Self {
             requested: true,
             wait: None,
-            ..Self::waiting(template, Duration::ZERO)
+            ..Self::waiting(templates, Duration::ZERO)
         }
     }
 
@@ -330,15 +410,19 @@ impl VenueOffers {
         std::mem::take(&mut self.requested)
     }
 
-    /// Opens the offer dialog on `prompt`, its text measured by `metrics`
-    /// and its buttons drawn in `style`.
+    /// Opens the offer dialog on `prompt`, in the variant its graphic
+    /// picks, its text measured by `metrics` and its buttons drawn in
+    /// `style`.
     pub(crate) fn open(
         &mut self,
         prompt: OfferPrompt,
         metrics: Rc<dyn TextMetrics>,
         style: ButtonStyle,
     ) {
-        let layout = self.template.clone().map(|template| (template, metrics));
+        let layout = self
+            .templates
+            .layout(prompt.graphic)
+            .map(|template| (template, metrics));
         self.dialog = Some(OfferDialog::new(layout, prompt, style));
     }
 
@@ -440,6 +524,14 @@ pub(crate) mod fixture {
             bounds: rect(0.0, 0.0, 300.0, 200.0),
             placement: Placement::Fixed,
             items,
+        }
+    }
+
+    /// [`template`] as the offer dialog, with no picture variant.
+    pub(crate) fn templates() -> super::OfferTemplates {
+        super::OfferTemplates {
+            plain: Ok(template()),
+            picture: Err("no DLOG 1020 here".to_owned()),
         }
     }
 
@@ -747,6 +839,14 @@ mod tests {
 
     // A venue's offers.
 
+    /// `plain` for the offer dialog, with no picture variant.
+    fn plain_only(plain: Result<DialogTemplate, String>) -> OfferTemplates {
+        OfferTemplates {
+            plain,
+            picture: Err("no DLOG 1020".to_owned()),
+        }
+    }
+
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
     }
@@ -761,7 +861,7 @@ mod tests {
 
     #[test]
     fn waiting_offers_ask_once_after_their_first_wait() {
-        let mut offers = VenueOffers::waiting(Ok(template()), ms(250));
+        let mut offers = VenueOffers::waiting(plain_only(Ok(template())), ms(250));
         assert!(!offers.take_request(), "not before any tick");
         offers.tick(ms(249));
         assert!(!offers.take_request());
@@ -774,7 +874,7 @@ mod tests {
 
     #[test]
     fn asking_offers_ask_before_any_tick_and_only_once() {
-        let mut offers = VenueOffers::asking(Ok(template()));
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         assert!(offers.take_request());
         assert!(!offers.take_request());
         offers.tick(ms(10_000));
@@ -783,7 +883,7 @@ mod tests {
 
     #[test]
     fn the_wait_does_not_run_down_while_an_offer_is_open() {
-        let mut offers = VenueOffers::waiting(Ok(template()), ms(100));
+        let mut offers = VenueOffers::waiting(plain_only(Ok(template())), ms(100));
         opened(&mut offers);
         assert!(offers.dialog().is_some());
         offers.tick(ms(500));
@@ -797,7 +897,7 @@ mod tests {
 
     #[test]
     fn after_a_rearm_they_ask_again_after_the_gap() {
-        let mut offers = VenueOffers::asking(Ok(template()));
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         assert!(offers.take_request());
         offers.rearm(ms(600));
         offers.tick(ms(599));
@@ -808,7 +908,7 @@ mod tests {
 
     #[test]
     fn an_open_offer_takes_the_input_and_its_choice_is_taken_once() {
-        let mut offers = VenueOffers::asking(Ok(template()));
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         let mut sounds = Vec::new();
         assert!(
             !offers.input(&key(Key::Enter), &mut sounds),
@@ -829,7 +929,7 @@ mod tests {
 
     #[test]
     fn an_open_offers_sounds_pointer_and_drawing_go_through_them() {
-        let mut offers = VenueOffers::asking(Ok(template()));
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         let mut list = DrawList::new();
         offers.draw(&mut list);
         assert!(list.iter().next().is_none(), "nothing open draws nothing");
@@ -860,11 +960,204 @@ mod tests {
 
     #[test]
     fn without_a_template_the_offer_says_why() {
-        let mut offers = VenueOffers::asking(Err("no DLOG 1016".to_owned()));
+        let mut offers = VenueOffers::asking(plain_only(Err("no DLOG 1016".to_owned())));
         opened(&mut offers);
         assert_eq!(
             offers.dialog().and_then(OfferDialog::problem),
             Some("no DLOG 1016")
+        );
+    }
+
+    // The picture variant, `DLOG` 1020.
+
+    /// Stock `DLOG` 1020, 651 x 244 and centred, with its ten disabled
+    /// user items as `DITL` 1020 has them, 4, 5 and 7 parked outside it.
+    fn picture_template() -> DialogTemplate {
+        let items = [
+            (221.0, 213.0, 99.0, 25.0),
+            (115.0, 213.0, 99.0, 25.0),
+            (13.0, 7.0, 413.0, 200.0),
+            (147.0, 319.0, 32.0, 32.0),
+            (194.0, 322.0, 32.0, 32.0),
+            (170.0, 213.0, 99.0, 25.0),
+            (169.0, 333.0, 32.0, 32.0),
+            (441.0, 7.0, 200.0, 200.0),
+            (340.0, 214.0, 23.0, 23.0),
+            (373.0, 214.0, 23.0, 23.0),
+        ];
+        DialogTemplate {
+            bounds: rect(-20.0, 103.0, 651.0, 244.0),
+            placement: Placement::Center,
+            items: items
+                .into_iter()
+                .map(|(x, y, w, h)| ItemTemplate {
+                    bounds: rect(x, y, w, h),
+                    enabled: false,
+                    kind: ItemSpec::User,
+                })
+                .collect(),
+        }
+    }
+
+    /// Where 1020 goes: (1024 - 651) / 2 and (768 - 244) / 2, floored.
+    const PICTURE_ORIGIN: Point = Point::new(186.0, 262.0);
+
+    fn pictured(graphic: i16, refuse: Option<&str>) -> OfferPrompt {
+        OfferPrompt {
+            graphic: Some(graphic),
+            ..prompt("I'm in", refuse)
+        }
+    }
+
+    fn templates() -> OfferTemplates {
+        OfferTemplates {
+            plain: Ok(template()),
+            picture: Ok(picture_template()),
+        }
+    }
+
+    #[test]
+    fn the_picture_variants_named_values() {
+        assert_eq!(
+            (PICTURE_OFFER_DIALOG, OFFER_PICTURE_ITEM, PICTURE_FRAME),
+            (1020, 8, ImageKey::picture(8528))
+        );
+    }
+
+    #[test]
+    fn a_graphic_above_127_takes_1020_on_the_id_alone() {
+        let templates = OfferTemplates {
+            plain: Err("no DLOG 1016".to_owned()),
+            picture: Err("no DLOG 1020".to_owned()),
+        };
+        for graphic in [None, Some(-5), Some(0), Some(127)] {
+            assert_eq!(
+                templates.layout(graphic),
+                Err("no DLOG 1016".to_owned()),
+                "{graphic:?}"
+            );
+        }
+        for graphic in [128, 5008] {
+            assert_eq!(
+                templates.layout(Some(graphic)),
+                Err("no DLOG 1020".to_owned())
+            );
+        }
+        assert_eq!(self::templates().layout(Some(128)), Ok(picture_template()));
+        assert_eq!(self::templates().layout(Some(127)), Ok(template()));
+    }
+
+    #[test]
+    fn the_picture_variant_lays_out_1020_and_draws_8528_then_the_items_then_the_graphic() {
+        let dialog = OfferDialog::new(
+            Ok((picture_template(), Rc::new(MonoMetrics))),
+            pictured(5008, Some("No thanks")),
+            ButtonStyle::STOCK,
+        );
+        assert_eq!(dialog.problem(), None);
+        let laid = dialog.dialog().expect("laid out");
+        assert_eq!(laid.bounds(), Bounds::at(PICTURE_ORIGIN, 651.0, 244.0));
+        let at =
+            |x, y, w, h| Bounds::at(Point::new(PICTURE_ORIGIN.x + x, PICTURE_ORIGIN.y + y), w, h);
+        assert_eq!(
+            laid.item_bounds(TEXT_ITEM),
+            Some(at(13.0, 7.0, 413.0, 200.0))
+        );
+        assert_eq!(
+            laid.text(TEXT_ITEM).map(|text| text.lines().join(" ")),
+            Some("Ferry this to Mars.".to_owned())
+        );
+        assert_eq!(
+            laid.item_bounds(ACCEPT_ITEM),
+            Some(at(221.0, 213.0, 99.0, 25.0))
+        );
+        assert_eq!(
+            laid.item_bounds(REFUSE_ITEM),
+            Some(at(115.0, 213.0, 99.0, 25.0))
+        );
+        assert!(laid.item_shown(ACCEPT_ITEM) && laid.item_shown(REFUSE_ITEM));
+        let commands = drawn(&dialog);
+        assert_eq!(
+            commands[0],
+            DrawCommand::StretchedPicture {
+                image: PICTURE_FRAME,
+                top_left: PICTURE_ORIGIN,
+                width: 651.0,
+                height: 244.0,
+            },
+            "one frame over the port (@0x98b9b-0x98bc3)"
+        );
+        let mut alone = DrawList::new();
+        laid.draw(&mut alone);
+        let alone: Vec<DrawCommand> = alone.iter().cloned().collect();
+        assert_eq!(commands[1..=alone.len()], alone[..]);
+        let item = at(441.0, 7.0, 200.0, 200.0);
+        assert_eq!(
+            commands[alone.len() + 1..],
+            [DrawCommand::StretchedPicture {
+                image: ImageKey::picture(5008),
+                top_left: item.min,
+                width: 200.0,
+                height: 200.0,
+            }],
+            "the graphic stretched into item 8 (@0x98bdd-0x98c53)"
+        );
+    }
+
+    #[test]
+    fn the_picture_variant_of_an_unrefusable_offer_shows_its_one_button_and_chooses() {
+        let mut dialog = OfferDialog::new(
+            Ok((picture_template(), Rc::new(MonoMetrics))),
+            pictured(200, None),
+            ButtonStyle::STOCK,
+        );
+        let laid = dialog.dialog().expect("laid out");
+        assert!(laid.item_shown(SINGLE_ITEM));
+        assert!(!laid.item_shown(ACCEPT_ITEM) && !laid.item_shown(REFUSE_ITEM));
+        click_item(&mut dialog, SINGLE_ITEM);
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn a_venue_shows_a_pictured_offer_in_1020_and_a_plain_one_in_1016() {
+        let mut offers = VenueOffers::asking(templates());
+        offers.open(
+            pictured(5008, Some("No")),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        );
+        let shown = offers
+            .dialog()
+            .and_then(OfferDialog::dialog)
+            .expect("laid out");
+        assert_eq!(shown.bounds().min, PICTURE_ORIGIN);
+        offers.input(&key(Key::Enter), &mut Vec::new());
+        opened(&mut offers);
+        let shown = offers
+            .dialog()
+            .and_then(OfferDialog::dialog)
+            .expect("laid out");
+        assert_eq!(shown.bounds().min, ORIGIN);
+        assert!(matches!(
+            drawn(offers.dialog().expect("open"))[0],
+            DrawCommand::StretchedPicture { image, .. } if image == FRAME.top
+        ));
+    }
+
+    #[test]
+    fn without_the_picture_template_a_pictured_offer_says_why() {
+        let mut offers = VenueOffers::asking(OfferTemplates {
+            plain: Ok(template()),
+            picture: Err("no DLOG 1020".to_owned()),
+        });
+        offers.open(
+            pictured(5008, Some("No")),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        );
+        assert_eq!(
+            offers.dialog().and_then(OfferDialog::problem),
+            Some("no DLOG 1020")
         );
     }
 }
