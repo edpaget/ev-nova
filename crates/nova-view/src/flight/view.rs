@@ -3751,7 +3751,7 @@ impl<
     /// reaches it: `mïsn` 197 and 320's `OnAccept`s, `H381 … G207` and
     /// `H382 … G209`, change the shield's most after the `H`, under
     /// `BriefText` 5422 and 5367. Filed as
-    /// rdm:phase/hud-fidelity/phase-39-cee-e-h-redraw-in-docked-scripts.
+    /// rdm:phase/missions-fidelity/phase-31-cee-e-h-redraw-in-docked-scripts.
     ///
     /// The buy's and the sell's own `_DrawStatus` (@0x5c5a1, @0x5d328)
     /// draw the nav too when the shipyard's restore marked it
