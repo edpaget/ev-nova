@@ -1477,6 +1477,7 @@ fn recharge(gauge: &mut Gauge, rate: f32) {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::combat::armament::LauncherRounds;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
@@ -1510,7 +1511,7 @@ mod tests {
         top_speed: f32,
         jumping: bool,
         armament: Armament,
-        rounds: BTreeMap<WeaponId, u32>,
+        rounds: LauncherRounds,
     }
 
     /// A trigger holding no weapon, its point defence running, as a test
@@ -1554,7 +1555,7 @@ mod tests {
                 top_speed: 10.0,
                 jumping: false,
                 armament: Armament::default(),
-                rounds: BTreeMap::new(),
+                rounds: LauncherRounds::default(),
             }
         }
 
@@ -1886,7 +1887,7 @@ mod tests {
                     1,
                 ),
             ]);
-            ship.rounds = BTreeMap::from([(WeaponId(150), 1)]);
+            ship.rounds = LauncherRounds::from([(WeaponId(150), 1)]);
             let mut combat = Combat::default();
             let mut ships = [ship];
             tick(&mut combat, &mut ships, &NovaDisable);
@@ -4963,7 +4964,7 @@ mod tests {
             secondary: Some(WeaponId(149)),
             ..Trigger::default()
         };
-        carrier.rounds = BTreeMap::from([(WeaponId(149), 2)]);
+        carrier.rounds = LauncherRounds::from([(WeaponId(149), 2)]);
         carrier.target = Some(B);
         [carrier, Ship::at(2, 300.0, 0.0)]
     }
@@ -4998,7 +4999,7 @@ mod tests {
             "heading 90, and the inaccuracy drawn: 19 of 20, less 10"
         );
         assert_eq!(combat.take_sorties(), [], "taken");
-        assert_eq!(ships[0].rounds[&WeaponId(149)], 1, "a round spent");
+        assert_eq!(ships[0].rounds.slot(WeaponId(149)), 1, "a round spent");
     }
 
     #[test]

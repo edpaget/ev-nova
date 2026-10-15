@@ -1104,6 +1104,9 @@ pub struct HullRecord {
     /// Its `Cost`, raw: -1 hides a ship of the type (see
     /// [`HullSpec::hidden`](crate::combat::hull::HullSpec::hidden)).
     pub cost: i32,
+    /// Its `Speed`, raw (see
+    /// [`HullSpec::class_speed`](crate::combat::hull::HullSpec::class_speed)).
+    pub speed: i16,
 }
 
 /// A government's penalties for crimes against its ships, raw from its

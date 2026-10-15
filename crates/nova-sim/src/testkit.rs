@@ -430,6 +430,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         strength: 0,
         key_carried: None,
         cost: 0,
+        speed: 0,
     }
 }
 
@@ -509,7 +510,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         condition: Condition::Intact,
         hull: HullSpec::default(),
         armament: Armament::default(),
-        rounds: std::collections::BTreeMap::new(),
+        rounds: crate::combat::armament::LauncherRounds::default(),
         trigger: Trigger::default(),
         target: None,
         provoked: 0.0,

@@ -1334,7 +1334,7 @@ fn alpharas_named_fleet_comes_when_its_roll_fires() {
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use nova_sim::combat::armament::{Arsenal, Rounds};
+use nova_sim::combat::armament::{Arsenal, LauncherRounds, Rounds};
 use nova_sim::combat::flags::FlagField;
 use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
 use nova_sim::combat::{Combat, Fighter, Rules};
@@ -1367,7 +1367,7 @@ struct Combatant {
     reserves: Reserves,
     condition: Condition,
     armament: Armament,
-    rounds: BTreeMap<WeaponId, u32>,
+    rounds: LauncherRounds,
 }
 
 impl Combatant {
@@ -1418,9 +1418,9 @@ fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
 /// The player at the centre, at rest, facing right, firing one of
 /// `weapon` with all the ammunition, fuel and armour it could want.
 fn shooter(weapon: &WeaponSpec) -> Combatant {
-    let mut rounds = BTreeMap::new();
+    let mut rounds = LauncherRounds::default();
     if let Ammo::Rounds(ammo) = weapon.ammo {
-        rounds.insert(ammo, 100_000);
+        rounds.set(ammo, 100_000);
     }
     Combatant {
         id: ShipRef::Player,
@@ -1484,7 +1484,7 @@ fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant
         reserves: ShipStats::new(record.fields, &mods).full(),
         condition: Condition::Intact,
         armament: Armament::default(),
-        rounds: BTreeMap::new(),
+        rounds: LauncherRounds::default(),
     }
 }
 
@@ -1767,7 +1767,7 @@ fn sponge(x: f32, y: f32) -> Combatant {
         reserves: Reserves::full(100_000.0, 100_000.0, 0.0),
         condition: Condition::Intact,
         armament: Armament::default(),
-        rounds: BTreeMap::new(),
+        rounds: LauncherRounds::default(),
     }
 }
 
@@ -3142,13 +3142,9 @@ fn stock_fighter_bays_launch_their_fighters_as_the_extracted_rules_say() {
     assert_eq!((viper_bay.max_ammo, viper_bay.reload), (4, 60.0));
     assert!(viper_bay.secondary());
     let outfits = data.outfits();
-    let (_, rounds) = arsenal.npc(ShipId(143), &BTreeMap::new(), &outfits);
-    assert_eq!(
-        rounds.get(&WeaponId(149)),
-        Some(&4),
-        "the Fed Carrier's Vipers"
-    );
-    assert_eq!(rounds.get(&WeaponId(150)), Some(&2), "and Anacondas");
+    let (_, rounds) = arsenal.npc(ShipId(143));
+    assert_eq!(rounds.slot(WeaponId(149)), 4, "the Fed Carrier's Vipers");
+    assert_eq!(rounds.slot(WeaponId(150)), 2, "and Anacondas");
     assert!(Arsenal::ammo_outfits(&outfits).contains(&(WeaponId(149), OutfitId(158))));
     let vipers = outfits
         .iter()
@@ -3689,15 +3685,11 @@ fn jack_folstam_appears_in_nesre_primus_and_by_the_engines_slip_in_jraphit() {
             was + u32::try_from(slot.count).expect("more"),
             "wëap {id}"
         );
-        if let Some(nova_sim::combat::weapon::Ammo::Rounds(ammo)) =
-            arsenal.weapon(slot.weapon).map(|spec| spec.ammo)
-            && slot.ammo > 0
-        {
+        if arsenal.weapon(slot.weapon).is_some() {
             assert_eq!(
-                fitted.rounds.get(&ammo).copied().unwrap_or(0),
-                valkyrie.rounds.get(&ammo).copied().unwrap_or(0)
-                    + u32::try_from(slot.ammo).expect("more"),
-                "the rounds of wëap {id}"
+                fitted.rounds.slot(slot.weapon),
+                valkyrie.rounds.slot(slot.weapon) + i32::from(slot.ammo),
+                "the rounds on wëap {id}, its own slot"
             );
         }
     }
@@ -4263,12 +4255,7 @@ fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nov
         .expect("Fomalhaut has traffic")
         .clone();
     let arsenal = Arsenal::read(data);
-    let outfits = data.outfits();
-    let mut defaults = std::collections::BTreeMap::new();
-    for (outfit, count) in data.default_outfits(ship) {
-        *defaults.entry(outfit).or_insert(0_u16) += count;
-    }
-    let (armament, rounds) = arsenal.npc(ship, &defaults, &outfits);
+    let (armament, rounds) = arsenal.npc(ship);
     let fields = data.ship_fields(ship).expect("the shïp reads");
     npc.ship = ship;
     npc.stats = ShipStats::new(fields, &[]);
@@ -4317,20 +4304,17 @@ fn a_stock_manticore_fires_its_ir_missile_before_its_emp_torpedo() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let manticore = ShipId(146);
-    let arsenal = Arsenal::read(&data);
-    let mounted: Vec<i16> = arsenal
-        .of_class(
-            manticore,
-            &std::collections::BTreeMap::new(),
-            &data.outfits(),
-        )
-        .mounts()
+    let slotted: Vec<i16> = nova_sim::CombatCatalog::hulls(&data)
+        .into_iter()
+        .find(|hull| hull.id == manticore)
+        .expect("the Manticore")
+        .weapons
         .iter()
-        .map(|mount| mount.spec.id.0)
+        .map(|slot| slot.weapon.0)
         .collect();
-    let emp = mounted.iter().position(|&id| id == 160).expect("the EMP");
-    let ir = mounted.iter().position(|&id| id == 134).expect("the IR");
-    assert!(emp < ir, "mounted EMP first: {mounted:?}");
+    let emp = slotted.iter().position(|&id| id == 160).expect("the EMP");
+    let ir = slotted.iter().position(|&id| id == 134).expect("the IR");
+    assert!(emp < ir, "slotted EMP first: {slotted:?}");
     let ir_missile = Some(nova_sim::WeaponId(134));
     assert_eq!(stock_missile_at(&data, manticore, ShipId(130)), ir_missile);
     assert_eq!(stock_missile_at(&data, manticore, ShipId(128)), ir_missile);
@@ -4353,7 +4337,7 @@ fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
         .map(|ship| ship.id)
         .find(|&ship| {
             let homing: Vec<i16> = arsenal
-                .of_class(ship, &std::collections::BTreeMap::new(), &data.outfits())
+                .of_class(ship)
                 .mounts()
                 .iter()
                 .filter(|mount| mount.spec.guidance == Guidance::Homing)
@@ -4378,4 +4362,144 @@ fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
         emp,
         "at the Cargo Drone"
     );
+}
+
+// An NPC's rounds on each launcher (`_WeaponHasAmmo` @0xbab4-0xbac2).
+
+/// The stock classes whose stock slots carry both 155 Hail and 161 Storm,
+/// which fire 155's rounds alike, are 241, 248, 250, 294 and 395. As an
+/// NPC each keeps every launcher's own load (`_RandomShipSpawn`
+/// @0x3c7de-0x3c848): 241's Storm, loaded -1, never fires its point
+/// defence, and 248's and 250's Hails, loaded -1, hold nothing though
+/// their Storms hold hundreds. Firing the Storm as point defence until it
+/// stops spends its own load to none and leaves the Hail's whole.
+#[test]
+fn stock_classes_carrying_the_hail_and_storm_chainguns_keep_separate_rounds() {
+    use nova_sim::combat::armament::Shooter;
+    use nova_sim::combat::projectile::ShotId;
+    use nova_sim::combat::report::Reports;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let (hail, storm) = (nova_sim::WeaponId(155), nova_sim::WeaponId(161));
+    let hulls = nova_sim::CombatCatalog::hulls(&data);
+    let both: Vec<i16> = hulls
+        .iter()
+        .filter(|hull| {
+            let carries = |weapon| hull.weapons.iter().any(|slot| slot.weapon == weapon);
+            carries(hail) && carries(storm)
+        })
+        .map(|hull| hull.id.0)
+        .collect();
+    assert_eq!(both, [241, 248, 250, 294, 395]);
+    for hull in hulls.iter().filter(|hull| both.contains(&hull.id.0)) {
+        let load = |weapon| {
+            hull.weapons
+                .iter()
+                .find(|slot| slot.weapon == weapon)
+                .map_or(0, |slot| i32::from(slot.ammo))
+        };
+        let (mut armament, mut rounds) = arsenal.npc(hull.id);
+        assert_eq!(rounds.slot(hail), load(hail), "{:?}", hull.id);
+        assert_eq!(rounds.slot(storm), load(storm), "{:?}", hull.id);
+        let npc = Shooter {
+            npc: true,
+            ..Shooter::PLAYER
+        };
+        let mut fuel = Gauge::full(0.0);
+        let mut shots = 0_u32;
+        for _ in 0..100_000 {
+            let fired = armament.fire_point_defence(
+                Condition::Intact,
+                npc,
+                &mut rounds,
+                &mut fuel,
+                &mut NeverFires,
+                &mut Reports::default(),
+                &mut |_| Some((0.0, ShotId(1))),
+            );
+            shots += u32::from(fired.is_some());
+            armament.reload();
+        }
+        assert_eq!(
+            shots > 0,
+            load(storm) > 0,
+            "{:?}: the Storm fires on its own load alone",
+            hull.id
+        );
+        assert_eq!(rounds.slot(storm), load(storm).min(0), "{:?}", hull.id);
+        assert_eq!(
+            rounds.slot(hail),
+            load(hail),
+            "{:?}: the Hail's whole",
+            hull.id
+        );
+    }
+}
+
+/// The stock scans behind the per-launcher rounds: no class names one
+/// weapon in two stock slots, so summing and replacing agree; the only
+/// negative stock loads on a weapon that spends rounds are 241's 161 and
+/// 248's and 250's 155, each -1; no stock count is negative; and no class
+/// carries a weapon or ammunition outfit among its `DefaultItems`, which
+/// arm no NPC (`_LoadObjectData` @0x7aa25-0x7ad0f).
+#[test]
+fn stock_classes_load_one_slot_a_weapon_and_name_no_weapon_among_their_default_items() {
+    use nova_sim::PilotCatalog;
+    use nova_sim::combat::armament::{MOD_AMMO, MOD_WEAPON};
+    use nova_sim::combat::weapon::Ammo;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let hulls = nova_sim::CombatCatalog::hulls(&data);
+    let twice: Vec<i16> = hulls
+        .iter()
+        .filter(|hull| {
+            let mut weapons: Vec<_> = hull.weapons.iter().map(|slot| slot.weapon).collect();
+            weapons.sort_unstable();
+            weapons.windows(2).any(|pair| pair[0] == pair[1])
+        })
+        .map(|hull| hull.id.0)
+        .collect();
+    assert_eq!(twice, Vec::<i16>::new());
+    let negative: Vec<(i16, i16, i16)> = hulls
+        .iter()
+        .flat_map(|hull| hull.weapons.iter().map(move |slot| (hull.id, slot)))
+        .filter(|(_, slot)| {
+            slot.ammo < 0
+                && arsenal
+                    .weapon(slot.weapon)
+                    .is_some_and(|spec| matches!(spec.ammo, Ammo::Rounds(_)) || spec.guidance_99())
+        })
+        .map(|(ship, slot)| (ship.0, slot.weapon.0, slot.ammo))
+        .collect();
+    assert_eq!(negative, [(241, 161, -1), (248, 155, -1), (250, 155, -1)]);
+    assert!(
+        hulls
+            .iter()
+            .flat_map(|hull| &hull.weapons)
+            .all(|slot| slot.count >= 0)
+    );
+    let outfits = data.outfits();
+    let arming: Vec<i16> = data
+        .ships()
+        .iter()
+        .filter(|ship| {
+            data.default_outfits(ship.id).iter().any(|(outfit, _)| {
+                outfits.iter().any(|record| {
+                    record.id == *outfit
+                        && record
+                            .mods
+                            .iter()
+                            .any(|&(kind, _)| kind == MOD_WEAPON || kind == MOD_AMMO)
+                })
+            })
+        })
+        .map(|ship| ship.id.0)
+        .collect();
+    assert_eq!(arming, Vec::<i16>::new());
 }

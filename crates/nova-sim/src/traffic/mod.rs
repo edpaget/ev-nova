@@ -826,6 +826,7 @@ impl Traffic {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::combat::armament::LauncherRounds;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
@@ -927,7 +928,7 @@ mod tests {
                         ..HullSpec::default()
                     },
                     armament: Armament::new([(WeaponSpec::new(&weapon(128)), 2)]),
-                    rounds: BTreeMap::from([(WeaponId(138), 7)]),
+                    rounds: LauncherRounds::from([(WeaponId(138), 7)]),
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
                     self_repair: false,
@@ -1022,7 +1023,7 @@ mod tests {
         assert_eq!(first.condition, Condition::Intact);
         assert_eq!(first.hull.hit_radius, 9.0);
         assert_eq!(first.armament.mounts().len(), 1);
-        assert_eq!(first.rounds, BTreeMap::from([(WeaponId(138), 7)]));
+        assert_eq!(first.rounds, LauncherRounds::from([(WeaponId(138), 7)]));
         assert_eq!(first.trigger, Trigger::default());
         assert_eq!(first.state.position, Vec2::new(0.0, 0.0));
         assert_eq!(first.mode, Mode::Flying);

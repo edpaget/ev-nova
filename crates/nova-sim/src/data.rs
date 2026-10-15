@@ -876,6 +876,7 @@ impl CombatCatalog for GameData {
                     strength: record.strength,
                     key_carried: record.key_carried,
                     cost: record.cost,
+                    speed: record.speed,
                 })
             })
             .collect()
@@ -3076,6 +3077,7 @@ mod tests {
             strength: 325,
             key_carried: Some(ShipId(140)),
             cost: -1,
+            speed: 2,
         };
         assert_eq!(
             data.hulls(),

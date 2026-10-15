@@ -244,6 +244,9 @@ pub struct WeaponSpec {
     pub speed: f32,
     /// What each shot spends.
     pub ammo: Ammo,
+    /// Its `AmmoType`, raw, as the plunder compares it
+    /// ([`board::player_fires`](crate::board::player_fires)).
+    pub ammo_type: i16,
     /// How far off its heading a shot may leave, in degrees.
     pub inaccuracy: u32,
     /// The explosion where it hits or detonates, if any.
@@ -391,6 +394,7 @@ impl WeaponSpec {
             energy_damage: f32::from(record.energy_dmg),
             speed: f32::from(record.speed) / SPEED_PER_PIXEL_PER_TICK,
             ammo,
+            ammo_type: record.ammo_type,
             inaccuracy: count(record.inaccuracy),
             explosion: Explosion::decode(record.explod_type),
             prox_radius: ticks(record.prox_radius),
@@ -417,6 +421,17 @@ impl WeaponSpec {
     #[must_use]
     pub fn is_bay(&self) -> bool {
         self.guidance == Guidance::FighterBay
+    }
+
+    /// Whether its raw guidance is 99: a fighter bay, or a guidance-99
+    /// weapon with no ship to carry ([`Guidance::Other`]`(99)`), each
+    /// paying from its own rounds (`_WeaponHasAmmo` @0xba87-0xbaa1).
+    #[must_use]
+    pub fn guidance_99(&self) -> bool {
+        matches!(
+            self.guidance,
+            Guidance::FighterBay | Guidance::Other(FIGHTER_BAY)
+        )
     }
 
     /// Whether it fires beams: guidance 0, 3 and 10.

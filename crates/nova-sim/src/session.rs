@@ -440,7 +440,6 @@ use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
-use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Shove, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
@@ -2533,10 +2532,7 @@ impl Session {
         let mut armaments: Vec<Armament> = ships
             .iter()
             .filter_map(|&ship| self.ship_record(ship))
-            .map(|record| {
-                let defaults = pilot::tally(record.defaults.iter().copied());
-                self.arsenal.of_class(record.id, &defaults, &self.outfits)
-            })
+            .map(|record| self.arsenal.of_class(record.id))
             .collect();
         armaments.push(self.armament.clone());
         let launched: Vec<ShipId> = armaments
@@ -4677,16 +4673,21 @@ impl Session {
         }
     }
 
-    /// What `npc` has on board to plunder.
+    /// What `npc` has on board to plunder: among the rest, the rounds on
+    /// each of its launchers, each the player's to take as the ammunition
+    /// outfit of lowest ID naming the launcher when a weapon the player
+    /// carries fires them ([`board::player_fires`], by the rulebook's
+    /// [`RuleKey::PlunderAmmoBays`]).
     fn prize(&self, npc: &Npc) -> Prize {
         let record = self.ship_record(npc.ship);
         let fields = record.map(|record| record.fields).unwrap_or_default();
-        let fires = |armament: &Armament, ammo: WeaponId, bay: bool| {
-            armament
-                .mounts()
-                .iter()
-                .any(|mount| mount.spec.ammo == Ammo::Rounds(ammo) && (!bay || mount.spec.is_bay()))
-        };
+        let carried: Vec<crate::combat::weapon::WeaponSpec> = self
+            .armament
+            .mounts()
+            .iter()
+            .map(|mount| mount.spec)
+            .collect();
+        let bays = self.rules.source_for(RuleKey::PlunderAmmoBays);
         Prize {
             booty: npc.booty.unwrap_or(0),
             cost: record.map_or(0, |record| record.cost),
@@ -4695,18 +4696,21 @@ impl Session {
             rounds: npc
                 .rounds
                 .iter()
-                .map(|(&ammo, &rounds)| HeldRounds {
-                    ammo,
-                    rounds,
-                    bay: fires(&npc.armament, ammo, true),
-                    outfit: fires(&self.armament, ammo, false)
-                        .then(|| {
-                            self.ammo_outfits
-                                .iter()
-                                .find(|&&(of, _)| of == ammo)
-                                .map(|&(_, outfit)| outfit)
-                        })
-                        .flatten(),
+                .filter_map(|(slot, rounds)| {
+                    let launcher = self.arsenal.weapon(slot)?;
+                    Some(HeldRounds {
+                        slot,
+                        rounds: u32::try_from(rounds).ok()?,
+                        bay: launcher.guidance_99(),
+                        outfit: crate::board::player_fires(launcher, &carried, bays)
+                            .then(|| {
+                                crate::combat::armament::lowest_ammo_outfit(
+                                    &self.ammo_outfits,
+                                    slot,
+                                )
+                            })
+                            .flatten(),
+                    })
                 })
                 .collect(),
             person_credits: npc
@@ -20579,6 +20583,112 @@ pub(super) mod tests {
             board_by(&mut session, &NovaLaw::default()),
             Ok(Boarding::Opened(ON_BOARD)),
             "a bay's rounds are its fighters"
+        );
+    }
+
+    /// [`boardable`] with a Hail-like launcher 155 and a Storm-like point
+    /// defence 161, both firing 155's rounds (`AmmoType` 27), outfit 320
+    /// their ammunition and 255 the launcher: the player stocks one 155,
+    /// and the trader 155 loaded `hail` and 161 loaded `storm`.
+    fn hail_and_storm(hail: i16, storm: i16) -> FakePilotCatalog {
+        let mut catalog = boardable();
+        catalog.weapons.push(secondary(155, 27));
+        catalog.weapons.push(WeaponRecord {
+            guidance: 9,
+            ..secondary(161, 27)
+        });
+        let slot = |weapon: i16, ammo: i16| StockWeapon {
+            weapon: WeaponId(weapon),
+            count: 1,
+            ammo,
+        };
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.weapons.push(slot(155, 0));
+            }
+            if hull.id == ShipId(129) {
+                hull.weapons = vec![slot(155, hail), slot(161, storm)];
+            }
+        }
+        catalog.outfits.push(outfit(320, &[(MOD_AMMO, 155)]));
+        catalog.outfits.push(outfit(255, &[(MOD_WEAPON, 155)]));
+        catalog
+    }
+
+    /// What boarding `catalog`'s trader, by `rules`, offers of ammunition:
+    /// the outfit and its rounds.
+    fn ammo_offered(catalog: &FakePilotCatalog, rules: Rulebook) -> Option<(OutfitId, u32)> {
+        let mut session = alongside(catalog).with_rules(rules);
+        // Draws fitting with and without the rounds' draw.
+        let mut chance = Draws::of(&[0, 2, 0, 3, 0, 0, 0]);
+        let opened = session.board(&NovaLaw::default(), &NovaBoarding::default(), &mut chance);
+        match opened {
+            Ok(Boarding::Opened(view)) => view.ammo,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_rounds_on_board_are_one_launchers_own_that_the_player_fires() {
+        assert_eq!(
+            ammo_offered(&hail_and_storm(30, 50), Rulebook::default()),
+            Some((OutfitId(320), 30)),
+            "155's own 30, not 161's too"
+        );
+        assert_eq!(
+            ammo_offered(&hail_and_storm(0, 50), Rulebook::default()),
+            None,
+            "161's rounds need a weapon of `AmmoType` 33, which the player lacks"
+        );
+        let mut storm_fired = hail_and_storm(0, 50);
+        storm_fired.weapons.push(secondary(162, 33));
+        storm_fired.outfits.push(outfit(256, &[(MOD_WEAPON, 162)]));
+        storm_fired.outfits.push(outfit(321, &[(MOD_AMMO, 161)]));
+        for hull in &mut storm_fired.hulls {
+            if hull.id == ShipId(128) {
+                hull.weapons.push(StockWeapon {
+                    weapon: WeaponId(162),
+                    count: 1,
+                    ammo: 0,
+                });
+            }
+        }
+        assert_eq!(
+            ammo_offered(&storm_fired, Rulebook::default()),
+            Some((OutfitId(321), 50)),
+            "a weapon of the player's firing 161's rounds"
+        );
+    }
+
+    #[test]
+    fn a_players_bay_of_another_fighter_ends_the_ammunition_search_by_the_engine() {
+        let mut carrier = hail_and_storm(30, 0);
+        carrier.weapons.push(WeaponRecord {
+            guidance: crate::board::FIGHTER_BAY,
+            ..secondary(150, 144)
+        });
+        carrier.outfits.push(outfit(254, &[(MOD_WEAPON, 150)]));
+        for hull in &mut carrier.hulls {
+            if hull.id == ShipId(128) {
+                hull.weapons.push(StockWeapon {
+                    weapon: WeaponId(150),
+                    count: 1,
+                    ammo: 0,
+                });
+            }
+        }
+        assert_eq!(
+            ammo_offered(&carrier, Rulebook::default()),
+            None,
+            "the bay, of lower ID than the launcher, ends the walk"
+        );
+        assert_eq!(
+            ammo_offered(
+                &carrier,
+                Rulebook::default().with_override(RuleKey::PlunderAmmoBays, RuleSource::Bible)
+            ),
+            Some((OutfitId(320), 30)),
+            "passed by"
         );
     }
 

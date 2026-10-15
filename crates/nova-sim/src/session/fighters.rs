@@ -478,6 +478,7 @@ fn fighter(
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::combat::armament::LauncherRounds;
     use std::rc::Rc;
 
     use super::*;
@@ -1261,7 +1262,7 @@ mod tests {
             crate::combat::weapon::WeaponSpec::new(&bay()),
             1,
         )]);
-        npc.rounds = std::collections::BTreeMap::from([(BAY, vipers)]);
+        npc.rounds = LauncherRounds::from([(BAY, i32::try_from(vipers).expect("few"))]);
         npc.hull.sprite_size = Some(60.0);
         session.traffic.add_npc(npc)
     }
@@ -1278,7 +1279,9 @@ mod tests {
 
     /// The fighters `carrier` holds.
     fn aboard(session: &Session, carrier: NpcId) -> u32 {
-        session.npc(carrier).map_or(0, |npc| npc.rounds[&BAY])
+        session
+            .npc(carrier)
+            .map_or(0, |npc| u32::try_from(npc.rounds.slot(BAY)).unwrap_or(0))
     }
 
     /// A session with a pirate carrier of 2 Vipers attacking the player,

@@ -47,6 +47,7 @@ use std::fmt::Debug;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{HullRecord, ShipId};
+use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
 
@@ -157,6 +158,11 @@ pub struct HullSpec {
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
+    /// Its class's top speed, in pixels a tick: its `Speed` alone, none of
+    /// its outfits' (the original's class +0x40, `_LoadObjectData`
+    /// @0x7a0db-0x7a0ef), as a hopeless chase compares them (see
+    /// [`odds`](crate::ai::odds)); none below none.
+    pub class_speed: f32,
     /// Whether it is hidden: its `Cost` is -1, and `_HandleShipDisplay`
     /// hides a ship of such a type and leaves its slot's layer as it was
     /// (@0x2b7f3 → @0x2cc6b; see
@@ -184,6 +190,7 @@ impl Default for HullSpec {
             sprite_height: None,
             planet_type: false,
             key_carried: None,
+            class_speed: 0.0,
             hidden: false,
         }
     }
@@ -212,6 +219,7 @@ impl HullSpec {
             sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
             planet_type: record.flags & PLANET_TYPE != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
+            class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             hidden: record.cost == HIDDEN_COST,
         }
     }
@@ -591,6 +599,15 @@ mod tests {
         assert!(!HullSpec::default().shows_armor);
         assert!(!HullSpec::default().hides_status);
         assert_eq!((SHOWS_ARMOR, HIDES_STATUS), (0x0100, 0x0200));
+    }
+
+    #[test]
+    fn a_hulls_class_speed_is_its_speed_alone_in_pixels_a_tick() {
+        let of = |speed| HullSpec::new(&HullRecord { speed, ..hull(128) }).class_speed;
+        assert_eq!(of(350), 3.5);
+        assert_eq!(of(0), 0.0);
+        assert_eq!(of(-200), 0.0, "none below none");
+        assert_eq!(HullSpec::default().class_speed, 0.0);
     }
 
     #[test]

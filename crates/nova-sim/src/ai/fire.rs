@@ -79,7 +79,8 @@
 //!   weapon it counts, has its ammunition as `_WeaponHasAmmo` says
 //!   ([`has_ammo`]): an NPC never picks a weapon of `Flags2` 0x0100, a
 //!   cloaked one only a weapon of `Flags2` 0x4000, and a weapon of
-//!   `Flags2` 0x0080 needs its class's `KeyCarried` aboard.
+//!   `Flags2` 0x0080 needs its class's `KeyCarried` aboard. Its rounds are
+//!   its launcher's own (see [`armament`](crate::combat::armament)).
 //! - There is no friendly-fire check, as in the original. Guns
 //!   (`_AIFireGun`) never read the untargetable bit.
 //!
@@ -96,11 +97,6 @@
 //!   reads from a local only an earlier 7 or 8 slot sets (@0x80c29-0x80c37,
 //!   @0x80c5b), else uninitialised stack: here the bearing.
 //! - The whole-degree truncation in the arc test (@0x80c7f, @0x80c95).
-//! - An NPC's rounds kept on each launcher, as `_WeaponHasAmmo` reads
-//!   them (@0xbab4-0xbac2) and `_FireAIShipWeapon` spends them
-//!   (@0x88d5f): here they are kept by ammunition. rdm phase
-//!   player-led-ships/phase-33 takes it, with the hopeless chase's direct
-//!   slot test (@0x8103a-0x8104e).
 //! - `_ShipTurnRate`'s own factors, which [`suitable_missile`] reads
 //!   through the target's turn rate: rdm
 //!   system-traffic-fidelity/phase-17-npc-skill-and-speed-factors.
@@ -315,7 +311,13 @@ pub enum AmmoLeft {
     Dry,
 }
 
-/// How much of its weapons `npc` can still fire (see [`AmmoLeft`]).
+/// How much of its weapons `npc` can still fire (see [`AmmoLeft`]),
+/// each launcher read from its own slot of rounds, as
+/// `_AIShipIsOutOfAmmo` reads them (@0x7f76a): a launcher whose
+/// ammunition another holds is still empty. The rest of the function (the
+/// ×10 fuel threshold, `AmmoType` -1000 as unlimited, and an `AmmoType`
+/// past 255 reading its own slot) is rdm
+/// combat-ai-fidelity/phase-1-warship-word-and-ammo's.
 ///
 /// Only [`AmmoLeft::Dry`] is read today, by
 /// [`select_target`](crate::ai::target::select_target); the escort's
@@ -328,7 +330,7 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
     for mount in npc.armament.mounts() {
         if matches!(mount.spec.ammo, Ammo::Unlimited | Ammo::Other(_)) {
             unlimited = true;
-        } else if mount.affords(&npc.rounds, npc.reserves.fuel) {
+        } else if mount.affords(&npc.rounds, npc.reserves.fuel, true) {
             return AmmoLeft::Armed;
         } else {
             spending = true;
@@ -644,6 +646,7 @@ impl Sight<'_> {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::combat::armament::LauncherRounds;
     use std::collections::BTreeMap;
 
     use super::*;
@@ -1013,7 +1016,7 @@ mod tests {
             },
             Condition::Intact,
             crate::combat::armament::Shooter::PLAYER,
-            &mut BTreeMap::new(),
+            &mut LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
             &mut crate::combat::report::Reports::default(),
@@ -1431,8 +1434,10 @@ mod tests {
         };
         let mut npc = shooter(&[rocket], ATTACK);
         assert_eq!(fired(&npc, 0.0, -100.0, 50.0), None, "no rounds");
-        npc.rounds = BTreeMap::from([(WeaponId(138), 1)]);
-        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), id(128));
+        npc.rounds = LauncherRounds::from([(WeaponId(138), 1)]);
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), None, "its ammunition's");
+        npc.rounds = LauncherRounds::from([(WeaponId(128), 1)]);
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), id(128), "its own");
         let mut slow = shooter(
             &[WeaponRecord {
                 reload: 10,
@@ -1442,7 +1447,7 @@ mod tests {
         );
         assert_eq!(fired(&slow, 0.0, -100.0, 50.0), id(128));
         let mut fuel = slow.reserves.fuel;
-        let mut rounds = BTreeMap::new();
+        let mut rounds = LauncherRounds::default();
         slow.armament.fire(
             Trigger {
                 only: Some(WeaponId(128)),
@@ -1497,7 +1502,7 @@ mod tests {
             ATTACK,
         );
         assert!(!destroys(&rocket), "no rounds");
-        rocket.rounds = BTreeMap::from([(WeaponId(138), 1)]);
+        rocket.rounds = LauncherRounds::from([(WeaponId(128), 1)]);
         assert!(destroys(&rocket));
     }
 
@@ -1591,7 +1596,25 @@ mod tests {
     fn a_launcher_is_dry_without_rounds_and_armed_with_them() {
         let mut ship = shooter(&[launcher(128)], ATTACK);
         assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
-        ship.rounds = BTreeMap::from([(WeaponId(138), 1)]);
+        ship.rounds = LauncherRounds::from([(WeaponId(128), 1)]);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn ammo_left_reads_each_launchers_own_rounds() {
+        let storm = WeaponRecord {
+            guidance: 9,
+            ammo_type: 27,
+            ..weapon(161)
+        };
+        let mut ship = shooter(&[storm], ATTACK);
+        ship.rounds = LauncherRounds::from([(WeaponId(155), 40), (WeaponId(161), 0)]);
+        assert_eq!(
+            ammo_left(&ship),
+            AmmoLeft::Dry,
+            "155's rounds are not 161's (`_AIShipIsOutOfAmmo` @0x7f76a)"
+        );
+        ship.rounds = LauncherRounds::from([(WeaponId(161), 1)]);
         assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
     }
 
@@ -1610,7 +1633,7 @@ mod tests {
             ..weapon(130)
         };
         let mut ship = shooter(&[weapon(127), launcher(128), other], ATTACK);
-        ship.rounds = BTreeMap::from([(WeaponId(140), 1)]);
+        ship.rounds = LauncherRounds::from([(WeaponId(130), 1)]);
         assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
     }
 
@@ -1872,7 +1895,7 @@ mod tests {
             },
             Condition::Intact,
             crate::combat::armament::Shooter::PLAYER,
-            &mut BTreeMap::new(),
+            &mut LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
             &mut crate::combat::report::Reports::default(),
@@ -1954,7 +1977,7 @@ mod tests {
         };
         let mut ship = shooter(&[bay], ATTACK);
         assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
-        ship.rounds = BTreeMap::from([(WeaponId(150), 1)]);
+        ship.rounds = LauncherRounds::from([(WeaponId(150), 1)]);
         assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
     }
 }

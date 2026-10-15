@@ -1,14 +1,12 @@
 //! An NPC ship: what it is, how it performs, where it is, what it is
 //! doing, and what it fights with.
 
-use std::collections::BTreeMap;
-
 use crate::ai::Goal;
 use crate::bay::Carrier;
-use crate::catalog::{GovtId, PersonId, ShipId, WeaponId};
+use crate::catalog::{GovtId, PersonId, ShipId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
-use crate::combat::armament::{Armament, Trigger};
+use crate::combat::armament::{Armament, LauncherRounds, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
@@ -168,8 +166,9 @@ pub struct Npc {
     pub hull: HullSpec,
     /// Its weapons.
     pub armament: Armament,
-    /// The rounds of each ammunition it holds.
-    pub rounds: BTreeMap<WeaponId, u32>,
+    /// The rounds it holds, on each launcher (see
+    /// [`armament`](crate::combat::armament)).
+    pub rounds: LauncherRounds,
     /// The fire command it holds, as it last decided.
     pub trigger: Trigger,
     /// The ship it targets, as it last decided.
