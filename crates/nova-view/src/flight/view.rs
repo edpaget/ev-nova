@@ -8753,18 +8753,16 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_whose_system_is_gone_cannot_fly() {
+    fn a_pilot_whose_system_is_gone_flies_in_the_lowest_that_exists() {
         // In flight: a docked pilot resumes in its stellar's system.
         let mut pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         pilot.explore(SystemId(132));
         let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 132");
         let moved = nova_sim::save::decode(&text).expect("a pilot");
         let view = FlightView::with_pilot(catalog(), moved);
-        assert_eq!(
-            view.session().err(),
-            Some("the pilot's system, sÿst 132, does not exist")
-        );
-        assert_eq!(view.pilot(), None);
+        let session = view.session().expect("flies");
+        assert_eq!(session.system(), SystemId(130));
+        assert!(session.load_repaired());
     }
 
     #[test]

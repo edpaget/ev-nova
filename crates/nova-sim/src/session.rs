@@ -1045,6 +1045,9 @@ pub struct Session {
     /// The offer from a ship the offer dialog shows, until the player
     /// answers it (see the `person_offers` module); never saved.
     offering: Option<person_offers::Offering>,
+    /// Whether the load had to fall back for data the save references
+    /// and the catalog lacks ([`Session::load_repaired`]); never saved.
+    load_repaired: bool,
 }
 
 impl Session {
@@ -1099,14 +1102,54 @@ impl Session {
     /// the pilot then forgets) the ship starts at rest at the system's
     /// centre, facing up.
     ///
+    /// [`Session::load`] under [`Rulebook::default`]: see there for the
+    /// fallbacks a save whose data is missing takes. The session's own
+    /// rule set is [`Rulebook::default`] until [`Session::with_rules`].
+    ///
     /// # Errors
     ///
-    /// When the ship cannot be read, or the system the pilot resumes in
-    /// (its stellar's, else its saved one) no longer exists.
-    #[allow(clippy::too_many_lines)] // one line for each of the session's fields
+    /// When the ship cannot be read, or no system exists at all.
     pub fn fly(
         catalog: &(impl PilotCatalog + CombatCatalog),
+        pilot: Pilot,
+    ) -> Result<Self, StartError> {
+        Self::load(catalog, pilot, &Rulebook::default())
+    }
+
+    /// `pilot`'s session as [`Session::fly`] builds it, the load's
+    /// fallbacks reading `rules`, and [`Session::load_repaired`] saying
+    /// whether one applied, as `_LoadPilotData` returns -0x2e when it set
+    /// its warning flag (@0x7648b-0x76498), the load otherwise complete:
+    ///
+    /// - A pilot whose stellar no system lists, so the loaded data doesn't
+    ///   place it, resumes as [`RuleKey::UnlistedStellar`] reads: by the
+    ///   engine in the lowest system that exists, as `_LoadPilotData` takes
+    ///   the first with +0x1ed set when `_FindSystemFromStellar` finds none
+    ///   (@0x752d6-0x75318), by the other reading (the default) in its
+    ///   saved system. Either way the stellar is forgotten, as the system
+    ///   doesn't list it, and the ship starts at the centre: the original's
+    ///   position at the stellar's x/y in a system that doesn't hold it
+    ///   (@0x75329-0x75354) isn't copied.
+    /// - A pilot whose system no longer exists, its stellar unlisted or
+    ///   `None`, resumes in the lowest system that exists, at the centre,
+    ///   under either reading. The original has no such case, as it takes
+    ///   the system from the stellar alone; the engine's saved system is
+    ///   its own, and refusing the pilot would strand one a removed
+    ///   plug-in's system held.
+    ///
+    /// A pilot never landed, its stellar `None`, is not repaired: the
+    /// original's stellar -1 fallback (@0x751e9-0x75255) is left out, as
+    /// the engine's `None` stellar doesn't mean missing data.
+    ///
+    /// # Errors
+    ///
+    /// When the ship cannot be read, or no system exists at all
+    /// ([`StartError::NoSystem`] with the pilot's saved system).
+    #[allow(clippy::too_many_lines)] // one line for each of the session's fields
+    pub fn load(
+        catalog: &(impl PilotCatalog + CombatCatalog),
         mut pilot: Pilot,
+        rules: &Rulebook,
     ) -> Result<Self, StartError> {
         let ship = pilot.ship;
         let fields = catalog
@@ -1124,15 +1167,25 @@ impl Session {
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
         let listed = catalog.listed_stellars();
-        if let Some(system) = pilot
-            .stellar
-            .and_then(|stellar| listed.iter().find(|listed| listed.id == stellar))
-            .and_then(|listed| resume_system(&galaxy, &listed.systems))
-        {
-            pilot.system = system;
+        let saved = pilot.system;
+        let mut load_repaired = false;
+        if let Some(stellar) = pilot.stellar {
+            if let Some(system) = listed
+                .iter()
+                .find(|listed| listed.id == stellar)
+                .and_then(|listed| resume_system(&galaxy, &listed.systems))
+            {
+                pilot.system = system;
+            } else {
+                load_repaired = true;
+                if rules.source_for(RuleKey::UnlistedStellar) == RuleSource::Engine {
+                    pilot.system = lowest_system(&galaxy, catalog).unwrap_or(pilot.system);
+                }
+            }
         }
         if !catalog.system_exists(pilot.system) {
-            return Err(StartError::NoSystem(pilot.system));
+            pilot.system = lowest_system(&galaxy, catalog).ok_or(StartError::NoSystem(saved))?;
+            load_repaired = true;
         }
         // A load is one of the original's refresh points: a pilot in a
         // hidden system flies from the one standing for it, silently.
@@ -1314,6 +1367,7 @@ impl Session {
             ship_offers: person_offers::ShipOffers::new(),
             offering: None,
             script_slot: None,
+            load_repaired,
             pilot,
         };
         session.register_offer_roll();
@@ -1347,6 +1401,16 @@ impl Session {
         // `precalced` module).
         session.reset_precalced();
         Ok(session)
+    }
+
+    /// Whether the load had to fall back because the save references data
+    /// the catalog lacks: a stellar no system lists, or a system that no
+    /// longer exists (see [`Session::load`]). It stands for
+    /// `_LoadPilotData`'s -0x2e result (@0x7648b-0x76498), on which
+    /// `_MainScreenChoice` shows `STR#` 140 #52 (@0x1a840-0x1a85b).
+    #[must_use]
+    pub fn load_repaired(&self) -> bool {
+        self.load_repaired
     }
 
     /// Turns the player's ship to a whole degree from 0 to 359 drawn on
@@ -5191,6 +5255,19 @@ fn resume_system(galaxy: &OverlaidGalaxy, listers: &[SystemId]) -> Option<System
         .or_else(|| listers.first().copied())
 }
 
+/// The lowest system on `galaxy`'s map that `catalog` can read: where a
+/// load falls back to, as `_LoadPilotData` takes the first system with
+/// +0x1ed set (@0x752ea-0x75316).
+fn lowest_system(
+    galaxy: &OverlaidGalaxy,
+    catalog: &(impl PilotCatalog + ?Sized),
+) -> Option<SystemId> {
+    galaxy
+        .map()
+        .systems()
+        .find(|&system| catalog.system_exists(system))
+}
+
 /// Where `pilot`, flown among its system's stellars `here`, resumes
 /// docked: the stellar it last landed on, if it is among them; else, if
 /// it is another system's at the same place, one the overlay hid and moved
@@ -7123,19 +7200,142 @@ pub(super) mod tests {
         assert_eq!(session.pilot().stellar(), None);
     }
 
+    /// [`landed_pilot`] moved to system 131 and last landed on stellar
+    /// 999, which no system lists.
+    fn unlisted_pilot(catalog: &FakePilotCatalog) -> Pilot {
+        let mut pilot = landed_pilot(catalog);
+        pilot.system = SystemId(131);
+        pilot.stellar = Some(StellarId(999));
+        pilot
+    }
+
+    fn engine_unlisted() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::UnlistedStellar, RuleSource::Engine)
+    }
+
+    /// Asserts `session` flies undocked at its system's centre, having
+    /// forgotten its stellar.
+    fn assert_undocked_at_centre(session: &Session) {
+        assert_eq!(session.landed(), None);
+        assert_eq!(*session.player(), ShipState::default());
+        assert_eq!(session.pilot().stellar(), None);
+    }
+
     #[test]
-    fn flying_a_pilot_in_a_system_that_no_longer_exists_is_an_error() {
-        let pilot = landed_pilot(&catalog());
-        // 130 is gone with its stellars, so no system lists 128 either.
+    fn loading_a_pilot_whose_stellar_no_system_lists_keeps_its_system_by_default_and_says_so() {
+        let catalog = catalog();
+        let session =
+            Session::load(&catalog, unlisted_pilot(&catalog), &Rulebook::default()).expect("loads");
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_undocked_at_centre(&session);
+        assert!(session.load_repaired());
+    }
+
+    #[test]
+    fn loading_an_unlisted_stellar_by_the_engines_reading_moves_to_the_lowest_system() {
+        let catalog = catalog();
+        let session =
+            Session::load(&catalog, unlisted_pilot(&catalog), &engine_unlisted()).expect("loads");
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(session.pilot().system(), SystemId(130));
+        assert_undocked_at_centre(&session);
+        assert!(session.load_repaired());
+    }
+
+    #[test]
+    fn loading_a_never_landed_pilot_repairs_nothing_under_either_reading() {
+        let catalog = catalog();
+        let mut pilot = Session::start(&catalog).expect("starts").pilot().clone();
+        pilot.system = SystemId(131);
+        assert_eq!(pilot.stellar(), None);
+        for rules in [Rulebook::default(), engine_unlisted()] {
+            let session = Session::load(&catalog, pilot.clone(), &rules).expect("loads");
+            assert_eq!(session.system(), SystemId(131), "{rules:?}");
+            assert!(!session.load_repaired(), "{rules:?}");
+        }
+    }
+
+    #[test]
+    fn loading_a_pilot_whose_system_is_gone_moves_to_the_lowest_that_exists() {
+        // 130 is gone with its stellars, so no system lists 128 either;
+        // the star map still has 130, 132 and 133, none of which exists.
         let gone = FakePilotCatalog {
             systems: vec![SystemId(131)],
             sites: vec![(SystemId(131), vec![planet(140, 0.0, 0.0)])],
             ..catalog()
         };
+        let mut never_landed = Session::start(&catalog()).expect("starts").pilot().clone();
+        never_landed.stellar = None;
+        let mut unlisted = landed_pilot(&catalog());
+        unlisted.stellar = Some(StellarId(999));
+        for pilot in [never_landed, unlisted] {
+            assert_eq!(pilot.system(), SystemId(130));
+            for rules in [Rulebook::default(), engine_unlisted()] {
+                let session = Session::load(&gone, pilot.clone(), &rules).expect("loads");
+                assert_eq!(session.system(), SystemId(131), "{rules:?}");
+                assert_eq!(session.pilot().system(), SystemId(131), "{rules:?}");
+                assert_undocked_at_centre(&session);
+                assert!(session.load_repaired(), "{rules:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn loading_with_no_system_at_all_is_still_no_system() {
+        let pilot = landed_pilot(&catalog());
+        let none = FakePilotCatalog {
+            systems: vec![],
+            ..catalog()
+        };
+        for rules in [Rulebook::default(), engine_unlisted()] {
+            assert_eq!(
+                Session::load(&none, pilot.clone(), &rules),
+                Err(StartError::NoSystem(SystemId(130)))
+            );
+        }
+        let mut moved = pilot;
+        moved.stellar = Some(StellarId(999));
         assert_eq!(
-            Session::fly(&gone, pilot),
-            Err(StartError::NoSystem(SystemId(130)))
+            Session::load(&none, moved, &engine_unlisted()),
+            Err(StartError::NoSystem(SystemId(130))),
+            "the saved system, not one a fallback chose"
         );
+    }
+
+    #[test]
+    fn loading_a_pilot_whose_system_is_gone_but_whose_stellar_is_listed_resumes_as_phase_13_places_it()
+     {
+        let catalog = catalog();
+        let mut pilot = landed_pilot(&catalog);
+        pilot.system = SystemId(133);
+        pilot.stellar = Some(StellarId(140));
+        for rules in [Rulebook::default(), engine_unlisted()] {
+            let session = Session::load(&catalog, pilot.clone(), &rules).expect("loads");
+            assert_eq!(session.system(), SystemId(131), "{rules:?}");
+            assert_eq!(session.landed(), Some(StellarId(140)), "{rules:?}");
+            assert!(!session.load_repaired(), "{rules:?}");
+        }
+    }
+
+    #[test]
+    fn a_normal_load_repairs_nothing() {
+        let catalog = catalog();
+        let pilot = landed_pilot(&catalog);
+        for rules in [Rulebook::default(), engine_unlisted()] {
+            let session = Session::load(&catalog, pilot.clone(), &rules).expect("loads");
+            assert_eq!(session.landed(), Some(StellarId(128)));
+            assert!(!session.load_repaired());
+        }
+        assert!(!Session::start(&catalog).expect("starts").load_repaired());
+    }
+
+    #[test]
+    fn fly_reads_the_default_rulebook() {
+        let catalog = catalog();
+        let session = Session::fly(&catalog, unlisted_pilot(&catalog)).expect("flies");
+        assert_eq!(session.system(), SystemId(131));
+        assert!(session.load_repaired());
     }
 
     /// [`catalog`] with 131's planet 140 at (50, 60), off its centre.
