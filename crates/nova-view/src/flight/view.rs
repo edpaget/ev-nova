@@ -12899,6 +12899,13 @@ mod tests {
         view.input(&held(NEAREST_KEY));
         assert_eq!(view.take_sounds(), [], "a repeat of R");
         assert_eq!(target_of(&view), before);
+        view.input(&key(NEAREST_KEY, false));
+        tap(&mut view, NEAREST_KEY);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "a fresh R finds no threat"
+        );
     }
 
     /// NPC 0 attacks the player; the rest idle.
