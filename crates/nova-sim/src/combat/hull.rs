@@ -44,6 +44,7 @@
 
 use std::fmt::Debug;
 
+use super::exits::ExitPoints;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{HullRecord, ShipId};
@@ -178,6 +179,10 @@ pub struct HullSpec {
     /// (@0x2b7f3 → @0x2cc6b; see
     /// [`ship_layer`](crate::ship_layer)).
     pub hidden: bool,
+    /// Its weapon exit points, from its `shän`; none without one, and its
+    /// shots and beams leave from its centre (see
+    /// [`exits`](super::exits)).
+    pub exits: Option<ExitPoints>,
 }
 
 impl Default for HullSpec {
@@ -203,6 +208,7 @@ impl Default for HullSpec {
             class_speed: 0.0,
             stock_reach: None,
             hidden: false,
+            exits: None,
         }
     }
 }
@@ -233,6 +239,7 @@ impl HullSpec {
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
             hidden: record.cost == HIDDEN_COST,
+            exits: record.exits.as_ref().and_then(ExitPoints::new),
         }
     }
 
@@ -371,7 +378,8 @@ impl DisableRule for NovaDisable {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{BoomId, ShipId};
+    use crate::catalog::{BoomId, ShipExits, ShipId};
+    use crate::combat::exits::ExitPoints;
     use crate::testkit::hull;
 
     fn armor(now: f32, max: f32) -> Gauge {
@@ -427,6 +435,38 @@ mod tests {
         }
         assert_eq!(DEFAULT_HIT_RADIUS, 16.0);
         assert_eq!(HullSpec::default().hit_radius, 16.0);
+    }
+
+    #[test]
+    fn hull_spec_reads_exit_points_in_simulation_units() {
+        let raw = ShipExits {
+            points: [
+                [(3, 10), (-3, 10), (3, 10), (-3, 10)],
+                [(0, 0); 4],
+                [(0, 0); 4],
+                [(0, 0); 4],
+            ],
+            z: [[-2; 4], [0; 4], [0; 4], [0; 4]],
+            up_compress: (100, 71),
+            down_compress: (100, 71),
+            frames: 36,
+        };
+        let shuttle = HullSpec::new(&HullRecord {
+            exits: Some(raw),
+            ..hull(128)
+        });
+        assert_eq!(shuttle.exits, ExitPoints::new(&raw));
+        assert!(shuttle.exits.is_some());
+        let without = HullSpec::new(&HullRecord {
+            exits: None,
+            ..hull(128)
+        });
+        assert_eq!(without.exits, None, "no shän");
+        assert_eq!(
+            HullSpec::default().exits,
+            None,
+            "a placeholder fires from its centre"
+        );
     }
 
     #[test]

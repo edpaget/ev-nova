@@ -412,6 +412,7 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         max_ammo: 0,
         prox_safety: 0,
         recoil: 0,
+        exit_type: -1,
     }
 }
 
@@ -432,6 +433,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         key_carried: None,
         cost: 0,
         speed: 0,
+        exits: None,
     }
 }
 

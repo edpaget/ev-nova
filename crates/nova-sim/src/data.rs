@@ -38,9 +38,9 @@ use crate::catalog::{
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    RankId, RankRecord, ShipExits, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic,
+    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -849,6 +849,7 @@ impl CombatCatalog for GameData {
                     max_ammo: record.max_ammo,
                     prox_safety: record.prox_safety,
                     recoil: record.recoil,
+                    exit_type: record.exit_type,
                 })
             })
             .collect()
@@ -858,11 +859,13 @@ impl CombatCatalog for GameData {
         self.records::<Ship>()
             .filter_map(|(id, ship)| {
                 let record = ship.ok()?.record;
-                let (size, height) = match self.get::<ShipAnim>(id) {
-                    Some(Ok(anim)) => {
-                        (Some(anim.record.base_x_size), Some(anim.record.base_y_size))
-                    }
-                    _ => (None, None),
+                let (size, height, exits) = match self.get::<ShipAnim>(id) {
+                    Some(Ok(anim)) => (
+                        Some(anim.record.base_x_size),
+                        Some(anim.record.base_y_size),
+                        Some(ship_exits(anim.record)),
+                    ),
+                    _ => (None, None, None),
                 };
                 Some(HullRecord {
                     id: ShipId(id),
@@ -878,6 +881,7 @@ impl CombatCatalog for GameData {
                     key_carried: record.key_carried,
                     cost: record.cost,
                     speed: record.speed,
+                    exits,
                 })
             })
             .collect()
@@ -978,6 +982,28 @@ fn stock_weapons(ship: &Ship) -> Vec<StockWeapon> {
             })
         })
         .collect()
+}
+
+/// A `shän`'s weapon exit points, compression and `FramesPer`, raw.
+fn ship_exits(anim: &ShipAnim) -> ShipExits {
+    let pairs = |xs: [i16; 4], ys: [i16; 4]| std::array::from_fn(|i| (xs[i], ys[i]));
+    ShipExits {
+        points: [
+            pairs(anim.gun_pos_x, anim.gun_pos_y),
+            pairs(anim.turret_pos_x, anim.turret_pos_y),
+            pairs(anim.guided_pos_x, anim.guided_pos_y),
+            pairs(anim.beam_pos_x, anim.beam_pos_y),
+        ],
+        z: [
+            anim.gun_pos_z,
+            anim.turret_pos_z,
+            anim.guided_pos_z,
+            anim.beam_pos_z,
+        ],
+        up_compress: (anim.up_compress_x, anim.up_compress_y),
+        down_compress: (anim.dn_compress_x, anim.dn_compress_y),
+        frames: anim.frames_per,
+    }
 }
 
 /// A `shän`'s `BlinkMode` and `BlinkValA`–`D`, raw.
@@ -1116,8 +1142,8 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
-        StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
+        DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipExits,
+        StarSystem, StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test, TestExpr};
@@ -2948,7 +2974,7 @@ mod tests {
         put_i16s(&mut bytes, 0x22, &[100]);
         put_i16s(&mut bytes, 0x30, &[300]);
         bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
-        put_i16s(&mut bytes, 0x56, &[12]);
+        put_i16s(&mut bytes, 0x56, &[12, 2]);
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
@@ -2994,6 +3020,7 @@ mod tests {
             max_ammo: 6,
             prox_safety: 8,
             recoil: 12,
+            exit_type: 2,
         };
         assert_eq!(
             data.weapons(),
@@ -3051,7 +3078,7 @@ mod tests {
             (ShipAnim::TYPE, 128, anim(24, 40)),
             (ShipAnim::TYPE, 131, short(anim(30, 30))),
         ]);
-        let record = |id, size, height| HullRecord {
+        let record = |id, size, height, exits| HullRecord {
             id: ShipId(id),
             flags: 0x0130,
             death_delay: 60,
@@ -3081,17 +3108,47 @@ mod tests {
             key_carried: Some(ShipId(140)),
             cost: -1,
             speed: 2,
+            exits,
         };
         assert_eq!(
             data.hulls(),
             [
-                record(128, Some(24), Some(40)),
-                record(130, None, None),
-                record(131, None, None)
+                record(128, Some(24), Some(40), Some(ShipExits::default())),
+                record(130, None, None, None),
+                record(131, None, None, None)
             ],
             "by ID, the undecodable shïp left out; without a shän that can be read, no size"
         );
         assert_eq!(store(&[]).hulls(), []);
+    }
+
+    #[test]
+    fn a_hull_carries_its_shäns_exit_points_compression_and_frames() {
+        let mut bytes = anim(24, 24);
+        put_i16s(&mut bytes, 0x34, &[64]);
+        put_i16s(&mut bytes, 0x48, &[3, -3, 4, -4, 10, 11, 12, 13]);
+        put_i16s(&mut bytes, 0x58, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        put_i16s(&mut bytes, 0x68, &[-1, -2, -3, -4, -5, -6, -7, -8]);
+        put_i16s(&mut bytes, 0x78, &[20, 0, -20, 0, 0, 30, 0, -30]);
+        put_i16s(&mut bytes, 0x88, &[100, 71, 0, -5]);
+        put_i16s(&mut bytes, 0x90, &[-2, -2, -2, -2, 0, 1, 2, 3]);
+        put_i16s(&mut bytes, 0xA0, &[4, 5, 6, 7, 25, 0, -25, 0]);
+        let data = store(&[(Ship::TYPE, 128, armed()), (ShipAnim::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.hulls()[0].exits,
+            Some(ShipExits {
+                points: [
+                    [(3, 10), (-3, 11), (4, 12), (-4, 13)],
+                    [(1, 5), (2, 6), (3, 7), (4, 8)],
+                    [(-1, -5), (-2, -6), (-3, -7), (-4, -8)],
+                    [(20, 0), (0, 30), (-20, 0), (0, -30)],
+                ],
+                z: [[-2; 4], [0, 1, 2, 3], [4, 5, 6, 7], [25, 0, -25, 0]],
+                up_compress: (100, 71),
+                down_compress: (0, -5),
+                frames: 64,
+            })
+        );
     }
 
     /// A `gövt` with every field the combat catalog reads set to something

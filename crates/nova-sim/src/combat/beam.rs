@@ -11,14 +11,19 @@
 //! ([`Sides::beam_can_hit`]), not a shot's: no government test, and a
 //! breaking-up ship is hit, so a beam stops on a hulk.
 //!
-//! A beam (0) is held along its firer's heading, plus the offset it left
-//! at. A turreted beam (3) is held along the bearing to its target every
-//! tick, and ends once the target is gone or breaking up. A point-defence
-//! beam (10) is held on its missile, ends once the missile is gone, and
-//! hits no ship.
+//! A beam starts at the exit point it left from (see
+//! [`exits`](super::exits)) on the frame its firer is drawn on that tick,
+//! as `_HandleBeams` places it after every ship is drawn
+//! (@0x3076a-0x30922): at its firer's centre when it has none. A beam (0)
+//! is held along its firer's heading, plus the offset it left at. A
+//! turreted beam (3) is held along the bearing from its start to its
+//! target every tick (@0x30432-0x306bb), and ends once the target is gone
+//! or breaking up. A point-defence beam (10) is held on its missile the
+//! same way, ends once the missile is gone, and hits no ship.
 
 use super::ShipRef;
 use super::aim::bearing;
+use super::exits::{Compression, ExitKind, ExitPoints, drawn_frame, frame_angle};
 use super::projectile::{Shot, ShotId, Target, contact};
 use super::sides::{Sides, Ties};
 use super::weapon::WeaponSpec;
@@ -68,6 +73,13 @@ pub struct Beam {
     /// +0x20): its weapon's [`disable_only`](WeaponSpec::disable_only),
     /// set at launch (`_SpawnBeam` @0x45260).
     pub disable_only: bool,
+    /// The set of its firer's exit points it left from, its weapon's
+    /// `ExitType` (the original's beam +0x1c); none for the centre.
+    pub kind: Option<ExitKind>,
+    /// The exit of that set it left from (beam +0x1a,
+    /// [`ExitCursors::beam_exit`](super::exits::ExitCursors::beam_exit));
+    /// none for the centre.
+    pub exit: Option<usize>,
 }
 
 impl Beam {
@@ -94,15 +106,25 @@ impl Beam {
             age: 0,
             aimed_at: None,
             disable_only: weapon.disable_only(),
+            kind: None,
+            exit: None,
         };
         beam.point(from.position, heading);
         beam
     }
 
-    /// Puts the beam on its firer, now `at`, held on what it aims at among
-    /// `targets` and `shots`; false, and left where it was, when that is
-    /// gone (see the module docs).
-    pub fn follow(&mut self, at: &ShipState, targets: &[Target], shots: &[Shot]) -> bool {
+    /// Puts the beam on its firer, now `at`, at its exit among the firer's
+    /// `exits`, compressed as `compression` says, and held on what it aims
+    /// at among `targets` and `shots`; false, and left where it was, when
+    /// that is gone (see the module docs).
+    pub fn follow(
+        &mut self,
+        at: &ShipState,
+        exits: Option<&ExitPoints>,
+        compression: Compression,
+        targets: &[Target],
+        shots: &[Shot],
+    ) -> bool {
         let toward = match self.aiming {
             Aiming::Ahead => None,
             Aiming::Ship(ship) => {
@@ -119,11 +141,29 @@ impl Beam {
                 None => return false,
             },
         };
+        let start = at.position + self.exit_offset(at.heading, exits, compression);
         let heading = toward.map_or(normalized(at.heading + self.offset), |toward| {
-            bearing(at.position, toward)
+            bearing(start, toward)
         });
-        self.point(at.position, heading);
+        self.point(start, heading);
         true
+    }
+
+    /// How far off its firer's centre, the firer facing `heading`, it
+    /// starts: its exit among `exits` on the frame the firer is drawn on,
+    /// and none without an exit (@0x30775-0x3079b).
+    fn exit_offset(
+        &self,
+        heading: f32,
+        exits: Option<&ExitPoints>,
+        compression: Compression,
+    ) -> Vec2 {
+        let (Some(exits), Some(kind), Some(exit)) = (exits, self.kind, self.exit) else {
+            return Vec2::ZERO;
+        };
+        let frames = exits.frames();
+        let angle = frame_angle(drawn_frame(heading, frames), frames);
+        exits.offset(angle, kind, exit, compression)
     }
 
     /// Points the beam from `start` along `heading`.
@@ -248,7 +288,13 @@ mod tests {
             beam.age();
         }
         assert!(beam.expired());
-        assert!(beam.follow(&at(-5.0, 0.0, 180.0), &[], &[]));
+        assert!(beam.follow(
+            &at(-5.0, 0.0, 180.0),
+            None,
+            Compression::default(),
+            &[],
+            &[]
+        ));
         assert_eq!(beam.start, Vec2::new(-5.0, 0.0));
         assert!(close(beam.end, Vec2::new(-5.0, 100.0)), "{beam:?}");
         let offset = Beam::launch(
@@ -261,6 +307,55 @@ mod tests {
         );
         assert!(close(offset.end, Vec2::new(100.0, 0.0)), "{offset:?}");
         assert_eq!(offset.offset, 100.0);
+    }
+
+    #[test]
+    fn a_beam_starts_at_its_exit_on_the_frame_its_firer_is_drawn_on() {
+        let raw = crate::catalog::ShipExits {
+            points: [
+                [(0, 0); 4],
+                [(0, 0); 4],
+                [(0, 0); 4],
+                [(0, 0), (30, 0), (0, 0), (0, 0)],
+            ],
+            up_compress: (100, 100),
+            down_compress: (100, 100),
+            frames: 36,
+            ..crate::catalog::ShipExits::default()
+        };
+        let exits = ExitPoints::new(&raw).expect("exits");
+        let mut beam = Beam {
+            kind: Some(ExitKind::Beam),
+            exit: Some(1),
+            ..Beam::launch(
+                laser(),
+                FIRER,
+                FIRER,
+                &at(0.0, 0.0, 0.0),
+                0.0,
+                Aiming::Ahead,
+            )
+        };
+        let mut start = |at: ShipState, exits| {
+            assert!(beam.follow(&at, exits, Compression::ByOffset, &[], &[]));
+            beam.start
+        };
+        assert!(close(
+            start(at(100.0, 100.0, 0.0), Some(&exits)),
+            Vec2::new(130.0, 100.0)
+        ));
+        assert!(
+            close(
+                start(at(100.0, 100.0, 99.0), Some(&exits)),
+                Vec2::new(100.0, 130.0)
+            ),
+            "on frame 9"
+        );
+        assert_eq!(
+            start(at(100.0, 100.0, 99.0), None),
+            Vec2::new(100.0, 100.0),
+            "no exits"
+        );
     }
 
     fn target(id: u32, x: f32, y: f32) -> Target {
@@ -344,11 +439,23 @@ mod tests {
             "as launched: {beam:?}"
         );
         for (x, y) in [(0.0, -50.0), (50.0, 0.0), (-30.0, 30.0)] {
-            assert!(beam.follow(&at(0.0, 0.0, 90.0), &[target(2, x, y)], &[]));
+            assert!(beam.follow(
+                &at(0.0, 0.0, 90.0),
+                None,
+                Compression::default(),
+                &[target(2, x, y)],
+                &[]
+            ));
             let along = Vec2::new(x, y) * (100.0 / Vec2::new(x, y).length());
             assert!(close(beam.end, along), "({x}, {y}): {beam:?}");
         }
-        assert!(beam.follow(&at(10.0, 0.0, 0.0), &[target(2, 10.0, 50.0)], &[]));
+        assert!(beam.follow(
+            &at(10.0, 0.0, 0.0),
+            None,
+            Compression::default(),
+            &[target(2, 10.0, 50.0)],
+            &[]
+        ));
         assert_eq!(beam.start, Vec2::new(10.0, 0.0));
         assert!(
             close(beam.end, Vec2::new(10.0, 100.0)),
@@ -359,7 +466,13 @@ mod tests {
     #[test]
     fn a_turreted_beam_ends_once_its_target_is_gone_or_breaking_up() {
         let mut beam = turreted();
-        assert!(!beam.follow(&at(0.0, 0.0, 90.0), &[target(3, 0.0, -50.0)], &[]));
+        assert!(!beam.follow(
+            &at(0.0, 0.0, 90.0),
+            None,
+            Compression::default(),
+            &[target(3, 0.0, -50.0)],
+            &[]
+        ));
         let dying = Target {
             condition: Condition::Dying {
                 ticks_left: 3,
@@ -367,12 +480,24 @@ mod tests {
             },
             ..target(2, 0.0, -50.0)
         };
-        assert!(!turreted().follow(&at(0.0, 0.0, 90.0), &[dying], &[]));
+        assert!(!turreted().follow(
+            &at(0.0, 0.0, 90.0),
+            None,
+            Compression::default(),
+            &[dying],
+            &[]
+        ));
         let disabled = Target {
             condition: Condition::Disabled,
             ..target(2, 0.0, -50.0)
         };
-        assert!(turreted().follow(&at(0.0, 0.0, 90.0), &[disabled], &[]));
+        assert!(turreted().follow(
+            &at(0.0, 0.0, 90.0),
+            None,
+            Compression::default(),
+            &[disabled],
+            &[]
+        ));
     }
 
     /// A shot of the IR Missile at (`x`, `y`), numbered `id`.
@@ -404,14 +529,26 @@ mod tests {
         );
         assert!(close(beam.end, Vec2::new(100.0, 0.0)));
         let shots = [missile(4, 0.0, -40.0), missile(5, 0.0, 40.0)];
-        assert!(beam.follow(&at(0.0, 0.0, 0.0), &[], &shots));
+        assert!(beam.follow(
+            &at(0.0, 0.0, 0.0),
+            None,
+            Compression::default(),
+            &[],
+            &shots
+        ));
         assert!(
             close(beam.end, Vec2::new(0.0, 100.0)),
             "at shot 5: {beam:?}"
         );
         assert_eq!(beam.hit(&among(&[target(2, 0.0, 50.0)])), None);
         assert!(
-            !beam.follow(&at(0.0, 0.0, 0.0), &[], &shots[..1]),
+            !beam.follow(
+                &at(0.0, 0.0, 0.0),
+                None,
+                Compression::default(),
+                &[],
+                &shots[..1]
+            ),
             "its shot gone"
         );
     }
@@ -426,7 +563,13 @@ mod tests {
             80.0,
             Aiming::Ahead,
         );
-        assert!(beam.follow(&at(0.0, 0.0, 0.0), &[target(2, 50.0, 0.0)], &[]));
+        assert!(beam.follow(
+            &at(0.0, 0.0, 0.0),
+            None,
+            Compression::default(),
+            &[target(2, 50.0, 0.0)],
+            &[]
+        ));
         assert!(close(beam.end, facing(350.0) * 100.0), "{beam:?}");
     }
 

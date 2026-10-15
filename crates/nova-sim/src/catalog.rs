@@ -1060,6 +1060,9 @@ pub struct WeaponRecord {
     /// Its `Recoil`: the push its firer takes away from its heading, over
     /// the firer's mass; none at 0 or -1.
     pub recoil: i16,
+    /// Its `ExitType`: which of its ship's exit points it fires from, 0
+    /// to 3; any other value fires from the centre.
+    pub exit_type: i16,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`
@@ -1072,6 +1075,24 @@ pub struct StockWeapon {
     pub count: i16,
     /// The `AmmoLoad`.
     pub ammo: i16,
+}
+
+/// A ship class's weapon exit points, raw from its `shän` (see
+/// [`exits`](crate::combat::exits)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShipExits {
+    /// Each `ExitType`'s four (x, y) points, in pixels from the centre with
+    /// the ship facing up: `GunPosX/Y`, `TurretPosX/Y`, `GuidedPosX/Y` and
+    /// `BeamPosX/Y`, in that order.
+    pub points: [[(i16, i16); 4]; 4],
+    /// Each point's z offset, in the same order: `GunPosZ` to `BeamPosZ`.
+    pub z: [[i16; 4]; 4],
+    /// `UpCompressX` and `UpCompressY`, in percent.
+    pub up_compress: (i16, i16),
+    /// `DnCompressX` and `DnCompressY`, in percent.
+    pub down_compress: (i16, i16),
+    /// `FramesPer`: the frames in a turn.
+    pub frames: i16,
 }
 
 /// What a ship class fights with and how it dies, raw from its `shïp` and
@@ -1110,6 +1131,9 @@ pub struct HullRecord {
     /// Its `Speed`, raw (see
     /// [`HullSpec::class_speed`](crate::combat::hull::HullSpec::class_speed)).
     pub speed: i16,
+    /// Its `shän`'s weapon exit points, or `None` when it has no `shän`
+    /// that can be read.
+    pub exits: Option<ShipExits>,
 }
 
 /// A government's penalties for crimes against its ships, raw from its

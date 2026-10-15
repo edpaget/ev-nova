@@ -10439,6 +10439,7 @@ mod tests {
             max_ammo: 0,
             prox_safety: 0,
             recoil: 0,
+            exit_type: -1,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -10458,6 +10459,7 @@ mod tests {
             key_carried: None,
             cost: 0,
             speed: 0,
+            exits: None,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
@@ -10571,6 +10573,7 @@ mod tests {
             max_ammo: 0,
             prox_safety: 0,
             recoil: 0,
+            exit_type: -1,
         }
     }
 
@@ -10598,6 +10601,7 @@ mod tests {
             key_carried: None,
             cost: 0,
             speed: 0,
+            exits: None,
         }
     }
 

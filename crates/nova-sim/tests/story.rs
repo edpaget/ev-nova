@@ -61,6 +61,7 @@ impl CombatCatalog for Home {
             max_ammo: 0,
             prox_safety: 0,
             recoil: 0,
+            exit_type: -1,
         }]
     }
 

@@ -17,6 +17,8 @@
 //! - [`defence`]: point defence, which missiles it engages, as the
 //!   [`PointDefenceRule`](defence::PointDefenceRule) port says, and what
 //!   its hits do to them.
+//! - [`exits`]: the weapon exit points a ship's shots and beams leave
+//!   from, turning with the frame it is drawn on.
 //! - [`flags`]: what the simulation does with each documented weapon flag,
 //!   and which of a weapon's are not done yet.
 //! - [`hull`]: a ship type's [`HullSpec`](hull::HullSpec), its
@@ -43,18 +45,22 @@
 //!
 //! 1. Each ship fires the weapons its trigger holds that are ready, each
 //!    as its guidance aims it at the ship's target ([`aim`]); a turret
-//!    that cannot fire spends nothing. A fighter bay's launch is no shot
-//!    but a [`Sortie`], which the session takes
+//!    that cannot fire spends nothing. Each shot or beam leaves from the
+//!    ship's exit point for its weapon's `ExitType`, on the frame the ship
+//!    was last drawn on ([`exits`], [`Fighter::drawn_heading`]), a turret
+//!    leading its target from there (see `Combat::launch`). A fighter
+//!    bay's launch is no shot but a [`Sortie`], which the session takes
 //!    ([`Combat::take_sorties`]) and puts in the system as a ship. An NPC
 //!    fires its pick as `_FireAIShipWeapon` does ([`ai_fire`]): a copy
 //!    that spawns nothing still spends, by the engine, and a recoil sets
 //!    the firer's velocity, reported as a [`Shove`].
 //! 2. Each ship's point defence fires at the missile it picks, with no
-//!    target needed ([`defence`]).
+//!    target needed ([`defence`]), from its exit point, aimed from there.
 //! 3. Every reload timer counts down a tick.
 //! 4. Shots fly a tick, homing ones steering at their target, breaking up
-//!    or not, and beams follow their firers, each held ahead, on its
-//!    target or on its missile; a beam whose firer is gone or no longer
+//!    or not, and beams follow their firers, each from its exit on the
+//!    frame its firer is drawn on this tick, held ahead, on its target or
+//!    on its missile; a beam whose firer is gone or no longer
 //!    intact, or whose target or missile is gone, goes with it. Before it
 //!    moves, any shot but point defence whose ship has gone (destroyed, or
 //!    out of the fight) is lost ([`Jam::Lost`](projectile::Jam::Lost)),
@@ -161,6 +167,7 @@ pub mod armament;
 pub mod beam;
 pub mod damage;
 pub mod defence;
+pub mod exits;
 pub mod flags;
 pub mod hull;
 pub mod projectile;
@@ -177,6 +184,7 @@ use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use beam::{Aiming, Beam};
 use damage::{Blast, Hit};
 use defence::{INTERCEPT_RADIUS, PointDefenceRule, Side};
+use exits::{Compression, ExitCursors, ExitPoints, drawn_frame, frame_angle};
 use hull::{
     Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
     never_breaks_up,
@@ -190,7 +198,7 @@ use weapon::{Explosion, Guidance};
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::{GovtId, ShipId, WeaponId};
 use crate::chance::Chance;
-use crate::flight::ShipState;
+use crate::flight::{ShipState, normalized};
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::legal::{LegalCode, NovaLaw};
@@ -427,6 +435,12 @@ pub struct Fighter<'a> {
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
     pub rounds: &'a mut dyn Rounds,
+    /// The heading it was last drawn at: its heading as the last tick
+    /// ended. Its shots leave from the exit points of the frame drawn at
+    /// it, as every ship fires before the original draws it again
+    /// (`_DoPlayGameWork` @0x43e19-0x43e29, @0x44483-0x444ad; see
+    /// [`exits`]).
+    pub drawn_heading: f32,
 }
 
 /// The rules a fight is fought by: when a ship is disabled, which
@@ -505,6 +519,12 @@ pub struct Combat {
     /// How an NPC's quadrant turret measures its arc
     /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)).
     quadrant_arc: RuleSource,
+    /// Which compression an exit point takes
+    /// ([`RuleKey::ExitCompression`](crate::RuleKey::ExitCompression)).
+    compression: Compression,
+    /// How many exits a point-defence shot moves its cursor on
+    /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)).
+    pd_exit_step: RuleSource,
 }
 
 impl Combat {
@@ -542,11 +562,15 @@ impl Combat {
             .map(|shot| shot.step(&targets))
             .collect();
         let shots = &self.shots;
+        let compression = self.compression;
         self.beams.retain_mut(|beam| {
             let firer = fighters.iter().find(|fighter| {
                 fighter.ship == beam.firer && *fighter.condition == Condition::Intact
             });
-            firer.is_some_and(|firer| beam.follow(&firer.state, &targets, shots))
+            firer.is_some_and(|firer| {
+                let exits = firer.hull.exits.as_ref();
+                beam.follow(&firer.state, exits, compression, &targets, shots)
+            })
         });
         let locks: Vec<Landed> = self
             .shots
@@ -703,6 +727,19 @@ impl Combat {
         self.quadrant_arc = arc;
     }
 
+    /// Has an exit point take its compression as `source` says
+    /// ([`Compression`]): by default, the engine's.
+    pub fn set_exit_compression(&mut self, source: RuleSource) {
+        self.compression = Compression::from(source);
+    }
+
+    /// Has a point-defence shot move its cursor on as `source` says
+    /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)): by default,
+    /// the engine's, two exits a shot.
+    pub fn set_pd_exit_step(&mut self, source: RuleSource) {
+        self.pd_exit_step = source;
+    }
+
     /// The next shot's number.
     fn next_id(&mut self) -> ShotId {
         let id = ShotId(self.next_shot);
@@ -743,56 +780,168 @@ impl Combat {
         aimed
     }
 
-    /// Puts `launch` in flight from `side`, at `from`, its damage aimed at
-    /// `aimed_at`, sounding as `sound` says: a fighter's [`Sortie`] from a
-    /// bay, a beam held on the missile `quarry`, on its target, or ahead,
-    /// or a shot of its government.
+    /// Puts `launch` in flight from `side`, from `muzzle`, its damage aimed
+    /// at `aimed_at` among `targets`, sounding as `sound` says: a fighter's
+    /// [`Sortie`] from a bay, a beam held on the missile `quarry`, on its
+    /// target, or ahead, or a shot of its government. Its firing is heard
+    /// at the ship's centre (`_PlaySoundDistance(&ship)`).
+    ///
+    /// A shot or beam whose weapon names a set of exit points its ship has
+    /// leaves from one ([`exits`]), as `_SpawnShot` (@0x3eb96-0x3ec95) and
+    /// `_SpawnBeam` (@0x450e4-0x4523d) pick it:
+    ///
+    /// - A weapon of `Flags3` 0x0010 takes the exit nearest the ship its
+    ///   damage is aimed at, `_SpawnShot`'s and `_SpawnBeam`'s target.
+    /// - A turret that leads its target (4, 7 and 8) leads it again from
+    ///   the exit (`_CalcLeadAngle` @0x3ecdc), turned by its inaccuracy.
+    /// - A point-defence shot steps its cursor twice by the engine, as
+    ///   `_HandleShipPointDefense` sets its shot from `_SpawnShot`'s exit
+    ///   back to the centre and takes the next (@0x396e5, @0x39707-0x3976c),
+    ///   so a ship's point defence fires from every other exit; once by
+    ///   the other reading. It takes the exit nearest its missile under
+    ///   `Flags3` 0x0010, and is aimed from it (`_CalcInterceptAngle`
+    ///   @0x39790). A point-defence beam never takes the nearest
+    ///   (@0x398d2, kind 1).
+    /// - A negative `Inaccuracy` flies the shot out from its ship's heading
+    ///   by as many degrees, to the side of its exit's x, facing as aimed
+    ///   (@0x3ee10-0x3eec0); a shot from an exit on the centre line, or
+    ///   from none, flies as aimed. A bomb or rocket keeps its launch
+    ///   velocity (weapons-fidelity phase 10).
+    /// - A beam's exit is kept, and it starts there every tick
+    ///   ([`Beam::follow`]).
     fn launch(
         &mut self,
         (side, ties): (Side, Ties),
-        from: &ShipState,
+        muzzle: &mut Muzzle,
         launch: Launch,
         (quarry, aimed_at): (Option<ShotId>, Option<ShipRef>),
         sound: Option<FireSound>,
+        targets: &[Target],
     ) {
         let Side { ship, fleet, .. } = side;
+        let from = muzzle.from;
         self.events.push(CombatEvent::Fired {
             ship,
             weapon: launch.weapon.id,
             at: from.position,
             sound,
         });
-        if let Some(carried) = launch.weapon.carried {
+        let weapon = launch.weapon;
+        let exits = muzzle.exits.zip(weapon.exit);
+        let toward = aimed_at
+            .filter(|_| weapon.nearest_exit)
+            .and_then(|ship| position_of(targets, ship));
+        if let Some(carried) = weapon.carried {
             self.sorties.push(Sortie {
                 carrier: ship,
-                bay: launch.weapon.id,
+                bay: weapon.id,
                 ship: carried,
-                from: *from,
+                from,
                 heading: launch.heading,
                 target: launch.target,
             });
-        } else if launch.weapon.is_beam() {
+        } else if weapon.is_beam() {
             let aiming = match (quarry, launch.target) {
                 (Some(missile), _) => Aiming::Shot(missile),
                 (None, Some(target)) => Aiming::Ship(target),
                 (None, None) => Aiming::Ahead,
             };
-            let beam = Beam {
+            let mut beam = Beam {
                 ties,
                 aimed_at,
-                ..Beam::launch(launch.weapon, ship, fleet, from, launch.heading, aiming)
+                ..Beam::launch(weapon, ship, fleet, &from, launch.heading, aiming)
             };
+            if let Some((points, kind)) = exits {
+                let toward = toward.filter(|_| quarry.is_none());
+                let exit = muzzle.cursors.beam_exit(
+                    points,
+                    kind,
+                    from.position,
+                    from.heading,
+                    toward,
+                    self.compression,
+                );
+                beam.kind = Some(kind);
+                beam.exit = Some(exit);
+            }
             self.beams.push(beam);
         } else {
-            let shot = Shot {
+            let missile = quarry
+                .and_then(|id| self.shots.iter().find(|shot| shot.id == id))
+                .map(|shot| shot.position);
+            let (start, heading, side_of_exit) =
+                self.shot_exit(muzzle, &launch, missile, toward, targets);
+            let leaving = ShipState {
+                position: start,
+                ..from
+            };
+            let mut shot = Shot {
                 id: self.next_id(),
                 target: launch.target,
                 aimed_at,
                 source: Source::Ship(ties),
-                ..Shot::launch(launch.weapon, ship, fleet, from, launch.heading)
+                ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
+            let launched_as_aimed =
+                matches!(weapon.guidance, Guidance::FreefallBomb | Guidance::Rocket);
+            if weapon.broadside > 0 && side_of_exit != 0.0 && quarry.is_none() && !launched_as_aimed
+            {
+                let out = normalized(from.heading + side_of_exit * weapon.broadside as f32).trunc();
+                shot.velocity = projectile::launch_velocity(&weapon, &from, out);
+            }
             self.shots.push(shot);
         }
+    }
+
+    /// Where a shot of `launch` leaves `muzzle` from, the heading it
+    /// leaves along, and the side of the exit it leaves from
+    /// ([`ExitPoints::side`]): from the centre, as aimed and on no side
+    /// without an exit; else from the exit its cursor or the nearest to
+    /// `toward` gives, a point-defence shot at its `missile` taking two
+    /// steps by the engine, and aimed again from there ([`aimed_from`];
+    /// see `Combat::launch`).
+    fn shot_exit(
+        &self,
+        muzzle: &mut Muzzle,
+        launch: &Launch,
+        missile: Option<Vec2>,
+        toward: Option<Vec2>,
+        targets: &[Target],
+    ) -> (Vec2, f32, f32) {
+        let from = muzzle.from;
+        let Some((points, kind)) = muzzle.exits.zip(launch.weapon.exit) else {
+            return (from.position, launch.heading, 0.0);
+        };
+        let toward = if missile.is_some() {
+            if self.pd_exit_step == RuleSource::Engine {
+                // `_SpawnShot`'s own exit, toward no ship, then undone.
+                muzzle.cursors.shot_start(
+                    points,
+                    kind,
+                    from.position,
+                    muzzle.angle,
+                    None,
+                    self.compression,
+                );
+            }
+            missile.filter(|_| launch.weapon.nearest_exit)
+        } else {
+            toward
+        };
+        let (start, index) = muzzle.cursors.shot_start(
+            points,
+            kind,
+            from.position,
+            muzzle.angle,
+            toward,
+            self.compression,
+        );
+        let leaving = ShipState {
+            position: start,
+            ..from
+        };
+        let heading = aimed_from(&leaving, launch, missile, targets);
+        (start, heading, points.side(kind, index))
     }
 
     /// Step 1: each ship fires what its trigger holds, aimed at its target
@@ -831,14 +980,17 @@ impl Combat {
                 &mut |spec| aim::aim(spec, &state, &hull, target),
             );
             let sides = (fighter.side(), fighter.ties());
+            let drawn = fighter.drawn_heading;
+            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
             for launch in launches {
                 let aimed_at = aimed_at(&launch, fighter.target);
                 self.launch(
                     sides,
-                    &state,
+                    &mut muzzle,
                     launch,
                     (None, aimed_at),
                     Some(FireSound::UNPORTED),
+                    targets,
                 );
             }
             let Some(pick) = fighter.trigger.only.filter(|_| npc) else {
@@ -859,12 +1011,13 @@ impl Combat {
             let Some(volley) = volley else {
                 continue;
             };
+            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
             for (copy, launch) in volley.launches.into_iter().enumerate() {
                 let aimed_at = aimed_at(&launch, fighter.target);
                 let sound = (copy == 0).then_some(FireSound {
                     priority: Some(AI_FIRE_PRIORITY),
                 });
-                self.launch(sides, &state, launch, (None, aimed_at), sound);
+                self.launch(sides, &mut muzzle, launch, (None, aimed_at), sound, targets);
             }
             let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
             if let Some(velocity) = pushed {
@@ -909,12 +1062,16 @@ impl Combat {
                 },
             );
             if let Some((launch, missile)) = fired {
+                let drawn = fighter.drawn_heading;
+                let mut muzzle =
+                    Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
                 self.launch(
                     (side, ties),
-                    &state,
+                    &mut muzzle,
                     launch,
                     (Some(missile), None),
                     Some(FireSound::UNPORTED),
+                    &[],
                 );
             }
         }
@@ -1495,6 +1652,75 @@ fn aimed_at(launch: &Launch, target: Option<ShipRef>) -> Option<ShipRef> {
     if ahead { None } else { target }
 }
 
+/// Where a ship's launches leave from this tick: the ship as it fires,
+/// its hull's exit points, the angle of the frame it was last drawn on,
+/// and its cursors ([`exits`]).
+struct Muzzle<'a> {
+    /// The ship as it fires.
+    from: ShipState,
+    /// Its hull's exit points, if any.
+    exits: Option<&'a ExitPoints>,
+    /// The angle, in whole degrees, of the frame it was last drawn on.
+    angle: f32,
+    /// Its cursors.
+    cursors: &'a mut ExitCursors,
+}
+
+impl<'a> Muzzle<'a> {
+    /// The muzzle of a ship flying `from` with `hull`, last drawn facing
+    /// `drawn_heading`, moving `cursors` on.
+    fn new(
+        from: ShipState,
+        hull: &'a HullSpec,
+        drawn_heading: f32,
+        cursors: &'a mut ExitCursors,
+    ) -> Self {
+        let exits = hull.exits.as_ref();
+        let angle = exits.map_or(0.0, |exits| {
+            let frames = exits.frames();
+            frame_angle(drawn_frame(drawn_heading, frames), frames)
+        });
+        Self {
+            from,
+            exits,
+            angle,
+            cursors,
+        }
+    }
+}
+
+/// Where `ship` is among `targets`, whatever its condition, as the
+/// original reads its slot's position.
+fn position_of(targets: &[Target], ship: ShipRef) -> Option<Vec2> {
+    targets
+        .iter()
+        .find(|target| target.ship == ship)
+        .map(|target| target.position)
+}
+
+/// The heading `launch` leaves along from an exit, `leaving` it: at its
+/// `missile` from there for point defence (`_CalcInterceptAngle`
+/// @0x39790), leading its target from there for a turret that leads
+/// ([`aim::leads`], `_CalcLeadAngle` @0x3ecdc), each turned by its
+/// inaccuracy; as aimed otherwise.
+fn aimed_from(
+    leaving: &ShipState,
+    launch: &Launch,
+    missile: Option<Vec2>,
+    targets: &[Target],
+) -> f32 {
+    if let Some(missile) = missile {
+        return normalized(aim::bearing(leaving.position, missile) + launch.offset);
+    }
+    let led = launch
+        .target
+        .filter(|_| aim::leads(launch.weapon.guidance))
+        .and_then(|ship| targets.iter().find(|target| target.ship == ship));
+    led.map_or(launch.heading, |target| {
+        normalized(aim::lead(leaving, target, launch.weapon.speed) + launch.offset)
+    })
+}
+
 /// The shield and armour `reserves` hold, together: what a hit takes is
 /// how much less this is after it.
 fn taken(reserves: &Reserves) -> f32 {
@@ -1597,9 +1823,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::catalog::{BoomId, WeaponRecord};
+    use crate::catalog::{BoomId, ShipExits, WeaponRecord};
     use crate::chance::NeverFires;
     use crate::combat::defence::Side;
+    use crate::combat::exits::{Compression, ExitKind, ExitPoints};
     use crate::combat::hull::{ESCAPE_POD_SHIP, NovaDisable};
     use crate::combat::weapon::WeaponSpec;
     use crate::testkit::weapon;
@@ -1627,6 +1854,8 @@ mod tests {
         jumping: bool,
         armament: Armament,
         rounds: LauncherRounds,
+        /// The heading it was last drawn at, when not its heading.
+        drawn_heading: Option<f32>,
     }
 
     /// A trigger holding no weapon, its point defence running, as a test
@@ -1672,6 +1901,7 @@ mod tests {
                 jumping: false,
                 armament: Armament::default(),
                 rounds: LauncherRounds::default(),
+                drawn_heading: None,
             }
         }
 
@@ -1715,6 +1945,7 @@ mod tests {
                 jumping: self.jumping,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
+                drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
             }
         }
     }
@@ -5727,5 +5958,459 @@ mod tests {
         let mut ships = [ship];
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_ne!(ships[0].condition, Condition::Intact);
+    }
+
+    // Exit points (`exits`).
+
+    /// A hull whose `ExitType` `kind`'s four exit points are `points`, of 36
+    /// frames, with no compression and no z.
+    fn exits_at(kind: usize, points: [(i16, i16); 4]) -> HullSpec {
+        let mut raw = ShipExits {
+            up_compress: (100, 100),
+            down_compress: (100, 100),
+            frames: 36,
+            ..ShipExits::default()
+        };
+        raw.points[kind] = points;
+        hull_of(raw)
+    }
+
+    fn hull_of(raw: ShipExits) -> HullSpec {
+        HullSpec {
+            exits: ExitPoints::new(&raw),
+            ..HullSpec::default()
+        }
+    }
+
+    impl Ship {
+        /// The ship with `hull`.
+        fn of(self, hull: HullSpec) -> Self {
+            Self { hull, ..self }
+        }
+
+        /// The ship last drawn facing `heading`.
+        fn drawn_at(self, heading: f32) -> Self {
+            Self {
+                drawn_heading: Some(heading),
+                ..self
+            }
+        }
+    }
+
+    /// A gun firing from its ship's gun exits every tick, 10 pixels a
+    /// tick for 10 ticks.
+    fn gun() -> WeaponRecord {
+        WeaponRecord {
+            count: 10,
+            speed: 1000,
+            exit_type: 0,
+            ..weapon(128)
+        }
+    }
+
+    /// Guns 3 pixels either side of the nose, 10 ahead.
+    const NOSE_GUNS: [(i16, i16); 4] = [(3, 10), (-3, 10), (3, 10), (-3, 10)];
+
+    /// Where `shot` left from: a shot fired this tick has flown a tick.
+    fn start(shot: &Shot) -> Vec2 {
+        shot.position - shot.velocity
+    }
+
+    fn close_to(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-3
+    }
+
+    /// Where the newest shot left from, after a tick among `ships`.
+    fn next_start(combat: &mut Combat, ships: &mut [Ship]) -> Vec2 {
+        tick(combat, ships, &NovaDisable);
+        start(combat.shots().last().expect("a shot"))
+    }
+
+    #[test]
+    fn a_ships_guns_fire_from_its_exit_points_in_turn() {
+        let mut combat = Combat::default();
+        let ship = Ship::at(1, 50.0, 50.0).armed(gun()).facing(0.0);
+        let mut ships = [ship.of(exits_at(0, NOSE_GUNS))];
+        let starts: Vec<Vec2> = (0..3)
+            .map(|_| next_start(&mut combat, &mut ships))
+            .collect();
+        for (at, expected) in starts
+            .iter()
+            .zip([(53.0, 40.0), (47.0, 40.0), (53.0, 40.0)])
+        {
+            assert!(
+                close_to(*at, Vec2::new(expected.0, expected.1)),
+                "{starts:?}"
+            );
+        }
+        assert_eq!(combat.shots()[0].heading, 0.0, "along the heading");
+    }
+
+    #[test]
+    fn the_player_fires_from_its_exit_points() {
+        let mut combat = Combat::default();
+        let player = Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(0, 0.0, 0.0).armed(gun()).facing(90.0)
+        };
+        let mut ships = [player.of(exits_at(0, NOSE_GUNS))];
+        assert!(close_to(
+            next_start(&mut combat, &mut ships),
+            Vec2::new(10.0, 3.0)
+        ));
+        assert!(close_to(
+            next_start(&mut combat, &mut ships),
+            Vec2::new(10.0, -3.0)
+        ));
+    }
+
+    #[test]
+    fn a_weapon_of_no_exit_type_and_a_ship_of_no_exits_fire_from_the_centre() {
+        let mut combat = Combat::default();
+        let centre = WeaponRecord {
+            exit_type: -1,
+            ..gun()
+        };
+        let mut ships = [Ship::at(1, 5.0, 5.0)
+            .armed(centre)
+            .facing(0.0)
+            .of(exits_at(0, NOSE_GUNS))];
+        assert!(close_to(
+            next_start(&mut combat, &mut ships),
+            Vec2::new(5.0, 5.0)
+        ));
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 5.0, 5.0).armed(gun()).facing(0.0)];
+        assert!(close_to(
+            next_start(&mut combat, &mut ships),
+            Vec2::new(5.0, 5.0)
+        ));
+    }
+
+    #[test]
+    fn an_npcs_pick_fires_each_simultaneous_copy_from_the_next_exit() {
+        let pair = WeaponRecord {
+            flags: crate::combat::weapon::SIMULTANEOUS,
+            ..gun()
+        };
+        let mut combat = Combat::default();
+        let mut ships = [Ship {
+            armament: Armament::new([(WeaponSpec::new(&pair), 2)]),
+            ..Ship::at(1, 0.0, 0.0)
+                .facing(0.0)
+                .picking(128)
+                .of(exits_at(0, NOSE_GUNS))
+        }];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let starts: Vec<Vec2> = combat.shots().iter().map(start).collect();
+        assert_eq!(starts.len(), 2);
+        assert!(close_to(starts[0], Vec2::new(3.0, -10.0)), "{starts:?}");
+        assert!(close_to(starts[1], Vec2::new(-3.0, -10.0)), "{starts:?}");
+    }
+
+    #[test]
+    fn a_ship_fires_from_the_frame_it_was_last_drawn_on() {
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0)
+            .armed(gun())
+            .facing(90.0)
+            .drawn_at(4.0)
+            .of(exits_at(0, NOSE_GUNS))];
+        assert!(
+            close_to(next_start(&mut combat, &mut ships), Vec2::new(3.0, -10.0)),
+            "frame 0, as drawn"
+        );
+        assert_eq!(combat.shots()[0].heading, 90.0, "along its heading");
+    }
+
+    #[test]
+    fn fired_is_heard_at_the_ships_centre() {
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 20.0, 30.0)
+            .armed(gun())
+            .facing(0.0)
+            .of(exits_at(0, NOSE_GUNS))];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let at: Vec<Vec2> = combat
+            .take_events()
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Fired { at, .. } => Some(at),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(at, [Vec2::new(20.0, 30.0)]);
+    }
+
+    #[test]
+    fn a_turret_leads_its_target_from_its_exit_point() {
+        let mut combat = Combat::default();
+        let turret = WeaponRecord {
+            exit_type: 1,
+            ..turret(4)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0)
+                .armed(turret)
+                .facing(0.0)
+                .targeting(B)
+                .of(exits_at(1, [(60, 0); 4])),
+            Ship {
+                state: ShipState {
+                    position: Vec2::new(0.0, -200.0),
+                    velocity: Vec2::new(8.0, 0.0),
+                    heading: 0.0,
+                },
+                ..Ship::at(2, 0.0, -200.0)
+            },
+        ];
+        let target = ships[1].fighter().as_target();
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shot = &combat.shots()[0];
+        let from = |position| ShipState {
+            position,
+            ..ShipState::default()
+        };
+        let speed = WeaponSpec::new(&turret).speed;
+        let from_exit = aim::lead(&from(Vec2::new(60.0, 0.0)), &target, speed);
+        let from_centre = aim::lead(&from(Vec2::ZERO), &target, speed);
+        assert!(close_to(start(shot), Vec2::new(60.0, 0.0)), "{shot:?}");
+        assert!(
+            (shot.heading - from_exit).abs() < 1e-3,
+            "{shot:?} {from_exit}"
+        );
+        assert!(
+            (from_exit - from_centre).abs() > 1.0,
+            "{from_exit} {from_centre}"
+        );
+    }
+
+    #[test]
+    fn a_negative_inaccuracy_fires_broadside_by_the_side_of_its_exit() {
+        let broadside = WeaponRecord {
+            inaccuracy: -90,
+            ..gun()
+        };
+        let mut combat = Combat::default();
+        let mut ships = [Ship {
+            state: ShipState {
+                position: Vec2::ZERO,
+                velocity: Vec2::new(1.0, 2.0),
+                heading: 0.0,
+            },
+            ..Ship::at(1, 0.0, 0.0)
+                .armed(broadside)
+                .of(exits_at(0, [(3, 10), (-3, 10), (0, 10), (0, 10)]))
+        }];
+        let mut velocities = Vec::new();
+        for _ in 0..3 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let shot = combat.shots().last().expect("a shot");
+            assert_eq!(shot.heading, 0.0, "facing as aimed");
+            velocities.push(shot.velocity);
+        }
+        assert!(
+            close_to(velocities[0], Vec2::new(11.0, 2.0)),
+            "to starboard: {velocities:?}"
+        );
+        assert!(
+            close_to(velocities[1], Vec2::new(-9.0, 2.0)),
+            "to port: {velocities:?}"
+        );
+        assert!(
+            close_to(velocities[2], Vec2::new(1.0, -8.0)),
+            "on the centre line, ahead: {velocities:?}"
+        );
+    }
+
+    /// A beam weapon of `guidance` firing from its ship's beam exits for
+    /// 10 ticks, 300 pixels long.
+    fn exit_beam(guidance: i16) -> WeaponRecord {
+        WeaponRecord {
+            guidance,
+            count: 10,
+            beam_length: 300,
+            exit_type: 3,
+            ..weapon(142)
+        }
+    }
+
+    #[test]
+    fn a_beam_starts_at_its_exit_point_and_stays_on_it_as_its_firer_turns() {
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 100.0, 100.0)
+            .armed(exit_beam(0))
+            .facing(0.0)
+            .of(exits_at(3, [(10, 20); 4]))];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let beam = combat.beams()[0];
+        assert!(close_to(beam.start, Vec2::new(110.0, 80.0)), "{beam:?}");
+        assert!(close_to(beam.end, Vec2::new(110.0, -220.0)), "{beam:?}");
+        ships[0].trigger = QUIET;
+        ships[0].state.heading = 95.0;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let beam = combat.beams()[0];
+        assert!(
+            close_to(beam.start, Vec2::new(120.0, 110.0)),
+            "on frame 9's exit, this tick's: {beam:?}"
+        );
+    }
+
+    #[test]
+    fn a_turret_beam_aims_from_its_exit_point() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0)
+                .armed(exit_beam(3))
+                .facing(0.0)
+                .targeting(B)
+                .of(exits_at(3, [(30, 0); 4])),
+            Ship::at(2, 0.0, 100.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let beam = combat.beams()[0];
+        assert!(close_to(beam.start, Vec2::new(30.0, 0.0)), "{beam:?}");
+        let along = crate::flight::facing(aim::bearing(beam.start, Vec2::new(0.0, 100.0)));
+        assert!(close_to(beam.end, beam.start + along * 300.0), "{beam:?}");
+    }
+
+    /// Beam exits: one ahead (up 25), one 30 to starboard, one behind
+    /// (down 25) and one 30 to port, as the Manticore's.
+    fn manticore() -> HullSpec {
+        let mut raw = ShipExits {
+            up_compress: (100, 71),
+            down_compress: (100, 71),
+            frames: 36,
+            ..ShipExits::default()
+        };
+        raw.points[3] = [(0, 0), (30, 0), (0, 0), (-30, 0)];
+        raw.z[3] = [25, 0, -25, 0];
+        hull_of(raw)
+    }
+
+    #[test]
+    fn a_nearest_exit_turret_beam_leaves_from_the_exit_nearest_its_target() {
+        let ion = WeaponRecord {
+            flags3: crate::combat::weapon::NEAREST_EXIT,
+            ..exit_beam(3)
+        };
+        for (x, exit, at) in [(100.0, 1, 30.0), (-100.0, 3, -30.0)] {
+            let mut combat = Combat::default();
+            let mut ships = [
+                Ship::at(1, 0.0, 0.0)
+                    .armed(ion)
+                    .facing(0.0)
+                    .targeting(B)
+                    .of(manticore()),
+                Ship::at(2, x, 0.0),
+            ];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let beam = combat.beams()[0];
+            assert_eq!(beam.exit, Some(exit), "{x}");
+            assert!(close_to(beam.start, Vec2::new(at, 0.0)), "{x}: {beam:?}");
+            assert_eq!(
+                ships[0].armament.exit_cursors().next(ExitKind::Beam),
+                1,
+                "stepped from 0, not set"
+            );
+        }
+    }
+
+    /// A point-defence turret firing from its ship's turret exits every
+    /// tick, 10 pixels a tick for 30 ticks.
+    fn exit_defence() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 9,
+            count: 30,
+            speed: 1000,
+            exit_type: 1,
+            ..weapon(161)
+        }
+    }
+
+    /// A point-defence ship facing up, with turret exits 10, 20, 30 and 40
+    /// pixels to its right, and a ship firing a missile at it from
+    /// (150, 100).
+    fn defended() -> [Ship; 2] {
+        let missile = WeaponRecord {
+            guidance: 1,
+            guided_turn: 70,
+            count: 100,
+            speed: 100,
+            ..weapon(134)
+        };
+        [
+            Ship::at(1, 0.0, 0.0)
+                .armed(exit_defence())
+                .facing(0.0)
+                .targeting(B)
+                .of(exits_at(1, [(10, 0), (20, 0), (30, 0), (40, 0)])),
+            Ship::at(2, 150.0, 100.0).armed(missile).targeting(A),
+        ]
+    }
+
+    /// The start and heading of the point-defence shots in flight.
+    fn defence_shots(combat: &Combat) -> Vec<(Vec2, f32)> {
+        combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.guidance == Guidance::PointDefence)
+            .map(|shot| (start(shot), shot.heading))
+            .collect()
+    }
+
+    #[test]
+    fn point_defence_fires_from_every_other_exit_at_the_missile() {
+        let mut combat = Combat::default();
+        let mut ships = defended();
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let fired = defence_shots(&combat);
+        assert_eq!(fired.len(), 1, "{:?}", combat.shots());
+        let (at, heading) = fired[0];
+        assert!(
+            close_to(at, Vec2::new(20.0, 0.0)),
+            "the second exit: {at:?}"
+        );
+        let bearing = aim::bearing(at, Vec2::new(150.0, 100.0));
+        assert!((heading - bearing).abs() < 1e-3, "{heading} {bearing}");
+        assert_eq!(
+            ships[0].armament.exit_cursors().next(ExitKind::Turret),
+            2,
+            "stepped twice"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_point_defence_steps_its_exits_once() {
+        let mut combat = Combat::default();
+        combat.set_pd_exit_step(RuleSource::Bible);
+        let mut ships = defended();
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let fired = defence_shots(&combat);
+        assert!(close_to(fired[0].0, Vec2::new(10.0, 0.0)), "{fired:?}");
+        assert_eq!(ships[0].armament.exit_cursors().next(ExitKind::Turret), 1);
+    }
+
+    #[test]
+    fn by_the_bible_an_exit_is_compressed_by_the_heading() {
+        let raw = ShipExits {
+            up_compress: (100, 50),
+            down_compress: (50, 100),
+            frames: 36,
+            points: [[(0, -10); 4], [(0, 0); 4], [(0, 0); 4], [(0, 0); 4]],
+            ..ShipExits::default()
+        };
+        for (source, behind) in [(RuleSource::Engine, 10.0), (RuleSource::Bible, 5.0)] {
+            let mut combat = Combat::default();
+            combat.set_exit_compression(source);
+            let mut ships = [Ship::at(1, 0.0, 0.0)
+                .armed(gun())
+                .facing(0.0)
+                .of(hull_of(raw))];
+            let at = next_start(&mut combat, &mut ships);
+            assert!(close_to(at, Vec2::new(0.0, behind)), "{source:?}: {at:?}");
+        }
+        assert_eq!(Compression::from(RuleSource::Bible), Compression::ByHeading);
     }
 }

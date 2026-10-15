@@ -48,6 +48,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::exits::ExitKind;
 use crate::bay::{FIGHTER_BAY, FIRST_SHIP};
 use crate::catalog::{BoomId, ShipId, WeaponId, WeaponRecord};
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
@@ -320,6 +321,17 @@ pub struct WeaponSpec {
     /// Its `Recoil`, raw: the push its firer takes away from its heading,
     /// over the firer's mass, when it [recoils](WeaponSpec::recoils).
     pub recoil: f32,
+    /// The exit points it fires from, by its `ExitType`; none, the
+    /// centre, for any but 0-3 (see [`exits`](super::exits)).
+    pub exit: Option<ExitKind>,
+    /// Whether it fires from the exit point nearest its target: its
+    /// `Flags3` [`NEAREST_EXIT`].
+    pub nearest_exit: bool,
+    /// How far off its firer's heading, in degrees, it flies out to the
+    /// side of the exit it leaves from: its `Inaccuracy` made positive
+    /// when that is below 0, which then draws no inaccuracy (`_SpawnShot`
+    /// @0x3ec2d-0x3ec95, @0x3ee10-0x3eec0); none otherwise.
+    pub broadside: u32,
 }
 
 /// The weapon whose rounds the status bar's secondary weapon line counts
@@ -362,6 +374,10 @@ pub const EXCLUSIVE: u16 = 0x0020;
 /// The ticks past an exclusive weapon's reload every other weapon is held
 /// (2.0 @0xdd074).
 pub const EXCLUSIVE_HOLD: f32 = 2.0;
+/// `Flags3`: it fires from its ship's exit point nearest the target
+/// (`_ModifyShotStartPosition` @0x73d9-0x742c, `_SpawnBeam`
+/// @0x45126-0x451af; see [`exits`](super::exits)).
+pub const NEAREST_EXIT: u16 = 0x0010;
 /// `Flags3`: it uses ammo only at the end of a burst.
 pub const AMMO_AT_BURST_END: u16 = 0x0001;
 /// `Flags3`: one shot at a time: while a shot of it is in flight, its
@@ -458,6 +474,13 @@ impl WeaponSpec {
             decay: count(record.decay),
             line_count: line_count(record),
             recoil: f32::from(record.recoil),
+            exit: ExitKind::from_raw(record.exit_type),
+            nearest_exit: record.flags3 & NEAREST_EXIT != 0,
+            broadside: if record.inaccuracy < 0 {
+                u32::from(record.inaccuracy.unsigned_abs())
+            } else {
+                0
+            },
         }
     }
 
@@ -723,6 +746,45 @@ mod tests {
         assert_eq!(spec.inaccuracy, 9);
         assert_eq!((spec.prox_radius, spec.blast_radius), (5.0, 6.0));
         assert_eq!(spec.id, WeaponId(128));
+    }
+
+    #[test]
+    fn a_weapon_reads_its_exit_type_nearest_exit_flag_and_broadside() {
+        for (raw, exit) in [
+            (0, Some(ExitKind::Gun)),
+            (1, Some(ExitKind::Turret)),
+            (2, Some(ExitKind::Guided)),
+            (3, Some(ExitKind::Beam)),
+            (-1, None),
+            (4, None),
+        ] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                exit_type: raw,
+                ..light_blaster()
+            });
+            assert_eq!(spec.exit, exit, "{raw}");
+        }
+        assert_eq!(NEAREST_EXIT, 0x0010);
+        for (flags3, nearest) in [(0x0010, true), (0x0030, true), (0x0020, false), (0, false)] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                flags3,
+                ..light_blaster()
+            });
+            assert_eq!(spec.nearest_exit, nearest, "{flags3:#x}");
+        }
+        for (inaccuracy, aimed, broadside) in
+            [(9, 9, 0), (0, 0, 0), (-90, 0, 90), (i16::MIN, 0, 32768)]
+        {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                inaccuracy,
+                ..light_blaster()
+            });
+            assert_eq!(
+                (spec.inaccuracy, spec.broadside),
+                (aimed, broadside),
+                "{inaccuracy}"
+            );
+        }
     }
 
     #[test]

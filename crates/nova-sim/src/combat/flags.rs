@@ -177,8 +177,8 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     // One shot at a time (`Combat::tick`'s hold); only `_HandleShot`
     // reads it, so no beam does.
     (Flags3, 0x0004, Shots, Implemented),
-    // Fires from the exit point nearest the target.
-    (Flags3, 0x0010, Any, Unimplemented),
+    // Fires from the exit point nearest the target (`exits`).
+    (Flags3, 0x0010, Any, Implemented),
     // Exclusive: an NPC's pick (`Armament::fire_pick`); the player's is
     // weapons-fidelity phase 15, so it is still reported.
     (Flags3, 0x0020, Any, Unimplemented),
@@ -276,7 +276,7 @@ mod tests {
         (Flags3, 0x0001, [Implemented; 4]),
         (Flags3, 0x0002, [Presentation; 4]),
         (Flags3, 0x0004, [Implemented, NA, Implemented, Implemented]),
-        (Flags3, 0x0010, [Unimplemented; 4]),
+        (Flags3, 0x0010, [Implemented; 4]),
         (Flags3, 0x0020, [Unimplemented; 4]),
     ];
 
@@ -399,12 +399,7 @@ mod tests {
     fn every_unimplemented_bit_set_is_listed_in_the_tables_order() {
         assert_eq!(
             unimplemented(&spec(-1, 0x0048, 0x8080, 0x0034)),
-            [
-                (Flags, 0x0040),
-                (Flags2, 0x8000),
-                (Flags3, 0x0010),
-                (Flags3, 0x0020),
-            ],
+            [(Flags, 0x0040), (Flags2, 0x8000), (Flags3, 0x0020),],
             "the guided-only 0x0008 left out"
         );
         assert_eq!(unimplemented(&spec(-1, 0, 0, 0)), []);
@@ -446,10 +441,7 @@ mod tests {
         );
         // The Ion Cannon: a looped, rear-blind turreted beam that disables
         // and fires from the exit point nearest the target.
-        assert_eq!(
-            unimplemented(&guided(3, 0x4010, 0, 0x1200, 0x0011)),
-            [(Flags3, 0x0010)]
-        );
+        assert_eq!(unimplemented(&guided(3, 0x4010, 0, 0x1200, 0x0011)), []);
         // The Polaron Multi-Torp: point defence can't target it, and its
         // sub-munitions seek the nearest; it fires while cloaked.
         assert_eq!(

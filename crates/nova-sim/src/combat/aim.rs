@@ -118,6 +118,17 @@ pub fn blind(blind_spots: u16, off: f32) -> bool {
     blind_spots & sector != 0
 }
 
+/// Whether a shot of `guidance` fired at a target leads it: a turret (4)
+/// and a quadrant turret (7, 8), as `_SpawnShot` sets its lead for them
+/// (@0x3e685-0x3e6cf) and leads from the shot's exit point (@0x3ecdc).
+#[must_use]
+pub fn leads(guidance: Guidance) -> bool {
+    matches!(
+        guidance,
+        Guidance::Turret | Guidance::FrontTurret | Guidance::RearTurret
+    )
+}
+
 /// The lead angle from `firer` to `target` for a shot of `speed` pixels a
 /// tick (see the module docs).
 #[must_use]
@@ -241,6 +252,14 @@ mod tests {
         ));
         assert!(close(bearing(Vec2::ZERO, Vec2::new(-5.0, -5.0)), 315.0));
         assert_eq!(bearing(Vec2::new(3.0, 4.0), Vec2::new(3.0, 4.0)), 0.0);
+    }
+
+    #[test]
+    fn only_turrets_4_7_and_8_lead() {
+        let leading: Vec<i16> = (-1..=10)
+            .filter(|&raw| leads(spec(raw, 0).guidance))
+            .collect();
+        assert_eq!(leading, [4, 7, 8]);
     }
 
     #[test]

@@ -1394,6 +1394,7 @@ impl Combatant {
             jumping: false,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
+            drawn_heading: self.state.heading,
         }
     }
 }
@@ -2210,7 +2211,7 @@ type Row = (&'static [i16], &'static [(FlagField, u16)]);
 /// ahead, reports exactly its unimplemented flags, each once.
 #[test]
 fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
-    use FlagField::{Flags2, Flags3, Seeker};
+    use FlagField::{Flags2, Seeker};
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -2239,13 +2240,14 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
     // The Zephyr family's `Flags2` 0x4000 (183-185, 199) fires while
     // cloaked, which `Armament::has_ammo` does, so it reports nothing.
     // The disable-only `Flags2` 0x1000 (142, 201, 233, 234) never
-    // destroys, which `damage::take` does, so it reports nothing.
-    let rows: [Row; 8] = [
+    // destroys, which `damage::take` does, so it reports nothing. The Ion
+    // Cannons' `Flags3` 0x0010 (142, 201) fires from the exit point
+    // nearest the target, which `exits` does, so they report nothing.
+    let rows: [Row; 7] = [
         (&[134, 136], &[(Seeker, 0x2)]),
         (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
         (&[137], &[(Seeker, 0x1), (Seeker, 0x8)]),
         (&[148, 182, 184, 185, 199, 229], &[(Seeker, 0x1)]),
-        (&[142, 201], &[(Flags3, 0x10)]),
         (&[234], &[(Seeker, 0x2), (Seeker, 0x8)]),
         (&[196, 197, 198], &[(Flags2, 0x8000)]),
         (&[230], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x8000)]),
@@ -2264,9 +2266,120 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
             })
         })
         .collect();
-    assert_eq!(expected.len(), 24);
-    assert_eq!(diagnostics.len(), 24, "each once: {diagnostics:?}");
+    assert_eq!(expected.len(), 22);
+    assert_eq!(diagnostics.len(), 22, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
+}
+
+/// Every stock `shïp` has a `shän` whose weapon exit points reach its
+/// hull, 279 of the 288 with one off the centre; 55 of the 81 `wëap` fire
+/// from a set of them. The Shuttle (128) fires its Light Blasters from
+/// guns 3 pixels either side of its nose, 10 ahead, squashed to 71% up the
+/// screen and lifted 2 by its z: at (3, -5.1) and then (-3, -5.1).
+#[test]
+fn stock_shans_carry_their_exit_points_to_the_hull() {
+    use nova_sim::combat::exits::ExitKind;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let hulls = data.hulls();
+    let backed: Vec<_> = hulls.iter().filter(|hull| hull.size.is_some()).collect();
+    assert_eq!(backed.len(), 288);
+    assert!(
+        backed
+            .iter()
+            .all(|hull| hull.exits.is_some() && arsenal.hull(hull.id).exits.is_some()),
+        "every shän-backed hull carries its exits"
+    );
+    let off_centre = backed
+        .iter()
+        .filter_map(|hull| hull.exits)
+        .filter(|exits| exits.points.iter().flatten().any(|&point| point != (0, 0)))
+        .count();
+    assert_eq!(off_centre, 279);
+    let weapons: Vec<WeaponSpec> = data.weapons().iter().map(WeaponSpec::new).collect();
+    assert_eq!(weapons.len(), 81);
+    assert_eq!(
+        weapons.iter().filter(|spec| spec.exit.is_some()).count(),
+        55
+    );
+    let shuttle = hulls
+        .iter()
+        .find(|hull| hull.id == ShipId(128))
+        .and_then(|hull| hull.exits)
+        .expect("the Shuttle's exits");
+    assert_eq!(shuttle.points[0], [(3, 10), (-3, 10), (3, 10), (-3, 10)]);
+    assert_eq!(shuttle.z[0], [-2; 4]);
+    assert_eq!(
+        (shuttle.up_compress, shuttle.down_compress),
+        ((100, 71), (100, 71))
+    );
+    let blaster = *arsenal.weapon(WeaponId(128)).expect("the Light Blaster");
+    assert_eq!(blaster.exit, Some(ExitKind::Gun));
+    let mut ships = [Combatant {
+        hull: arsenal.hull(ShipId(128)),
+        state: ShipState::default(),
+        ..shooter(&blaster)
+    }];
+    let mut combat = Combat::default();
+    let mut starts = Vec::new();
+    for _ in 0..30 {
+        fight_with(&mut combat, &mut ships, &arsenal);
+        if let Some(shot) = combat.shots().iter().find(|shot| shot.age == 1) {
+            starts.push(shot.position - shot.velocity);
+        }
+    }
+    assert!(starts.len() >= 2, "{starts:?}");
+    let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
+    assert!(near(starts[0], Vec2::new(3.0, -5.1)), "{starts:?}");
+    assert!(near(starts[1], Vec2::new(-3.0, -5.1)), "{starts:?}");
+}
+
+/// Only the stock Ion Cannons (142, 201) fire from the exit point nearest
+/// their target (`Flags3` 0x0010). A Manticore (146), whose beam exits
+/// stand ahead, 30 pixels to starboard, behind and 30 to port, fires its
+/// Ion Cannon from the starboard exit at a ship to starboard and from the
+/// port exit at a ship to port.
+#[test]
+fn the_stock_ion_cannons_fire_from_the_beam_exit_nearest_their_target() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let nearest: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.nearest_exit)
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(nearest, [142, 201]);
+    // Kept past its one tick of life, so the beam can be seen.
+    let ion = WeaponSpec {
+        lifetime: 10,
+        ..*arsenal.weapon(WeaponId(142)).expect("the Ion Cannon")
+    };
+    for (x, exit, at) in [(100.0, 1, 30.0), (-100.0, 3, -30.0)] {
+        let mut ships = [
+            Combatant {
+                hull: arsenal.hull(ShipId(146)),
+                state: ShipState::default(),
+                ..aiming(&ion)
+            },
+            sponge(x, 0.0),
+        ];
+        let mut combat = Combat::default();
+        fight_with(&mut combat, &mut ships, &arsenal);
+        let beam = combat.beams().first().copied().expect("a beam");
+        assert_eq!(beam.exit, Some(exit), "{x}");
+        assert!(
+            (beam.start - Vec2::new(at, 0.0)).length() < 1e-3,
+            "{x}: {beam:?}"
+        );
+    }
 }
 
 /// Each stock disable-only weapon (`Flags2` 0x1000): the Ion Cannons

@@ -515,6 +515,8 @@ struct FightTerms {
     class_speed: f32,
     /// Its top speed.
     top_speed: f32,
+    /// The heading it was last drawn at ([`Fighter::drawn_heading`]).
+    drawn_heading: f32,
 }
 
 impl FightTerms {
@@ -563,6 +565,7 @@ impl FightTerms {
             jumping: false,
             armament,
             rounds,
+            drawn_heading: self.drawn_heading,
         }
     }
 }
@@ -740,6 +743,13 @@ pub struct Session {
     /// on its own frame boundary, so this crosses no boundary the player
     /// can see.
     player_exploded_this_tick: bool,
+    /// The heading each ship in the fight was drawn at after the last
+    /// [`Session::tick_combat`]: its heading as that tick ended, which the
+    /// view draws before the next. Each ship's shots leave from the exit
+    /// points of that frame (see [`Fighter::drawn_heading`]); a ship not
+    /// in it, new to the fight, fires from its own heading's. Dropped while
+    /// the ship is landed or jumping, and never saved.
+    drawn: BTreeMap<ShipRef, f32>,
     /// How far the game's end has got since the player's ship exploded:
     /// set to the hold's start on the explosion tick, counted down by
     /// [`Session::tick`]'s dead branch, then moved on by
@@ -1283,6 +1293,7 @@ impl Session {
             armament: Armament::default(),
             condition: Condition::Intact,
             player_exploded_this_tick: false,
+            drawn: BTreeMap::new(),
             player_end: None,
             hold_expiry_due: false,
             pod: None,
@@ -1464,6 +1475,10 @@ impl Session {
             .set_ai_spend(rules.source_for(RuleKey::AiSpendWithoutShot));
         self.combat
             .set_quadrant_arc(rules.source_for(RuleKey::QuadrantTurretArc));
+        self.combat
+            .set_exit_compression(rules.source_for(RuleKey::ExitCompression));
+        self.combat
+            .set_pd_exit_step(rules.source_for(RuleKey::PdExitStep));
         self.rules = rules;
         self
     }
@@ -2079,13 +2094,18 @@ impl Session {
     /// under way, the pre-jump stage included. Before anything else,
     /// unless landed or jumping, the sabotage clock ticks, and what it sets
     /// off goes off (see the `sabotage` module), and the eject is checked
-    /// (see the `eject` module), both before the scans.
+    /// (see the `eject` module), both before the scans. Each ship fires
+    /// from the exit points of the frame it was drawn on after the last
+    /// fight tick, its heading as that tick ended
+    /// ([`Fighter::drawn_heading`]), as every ship fires before the
+    /// original draws it again.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
             // The fight stands still, but a scan a lead-in step's traffic
             // tick queued still settles (see `take_scans`).
             self.take_scans(rules.law, &mut &mut *chance);
+            self.drawn.clear();
             return;
         }
         self.sabotage_tick(rules, &mut &mut *chance);
@@ -2127,6 +2147,7 @@ impl Session {
             jumping: self.jump.is_some(),
             armament: &mut self.armament,
             rounds: &mut rounds,
+            drawn_heading: player_terms.drawn_heading,
         }];
         let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
@@ -2166,6 +2187,14 @@ impl Session {
         self.strike_stellars(&stellars, rules.law, chance);
         self.see_stellars();
         self.lay_out_ships();
+        self.drawn = std::iter::once((ShipRef::Player, self.player.heading))
+            .chain(
+                self.traffic
+                    .npcs()
+                    .iter()
+                    .map(|npc| (ShipRef::Npc(npc.id), npc.state.heading)),
+            )
+            .collect();
     }
 
     /// Raises [`SimSound::Klaxon`] while the player's ship breaks up, as
@@ -2202,13 +2231,16 @@ impl Session {
 
     /// What the fight needs of the player's ship and of each NPC, in
     /// order, that the ship does not carry: whether it is held disabled
-    /// ([`Session::mission_ship_held`]; the player never is), and its
-    /// class and top speeds, which a shockwave pushes it against.
+    /// ([`Session::mission_ship_held`]; the player never is), its class
+    /// and top speeds, which a shockwave pushes it against, and the heading
+    /// it was last drawn at, its own for a ship new to the fight.
     fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
+        let drawn = |ship: ShipRef, heading: f32| self.drawn.get(&ship).copied().unwrap_or(heading);
         let player = FightTerms {
             held_disabled: false,
             class_speed: self.class_speed(self.pilot.ship),
             top_speed: self.top_speed(),
+            drawn_heading: drawn(ShipRef::Player, self.player.heading),
         };
         let led_speed = self.led_speed();
         let npcs = self
@@ -2219,6 +2251,7 @@ impl Session {
                 held_disabled: self.mission_ship_held(npc),
                 class_speed: self.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
+                drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
             })
             .collect();
         (player, npcs)
@@ -14318,6 +14351,91 @@ pub(super) mod tests {
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.reserves().fuel.now, 290.0, "10 units a shot");
+    }
+
+    #[test]
+    fn the_players_shots_leave_from_the_exits_of_the_frame_it_was_last_drawn_on() {
+        let gun = WeaponRecord {
+            reload: 0,
+            exit_type: 0,
+            ..blaster()
+        };
+        let mut catalog = FakePilotCatalog {
+            weapons: vec![gun],
+            ..armed()
+        };
+        catalog.hulls[0].exits = Some(crate::catalog::ShipExits {
+            points: [[(5, 10); 4], [(0, 0); 4], [(0, 0); 4], [(0, 0); 4]],
+            up_compress: (100, 100),
+            down_compress: (100, 100),
+            frames: 36,
+            ..crate::catalog::ShipExits::default()
+        });
+        let mut session = Session::start(&catalog).expect("starts");
+        session.hold_trigger(FIRE);
+        session.player.heading = 0.0;
+        let centre = session.player.position;
+        let mut starts = Vec::new();
+        for heading in [0.0, 90.0, 90.0] {
+            session.player.heading = heading;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let shot = session.shots().last().expect("a shot");
+            starts.push(shot.position - shot.velocity - centre);
+        }
+        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
+        assert!(near(starts[0], Vec2::new(5.0, -10.0)), "{starts:?}");
+        assert!(
+            near(starts[1], Vec2::new(5.0, -10.0)),
+            "turned since it was drawn: {starts:?}"
+        );
+        assert!(near(starts[2], Vec2::new(10.0, 5.0)), "{starts:?}");
+    }
+
+    #[test]
+    fn the_rulebook_says_which_compression_the_players_exits_take() {
+        // A gun behind the nose, with the up compression halving y and the
+        // down one halving x: facing up, the gun stands down the screen.
+        let gun = WeaponRecord {
+            reload: 0,
+            exit_type: 0,
+            ..blaster()
+        };
+        let behind = |rules: Rulebook| {
+            let mut catalog = FakePilotCatalog {
+                weapons: vec![gun],
+                ..armed()
+            };
+            catalog.hulls[0].exits = Some(crate::catalog::ShipExits {
+                points: [[(0, -10); 4], [(0, 0); 4], [(0, 0); 4], [(0, 0); 4]],
+                up_compress: (100, 50),
+                down_compress: (50, 100),
+                frames: 36,
+                ..crate::catalog::ShipExits::default()
+            });
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            session.hold_trigger(FIRE);
+            session.player.heading = 0.0;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let shot = session.shots().last().expect("a shot");
+            (shot.position - shot.velocity - session.player.position).y
+        };
+        assert!(
+            (behind(Rulebook::default()) - 10.0).abs() < 1e-3,
+            "by the engine"
+        );
+        let bible = Rulebook::default().with_override(RuleKey::ExitCompression, RuleSource::Bible);
+        assert!((behind(bible) - 5.0).abs() < 1e-3, "by the heading");
+    }
+
+    #[test]
+    fn the_rulebook_says_how_far_point_defence_steps_its_exits() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session(Rulebook::default()).combat, Combat::default());
+        let mut once = Combat::default();
+        once.set_pd_exit_step(RuleSource::Bible);
+        let other = Rulebook::default().with_override(RuleKey::PdExitStep, RuleSource::Bible);
+        assert_eq!(session(other).combat, once);
     }
 
     #[test]

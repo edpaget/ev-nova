@@ -233,6 +233,21 @@ pub struct Shot {
     pub disable_only: bool,
 }
 
+/// The velocity a shot of `weapon` leaves a ship flying `from` with, sent
+/// along `heading`: a bomb a share of the ship's velocity, a rocket the
+/// ship's, a homing missile its `Speed` along `heading`, and any other its
+/// `Speed` along `heading` on top of the ship's. A broadside shot is sent
+/// to the side this way, facing ahead (see [`exits`](super::exits)).
+#[must_use]
+pub fn launch_velocity(weapon: &WeaponSpec, from: &ShipState, heading: f32) -> Vec2 {
+    match weapon.guidance {
+        Guidance::FreefallBomb => from.velocity * BOMB_LAUNCH,
+        Guidance::Rocket => from.velocity,
+        Guidance::Homing => facing(heading) * weapon.speed,
+        _ => from.velocity + facing(heading) * weapon.speed,
+    }
+}
+
 impl Shot {
     /// A shot of `weapon` launched by the ship `firer` of `fleet`, flying
     /// `from` along `heading`, tied to no one until it is given its
@@ -246,12 +261,7 @@ impl Shot {
         heading: f32,
     ) -> Self {
         let heading = normalized(heading);
-        let velocity = match weapon.guidance {
-            Guidance::FreefallBomb => from.velocity * BOMB_LAUNCH,
-            Guidance::Rocket => from.velocity,
-            Guidance::Homing => facing(heading) * weapon.speed,
-            _ => from.velocity + facing(heading) * weapon.speed,
-        };
+        let velocity = launch_velocity(&weapon, from, heading);
         Self {
             weapon,
             firer,

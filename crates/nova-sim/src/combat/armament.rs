@@ -116,6 +116,7 @@ use std::collections::BTreeMap;
 use super::ShipRef;
 use super::ai_fire;
 use super::aim::Aim;
+use super::exits::ExitCursors;
 use super::hull::{Condition, HullSpec};
 use super::projectile::ShotId;
 use super::report::{Reports, SimDiagnostic};
@@ -477,6 +478,10 @@ pub struct Launch {
     pub weapon: WeaponSpec,
     /// The heading it leaves along, its inaccuracy included, in degrees.
     pub heading: f32,
+    /// Its inaccuracy, in degrees: how far off its aim it leaves. The
+    /// fight turns a lead or a point-defence bearing it works out again
+    /// from the exit point by as much (see [`exits`](super::exits)).
+    pub offset: f32,
     /// The ship it is fired at, if any.
     pub target: Option<ShipRef>,
 }
@@ -498,6 +503,9 @@ pub struct Armament {
     /// The last unguided gun or rocket an NPC's pick fired (the original's
     /// +0xc8da, `_FireAIShipWeapon` @0x89258).
     last_gun: Option<WeaponId>,
+    /// The exit each `ExitType`'s next shot or beam leaves from (the
+    /// original's +0xc8fe-+0xc905; see [`exits`](super::exits)).
+    exits: ExitCursors,
 }
 
 impl Armament {
@@ -524,6 +532,7 @@ impl Armament {
         Self {
             mounts,
             last_gun: None,
+            exits: ExitCursors::default(),
         }
     }
 
@@ -643,6 +652,7 @@ impl Armament {
             launches.push(Launch {
                 weapon: mount.spec,
                 heading: normalized(aimed.heading + offset),
+                offset,
                 target: aimed.target,
             });
         }
@@ -715,6 +725,7 @@ impl Armament {
                 launches.push(Launch {
                     weapon: spec,
                     heading: normalized(aimed.heading + offset),
+                    offset,
                     target: aimed.target,
                 });
             }
@@ -765,6 +776,19 @@ impl Armament {
             weapon: spec,
             launches,
         })
+    }
+
+    /// The exit each `ExitType`'s next shot or beam leaves from, each 0
+    /// to 3 and starting at 0 (see [`exits`](super::exits)).
+    #[must_use]
+    pub fn exit_cursors(&self) -> &ExitCursors {
+        &self.exits
+    }
+
+    /// The cursors, for the fight to move on as its shots and beams leave
+    /// ([`Combat`](super::Combat)).
+    pub fn exit_cursors_mut(&mut self) -> &mut ExitCursors {
+        &mut self.exits
     }
 
     /// The last unguided gun or rocket (guidance -1 or 6) an NPC's pick
@@ -834,6 +858,7 @@ impl Armament {
         let launch = Launch {
             weapon: mount.spec,
             heading: normalized(bearing + offset),
+            offset,
             target: None,
         };
         Some((launch, missile))
@@ -1944,6 +1969,60 @@ mod tests {
             &mut ahead,
         );
         assert_eq!(launches[0].heading, 351.0, "wrapped");
+    }
+
+    #[test]
+    fn each_launch_carries_the_inaccuracy_it_drew() {
+        let wild = WeaponRecord {
+            inaccuracy: 9,
+            ..blaster(128, 0)
+        };
+        let launches = mounted(wild, 1).fire(
+            PRIMARY,
+            Condition::Intact,
+            Shooter::PLAYER,
+            &mut LauncherRounds::default(),
+            &mut Gauge::default(),
+            &mut Draws::of(&[2]),
+            &mut Reports::default(),
+            &mut at_seven,
+        );
+        assert_eq!((launches[0].offset, launches[0].heading), (-7.0, 93.0));
+        let volley = mounted(wild, 1)
+            .fire_pick(
+                WeaponId(128),
+                Condition::Intact,
+                Shooter {
+                    npc: true,
+                    ..Shooter::PLAYER
+                },
+                &mut LauncherRounds::default(),
+                &mut Gauge::default(),
+                &mut Draws::of(&[17]),
+                &mut Reports::default(),
+                RuleSource::Engine,
+                &mut at_seven,
+            )
+            .expect("a volley");
+        assert_eq!(volley.launches[0].offset, 8.0);
+        let (launch, _) = defend(
+            &mut mounted(defence(161, 9, 4, 9), 1),
+            &mut Supplies::none(),
+            &mut Draws::of(&[0]),
+            Some((30.0, ShotId(4))),
+            &mut Vec::new(),
+        )
+        .expect("point defence fires");
+        assert_eq!((launch.offset, launch.heading), (-9.0, 21.0));
+        let (beam, _) = defend(
+            &mut mounted(defence(150, 10, 4, 9), 1),
+            &mut Supplies::none(),
+            &mut Draws::of(&[]),
+            Some((30.0, ShotId(4))),
+            &mut Vec::new(),
+        )
+        .expect("a point-defence beam fires");
+        assert_eq!(beam.offset, 0.0, "a beam draws none");
     }
 
     // An NPC's pick (`_FireAIShipWeapon`).
