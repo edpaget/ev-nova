@@ -4069,6 +4069,16 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// An outfitter that listed nothing returned without opening
+    /// ([`SpaceportView::set_opened_outfitter`](crate::spaceport::SpaceportView::set_opened_outfitter)):
+    /// `_DoPortDialog` still runs `_DrawStatus` after it, as after every
+    /// outfitter (@0x5ff09-0x5ff10), which draws a nav the shipyard's
+    /// restore left marked. An empty shipyard or hire screen gets no such
+    /// draw: `_DoPortDialog` marks only cargo after them (@0x5ff85-0x5ffa3).
+    pub fn empty_outfitter_returned(&mut self) {
+        self.draw_marked_nav();
+    }
+
     /// The port's `_DrawStatus` with nothing else redrawing nav: the nav
     /// area is redrawn when the shipyard's restore marked it
     /// ([`FlightView::close_port_dialog`]).
@@ -12731,6 +12741,18 @@ mod tests {
             Ok(vec![SystemId(131)]),
             "the course kept"
         );
+    }
+
+    #[test]
+    fn an_empty_outfitter_draws_a_nav_the_shipyard_left_marked() {
+        let mut view = m_inside_of(port(), PortDialog::Shipyard);
+        assert_eq!(port_nav(&view), naming("Proxima"), "held after the close");
+        view.empty_outfitter_returned();
+        assert_eq!(port_nav(&view), naming("Earth"), "the restore drawn");
+        run_set(&mut view, "M131");
+        view.settle_script();
+        view.empty_outfitter_returned();
+        assert_eq!(port_nav(&view), naming("Earth"), "nothing marked");
     }
 
     #[test]
