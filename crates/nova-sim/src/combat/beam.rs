@@ -11,6 +11,11 @@
 //! ([`Sides::beam_can_hit`]), not a shot's: no government test, and a
 //! breaking-up ship is hit, so a beam stops on a hulk.
 //!
+//! A beam lives its weapon's `Count` ticks, and a decaying one (`Decay`
+//! above none) fades 15 − `Falloff` ticks more, hitting all the while
+//! ([`Beam::live`]). Its life is spent first in the tick, so it is still
+//! drawn on the tick of its last hit, and gone, with no hit, the next.
+//!
 //! A beam starts at the exit point it left from (see
 //! [`exits`](super::exits)) on the frame its firer is drawn on that tick,
 //! as `_HandleBeams` places it after every ship is drawn
@@ -29,6 +34,10 @@ use super::sides::{Sides, Ties};
 use super::weapon::WeaponSpec;
 use crate::flight::{ShipState, facing, normalized, shortest_turn};
 use crate::geometry::Vec2;
+
+/// The most a decaying beam's fade plus its `Falloff` may come to for it
+/// to fade a tick more (`_HandleBeams` @0x30352).
+pub const FADE_END: i64 = 15;
 
 /// What a beam is held on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,8 +71,12 @@ pub struct Beam {
     pub start: Vec2,
     /// Where it ends, its length along its heading.
     pub end: Vec2,
-    /// The ticks it has lasted.
-    pub age: u32,
+    /// The ticks of life it has left (the original's beam +0x10): its
+    /// weapon's `Count` at launch, spent a tick at a time ([`Beam::live`]).
+    pub life: u32,
+    /// The ticks it has faded at the end of its life (beam +0x12), which
+    /// the view draws its corona or its lightning by.
+    pub fade: u32,
     /// The ship it was fired at, if any (the original's beam +0x18,
     /// `_SpawnBeam` @0x45253: its firer's target as it fired), which
     /// decides whether a hit is intended
@@ -103,7 +116,8 @@ impl Beam {
             aiming,
             start: Vec2::ZERO,
             end: Vec2::ZERO,
-            age: 0,
+            life: weapon.lifetime,
+            fade: 0,
             aimed_at: None,
             disable_only: weapon.disable_only(),
             kind: None,
@@ -198,15 +212,32 @@ impl Beam {
             .map(|(t, ship)| (ship, self.start + (self.end - self.start) * t))
     }
 
-    /// Counts a tick of its life.
-    pub fn age(&mut self) {
-        self.age += 1;
-    }
-
-    /// Whether it has lasted its life.
-    #[must_use]
-    pub fn expired(&self) -> bool {
-        self.age >= self.weapon.lifetime
+    /// Spends a tick of its life, as `_HandleBeams` does before the beam
+    /// follows and hits (@0x30315-0x30388): a tick off its life while any
+    /// is left; at none left, a decaying beam (its `Decay` above none)
+    /// fades a tick instead while its fade plus its loaded `Falloff`
+    /// ([`WeaponSpec::falloff`]) is at most [`FADE_END`]; and otherwise it
+    /// has ended: false, and it neither hits nor is drawn again. So a beam
+    /// of `Count` n hits on n ticks, and a decaying one on 15 − `Falloff`
+    /// more, each at full damage.
+    ///
+    /// The second pass of the original's double-time frame (main's
+    /// `GamePass`, not on this branch) fades but spends only a life above
+    /// none (@0x30371-0x30383).
+    pub fn live(&mut self) -> bool {
+        if self.life == 0 && self.weapon.decay > 0 {
+            self.fade += 1;
+            if i64::from(self.weapon.falloff) + i64::from(self.fade) <= FADE_END {
+                return true;
+            }
+        }
+        match self.life.checked_sub(1) {
+            Some(life) => {
+                self.life = life;
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -283,11 +314,6 @@ mod tests {
         );
         assert_eq!(beam.start, Vec2::new(10.0, 20.0));
         assert!(close(beam.end, Vec2::new(110.0, 20.0)), "{beam:?}");
-        for tick in 1..=3 {
-            assert!(!beam.expired(), "{tick}");
-            beam.age();
-        }
-        assert!(beam.expired());
         assert!(beam.follow(
             &at(-5.0, 0.0, 180.0),
             None,
@@ -307,6 +333,51 @@ mod tests {
         );
         assert!(close(offset.end, Vec2::new(100.0, 0.0)), "{offset:?}");
         assert_eq!(offset.offset, 100.0);
+    }
+
+    /// A beam lasting `count` ticks, of `decay`, `falloff` and
+    /// `li_density`.
+    fn lasting(count: i16, decay: i16, falloff: i16, li_density: i16) -> Beam {
+        let weapon = WeaponSpec::new(&WeaponRecord {
+            count,
+            decay,
+            falloff,
+            li_density,
+            ..laser_record()
+        });
+        Beam::launch(
+            weapon,
+            FIRER,
+            FIRER,
+            &at(0.0, 0.0, 90.0),
+            90.0,
+            Aiming::Ahead,
+        )
+    }
+
+    /// The fade on each tick `beam` lives, until it ends.
+    fn lives(mut beam: Beam) -> Vec<u32> {
+        let mut fades = Vec::new();
+        while beam.live() {
+            fades.push(beam.fade);
+            assert!(fades.len() < 100, "lives for ever");
+        }
+        fades
+    }
+
+    #[test]
+    fn a_beam_of_decay_hits_15_less_falloff_ticks_past_its_count() {
+        assert_eq!(lives(lasting(3, 0, 10, 0)), [0, 0, 0], "no decay");
+        assert_eq!(lives(lasting(3, 1, 10, 0)), [0, 0, 0, 1, 2, 3, 4, 5]);
+        assert_eq!(lives(lasting(3, 1, 14, 0)), [0, 0, 0, 1]);
+        assert_eq!(lives(lasting(3, 1, 15, 0)), [0, 0, 0], "falloff 15");
+        assert_eq!(lives(lasting(3, 1, 20, 0)), [0, 0, 0]);
+        assert_eq!(lives(lasting(3, 1, 0, 0)), [0, 0, 0], "falloff 0 loads 16");
+        assert_eq!(lives(lasting(3, -1, 10, 0)), [0, 0, 0], "decay below none");
+        let lightning: Vec<u32> = [0, 0].into_iter().chain(1..=15).collect();
+        assert_eq!(lives(lasting(2, 1, 8, 4)), lightning, "of no falloff");
+        assert!(lives(lasting(0, 0, 10, 0)).is_empty(), "a count of none");
+        assert_eq!(lives(lasting(0, 1, 13, 0)), [1, 2]);
     }
 
     #[test]

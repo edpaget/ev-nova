@@ -58,7 +58,9 @@
 //!    target needed ([`defence`]), from its exit point, aimed from there.
 //! 3. Every reload timer counts down a tick.
 //! 4. Shots fly a tick, homing ones steering at their target, breaking up
-//!    or not, and beams follow their firers, each from its exit on the
+//!    or not, and each beam spends a tick of its life, or fades a tick at
+//!    its end ([`Beam::live`]), one that has ended going before it hits or
+//!    is drawn again. The rest follow their firers, each from its exit on the
 //!    frame its firer is drawn on this tick, held ahead, on its target or
 //!    on its missile; a beam whose firer is gone or no longer
 //!    intact, or whose target or missile is gone, goes with it. Before it
@@ -565,6 +567,9 @@ impl Combat {
         let shots = &self.shots;
         let compression = self.compression;
         self.beams.retain_mut(|beam| {
+            if !beam.live() {
+                return false;
+            }
             let firer = fighters.iter().find(|fighter| {
                 fighter.ship == beam.firer && *fighter.condition == Condition::Intact
             });
@@ -1297,9 +1302,7 @@ impl Combat {
                     self.events.push(CombatEvent::Exploded { at, explosion });
                 }
             }
-            beam.age();
         }
-        self.beams.retain(|beam| !beam.expired());
         self.land(fighters, hits, rule);
     }
 
@@ -3059,6 +3062,57 @@ mod tests {
         assert_eq!(shields, [95.0, 90.0, 85.0, 85.0, 85.0]);
         assert_eq!(combat.beams(), [], "over");
         assert_eq!(combat.shots(), []);
+    }
+
+    /// Each tick of `ticks` with `weapon` fired once from (0, 0) at a ship
+    /// of 100 shield at (100, 0): the beams there after it, their fade,
+    /// and the ship's shield.
+    fn beam_ticks(weapon: WeaponRecord, ticks: usize) -> Vec<(Vec<u32>, f32)> {
+        let mut combat = Combat::default();
+        let mut target = Ship::at(2, 100.0, 0.0);
+        target.reserves.shield = Gauge::full(100.0);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(weapon), target];
+        (0..ticks)
+            .map(|_| {
+                tick(&mut combat, &mut ships, &NovaDisable);
+                ships[0].trigger = QUIET;
+                let fades = combat.beams().iter().map(|beam| beam.fade).collect();
+                (fades, ships[1].reserves.shield.now)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_beam_is_kept_through_its_last_hit_tick_and_ends_the_next_without_hitting() {
+        assert_eq!(
+            beam_ticks(laser(), 4),
+            [
+                (vec![0], 95.0),
+                (vec![0], 90.0),
+                (vec![0], 85.0),
+                (vec![], 85.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_beam_strikes_every_tick_of_its_fade() {
+        let fading = WeaponRecord {
+            decay: 1,
+            falloff: 13,
+            ..laser()
+        };
+        assert_eq!(
+            beam_ticks(fading, 6),
+            [
+                (vec![0], 95.0),
+                (vec![0], 90.0),
+                (vec![0], 85.0),
+                (vec![1], 80.0),
+                (vec![2], 75.0),
+                (vec![], 75.0)
+            ]
+        );
     }
 
     #[test]
