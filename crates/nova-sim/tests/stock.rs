@@ -1337,6 +1337,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use nova_sim::combat::armament::{Arsenal, LauncherRounds, Rounds};
 use nova_sim::combat::flags::FlagField;
 use nova_sim::combat::impact::TractorLock;
+use nova_sim::combat::ion::Ion;
 use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
 use nova_sim::combat::{Combat, Fighter, Rules, Shove};
 use nova_sim::{
@@ -1370,6 +1371,7 @@ struct Combatant {
     /// Its top speed: what a push is clamped to.
     top_speed: f32,
     tractor: Option<TractorLock>,
+    ion: Ion,
     trigger: Trigger,
     reserves: Reserves,
     condition: Condition,
@@ -1400,6 +1402,7 @@ impl Combatant {
             top_speed: self.top_speed,
             jumping: false,
             tractor: &mut self.tractor,
+            ion: &mut self.ion,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
             drawn_heading: self.state.heading,
@@ -1443,6 +1446,7 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
         class_speed: 0.0,
         top_speed: 0.0,
         tractor: None,
+        ion: Ion::default(),
         trigger: Trigger {
             primary: !weapon.secondary(),
             secondary: weapon.secondary().then_some(weapon.id),
@@ -1523,6 +1527,7 @@ fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant
         class_speed,
         top_speed,
         tractor: None,
+        ion: Ion::default(),
         trigger: Trigger::default(),
         reserves,
         condition: Condition::Intact,
@@ -1823,6 +1828,7 @@ fn sponge(x: f32, y: f32) -> Combatant {
         class_speed: 0.0,
         top_speed: 0.0,
         tractor: None,
+        ion: Ion::default(),
         trigger: Trigger::default(),
         reserves: Reserves::full(100_000.0, 100_000.0, 0.0),
         condition: Condition::Intact,
@@ -2093,6 +2099,240 @@ fn a_vell_os_darts_flower_of_spring_pulls_the_dart_to_a_shuttle() {
     let pulled = push_of(at, start, -5.0, 6.0);
     assert!(close(dart.state.velocity, pulled), "{shoves:?}, {pulled:?}");
     assert!(pulled.x > 0.8, "toward the Shuttle: {pulled:?}");
+}
+
+/// Stock weapon `id`.
+fn stock_weapon(data: &GameData, id: i16) -> WeaponSpec {
+    data.weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .find(|spec| spec.id.0 == id)
+        .expect("a stock weapon")
+}
+
+/// Exactly 18 stock weapons ionize, every one by a positive amount.
+#[test]
+fn stock_ionizing_weapons_are_18_all_positive() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let ionizing: Vec<(i16, i32)> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.ionization != 0)
+        .map(|spec| (spec.id.0, spec.ionization))
+        .collect();
+    let ids: Vec<i16> = ionizing.iter().map(|&(id, _)| id).collect();
+    assert_eq!(
+        ids,
+        [
+            137, 142, 146, 148, 160, 163, 164, 173, 174, 182, 184, 185, 198, 199, 201, 229, 230,
+            232
+        ]
+    );
+    assert!(
+        ionizing.iter().all(|&(_, amount)| amount > 0),
+        "{ionizing:?}"
+    );
+}
+
+/// `ships[0]` fires once, its trigger then let go, and the fight runs on
+/// for `ticks` more: the first explosion's place.
+fn fire_once(ships: &mut [Combatant], arsenal: &Arsenal, ticks: u32) -> Option<Vec2> {
+    let mut combat = Combat::default();
+    let mut at = None;
+    for tick in 0..=ticks {
+        fight_with(&mut combat, ships, arsenal);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+        }
+        at = at.or_else(|| {
+            combat.take_events().iter().find_map(|event| match *event {
+                CombatEvent::Exploded { at, .. } => Some(at),
+                _ => None,
+            })
+        });
+    }
+    at
+}
+
+/// A Shuttle (128), NPC `n`, at `at`.
+fn bystander(data: &GameData, arsenal: &Arsenal, n: u32, at: Vec2) -> Combatant {
+    let mut ship = target(data, arsenal, ShipId(128), 0.0);
+    ship.id = ShipRef::Npc(nova_sim::NpcId(n));
+    ship.state.position = at;
+    ship
+}
+
+/// The EMP Torp. (160: `Ionization` 100, `IonizeColor` 0xd4ffff,
+/// `BlastRadius` 100) hits a Leviathan (131) dead ahead and ionizes it by
+/// 100 in its colour, once; a Shuttle 50 pixels from where it hit gains
+/// 75, and one in the blast's square, 80 off on each axis, outside its
+/// circle, none.
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_stock_emp_torpedo_ionizes_the_ship_it_hits_and_its_blasts_circle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let torpedo = stock_weapon(&data, 160);
+    assert_eq!(
+        (
+            torpedo.guidance,
+            torpedo.ionization,
+            torpedo.ionize_colour,
+            torpedo.blast_radius
+        ),
+        (Guidance::Homing, 100, 0x00d4_ffff, 100.0)
+    );
+    let ahead = 300.0;
+    let leviathan = || target(&data, &arsenal, ShipId(131), ahead);
+    // A first fight finds where the torpedo meets the Leviathan.
+    let mut ships = [aiming(&torpedo), leviathan()];
+    let at = fire_once(&mut ships, &arsenal, torpedo.lifetime).expect("it hit");
+    assert_eq!(
+        ships[1].ion,
+        Ion {
+            charge: 100.0,
+            colour: 0x00d4_ffff
+        }
+    );
+    let mut ships = [
+        aiming(&torpedo),
+        leviathan(),
+        bystander(&data, &arsenal, 1, at + Vec2::new(0.0, 50.0)),
+        bystander(&data, &arsenal, 2, at + Vec2::new(80.0, 80.0)),
+    ];
+    let again = fire_once(&mut ships, &arsenal, torpedo.lifetime);
+    assert_eq!(again, Some(at), "the same hit");
+    assert_eq!(ships[1].ion.charge, 100.0, "the direct hit alone");
+    assert_eq!(
+        ships[2].ion,
+        Ion {
+            charge: 75.0,
+            colour: 0x00d4_ffff
+        }
+    );
+    let shuttle = class(&data, &arsenal, ShipId(128)).reserves.shield.now;
+    assert!(ships[3].reserves.shield.now < shuttle, "in the square");
+    assert_eq!(ships[3].ion, Ion::default(), "outside the circle");
+}
+
+/// The Nanites (229, homing, `Ionization` 50, `Decay` 5, no blast) ionize
+/// a Leviathan by the whole 50 whether they hit early or late in their
+/// life, though late they do less damage.
+#[test]
+#[allow(clippy::float_cmp)]
+fn stock_nanites_ionize_by_their_whole_ionization_however_decayed() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let nanites = stock_weapon(&data, 229);
+    assert_eq!(
+        (
+            nanites.guidance,
+            nanites.ionization,
+            nanites.decay,
+            nanites.blast_radius
+        ),
+        (Guidance::Homing, 50, 5, 0.0)
+    );
+    let hit_from = |ahead: f32| {
+        let mut ships = [
+            aiming(&nanites),
+            target(&data, &arsenal, ShipId(131), ahead),
+        ];
+        let mut combat = Combat::default();
+        let mut damage = 0.0;
+        for tick in 0..=nanites.lifetime {
+            fight_with(&mut combat, &mut ships, &arsenal);
+            if tick == 0 {
+                ships[0].trigger = Trigger::default();
+            }
+            damage += combat
+                .take_strikes()
+                .iter()
+                .filter(|strike| strike.ship == QUARRY)
+                .map(|strike| strike.damage)
+                .sum::<f32>();
+        }
+        (ships[1].ion.charge, damage)
+    };
+    let (early, early_damage) = hit_from(100.0);
+    let (late, late_damage) = hit_from(1500.0);
+    assert!(late_damage < early_damage, "{late_damage} < {early_damage}");
+    assert_eq!((early, late), (50.0, 50.0));
+}
+
+/// The Pulse Laser (146, a beam, `Ionization` 4, 0xff00ff) held on a
+/// Leviathan ionizes it by 4 on each tick it hits.
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_stock_pulse_laser_ionizes_by_4_on_every_hit_tick() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let laser = stock_weapon(&data, 146);
+    assert_eq!(
+        (laser.guidance, laser.ionization, laser.ionize_colour),
+        (Guidance::Beam, 4, 0x00ff_00ff)
+    );
+    let mut combat = Combat::default();
+    let mut ships = [shooter(&laser), target(&data, &arsenal, ShipId(131), 60.0)];
+    let mut hits = 0_u16;
+    for tick in 0..=laser.lifetime + 2 {
+        fight_with(&mut combat, &mut ships, &arsenal);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+        }
+        let strikes = combat.take_strikes();
+        hits += u16::try_from(
+            strikes
+                .iter()
+                .filter(|strike| strike.ship == QUARRY)
+                .count(),
+        )
+        .expect("few");
+    }
+    assert!(hits > 1, "{hits}");
+    assert_eq!(
+        ships[1].ion,
+        Ion {
+            charge: 4.0 * f32::from(hits),
+            colour: 0x00ff_00ff
+        }
+    );
+}
+
+/// The Ion Cannon (142, 0x34c2ff) and then the EMP Torp. (160, 0xd4ffff)
+/// on one ship leave it the two colours OR-ed: 0xf4ffff.
+#[test]
+fn stock_ion_colours_or_together() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let cannon = stock_weapon(&data, 142);
+    let torpedo = stock_weapon(&data, 160);
+    assert_eq!(
+        (cannon.ionize_colour, torpedo.ionize_colour),
+        (0x0034_c2ff, 0x00d4_ffff)
+    );
+    let mut ships = [aiming(&cannon), target(&data, &arsenal, ShipId(131), 100.0)];
+    fire_once(&mut ships, &arsenal, 3);
+    assert_eq!(ships[1].ion.colour, 0x0034_c2ff, "the cannon hit");
+    ships[0] = aiming(&torpedo);
+    fire_once(&mut ships, &arsenal, torpedo.lifetime);
+    assert_eq!(ships[1].ion.colour, 0x00f4_ffff);
 }
 
 /// Each stock homing weapon, fired at a stock ship dead ahead within its

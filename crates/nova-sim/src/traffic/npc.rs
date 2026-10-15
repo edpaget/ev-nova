@@ -9,6 +9,7 @@ use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::impact::TractorLock;
+use crate::combat::ion::Ion;
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
 use crate::mission::ships::ShipBehav;
@@ -245,6 +246,13 @@ pub struct Npc {
     /// as the original's spawns and `_LaunchFighter` set it (@0x3c5c8,
     /// @0x3cb1c, @0x3d71d). The fight sets and touches it.
     pub tractor: Option<TractorLock>,
+    /// Its ionization (the original's +0x5c and +0xb0, see
+    /// [`ion`](crate::combat::ion)): none as it spawns, launches or is
+    /// left as the player's hulk, as `_RandomShipSpawn`,
+    /// `_GenericRandomShipSpawn`, `_LaunchFighter` and the eject set it
+    /// (@0x3c457, @0x3c9f1, @0x3d8aa, @0x6f372). The fight raises it;
+    /// ship-handling-fidelity phase 11 lowers it. Never saved.
+    pub ion: Ion,
 }
 
 /// What marks an NPC as an active mission's special ship (see the

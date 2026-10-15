@@ -64,6 +64,8 @@ impl CombatCatalog for Home {
             prox_safety: 0,
             recoil: 0,
             exit_type: -1,
+            ionization: 0,
+            ionize_color: 0,
         }]
     }
 

@@ -438,6 +438,7 @@ use crate::combat::armament::{
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::impact::TractorLock;
+use crate::combat::ion::Ion;
 use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
@@ -543,6 +544,7 @@ impl FightTerms {
             rounds,
             cloak,
             tractor,
+            ion,
             ..
         } = npc;
         Fighter {
@@ -566,6 +568,7 @@ impl FightTerms {
             top_speed: self.top_speed,
             jumping: false,
             tractor,
+            ion,
             armament,
             rounds,
             drawn_heading: self.drawn_heading,
@@ -748,6 +751,8 @@ pub struct Session {
     player_exploded_this_tick: bool,
     /// The player's tractor lock ([`Session::tractor`]).
     tractor: Option<TractorLock>,
+    /// The player's ionization ([`Session::ion`]).
+    ion: Ion,
     /// The heading each ship in the fight was drawn at after the last
     /// [`Session::tick_combat`]: its heading as that tick ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
@@ -1299,6 +1304,7 @@ impl Session {
             condition: Condition::Intact,
             player_exploded_this_tick: false,
             tractor: None,
+            ion: Ion::default(),
             drawn: BTreeMap::new(),
             player_end: None,
             hold_expiry_due: false,
@@ -2159,6 +2165,7 @@ impl Session {
             top_speed: player_terms.top_speed,
             jumping: self.jump.is_some(),
             tractor: &mut self.tractor,
+            ion: &mut self.ion,
             armament: &mut self.armament,
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
@@ -3585,6 +3592,9 @@ impl Session {
         // them. The take-off's restart of the auxiliary ships comes
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
+        // The dock request's tail clears the player's ionization, charge
+        // and colour, before the strength timer (@0x67008, @0x67020).
+        self.ion = Ion::default();
         self.arm_strength_timer(chance);
         // The dock request's reset, after the stay's days and before the
         // setup (@0x6709b; see the `precalced` module).
@@ -4449,6 +4459,16 @@ impl Session {
     #[must_use]
     pub fn tractor(&self) -> Option<TractorLock> {
         self.tractor
+    }
+
+    /// The player's ionization (see [`ion`](crate::combat::ion)): none at
+    /// the start of a session and of a load, as `_DoNewPilot` and
+    /// `_ResetPlayer` set it (@0x19227, @0x1d523) and it is never saved,
+    /// and cleared as the player takes off. The fight raises it; it is
+    /// kept through a jump and an eject.
+    #[must_use]
+    pub fn ion(&self) -> Ion {
+        self.ion
     }
 
     /// The pilot flying.
@@ -16253,6 +16273,74 @@ pub(super) mod tests {
         assert_eq!(session.tractor(), Some(TractorLock::by(ShipRef::Player)));
         assert_eq!(session.npcs()[0].tractor, None);
         assert_eq!(session.npcs()[0].state.velocity, Vec2::ZERO);
+    }
+
+    // Ionization (see the `combat::ion` module).
+
+    /// The blaster ionizing by 30 in green.
+    fn ionizer() -> WeaponRecord {
+        WeaponRecord {
+            ionization: 30,
+            ionize_color: 0x0000_ff00,
+            ..blaster()
+        }
+    }
+
+    /// A player ionized by 40 in red.
+    const IONIZED: Ion = Ion {
+        charge: 40.0,
+        colour: 0x00ff_0000,
+    };
+
+    #[test]
+    fn an_npcs_ionizing_shot_ionizes_the_player() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (None, 100.0), (Some(ionizer()), 100.0));
+        fight_until(&mut session, |session| {
+            session.reserves().shield.now < 1000.0
+        });
+        assert_eq!(
+            session.ion(),
+            Ion {
+                charge: 30.0,
+                colour: 0x0000_ff00
+            }
+        );
+        assert_eq!(session.npcs()[0].ion, Ion::default());
+    }
+
+    #[test]
+    fn the_players_ionizing_shot_ionizes_the_npc() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (Some(ionizer()), 100.0), (None, 100.0));
+        fight_until(&mut session, |session| {
+            session.npcs()[0].reserves.shield.now < 1000.0
+        });
+        assert_eq!(session.npcs()[0].ion.charge, 30.0);
+        assert_eq!(session.ion(), Ion::default());
+    }
+
+    #[test]
+    fn an_ionized_player_takes_off_with_no_ionization() {
+        let catalog = edge_lander();
+        let mut session = landed_at_the_edge(&catalog);
+        session.ion = IONIZED;
+        session.take_off(&catalog, &mut NeverFires);
+        assert_eq!(session.ion(), Ion::default());
+    }
+
+    #[test]
+    fn an_ionized_player_keeps_its_ionization_through_a_jump() {
+        let catalog = edge_lander();
+        let mut session = landed_at_the_edge(&catalog);
+        session.take_off(&catalog, &mut NeverFires);
+        session.ion = IONIZED;
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(132)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
+        assert_eq!(session.ion(), IONIZED);
     }
 
     #[test]

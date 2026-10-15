@@ -42,6 +42,7 @@ use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
+use crate::combat::ion::Ion;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
@@ -474,6 +475,7 @@ fn fighter(
         self_repair: kind.self_repair,
         former: None,
         tractor: None,
+        ion: Ion::default(),
     }
 }
 

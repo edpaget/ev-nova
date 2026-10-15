@@ -16,6 +16,7 @@ use crate::catalog::{
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
+use crate::combat::ion::Ion;
 use crate::control::{ControlBits, PilotFacts, Script, Test, TestExpr};
 use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
@@ -415,6 +416,8 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         prox_safety: 0,
         recoil: 0,
         exit_type: -1,
+        ionization: 0,
+        ionize_color: 0,
     }
 }
 
@@ -537,6 +540,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         self_repair: false,
         former: None,
         tractor: None,
+        ion: Ion::default(),
     }
 }
 

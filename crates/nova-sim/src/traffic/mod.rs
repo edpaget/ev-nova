@@ -76,6 +76,7 @@ pub mod table;
 
 use crate::ai::interceptor::within_reach;
 use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings};
+use crate::combat::ion::Ion;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{GovtId, LandingSite, PersonId, ShipId};
@@ -833,6 +834,7 @@ impl Traffic {
                 self_repair: kind.self_repair,
                 former: None,
                 tractor: None,
+                ion: Ion::default(),
             });
         }
     }

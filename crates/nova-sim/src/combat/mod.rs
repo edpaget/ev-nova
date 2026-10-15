@@ -119,6 +119,11 @@
 //!    target, or, lighter, holds itself and pulls itself toward it. The
 //!    session takes each push as a [`Shove`] and sets the ship's velocity.
 //!
+//!    Each hit but a missile lock also ionizes its ship by its weapon's
+//!    `Ionization` in its `IonizeColor` ([`ion`]): a shot's direct hit and
+//!    a beam's tick wholly, however decayed, a blast by its share over its
+//!    circle; the escape pod too, which nothing else here touches.
+//!
 //!    The original tests a shot's move in the next frame's collision
 //!    passes, before `_HandleShot` moves it again (`_DoPlayGameWork`
 //!    @0x43e70-0x44015, @0x44385); here the move is tested in the tick it
@@ -190,6 +195,7 @@ pub mod exits;
 pub mod flags;
 pub mod hull;
 pub mod impact;
+pub mod ion;
 pub mod projectile;
 pub mod report;
 pub mod shockwave;
@@ -211,6 +217,7 @@ use hull::{
     never_breaks_up,
 };
 use impact::{Body, Tractor, TractorLock};
+use ion::{Burst, Dose, Ion};
 use projectile::{DecayStep, Fuse, Jam, Meeting, Shot, ShotId, Source, Target, contact};
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
@@ -464,6 +471,9 @@ pub struct Fighter<'a> {
     /// and touches it ([`impact`]); what it does to the ship is the
     /// session's to come.
     pub tractor: &'a mut Option<TractorLock>,
+    /// Its ionization (the original's +0x5c and +0xb0): the fight raises
+    /// it ([`ion`]); what it does to the ship is the session's to come.
+    pub ion: &'a mut Ion,
     /// Its weapons.
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
@@ -520,6 +530,9 @@ struct Landed {
     lock: bool,
     /// How it pushes the ship.
     push: Push,
+    /// What it ionizes the ship by (`_IonizeShip`'s weapon and point):
+    /// none for a missile lock.
+    ion: Option<Dose>,
 }
 
 /// How a hit that landed pushes its ship ([`impact`]): `_DamageShip`'s
@@ -1296,6 +1309,7 @@ impl Combat {
                         impact: shot.weapon.impact,
                         beam: false,
                     },
+                    ion: Some(Dose::of(&shot.weapon, None)),
                 });
                 shot.position = at;
                 // Only the proximity pass releases sub-munitions
@@ -1330,6 +1344,13 @@ impl Combat {
                         impact: shot.weapon.impact,
                         beam: false,
                     },
+                    ion: Some(Dose::of(
+                        &shot.weapon,
+                        Some(Burst {
+                            centre: blast.at,
+                            radius: blast.radius,
+                        }),
+                    )),
                 }));
             }
             if let Some(target) = subs {
@@ -1381,6 +1402,7 @@ impl Combat {
                     impact: beam.weapon.impact,
                     beam: true,
                 },
+                ion: Some(Dose::of(&beam.weapon, None)),
             });
             if let Some(explosion) = beam.weapon.explosion {
                 self.events.push(CombatEvent::Exploded { at, explosion });
@@ -1405,6 +1427,13 @@ impl Combat {
     /// ([`Combat::take_shoves`]), before the next movement, which crosses
     /// no boundary the player sees. The hits compound in the order they
     /// land: locks, contacts, proximities, expiries, then beams.
+    ///
+    /// Each hit but a lock ionizes its ship ([`Ion::take`], `_IonizeShip`)
+    /// at the ship's place, the escape pod included, whatever the tractor
+    /// branch passes on. The original ionizes before `_DamageShip` on a
+    /// direct hit and a beam tick and after it on a blast; nothing reads
+    /// the charge between the two, nor before the handling's next step,
+    /// so one place serves all, crossing no boundary the player sees.
     fn land(&mut self, fighters: &mut [Fighter], hits: Vec<Landed>, rule: &dyn DisableRule) {
         // A shot passes through the escape pod and every class after it
         // (`_ShotCanHitShip` @0x447b3-0x447d9), and a beam through the pod
@@ -1429,6 +1458,9 @@ impl Combat {
                 .flatten()
                 .map(|firer| firer.state.position);
             let fighter = &mut fighters[index];
+            if let Some(dose) = landed.ion {
+                fighter.ion.take(dose, fighter.state.position);
+            }
             if immune(fighter.ship_type) {
                 continue;
             }
@@ -1941,6 +1973,7 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
             impact: 0.0,
             beam: false,
         },
+        ion: None,
     })
 }
 
@@ -1985,7 +2018,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::defence::Side;
     use crate::combat::exits::{Compression, ExitKind, ExitPoints};
-    use crate::combat::hull::{ESCAPE_POD_SHIP, NovaDisable};
+    use crate::combat::hull::{DEFAULT_HIT_RADIUS, ESCAPE_POD_SHIP, NovaDisable};
     use crate::combat::weapon::WeaponSpec;
     use crate::testkit::weapon;
 
@@ -2011,6 +2044,7 @@ mod tests {
         top_speed: f32,
         jumping: bool,
         tractor: Option<TractorLock>,
+        ion: Ion,
         armament: Armament,
         rounds: LauncherRounds,
         /// The heading it was last drawn at, when not its heading.
@@ -2059,6 +2093,7 @@ mod tests {
                 top_speed: 10.0,
                 jumping: false,
                 tractor: None,
+                ion: Ion::default(),
                 armament: Armament::default(),
                 rounds: LauncherRounds::default(),
                 drawn_heading: None,
@@ -2104,6 +2139,7 @@ mod tests {
                 top_speed: self.top_speed,
                 jumping: self.jumping,
                 tractor: &mut self.tractor,
+                ion: &mut self.ion,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
@@ -3128,6 +3164,7 @@ mod tests {
                     impact: 0.0,
                     beam: false,
                 },
+                ion: None,
             })
             .collect();
         combat.land(&mut [ship.fighter()], landed, &NovaDisable);
@@ -7487,5 +7524,228 @@ mod tests {
             shield - 5.0,
             "hurt all the same"
         );
+    }
+
+    // Ionization (`_IonizeShip` @0x8409-0x84d1; see the `ion` module).
+
+    /// `record` ionizing by `ionization` in `colour`.
+    fn ionizing(record: WeaponRecord, ionization: i16, colour: u32) -> WeaponRecord {
+        WeaponRecord {
+            ionization,
+            ionize_color: colour,
+            ..record
+        }
+    }
+
+    /// The dose `ionization` gives a ship `off` from a blast's centre of
+    /// `radius`, by the `ion` module's own reckoning.
+    fn share(ionization: i32, radius: f32, off: Vec2) -> f32 {
+        let mut ion = Ion::default();
+        ion.take(
+            ion::Dose {
+                ionization,
+                colour: 0,
+                blast: Some(ion::Burst {
+                    centre: Vec2::ZERO,
+                    radius,
+                }),
+            },
+            off,
+        );
+        ion.charge
+    }
+
+    const GREEN: u32 = 0x0000_ff00;
+
+    #[test]
+    fn a_contact_hit_ionizes_its_ship_by_the_whole_ionization_in_its_colour() {
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(ionizing(blaster(), 30, GREEN)),
+            Ship::at(2, 100.0, 0.0),
+        ];
+        let (_, at) = shoves_after_one(&mut ships, 12);
+        assert!(at.is_none(), "no blast, no explosion");
+        assert_eq!(
+            ships[1].ion,
+            Ion {
+                charge: 30.0,
+                colour: GREEN
+            }
+        );
+        assert_eq!(ships[0].ion, Ion::default(), "not its firer");
+    }
+
+    #[test]
+    fn a_proximity_hit_ionizes_its_ship_by_the_whole_ionization() {
+        // B sits 30 pixels off the bolt's path, beyond its hit radius and
+        // within its fuse's 20 more.
+        let fused = WeaponRecord {
+            prox_radius: 20,
+            ..ionizing(blaster(), 30, GREEN)
+        };
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(fused), Ship::at(2, 100.0, 30.0)];
+        let mut strikes = Vec::new();
+        for _ in 0..12 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            strikes.extend(combat.take_strikes());
+        }
+        assert_eq!(strikes.len(), 1, "{strikes:?}");
+        const { assert!(DEFAULT_HIT_RADIUS < 30.0, "not by contact") };
+        assert_eq!(ships[1].ion.charge, 30.0);
+    }
+
+    #[test]
+    fn a_decayed_shot_still_ionizes_by_its_whole_ionization() {
+        let mut combat = Combat::default();
+        combat.set_decay(DecayStep::EveryDecayPlusOne);
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(ionizing(slug(0x0020), 50, GREEN)),
+            Ship::at(2, 95.0, 0.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        while !combat.shots().is_empty() {
+            tick(&mut combat, &mut ships, &NovaDisable);
+        }
+        assert_eq!(ships[1].reserves.armor.now, 24.0, "the damage decayed");
+        assert_eq!(ships[1].ion.charge, 50.0);
+    }
+
+    #[test]
+    fn a_hit_blast_ionizes_the_ship_hit_once_and_each_ship_in_its_circle_by_its_share() {
+        let shell = WeaponRecord {
+            blast_radius: 30,
+            ..ionizing(pushing(0), 100, GREEN)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell),
+            Ship::at(2, 100.0, 0.0),
+            Ship::at(3, 100.0, 25.0),
+            Ship::at(4, 100.0, -28.0),
+        ];
+        let (_, at) = shoves_after_one(&mut ships, 12);
+        let at = at.expect("it hit");
+        assert_eq!(ships[1].ion.charge, 100.0, "the direct hit alone");
+        let near = Vec2::new(100.0, 25.0) - at;
+        let expected = share(100, 30.0, near);
+        assert!(expected > 0.0 && expected < 100.0, "{near:?}: {expected}");
+        assert_eq!(
+            ships[2].ion,
+            Ion {
+                charge: expected,
+                colour: GREEN
+            }
+        );
+        let corner = Vec2::new(100.0, -28.0) - at;
+        assert!(
+            corner.x * corner.x + corner.y * corner.y > 900.0,
+            "{corner:?}"
+        );
+        assert!(ships[3].reserves.shield.now < 10.0, "in the blast's square");
+        assert_eq!(ships[3].ion, Ion::default(), "outside its circle");
+    }
+
+    #[test]
+    fn an_expiry_blast_ionizes_by_the_share_from_where_its_shot_ended() {
+        let flak = WeaponRecord {
+            count: 3,
+            speed: 1000,
+            explod_type: 2,
+            blast_radius: 40,
+            flags: 0x8000,
+            ..ionizing(blaster(), 80, GREEN)
+        };
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(flak), Ship::at(3, 30.0, 35.0)];
+        let (_, at) = shoves_after_one(&mut ships, 6);
+        let at = at.expect("it detonated");
+        let expected = share(80, 40.0, Vec2::new(30.0, 35.0) - at);
+        assert!(expected > 0.0 && expected < 80.0, "{at:?}: {expected}");
+        assert_eq!(ships[1].ion.charge, expected);
+    }
+
+    #[test]
+    fn a_beam_ionizes_by_the_whole_ionization_on_every_tick_it_hits() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(ionizing(laser(), 4, 0x00ff_00ff)),
+            Ship::at(2, 100.0, 0.0),
+        ];
+        ships[1].reserves.shield = Gauge::full(100.0);
+        let mut charges = Vec::new();
+        for _ in 0..5 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            charges.push(ships[1].ion.charge);
+        }
+        assert_eq!(charges, [4.0, 8.0, 12.0, 12.0, 12.0]);
+        assert_eq!(ships[1].ion.colour, 0x00ff_00ff);
+    }
+
+    #[test]
+    fn a_tractor_beam_slipping_off_a_massless_target_still_ionizes_it() {
+        let mut ships = [
+            of_mass(
+                Ship::at(1, 0.0, 0.0).armed(ionizing(tractor_beam(), 7, GREEN)),
+                200.0,
+            )
+            .facing(135.0),
+            of_mass(Ship::at(2, 100.0, 100.0), 0.0),
+        ];
+        assert_eq!(tractored(&mut ships), []);
+        assert_eq!(ships[1].ion.charge, 7.0);
+    }
+
+    #[test]
+    fn a_missile_lock_ionizes_nothing() {
+        let mut combat = Combat::default();
+        let mut ships = [player_with(ionizing(missile(), 100, GREEN)), far_b()];
+        let mut locks = 0;
+        for _ in 0..40 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            locks += combat
+                .take_strikes()
+                .iter()
+                .filter(|strike| strike.lock)
+                .count();
+        }
+        assert_eq!(locks, 1);
+        assert_eq!(ships[1].ion, Ion::default());
+    }
+
+    #[test]
+    fn an_escape_pod_reached_by_a_blast_is_ionized_though_not_hurt() {
+        let shell = WeaponRecord {
+            blast_radius: 30,
+            ..ionizing(pushing(0), 100, GREEN)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell),
+            Ship::at(4, 100.0, 0.0),
+            pod(Ship::at(3, 100.0, 10.0), ESCAPE_POD_SHIP),
+        ];
+        let (_, at) = shoves_after_one(&mut ships, 12);
+        let at = at.expect("it hit");
+        assert_eq!(ships[2].reserves.shield.now, 10.0, "unhurt");
+        let expected = share(100, 30.0, Vec2::new(100.0, 10.0) - at);
+        assert!(expected > 0.0, "{at:?}");
+        assert_eq!(ships[2].ion.charge, expected);
+    }
+
+    #[test]
+    fn a_shot_on_the_player_ionizes_the_player() {
+        let player = Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(0, 100.0, 0.0)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(ionizing(blaster(), 30, GREEN)),
+            player,
+        ];
+        shoves_after_one(&mut ships, 12);
+        assert_eq!(ships[1].ion.charge, 30.0);
     }
 }

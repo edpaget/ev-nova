@@ -146,6 +146,7 @@ use super::ship_change::ClassChange;
 use crate::ai::Goal;
 use crate::bay::launch_velocity;
 use crate::board::MAX_SHIPS_IN_SYSTEM;
+use crate::combat::ion::Ion;
 use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, ShipId, ShipRecord};
@@ -378,6 +379,7 @@ impl Session {
             self_repair: kind.self_repair,
             former: None,
             tractor: None,
+            ion: Ion::default(),
         }
     }
 
@@ -673,6 +675,21 @@ mod tests {
             last = Some(session.traffic.add_npc(far));
         }
         last.expect("room to fill")
+    }
+
+    #[test]
+    fn an_ejecting_player_keeps_its_ionization_and_its_hulk_has_none() {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        let ionized = Ion {
+            charge: 40.0,
+            colour: 0x00ff_0000,
+        };
+        session.ion = ionized;
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert_eq!(session.ion(), ionized);
+        assert_eq!(hulk(&session).ion, Ion::default());
     }
 
     #[test]

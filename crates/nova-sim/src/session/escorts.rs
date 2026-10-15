@@ -104,6 +104,7 @@ use crate::cloak::Cloak;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
+use crate::combat::ion::Ion;
 use crate::escort::{
     self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
     FormationSlot,
@@ -246,6 +247,7 @@ impl Session {
             self_repair: kind.self_repair,
             former: None,
             tractor: None,
+            ion: Ion::default(),
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),

@@ -852,6 +852,8 @@ impl CombatCatalog for GameData {
                     prox_safety: record.prox_safety,
                     recoil: record.recoil,
                     exit_type: record.exit_type,
+                    ionization: record.ionization,
+                    ionize_color: record.ionize_color,
                 })
             })
             .collect()
@@ -2981,6 +2983,8 @@ mod tests {
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
         put_i16s(&mut bytes, 0x68, &[4, 70, 6, 3]);
+        put_i16s(&mut bytes, 0x4A, &[-40]);
+        bytes[0x72..0x76].copy_from_slice(&0x0034_c2ff_u32.to_be_bytes());
         bytes
     }
 
@@ -3025,6 +3029,8 @@ mod tests {
             prox_safety: 8,
             recoil: 12,
             exit_type: 2,
+            ionization: -40,
+            ionize_color: 0x0034_c2ff,
         };
         assert_eq!(
             data.weapons(),

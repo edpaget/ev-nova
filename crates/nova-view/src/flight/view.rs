@@ -10443,6 +10443,8 @@ mod tests {
             prox_safety: 0,
             recoil: 0,
             exit_type: -1,
+            ionization: 0,
+            ionize_color: 0,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -10579,6 +10581,8 @@ mod tests {
             prox_safety: 0,
             recoil: 0,
             exit_type: -1,
+            ionization: 0,
+            ionize_color: 0,
         }
     }
 

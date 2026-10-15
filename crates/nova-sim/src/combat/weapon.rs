@@ -331,6 +331,13 @@ pub struct WeaponSpec {
     /// a tractor's. It is never decayed, reduced by blast falloff or
     /// doubled in double time.
     pub impact: f32,
+    /// Its `Ionization`, raw and widened: the ion charge a direct hit or a
+    /// beam tick adds to the ship it lands on, and a blast scaled over
+    /// its circle ([`ion`](super::ion)); never decayed or doubled.
+    pub ionization: i32,
+    /// Its `IonizeColor`, `00RRGGBB`: the colour it ORs into the ion
+    /// colour of a ship it ionizes ([`ion`](super::ion)).
+    pub ionize_colour: u32,
     /// The exit points it fires from, by its `ExitType`; none, the
     /// centre, for any but 0-3 (see [`exits`](super::exits)).
     pub exit: Option<ExitKind>,
@@ -509,6 +516,8 @@ impl WeaponSpec {
             line_count: line_count(record),
             recoil: f32::from(record.recoil),
             impact: f32::from(record.impact),
+            ionization: i32::from(record.ionization),
+            ionize_colour: record.ionize_color,
             exit: ExitKind::from_raw(record.exit_type),
             nearest_exit: record.flags3 & NEAREST_EXIT != 0,
             broadside: if record.inaccuracy < 0 {
@@ -854,6 +863,22 @@ mod tests {
                 ..light_blaster()
             });
             assert_eq!(spec.impact, f32::from(raw), "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_weapons_ionization_and_ion_colour_are_its_raw_ones() {
+        for (raw, colour) in [(100, 0x00d4_ffff), (-5, 0x0034_c2ff), (0, 0)] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                ionization: raw,
+                ionize_color: colour,
+                ..light_blaster()
+            });
+            assert_eq!(
+                (spec.ionization, spec.ionize_colour),
+                (i32::from(raw), colour),
+                "{raw}"
+            );
         }
     }
 

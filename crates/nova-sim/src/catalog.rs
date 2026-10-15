@@ -1068,6 +1068,10 @@ pub struct WeaponRecord {
     /// Its `ExitType`: which of its ship's exit points it fires from, 0
     /// to 3; any other value fires from the centre.
     pub exit_type: i16,
+    /// Its `Ionization`: the ion charge it adds to a ship it hits.
+    pub ionization: i16,
+    /// Its `IonizeColor`, `00RRGGBB`.
+    pub ionize_color: u32,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`
