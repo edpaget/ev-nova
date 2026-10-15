@@ -3759,10 +3759,13 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_escort_mission_at_its_return_with_one_destroyed_does_not_complete() {
+    fn an_escort_mission_at_its_return_with_one_destroyed_fails_before_the_escort_branch() {
         let (catalog, mut session) = escort_gone(1);
         let cash = session.pilot().cash();
+        assert!(!bits(&session).contains(&5));
         land_home(&mut session, &catalog);
+        assert_eq!(held(&session), [], "the slot is freed");
+        assert!(bits(&session).contains(&5), "OnFailure ran");
         assert!(!shown(&mut session).contains(&comp("Paid.")));
         assert_eq!(session.pilot().cash(), cash);
     }
