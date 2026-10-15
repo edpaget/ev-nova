@@ -85,8 +85,16 @@ impl Session {
         let coming = active.aux.coming(&record.aux);
         let holder = |stop: Option<Stop>| stop.and_then(|stop| self.holder_of(stop.stellar));
         let holders = (holder(active.destination), holder(active.return_to));
-        let places = self.galaxy.map().places();
-        if coming <= 0 || !aux_system_allows(record.aux.syst, self.pilot.system, holders, places) {
+        let map = self.galaxy.map();
+        if coming <= 0
+            || !aux_system_allows(
+                record.aux.syst,
+                self.pilot.system,
+                holders,
+                map,
+                &self.govts,
+            )
+        {
             return;
         }
         let Some(dude) = aux_dude(&record.aux) else {
