@@ -436,8 +436,6 @@ pub fn spread_statuses(
                 }
             })
     };
-    let held =
-        |record: i32| i16::try_from(record.clamp(-RECORD_LIMIT, RECORD_LIMIT)).unwrap_or_default();
     for (system, owner) in systems {
         if let Some(record) = spread(owner) {
             pilot.set_system_record(system, held(record));
@@ -451,7 +449,12 @@ pub fn spread_statuses(
     }
 }
 
-/// Applies one conviction to `pilot`:`govt_changes` to its records with
+/// `record` held within [`RECORD_LIMIT`], as the pilot's records store it.
+fn held(record: i32) -> i16 {
+    i16::try_from(record.clamp(-RECORD_LIMIT, RECORD_LIMIT)).unwrap_or_default()
+}
+
+/// Applies one conviction to `pilot`: `govt_changes` to its records with
 /// each government, and `system_changes` (a [`LegalCode`]'s walk) to its
 /// record in each system. A system's new record is its record plus the
 /// change in single precision, truncated (`cvttss2si` of the float sum,
@@ -462,10 +465,6 @@ pub fn convict(
     govt_changes: &[(GovtId, i32)],
     system_changes: &[(SystemId, f32)],
 ) {
-    let held = |record: i32| {
-        let record = record.clamp(-RECORD_LIMIT, RECORD_LIMIT);
-        i16::try_from(record).unwrap_or_default()
-    };
     for &(govt, change) in govt_changes {
         let record = i32::from(pilot.legal_record(govt)) + change;
         pilot.set_legal_record(govt, held(record));
