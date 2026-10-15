@@ -24,6 +24,7 @@
 //! an accept is rdm:phase/missions/phase-15-accept-drops-next-offer.
 
 use super::Session;
+use super::missions::TextSource;
 use crate::catalog::{MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
 use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
@@ -161,8 +162,9 @@ impl Session {
         std::mem::take(&mut self.shown_texts)
     }
 
-    /// Queues `mission`'s `kind` text to show, when it has one, filled
-    /// for `slot` ([`Session::mission_text`]), or with no mission
+    /// Queues `mission`'s `kind` text to show, when it has one, taken in
+    /// as a `dësc` ([`TextSource::Desc`]) and filled for `slot`
+    /// ([`Session::mission_text`]), or with no mission
     /// ([`Session::plain_text`]): whether it had one.
     pub(super) fn show_mission_text(
         &mut self,
@@ -174,12 +176,14 @@ impl Session {
             .mission_texts
             .get(&mission)
             .and_then(|texts| kind.of(texts))
+            .map(str::to_owned)
         else {
             return false;
         };
+        let raw = self.take_in(TextSource::Desc, &raw);
         let text = match slot {
-            Some(slot) => self.mission_text(slot, raw),
-            None => self.plain_text(raw),
+            Some(slot) => self.mission_text(slot, &raw),
+            None => self.plain_text(&raw),
         };
         self.show_text(kind, mission, text);
         true
@@ -197,7 +201,11 @@ impl Session {
     /// The mission computer of the stellar docked at (`_DoMissionDialog`
     /// @0xa37cf): every offer at the computer in the order it shows, with
     /// no availability check (`_SetupMissionList` @0xa08c4-0xa09d6), each
-    /// name and text filled for its offer, and today's medium date.
+    /// name and text filled for its offer, and today's medium date. The
+    /// names read the remembered rank governments, as the original's list
+    /// munges them before any text is loaded (@0xa0947); each text reads
+    /// its own, as if loaded, changing nothing: the screen loads the
+    /// selected one ([`Session::show_computer_row`]).
     ///
     /// # Errors
     ///
@@ -218,14 +226,17 @@ impl Session {
             .iter()
             .map(|offer| {
                 let texts = self.mission_texts(offer.mission);
-                let fill = |text: Option<&str>| {
-                    self.offer_text(offer.mission, text.unwrap_or_default())
-                        .unwrap_or_default()
-                };
+                let name = texts.map_or("", |texts| texts.name.as_str());
+                let text = texts
+                    .and_then(|texts| texts.offer.as_deref())
+                    .unwrap_or_default();
+                let loaded = TextSource::Desc.govts(self.rank_govts, text);
                 ComputerRow {
                     mission: offer.mission,
-                    name: fill(texts.map(|texts| texts.name.as_str())),
-                    text: fill(texts.and_then(|texts| texts.offer.as_deref())),
+                    name: self.offer_text(offer.mission, name).unwrap_or_default(),
+                    text: self
+                        .offer_text_reading(offer.mission, text, loaded)
+                        .unwrap_or_default(),
                 }
             })
             .collect();
@@ -239,7 +250,11 @@ impl Session {
     /// active slot whose mission lacks `Flags` 0x0400, in slot order
     /// (`_SetupMissionInfoList` @0x9de7a), its name and `QuickBrief`
     /// filled for the slot (@0x9e2e1-0x9e309), and today's medium date. A
-    /// slot whose `mïsn` is gone reads with no text, and abortable.
+    /// slot whose `mïsn` is gone reads with no text, and abortable. The
+    /// names read the remembered rank governments, as the original's list
+    /// munges them before any text is loaded (@0x9e108); each text reads
+    /// its own, as if loaded, changing nothing: the screen loads the
+    /// selected one ([`Session::show_info_row`]).
     #[must_use]
     pub fn mission_info(&self) -> MissionInfo {
         let rows = self
@@ -252,12 +267,16 @@ impl Session {
                     return None;
                 }
                 let texts = self.mission_texts(active.mission);
-                let fill = |text: Option<&str>| self.mission_text(slot, text.unwrap_or_default());
+                let name = texts.map_or("", |texts| texts.name.as_str());
+                let text = texts
+                    .and_then(|texts| texts.quick_brief.as_deref())
+                    .unwrap_or_default();
+                let loaded = TextSource::Desc.govts(self.rank_govts, text);
                 Some(InfoRow {
                     slot,
-                    name: fill(texts.map(|texts| texts.name.as_str())),
+                    name: self.mission_text(slot, name),
                     failed: active.failed.is_some(),
-                    text: fill(texts.and_then(|texts| texts.quick_brief.as_deref())),
+                    text: self.mission_text_reading(slot, text, loaded),
                     abortable: record.can_abort != 0,
                 })
             })
@@ -266,6 +285,40 @@ impl Session {
             rows,
             today: self.med_date_text(),
         }
+    }
+
+    /// Shows the mission computer's row of `mission`, selected: its offer
+    /// text loaded as a `dësc` and filled for its offer, as
+    /// `_MissionFilter` loads a selected row's (@0x9f9bd-0x9f9eb), and
+    /// then its name filled, as `_MissionDialogUpdate` munges the
+    /// selected name after (@0x9f40c). `None` when it is not offered.
+    pub fn show_computer_row(&mut self, mission: MissionId) -> Option<ComputerRow> {
+        self.offer_of(mission)?;
+        let texts = self.mission_texts(mission);
+        let name = texts.map_or("", |texts| texts.name.as_str()).to_owned();
+        let raw = texts
+            .and_then(|texts| texts.offer.clone())
+            .unwrap_or_default();
+        let raw = self.take_in(TextSource::Desc, &raw);
+        Some(ComputerRow {
+            mission,
+            text: self.offer_text(mission, &raw)?,
+            name: self.offer_text(mission, &name)?,
+        })
+    }
+
+    /// Shows the mission info screen's row of `slot`, selected: its
+    /// `QuickBrief` loaded as a `dësc` and filled for the slot, as
+    /// `_MissionInfoFilter` loads a selected row's (@0x9d89f-0x9d8bc).
+    /// `None` for a free slot.
+    pub fn show_info_row(&mut self, slot: u8) -> Option<String> {
+        let active = self.pilot.missions.get(slot)?;
+        let raw = self
+            .mission_texts(active.mission)
+            .and_then(|texts| texts.quick_brief.clone())
+            .unwrap_or_default();
+        let raw = self.take_in(TextSource::Desc, &raw);
+        Some(self.mission_text(slot, &raw))
     }
 
     /// The next offer at venue `loc` (an `AvailLoc` other than the mission
@@ -332,9 +385,11 @@ impl Session {
             texts.map_or("", |texts| texts.refuse_button.as_str()),
             can_refuse,
         );
+        let raw = raw.to_owned();
+        let raw = self.take_in(TextSource::Desc, &raw);
         VenueOffer::Prompt(OfferPrompt {
             mission,
-            text: self.offer_text(mission, raw).unwrap_or_default(),
+            text: self.offer_text(mission, &raw).unwrap_or_default(),
             labels,
         })
     }
@@ -390,6 +445,7 @@ mod tests {
     use crate::mission::AbortRefusal;
     use crate::mission::screens::{BAR, NO_LABEL, OKAY_LABEL, OUTFITTER, SHIPYARD, TRADE_CENTER};
     use crate::mission::{AcceptError, ActiveMission, OfferLabels, SLOTS};
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::AbortError;
     use crate::testkit::{FakePilotCatalog, catalog, land_now, mission};
 
@@ -450,6 +506,138 @@ mod tests {
 
     fn bit(n: u16) -> Bit {
         Bit::new(n).expect("in range")
+    }
+
+    /// [`screens`] of `missions` and `texts`, with ranks 200 (government
+    /// 128, "Cdr") and 201 (129, "Ad"), docked and both held.
+    fn ranked(missions: Vec<MissionRecord>, texts: Vec<MissionTexts>, rules: Rulebook) -> Session {
+        let mut catalog = screens(missions, texts);
+        let rank = |id, govt, short: &str| crate::catalog::RankRecord {
+            short_name: short.to_owned(),
+            affil_govt: Some(crate::catalog::GovtId(govt)),
+            ..crate::testkit::rank(id)
+        };
+        catalog.ranks = vec![rank(200, 128, "Cdr"), rank(201, 129, "Ad")];
+        let mut session = docked(&catalog).with_rules(rules);
+        session.run_set(
+            &SetExpr::parse("K200 K201").expect("parses"),
+            &mut NeverFires,
+        );
+        session
+    }
+
+    #[test]
+    fn by_the_engine_the_computers_names_read_the_governments_left_and_each_text_its_own() {
+        let mut session = ranked(
+            vec![to_mars(130)],
+            vec![texts(130, "Run <PRK128>", Some("Go, <PRK128>."))],
+            Rulebook::default(),
+        );
+        let _ = session.take_in(TextSource::Desc, "Earlier: <PRK128> <SRK129>.");
+        let computer = session.mission_computer().expect("opens");
+        assert_eq!(
+            (
+                computer.rows[0].name.as_str(),
+                computer.rows[0].text.as_str()
+            ),
+            ("Run Ad", "Go, captain."),
+            "the list's names are munged before any text loads (@0xa0947); the \
+             text as if loaded"
+        );
+        assert_eq!(
+            session.plain_text("<PRK128>"),
+            "Ad",
+            "the computer's view changes nothing"
+        );
+        let shown = session.show_computer_row(MissionId(130)).expect("offered");
+        assert_eq!(
+            (shown.name.as_str(), shown.text.as_str()),
+            ("Run captain", "Go, captain."),
+            "selected: its text loaded (@0x9f9bd), then its name munged again (@0x9f40c)"
+        );
+        assert_eq!(
+            session.plain_text("<PRK128>"),
+            "captain",
+            "left by the load"
+        );
+        assert_eq!(
+            session.mission_computer().expect("opens").rows[0].name,
+            "Run captain",
+            "opened again, the names read what the last load left"
+        );
+        assert_eq!(
+            session.show_computer_row(MissionId(131)),
+            None,
+            "not offered"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_the_computers_rank_nnn_tags_read_their_own_government() {
+        let rules = Rulebook::default().with_override(RuleKey::CrossedRankTags, RuleSource::Bible);
+        let mut session = ranked(
+            vec![to_mars(130)],
+            vec![texts(130, "Run <PRK128>", Some("Go, <PRK128>."))],
+            rules,
+        );
+        let _ = session.take_in(TextSource::Desc, "Earlier: <PRK128> <SRK129>.");
+        let computer = session.mission_computer().expect("opens");
+        assert_eq!(
+            (
+                computer.rows[0].name.as_str(),
+                computer.rows[0].text.as_str()
+            ),
+            ("Run Cdr", "Go, Cdr.")
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_shown_text_resets_the_governments_before_its_own() {
+        let mut session = ranked(
+            vec![to_mars(130)],
+            vec![MissionTexts {
+                brief: Some("Off you go, <PRK128>.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "Run")
+            }],
+            Rulebook::default(),
+        );
+        let _ = session.take_in(TextSource::Quote, "Earlier: <SRK129> said.");
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(
+            session.take_mission_texts(),
+            [text(MissionTextKind::Brief, 130, "Off you go, captain.")],
+            "the earlier <SRK129> is reset (@0x71926-0x71930)"
+        );
+    }
+
+    #[test]
+    fn the_mission_infos_names_read_the_governments_left_and_a_selected_row_loads_its_text() {
+        let mut session = ranked(
+            vec![to_mars(130)],
+            vec![MissionTexts {
+                quick_brief: Some("To <PRK128>.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "Run <PRK128>")
+            }],
+            Rulebook::default(),
+        );
+        let slot = session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let _ = session.take_in(TextSource::Desc, "Earlier: <PRK128> <SRK129>.");
+        let info = session.mission_info();
+        assert_eq!(
+            (info.rows[0].name.as_str(), info.rows[0].text.as_str()),
+            ("Run Ad", "To captain.")
+        );
+        assert_eq!(session.show_info_row(slot).as_deref(), Some("To captain."));
+        assert_eq!(
+            session.plain_text("<PRK128>"),
+            "captain",
+            "left by the load"
+        );
+        assert_eq!(session.show_info_row(15), None, "a free slot");
     }
 
     fn ids(computer: &MissionComputer) -> Vec<i16> {

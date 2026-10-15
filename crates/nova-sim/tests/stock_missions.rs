@@ -178,6 +178,7 @@ fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
             pay_millions: RuleSource::Engine,
             slot: None,
         }),
+        rank_govts: nova_sim::text_tags::RankTagGovts::NONE,
         rules: TagRules::default(),
     };
     let mut texts = 0;

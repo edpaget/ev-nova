@@ -1735,6 +1735,19 @@
 //!   tags: a text with none comes out unchanged;
 //! - dialogue nodes (plugin-scripting-extensions phase 3).
 //!
+//! **Text sources** (missions-fidelity phase 2). The crossed rank tags
+//! read the governments the session remembers
+//! ([`RankTagGovts`](crate::text_tags::RankTagGovts), the original's
+//! `_descRankGovt`), which a text changes only as it is shown, by where
+//! it comes from: a `dësc` the original loads through `_LoadDescription`
+//! (an offer, the lifecycle texts, the cargo and ship-done texts, the
+//! mission computer's or mission info's selected row) resets them and
+//! parses its own; a hail quote parses its own onto them; anything else
+//! (the screens' lists of names, a `Q` message) reads them as they stand.
+//! The `&self` texts and screens read them and change nothing; the
+//! `&mut` paths that show a text take it in first, so the governments
+//! settle as each text is shown, as the original's do.
+//!
 //! ## Checked for phase 3
 //!
 //! - The firing points stand as "One landing", "One take-off" and "One

@@ -102,7 +102,7 @@ use crate::pilot::Escort;
 use crate::rank::RankNames;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::text_tags::{self, NoNames, TagContext, TagRules};
+use crate::text_tags::{self, NoNames, RankTagGovts, TagContext, TagRules};
 use crate::traffic::npc::{Mode, Npc, NpcPerson};
 use crate::traffic::table::ShipKind;
 
@@ -227,6 +227,9 @@ pub struct QuoteTags<'a> {
     pub ship_name: &'a str,
     /// The player's ranks: the rank tags.
     pub ranks: RankNames<'a>,
+    /// The rank governments the quote's crossed rank tags read: those
+    /// its parse leaves (see [`RankTagGovts`]).
+    pub rank_govts: RankTagGovts,
     /// The disputed rules the tags follow.
     pub rules: TagRules,
 }
@@ -245,6 +248,7 @@ pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
         person: Some(tags.person),
         ranks: tags.ranks.clone(),
         mission: None,
+        rank_govts: tags.rank_govts,
         rules: tags.rules,
     };
     text_tags::expand(text, &context, &NoNames)
@@ -1303,6 +1307,7 @@ mod tests {
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames::none(),
+            rank_govts: RankTagGovts::NONE,
             rules: TagRules::default(),
         };
         assert_eq!(
@@ -1327,6 +1332,7 @@ mod tests {
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames::none(),
+            rank_govts: RankTagGovts::NONE,
             rules: TagRules::default(),
         };
         assert_eq!(
@@ -1357,7 +1363,8 @@ mod tests {
             ..crate::testkit::rank(200)
         }];
         let active = BTreeSet::from([RankId(200)]);
-        let tags = QuoteTags {
+        let text = "<PRK>, <SRK>, <RRK>, <PRK128>.";
+        let mut tags = QuoteTags {
             person: "Bounty Hunter",
             pilot: "Stock",
             ship_type: "Shuttle",
@@ -1368,12 +1375,16 @@ mod tests {
                 recent: Some(RankId(200)),
                 fallback: "captain".into(),
             },
+            rank_govts: RankTagGovts::NONE.parsed(text),
             rules: TagRules::default(),
         };
         assert_eq!(
-            expand_tags("<PRK>, <SRK>, <RRK>, <PRK128>.", &tags),
-            "Cmdr, Cdr, Commander, Cdr."
+            expand_tags(text, &tags),
+            "Cmdr, Cdr, Commander, captain.",
+            "by the engine a lone <PRKnnn> reads the <SRKnnn> government's: none"
         );
+        tags.rules.crossed_rank_tags = RuleSource::Bible;
+        assert_eq!(expand_tags(text, &tags), "Cmdr, Cdr, Commander, Cdr.");
     }
 
     fn quoting(flags: u16) -> NpcPerson {

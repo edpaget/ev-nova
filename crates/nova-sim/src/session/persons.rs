@@ -47,6 +47,7 @@
 
 use std::rc::Rc;
 
+use super::missions::TextSource;
 use super::{Session, hire};
 use crate::catalog::{CommCatalog, MissionId, PersonId};
 use crate::chance::Chance;
@@ -197,6 +198,7 @@ impl Session {
                 .and_then(|at| lines.get(at))
                 .cloned()
                 .unwrap_or_default();
+            let line = self.take_in(TextSource::Quote, &line);
             let tags = QuoteTags {
                 person: self
                     .traffic
@@ -206,6 +208,7 @@ impl Session {
                 ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
                 ship_name: self.pilot.ship_name().unwrap_or_default(),
                 ranks: self.rank_names(),
+                rank_govts: self.rank_govts,
                 rules: TagRules::from_rulebook(&self.rules),
             };
             let text = expand_tags(&line, &tags);
@@ -1016,6 +1019,57 @@ mod tests {
         session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said, ["Halt, Cmdr! A Commander?"], "not captain");
+    }
+
+    /// [`quoters`] whose quote is `line`, with ranks 200 (government
+    /// 128, "Cdr") and 201 (129, "Ad") held, Ace attacking the player.
+    fn ranked_quote(line: &str, rules: Rulebook) -> (FakePilotCatalog, Session) {
+        let mut catalog = quoters([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+        catalog.strings = vec![(7101, vec![line.to_owned()])];
+        let rank = |id, govt, short: &str| crate::catalog::RankRecord {
+            short_name: short.to_owned(),
+            affil_govt: Some(crate::catalog::GovtId(govt)),
+            ..crate::testkit::rank(id)
+        };
+        catalog.ranks = vec![rank(200, 128, "Cdr"), rank(201, 129, "Ad")];
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_rules(rules);
+        session.populate(&catalog, &mut NeverFires);
+        session.run_set(
+            &crate::control::SetExpr::parse("K200 K201").expect("parses"),
+            &mut crate::testkit::Scripted::default(),
+        );
+        session.traffic.npcs_mut()[1].person = None;
+        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        (catalog, session)
+    }
+
+    #[test]
+    fn by_the_engine_a_quote_parses_its_rank_governments_onto_those_remembered() {
+        let (catalog, mut session) = ranked_quote("<PRK128>, I said!", Rulebook::default());
+        let _ = session.take_in(TextSource::Desc, "Earlier: <SRK129>.");
+        let (said, _) = quote_tick(&catalog, &mut session, &[77]);
+        assert_eq!(
+            said,
+            ["Ad, I said!"],
+            "no reset (@0x445ee): the earlier <SRK129> crosses"
+        );
+        assert_eq!(
+            session.plain_text("<SRK129> <PRK128>"),
+            "Cdr Ad",
+            "both kept for later texts"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_quotes_rank_nnn_tag_reads_its_own_government() {
+        let rules = Rulebook::default().with_override(RuleKey::CrossedRankTags, RuleSource::Bible);
+        let (catalog, mut session) = ranked_quote("<PRK128>, I said!", rules);
+        let _ = session.take_in(TextSource::Desc, "Earlier: <SRK129>.");
+        let (said, _) = quote_tick(&catalog, &mut session, &[77]);
+        assert_eq!(said, ["Cdr, I said!"]);
     }
 
     #[test]

@@ -122,6 +122,7 @@
 //! | [`PaySlotOffset`](RuleKey::PaySlotOffset) | `pay_slot_offset` | a slot's `<PAY>` of a pay that is not cash, a fine or a charge reads the slot's byte offset, slot × 2,284 (`_MungeBriefing` @0x9cd2a-0x9cdb6; see [`text_tags`](crate::text_tags)) | it reads 0, as an offer's does\* |
 //! | [`MissionlessTags`](RuleKey::MissionlessTags) | `missionless_tags` | a text filled with no mission (a hail quote, a `RefuseText`) reads `"[Error]"` for each mission tag (`_MungeBriefing` @0x9c83f-0x9c843; see [`text_tags`](crate::text_tags)) | they are left as written\* |
 //! | [`PrkNnnName`](RuleKey::PrkNnnName) | `prk_nnn_name` | `<PRKnnn>` reads the rank's `ShortName`, as `<SRKnnn>` does (`_MungeBriefing` +0xde @0x9d1ef, @0x9d2d0; see [`text_tags`](crate::text_tags)) | its `ConvName`, "same as `<PRK>`" |
+//! | [`CrossedRankTags`](RuleKey::CrossedRankTags) | `crossed_rank_tags` | `<PRKnnn>` and `<SRKnnn>` read the governments the last tags of their kind named, remembered between texts and reset only as a `dësc` loads, crossed: `<PRKnnn>` the `<SRKnnn>` government's rank and `<SRKnnn>` the `<PRKnnn>` one's (`_ParseTextDescription` @0x14f34-0x15055, `_MungeBriefing` @0x9d53d-0x9d5a5; see [`text_tags`](crate::text_tags)) | each reads government nnn's own rank |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
@@ -1689,6 +1690,18 @@ rule_keys! {
     /// `<PRK>`, but only for ranks affiliated with government ID nnn": its
     /// `ConvName`. `<SRKnnn>` reads `ShortName` under both.
     PrkNnnName => "prk_nnn_name",
+    /// Which government's rank `<PRKnnn>` and `<SRKnnn>` read (see
+    /// [`text_tags`](crate::text_tags)). By the engine, as the original remembers
+    /// the last `<PRKnnn>` and `<SRKnnn>` government a text named
+    /// (`_descRankGovt`, set by `_ParseTextDescription` @0x14f34-0x15055 and reset
+    /// by `_LoadDescription` @0x71926-0x71930 before each `dësc`) and crosses
+    /// them (`_MungeBriefing` @0x9d53d-0x9d5a5): only the remembered nnn of each
+    /// kind is filled, `<PRKnnn>` with the `<SRKnnn>` government's rank and
+    /// `<SRKnnn>` with the `<PRKnnn>` one's, so a lone tag reads "captain" and a
+    /// text not loaded as a `dësc` reads the governments an earlier one left.
+    /// By the Bible, "only for ranks affiliated with government ID nnn": each
+    /// tag reads government nnn's own rank.
+    CrossedRankTags => "crossed_rank_tags",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -2235,7 +2248,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(58),
+            RuleKey::ALL.iter().rev().nth(59),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2252,7 +2265,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(57),
+            RuleKey::ALL.iter().rev().nth(58),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -2292,7 +2305,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(56),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2314,7 +2327,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(55),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2339,7 +2352,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(54),
+            RuleKey::ALL.iter().rev().nth(55),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2365,7 +2378,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(53),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2385,7 +2398,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(52),
+            RuleKey::ALL.iter().rev().nth(53),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2405,7 +2418,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(51),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2425,7 +2438,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2447,7 +2460,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2669,7 +2682,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(46), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(47), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2684,7 +2697,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -2701,7 +2714,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -2718,7 +2731,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -2735,7 +2748,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -2752,7 +2765,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -2769,7 +2782,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -2786,7 +2799,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::PaySlotOffset)
         );
     }
@@ -2803,7 +2816,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::MissionlessTags)
         );
     }
@@ -2817,8 +2830,25 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::PrkNnnName)
+        );
+    }
+
+    #[test]
+    fn the_crossed_rank_tags_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::CrossedRankTags.key(), "crossed_rank_tags");
+        assert_eq!(
+            RuleKey::from_key("crossed_rank_tags"),
+            Some(RuleKey::CrossedRankTags)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::CrossedRankTags),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(37),
+            Some(&RuleKey::CrossedRankTags)
         );
     }
 
@@ -2858,7 +2888,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -3263,7 +3293,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(60),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3425,6 +3455,7 @@ mod tests {
                 RuleKey::PaySlotOffset,
                 RuleKey::MissionlessTags,
                 RuleKey::PrkNnnName,
+                RuleKey::CrossedRankTags,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,

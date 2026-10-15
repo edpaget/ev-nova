@@ -495,6 +495,7 @@ use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
 use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
+use crate::text_tags::RankTagGovts;
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
@@ -1040,6 +1041,11 @@ pub struct Session {
     /// The mission texts to show, until they are taken (see the
     /// `mission_screens` module); never saved.
     shown_texts: Vec<MissionText>,
+    /// The governments the last `<PRKnnn>` and `<SRKnnn>` taken in named
+    /// (`_descRankGovt`; see the `missions` module's text sources), as
+    /// the crossed rank tags read them; never saved, as the original
+    /// saves none of it.
+    rank_govts: RankTagGovts,
     /// The outside offers whose accept was refused, passed over until
     /// another venue is entered (see the `mission_screens` module); never
     /// saved, as the original saves none of it.
@@ -1377,6 +1383,7 @@ impl Session {
             swap_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
+            rank_govts: RankTagGovts::NONE,
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),

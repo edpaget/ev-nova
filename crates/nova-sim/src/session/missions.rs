@@ -95,7 +95,9 @@ use crate::rules::Verdict;
 use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
-use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames, TagRules};
+use crate::text_tags::{
+    self, MissionTags, MissionValues, RankTagGovts, TagContext, TagNames, TagRules,
+};
 
 /// Why a mission's stop has no landing a player can reach
 /// ([`Session::stop_landing`]).
@@ -376,7 +378,7 @@ impl Session {
     /// The offer of `mission` on the visit under way, or in flight the
     /// offer from a ship the offer dialog shows (see the `person_offers`
     /// module).
-    fn offer_of(&self, mission: MissionId) -> Option<Offer> {
+    pub(super) fn offer_of(&self, mission: MissionId) -> Option<Offer> {
         if self.landed.is_none() {
             let offering = self
                 .offering
@@ -1274,9 +1276,15 @@ impl Session {
     }
 
     /// What `text`'s tags read for `mission`, in `slot` (none for an
-    /// offer), or no mission: the pilot, its ship, no person, and the
-    /// session's cash, date and rules.
-    fn tag_context(&self, mission: Option<MissionValues>, slot: Option<u8>) -> TagContext<'_> {
+    /// offer), or no mission, the crossed rank tags reading `rank_govts`:
+    /// the pilot, its ship, no person, and the session's cash, date and
+    /// rules.
+    fn tag_context(
+        &self,
+        mission: Option<MissionValues>,
+        slot: Option<u8>,
+        rank_govts: RankTagGovts,
+    ) -> TagContext<'_> {
         TagContext {
             pilot: &self.pilot.name,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
@@ -1291,42 +1299,110 @@ impl Session {
                 pay_millions: self.rules.source_for(RuleKey::PayMillions),
                 slot,
             }),
+            rank_govts,
             rules: TagRules::from_rulebook(&self.rules),
         }
     }
 
-    /// `text` with its tags filled for `mission`'s offer on the visit
-    /// under way (`_MungeBriefing` with `offer` set; see
-    /// [`text_tags`](crate::text_tags)): none when it is not offered, or
-    /// in flight.
-    #[must_use]
-    pub fn offer_text(&self, mission: MissionId, text: &str) -> Option<String> {
+    /// Takes in `raw`, a text from `source`, as the original does before
+    /// it fills it: the remembered rank governments become those `source`
+    /// leaves ([`TextSource::govts`]). What it gives back is the text to
+    /// fill.
+    ///
+    /// The `&self` texts below ([`Session::offer_text`],
+    /// [`Session::mission_text`], [`Session::plain_text`]) read the
+    /// remembered governments and change nothing; only the paths that
+    /// show a text take it in, so the governments settle as each text is
+    /// shown, as the original's `_LoadDescription` does.
+    pub(super) fn take_in(&mut self, source: TextSource, raw: &str) -> String {
+        self.rank_govts = source.govts(self.rank_govts, raw);
+        raw.to_owned()
+    }
+
+    /// `text` filled for `mission`'s offer, its crossed rank tags reading
+    /// `rank_govts`: none when it is not offered, or in flight.
+    pub(super) fn offer_text_reading(
+        &self,
+        mission: MissionId,
+        text: &str,
+        rank_govts: RankTagGovts,
+    ) -> Option<String> {
         let offer = self.offer_of(mission)?;
-        let context = self.tag_context(Some(MissionValues::offered(&offer)), None);
+        let context = self.tag_context(Some(MissionValues::offered(&offer)), None, rank_govts);
         Some(text_tags::expand(text, &context, self))
     }
 
-    /// `text` with its tags filled for the mission in `slot`
-    /// (`_MungeBriefing` with a slot; see [`text_tags`](crate::text_tags)):
-    /// a free slot's mission tags read [`UNSET`](text_tags::UNSET).
-    #[must_use]
-    pub fn mission_text(&self, slot: u8, text: &str) -> String {
+    /// `text` filled for the mission in `slot`, its crossed rank tags
+    /// reading `rank_govts`.
+    pub(super) fn mission_text_reading(
+        &self,
+        slot: u8,
+        text: &str,
+        rank_govts: RankTagGovts,
+    ) -> String {
         let values = self
             .pilot
             .missions
             .get(slot)
             .map(MissionValues::active)
             .unwrap_or_default();
-        text_tags::expand(text, &self.tag_context(Some(values), Some(slot)), self)
+        let context = self.tag_context(Some(values), Some(slot), rank_govts);
+        text_tags::expand(text, &context, self)
+    }
+
+    /// `text` with its tags filled for `mission`'s offer on the visit
+    /// under way (`_MungeBriefing` with `offer` set; see
+    /// [`text_tags`](crate::text_tags)), reading the remembered rank
+    /// governments: none when it is not offered, or in flight.
+    #[must_use]
+    pub fn offer_text(&self, mission: MissionId, text: &str) -> Option<String> {
+        self.offer_text_reading(mission, text, self.rank_govts)
+    }
+
+    /// `text` with its tags filled for the mission in `slot`
+    /// (`_MungeBriefing` with a slot; see [`text_tags`](crate::text_tags)),
+    /// reading the remembered rank governments: a free slot's mission
+    /// tags read [`UNSET`](text_tags::UNSET).
+    #[must_use]
+    pub fn mission_text(&self, slot: u8, text: &str) -> String {
+        self.mission_text_reading(slot, text, self.rank_govts)
     }
 
     /// `text` with its tags filled with no mission, as the original's
     /// `RefuseText`, comm dialog and hail quotes are (`_MungeBriefing`
-    /// with index -1; see [`text_tags`](crate::text_tags)): the mission
-    /// tags read as [`RuleKey::MissionlessTags`] says.
+    /// with index -1; see [`text_tags`](crate::text_tags)), reading the
+    /// remembered rank governments: the mission tags read as
+    /// [`RuleKey::MissionlessTags`] says.
     #[must_use]
     pub fn plain_text(&self, text: &str) -> String {
-        text_tags::expand(text, &self.tag_context(None, None), self)
+        let context = self.tag_context(None, None, self.rank_govts);
+        text_tags::expand(text, &context, self)
+    }
+}
+
+/// Where a text the session fills comes from, which decides the rank
+/// governments its crossed tags read
+/// ([`RuleKey::CrossedRankTags`]; see [`RankTagGovts`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextSource {
+    /// A `dësc` loaded as `_LoadDescription` loads one: an offer's,
+    /// `BriefText`, `CompText`, `FailText`, `RefuseText`, the cargo texts,
+    /// `ShipDoneText`, `QuickBrief`. The governments are reset
+    /// (@0x71926-0x71930), then its own are parsed (@0x71936).
+    Desc,
+    /// A hail quote, parsed with no reset (`_ShowPersonHailQuote`
+    /// @0x445ee).
+    Quote,
+}
+
+impl TextSource {
+    /// The governments `raw` from this source leaves, `remembered`
+    /// before it.
+    pub(super) fn govts(self, remembered: RankTagGovts, raw: &str) -> RankTagGovts {
+        match self {
+            Self::Desc => RankTagGovts::NONE.parsed(raw),
+            Self::Quote => remembered.parsed(raw),
+        }
     }
 }
 

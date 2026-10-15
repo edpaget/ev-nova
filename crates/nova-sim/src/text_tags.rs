@@ -53,24 +53,27 @@
 //!   licence, so `<REG>` is empty.
 //! - `<SN>` reads a slot's ship name, which stays empty until
 //!   rdm:phase/mission-ships/phase-1-spawn-mission-ships draws one.
-//! - The rank tags read the context's [`RankNames`]: `<PRKnnn>` and
-//!   `<SRKnnn>` for nnn 128-383, any other nnn left as written, each
-//!   read uncrossed, as government nnn's highest active rank's
-//!   `ShortName`; by the Bible's reading of
-//!   [`RuleKey::PrkNnnName`](crate::RuleKey::PrkNnnName), `<PRKnnn>` reads
-//!   its `ConvName`, "same as `<PRK>`". The original crosses the two governments, which
-//!   rdm:phase/missions-fidelity/phase-2-text-substitution-quirks
-//!   ports. A context with no ranks wired ([`RankNames::none`]) reads
-//!   "captain" ([`NO_RANK`](crate::person::NO_RANK)) for each.
+//! - The rank tags read the context's [`RankNames`]. `<PRKnnn>` and
+//!   `<SRKnnn>` follow [`RuleKey::CrossedRankTags`](crate::RuleKey::CrossedRankTags):
+//!   by the engine, as the original crosses them, only the nnn of each
+//!   kind the context's [`RankTagGovts`] remember is filled, `<PRKnnn>`
+//!   with the `<SRKnnn>` government's rank and `<SRKnnn>` with the
+//!   `<PRKnnn>` one's; by the Bible, each nnn of
+//!   128-383 with government nnn's own, any other nnn left as written.
+//!   A rank is named by its `ShortName`; by the Bible's reading of
+//!   [`RuleKey::PrkNnnName`](crate::RuleKey::PrkNnnName), `<PRKnnn>`
+//!   reads its `ConvName`, "same as `<PRK>`". A context with no ranks
+//!   wired ([`RankNames::none`]) reads "captain"
+//!   ([`NO_RANK`](crate::person::NO_RANK)) for each.
 //! - `<PAY>` of a million or more follows [`RuleKey::PayMillions`](crate::RuleKey::PayMillions),
 //!   and a slot's `<PAY>` of a pay that is not cash, a fine or a charge
 //!   follows [`RuleKey::PaySlotOffset`](crate::RuleKey::PaySlotOffset):
 //!   by the engine the slot's byte offset, as the original's register
 //!   leaves it ([`MissionTags::other_pay`]).
 //!
-//! The original's quirks not reproduced here (the crossed `<PRKnnn>`/`<SRKnnn>` governments, a stale
-//! `<OSN>`, the `l33t` mode and `'STR '` 9100+ cargo name patches) are
-//! rdm:phase/missions/phase-13-text-substitution-quirks.
+//! The original's quirks not reproduced here (a stale `<OSN>`, the `l33t`
+//! mode and `'STR '` 9100+ cargo name patches) are
+//! rdm:phase/missions-fidelity/phase-2-text-substitution-quirks.
 
 use crate::catalog::{DateAffixes, GovtId, StellarId, SystemId};
 use crate::date::{GameDate, long_date_text};
@@ -284,6 +287,9 @@ pub struct TagRules {
     /// Which name of a rank `<PRKnnn>` reads
     /// ([`RuleKey::PrkNnnName`](crate::RuleKey::PrkNnnName)).
     pub prk_nnn_name: RuleSource,
+    /// Whether `<PRKnnn>` and `<SRKnnn>` cross their remembered
+    /// governments ([`RuleKey::CrossedRankTags`](crate::RuleKey::CrossedRankTags)).
+    pub crossed_rank_tags: RuleSource,
 }
 
 impl TagRules {
@@ -295,7 +301,72 @@ impl TagRules {
             pay_slot_offset: rules.source_for(RuleKey::PaySlotOffset),
             missionless: rules.source_for(RuleKey::MissionlessTags),
             prk_nnn_name: rules.source_for(RuleKey::PrkNnnName),
+            crossed_rank_tags: rules.source_for(RuleKey::CrossedRankTags),
         }
+    }
+}
+
+/// The governments the last `<PRKnnn>` and `<SRKnnn>` a text named,
+/// as the original remembers them between texts (`_descRankGovt`, +0
+/// and +2): what the crossed rank tags read
+/// ([`RuleKey::CrossedRankTags`](crate::RuleKey::CrossedRankTags)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RankTagGovts {
+    /// The last `<PRKnnn>`'s government nnn.
+    pub prk: Option<GovtId>,
+    /// The last `<SRKnnn>`'s government nnn.
+    pub srk: Option<GovtId>,
+}
+
+impl RankTagGovts {
+    /// Neither: what `_LoadDescription` resets both to before each `dësc`
+    /// (@0x71926-0x71930).
+    pub const NONE: Self = Self {
+        prk: None,
+        srk: None,
+    };
+
+    /// These governments after `_ParseTextDescription`'s scan of `text`
+    /// (@0x14f34-0x15055), counted in characters: a text of 5 or fewer
+    /// is not scanned. At each place before the last 5 characters, a
+    /// `<`, then `P` or `S`, then `RK` and anything but `>` is a tag:
+    /// its digits (none reads 0) name government nnn when it is 128-383,
+    /// remembered for its kind, and else that kind is forgotten; the scan
+    /// goes on after the `<PRK`. So the last tag of each kind wins, and a
+    /// kind with no tag in `text` is kept.
+    #[must_use]
+    pub fn parsed(self, text: &str) -> Self {
+        let chars: Vec<char> = text.chars().collect();
+        let mut govts = self;
+        let mut at = 0;
+        while at + 5 < chars.len() {
+            let kind = chars[at + 1];
+            if chars[at] == '<'
+                && matches!(kind, 'P' | 'S')
+                && chars[at + 2..at + 4] == ['R', 'K']
+                && chars[at + 4] != '>'
+            {
+                let nnn = chars[at + 4..]
+                    .iter()
+                    .map_while(|c| c.to_digit(10))
+                    .fold(0_u64, |nnn, digit| {
+                        nnn.saturating_mul(10).saturating_add(u64::from(digit))
+                    });
+                let govt = u32::try_from(nnn)
+                    .ok()
+                    .filter(|nnn| RANKED_GOVTS.contains(nnn))
+                    .and_then(|nnn| i16::try_from(nnn).ok())
+                    .map(GovtId);
+                if kind == 'P' {
+                    govts.prk = govt;
+                } else {
+                    govts.srk = govt;
+                }
+                at += 4;
+            }
+            at += 1;
+        }
+        govts
     }
 }
 
@@ -315,6 +386,11 @@ pub struct TagContext<'a> {
     /// The mission, if the text has one; with none its tags are left as
     /// written.
     pub mission: Option<MissionTags<'a>>,
+    /// The governments the crossed rank tags read
+    /// ([`RuleKey::CrossedRankTags`](crate::RuleKey::CrossedRankTags)'s
+    /// engine reading): those the text's source leaves (see the
+    /// [`story`](crate::story) module's "Text substitution").
+    pub rank_govts: RankTagGovts,
     /// The disputed rules the tags follow.
     pub rules: TagRules,
 }
@@ -415,6 +491,33 @@ fn fill_ranked<'a>(text: &str, prefix: &str, rank: impl Fn(GovtId) -> &'a str) -
     filled
 }
 
+/// `text` with its rank-nnn tags crossed as `_MungeBriefing` fills them
+/// after its table (@0x9d53d-0x9d5a5): with a `<PRKnnn>` government
+/// remembered, every `<PRKnnn>` of it reads the remembered `<SRKnnn>`
+/// government's rank as `prk_name` names it; with an `<SRKnnn>`
+/// government remembered, every `<SRKnnn>` of it reads the `<PRKnnn>`
+/// government's `ShortName`. A government not remembered, or one with no
+/// rank, reads the fallback (@0x9d25f, @0x9d33a). Any other rank-nnn tag
+/// is left as written.
+fn fill_crossed<'a>(
+    text: &str,
+    govts: RankTagGovts,
+    ranks: &'a RankNames,
+    prk_name: impl Fn(GovtId) -> &'a str,
+) -> String {
+    let fallback: &str = &ranks.fallback;
+    let mut filled = text.to_owned();
+    if let Some(prk) = govts.prk {
+        let name = govts.srk.map_or(fallback, &prk_name);
+        filled = filled.replace(&format!("<PRK{}>", prk.0), name);
+    }
+    if let Some(srk) = govts.srk {
+        let name = govts.prk.map_or(fallback, |govt| ranks.short_of(govt));
+        filled = filled.replace(&format!("<SRK{}>", srk.0), name);
+    }
+    filled
+}
+
 /// `text` with its tags filled as `context` and `names` say, as
 /// `_MungeBriefing` (@0x9c11d) fills them: one tag at a time in the
 /// table's order (0xdb198), every occurrence, case-sensitively, so a
@@ -451,14 +554,18 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
     let filled = tags.fold(text.to_owned(), |text, (tag, value)| {
         text.replace(tag, value)
     });
-    let short_of = |govt| context.ranks.short_of(govt);
-    let filled = match context.rules.prk_nnn_name {
-        RuleSource::Engine => fill_ranked(&filled, "<PRK", short_of),
-        RuleSource::Bible => {
-            fill_ranked(&filled, "<PRK", |govt| context.ranks.conversation_of(govt))
-        }
+    let ranks = &context.ranks;
+    let prk_name = |govt| match context.rules.prk_nnn_name {
+        RuleSource::Engine => ranks.short_of(govt),
+        RuleSource::Bible => ranks.conversation_of(govt),
     };
-    fill_ranked(&filled, "<SRK", short_of)
+    match context.rules.crossed_rank_tags {
+        RuleSource::Engine => fill_crossed(&filled, context.rank_govts, ranks, prk_name),
+        RuleSource::Bible => {
+            let filled = fill_ranked(&filled, "<PRK", prk_name);
+            fill_ranked(&filled, "<SRK", |govt| ranks.short_of(govt))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -644,6 +751,7 @@ mod tests {
                 pay_millions: RuleSource::Engine,
                 slot: None,
             }),
+            rank_govts: RankTagGovts::NONE,
             rules: TagRules::default(),
         }
     }
@@ -945,8 +1053,17 @@ mod tests {
 
     #[test]
     fn the_rank_tags_read_captain() {
+        let text = "<PRK> <SRK> <RRK> <PRK128> <SRK383> <PRK200>";
+        let mut loaded = context(Some(values()));
+        loaded.rank_govts = RankTagGovts::NONE.parsed(text);
         assert_eq!(
-            with(values(), "<PRK> <SRK> <RRK> <PRK128> <SRK383> <PRK200>"),
+            expand(text, &loaded, &names()),
+            "captain captain captain <PRK128> captain captain",
+            "by the engine only the last <PRKnnn> parsed is filled"
+        );
+        loaded.rules.crossed_rank_tags = RuleSource::Bible;
+        assert_eq!(
+            expand(text, &loaded, &names()),
             "captain captain captain captain captain captain"
         );
     }
@@ -998,36 +1115,15 @@ mod tests {
         assert_eq!(expand("<PRK> <SRK> <RRK>", &none, &names()), "sir sir sir");
     }
 
-    #[test]
-    fn prk_nnn_and_srk_nnn_read_government_nnns_short_name() {
-        let records = ranks();
-        let active = BTreeSet::from([RankId(200), RankId(201)]);
-        let tags = TagContext {
-            ranks: RankNames {
-                records: &records,
-                active: &active,
-                recent: None,
-                fallback: "sir".into(),
-            },
-            ..context(Some(values()))
-        };
-        assert_eq!(
-            expand(
-                "<PRK128> <SRK128> <PRK129> <SRK129> <PRK130> <SRK383>",
-                &tags,
-                &names()
-            ),
-            "Cdr Cdr Ad Ad sir sir",
-            "uncrossed, each its own government's"
-        );
-    }
-
     /// [`context`] with [`ranks`] all held, `<PRKnnn>` named as
-    /// `prk_nnn_name` reads it.
+    /// `prk_nnn_name` reads it and the tags crossed as `crossed` reads
+    /// them, the governments remembered `govts`.
     fn ranked<'a>(
         records: &'a [RankRecord],
         active: &'a BTreeSet<RankId>,
         prk_nnn_name: RuleSource,
+        crossed: RuleSource,
+        govts: RankTagGovts,
     ) -> TagContext<'a> {
         let mut tags = TagContext {
             ranks: RankNames {
@@ -1036,29 +1132,129 @@ mod tests {
                 recent: None,
                 fallback: "sir".into(),
             },
+            rank_govts: govts,
             ..context(Some(values()))
         };
         tags.rules.prk_nnn_name = prk_nnn_name;
+        tags.rules.crossed_rank_tags = crossed;
         tags
+    }
+
+    /// The governments `prk` and `srk` remembered.
+    fn govts(prk: Option<i16>, srk: Option<i16>) -> RankTagGovts {
+        RankTagGovts {
+            prk: prk.map(GovtId),
+            srk: srk.map(GovtId),
+        }
+    }
+
+    /// `text` filled with [`ranks`] all held, by the engine's names, the
+    /// tags crossed as `crossed` reads them, the governments remembered
+    /// `remembered`.
+    fn crossing(crossed: RuleSource, remembered: RankTagGovts, text: &str) -> String {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let tags = ranked(&records, &active, RuleSource::Engine, crossed, remembered);
+        expand(text, &tags, &names())
+    }
+
+    #[test]
+    fn by_the_bible_each_rank_nnn_tag_reads_its_own_government() {
+        assert_eq!(
+            crossing(
+                RuleSource::Bible,
+                RankTagGovts::NONE,
+                "<PRK128> <SRK128> <PRK129> <SRK129> <PRK130> <SRK383>"
+            ),
+            "Cdr Cdr Ad Ad sir sir",
+            "uncrossed, each its own government's, nothing remembered needed"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_two_governments_swap() {
+        assert_eq!(
+            crossing(
+                RuleSource::Engine,
+                govts(Some(128), Some(129)),
+                "<PRK128> <SRK129>"
+            ),
+            "Ad Cdr",
+            "<PRKnnn> takes the SRK government's, <SRKnnn> the PRK's (@0x9d53d-0x9d5a5)"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_lone_tag_reads_the_fallback() {
+        assert_eq!(
+            crossing(RuleSource::Engine, govts(Some(128), None), "<PRK128>"),
+            "sir"
+        );
+        assert_eq!(
+            crossing(RuleSource::Engine, govts(None, Some(129)), "<SRK129>"),
+            "sir"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_only_the_remembered_nnn_is_filled() {
+        assert_eq!(
+            crossing(
+                RuleSource::Engine,
+                govts(Some(129), Some(129)),
+                "<PRK128> <PRK129> <SRK128> <SRK129>"
+            ),
+            "<PRK128> Ad <SRK128> Ad"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_tag_of_an_unset_government_is_left_as_written() {
+        assert_eq!(
+            crossing(RuleSource::Engine, RankTagGovts::NONE, "<PRK128> <SRK129>"),
+            "<PRK128> <SRK129>"
+        );
+        assert_eq!(
+            crossing(
+                RuleSource::Engine,
+                govts(None, Some(128)),
+                "<PRK128> <SRK128>"
+            ),
+            "<PRK128> sir"
+        );
     }
 
     #[test]
     fn by_the_engine_prk_nnn_reads_short_name() {
         let records = ranks();
         let active = BTreeSet::from([RankId(200), RankId(201)]);
-        let tags = ranked(&records, &active, RuleSource::Engine);
-        assert_eq!(
-            expand("<PRK128> <PRK129>", &tags, &names()),
-            "Cdr Ad",
-            "+0xde @0x9d1ef, @0x9d2d0"
-        );
+        for crossed in RuleSource::ALL {
+            let tags = ranked(
+                &records,
+                &active,
+                RuleSource::Engine,
+                crossed,
+                govts(Some(128), Some(128)),
+            );
+            assert_eq!(
+                expand("<PRK128>", &tags, &names()),
+                "Cdr",
+                "+0xde @0x9d1ef, @0x9d2d0; {crossed:?}"
+            );
+        }
     }
 
     #[test]
     fn by_the_bible_prk_nnn_reads_conv_name() {
         let records = ranks();
         let active = BTreeSet::from([RankId(200), RankId(201)]);
-        let tags = ranked(&records, &active, RuleSource::Bible);
+        let tags = ranked(
+            &records,
+            &active,
+            RuleSource::Bible,
+            RuleSource::Bible,
+            RankTagGovts::NONE,
+        );
         assert_eq!(
             expand("<PRK128> <PRK129> <PRK130>", &tags, &names()),
             "Cmdr Adm sir",
@@ -1071,7 +1267,13 @@ mod tests {
         let records = ranks();
         let active = BTreeSet::from([RankId(200), RankId(201)]);
         for rule in RuleSource::ALL {
-            let tags = ranked(&records, &active, rule);
+            let tags = ranked(
+                &records,
+                &active,
+                rule,
+                RuleSource::Bible,
+                RankTagGovts::NONE,
+            );
             assert_eq!(
                 expand("<SRK128> <SRK129>", &tags, &names()),
                 "Cdr Ad",
@@ -1081,13 +1283,98 @@ mod tests {
     }
 
     #[test]
+    fn prk_nnn_name_by_each_reading_with_the_crossing() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let remembered = govts(Some(128), Some(129));
+        let cases = [
+            (RuleSource::Engine, RuleSource::Engine, "Ad Cdr"),
+            (RuleSource::Bible, RuleSource::Engine, "Adm Cdr"),
+            (RuleSource::Engine, RuleSource::Bible, "Cdr Ad"),
+            (RuleSource::Bible, RuleSource::Bible, "Cmdr Ad"),
+        ];
+        for (name, crossed, filled) in cases {
+            let tags = ranked(&records, &active, name, crossed, remembered);
+            assert_eq!(
+                expand("<PRK128> <SRK129>", &tags, &names()),
+                filled,
+                "prk_nnn_name {name:?}, crossed_rank_tags {crossed:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_rank_tag_of_a_government_outside_128_to_383_is_left_as_written() {
+        let text = "<PRK999> <SRK127> <PRK384> <PRK> <PRKx> <PRK12a> <PRK130x> <SRK130";
+        let filled = "<PRK999> <SRK127> <PRK384> captain <PRKx> <PRK12a> <PRK130x> <SRK130";
+        let mut tags = context(Some(values()));
+        tags.rules.crossed_rank_tags = RuleSource::Bible;
+        assert_eq!(expand(text, &tags, &names()), filled);
+        tags.rules.crossed_rank_tags = RuleSource::Engine;
+        tags.rank_govts = RankTagGovts::NONE.parsed(text);
+        assert_eq!(expand(text, &tags, &names()), filled);
+    }
+
+    // `_ParseTextDescription`'s scan (@0x14f34-0x15055).
+
+    #[test]
+    fn the_scan_remembers_the_last_prk_and_srk_government() {
         assert_eq!(
-            with(
-                values(),
-                "<PRK999> <SRK127> <PRK384> <PRK> <PRKx> <PRK12a> <PRK130x> <SRK130"
-            ),
-            "<PRK999> <SRK127> <PRK384> captain <PRKx> <PRK12a> <PRK130x> <SRK130"
+            RankTagGovts::NONE.parsed("<PRK128> and <SRK130> then <PRK129>."),
+            govts(Some(129), Some(130))
+        );
+    }
+
+    #[test]
+    fn the_scan_keeps_a_kind_it_finds_no_tag_of() {
+        assert_eq!(
+            govts(Some(128), Some(129)).parsed("Only <SRK140> here."),
+            govts(Some(128), Some(140))
+        );
+        assert_eq!(
+            govts(Some(128), Some(129)).parsed("<PRK> <SRK> <prk130> <PRk130>"),
+            govts(Some(128), Some(129)),
+            "<PRK> with no number is not read, nor another case"
+        );
+    }
+
+    #[test]
+    fn a_tag_with_no_number_or_one_outside_128_to_383_forgets_its_kind() {
+        for text in ["<PRKx> padding", "<PRK127>!!", "<PRK384>!!", "<PRK99999>!"] {
+            assert_eq!(
+                govts(Some(128), Some(129)).parsed(text),
+                govts(None, Some(129)),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            govts(Some(128), Some(129)).parsed("<PRK383x> <SRK128a"),
+            govts(Some(383), Some(128)),
+            "the digits end at the first other character"
+        );
+    }
+
+    #[test]
+    fn the_scan_skips_a_text_of_5_characters_or_fewer_and_the_last_5() {
+        assert_eq!(
+            RankTagGovts::NONE.parsed("<PRK1"),
+            RankTagGovts::NONE,
+            "5 characters"
+        );
+        assert_eq!(
+            RankTagGovts::NONE.parsed("ab<PRK1"),
+            RankTagGovts::NONE,
+            "a '<' among the last 5 is not looked at"
+        );
+        assert_eq!(
+            govts(Some(130), None).parsed("<PRK1x"),
+            RankTagGovts::NONE,
+            "6 characters: read, and 1 is out of range"
+        );
+        assert_eq!(
+            RankTagGovts::NONE.parsed("é<PRK128>"),
+            govts(Some(128), None),
+            "counted in characters"
         );
     }
 
