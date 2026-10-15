@@ -554,6 +554,20 @@ mod tests {
         assert_eq!(session.take_messages(), []);
     }
 
+    #[test]
+    fn a_moves_dock_ends_a_warp_up_playing() {
+        // The move docks by the entry table's `Reset::Dock`, not through
+        // a landing, so it ends the warp-ups itself (see `warp::WarpUps`).
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.warp_ups.start(false, 364);
+        session.warp_ups.start(true, 252);
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+    }
+
     /// The original redraws the rolls only in its daily step
     /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
     /// them: a move, passing no day, keeps them, and only the redraw due
