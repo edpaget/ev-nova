@@ -461,7 +461,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave";
 /// The port's own overlays on the flight screen, which the original does
 /// not draw: developer settings, both off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -6183,7 +6183,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -17126,6 +17126,11 @@ mod tests {
         assert!(!view.take_player_info_request());
         assert!(view.map_open());
         assert!(HELP.contains("P: player info"), "{HELP}");
+    }
+
+    #[test]
+    fn the_help_line_names_mission_info() {
+        assert!(HELP.contains("P: player info   I: mission info"), "{HELP}");
     }
 
     #[test]
