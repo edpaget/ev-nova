@@ -683,6 +683,9 @@ pub struct Session {
     /// The nav saved as a port dialog opened, until its close restores it
     /// ([`Session::save_port_nav`], [`Session::restore_port_nav`]).
     port_nav: Option<NavMode>,
+    /// The nav saved as the bar opened, put back after each map opened
+    /// from it ([`Session::open_bar`], [`Session::restore_bar_nav`]).
+    bar_nav: Option<NavMode>,
     /// The galaxy every reader sees: the catalog's systems, read when the
     /// session starts, with the pilot's overlay (see the
     /// [`story`](crate::story) module's "Galaxy overlay").
@@ -1310,6 +1313,7 @@ impl Session {
             landed,
             nav: NavMode::Off,
             port_nav: None,
+            bar_nav: None,
             galaxy,
             jump: None,
             warp_sound: warp::sound_duration(catalog.warp_sound()),

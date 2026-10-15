@@ -107,6 +107,11 @@
 //!   the mission computer @0x5ffc0-0x5ffd0 / @0x60084-0x60096. So a
 //!   landed `M` or `N` run inside one is undone as it closes. When the
 //!   restored nav shows is the flight view's.
+//! - The bar's restore ([`Session::restore_bar_nav`]): the bar saves both
+//!   as it opens ([`Session::open_bar`], `_DoBarDialog` @0x48efe-0x48f11,
+//!   the raw selection) and puts them back after each map opened from it
+//!   (@0x492b7-0x492d3), keeping the save for the next map. Its own close
+//!   restores nothing (@0x49414-0x4946f).
 //! - A map click ([`Session::plot_course`], `_DoSystemMap`
 //!   @0x136d7-0x137c7): a route cues its first hop, the original's click on
 //!   a system the current one lists (@0x137b3-0x137bb), or its cue as the
@@ -281,6 +286,17 @@ impl Session {
     /// save is restored once.
     pub fn restore_port_nav(&mut self) {
         if let Some(saved) = self.port_nav.take() {
+            self.nav = saved;
+        }
+    }
+
+    /// Puts back the nav saved as the bar opened ([`Session::open_bar`]),
+    /// mode and selection exactly as saved, as a map opened from the bar
+    /// closes (see the module's **Setters**). The save is kept, as the
+    /// bar's locals outlive each map, so every map is put back to the
+    /// same nav. With nothing saved it changes nothing.
+    pub fn restore_bar_nav(&mut self) {
+        if let Some(saved) = self.bar_nav {
             self.nav = saved;
         }
     }
