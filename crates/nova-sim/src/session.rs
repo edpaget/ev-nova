@@ -16158,6 +16158,22 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_disabled_players_l_in_a_system_with_no_stellars_says_so_as_an_intact_one_does() {
+        let empty = FakePilotCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        };
+        let mut session = disabled(&empty);
+        assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x669aa");
+        session.condition = Condition::Intact;
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NoStellars),
+            "the same refusal"
+        );
+    }
+
+    #[test]
     fn a_disabled_players_l_over_a_hypergate_does_not_enter_it() {
         let catalog = gated();
         let mut session = disabled(&catalog);
