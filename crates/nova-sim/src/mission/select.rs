@@ -1490,6 +1490,75 @@ mod tests {
         );
     }
 
+    /// Two visible systems, 130 and 131, share a place, and the player is
+    /// in 132, which lists neither 140 nor 141, so `holder`'s rescue
+    /// (`_HandleStellarSystemVisibility` @0x32c58-0x32cb3) gives neither to
+    /// the player's system. By [`CoLocated::Lowest`] 130 claims 140 and
+    /// marks 131 done (`_PropagateMissionBitEffects` @0x9977e-0x997ae), so
+    /// 141, which only 131 lists, keeps no owner, is never set active, and
+    /// a -2 from 150 can't draw it. By [`CoLocated::Itself`] 131 owns 141
+    /// and the draw can take it.
+    ///
+    /// The rest of the rule is pinned elsewhere: the rescue in a shadowed
+    /// player's system by
+    /// `a_stellar_rescued_into_the_players_system_is_a_candidate_there`,
+    /// the chain taking in a hidden member by
+    /// `a_stellar_is_listed_at_its_place_when_every_system_there_lists_it`,
+    /// the readers that fall back to `_FindSystemFromStellar` by
+    /// `whereabouts_hold_the_rescued_holder_and_what_find_system_from_stellar_gives`
+    /// and `the_travel_system_is_the_holders_stand_in_else_find_system_from_stellar`,
+    /// and the session's wiring of the rule by
+    /// `by_the_engine_a_place_of_two_visible_systems_is_the_lowest_one`.
+    #[test]
+    fn a_random_draw_takes_a_stellar_only_a_shadowed_system_lists_only_by_the_other_reading() {
+        let systems: Vec<StarSystem> = vec![
+            star(130, (0.0, 0.0), &[]),
+            star(131, (0.0, 0.0), &[]),
+            star(132, (200.0, 0.0), &[]),
+        ];
+        let landable = |id, systems: &[i16]| ListedStellar {
+            id: StellarId(id),
+            systems: systems.iter().copied().map(SystemId).collect(),
+            flags: StellarFlags::CAN_LAND,
+            flags2: 0,
+            govt: None,
+        };
+        let listed = [
+            landable(140, &[130, 131]),
+            landable(141, &[131]),
+            landable(150, &[132]),
+        ];
+        let govts = govts();
+        let pool_of = |colocated| {
+            let mut galaxy = OverlaidGalaxy::new(systems.clone(), GalaxyOverlay::default());
+            galaxy.set_colocated(colocated);
+            let stellars = stellars_of(&galaxy, &listed, SystemId(132));
+            let world = World {
+                stellars: &stellars,
+                placed: &[],
+                map: galaxy.map(),
+                govts: &govts,
+                draw: RuleSource::Engine,
+                distance: RuleSource::Engine,
+                ally_index: RuleSource::Engine,
+            };
+            pool(Kind::Inhabited, Some(StellarId(150)), None, &world)
+                .iter()
+                .map(|id| id.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            pool_of(CoLocated::Lowest),
+            [140],
+            "131 is shadowed by 130 and claims nothing, and the player's 132 doesn't list 141"
+        );
+        assert_eq!(
+            pool_of(CoLocated::Itself),
+            [140, 141],
+            "131 stands for itself and owns 141"
+        );
+    }
+
     #[test]
     fn the_stellars_of_the_visible_systems_go_to_the_lowest_id_listing_each() {
         let mut overlay = GalaxyOverlay::default();
