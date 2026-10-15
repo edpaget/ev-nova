@@ -7416,6 +7416,39 @@ mod tests {
     }
 
     #[test]
+    fn a_tractor_still_holds_or_pulls_along_a_class_after_the_escape_pod_it_leaves_unharmed() {
+        // A beam passes through the pod alone (@0x30dd2), and
+        // `_HandleBeams`' tractor branch (@0x311d0-0x31450) tests no class
+        // before `_DamageShip` (@0x316a1) does nothing to the pod or any
+        // class after it (@0x3a87c).
+        let after = ShipId(ESCAPE_POD_SHIP.0 + 1);
+        let unharmed = left(&Ship::at(2, 0.0, 0.0));
+        // Off both of its axes, a heavy firer would pull an ordinary
+        // target; this one it holds and leaves where it is.
+        let mut ships = [
+            tractor_firer(200.0, 135.0),
+            pod(of_mass(Ship::at(2, 100.0, 100.0), 100.0), after),
+        ];
+        assert_eq!(tractored(&mut ships), []);
+        assert_eq!(ships[1].tractor, Some(TractorLock::by(A)));
+        assert_eq!(ships[0].tractor, None);
+        assert_eq!(left(&ships[1]), unharmed);
+        // A light firer pulls itself toward it and holds itself.
+        let mut ships = [
+            tractor_firer(6.0, 90.0),
+            pod(of_mass(Ship::at(2, 100.0, 0.0), 15.0), after),
+        ];
+        let shoves = tractored(&mut ships);
+        assert_eq!(shoves_on(&shoves, B), [], "the target");
+        let pulled = shoves_on(&shoves, A);
+        assert_eq!(pulled.len(), 1, "{shoves:?}");
+        assert!(close_by(pulled[0], Vec2::new(5.0 / 6.0, 0.0)), "{pulled:?}");
+        assert_eq!(ships[0].tractor, Some(TractorLock::by(A)));
+        assert_eq!(ships[1].tractor, None);
+        assert_eq!(left(&ships[1]), unharmed);
+    }
+
+    #[test]
     fn a_light_firer_is_not_pulled_near_its_target_on_both_axes_massless_or_planet_type() {
         let near = of_mass(Ship::at(2, 30.0, 0.0), 15.0);
         let mut ships = [tractor_firer(6.0, 90.0), near];
