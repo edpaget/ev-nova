@@ -3386,8 +3386,30 @@ impl<
     /// redraws: the flash lasts from one flush to the next, at least one
     /// display refresh, under one of ours' 30 Hz ticks. Ours holds it for
     /// at least one presented frame of ours, up to 1/30 s past that
-    /// frame's start. Stock reaches it after
-    /// the seven finales' `M472 Q25048` ("Our Spiel").
+    /// frame's start.
+    ///
+    /// Every take-off reaches it, not only a landed `M`'s. While docked
+    /// the original holds the selection the ship landed with: the land
+    /// key puts mode 2 over any mode, a course's mode-3 cue too, with the
+    /// nearest stellar (`_HandlePlayer` @0x6a8ed-0x6a932); the dock
+    /// request lands on +0x6c (`_StellarIsLandable` @0x66968-0x66977);
+    /// and `_PlayerLandOnStellar` passes +0x6c on as the stellar docked
+    /// at, to `_DoAutoRefuel` (@0x632b2-0x632c5), `_DoPortDialog`
+    /// (@0x6336e-0x63381) and `_SavePilotFile` (@0x6353e-0x6354b). Nothing
+    /// between the landing and @0x633a0 writes the player's +0x6a or
+    /// +0x6c but a landed `M` or `N` (`_EvalSetExp` @0x15705, @0x157e3,
+    /// @0x158fd): the port dialogs put back what they saved
+    /// (`_DoPortDialog` @0x5fcf0-0x5fd1b, @0x60084-0x60096, and the
+    /// `nav` module's restores), and `_PlayerLandOnStellar`'s and
+    /// `_HandlePlayerDockRequest`'s other writes at +0x6c (@0x63520,
+    /// @0x672ac) are the auxiliary ships'. So the take-off's redraw names
+    /// the landed stellar in mode 2 (`_DrawStatusNav` @0x4a09e-0x4a18c),
+    /// or a landed `M`'s (the seven stock finales' `M472 Q25048` name
+    /// "Our Spiel"), until the deselect's redraw shows "No Destination",
+    /// or the course cued again in mode 3 (`_CueNextHyperRouteDest`
+    /// @0xe33c-0xe344, from @0x674d8). Only a take-off whose held
+    /// selection is let go already, after an `N` or an `M` to a system
+    /// with no stellar, shows no flash.
     ///
     /// Only a set expression run in that window could hold the bar
     /// longer, by starting a mission whose text shows (`S` →
@@ -13229,6 +13251,59 @@ mod tests {
         assert_eq!(view.take_off(), Some(StellarId(128)));
         assert_eq!(view.nav_shown(), NavDisplay::Stellar(None));
         assert_eq!(view.nav_flash, None, "no flash to end");
+    }
+
+    #[test]
+    fn a_plain_take_off_names_the_landed_stellar_for_one_frame() {
+        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(None)),
+            "let go"
+        );
+        assert_eq!(view.nav_shown(), flashing("Earth"), "held");
+        view.tick(TICK);
+        assert_eq!(view.nav_shown(), flashing("Earth"), "the first frame");
+        view.tick(TICK);
+        assert_eq!(view.nav_shown(), NavDisplay::Stellar(None), "a tick on");
+        let mut view = docked_at_earth(port(), RuleSource::Bible);
+        view.take_off();
+        assert_eq!(view.nav_shown(), NavDisplay::Stellar(None), "by the bible");
+    }
+
+    #[test]
+    fn a_take_off_with_a_course_names_the_landed_stellar_over_the_cue_for_one_frame() {
+        let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
+        let mut view = FlightView::new(port()).with_rules(rules);
+        view.session
+            .as_mut()
+            .expect("flying")
+            .plot_course(SystemId(131))
+            .expect("a route");
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "the land key put mode 2 over the cue"
+        );
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Hyperspace(Some(SystemId(131)))),
+            "cued"
+        );
+        assert_eq!(view.nav_shown(), flashing("Earth"), "held over the cue");
+        view.tick(TICK);
+        assert_eq!(view.nav_shown(), flashing("Earth"), "the first frame");
+        view.tick(TICK);
+        assert!(
+            matches!(view.nav_shown(), NavDisplay::Hyperspace { .. }),
+            "a tick on: {:?}",
+            view.nav_shown()
+        );
     }
 
     #[test]

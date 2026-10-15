@@ -66,7 +66,14 @@
 //!   cue. The take-off notes the nav as it begins
 //!   ([`Session::take_takeoff_nav`]), as the original's take-off redraw
 //!   (@0x633a0) draws it before the deselect; the flight view holds it
-//!   for a tick.
+//!   for a tick. That is the selection held while docked, so every
+//!   take-off has one to show: the landed stellar in mode 2, which the
+//!   original keeps at +0x6c as the stellar docked at
+//!   (`_PlayerLandOnStellar` @0x632b2, @0x6336e, @0x6353e), or a landed
+//!   `M`'s; none only after an `N` or an `M` to a system with no stellar.
+//!   With a course, the land key's mode 2 replaced its mode-3 cue, so
+//!   the landed stellar shows until the cue (@0x674d8 →
+//!   `_CueNextHyperRouteDest` @0xe33c-0xe344) brings mode 3 back.
 //! - A hyperspace arrival (@0x6be25-0x6be2b, @0x6c4cd): off, then, after
 //!   the course's step, the cue, so mode 3 comes back while hops remain
 //!   (the `entry` module's table).
