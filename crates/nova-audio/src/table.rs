@@ -63,6 +63,9 @@ pub struct SoundTable {
     pub nav_selected: Option<SoundId>,
     /// Plays as Hyper Select moves through the system's links.
     pub hyper_selected: Option<SoundId>,
+    /// Plays as a target key is taken: Target Select on every press, and
+    /// Closest Target picking a ship other than the target.
+    pub target_selected: Option<SoundId>,
     /// Plays as Option-backquote lets go of the ship target.
     pub target_cleared: Option<SoundId>,
     /// Plays as a first-flight tutorial hint is shown.
@@ -179,6 +182,10 @@ impl SoundTable {
     ///   (@0x6a6c1).
     /// - `hyper_selected`: 152, `_beepSnd[2]`, as Hyper Select moves
     ///   through the system's links (@0x69c89).
+    /// - `target_selected`: 152, `_beepSnd[2]`, which `_HandlePlayer`
+    ///   plays on every press of Target Select (@0x69f64-0x69f6f) and as
+    ///   Closest Target picks a ship other than the target
+    ///   (@0x6aa32-0x6aa55).
     /// - `target_cleared`: 150, `_beepSnd[0]`, as Option-backquote lets go
     ///   of the ship target (@0x69a7d).
     /// - `tutorial_hint`: 154, `_beepSnd[4]`, as `_HandlePlayer` shows a
@@ -265,6 +272,7 @@ impl SoundTable {
         hail_quote: Some(SoundId(154)),
         nav_selected: Some(SoundId(150)),
         hyper_selected: Some(SoundId(152)),
+        target_selected: Some(SoundId(152)),
         target_cleared: Some(SoundId(150)),
         tutorial_hint: Some(SoundId(154)),
         ship_downed: Some(SoundId(151)),
@@ -323,6 +331,7 @@ mod tests {
         assert_eq!(table.nav_selected, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.hyper_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.target_cleared, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.target_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(

@@ -105,6 +105,13 @@ pub enum SimSound {
     /// (`_HandlePlayer` @0x69c89): `_beepSnd[2]`, `snd ` 152. With no
     /// links it is silent.
     HyperSelected,
+    /// A target key was taken: Target Select (Tab, with Shift or Option or
+    /// both) on every press, before its search and whatever it finds
+    /// (`_HandlePlayer` @0x69f6f), and Closest Target (R, with or without
+    /// Option) when it picks a ship other than the target (@0x6aa55):
+    /// `_beepSnd[2]`, `snd ` 152. Closest Target finding no ship raises
+    /// [`SimSound::Refused`] instead.
+    TargetSelected,
     /// Option-backquote let go of the ship target (`_HandlePlayer`
     /// @0x69a7d): `_beepSnd[0]`, `snd ` 150. With no target it is silent.
     TargetCleared,
@@ -163,6 +170,8 @@ pub enum SimSound {
     /// not-landable, too-far and too-fast refusals from the dock request
     /// (@0x67e8f, @0x676aa, @0x676fe; see
     /// [`LandingRefusal::beeps`](crate::landing::LandingRefusal::beeps)),
+    /// and Closest Target finding no ship (`_HandlePlayer` @0x6aadb; see
+    /// [`Session::select_target`](crate::Session::select_target)),
     /// and every other refusal
     /// that beeps reuses it rather than adding a variant of its own.
     Refused,

@@ -279,7 +279,11 @@
 //!   turn, R the nearest threat, and Alt-R (Option-R) the nearest ship
 //!   ([`TargetPick`]). Shift-Tab targets back through the ships, and
 //!   Shift-Alt-Tab (Shift-Option-Tab) back through the escorts, as the
-//!   original's `_FindPrevShipInSystem` does. Tab, R and W work during a
+//!   original's `_FindPrevShipInSystem` does. Every Tab press beeps
+//!   ([`SimSound::TargetSelected`](nova_sim::SimSound::TargetSelected)),
+//!   as does R picking a ship other than the target; R finding none
+//!   beeps the refusal. A held key's repeat does nothing, as the
+//!   original's per-press latches. Tab, R and W work during a
 //!   jump too, picking from the system being left until arrival lets go
 //!   of the target; Space and Control fire nothing then (@0x6aaf0,
 //!   @0x6ab75).
@@ -12875,6 +12879,23 @@ mod tests {
         view.input(&held(NEAREST_KEY));
         assert_eq!(target_of(&view), None, "a repeat does nothing");
         assert_eq!((TARGET_KEY, NEAREST_KEY), (Key::Tab, Key::Char('r')));
+    }
+
+    #[test]
+    fn a_target_key_press_beeps_once_and_its_repeat_is_silent() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        view.take_sounds();
+        view.input(&key(Key::Tab, true));
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
+        view.input(&held(Key::Tab));
+        view.input(&key(Key::Tab, false));
+        assert_eq!(view.take_sounds(), [], "a repeat of Tab");
+        view.input(&key(Key::Alt, true));
+        tap(&mut view, NEAREST_KEY);
+        view.take_sounds();
+        view.input(&key(NEAREST_KEY, true));
+        view.input(&held(NEAREST_KEY));
+        assert_eq!(view.take_sounds(), [], "the same ship, then a repeat of R");
     }
 
     /// NPC 0 attacks the player; the rest idle.

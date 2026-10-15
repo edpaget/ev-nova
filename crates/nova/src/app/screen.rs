@@ -7738,14 +7738,12 @@ pub(super) mod tests {
     /// the trader with Tab and boards it with B.
     fn board(screen: &mut AppScreen) {
         screen.tick(TICK);
-        for (k, pressed) in [
-            (Key::Tab, true),
-            (Key::Tab, false),
-            (Key::Char('b'), true),
-            (Key::Char('b'), false),
-        ] {
-            screen.input(&key(k, pressed));
-        }
+        screen.input(&key(Key::Tab, true));
+        screen.input(&key(Key::Tab, false));
+        // Tab's beep, so a test hears only what follows.
+        screen.take_sounds();
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Char('b'), false));
     }
 
     /// The router over [`boarding_data`] with dialogs, in the developer's
@@ -8084,14 +8082,12 @@ pub(super) mod tests {
     /// Ticks once, targets the trader with Tab and hails it with Y.
     fn hail(screen: &mut AppScreen) {
         screen.tick(TICK);
-        for (k, pressed) in [
-            (Key::Tab, true),
-            (Key::Tab, false),
-            (Key::Char('y'), true),
-            (Key::Char('y'), false),
-        ] {
-            screen.input(&key(k, pressed));
-        }
+        screen.input(&key(Key::Tab, true));
+        screen.input(&key(Key::Tab, false));
+        // Tab's beep, so a test hears only what follows.
+        screen.take_sounds();
+        screen.input(&key(Key::Char('y'), true));
+        screen.input(&key(Key::Char('y'), false));
     }
 
     /// The router over [`boarding_data`] with dialogs, in the developer's

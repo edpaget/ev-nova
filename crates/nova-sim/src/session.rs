@@ -2608,30 +2608,55 @@ impl Session {
     /// hyperspace included, until arrival clears the target. A pick that
     /// changes the target starts its brackets' fly-in
     /// ([`Session::target_brackets`]).
+    ///
+    /// Target Select (every [`TargetPick`] but the nearest two) raises
+    /// [`SimSound::TargetSelected`], `_beepSnd[2]`, on every pick, before
+    /// its search and whatever that finds (@0x69f4c-0x69f6f); Escort
+    /// Select is the same path, the searches reading Option themselves.
+    /// Closest Target raises [`SimSound::Refused`], `_beepSnd[3]`, when it
+    /// finds no ship (@0x6aab8-0x6aadb), [`SimSound::TargetSelected`]
+    /// when it picks a ship other than the target (@0x6aa32-0x6aa55), and
+    /// nothing when it picks the target again. Both beeps sit behind the
+    /// ship's +0x6e word being 1 (@0x69f41, @0x6aa16), but only
+    /// `_InitObjects` (@0x1c373) and the R pick (@0x6aa71) write it, both
+    /// with 1, so that gate is not modelled. The original's per-press
+    /// latches (`0xdede8`, `0xdee50`) are the view's press-only filter.
+    /// While landed the keys are silent.
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         let before = self.target;
         if self.landed.is_none() {
             let scanner = self.scanner();
             let npcs = self.traffic.npcs();
             let from = self.player.position;
+            let closest = |npc: &Npc| match pick {
+                TargetPick::NearestThreat => npc.threatens_player_among(npcs),
+                _ => true,
+            };
             match pick {
-                TargetPick::Nearest => {
-                    let nearest = targeting::nearest(npcs, from, scanner, |_| true);
-                    self.target = nearest.or(self.target);
+                TargetPick::Nearest | TargetPick::NearestThreat => {
+                    match targeting::nearest(npcs, from, scanner, closest) {
+                        None => self.sounds.push(SimSound::Refused),
+                        Some(id) if Some(id) == before => {}
+                        Some(id) => {
+                            self.sounds.push(SimSound::TargetSelected);
+                            self.target = Some(id);
+                        }
+                    }
                 }
-                TargetPick::NearestThreat => {
-                    let threat = |npc: &Npc| npc.threatens_player_among(npcs);
-                    let nearest = targeting::nearest(npcs, from, scanner, threat);
-                    self.target = nearest.or(self.target);
+                TargetPick::Next => {
+                    self.sounds.push(SimSound::TargetSelected);
+                    self.target = targeting::next(npcs, self.target, scanner);
                 }
-                TargetPick::Next => self.target = targeting::next(npcs, self.target, scanner),
                 TargetPick::NextEscort => {
+                    self.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::next_escort(npcs, self.target, scanner);
                 }
                 TargetPick::Previous => {
+                    self.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::previous(npcs, self.target, scanner);
                 }
                 TargetPick::PreviousEscort => {
+                    self.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::previous_escort(npcs, self.target, scanner);
                 }
             }
@@ -16274,6 +16299,79 @@ pub(super) mod tests {
             session.target = None;
             assert_eq!(session.select_target(pick), Some(NpcId(0)), "{pick:?}");
         }
+    }
+
+    #[test]
+    fn every_target_select_key_beeps_before_its_search_found_a_ship_or_not() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.take_sounds();
+        for pick in [
+            TargetPick::Next,
+            TargetPick::NextEscort,
+            TargetPick::Previous,
+            TargetPick::PreviousEscort,
+        ] {
+            session.select_target(pick);
+            assert_eq!(
+                session.take_sounds(),
+                [SimSound::TargetSelected],
+                "{pick:?}"
+            );
+        }
+        let mut empty = Session::start(&catalog).expect("starts");
+        empty.take_sounds();
+        assert_eq!(empty.select_target(TargetPick::Next), None);
+        assert_eq!(empty.take_sounds(), [SimSound::TargetSelected], "no ships");
+    }
+
+    #[test]
+    fn closest_target_beeps_a_new_pick_refuses_none_and_is_silent_on_the_same_ship() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.take_sounds();
+        session.target = Some(NpcId(0));
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(NpcId(0))
+        );
+        assert_eq!(session.take_sounds(), [SimSound::Refused], "no threat");
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+        assert_eq!(session.take_sounds(), [SimSound::TargetSelected]);
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+        assert_eq!(session.take_sounds(), [], "the same ship");
+        session.target = None;
+        session.traffic.npcs_mut()[0].goal = Goal::Attack(ShipRef::Player);
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(NpcId(0))
+        );
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::TargetSelected],
+            "a threat"
+        );
+        let mut empty = Session::start(&catalog).expect("starts");
+        empty.take_sounds();
+        assert_eq!(empty.select_target(TargetPick::Nearest), None);
+        assert_eq!(empty.take_sounds(), [SimSound::Refused], "no ships");
+    }
+
+    #[test]
+    fn the_target_keys_are_silent_while_landed() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.landed = Some(crate::catalog::StellarId(128));
+        session.take_sounds();
+        for pick in [
+            TargetPick::Next,
+            TargetPick::Nearest,
+            TargetPick::NearestThreat,
+        ] {
+            session.select_target(pick);
+        }
+        assert_eq!(session.take_sounds(), []);
     }
 
     #[test]

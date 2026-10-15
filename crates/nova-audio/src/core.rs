@@ -165,6 +165,7 @@ impl<A: Audio> AudioCore<A> {
             Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
             Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
             Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
+            Sound::Sim(SimSound::TargetSelected) => self.play(self.table.target_selected),
             Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
             Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
             Sound::Sim(SimSound::TutorialHint) => self.play(self.table.tutorial_hint),
@@ -589,6 +590,19 @@ mod tests {
             drain(&log),
             [play(150, 1.0), play(152, 1.0), play(150, 1.0)]
         );
+    }
+
+    #[test]
+    fn a_target_key_beeps_152_and_closest_target_finding_none_153() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::TargetSelected),
+                Sound::Sim(SimSound::Refused),
+            ],
+        );
+        assert_eq!(drain(&log), [play(152, 1.0), play(153, 1.0)]);
     }
 
     #[test]
