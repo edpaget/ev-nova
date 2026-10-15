@@ -1031,6 +1031,10 @@ pub struct Session {
     /// mission in the slot, once the settling that accepted it begins
     /// (see the `mission_ships` module); never saved.
     swap_due: Option<(NpcId, u8)>,
+    /// The stellar a move ([`Session::relocate`]) docked at, whose
+    /// offers the next settling rolls if the ship is still landed there
+    /// (see the `edit` module); never saved.
+    offer_roll_due: Option<StellarId>,
     /// The slot whose mission's script is running, if any: what a `Q`
     /// fills its mission tags from (see the `missions` module); never
     /// saved.
@@ -1392,6 +1396,7 @@ impl Session {
             reoffer_due: false,
             goal_checks_due: Vec::new(),
             swap_due: None,
+            offer_roll_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
             rank_govts: RankTagGovts::NONE,

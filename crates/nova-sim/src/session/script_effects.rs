@@ -276,6 +276,11 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         let mut settled = Settled::default();
+        if let Some(stellar) = self.offer_roll_due.take()
+            && self.landed == Some(stellar)
+        {
+            self.roll_landing_offers(stellar, catalog, &mut &mut *chance);
+        }
         loop {
             if let Some((npc, slot)) = self.swap_due.take() {
                 self.swap_in_mission_ship(catalog, npc, slot, chance);

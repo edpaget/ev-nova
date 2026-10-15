@@ -21,7 +21,9 @@
 //!   next take-off populates the new system; a held `P` sound and the
 //!   fighters out are kept. It enters the system by the relocation's row
 //!   of the table in the `entry` module ([`Session::enter_system`]). It
-//!   makes no sound and raises no message, and leaves the ship, its
+//!   makes no sound and raises no message, and raises no `Landed`: the
+//!   new stellar's offers are rolled at the next settling instead, if the
+//!   ship is still landed there. It leaves the ship, its
 //!   outfits, stats and reserves as they were. It tells
 //!   [`SessionEvent::SystemChanged`](super::SessionEvent) into a system
 //!   other than the one whose stellars are shown, and
@@ -110,7 +112,9 @@ impl Session {
             self.save_due = true;
             return Ok(());
         }
-        self.enter_at(catalog, system, stellar)
+        self.enter_at(catalog, system, stellar)?;
+        self.offer_roll_due = Some(stellar);
+        Ok(())
     }
 
     /// Lands the ship at `stellar` in `system`, read from `catalog`,
@@ -790,6 +794,42 @@ mod tests {
         assert!(session.take_save_due());
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert!(offered(&session, 200));
+    }
+
+    #[test]
+    fn a_move_to_another_stellar_rolls_its_offers_as_it_settles() {
+        let catalog = with_missions(vec![crate::catalog::MissionRecord {
+            avail_stel: 129,
+            ..crate::testkit::mission(200)
+        }]);
+        let mut session = docked(&catalog);
+        assert_eq!(
+            session.relocate(&catalog, SystemId(130), StellarId(129)),
+            Ok(())
+        );
+        assert!(!offered(&session, 200));
+        assert!(landings(&session).is_empty(), "a move raises no Landed");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(offered(&session, 200));
+    }
+
+    #[test]
+    fn a_move_then_a_take_off_rolls_nothing_as_it_settles() {
+        let catalog = with_missions(vec![crate::catalog::MissionRecord {
+            avail_stel: 129,
+            ..crate::testkit::mission(200)
+        }]);
+        let mut session = docked(&catalog);
+        assert_eq!(
+            session.relocate(&catalog, SystemId(130), StellarId(129)),
+            Ok(())
+        );
+        assert_eq!(
+            session.take_off(&catalog, &mut NeverFires),
+            Some(StellarId(129))
+        );
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(!offered(&session, 200), "rolled only while landed there");
     }
 
     #[test]

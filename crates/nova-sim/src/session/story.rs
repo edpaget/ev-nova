@@ -152,10 +152,8 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
             // module).
             Consumer::Offers => {
                 if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
-                    if self.session.offers.due_at(stellar) {
-                        self.session.refresh_galaxy(self.catalog);
-                    }
-                    self.session.roll_offers(stellar, &mut *self.chance);
+                    self.session
+                        .roll_landing_offers(stellar, self.catalog, &mut *self.chance);
                 }
             }
             // The galaxy refresh after the land check (@0xa1af2) and the
@@ -436,6 +434,23 @@ impl Session {
             hidden: hidden_by(self.galaxy.catalog_systems(), &self.visibility, &gate),
             inactive: inactive_by(&self.nebulae, &gate),
         }
+    }
+
+    /// Rolls the offers at `stellar`, landed on, as a landing does:
+    /// first refreshing the galaxy from `catalog` when they are due
+    /// there, then drawing on `chance`.
+    pub(super) fn roll_landing_offers<C>(
+        &mut self,
+        stellar: StellarId,
+        catalog: &C,
+        chance: &mut dyn Chance,
+    ) where
+        C: PilotCatalog + TrafficCatalog + ?Sized,
+    {
+        if self.offers.due_at(stellar) {
+            self.refresh_galaxy(catalog);
+        }
+        self.roll_offers(stellar, chance);
     }
 
     /// The galaxy refresh at a landing or a new pilot's start

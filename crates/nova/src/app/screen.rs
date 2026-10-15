@@ -796,7 +796,9 @@ impl AppScreen {
     /// which its next frame would do anyway), laying out the system the
     /// pilot moved to or drawing the ship at the stellar it moved to; the
     /// open spaceport is rebuilt for the stellar the pilot is now landed
-    /// on when it moved, and otherwise shows the exchange, outfitter and
+    /// on when it moved, settling at once so the session rolls the new
+    /// stellar's offers and the spaceport asks its landing offer before
+    /// the next frame, and otherwise shows the exchange, outfitter and
     /// shipyard as they now are; then the pilot is saved if a save is due,
     /// as after any change.
     pub fn after_pilot_edit(&mut self) {
@@ -807,7 +809,10 @@ impl AppScreen {
         let landed = flight.session().ok().and_then(Session::landed);
         if let Some(spaceport) = &mut self.spaceport {
             match landed {
-                Some(stellar) if stellar != spaceport.stellar() => self.show_spaceport(stellar),
+                Some(stellar) if stellar != spaceport.stellar() => {
+                    self.show_spaceport(stellar);
+                    self.settle_script();
+                }
                 _ => refresh_spaceport(spaceport, flight),
             }
         }
@@ -8586,13 +8591,22 @@ pub(super) mod tests {
     /// (below -50,000, so its accept takes 100 credits, and the cash shown
     /// changes).
     fn venue_mission(loc: i16) -> Vec<u8> {
+        venue_mission_at(loc, 128)
+    }
+
+    /// [`venue_mission`], available at stellar `stellar`.
+    fn venue_mission_at(loc: i16, stellar: i16) -> Vec<u8> {
         let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
         let put = |bytes: &mut Vec<u8>, at: usize, values: &[i16]| {
             for (i, value) in values.iter().enumerate() {
                 bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
             }
         };
-        put(&mut bytes, 0x00, &[128, 0, loc, 0, 0, 100, -1, -1, -1, -1]);
+        put(
+            &mut bytes,
+            0x00,
+            &[stellar, 0, loc, 0, 0, 100, -1, -1, -1, -1],
+        );
         bytes[0x1C..0x20].copy_from_slice(&(-50_100_i32).to_be_bytes());
         put(&mut bytes, 0x20, &[0, 0, -1, -1, 0, -1, 0, -1, 0]);
         put(&mut bytes, 0x32, &[-1, -1, -1, -1, -1, -1, -1, 0, 1, -1]);
@@ -8695,6 +8709,36 @@ pub(super) mod tests {
         assert!(spaceport(&screen).offer_dialog().is_none());
         assert_eq!(active(&screen), [MissionId(130)]);
         assert_eq!(pilot(&screen).cash(), 900, "its pay took 100");
+    }
+
+    #[test]
+    fn a_pilot_desk_move_offers_the_new_stellars_spaceport_mission() {
+        let fork = game_data_fork(true, true, true, 100, b"", b"", None)
+            .resource(
+                Mission::TYPE,
+                131,
+                Some(b"Venue job"),
+                &venue_mission_at(SPACEPORT, 129),
+            )
+            .resource(Desc::TYPE, 131 + 3872, Some(b"Offer"), &desc_of("Job 131."));
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, loaded(&fork));
+        assert!(spaceport(&screen).offer_dialog().is_none(), "none at 128");
+        edit(
+            &mut screen,
+            PilotEdit::MoveTo {
+                system: SystemId(129),
+                stellar: nova_sim::StellarId(129),
+            },
+        );
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(129));
+        assert_eq!(
+            offered_mission(spaceport(&screen).offer_dialog()),
+            Some(MissionId(131)),
+            "asked before the next frame"
+        );
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(131)]);
     }
 
     /// Opens shop `item` at a stellar offering mission 130 at `loc`, and
