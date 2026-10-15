@@ -4630,9 +4630,9 @@ impl<C> FlightView<C> {
 
     /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
     /// ([`HYPERSPACE_MODE_KEY`]). The press's own frame shows the floating
-    /// map: H always, `\` when it leaves the mode at 3. A tap released
-    /// before the next tick still shows it, as the frame's key poll would
-    /// see it down.
+    /// map when it leaves the mode at 3: H always does outside a jump, and
+    /// `\` unless it found no system. A tap released before the next tick
+    /// still shows it, as the frame's key poll would see it down.
     fn hyperspace_key(&mut self, key: Key) {
         let Ok(session) = &mut self.session else {
             return;
@@ -4642,7 +4642,7 @@ impl<C> FlightView<C> {
         } else {
             session.hyperspace_mode();
         }
-        if key == HYPERSPACE_MODE_KEY || matches!(session.nav_mode(), NavMode::Hyperspace(_)) {
+        if matches!(session.nav_mode(), NavMode::Hyperspace(_)) {
             self.show_floating_map();
         }
     }

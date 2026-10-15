@@ -122,6 +122,8 @@
 //! [`FlightView`]: super::FlightView
 //! [`GalaxyMap::draw_marks`]: crate::galaxy::GalaxyMap::draw_marks
 
+use std::cmp::Ordering;
+
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::galaxy::SystemId;
@@ -601,7 +603,8 @@ fn minus(a: Bounds, b: Bounds) -> Vec<Bounds> {
 
 /// The stretch of the segment from `from` to `to` inside `area`, edges
 /// included, as fractions of the way along it (Liang-Barsky); `None` when
-/// it misses. A segment of no length inside is all of it.
+/// it misses or only touches it at a point. A segment of no length inside
+/// is all of it.
 fn span_in(from: Point, to: Point, area: Bounds) -> Option<(f32, f32)> {
     let (dx, dy) = (to.x - from.x, to.y - from.y);
     let mut span = (0.0_f32, 1.0_f32);
@@ -611,17 +614,18 @@ fn span_in(from: Point, to: Point, area: Bounds) -> Option<(f32, f32)> {
         (-dy, from.y - area.min.y),
         (dy, area.max.y - from.y),
     ] {
-        if p == 0.0 {
-            if q < 0.0 {
-                return None;
+        match p.partial_cmp(&0.0) {
+            Some(Ordering::Less) => span.0 = span.0.max(q / p),
+            Some(Ordering::Greater) => span.1 = span.1.min(q / p),
+            // Parallel to this edge: in or out along its whole length.
+            _ => {
+                if q < 0.0 {
+                    return None;
+                }
             }
-        } else if p < 0.0 {
-            span.0 = span.0.max(q / p);
-        } else {
-            span.1 = span.1.min(q / p);
         }
     }
-    (span.0 <= span.1).then_some(span)
+    (span.0 < span.1).then_some(span)
 }
 
 /// What is left of the stretch `have` once `gone` is cut out of it: the
@@ -722,6 +726,13 @@ mod tests {
     }
 
     #[test]
+    fn the_default_is_the_new_map_down_at_16_9() {
+        assert_eq!(FloatingMap::default(), FloatingMap::new());
+        assert!(!FloatingMap::default().is_up());
+        assert_eq!(FloatingMap::default().zoom(), START_ZOOM);
+    }
+
+    #[test]
     fn showing_again_restarts_the_clock() {
         let mut map = FloatingMap::new();
         map.show(0);
@@ -798,7 +809,13 @@ mod tests {
                 "{point:?}"
             );
         }
-        for point in [at(694.0, 278.0), at(686.0, 286.0), at(677.9, 278.0)] {
+        for point in [
+            at(694.0, 278.0),
+            at(686.0, 286.0),
+            at(677.9, 278.0),
+            at(686.0, 269.9),
+            at(686.0, 200.0),
+        ] {
             assert_eq!(hit(&map, stock(), point, here, &[]), Hit::Miss, "{point:?}");
         }
     }
@@ -997,12 +1014,24 @@ mod tests {
         let above = line(at(600.0, 140.0), at(700.0, 140.0), 1.0, RED);
         let below = line(at(600.0, 410.0), at(700.0, 410.0), 1.0, RED);
         let left = line(at(550.0, 200.0), at(550.0, 300.0), 1.0, RED);
+        let corner = line(at(500.0, 100.0), at(558.0, 150.0), 1.0, RED);
+        let point = line(at(600.0, 200.0), at(600.0, 200.0), 1.0, GREEN);
         assert_eq!(
             passed(
-                &list(&[inside.clone(), outside, beside, above, below, left]),
+                &list(&[
+                    inside.clone(),
+                    outside,
+                    beside,
+                    above,
+                    below,
+                    left,
+                    corner,
+                    point.clone()
+                ]),
                 32
             ),
-            [inside]
+            [inside, point],
+            "one only touching the frame's corner is dropped; a point inside is kept"
         );
     }
 
@@ -1028,9 +1057,12 @@ mod tests {
         let inside = dot(at(600.0, 200.0), 6.0, RED);
         let edge = dot(at(812.0, 404.0), 8.0, GREEN);
         let outside = dot(at(820.0, 200.0), 6.0, RED);
+        let touching = dot(at(817.0, 200.0), 6.0, RED);
+        let below = dot(at(600.0, 409.0), 6.0, RED);
         assert_eq!(
-            passed(&list(&[inside.clone(), edge, outside]), 32),
-            [inside, rect((808.0, 400.0), (814.0, 406.0), GREEN)]
+            passed(&list(&[inside.clone(), edge, outside, touching, below]), 32),
+            [inside, rect((808.0, 400.0), (814.0, 406.0), GREEN)],
+            "one touching the frame's edge from outside is dropped"
         );
     }
 
