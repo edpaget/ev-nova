@@ -411,46 +411,48 @@ pub fn land_or_select(
         return refused(not_landable(site));
     }
     let (stellar, station) = (site.id, is_station(site));
-    let mut press = DockPress {
-        selected,
-        dock,
-        said: None,
-        outcome: Err(LandingRefusal::NoStellars),
-    };
+    let (mut dock, mut said) = (dock, None);
     if has(site, StellarFlags::UNINHABITED) {
-        press.dock = Some(DockRequest {
+        dock = Some(DockRequest {
             stellar,
             permission: CLEARED,
         });
-        press.said = Some(DockSaid::NoResponse);
+        said = Some(DockSaid::NoResponse);
     }
-    if let Some(request) = press.dock.filter(|request| request.stellar == stellar) {
+    let pressed = |dock, said, outcome| DockPress {
+        selected,
+        dock,
+        said,
+        outcome,
+    };
+    if let Some(request) = dock.filter(|request| request.stellar == stellar) {
         let attempt = check_landing(player, site, request.permission, reach(site));
-        if attempt.is_ok() {
-            press.dock = None;
-        }
-        press.outcome = attempt.map(LandOutcome::Landed);
-        return press;
+        let dock = if attempt.is_ok() { None } else { dock };
+        return pressed(dock, said, attempt.map(LandOutcome::Landed));
     }
     if !cleared(site) {
-        press.dock = None;
-        press.outcome = Err(LandingRefusal::Denied {
+        let denied = LandingRefusal::Denied {
             stellar,
             station,
             min_status: site.min_status,
-        });
-        return press;
+        };
+        return pressed(None, said, Err(denied));
     }
     let near = clearance::near(site.position - player.position);
-    press.dock = Some(DockRequest {
+    let request = DockRequest {
         stellar,
         permission: if near { REQUESTED_NEAR } else { 0 },
-    });
-    if !near {
-        press.said = Some(DockSaid::Requested);
-    }
-    press.outcome = Ok(LandOutcome::Requested { stellar, station });
-    press
+    };
+    let said = if near {
+        said
+    } else {
+        Some(DockSaid::Requested)
+    };
+    pressed(
+        Some(request),
+        said,
+        Ok(LandOutcome::Requested { stellar, station }),
+    )
 }
 
 /// Whether `site` can be landed on at all, by its flags and whether it is

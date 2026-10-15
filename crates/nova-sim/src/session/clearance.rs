@@ -274,6 +274,29 @@ mod tests {
     }
 
     #[test]
+    fn the_requests_line_words_the_stellar_requested_by_its_kind() {
+        let mut catalog = catalog();
+        catalog.sites[0].1[1].flags |= StellarFlags::STATION;
+        let mut session = on_129(quiet(Session::start(&catalog).expect("starts")));
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::Requested {
+                stellar: StellarId(129),
+                station: true,
+            }
+            .into())
+        );
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::DockRequested {
+                stellar: StellarId(129),
+                kind: DockKind::Station,
+            }],
+            "not planet 128's kind"
+        );
+    }
+
+    #[test]
     fn a_request_over_the_stellar_is_silent_and_the_next_tick_greets() {
         let mut session = session();
         assert_eq!(session.land(), requested(128));
