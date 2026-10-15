@@ -105,11 +105,6 @@ pub struct LandingSite {
     pub flags: u32,
     /// Its `MinStatus`: the legal record below which landing is refused.
     pub min_status: i16,
-    /// The sound it plays when the player lands, from its `CustSndID`:
-    /// stellar landing sounds are `snd ` 10000 and up, and any other value
-    /// (-1 for none, 0, or the angle hypergates and wormholes keep there)
-    /// is none.
-    pub landing_sound: Option<SoundId>,
     /// Its `TechLevel`: the [`outfitter`](crate::outfitter) sells outfits
     /// up to it.
     pub tech_level: i16,
@@ -1877,7 +1872,6 @@ mod tests {
                 frame_size: Some((10, 20)),
                 flags: 0x01,
                 min_status: 0,
-                landing_sound: None,
                 tech_level: 3,
                 special_tech: [0; 8],
                 govt: None,

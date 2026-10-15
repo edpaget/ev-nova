@@ -14,7 +14,7 @@ use nova_data::SoundId;
 pub struct SoundTable {
     /// Loops while the ship thrusts.
     pub engine: Option<SoundId>,
-    /// Plays as the ship lands, before the stellar's own landing sound.
+    /// Plays as the ship lands.
     pub landing: Option<SoundId>,
     /// Plays as the ship takes off.
     pub take_off: Option<SoundId>,
@@ -113,9 +113,10 @@ impl SoundTable {
     ///   reserves no ID for one: the original thrusts in silence.
     /// - `landing`: 151, "Beep2". The guide: "151 Beep 2: ... request/grant
     ///   landing clearance". L lands at once here, so the clearance beep
-    ///   marks the landing. The stellar's own sound (its `CustSndID`, 10000
-    ///   and up, the guide's "custom stellar landing sounds") follows it,
-    ///   from the event.
+    ///   marks the landing. The stellar's own sound (its `CustSndID`, 128
+    ///   and up) is not the table's: the spaceport plays it as its ambient
+    ///   sound once it is frontmost
+    ///   ([`UiSound::PortAmbient`](nova_view::sound::UiSound::PortAmbient)).
     /// - `take_off`: none. The guide lists none, and the `NovaSwift` remake
     ///   (github.com/SirStig/NovaSwift, `Game/GameScene.swift`) notes that
     ///   "lifting off a planet is silent in the original".

@@ -31,7 +31,8 @@ use crate::table::SoundTable;
 ///   and on, before the music is spent, starts it again from the top.
 /// - Each event with a `snd ` in the table plays it once, at the effects
 ///   volume, while the sound setting is on. A landing plays the table's
-///   landing sound, then the stellar's own. A `P` set operator's sound
+///   landing sound alone: the stellar's own is the spaceport's ambient
+///   sound. A `P` set operator's sound
 ///   plays its own `snd ` the same way, on the one mission channel when
 ///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
 ///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
@@ -159,10 +160,7 @@ impl<A: Audio> AudioCore<A> {
                 self.thrusting = self.scene == Some(Showing::Flight);
             }
             Sound::Sim(SimSound::ThrustStopped) => self.thrusting = false,
-            Sound::Sim(SimSound::Landed { stellar_sound }) => {
-                self.play(self.table.landing);
-                self.play(stellar_sound);
-            }
+            Sound::Sim(SimSound::Landed) => self.play(self.table.landing),
             Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
             Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
             Sound::Sim(SimSound::JumpBeganInDoubleTime) => self.play(self.table.jump_double_time),
@@ -558,11 +556,7 @@ mod tests {
     const JUMP: Sound = Sound::Sim(SimSound::JumpBegan);
     const ARRIVED: Sound = Sound::Sim(SimSound::Arrived);
 
-    fn landed(stellar_sound: Option<i16>) -> Sound {
-        Sound::Sim(SimSound::Landed {
-            stellar_sound: stellar_sound.map(SoundId),
-        })
-    }
+    const LANDED: Sound = Sound::Sim(SimSound::Landed);
 
     /// The default effects volume, level 4's: a quarter of full.
     const EFFECTS: f32 = 0.25;
@@ -1348,11 +1342,9 @@ mod tests {
     }
 
     #[test]
-    fn a_landing_plays_the_beep_then_the_stellars_own_sound() {
+    fn a_landing_plays_only_the_beep() {
         let (mut core, log) = original();
-        core.update(Some(Showing::ShipBrowser), &[landed(Some(10_032))]);
-        assert_eq!(drain(&log), [play(151, EFFECTS), play(10_032, EFFECTS)]);
-        core.update(None, &[landed(None)]);
+        core.update(Some(Showing::ShipBrowser), &[LANDED]);
         assert_eq!(drain(&log), [play(151, EFFECTS)]);
     }
 
@@ -1400,8 +1392,8 @@ mod tests {
             ..SoundTable::ORIGINAL
         };
         let mut core = AudioCore::with_table(audio, table);
-        core.update(Some(Showing::ShipBrowser), &[landed(Some(10_000)), JUMP]);
-        assert_eq!(drain(&log), [play(10_000, EFFECTS)]);
+        core.update(Some(Showing::ShipBrowser), &[LANDED, JUMP, ARRIVED]);
+        assert_eq!(drain(&log), [play(130, EFFECTS)]);
     }
 
     // The engine.
@@ -1435,7 +1427,7 @@ mod tests {
         core.set_music(false);
         core.update(Some(Showing::Flight), &[THRUST]);
         drain(&log);
-        core.update(Some(Showing::Flight), &[COAST, landed(None)]);
+        core.update(Some(Showing::Flight), &[COAST, LANDED]);
         assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, EFFECTS)]);
     }
 
@@ -1730,7 +1722,7 @@ mod tests {
         let (mut core, log) = engine();
         core.update(Some(Showing::Flight), &[THRUST]);
         assert_eq!(drain(&log), [start_loop(200, EFFECTS)]);
-        core.update(Some(Showing::Spaceport), &[COAST, landed(None)]);
+        core.update(Some(Showing::Spaceport), &[COAST, LANDED]);
         assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, EFFECTS)]);
     }
 
@@ -1782,7 +1774,9 @@ mod tests {
             &[
                 COAST,
                 THRUST,
-                landed(Some(10_032)),
+                LANDED,
+                ambient(10_032, false),
+                ambient(10_032, true),
                 TOOK_OFF,
                 JUMP,
                 ARRIVED,

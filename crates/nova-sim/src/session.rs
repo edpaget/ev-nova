@@ -3717,7 +3717,6 @@ impl Session {
         if let Some(site) = site {
             self.player.position = site.position;
         }
-        let stellar_sound = site.and_then(|site| site.landing_sound);
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
         // A warp-up still playing is taken as over (see `warp::WarpUps`).
@@ -3737,7 +3736,7 @@ impl Session {
         self.stop_thrust();
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
         self.red_alert.clear_icon();
-        self.sounds.push(SimSound::Landed { stellar_sound });
+        self.sounds.push(SimSound::Landed);
         // `_PlayerLandOnStellar`'s reset (@0x63211; see the `precalced`
         // module), before the port opens.
         self.reset_precalced();
@@ -6312,12 +6311,7 @@ pub(super) mod tests {
             "landing writes neither nav word"
         );
         assert!(session.take_save_due());
-        assert_eq!(
-            session.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: None
-            }]
-        );
+        assert_eq!(session.take_sounds(), [SimSound::Landed]);
         // Once off again, L requests clearance afresh.
         session.take_off(&NoTraffic, &mut NeverFires);
         assert!(matches!(
@@ -8062,7 +8056,7 @@ pub(super) mod tests {
 
     #[test]
     fn the_session_is_thrusting_while_the_last_tick_flew_thrust() {
-        let mut session = Session::start(&sounding()).expect("starts");
+        let mut session = Session::start(&catalog()).expect("starts");
         assert!(!session.thrusting(), "at rest");
         session.tick(THRUST);
         assert!(session.thrusting());
@@ -8178,43 +8172,16 @@ pub(super) mod tests {
         assert_eq!(session.take_sounds(), []);
     }
 
-    /// The catalog with planet 128 playing `snd ` 10032 when landed on.
-    fn sounding() -> FakePilotCatalog {
-        FakePilotCatalog {
-            sites: vec![(
-                SystemId(130),
-                vec![LandingSite {
-                    landing_sound: Some(SoundId(10_032)),
-                    ..planet(128, 30.0, -40.0)
-                }],
-            )],
-            ..catalog()
-        }
-    }
-
     #[test]
-    fn landing_emits_landed_with_the_stellars_sound() {
-        let mut session = Session::start(&sounding()).expect("starts");
+    fn landing_emits_landed() {
+        let mut session = Session::start(&catalog()).expect("starts");
         land_now(&mut session).expect("lands");
-        assert_eq!(
-            session.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: Some(SoundId(10_032))
-            }]
-        );
-        let mut silent = Session::start(&catalog()).expect("starts");
-        land_now(&mut silent).expect("lands");
-        assert_eq!(
-            silent.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: None
-            }]
-        );
+        assert_eq!(session.take_sounds(), [SimSound::Landed]);
     }
 
     #[test]
     fn landing_while_thrusting_stops_the_thrust_first() {
-        let mut session = Session::start(&sounding()).expect("starts");
+        let mut session = Session::start(&catalog()).expect("starts");
         session.tick(Controls {
             turn: Turn::Right,
             ..THRUST
@@ -8223,12 +8190,7 @@ pub(super) mod tests {
         land_now(&mut session).expect("lands");
         assert_eq!(
             session.take_sounds(),
-            [
-                SimSound::ThrustStopped,
-                SimSound::Landed {
-                    stellar_sound: Some(SoundId(10_032))
-                }
-            ]
+            [SimSound::ThrustStopped, SimSound::Landed]
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "docked, nothing thrusts");
@@ -22650,7 +22612,7 @@ pub(super) mod tests {
             !session
                 .take_sounds()
                 .iter()
-                .any(|sound| matches!(sound, SimSound::Landed { .. })),
+                .any(|sound| matches!(sound, SimSound::Landed)),
             "no landing sound"
         );
         assert_eq!(

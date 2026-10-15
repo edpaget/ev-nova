@@ -1683,7 +1683,10 @@ impl AppScreen {
 
     /// Shows the spaceport of `stellar`, landed on, laid out by the
     /// "Spaceport" dialog when the router has dialogs, with the session's
-    /// exchange and outfitter when it has them.
+    /// exchange and outfitter when it has them, its ambient sound's waits
+    /// drawn on the router's chance. One already open, for another
+    /// stellar the pilot desk moved to, is dropped first
+    /// ([`AppScreen::drop_spaceport`]).
     fn show_spaceport(&mut self, stellar: nova_sim::StellarId) {
         let template = |id| match &self.dialogs {
             Some(dialogs) => dialogs
@@ -1739,8 +1742,10 @@ impl AppScreen {
                     template_of(DESC_DIALOG),
                 );
         }
-        spaceport =
-            spaceport.with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG));
+        spaceport = spaceport
+            .with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG))
+            .with_chance(self.chance.clone());
+        self.drop_spaceport();
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
     }
@@ -1758,7 +1763,7 @@ impl AppScreen {
     /// router's rules ([`FlightView::loaded`]), a new one is flown as it
     /// is.
     fn build_flight(&mut self, pilot: Pilot, loaded: bool) {
-        self.spaceport = None;
+        self.drop_spaceport();
         self.put_away_flight();
         let rules = self.rules;
         let flight = self.flight(|data| {
@@ -1791,7 +1796,7 @@ impl AppScreen {
         self.put_away_pilot();
         self.switch_to(side);
         self.put_away_flight();
-        self.spaceport = None;
+        self.drop_spaceport();
         self.plunder = None;
         self.assignment = None;
         self.comm = None;
@@ -2028,15 +2033,28 @@ impl AppScreen {
         self.drop_closed_missions();
     }
 
-    /// Closes the spaceport, if it is open, keeping its sounds, and shows
-    /// flight, letting go of the spaceport's keys.
+    /// Closes the spaceport, if it is open, and shows flight, letting go
+    /// of the spaceport's keys, then drops it
+    /// ([`AppScreen::drop_spaceport`]).
     fn close_spaceport(&mut self) {
-        let Some(spaceport) = self.spaceport.as_mut() else {
+        if self.spaceport.is_none() {
             return;
-        };
-        self.sounds.extend(spaceport.take_sounds());
+        }
         self.switch_to(Side::Flight);
-        self.spaceport = None;
+        self.drop_spaceport();
+    }
+
+    /// Drops the spaceport, if it is open, keeping its sounds and its
+    /// ambient sound's halt ([`SpaceportView::close_sounds`]): every way
+    /// the spaceport goes comes through here, Leave, a script's take-off,
+    /// the pilot put away or replaced, or the pilot desk moving it, as
+    /// `_DoPortDialog` halts `_planetSnd` however its loop ends
+    /// (@0x601d2-0x601eb). A move while landed keeps the spaceport open,
+    /// and its sound with it.
+    fn drop_spaceport(&mut self) {
+        if let Some(mut spaceport) = self.spaceport.take() {
+            self.sounds.extend(spaceport.close_sounds());
+        }
     }
 
     /// Saves the pilot if flight says a save is due: it has landed, taken
@@ -2899,7 +2917,15 @@ impl Screen for AppScreen {
             }
         }
         match self.overlay_mut() {
-            Some(overlay) => overlay.tick(dt),
+            Some(overlay) => {
+                overlay.tick(dt);
+                // The spaceport isn't ticked under it, so says so: the
+                // original's port window comes back to the front once the
+                // overlay closes.
+                if let Some(spaceport) = &mut self.spaceport {
+                    spaceport.cover();
+                }
+            }
             None => self.shown_mut().tick(dt),
         }
         self.advance_fade_in(dt);
@@ -3320,6 +3346,10 @@ pub(super) mod tests {
         ))
     }
 
+    /// Alpha Prime's `CustSndID`, its ambient sound: Port Kane's in the
+    /// stock data.
+    const AMBIENT: i16 = 10_032;
+
     /// The resources of [`game_data_full`], before they are loaded.
     #[allow(clippy::fn_params_excessive_bools)] // A fixture's switches.
     fn game_data_fork(
@@ -3344,6 +3374,7 @@ pub(super) mod tests {
         let mut character = vec![0; Character::SIZE.expect("fixed")];
         character[0x32..0x32 + on_start.len()].copy_from_slice(on_start);
         let mut stellar = landable();
+        stellar[0x1A..0x1C].copy_from_slice(&AMBIENT.to_be_bytes());
         let mut fork = ForkBuilder::new();
         if trading {
             average[0x00..0x02].copy_from_slice(&10_i16.to_be_bytes());
@@ -4891,9 +4922,7 @@ pub(super) mod tests {
             screen.take_sounds(),
             [
                 Sound::Sim(SimSound::TrafficControl),
-                Sound::Sim(SimSound::Landed {
-                    stellar_sound: None
-                })
+                Sound::Sim(SimSound::Landed)
             ],
             "the greeting, then the landing"
         );
@@ -4905,9 +4934,97 @@ pub(super) mod tests {
             .center();
         assert_eq!(
             press_and_release(&mut screen, leave),
-            [vec![], vec![Sound::Sim(SimSound::TookOff)]]
+            [vec![], vec![halted(), Sound::Sim(SimSound::TookOff)]],
+            "the ambient sound halts with the spaceport"
         );
         assert!(screen.spaceport_view().is_none(), "gone");
+    }
+
+    fn ambient() -> Sound {
+        Sound::Ui(UiSound::PortAmbient {
+            sound: nova_sim::SoundId(AMBIENT),
+            until_stopped: false,
+        })
+    }
+
+    fn halted() -> Sound {
+        Sound::Ui(UiSound::PortAmbientHalted(nova_sim::SoundId(AMBIENT)))
+    }
+
+    /// One frame of `dt`'s sounds.
+    fn frame_sounds(screen: &mut AppScreen, dt: Duration) -> Vec<Sound> {
+        screen.tick(dt);
+        screen.take_sounds()
+    }
+
+    #[test]
+    fn the_stellars_ambient_sound_starts_on_the_spaceports_first_frame_not_at_touchdown() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        let landing = screen.take_sounds();
+        assert!(!landing.contains(&ambient()), "{landing:?}");
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        assert_eq!(frame_sounds(&mut screen, TICK), []);
+    }
+
+    /// The landing's input settles its texts and the spaceport's offer
+    /// ([`AppScreen::settle_script`]) before the spaceport's first frame,
+    /// so nothing holds the sound back there.
+    #[test]
+    fn with_a_pilot_the_ambient_sound_starts_once_the_landings_offer_is_served() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, data());
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+    }
+
+    #[test]
+    fn the_ambient_sounds_waits_are_drawn_on_the_routers_chance() {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(FirstOutcome));
+        let mut screen = with_dialogs(data()).with_chance(SharedChance::new(shared));
+        land(&mut screen);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        assert_eq!(
+            frame_sounds(&mut screen, nova_sim::mission::screens::mac_ticks(480)),
+            [ambient()],
+            "480 ticks, as the first outcome draws"
+        );
+    }
+
+    /// A source whose every draw is the first outcome.
+    struct FirstOutcome;
+
+    impl Chance for FirstOutcome {
+        fn fires(&mut self, _percent: u8) -> bool {
+            true
+        }
+
+        fn below(&mut self, _n: u32) -> u32 {
+            0
+        }
+    }
+
+    #[test]
+    fn the_preferences_closing_over_the_spaceport_rearms_the_ambient_sound() {
+        use nova_sim::mission::screens::mac_ticks;
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        assert_eq!(frame_sounds(&mut screen, mac_ticks(900)), []);
+        open_prefs(&mut screen);
+        assert_eq!(frame_sounds(&mut screen, mac_ticks(900)), [], "paused");
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, false));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen.take_sounds();
+        assert_eq!(
+            frame_sounds(&mut screen, mac_ticks(100)),
+            [],
+            "the wait began again"
+        );
+        assert_eq!(frame_sounds(&mut screen, mac_ticks(959)), [ambient()]);
     }
 
     #[test]
@@ -7724,9 +7841,16 @@ pub(super) mod tests {
         assert_eq!(store.writes(), writes + 1, "saved once, after the input");
         assert_eq!(saved(&store, "Ada").owned(BOOSTER), 1);
         let sounds = screen.take_sounds();
+        let took_off = sounds
+            .iter()
+            .position(|&sound| sound == Sound::Sim(nova_sim::SimSound::TookOff));
+        assert!(took_off.is_some(), "{sounds:?}");
         assert!(
-            sounds.contains(&Sound::Sim(nova_sim::SimSound::TookOff)),
-            "{sounds:?}"
+            sounds
+                .iter()
+                .position(|&sound| sound == halted())
+                .is_some_and(|halt| Some(halt) < took_off),
+            "the ambient sound halts with the spaceport: {sounds:?}"
         );
         assert!(
             !sounds.contains(&Sound::Sim(nova_sim::SimSound::ScriptMessage)),

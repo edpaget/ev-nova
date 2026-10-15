@@ -147,12 +147,12 @@ fn system() -> Vec<u8> {
 /// and a bar.
 const FLAGS: u32 = 0x01 | 0x02 | 0x40;
 
-/// Alpha Prime's landing sound, its `CustSndID`: Port Kane's
+/// Alpha Prime's ambient sound, its `CustSndID`: Port Kane's
 /// "Federation Station.SFIL" in the stock data.
 const LANDING_SOUND: i16 = 10_032;
 
 /// Alpha Prime: a planet at (0, `y`) of graphic type 4 and no custom
-/// picture, so its landscape is `PICT` 10004, with its own landing sound.
+/// picture, so its landscape is `PICT` 10004, with its own ambient sound.
 fn stellar(y: i16) -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[0, y, 4]);
@@ -675,18 +675,28 @@ fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
     assert_eq!(drain(&log), []);
     harness.approach();
     assert_eq!(drain(&log), [play(151)], "traffic control");
-    // The landing beep, then the planet's own sound.
+    // The landing beep, then, on the spaceport's first frame, the
+    // planet's own ambient sound.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
-    assert_eq!(drain(&log), [play(151), play(LANDING_SOUND)]);
+    assert_eq!(drain(&log), [play(151)]);
     harness.frame();
+    assert_eq!(drain(&log), [play(LANDING_SOUND)]);
+    harness.frame();
+    assert_eq!(drain(&log), [], "not again until its wait is out");
 
     // Leave is silent under the pointer, as `_TrackPlanetButtons`
-    // @0x2996f plays nothing; taking off is silent too.
+    // @0x2996f plays nothing; taking off is silent too, but halts the
+    // planet's sound.
     let leave = harness.item(LEAVE_ITEM).center();
     harness.click(leave);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(drain(&log), []);
+    assert_eq!(
+        drain(&log),
+        [AudioCommand::Halt {
+            sound: nova_data::SoundId(LANDING_SOUND)
+        }]
+    );
     harness.frame();
     assert_eq!(drain(&log), []);
 

@@ -11,11 +11,10 @@ pub enum SimSound {
     /// The ship stopped thrusting: the player let go, or it landed or
     /// began a jump.
     ThrustStopped,
-    /// The ship landed, on a stellar with this landing sound, if any.
-    Landed {
-        /// The stellar's own landing sound.
-        stellar_sound: Option<SoundId>,
-    },
+    /// The ship landed. The stellar's own sound is its spaceport's
+    /// ambient sound, which the spaceport plays once it is frontmost, not
+    /// at touchdown (`_DoPortDialog` @0x5fa50, `_PortFilter` @0x4f041).
+    Landed,
     /// The ship took off.
     TookOff,
     /// The warp stage of a jump began out of double time, as the brake
