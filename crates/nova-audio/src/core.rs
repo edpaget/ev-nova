@@ -19,8 +19,10 @@ use crate::table::SoundTable;
 /// thrusting), and sends a command only when what it wants changes.
 ///
 /// - Music is the original's one-shot intro track: it plays on the main
-///   menu, and the dialogs over it, while the music setting is on (see
-///   [`has_music`]). It is spent for good, as in the original, once it has
+///   menu, and the dialogs over it, while the music setting is on (the
+///   scene rule in `has_music`: the main menu and its dialogs only;
+///   flight, the spaceport, the maps and the system view are silent). It
+///   is spent for good, as in the original, once it has
 ///   played to its end, or once a pilot enters the game or the About text
 ///   opens, which fade it out ([`music_fade`]). Spent music never plays
 ///   again in the run.
