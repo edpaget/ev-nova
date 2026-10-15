@@ -15,12 +15,17 @@
 //! plunders) waits for NPC boarding, and with it the plunder of the
 //! player's cargo and the mission failure it brings
 //! (`_AIPlunderShipContents` @0x84a0f, `mïsn` `Flags` 0x8000).
+//!
+//! Each decision ([`Behaviour::decision`]) carries whether the think
+//! turned the ship on the player through `_AIMakeShipAttackPlayer`: the
+//! type's own, or a `ShipBehav` 0 mission ship's hunt (`_HighLevelAIHandler`
+//! @0x8d6b7), whose quote gate its mark always fails (+0xc8d2, @0x89c71).
 
 use std::rc::Rc;
 
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, BraveTrader, CarriedAi, EscortAi, GateWait, Goal, Interceptor, Reaction,
+    Behaviour, BraveTrader, CarriedAi, Decision, EscortAi, GateWait, Goal, Interceptor, Reaction,
     Surroundings, Warship, WimpyTrader,
 };
 use crate::chance::Chance;
@@ -174,13 +179,25 @@ impl NovaAi {
 }
 
 impl Behaviour for NovaAi {
-    /// A mission ship of `ShipBehav` 0 attacks the player
-    /// (`hunts_player`); every other NPC decides as its behaviour does.
+    /// [`NovaAi::decision`]'s goal.
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        self.decision(npc, around, chance).goal
+    }
+
+    /// A mission ship of `ShipBehav` 0 attacks the player
+    /// (`hunts_player`), turning on it through `_AIMakeShipAttackPlayer`
+    /// (`_HighLevelAIHandler` @0x8d6b7), whose quote gate its mark fails
+    /// (+0xc8d2, @0x89c71); every other NPC decides as its behaviour does,
+    /// its turn on the player with it.
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         if self.hunts_player(npc, around) {
-            return Goal::Attack(ShipRef::Player);
+            return Decision {
+                goal: Goal::Attack(ShipRef::Player),
+                turns_on_player: true,
+                dropped_target: false,
+            };
         }
-        self.of(npc).decide(npc, around, chance)
+        self.of(npc).decision(npc, around, chance)
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -1023,5 +1040,81 @@ mod tests {
         let inhabited =
             Rulebook::default().with_override(RuleKey::PatrolUninhabited, RuleSource::Bible);
         assert_eq!(decide(&inhabited), Goal::Land(StellarId(128)));
+    }
+
+    /// Turns on the player in each decision, its goal idle.
+    #[derive(Debug)]
+    struct Turning;
+
+    impl Behaviour for Turning {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+
+        fn decision(
+            &self,
+            _npc: &Npc,
+            _around: &Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Decision {
+            Decision {
+                goal: Goal::Idle,
+                turns_on_player: true,
+                dropped_target: true,
+            }
+        }
+    }
+
+    #[test]
+    fn nova_ai_carries_each_types_turn_and_its_mission_hunt_turns_on_the_player() {
+        use crate::ai::fixture::{POLICE, around, govts, ship, sites};
+        let hunters = [mission_ship(of(1, AiType::Warship), 0)];
+        assert_eq!(
+            NovaAi::default().decision(
+                &hunters[0],
+                &with_player(&hunters, Condition::Intact),
+                &mut Draws::of(&[])
+            ),
+            Decision {
+                goal: Goal::Attack(ShipRef::Player),
+                turns_on_player: true,
+                dropped_target: false,
+            },
+            "the mission hunt (@0x8d6b7)"
+        );
+        let ai = NovaAi::default().with(AiType::BraveTrader, Rc::new(Turning));
+        let brave = [of(2, AiType::BraveTrader)];
+        let around_brave = with_player(&brave, Condition::Intact);
+        assert_eq!(
+            ai.decision(&brave[0], &around_brave, &mut Draws::of(&[])),
+            Turning.decision(&brave[0], &around_brave, &mut Draws::of(&[])),
+            "its type's, whole"
+        );
+        let govts = govts(0, crate::govt::ALWAYS_ATTACKS_PLAYER);
+        let sites = sites();
+        let police = [ship(3, POLICE, AiType::Warship, 0.0, 0.0)];
+        let seen = around(&sites, &police, &govts, (0.0, -1000.0), 0);
+        assert!(
+            NovaAi::default()
+                .decision(&police[0], &seen, &mut Draws::of(&[0; 4]))
+                .turns_on_player,
+            "a 0x0004 warship's word"
+        );
+        let escort = [escorting(ship(4, POLICE, AiType::Warship, 0.0, 0.0))];
+        let seen = around(&sites, &escort, &govts, (0.0, -1000.0), 0);
+        assert!(
+            !NovaAi::default()
+                .decision(&escort[0], &seen, &mut Draws::of(&[0; 4]))
+                .turns_on_player,
+            "an escort"
+        );
+        let trader = [ship(5, POLICE, AiType::WimpyTrader, 0.0, 0.0)];
+        let seen = around(&sites, &trader, &govts, (0.0, -1000.0), 0);
+        assert!(
+            !NovaAi::default()
+                .decision(&trader[0], &seen, &mut Draws::of(&[0; 4]))
+                .turns_on_player,
+            "a trader"
+        );
     }
 }

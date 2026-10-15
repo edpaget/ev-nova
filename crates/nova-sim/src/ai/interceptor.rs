@@ -10,7 +10,11 @@
 //!   rather than 0x0010 (@0x8d180, likely a slip in the original, kept as
 //!   the default). Its word reaches a blessed player as
 //!   [`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks)
-//!   says (`_InterceptorAI` @0x8cb5c reads no blessing).
+//!   says (`_InterceptorAI` @0x8cb5c reads no blessing). Its turn on the
+//!   player through `_AIMakeShipAttackPlayer`, the word's (@0x8cb8f) or
+//!   its pick's ([`Decision::turns_on_player`]), holds through the
+//!   inspection, hold or patrol it goes on to when the hunt gives it
+//!   nothing to fight.
 //! - Idle with nothing to fight, it inspects (@0x8ce34): it flies up to a
 //!   ship picked at random among the others in the system (the player
 //!   first, then the NPCs in order), but not the one it last inspected
@@ -36,7 +40,7 @@
 use crate::ai::fire::FireRules;
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
-    Admit, Behaviour, Goal, Reaction, Surroundings, fire, idle, idle_admitting, react,
+    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_admitting, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -83,28 +87,36 @@ pub struct Interceptor {
 
 impl Behaviour for Interceptor {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        self.decision(npc, around, chance).goal
+    }
+
+    /// Its [`hunt`], or with nothing to fight its inspection, hold or
+    /// patrol, the hunt's call on the player kept through each.
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
             ..INTERCEPTOR_RETREAT
         };
-        if let Some(goal) = hunt(npc, around, retreat, self.always_attacks) {
-            return goal;
-        }
-        if let Goal::Inspect(ship) = npc.goal
-            && let Some(state) = around.state_of(ship).filter(|_| around.live(ship))
-            && !within_reach(state.position - npc.state.position)
-        {
-            return Goal::Inspect(ship);
-        }
-        if npc.goal == Goal::Hold {
-            // The patrol and inspect block needs goal 1 or below, or 0x14
-            // (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship holds.
-            return idle(npc, around, chance);
-        }
-        let patrol = Admit::PlainOnly {
-            uninhabited: self.patrol_uninhabited == RuleSource::Engine,
-        };
-        inspect(npc, around, chance).unwrap_or_else(|| idle_admitting(npc, around, chance, patrol))
+        let hunt = hunt(npc, around, retreat, self.always_attacks);
+        hunt.or(|| {
+            if let Goal::Inspect(ship) = npc.goal
+                && let Some(state) = around.state_of(ship).filter(|_| around.live(ship))
+                && !within_reach(state.position - npc.state.position)
+            {
+                return Goal::Inspect(ship);
+            }
+            if npc.goal == Goal::Hold {
+                // The patrol and inspect block needs goal 1 or below, or
+                // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
+                // holds.
+                return idle(npc, around, chance);
+            }
+            let patrol = Admit::PlainOnly {
+                uninhabited: self.patrol_uninhabited == RuleSource::Engine,
+            };
+            inspect(npc, around, chance)
+                .unwrap_or_else(|| idle_admitting(npc, around, chance, patrol))
+        })
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -153,6 +165,7 @@ mod tests {
     use crate::ai::fixture::{NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, sites};
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
+    use crate::combat::hull::Condition;
     use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
     use crate::govt::{Governments, WARSHIPS_RETREAT};
@@ -460,6 +473,109 @@ mod tests {
             decide(RuleSource::Bible),
             Goal::Inspect(P),
             "no word: it goes about inspecting"
+        );
+    }
+
+    // The quote call (`_AIMakeShipAttackPlayer` @0x8cb8f, and
+    // `_SelectWarshipTarget`'s).
+
+    /// The interceptor's whole decision among `npcs` (it first), the police
+    /// of `police_flags`, the player 1000 above in `condition` of record
+    /// `record`, drawing `draws`.
+    fn decision_by(
+        police_flags: u16,
+        npcs: &[Npc],
+        condition: Condition,
+        record: i16,
+        draws: &[u32],
+    ) -> Decision {
+        let govts = govts(0, police_flags);
+        let sites = sites();
+        let mut seen = around(&sites, npcs, &govts, (0.0, -1000.0), record);
+        if let Some(player) = seen.player.as_mut() {
+            player.condition = condition;
+        }
+        Interceptor::default().decision(&npcs[0], &seen, &mut Draws::of(draws))
+    }
+
+    #[test]
+    fn an_interceptors_word_and_hunt_turn_on_the_player_with_the_quote_call() {
+        const ALWAYS: u16 = crate::govt::ALWAYS_ATTACKS_PLAYER;
+        const NEVER: u16 = crate::govt::NEVER_ATTACKS_PLAYER;
+        let intact = Condition::Intact;
+        let turned = |goal| Decision {
+            goal,
+            turns_on_player: true,
+            dropped_target: false,
+        };
+        let not = |goal| Decision {
+            goal,
+            ..Decision::default()
+        };
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        let mut busy = police();
+        busy.goal = Goal::Attack(n(2));
+        assert_eq!(
+            decision_by(ALWAYS, &[busy.clone(), pirate.clone()], intact, 0, &[0]),
+            turned(Goal::Attack(P)),
+            "its government's word (@0x8cb8f)"
+        );
+        assert_eq!(
+            decision_by(ALWAYS, &[busy, pirate], Condition::Disabled, 0, &[0]),
+            turned(Goal::Inspect(P)),
+            "the word lets a disabled player go: on to an inspection"
+        );
+        let mut held = police();
+        held.goal = Goal::Hold;
+        assert_eq!(
+            decision_by(ALWAYS, &[held], Condition::Disabled, 0, &[]),
+            turned(Goal::Hold),
+            "held, the word lets a disabled player go"
+        );
+        assert_eq!(
+            decision_by(0, &[police()], intact, -10, &[]),
+            turned(Goal::Attack(P)),
+            "the hunt's pick (@0x8ad31)"
+        );
+        let mut hunting = police();
+        hunting.goal = Goal::Attack(P);
+        assert_eq!(
+            decision_by(0, &[hunting.clone()], intact, -10, &[]),
+            not(Goal::Attack(P)),
+            "the player kept"
+        );
+        assert_eq!(
+            decision_by(0, &[police()], intact, 0, &[0]),
+            not(Goal::Inspect(P)),
+            "an inspection"
+        );
+        assert_eq!(
+            decision_by(0, &[police()], intact, 0, &[]).goal,
+            Goal::Inspect(P),
+            "decide agrees"
+        );
+        let mut grudger = hunting;
+        grudger.person = Some(crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(600),
+            flags: crate::person::GRUDGE,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: -1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: true,
+            quoted: false,
+            quoted_at: None,
+        });
+        assert_eq!(
+            decision_by(NEVER, &[grudger], intact, 0, &[]),
+            Decision {
+                goal: Goal::Attack(P),
+                turns_on_player: true,
+                dropped_target: true,
+            },
+            "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
         );
     }
 }

@@ -111,7 +111,7 @@ pub mod strength;
 pub mod table;
 
 use crate::ai::interceptor::within_reach;
-use crate::ai::{Behaviour, GateWait, Goal, PlayerSide, Reaction, Surroundings};
+use crate::ai::{Behaviour, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
@@ -161,6 +161,17 @@ pub const DECISION_INTERVAL: u32 = 1;
 pub fn decision_due(tick: u64, id: NpcId, interval: u32) -> bool {
     let interval = u64::from(interval.max(1));
     tick % interval == u64::from(id.0) % interval
+}
+
+/// Whether the player in `world` is dying or destroyed (`_IsDying`, as
+/// `_AIMakeShipAttackPlayer`'s quote gate reads it @0x89ca7).
+fn player_dying(world: &World) -> bool {
+    world.player.is_some_and(|player| {
+        matches!(
+            player.condition,
+            Condition::Dying { .. } | Condition::Destroyed
+        )
+    })
 }
 
 /// What the traffic flies among besides itself: the system's stellars,
@@ -552,11 +563,29 @@ impl Traffic {
             })
             .collect();
         let around = world.around(&self.npcs);
-        let goals: Vec<Option<Goal>> = self
+        let decisions: Vec<Option<Decision>> = self
             .npcs
             .iter()
             .zip(&due)
-            .map(|(npc, &due)| due.then(|| behaviour.decide(npc, &around, &mut &mut *chance)))
+            .map(|(npc, &due)| due.then(|| behaviour.decision(npc, &around, &mut &mut *chance)))
+            .collect();
+        let turning: Vec<(NpcId, bool)> = self
+            .npcs
+            .iter()
+            .zip(&decisions)
+            .filter_map(|(npc, decision)| {
+                decision
+                    .filter(|decision| decision.turns_on_player)
+                    .map(|decision| (npc.id, decision.dropped_target))
+            })
+            .collect();
+        let player_dying = player_dying(&world);
+        for (id, dropped_target) in turning {
+            self.ask_quote_gate(id, dropped_target, player_dying);
+        }
+        let goals = decisions
+            .into_iter()
+            .map(|decision| decision.map(|decision| decision.goal))
             .collect();
         self.take_goals(goals, world.player.map(|player| player.state.position));
         let around = world.around(&self.npcs);
@@ -935,12 +964,7 @@ impl Traffic {
                     .collect()
             })
             .collect();
-        let player_dying = world.player.is_some_and(|player| {
-            matches!(
-                player.condition,
-                Condition::Dying { .. } | Condition::Destroyed
-            )
-        });
+        let player_dying = player_dying(world);
         for (at, reactions) in reactions.into_iter().enumerate() {
             for (reaction, strike) in reactions.into_iter().zip(&strikes) {
                 let id = self.npcs[at].id;
@@ -984,14 +1008,53 @@ impl Traffic {
     /// gate is asked before the turn sets anything. An NPC not in the
     /// system queues nothing.
     ///
-    /// The player's answered hit asks it ([`Traffic::react`]), as
-    /// `_DamageShip` does (@0x3be69), and so does the session for a
-    /// declined bribe (`_DoCommDialog` @0x9621f). The original's other
-    /// callers turn their ships through the per-type AIs' decisions, which
-    /// say their quotes through `_HandleShip`'s path instead.
+    /// Three callers ask it: the player's answered hit ([`Traffic::react`]),
+    /// as `_DamageShip` does (@0x3be69); a decision that turns on the
+    /// player ([`Decision::turns_on_player`]: `_SelectWarshipTarget`
+    /// @0x89f20, @0x8a40e and @0x8ad31, `_WarshipAI` @0x8b7da,
+    /// `_InterceptorAI` @0x8cb8f and `_HighLevelAIHandler` @0x8d6b7),
+    /// asked in the tick's decisions before any goal is taken; and the
+    /// session for a declined bribe (`_DoCommDialog` @0x9621f).
+    ///
+    /// The original asks each ship's gate in its own think, slot by slot,
+    /// each seeing the ships before it as their thinks left them; the
+    /// engine asks every gate of a tick against the NPCs as the tick
+    /// found them, as all its decisions read. The two differ in two ways:
+    ///
+    /// - A ship's own think may change its target and goal before the
+    ///   call: the 0x0040 word clears both (`_WarshipAI` @0x8b800,
+    ///   `_InterceptorAI` @0x8cbc0) before `_SelectWarshipTarget`'s grudge
+    ///   calls `_AIMakeShipAttackPlayer`. Such a decision carries
+    ///   [`Decision::dropped_target`], and its gate sees the ship with no
+    ///   target and no goal, as the original's does: no threat, so the
+    ///   quote is said again.
+    /// - A lead and its escort deciding on the same tick: the lead's
+    ///   gate reads the escort clause against the escort as the tick found
+    ///   it, where the original reads it as the escort's think, earlier in
+    ///   slot order, left it. The decision and the quote land in the same
+    ///   tick and are drawn together, so this crosses no boundary the
+    ///   player sees, and is not filed.
     pub fn turn_with_quote(&mut self, id: NpcId, player_dying: bool) {
+        self.ask_quote_gate(id, false, player_dying);
+    }
+
+    /// [`Traffic::turn_with_quote`] for NPC `id`, its gate seeing it with
+    /// no target and no goal when its think has `dropped_target` first
+    /// ([`Decision::dropped_target`]).
+    fn ask_quote_gate(&mut self, id: NpcId, dropped_target: bool, player_dying: bool) {
         let Some(npc) = self.npcs.iter().find(|npc| npc.id == id) else {
             return;
+        };
+        let cleared;
+        let npc = if dropped_target {
+            cleared = Npc {
+                target: None,
+                goal: Goal::Idle,
+                ..npc.clone()
+            };
+            &cleared
+        } else {
+            npc
         };
         let threatened = person::already_threatens(npc, &self.npcs);
         if person::turns_with_quote(npc, threatened, player_dying) {
@@ -2987,6 +3050,130 @@ mod tests {
             &mut Draws::of(&[]),
         );
         assert_eq!(traffic.take_attack_quotes(), [NpcId(0)], "held, again");
+    }
+
+    /// Makes `0`'s decision for everyone.
+    #[derive(Debug)]
+    struct Decides(crate::ai::Decision);
+
+    impl Behaviour for Decides {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.0.goal
+        }
+
+        fn decision(
+            &self,
+            _npc: &Npc,
+            _around: &Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> crate::ai::Decision {
+            self.0
+        }
+    }
+
+    /// A decision of `goal`, turning on the player as `turns` says.
+    fn turning_to(goal: Goal, turns: bool) -> Decides {
+        Decides(crate::ai::Decision {
+            goal,
+            turns_on_player: turns,
+            dropped_target: false,
+        })
+    }
+
+    #[test]
+    fn a_decision_that_turns_on_the_player_queues_its_persons_quote_before_its_goal_is_taken() {
+        let attacks = Goal::Attack(ShipRef::Player);
+        // `quoting_traffic`'s NPC 0 decides on tick 0, and again on 1000.
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 0;
+        let turning = turning_to(attacks, true);
+        traffic.tick_in(&turning, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[0].goal, attacks);
+        assert_eq!(traffic.take_attack_quotes(), [NpcId(0)], "idle, it turns");
+        traffic.ticks = 1000;
+        traffic.tick_in(&turning, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.take_attack_quotes(),
+            [],
+            "already attacking the player, it threatens"
+        );
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 0;
+        traffic.tick_in(
+            &turning_to(attacks, false),
+            World::new(&[]),
+            &[],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(traffic.take_attack_quotes(), [], "no call");
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 0;
+        traffic.npcs[0].mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        });
+        traffic.tick_in(&turning, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.take_attack_quotes(),
+            [],
+            "a mission's ship fails +0xc8d2 (@0x89c71)"
+        );
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 0;
+        traffic.npcs[0].goal = attacks;
+        traffic.npcs[0].target = Some(ShipRef::Player);
+        let after_drop = Decides(crate::ai::Decision {
+            goal: attacks,
+            turns_on_player: true,
+            dropped_target: true,
+        });
+        traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.take_attack_quotes(),
+            [NpcId(0)],
+            "its target dropped first, it threatens no more as it turns"
+        );
+    }
+
+    #[test]
+    fn a_0x0040_person_holding_a_grudge_queues_its_quote_again_each_think() {
+        use crate::ai::fixture::{POLICE, govts};
+        // `_WarshipAI` drops the target (@0x8b800), then
+        // `_SelectWarshipTarget`'s grudge calls `_AIMakeShipAttackPlayer`
+        // (@0x89f20), whose `_ExtendedIsThreatToPlayer` sees no target.
+        let govts = govts(0, crate::govt::NEVER_ATTACKS_PLAYER);
+        let world = World {
+            player: Some(player_at(0.0, -300.0)),
+            govts: &govts,
+            ..World::new(&[])
+        };
+        let grudging = |grudge| {
+            let mut traffic = quoting_traffic(1);
+            traffic.ticks = 0;
+            let npc = &mut traffic.npcs[0];
+            npc.govt = Some(POLICE);
+            npc.ai_type = AiType::Warship;
+            npc.goal = Goal::Attack(ShipRef::Player);
+            npc.target = Some(ShipRef::Player);
+            if let Some(person) = npc.person.as_mut() {
+                person.flags |= crate::person::GRUDGE;
+                person.grudge = grudge;
+            }
+            traffic
+        };
+        let warship = crate::ai::Warship::default();
+        let mut traffic = grudging(true);
+        traffic.tick_in(&warship, world, &[], &mut Draws::of(&[0; 4]));
+        assert_eq!(traffic.npcs[0].goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(traffic.take_attack_quotes(), [NpcId(0)]);
+        traffic.ticks = 1000;
+        traffic.tick_in(&warship, world, &[], &mut Draws::of(&[0; 4]));
+        assert_eq!(traffic.take_attack_quotes(), [NpcId(0)], "and again");
+        let mut traffic = grudging(false);
+        traffic.tick_in(&warship, world, &[], &mut Draws::of(&[0; 4]));
+        assert_eq!(traffic.take_attack_quotes(), [], "no grudge: dropped");
     }
 
     #[test]

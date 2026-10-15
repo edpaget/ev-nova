@@ -327,10 +327,45 @@ pub struct GateWait {
     pub drops_target: bool,
 }
 
+/// An NPC's decision ([`Behaviour::decision`]): its goal, and whether the
+/// think turned it on the player.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Decision {
+    /// Its goal now.
+    pub goal: Goal,
+    /// Whether the original calls `_AIMakeShipAttackPlayer` in this think,
+    /// whose gate says a person's attack quote at once (@0x89c50-0x89c9b,
+    /// see [`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote)).
+    /// The per-type AIs' callers are `_SelectWarshipTarget`'s grudge and
+    /// `ShipBehav` 0 tail call (@0x89f20), its xenophobe (@0x8a40e) and
+    /// its hunt (@0x8ad31) ([`target::Pick`]), the government's 0x0004
+    /// word in `_WarshipAI` (@0x8b7da) and `_InterceptorAI` (@0x8cb8f)
+    /// ([`warship::hunt`]), and `_HighLevelAIHandler`'s mission hunt
+    /// (@0x8d6b7, [`NovaAi`]). The call comes before the rest of the
+    /// think, so it is made whatever goal the think ends in: an attack, a
+    /// retreat, a hopeless chase, or none at all.
+    pub turns_on_player: bool,
+    /// Whether the think dropped its target and goal (-1, goal 0) before
+    /// it turned on the player: the government's 0x0040 word
+    /// (`_WarshipAI` @0x8b800, `_InterceptorAI` @0x8cbc0). The quote's gate
+    /// then sees the ship with neither, and finds it no threat.
+    pub dropped_target: bool,
+}
+
 /// How NPCs decide what to do.
 pub trait Behaviour: Debug {
     /// `npc`'s goal now, among `around`, rolling any choice on `chance`.
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal;
+
+    /// `npc`'s whole decision now ([`Decision`]), among `around`, rolling
+    /// any choice on `chance`: by default its [`decide`](Self::decide)
+    /// goal, turning on nobody.
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        Decision {
+            goal: self.decide(npc, around, chance),
+            ..Decision::default()
+        }
+    }
 
     /// The fire command `npc` holds now, among `around`: none by default.
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
