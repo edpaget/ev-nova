@@ -4025,6 +4025,43 @@ mod tests {
     }
 
     #[test]
+    fn the_mission_screens_ask_for_their_selected_texts_and_show_them_loaded() {
+        let mut view = missioned();
+        assert_eq!(view.take_computer_text_request(), None, "nothing open");
+        assert_eq!(view.take_info_text_request(), None);
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        assert_eq!(view.take_computer_text_request(), Some(MissionId(130)));
+        assert_eq!(view.take_computer_text_request(), None, "once");
+        view.show_computer_row(&ComputerRow {
+            mission: MissionId(130),
+            name: "Run, loaded".to_owned(),
+            text: "Go, loaded.".to_owned(),
+        });
+        let computer = view.mission_computer().expect("open");
+        let item = |item| {
+            computer
+                .dialog()
+                .and_then(|dialog| dialog.text(item))
+                .expect("a text item")
+                .lines()
+                .join(" ")
+        };
+        assert_eq!(item(crate::spaceport::missions::TEXT_ITEM), "Go, loaded.");
+        view.open_mission_info(actives(2));
+        assert_eq!(view.take_info_text_request(), Some(0));
+        view.show_info_text(0, "Text 0, loaded.");
+        let text = view
+            .mission_info()
+            .and_then(MissionInfoScreen::dialog)
+            .and_then(|dialog| dialog.text(crate::spaceport::missions::INFO_TEXT_ITEM))
+            .expect("the text")
+            .lines()
+            .join(" ");
+        assert_eq!(text, "Text 0, loaded.");
+    }
+
+    #[test]
     fn mission_info_opens_over_whatever_is_open_only_with_missions_to_show() {
         let mut view = missioned();
         click_item(&mut view, 11);

@@ -1426,8 +1426,8 @@ mod tests {
             "5 characters"
         );
         assert_eq!(
-            RankTagGovts::NONE.parsed("ab<PRK1"),
-            RankTagGovts::NONE,
+            govts(Some(130), None).parsed("ab<PRK1"),
+            govts(Some(130), None),
             "a '<' among the last 5 is not looked at"
         );
         assert_eq!(

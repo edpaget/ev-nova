@@ -1219,12 +1219,31 @@ mod tests {
         let mut session = Session::fly(&linked, pilot).expect("flies");
         session.populate(&linked, &mut NeverFires);
         named_earlier(&mut session);
+        session.traffic.npcs_mut()[0].condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let _ = quote_tick(&linked, &mut session, &[1, 1]);
+        assert_eq!(
+            session.plain_text("<OSN>"),
+            "Earlier",
+            "a dying ship: no check"
+        );
+        session.traffic.npcs_mut()[0].condition = Condition::Intact;
         let _ = quote_tick(&linked, &mut session, &[1, 1]);
         assert_eq!(
             session.plain_text("<OSN>"),
             "[Error]",
             "named around _IsMissionAvailable(m, 0), then -1 (@0x33dfb, @0x33e25)"
         );
+        let mut unflagged = linked;
+        unflagged.persons[0].flags = 0;
+        let pilot = Pilot::new(&unflagged, "Stock").expect("a pilot");
+        let mut session = Session::fly(&unflagged, pilot).expect("flies");
+        session.populate(&unflagged, &mut NeverFires);
+        named_earlier(&mut session);
+        let _ = quote_tick(&unflagged, &mut session, &[1, 1]);
+        assert_eq!(session.plain_text("<OSN>"), "Earlier", "linked, not 0x0400");
     }
 
     #[test]

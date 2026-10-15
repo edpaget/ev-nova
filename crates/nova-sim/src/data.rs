@@ -2497,6 +2497,7 @@ mod tests {
     #[test]
     fn any_l33t_resource_turns_the_leet_mode_on() {
         assert!(!store(&[]).leet_mode());
+        assert!(!CommCatalog::leet_mode(&&store(&[])), "a borrow asks");
         assert!(
             !store(&[(StrList::TYPE, 4001, str_list(&["food"]))]).leet_mode(),
             "nothing else does"

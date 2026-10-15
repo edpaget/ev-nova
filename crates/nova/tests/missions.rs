@@ -91,7 +91,7 @@ use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::spaceport::missions::{
-    ABORT_ITEM, ACCEPT_ITEM, MissionComputerScreen, MissionInfoScreen,
+    ABORT_ITEM, ACCEPT_ITEM, INFO_TEXT_ITEM, MissionComputerScreen, MissionInfoScreen,
     TEXT_ITEM as COMPUTER_TEXT_ITEM,
 };
 use nova_view::spaceport::{OfferDialog, SpaceportView};
@@ -1247,6 +1247,37 @@ fn in_flight_i_says_there_are_no_active_missions() {
         shown.contains(&"You have no active missions.".to_owned()),
         "{shown:?}"
     );
+}
+
+#[test]
+fn in_flight_mission_infos_selected_quick_brief_is_loaded_through_flight() {
+    // A l33t resource turns the leet mode on, and the chance replaces
+    // every letter drawn: only a loaded text draws.
+    let mut run = mission(128, 200, 201);
+    put_i16s(&mut run, 0x36, &[205]);
+    let data = game_data_built(&run, bar_job(), "Take this to <DST>.", |fork| {
+        fork.resource(ResType::new(*b"l33t"), 128, None, &[])
+            .resource(Desc::TYPE, 205, None, &desc(&"a".repeat(24)))
+    });
+    let store = MemoryPilots::new();
+    let pilot = holding(&ada(), &[(0, 128, None, None)]);
+    let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
+    game.frame();
+    game.tap(Key::Char('i'));
+    assert_eq!(game.showing(), Showing::MissionInfo);
+    let info = game.app.screen().flight_mission_info().expect("open");
+    assert_eq!(
+        info.info().rows[0].text,
+        "a".repeat(24),
+        "the view draws nothing"
+    );
+    let shown = info
+        .dialog()
+        .and_then(|dialog| dialog.text(INFO_TEXT_ITEM))
+        .expect("the text item")
+        .lines()
+        .concat();
+    assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
 }
 
 #[test]

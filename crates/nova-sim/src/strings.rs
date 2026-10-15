@@ -155,9 +155,11 @@ mod tests {
         assert_eq!(patched_list(&[], 2, |_| text("x")), list(&["x", "x"]));
     }
 
-    /// `STR#` 4001-4003 and 128, and `'STR '` patches by ID.
+    /// `STR#` 4001-4003 and 128, and `'STR '` patches by ID, from data
+    /// holding a `l33t` resource or not.
     struct Fake {
         patches: Vec<(i16, StringPatch)>,
+        leet: bool,
     }
 
     impl CommCatalog for Fake {
@@ -172,7 +174,7 @@ mod tests {
         }
 
         fn leet_mode(&self) -> bool {
-            true
+            self.leet
         }
 
         fn plugin_string(&self, id: i16) -> StringPatch {
@@ -191,6 +193,7 @@ mod tests {
                 (9201, text("Psg")),
                 (9401, text("Mfg:")),
             ],
+            leet: true,
         });
         let cargo = strings.string_list(4001);
         assert_eq!(cargo[..2], list(&["grain", "*passengers"]));
@@ -210,7 +213,9 @@ mod tests {
     fn the_overlap_of_9400_to_9405_patches_both_4002_and_4003() {
         let strings = PatchedStrings::new(Fake {
             patches: vec![(9400, text("Shared"))],
+            leet: false,
         });
+        assert!(!strings.leet_mode(), "asked of the inner catalog");
         assert_eq!(strings.string_list(4003)[0], "Shared");
         assert_eq!(strings.string_list(4002).len(), 201);
         assert_eq!(strings.string_list(4002)[200], "Shared", "#201");
@@ -221,6 +226,7 @@ mod tests {
     fn the_last_patch_of_4001_is_9355() {
         let strings = PatchedStrings::new(Fake {
             patches: vec![(9355, text("last")), (9356, text("past"))],
+            leet: false,
         });
         let cargo = strings.string_list(4001);
         assert_eq!(cargo.len(), 256);

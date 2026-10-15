@@ -14354,6 +14354,12 @@ mod tests {
         let computer = view.mission_computer().expect("opens");
         let names: Vec<_> = computer.rows.iter().map(|row| row.name.as_str()).collect();
         assert_eq!(names, ["Run", "Walk"]);
+        assert_eq!(view.open_mission_computer(), Ok(computer.clone()));
+        assert_eq!(
+            view.show_computer_row(MissionId(131)),
+            Some(computer.rows[1].clone()),
+            "loaded through the session"
+        );
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
         assert_eq!(view.refuse_mission(MissionId(131)), Ok(()));
         let texts: Vec<_> = view
@@ -14377,6 +14383,11 @@ mod tests {
             broken.mission_computer(),
             Err(ComputerRefusal::NoneAvailable)
         );
+        assert_eq!(
+            broken.open_mission_computer(),
+            Err(ComputerRefusal::NoneAvailable)
+        );
+        assert_eq!(broken.show_computer_row(MissionId(130)), None);
         assert_eq!(
             broken.accept_mission(MissionId(130)),
             Err(AcceptError::NotOffered)
@@ -15197,6 +15208,10 @@ mod tests {
         let mut errands = catalog();
         errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
         errands.missions = vec![errand(130)];
+        errands.mission_texts = vec![MissionTexts {
+            quick_brief: Some("Quick.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
         let mut view = FlightView::new(errands);
         assert_eq!(view.mission_info().rows, []);
         assert_eq!(view.abort_mission(0), Err(AbortError::NotActive));
@@ -15210,6 +15225,8 @@ mod tests {
             .map(|row| row.slot)
             .collect();
         assert_eq!(slots, [0]);
+        assert_eq!(view.show_info_row(0).as_deref(), Some("Quick."));
+        assert_eq!(view.show_info_row(1), None, "a free slot");
         assert_eq!(view.abort_mission(0), Ok(()));
         assert_eq!(view.mission_info().rows, []);
         let mut broken = FlightView::new(FakeCatalog {
@@ -15217,6 +15234,7 @@ mod tests {
             ..catalog()
         });
         assert_eq!(broken.mission_info().rows, []);
+        assert_eq!(broken.show_info_row(0), None);
         assert_eq!(broken.abort_mission(0), Err(AbortError::NotActive));
     }
 

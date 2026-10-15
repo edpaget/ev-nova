@@ -413,6 +413,25 @@ mod tests {
     }
 
     #[test]
+    fn the_info_screens_selected_text_is_asked_for_and_shown() {
+        let mut dialogs = dialogs();
+        assert_eq!(dialogs.take_info_text_request(), None, "nothing open");
+        dialogs.show_info_text(2, "Nowhere to show.");
+        dialogs.open_info(info());
+        assert_eq!(dialogs.take_info_text_request(), Some(2));
+        assert_eq!(dialogs.take_info_text_request(), None, "once");
+        dialogs.show_info_text(2, "Loaded.");
+        let text = dialogs
+            .info()
+            .and_then(MissionInfoScreen::dialog)
+            .and_then(|dialog| dialog.text(crate::spaceport::missions::INFO_TEXT_ITEM))
+            .expect("the text")
+            .lines()
+            .join(" ");
+        assert_eq!(text, "Loaded.");
+    }
+
+    #[test]
     fn done_closes_the_info_screen() {
         let mut dialogs = dialogs();
         dialogs.open_info(info());
