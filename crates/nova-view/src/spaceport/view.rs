@@ -89,6 +89,17 @@
 //! box in place of the description until the next button is activated, or
 //! the ship is recharged ([`SpaceportView::recharged`]).
 //!
+//! The stellar's ambient sound (its `CustSndID`, 128 and up) plays while
+//! nothing covers the spaceport, as `_PortFilter` @0x4f041 plays it, and
+//! once more for a press on the landscape ([`ambient`](super::ambient)):
+//! its waits are drawn on the chance given
+//! ([`SpaceportView::with_chance`]). Nothing open over it, a mission text,
+//! the mission info or player info screen, or the spaceport's own offer,
+//! asked for and not yet served, covers it; whoever shows something else
+//! over it says so ([`SpaceportView::cover`]). Whatever closes it takes
+//! its last sounds with the ambient sound's halt
+//! ([`SpaceportView::close_sounds`]).
+//!
 //! Without the dialog, or the stellar's record, the screen says why, and
 //! Return or Escape still leaves.
 
@@ -103,6 +114,7 @@ use nova_sim::{
     SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
 };
 
+use super::ambient::Ambient;
 use super::bar::MISSION_INFO_KEY;
 use super::bar::{BarScreen, Hiring};
 use super::catalog::{SpaceportCatalog, StellarId};
@@ -118,6 +130,7 @@ use super::shipyard::{InfoTemplates, ShipOrder, ShipyardCatalog, ShipyardScreen}
 use super::trade::TradeScreen;
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::view::SharedChance;
 use crate::font::Font;
 use crate::geometry::Point;
 use crate::image::ImageKey;
@@ -380,6 +393,11 @@ pub struct SpaceportView {
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
     sounds: Vec<Sound>,
+    /// The stellar's ambient sound, when it has one and the spaceport can
+    /// be shown.
+    ambient: Option<Ambient>,
+    /// What the ambient sound's waits are drawn on.
+    chance: SharedChance,
 }
 
 impl SpaceportView {
@@ -391,8 +409,10 @@ impl SpaceportView {
         stellar: StellarId,
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
     ) -> Self {
+        let mut ambient = None;
         let port = layout.and_then(|(template, metrics)| {
             let record = catalog.stellar_port(stellar)?;
+            ambient = Ambient::of(record.cust_snd_id, record.flags2);
             let offered = services(record.flags);
             let sells_fuel = sells_fuel(record.flags);
             let (text, description_problem) = match catalog.description(stellar.0) {
@@ -464,7 +484,54 @@ impl SpaceportView {
             shop_closed: false,
             outfitter_closed: false,
             sounds: Vec::new(),
+            ambient,
+            chance: SharedChance::default(),
         }
+    }
+
+    /// The spaceport with its ambient sound's waits drawn on `chance`.
+    /// Without one, each draw is the last outcome.
+    #[must_use]
+    pub fn with_chance(self, chance: SharedChance) -> Self {
+        Self { chance, ..self }
+    }
+
+    /// Something that doesn't tick the spaceport covered it, such as the
+    /// Preferences dialog: its next frontmost frame counts as the port
+    /// coming back to the front, which rearms the ambient sound's wait
+    /// (see [`ambient`](super::ambient)).
+    pub fn cover(&mut self) {
+        if let Some(ambient) = &mut self.ambient {
+            ambient.cover();
+        }
+    }
+
+    /// The spaceport closes, whatever closes it: its sounds not yet taken,
+    /// then its ambient sound's halt, as `_DoPortDialog` halts `_planetSnd`
+    /// as the port closes (@0x601d2-0x601eb).
+    pub fn close_sounds(&mut self) -> Vec<Sound> {
+        let mut sounds = std::mem::take(&mut self.sounds);
+        sounds.extend(
+            self.ambient
+                .as_ref()
+                .map(|ambient| Sound::Ui(ambient.halted())),
+        );
+        sounds
+    }
+
+    /// Whether something open over the spaceport covers it, so its own
+    /// filter doesn't run: a service or shop, a mission text, the mission
+    /// info or player info screen, or its own offer, asked for and not yet
+    /// served, or open.
+    fn covered(&self) -> bool {
+        self.open.is_some()
+            || !self.texts.is_empty()
+            || self.info.is_some()
+            || self.player_info.is_some()
+            || self
+                .missioning
+                .as_ref()
+                .is_some_and(|missioning| missioning.landing.pending())
     }
 
     /// Whether the exchange, the outfitter or the shipyard has closed
@@ -1412,6 +1479,20 @@ impl Screen for SpaceportView {
             self.player_info_requested = true;
             return ScreenAction::None;
         }
+        if let (
+            Input::PointerButton {
+                pressed: true, at, ..
+            },
+            Ok(port),
+            Some(ambient),
+        ) = (*input, &self.port, &self.ambient)
+            && port
+                .dialog
+                .item_bounds(LANDSCAPE_ITEM)
+                .is_some_and(|landscape| landscape.contains(at))
+        {
+            self.sounds.extend(ambient.pressed().map(Sound::Ui));
+        }
         let event = match &mut self.port {
             Ok(port) => port.dialog.input(input),
             Err(_) => match *input {
@@ -1429,8 +1510,18 @@ impl Screen for SpaceportView {
         ScreenAction::None
     }
 
-    /// The screen open ticks, unless a mission text is shown over it.
+    /// The screen open ticks, unless a mission text is shown over it. The
+    /// ambient sound's frame passes, covered or not
+    /// ([`Ambient::tick`]).
     fn tick(&mut self, dt: Duration) {
+        let covered = self.covered();
+        if let Some(sound) = self
+            .ambient
+            .as_mut()
+            .and_then(|ambient| ambient.tick(dt, covered, &mut self.chance))
+        {
+            self.sounds.push(Sound::Ui(sound));
+        }
         if self.texts.is_empty()
             && self.info.is_none()
             && self.player_info.is_none()
@@ -1496,9 +1587,9 @@ impl Screen for SpaceportView {
         }
     }
 
-    /// The open service's sounds, in order. The spaceport's own buttons
-    /// are silent under the pointer, as `_TrackPlanetButtons` @0x2996f
-    /// plays nothing.
+    /// The open service's sounds and the ambient sound's, in order. The
+    /// spaceport's own buttons are silent under the pointer, as
+    /// `_TrackPlanetButtons` @0x2996f plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -1589,6 +1680,8 @@ mod tests {
                 flags: FLAGS,
                 cust_pic_id: -1,
                 graphic_type: 3,
+                cust_snd_id: -1,
+                flags2: 0,
             }),
             pictures: vec![10_003],
             description: Ok("Blue and green.\rHome.".to_owned()),
@@ -4334,5 +4427,284 @@ mod tests {
         );
         view.set_mission_info(actives(0));
         assert!(view.mission_info().is_none(), "closed with nothing left");
+    }
+
+    // The ambient sound.
+
+    use crate::flight::view::SharedChance;
+    use crate::sound::SoundId;
+    use crate::spaceport::ambient::LOOPS;
+    use nova_sim::mission::screens::mac_ticks;
+
+    /// Port Kane's ambient sound.
+    const KANE: i16 = 10_032;
+
+    /// Earth sounding Port Kane's ambient sound, with this `Flags2`.
+    fn sounding(flags2: u16) -> FakePort {
+        FakePort {
+            port: Ok(PortRecord {
+                cust_snd_id: KANE,
+                flags2,
+                ..catalog().port.expect("a record")
+            }),
+            ..catalog()
+        }
+    }
+
+    /// Earth sounding Port Kane's, its waits drawn on a source whose every
+    /// draw is the last outcome, so each wait is 959 ticks.
+    fn kane() -> SpaceportView {
+        view_of(&sounding(0))
+    }
+
+    fn ambient(until_stopped: bool) -> Vec<Sound> {
+        vec![Sound::Ui(UiSound::PortAmbient {
+            sound: SoundId(KANE),
+            until_stopped,
+        })]
+    }
+
+    /// One 50 ms frame's sounds.
+    fn frame(view: &mut SpaceportView) -> Vec<Sound> {
+        view.tick(Duration::from_millis(50));
+        view.take_sounds()
+    }
+
+    /// Runs out a fresh 959-tick wait: nothing up to its last tick, which
+    /// plays.
+    fn plays_after_a_fresh_wait(view: &mut SpaceportView) {
+        view.tick(mac_ticks(958));
+        assert_eq!(view.take_sounds(), [], "958 ticks");
+        view.tick(mac_ticks(959).saturating_sub(mac_ticks(958)));
+        assert_eq!(view.take_sounds(), ambient(false), "959 ticks");
+    }
+
+    #[test]
+    fn the_ambient_sound_plays_on_the_first_frame_then_after_each_wait() {
+        let mut view = kane();
+        assert_eq!(view.take_sounds(), [], "not as it is built");
+        assert_eq!(frame(&mut view), ambient(false));
+        assert_eq!(frame(&mut view), []);
+        view.tick(mac_ticks(959).saturating_sub(Duration::from_millis(50)));
+        assert_eq!(view.take_sounds(), ambient(false));
+    }
+
+    #[test]
+    fn its_wait_is_drawn_on_the_chance_given() {
+        let chance: Rc<RefCell<dyn nova_sim::Chance>> = Rc::new(RefCell::new(First));
+        let mut view = kane().with_chance(SharedChance::new(chance));
+        assert_eq!(frame(&mut view), ambient(false));
+        view.tick(mac_ticks(479));
+        assert_eq!(view.take_sounds(), [], "479 ticks");
+        view.tick(mac_ticks(480).saturating_sub(mac_ticks(479)));
+        assert_eq!(view.take_sounds(), ambient(false), "480 ticks");
+    }
+
+    /// A source whose every draw is the first outcome.
+    struct First;
+
+    impl nova_sim::Chance for First {
+        fn fires(&mut self, _percent: u8) -> bool {
+            true
+        }
+
+        fn below(&mut self, _n: u32) -> u32 {
+            0
+        }
+    }
+
+    #[test]
+    fn a_stellar_without_an_ambient_sound_stays_silent() {
+        for id in [-1, 0, 127] {
+            let catalog = FakePort {
+                port: Ok(PortRecord {
+                    cust_snd_id: id,
+                    ..catalog().port.expect("a record")
+                }),
+                ..catalog()
+            };
+            let mut view = view_of(&catalog);
+            view.tick(Duration::from_secs(60));
+            assert_eq!(view.take_sounds(), [], "{id}");
+            click_item(&mut view, LANDSCAPE_ITEM);
+            assert_eq!(view.take_sounds(), [], "{id}");
+            assert_eq!(view.close_sounds(), [], "{id}");
+        }
+    }
+
+    #[test]
+    fn a_spaceport_that_cannot_be_shown_has_no_ambient_sound() {
+        let mut view = SpaceportView::new(&sounding(0), StellarId(140), Err("no DLOG".into()));
+        view.tick(Duration::from_secs(60));
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_service_open_over_the_port_holds_the_sound_and_its_close_rearms_it() {
+        let mut view = kane();
+        assert_eq!(frame(&mut view), ambient(false));
+        view.tick(mac_ticks(900));
+        click_item(&mut view, 10);
+        assert!(view.open_service().is_some());
+        view.tick(Duration::from_secs(60));
+        assert_eq!(view.take_sounds(), [], "under the bar");
+        view.input(&key(Key::Escape));
+        assert!(view.open_service().is_none());
+        assert_eq!(frame(&mut view), [], "the activate rearms, no play");
+        plays_after_a_fresh_wait(&mut view);
+    }
+
+    fn text(text: &str) -> MissionText {
+        MissionText {
+            kind: MissionTextKind::Comp,
+            mission: MissionId(130),
+            text: text.to_owned(),
+        }
+    }
+
+    /// Port Kane's spaceport with its mission screens, its own offer
+    /// already asked for and answered with none.
+    fn kane_missioned() -> SpaceportView {
+        let mut view = kane().with_missions(
+            Ok(computer_template()),
+            Ok(info_template()),
+            Ok(text_template()),
+            Ok(text_template()),
+        );
+        assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+        view
+    }
+
+    #[test]
+    fn the_first_play_waits_for_the_spaceports_own_offer_to_be_asked_for() {
+        let mut view = kane().with_missions(
+            Ok(computer_template()),
+            Ok(info_template()),
+            Ok(text_template()),
+            Ok(text_template()),
+        );
+        assert_eq!(frame(&mut view), [], "the offer is still to be asked for");
+        assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+        assert_eq!(frame(&mut view), ambient(false));
+    }
+
+    #[test]
+    fn the_first_play_waits_for_the_landings_texts_and_offer_to_close() {
+        let mut view = kane_missioned();
+        view.show_mission_texts(vec![text("Well done.")]);
+        view.open_offer(offered());
+        assert_eq!(frame(&mut view), []);
+        done(&mut view);
+        assert!(view.mission_text().is_none());
+        assert_eq!(frame(&mut view), [], "under the offer");
+        view.input(&key(Key::Enter));
+        assert!(view.offer_dialog().is_none());
+        assert_eq!(frame(&mut view), ambient(false), "once both are gone");
+        plays_after_a_fresh_wait(&mut view);
+    }
+
+    #[test]
+    fn the_mission_info_and_the_player_info_over_the_port_hold_the_sound() {
+        let mut view = informed(kane_missioned());
+        view.open_mission_info(actives(1));
+        assert_eq!(frame(&mut view), [], "under the mission info");
+        view.input(&key(Key::Escape));
+        assert!(view.mission_info().is_none());
+        view.open_player_info(pilot_info());
+        assert_eq!(frame(&mut view), [], "under the player info");
+        view.input(&key(Key::Escape));
+        assert!(view.player_info().is_none());
+        assert_eq!(frame(&mut view), ambient(false));
+    }
+
+    #[test]
+    fn a_looped_ambient_sound_asks_every_frontmost_frame() {
+        let mut view = view_of(&sounding(LOOPS));
+        assert_eq!(frame(&mut view), ambient(true));
+        assert_eq!(frame(&mut view), ambient(true));
+        click_item(&mut view, 10);
+        assert_eq!(frame(&mut view), [], "covered");
+        view.input(&key(Key::Escape));
+        assert_eq!(frame(&mut view), ambient(true));
+    }
+
+    #[test]
+    fn a_press_on_the_landscape_plays_it_once_unless_it_loops() {
+        let mut view = kane();
+        assert_eq!(frame(&mut view), ambient(false));
+        let landscape = item(&view, LANDSCAPE_ITEM).center();
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: landscape,
+        });
+        assert_eq!(view.take_sounds(), ambient(false), "on the press");
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at: landscape,
+        });
+        assert_eq!(view.take_sounds(), [], "not the release");
+        click_item(&mut view, TEXT_ITEM);
+        assert_eq!(view.take_sounds(), [], "elsewhere");
+        view.input(&Input::PointerButton {
+            button: MouseButton::Right,
+            pressed: true,
+            at: landscape,
+        });
+        assert_eq!(view.take_sounds(), ambient(false), "any button");
+        plays_after_a_fresh_wait(&mut view);
+        let mut looped = view_of(&sounding(LOOPS));
+        click(&mut looped, landscape);
+        assert_eq!(looped.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_press_on_the_landscape_under_something_open_is_not_the_ports() {
+        let mut view = kane();
+        frame(&mut view);
+        click_item(&mut view, 10);
+        let landscape = item(&view, LANDSCAPE_ITEM).center();
+        click(&mut view, landscape);
+        assert_eq!(view.take_sounds(), []);
+        let mut view = kane_missioned();
+        view.show_mission_texts(vec![text("Hello.")]);
+        click(&mut view, landscape);
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_cover_from_outside_rearms_the_wait() {
+        let mut view = kane();
+        assert_eq!(frame(&mut view), ambient(false));
+        view.tick(mac_ticks(900));
+        view.cover();
+        assert_eq!(frame(&mut view), [], "the activate rearms, no play");
+        plays_after_a_fresh_wait(&mut view);
+        let mut fresh = kane();
+        fresh.cover();
+        assert_eq!(frame(&mut fresh), ambient(false), "never played");
+    }
+
+    #[test]
+    fn closing_halts_the_sound_after_whatever_was_made() {
+        let mut view = kane();
+        view.tick(Duration::from_millis(50));
+        assert_eq!(
+            view.close_sounds(),
+            [
+                Sound::Ui(UiSound::PortAmbient {
+                    sound: SoundId(KANE),
+                    until_stopped: false,
+                }),
+                Sound::Ui(UiSound::PortAmbientHalted(SoundId(KANE))),
+            ]
+        );
+        let mut looped = view_of(&sounding(LOOPS));
+        assert_eq!(
+            looped.close_sounds(),
+            [Sound::Ui(UiSound::PortAmbientHalted(SoundId(KANE)))],
+            "halted even before it played"
+        );
     }
 }

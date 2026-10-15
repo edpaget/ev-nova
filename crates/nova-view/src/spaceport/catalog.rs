@@ -18,6 +18,11 @@ pub struct PortRecord {
     pub cust_pic_id: i16,
     /// Its `Type`.
     pub graphic_type: i16,
+    /// Its `CustSndID`: its ambient sound from 128 up
+    /// ([`Ambient::of`](super::ambient::Ambient::of)).
+    pub cust_snd_id: i16,
+    /// Its `Flags2`.
+    pub flags2: u16,
 }
 
 /// The stellars and pictures the spaceport reads.
@@ -67,6 +72,8 @@ mod tests {
                 flags: 1,
                 cust_pic_id: -1,
                 graphic_type: 2,
+                cust_snd_id: -1,
+                flags2: 0,
             })
         }
 

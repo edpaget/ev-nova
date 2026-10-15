@@ -317,6 +317,12 @@ impl VenueOffers {
         }
     }
 
+    /// Whether an offer is asked for and not yet taken, or open: the
+    /// venue's offer stands between it and the player.
+    pub(crate) fn pending(&self) -> bool {
+        self.requested || self.dialog.is_some()
+    }
+
     /// Whether the venue has asked for an offer since this was last taken.
     pub(crate) fn take_request(&mut self) -> bool {
         std::mem::take(&mut self.requested)
