@@ -57,6 +57,12 @@
 //!   timer; strikes it raises wait for the next advance pass's answers.
 //! - `_HandleBeams(arg)` (@0x4452f-0x4453d): on the second pass a beam
 //!   only ages (see [`GamePass`]).
+//! - The warp's clock is `TickCount` less the warp stage's stamp (see the
+//!   [`warp`](crate::warp) module), real time, which the second pass
+//!   doesn't move on: the pre-jump flies on both passes, and the second
+//!   can start the clock, but only the advance pass moves it on, and a
+//!   collapse on the second pass reads the frame's clock as its advance
+//!   pass left it.
 //!
 //! **Ordering.** The original draws its frame between the two passes
 //! (@0x45d96-0x45e3e); the view draws after both. Every frame shown is
@@ -223,6 +229,67 @@ mod tests {
                 "{double_time}"
             );
         }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn the_warp_clock_moves_on_once_a_frame_in_double_time() {
+        // The clock is `TickCount`, which the second pass does not move on
+        // (F7). Facing up, the turn to east takes 15 frames at two turns a
+        // frame.
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.warp_clock(), Some(0));
+        for frame in 1..=5 {
+            session.tick(Controls::default());
+            assert_eq!(session.warp_clock(), Some(frame), "advance {frame}");
+            again(&mut session, Controls::default());
+            assert_eq!(session.warp_clock(), Some(frame), "again {frame}");
+        }
+        assert_eq!(session.player().heading, 30.0, "turned on both passes");
+        assert_eq!(
+            session.preparing_jump(),
+            Some(crate::catalog::SystemId(131))
+        );
+    }
+
+    #[test]
+    fn a_collapse_on_the_second_pass_reads_the_frames_clock() {
+        // Three frames into the turn, a collapse on the fourth frame's
+        // advance pass reads t = 8 Mac ticks; disabled after it, the
+        // second pass's collapse reads the same 8, where 10 would be the
+        // next frame's.
+        let w = crate::warp::warp_factor(0);
+        let d = 36;
+        let at_8 = crate::warp::lead_in_speed(8, w, d);
+        let at_10 = crate::warp::lead_in_speed(10, w, d);
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
+        let top = session.top_speed();
+        assert!(at_8 > 0.0 && at_8 < top && at_10 > at_8, "{at_8} {at_10}");
+        session.warp_sounds[1] = d;
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        for _ in 0..3 {
+            session.tick(Controls::default());
+            again(&mut session, Controls::default());
+        }
+        let mut advance = session.clone();
+        advance.condition = crate::combat::hull::Condition::Disabled;
+        advance.tick(Controls::default());
+        assert_eq!(advance.preparing_jump(), None, "collapsed");
+        assert_eq!(
+            advance.player().velocity,
+            crate::cargo_box::accel(18, at_8) * crate::flight::DISABLED_DRAG
+        );
+        session.tick(Controls::default());
+        session.condition = crate::combat::hull::Condition::Disabled;
+        again(&mut session, Controls::default());
+        assert_eq!(session.preparing_jump(), None, "collapsed");
+        assert_eq!(
+            session.player().velocity,
+            crate::cargo_box::accel(21, at_8) * crate::flight::DISABLED_DRAG
+        );
     }
 
     #[test]

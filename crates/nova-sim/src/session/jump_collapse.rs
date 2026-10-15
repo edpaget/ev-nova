@@ -101,17 +101,26 @@ pub(crate) fn collapsed_velocity(velocity: Vec2, heading: f32, speed: f32, top: 
 }
 
 /// The Mac ticks of the warp clock as the collapse reads them, from the
-/// pre-jump's `warp` at the start of the tick: one tick while braking
-/// (the stamp is the previous frame's), and k ticks on the k-th tick
-/// after the warp start, whose own advance comes later in the tick.
-fn collapse_ticks(warp: Option<u32>) -> u32 {
-    warp::mac_ticks(warp.map_or(1, |ticks| ticks.saturating_add(1)))
+/// pre-jump's `warp` at the start of the pass. On the advance pass: one
+/// tick while braking (the stamp is the previous frame's), and k ticks on
+/// the k-th tick after the warp start, whose own advance comes later in
+/// the tick. On double time's second pass (`again`), the frame's advance
+/// pass has already moved the clock on: k ticks for a `warp` of k, and
+/// none while braking, the stamp the same frame's.
+fn collapse_ticks(warp: Option<u32>, again: bool) -> u32 {
+    let ticks = if again {
+        warp.unwrap_or(0)
+    } else {
+        warp.map_or(1, |ticks| ticks.saturating_add(1))
+    };
+    warp::mac_ticks(ticks)
 }
 
 impl Session {
     /// Collapses a pre-jump, as a disabled or dying player's does (see
-    /// the module docs): nothing without one.
-    pub(super) fn collapse_jump(&mut self) {
+    /// the module docs), on double time's second pass when `again`:
+    /// nothing without one.
+    pub(super) fn collapse_jump(&mut self, again: bool) {
         let Some(Jump::PreJump { warp, .. }) = self.jump else {
             return;
         };
@@ -119,7 +128,7 @@ impl Session {
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.flags);
         let speed = warp::lead_in_speed(
-            collapse_ticks(warp),
+            collapse_ticks(warp, again),
             warp::warp_factor(flags),
             self.warp_sound(),
         );
@@ -183,10 +192,18 @@ mod tests {
 
     #[test]
     fn the_clock_is_one_tick_while_braking_and_counts_from_the_warp_start() {
-        assert_eq!(collapse_ticks(None), 2, "the previous frame's stamp");
-        assert_eq!(collapse_ticks(Some(0)), 2);
-        assert_eq!(collapse_ticks(Some(4)), 10);
-        assert_eq!(collapse_ticks(Some(u32::MAX)), u32::MAX, "saturates");
+        assert_eq!(collapse_ticks(None, false), 2, "the previous frame's stamp");
+        assert_eq!(collapse_ticks(Some(0), false), 2);
+        assert_eq!(collapse_ticks(Some(4), false), 10);
+        assert_eq!(collapse_ticks(Some(u32::MAX), false), u32::MAX, "saturates");
+    }
+
+    #[test]
+    fn on_the_second_pass_the_clock_is_the_frames_already() {
+        assert_eq!(collapse_ticks(None, true), 0, "this frame's stamp");
+        assert_eq!(collapse_ticks(Some(0), true), 0);
+        assert_eq!(collapse_ticks(Some(4), true), 8);
+        assert_eq!(collapse_ticks(Some(u32::MAX), true), u32::MAX, "saturates");
     }
 
     // Through the session.

@@ -1701,20 +1701,27 @@ impl Session {
             self.pod_tick();
             return;
         }
-        self.move_player(controls);
+        self.move_player(controls, pass);
         // After the ship moves, as `_HandlePlayer` runs the approach
         // (@0x6a965) after it moves the ship (@0x6864d); see the
         // `clearance` module.
         self.dock_approach();
     }
 
-    /// The ship's motion in [`Session::fly_player`]: by its condition and
-    /// the jump under way, under `controls`, then the fuel's regeneration.
-    fn move_player(&mut self, controls: Controls) {
+    /// The ship's motion in [`Session::fly_player`] on `pass`: by its
+    /// condition and the jump under way, under `controls`, then the fuel's
+    /// regeneration.
+    ///
+    /// The warp's clock moves on only on the advance pass: it is
+    /// `TickCount`, real time, which double time's second pass doesn't
+    /// move on (`_HandlePlayer` @0x6d1c1, @0x688bb), though that pass
+    /// flies the pre-jump again and can start the clock.
+    fn move_player(&mut self, controls: Controls, pass: GamePass) {
+        let again = pass == GamePass::Again;
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
-                self.collapse_jump();
+                self.collapse_jump(again);
                 Controls::default()
             }
             Condition::Destroyed => {
@@ -1738,7 +1745,12 @@ impl Session {
                 let thrust =
                     pre_jump::fly(&mut self.player, &handling, bearing, !self.stats.fast_jump);
                 self.thrust(thrust);
-                self.stage_jump(to, bearing, warp.map(|ticks| ticks.saturating_add(1)));
+                let warp = if again {
+                    warp
+                } else {
+                    warp.map(|ticks| ticks.saturating_add(1))
+                };
+                self.stage_jump(to, bearing, warp);
             }
             Some(Jump::Hyperspace { to, warp }) => {
                 self.jump = Some(Jump::Hyperspace {
@@ -2330,7 +2342,7 @@ impl Session {
         let strikes = self.combat.take_strikes();
         self.player_downed(player_was, &strikes, &mut &mut *chance);
         self.take_shoves();
-        self.eject_on_breakup(&mut &mut *chance);
+        self.eject_on_breakup(pass, &mut &mut *chance);
         let exploded = !was_destroyed && self.condition == Condition::Destroyed;
         if exploded {
             // Set only, never cleared here: double time's second pass
