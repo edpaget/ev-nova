@@ -518,24 +518,81 @@ mod tests {
         assert_eq!(session.landed(), None);
     }
 
+    /// F5 picks as `_FindNearestStellar` does (@0x276c-0x2888), a
+    /// destroyed can-land stellar included, and beeps (@0x69e9a).
     #[test]
-    fn f5_skips_a_destroyed_stellar() {
+    fn f5_picks_a_destroyed_stellar_as_find_nearest_stellar_does() {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        session.take_sounds();
         assert_eq!(
             session.select_stellar(StellarPick::Nearest),
             Some(StellarId(128))
         );
-        run(&mut session, "Y128");
-        assert_eq!(
-            session.select_stellar(StellarPick::Nearest),
-            Some(StellarId(129))
+        assert!(
+            session
+                .take_sounds()
+                .contains(&crate::SimSound::NavSelected)
         );
         run(&mut session, "U128");
         assert_eq!(
             session.select_stellar(StellarPick::Nearest),
             Some(StellarId(128))
         );
+    }
+
+    /// `catalog` with every stellar but 128 stripped of its flags.
+    fn only_128_can_land(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+        for (_, sites) in &mut catalog.sites {
+            for site in sites {
+                if site.id.0 != 128 {
+                    site.flags = 0;
+                }
+            }
+        }
+        catalog
+    }
+
+    /// An untargeted L selects `_FindNearestStellar`'s pick silently
+    /// (@0x276c-0x2888, @0x6a8ed-0x6a932) and the dock request refuses it
+    /// as not landable (@0x66977 → 0x67cda).
+    fn assert_l_selects_128_and_cannot_land(session: &mut Session) {
+        session.take_sounds();
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(128),
+                station: false,
+            })
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(128)));
+        assert_eq!(
+            session.nav_mode(),
+            crate::navigation::NavMode::Stellar(Some(StellarId(128)))
+        );
+        assert_eq!(session.dock_request(), None);
+        assert!(
+            !session
+                .take_sounds()
+                .contains(&crate::SimSound::NavSelected)
+        );
+    }
+
+    #[test]
+    fn an_untargeted_l_selects_the_only_can_land_stellar_destroyed_and_says_it_cannot_land() {
+        let catalog = only_128_can_land(wrecking());
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        assert_l_selects_128_and_cannot_land(&mut session);
+    }
+
+    #[test]
+    fn an_untargeted_l_selects_an_intact_stellar_landable_only_once_destroyed_and_says_it_cannot_land()
+     {
+        let catalog = only_128_can_land(ruins());
+        let mut session = quiet(&catalog);
+        assert_l_selects_128_and_cannot_land(&mut session);
     }
 
     /// [`wrecking`] with 128 and 140 landable only once destroyed.

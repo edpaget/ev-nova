@@ -184,7 +184,7 @@
 //!   either overrides Down.
 //! - L, once a press (its repeats do nothing), requests clearance, then
 //!   lands, as [`landing`](nova_sim::landing) says, in two presses: with
-//!   no navigation target it selects the nearest landable stellar, and
+//!   no navigation target it selects the nearest stellar, and
 //!   the press requests the stellar selected. Away from it traffic
 //!   control answers with the request's line ([`request_line`]); within
 //!   249 pixels it says nothing. On the ticks after, the dock approach
@@ -237,7 +237,7 @@
 //!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
 //!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`], presses) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
-//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest landable one,
+//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest stellar,
 //!   as L does with none; a left click in space the stellar under it
 //!   (not in the status panel, the right [`STATUS_BAR_WIDTH`] of the
 //!   screen, where the radar takes no clicks). Backquote, Nav Off

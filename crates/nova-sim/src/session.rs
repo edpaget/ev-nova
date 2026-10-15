@@ -85,12 +85,12 @@
 //! original's +0x6a and +0x6c; see the session's `nav` module) say what
 //! the nav area shows and where J jumps. The player selects one of the
 //! system's stellars ([`Session::select_stellar`]) by its slot in the
-//! system's navigation defaults, as the nearest landable one, or by
+//! system's navigation defaults, as the nearest with the can-land flag, or by
 //! clicking it, as the [`navigation`](crate::navigation) rules say;
 //! turns the nav system off with Nav Off ([`Session::nav_off`]), the
 //! course kept; selects the course's next hop with Hyperspace Mode
 //! ([`Session::hyperspace_mode`]); or presses the land key
-//! ([`Session::land`]), which selects the nearest landable stellar when
+//! ([`Session::land`]), which selects the nearest stellar with the can-land flag when
 //! none is selected and lands on the one selected when there is one.
 //! Landing keeps the selection, and the take-off lets go of it. The mode
 //! is not part of the pilot, so it is not saved.
@@ -608,8 +608,8 @@ pub enum StellarPick {
     /// The stellar in this slot of the system's navigation defaults,
     /// from 0: the original's keys 1-4 and F1-F4 (@0x69cf6-0x69f17).
     Slot(usize),
-    /// The nearest landable stellar, the one the land key selects with no
-    /// target ([`nearest_landable`]): the original's F5, which picks
+    /// The nearest stellar with the can-land flag, destroyed or not, the one the land key selects with no
+    /// target ([`nearest_stellar`]): the original's F5, which picks
     /// through the same `_FindNearestStellar` (@0x276c) its land key does.
     Nearest,
     /// The stellar under a click at this point in the system
@@ -6081,7 +6081,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_first_l_selects_the_nearest_landable_stellar_and_does_not_land() {
+    fn the_first_l_selects_the_nearest_stellar_stellar_and_does_not_land() {
         let mut session = Session::start(&catalog()).expect("starts");
         let before = *session.player();
         assert_eq!(

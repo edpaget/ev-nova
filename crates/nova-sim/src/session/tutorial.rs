@@ -13,7 +13,7 @@
 use super::Session;
 use crate::combat::hull::Condition;
 use crate::hyperspace::JumpRefusal;
-use crate::landing::nearest_landable_station;
+use crate::landing::nearest_stellar_station;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -60,7 +60,7 @@ impl Session {
 
     /// The tutorial's part of a flight tick on `frame` (see the module
     /// docs): the hint block, with the ship intact or not, its squared
-    /// distance from the centre and the nearest landable stellar
+    /// distance from the centre and the nearest stellar
     /// (`_FindNearestStellar`, the one F5 selects).
     pub(super) fn tutorial_tick(&mut self, frame: i16) {
         if self.condition == Condition::Destroyed {
@@ -73,7 +73,7 @@ impl Session {
             frame,
             self.condition == Condition::Intact,
             distance_squared,
-            || nearest_landable_station(position, sites),
+            || nearest_stellar_station(position, sites),
         );
         for hint in hints {
             self.messages.push(SimMessage::Tutorial(hint));

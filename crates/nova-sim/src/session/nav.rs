@@ -178,7 +178,7 @@ use super::Session;
 use crate::StellarPick;
 use crate::catalog::{StellarId, SystemId};
 use crate::hyperspace::{HyperSelectRule, next_hyper_destination};
-use crate::landing::nearest_landable;
+use crate::landing::nearest_stellar;
 use crate::navigation::{NavMode, stellar_under};
 use crate::sound::SimSound;
 
@@ -366,7 +366,7 @@ impl Session {
     /// gives it. The course is left alone. `None`, and nothing changes,
     /// during a jump (pre-jump stage too, as the original skips its nav
     /// inputs while jumping) or when `pick` finds nothing: an empty slot,
-    /// no landable stellar, or a click on none.
+    /// no stellar with the can-land flag, or a click on none.
     ///
     /// A key that finds a stellar raises [`SimSound::NavSelected`], even
     /// for the one selected. Selecting changes the mode to 2 and starts
@@ -381,7 +381,7 @@ impl Session {
         }
         let picked = match pick {
             StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
-            StellarPick::Nearest => nearest_landable(self.player.position, &self.sites),
+            StellarPick::Nearest => nearest_stellar(self.player.position, &self.sites),
             StellarPick::At(at) => {
                 stellar_under(&self.sites, at, |site| self.drawn_frame_size(site))
             }
