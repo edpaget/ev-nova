@@ -627,12 +627,17 @@ fn burst(
 /// Cuts the wait of `npc`, hit and answering it, to at most
 /// [`HIT_WAIT`] ticks: `_DamageShip` sets the victim's AI wait (+0x4c) to
 /// 20.0 when it is above that (@0x3be6e-0x3be7c), whoever the attacker.
-/// Only a ship waiting in its gate ([`Mode::Emerging`]) or holding its
-/// course after its glide or burst ([`Mode::Coasting`]) has a wait to
-/// cut: a glide or burst has none (+0x4c = -1, @0x8dd83), and a ship held
-/// at its gate was cut as it was held.
+/// Only a ship waiting in its gate ([`Mode::Emerging`]), held at it
+/// ([`Mode::HeldAtGate`]) or holding its course after its glide or burst
+/// ([`Mode::Coasting`]) has a wait to cut: a glide or burst has none
+/// (+0x4c = -1, @0x8dd83). A ship the player hit in its gate was cut as
+/// it was held, but a Good Samaritan held there kept its wait
+/// (@0x82b82-0x82b97), which a later hit cuts.
 pub(crate) fn cut_wait(npc: &mut Npc) {
-    if let Mode::Coasting { ticks_left } | Mode::Emerging { ticks_left } = &mut npc.mode {
+    if let Mode::Coasting { ticks_left }
+    | Mode::Emerging { ticks_left }
+    | Mode::HeldAtGate { ticks_left } = &mut npc.mode
+    {
         *ticks_left = (*ticks_left).min(HIT_WAIT);
     }
 }
@@ -1359,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_cuts_a_gate_wait_to_20_and_leaves_any_other_mode_alone() {
+    fn a_hit_cuts_a_wait_in_or_at_a_gate_or_on_course_to_20_and_leaves_any_other_mode_alone() {
         let cut = |mode| {
             let mut ship = npc(AVERAGE, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 0.0));
             ship.mode = mode;
@@ -1378,8 +1383,16 @@ mod tests {
             cut(Mode::Coasting { ticks_left: 45 }),
             Mode::Coasting { ticks_left: 20 }
         );
+        assert_eq!(
+            cut(Mode::HeldAtGate { ticks_left: 59 }),
+            Mode::HeldAtGate { ticks_left: 20 },
+            "a Good Samaritan's uncut hold"
+        );
+        assert_eq!(
+            cut(Mode::HeldAtGate { ticks_left: 19 }),
+            Mode::HeldAtGate { ticks_left: 19 }
+        );
         for mode in [
-            Mode::HeldAtGate { ticks_left: 30 },
             Mode::JumpingIn { tick: 2 },
             Mode::LeavingGate { tick: 2 },
             Mode::Flying,

@@ -806,8 +806,8 @@ impl Traffic {
     /// `behaviour` says, all against the NPCs as they were before; by the
     /// other reading of [`World::arrival_hits`] only those that have
     /// arrived ([`Npc::arrived`]) do. A hit on it that it answers (taking
-    /// a target) cuts its wait, in its gate or holding its course
-    /// ([`autopilot::cut_wait`], `_DamageShip` @0x3be6e-0x3be7c).
+    /// a target) cuts its wait, in its gate, held at it or holding its
+    /// course ([`autopilot::cut_wait`], `_DamageShip` @0x3be6e-0x3be7c).
     ///
     /// A ship still coming in answers as `_DamageShip` has it (see the
     /// [`ai::react`](crate::ai::react) module):
@@ -2874,6 +2874,28 @@ mod tests {
         assert_eq!(gliding.mode, Mode::JumpingIn { tick: 1 });
         assert_eq!(gliding.goal, Goal::Idle);
         assert_eq!(gliding.target, Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_good_samaritan_held_at_its_gate_and_hit_later_has_its_wait_cut_to_20() {
+        // `_DamageShip` cuts the victim's +0x4c to 20 whatever its goal
+        // (@0x3be6e-0x3be7c); the Samaritan's hold left it uncut.
+        let mut traffic = populated(2, 1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].emerges_from = Some(GATE);
+        traffic.npcs[0].hold_at_gate();
+        let firing = Firing::default();
+        traffic.tick_in(&firing, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].mode, Mode::HeldAtGate { ticks_left: 59 });
+        traffic.tick_in(
+            &firing,
+            World::new(&[]),
+            &[struck_by(0, 1, 2.0)],
+            &mut Draws::of(&[]),
+        );
+        let hit = &traffic.npcs()[0];
+        assert_eq!(hit.provoked, 2.0, "it answered");
+        assert_eq!(hit.mode, Mode::HeldAtGate { ticks_left: 19 });
     }
 
     /// NPC 0 waiting 30 ticks in a gate beside NPC 1, as `setup` makes
