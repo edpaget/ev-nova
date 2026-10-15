@@ -1579,6 +1579,24 @@ impl Session {
         self.clear_lost_target();
     }
 
+    /// The NPCs answer the fight's strikes since the last traffic tick
+    /// now, as `behaviour` says ([`Traffic::answer`]): a ship the player
+    /// hit in its gate is held there and seen, and a person turned on the
+    /// player queues its quote. The original answers a hit inside
+    /// `_HandleShot` (@0x44385), before `_HandleShip`'s quotes and the
+    /// display pass, so the frame drawn after the fight shows the answer;
+    /// a flight calls this right after [`Session::tick_combat`]. Whatever
+    /// is left unanswered, [`Session::tick_traffic`] answers (as for a
+    /// caller that never calls this). While the ship is landed or jumping,
+    /// or before the system is set up, nothing is answered.
+    pub fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
+        if self.landed.is_some() || self.jumping().is_some() || self.traffic_due {
+            return;
+        }
+        let strikes = std::mem::take(&mut self.strikes);
+        self.step_traffic(|traffic, world| traffic.answer(behaviour, &world, &strikes));
+    }
+
     /// Runs `f` on the traffic in the [`World`] it flies among in flight:
     /// the system's stellars, the player, the governments, the system's
     /// government and the player's legal record with it, the persons'
@@ -13181,6 +13199,74 @@ pub(super) mod tests {
             session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
             assert_eq!(quotes_said(&mut session, &catalog), (vec![], false));
         }
+    }
+
+    /// `catalog`'s session facing a warship waiting 60 ticks in a gate 100
+    /// above the player, flown by a person of `Flags` 0x0010, once the
+    /// player's shots have hit it, nothing answered yet.
+    fn hit_in_its_gate(catalog: &FakePilotCatalog) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        make_quoting_warship(&mut session);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        session.take_sounds();
+        shoot_until_hit(&mut session);
+        session.hold_trigger(Trigger::default());
+        session
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_is_held_and_seen_in_the_hits_step() {
+        // The original answers inside `_HandleShot` (@0x44385), before
+        // `_HandleShip` and the display pass.
+        use crate::traffic::npc::Mode;
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        let npc = &session.npcs()[0];
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 20 });
+        assert!(npc.arrived());
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+    }
+
+    #[test]
+    fn answered_strikes_are_not_answered_again_by_the_traffic_tick() {
+        use crate::traffic::npc::Mode;
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        let provoked = session.npcs()[0].provoked;
+        assert!(provoked > 0.0);
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        let npc = &session.npcs()[0];
+        assert_eq!(npc.provoked, provoked);
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 19 });
+    }
+
+    #[test]
+    fn a_held_person_says_its_quote_and_beeps_in_the_hits_step() {
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert_eq!(
+            quotes_said(&mut session, &catalog),
+            (vec!["Prepare to die!".to_owned()], true),
+            "not when the hold is out"
+        );
+    }
+
+    #[test]
+    fn strikes_are_left_unanswered_while_landed_jumping_or_before_the_system_is_set_up() {
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.landed = Some(crate::catalog::StellarId(128));
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert!(session.npcs()[0].emerging(), "landed");
+        session.landed = None;
+        session.traffic_due = true;
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert!(session.npcs()[0].emerging(), "not set up");
+        assert!(!session.strikes.is_empty(), "kept");
     }
 
     #[test]

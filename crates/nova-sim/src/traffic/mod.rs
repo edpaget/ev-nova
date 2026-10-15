@@ -52,7 +52,10 @@
 //!    [`World::arrival_hits`] say otherwise: the ship it targets, its
 //!    provocation, and any goal it takes at once; one hit in its gate has
 //!    its wait cut, and the player's hit there holds it at the gate (see
-//!    the traffic's `react`);
+//!    the traffic's `react`), and the player's hit on a person whose wait
+//!    runs queues its hail quote ([`Traffic::take_attack_quotes`]). A
+//!    flight answers the fight's strikes in the hit's own step instead
+//!    ([`Traffic::answer`]), so this step answers only those left;
 //! 3. an NPC not intact loses its provocation;
 //! 4. the decisions due on the AI timer, never for a ship still jumping
 //!    in or emerging from a gate (waiting there or bursting out of it,
@@ -808,6 +811,18 @@ impl Traffic {
     }
 
     /// Each intact NPC answers each of `strikes` in `world`, as
+    /// `behaviour` says, now, as [`Traffic::tick_in`]'s step 2 does: the
+    /// hit's own step (see [`Session::answer_strikes`](crate::Session::answer_strikes)).
+    pub fn answer(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        world: &World,
+        strikes: &[Strike],
+    ) {
+        self.react(behaviour, world, strikes);
+    }
+
+    /// Each intact NPC answers each of `strikes` in `world`, as
     /// `behaviour` says, all against the NPCs as they were before; by the
     /// other reading of [`World::arrival_hits`] only those that have
     /// arrived ([`Npc::arrived`]) do. A hit on it that it answers (taking
@@ -837,10 +852,12 @@ impl Traffic {
     /// ship then already targets the player, so only a ship whose wait
     /// runs says it, once a hit.
     ///
-    /// The strikes are the fight's since the last tick, so a ship the
-    /// player hit in its gate is held, and seen, on the next traffic tick
-    /// after the hit: one frame after the original shows it. That lag is
-    /// filed.
+    /// A flight answers the fight's strikes in the hit's own step
+    /// ([`Traffic::answer`], from
+    /// [`Session::answer_strikes`](crate::Session::answer_strikes)), so a
+    /// ship the player hit in its gate is held, and seen, on the frame of
+    /// the hit, as the original answers inside `_HandleShot` (@0x44385);
+    /// [`Traffic::tick_in`] answers those its caller leaves.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
         if strikes.is_empty() {
             return;
