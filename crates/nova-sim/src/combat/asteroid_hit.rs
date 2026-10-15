@@ -46,10 +46,18 @@
 //! A broken asteroid is skipped by every later shot in the tick, as its
 //! hidden sprite is.
 //!
-//! Left out: the blast's `_IonizeShip` (@0x368b7), for
-//! rdm:phase/weapons-fidelity/phase-9-ionizing-hits, which ionizes a
-//! ship its blast reaches; until then the blast does its `_DamageShip`
-//! part only.
+//! Left out, from the blast:
+//!
+//! - `_DamageShip`'s impact push (@0x3a9b8-0x3ab84), for
+//!   rdm:phase/weapons-fidelity/phase-8-knockback-and-tractor-beams: the
+//!   blast (`_DamageShip` @0x36888) passes the weapon's `Impact` with the
+//!   shot's position and no source, so each ship it reaches is pushed
+//!   away from the blast centre, with no 50-px source gate. Until then
+//!   the blast damages the ships it reaches and pushes none.
+//! - `_IonizeShip` (@0x368b7), for
+//!   rdm:phase/weapons-fidelity/phase-9-ionizing-hits, which ionizes a
+//!   ship its blast reaches; until then the blast does its `_DamageShip`
+//!   part only.
 //!
 //! [`AsteroidType::radius`]: crate::asteroid::AsteroidType::radius
 
