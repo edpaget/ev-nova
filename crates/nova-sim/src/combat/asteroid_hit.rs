@@ -53,9 +53,11 @@
 //!
 //! [`AsteroidType::radius`]: crate::asteroid::AsteroidType::radius
 
+use super::damage::Blast;
 use super::projectile::{Shot, contact};
 use super::shockwave::speed_limit;
-use super::weapon::WeaponSpec;
+use super::weapon::{HitParticles, WeaponSpec};
+use super::{ParticleBurst, ShipRef};
 use crate::bay::launch_velocity;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -63,6 +65,13 @@ use crate::rulebook::RuleSource;
 /// The fastest a hit pushes an asteroid on each axis, in pixels a tick
 /// (`_AdjustedAccel` and `_SpeedLimit`'s 2.0, @0x36921-0x36996).
 pub const PUSH_TOP_SPEED: f32 = 2.0;
+
+/// How far, in percent, a hit particle's speed varies either way
+/// (@0x366a0-0x36701).
+pub const HIT_PART_VARIATION: u32 = 20;
+
+/// A hit particle's most life over its least (the 1.25 @0xdd5c8).
+pub const HIT_PART_LIFE_SPAN: f64 = 1.25;
 
 /// An asteroid shots may hit this tick, taken from its slot by the
 /// session, which writes its strength and velocity back.
@@ -182,6 +191,45 @@ pub fn push(velocity: Vec2, heading: f32, impact: f32, mass: i16) -> Vec2 {
         PUSH_TOP_SPEED,
     );
     speed_limit(pushed, PUSH_TOP_SPEED)
+}
+
+/// The burst of a hit's `particles` at `at` (@0x366a0-0x36701): their
+/// speed varied by [`HIT_PART_VARIATION`] percent, their life from
+/// `HitPartLife` to its whole × [`HIT_PART_LIFE_SPAN`], all at `at`.
+#[must_use]
+pub fn hit_burst(at: Vec2, particles: &HitParticles) -> ParticleBurst {
+    // A whole `u32` times 1.25, truncated: within a `u32` for any life
+    // an `i16` gives.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let most = (f64::from(particles.life) * HIT_PART_LIFE_SPAN).trunc() as u32;
+    ParticleBurst {
+        at,
+        speed: particles.speed,
+        variation: HIT_PART_VARIATION,
+        life: (particles.life, most),
+        color: particles.color,
+        count: particles.count,
+        spread: 0.0,
+    }
+}
+
+/// The blast of `shot`'s hit on an asteroid at `at` (@0x3670d-0x368ca):
+/// only a player's shot's, with a `BlastRadius` above none, from a weapon
+/// that is not planet-type; it hits no ship directly, and spares the
+/// player only by `Flags` 0x0100. The caller leaves planet-type ships out
+/// of those it may reach (@0x367a8).
+#[must_use]
+pub fn blast(shot: &Shot, at: Vec2) -> Option<Blast> {
+    let weapon = &shot.weapon;
+    (shot.firer == ShipRef::Player && weapon.blast_radius > 0.0 && !weapon.planet_type()).then(
+        || Blast {
+            at,
+            radius: weapon.blast_radius,
+            direct: None,
+            firer: ShipRef::Player,
+            spares_player: weapon.spares_player(),
+        },
+    )
 }
 
 /// What is left of an asteroid's `strength` after a hit of `weapon`: its
@@ -448,6 +496,72 @@ mod tests {
     fn what_is_left_is_held_within_an_i16() {
         assert_eq!(damaged(-32_000, &mining(i16::MAX, 0x8000)), i16::MIN);
         assert_eq!(damaged(i16::MAX, &mining(-5, 0)), i16::MAX);
+    }
+
+    #[test]
+    fn a_hits_burst_varies_its_speed_20_percent_and_lives_up_to_a_quarter_longer() {
+        let particles = HitParticles {
+            count: 6,
+            speed: 2.5,
+            life: 30,
+            color: 0x00FF_8000,
+        };
+        let at = Vec2::new(5.0, -7.0);
+        assert_eq!(
+            hit_burst(at, &particles),
+            ParticleBurst {
+                at,
+                speed: 2.5,
+                variation: 20,
+                life: (30, 37),
+                color: 0x00FF_8000,
+                count: 6,
+                spread: 0.0,
+            }
+        );
+        let short = HitParticles {
+            life: 3,
+            ..particles
+        };
+        assert_eq!(hit_burst(at, &short).life, (3, 3));
+        assert_eq!(HIT_PART_LIFE_SPAN, 1.25);
+    }
+
+    /// A shot of `firer`'s weapon of `BlastRadius` `radius` and these
+    /// `Flags` and `Flags2`.
+    fn blasting(firer: ShipRef, radius: i16, flags: u16, flags2: u16) -> Shot {
+        Shot {
+            firer,
+            ..shot_of(WeaponRecord {
+                blast_radius: radius,
+                flags,
+                flags2,
+                ..weapon(128)
+            })
+        }
+    }
+
+    #[test]
+    fn only_a_players_shot_with_a_blast_radius_and_not_planet_type_blasts() {
+        let at = Vec2::new(3.0, 4.0);
+        assert_eq!(
+            blast(&blasting(ShipRef::Player, 30, 0, 0), at),
+            Some(Blast {
+                at,
+                radius: 30.0,
+                direct: None,
+                firer: ShipRef::Player,
+                spares_player: false,
+            })
+        );
+        assert_eq!(
+            blast(&blasting(ShipRef::Player, 30, 0x0100, 0), at).map(|b| b.spares_player),
+            Some(true)
+        );
+        let npc = ShipRef::Npc(crate::traffic::npc::NpcId(1));
+        assert_eq!(blast(&blasting(npc, 30, 0, 0), at), None);
+        assert_eq!(blast(&blasting(ShipRef::Player, 0, 0, 0), at), None);
+        assert_eq!(blast(&blasting(ShipRef::Player, 30, 0, 0x0400), at), None);
     }
 
     #[test]

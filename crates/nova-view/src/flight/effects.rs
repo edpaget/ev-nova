@@ -38,6 +38,19 @@
 //!   every shot.
 //! - A missile shot down by point defence goes off as explosion type 0
 //!   ([`SHOT_DOWN`]), unheard, as `_SpawnExplod` plays nothing.
+//! - A burst of particles ([`CombatEvent::Particles`]: a shot's hit on an
+//!   asteroid, an asteroid destroyed) is `_SpawnParticles`
+//!   (@0x44b70-0x44d4e) as a plain particle effect: each of its pieces
+//!   leaves where it went off, or `_Accel(Rand(360), Rand(spread × 100)
+//!   × 0.01)` off it with a spread, along `Rand(360)` at its speed,
+//!   varied as `speed × (100 + Rand(2v + 1) − v) / 100` for a variation
+//!   `v` of 1-99, and lives `min + Rand(max − min + 1)` ticks, or `min`
+//!   when `min` is at or above `max`; it takes on no source's velocity,
+//!   and is a dot of the burst's `00RRGGBB` colour. Left out: the
+//!   original's constant 0x20 argument, which `_NewParticle` reads, and
+//!   how the original draws a particle;
+//!   rdm:phase/weapons-fidelity/phase-14-combat-presentation refines the
+//!   look.
 //!
 //! [`WeaponLook::sound_ticks`]: super::catalog::WeaponLook::sound_ticks
 //!
@@ -45,6 +58,7 @@
 
 use std::collections::BTreeMap;
 
+use nova_sim::combat::ParticleBurst;
 use nova_sim::combat::weapon::Explosion as Blast;
 use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
 
@@ -94,6 +108,18 @@ fn offset(at: Point, x: f64, y: f64) -> Point {
     Point::new(at.x + x as f32, at.y + y as f32)
 }
 
+/// `at` moved `distance` along `heading` degrees, as `_Accel` pushes.
+fn offset_along(at: Point, heading: f32, distance: f32) -> Point {
+    let (sin, cos) = heading.to_radians().sin_cos();
+    Point::new(at.x + sin * distance, at.y - cos * distance)
+}
+
+/// A `00RRGGBB` colour, opaque.
+fn particle_color(rgb: u32) -> Color {
+    let [_, r, g, b] = rgb.to_be_bytes();
+    Color::rgba(r, g, b, 255)
+}
+
 /// `sound`, heard by a player at `player` from `at`.
 fn heard(sound: nova_sim::SoundId, at: Point, player: Point) -> CombatSound {
     CombatSound {
@@ -118,7 +144,7 @@ pub struct Explosion {
     pub delay: f32,
 }
 
-/// A piece of debris.
+/// A particle: a piece of debris, or of a burst.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Particle {
     /// Where it is, in world units.
@@ -127,6 +153,8 @@ pub struct Particle {
     pub velocity: Point,
     /// The ticks it has left.
     pub life: u32,
+    /// Its colour.
+    pub color: Color,
 }
 
 /// Where a step's events are heard from.
@@ -156,7 +184,7 @@ pub struct Dying {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Effects {
     explosions: Vec<Explosion>,
-    debris: Vec<Particle>,
+    particles: Vec<Particle>,
     sounds: Vec<CombatSound>,
     /// Each looped weapon sound still playing, by firer and weapon, with
     /// the steps it has left.
@@ -209,7 +237,44 @@ impl Effects {
                 }
                 self.scatter(point(at), point(velocity), chance);
             }
+            CombatEvent::Particles(burst) => self.spray(&burst, chance),
             CombatEvent::Disabled { .. } | CombatEvent::BreakingUp { .. } => {}
+        }
+    }
+
+    /// Throws off `burst`'s particles (see the module docs).
+    fn spray(&mut self, burst: &ParticleBurst, chance: &mut dyn Chance) {
+        let at = point(burst.at);
+        let color = particle_color(burst.color);
+        let (least, most) = burst.life;
+        for _ in 0..burst.count {
+            let heading = chance.below(360) as f32;
+            let speed = if (1..=99).contains(&burst.variation) {
+                let v = burst.variation;
+                let percent = 100 + chance.below(2 * v + 1);
+                burst.speed * (percent as f32 - v as f32) / 100.0
+            } else {
+                burst.speed
+            };
+            let life = if least >= most {
+                least
+            } else {
+                least + chance.below(most - least + 1)
+            };
+            let start = if burst.spread > 0.0 {
+                let angle = chance.below(360) as f32;
+                let reach = (burst.spread * 100.0) as u32;
+                let off = chance.below(reach.max(1)) as f32 * 0.01;
+                offset_along(at, angle, off)
+            } else {
+                at
+            };
+            self.particles.push(Particle {
+                at: start,
+                velocity: offset_along(Point::new(0.0, 0.0), heading, speed),
+                life,
+                color,
+            });
         }
     }
 
@@ -223,10 +288,11 @@ impl Effects {
             let speed = DEBRIS_SPEED * (percent as f32 - variation as f32) / 100.0;
             let life = DEBRIS_LIFE_MIN + chance.below(DEBRIS_LIFE_MAX - DEBRIS_LIFE_MIN + 1);
             let (sin, cos) = heading.to_radians().sin_cos();
-            self.debris.push(Particle {
+            self.particles.push(Particle {
                 at,
                 velocity: Point::new(velocity.x + sin * speed, velocity.y - cos * speed),
                 life,
+                color: DEBRIS_COLOR,
             });
         }
     }
@@ -305,7 +371,7 @@ impl Effects {
             let frames = look.sheet.as_ref().map_or(1, |sheet| sheet.frames.get());
             (explosion.frame as u32) < u32::from(frames)
         });
-        self.debris.retain_mut(|piece| {
+        self.particles.retain_mut(|piece| {
             piece.at = Point::new(piece.at.x + piece.velocity.x, piece.at.y + piece.velocity.y);
             piece.life = piece.life.saturating_sub(1);
             piece.life > 0
@@ -349,8 +415,8 @@ impl Effects {
                 list.sprite(frame, camera.world_to_screen(explosion.at), translucent());
             }
         }
-        for piece in &self.debris {
-            list.dot(camera.world_to_screen(piece.at), DEBRIS_SIZE, DEBRIS_COLOR);
+        for piece in &self.particles {
+            list.dot(camera.world_to_screen(piece.at), DEBRIS_SIZE, piece.color);
         }
     }
 
@@ -360,10 +426,10 @@ impl Effects {
         &self.explosions
     }
 
-    /// The debris flying.
+    /// The particles flying: debris and bursts.
     #[must_use]
-    pub fn debris(&self) -> &[Particle] {
-        &self.debris
+    pub fn particles(&self) -> &[Particle] {
+        &self.particles
     }
 
     /// The sounds made since they were last taken; taking them empties the
@@ -376,7 +442,7 @@ impl Effects {
     /// looped sounds playing.
     pub fn clear(&mut self) {
         self.explosions.clear();
-        self.debris.clear();
+        self.particles.clear();
         self.sounds.clear();
         self.playing.clear();
     }
@@ -532,7 +598,7 @@ mod tests {
             seen.push(frames(&effects));
         }
         assert_eq!(seen, [vec![1.0], vec![2.0], vec![3.0], vec![]]);
-        assert_eq!(effects.debris(), []);
+        assert_eq!(effects.particles(), []);
     }
 
     #[test]
@@ -1086,7 +1152,7 @@ mod tests {
         // Each piece draws its direction, its speed and its life.
         let debris = &chance.asked[33..];
         assert_eq!(debris, [360, 101, 31].repeat(16));
-        assert_eq!(effects.debris().len(), 16);
+        assert_eq!(effects.particles().len(), 16);
         assert_eq!(
             (DEBRIS_COUNT, DEBRIS_SPEED, DEBRIS_SPEED_VARIATION),
             (16, 2.0, 50)
@@ -1104,25 +1170,25 @@ mod tests {
         let mut chance = Script::of(&draws);
         effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
         assert_eq!(effects.explosions(), [], "no Explode2");
-        let first = effects.debris()[0];
+        let first = effects.particles()[0];
         assert_eq!(first.at, at(200.0, 100.0));
         assert!((first.velocity.x - 3.0).abs() < 1e-5, "{first:?}");
         assert!((first.velocity.y + 2.0).abs() < 1e-5, "{first:?}");
         assert_eq!(first.life, 15);
-        let second = effects.debris()[1];
+        let second = effects.particles()[1];
         assert!((second.velocity.x - 6.0).abs() < 1e-5, "{second:?}");
         assert!((second.velocity.y + 1.0).abs() < 1e-5, "{second:?}");
         assert_eq!(second.life, 45);
-        let third = effects.debris()[2];
+        let third = effects.particles()[2];
         assert!((third.velocity.y + 3.0).abs() < 1e-5, "up at 2: {third:?}");
         steps(&mut effects, 1);
-        let moved = effects.debris()[0];
+        let moved = effects.particles()[0];
         assert!((moved.at.x - 203.0).abs() < 1e-4 && (moved.at.y - 98.0).abs() < 1e-4);
         assert_eq!(moved.life, 14);
         steps(&mut effects, 14);
-        assert_eq!(effects.debris().len(), 1, "the first expired");
+        assert_eq!(effects.particles().len(), 1, "the first expired");
         steps(&mut effects, 30);
-        assert_eq!(effects.debris(), []);
+        assert_eq!(effects.particles(), []);
     }
 
     #[test]
@@ -1154,6 +1220,133 @@ mod tests {
                 color: DEBRIS_COLOR,
             }
         );
+    }
+
+    /// A burst of `count` at (10, 20), 2 pixels a tick varied by
+    /// `variation` percent, living `life`, orange, spread over `spread`.
+    fn burst(count: u32, variation: u32, life: (u32, u32), spread: f32) -> CombatEvent {
+        CombatEvent::Particles(ParticleBurst {
+            at: Vec2::new(10.0, 20.0),
+            speed: 2.0,
+            variation,
+            life,
+            color: 0x00FF_8000,
+            count,
+            spread,
+        })
+    }
+
+    const ORANGE: Color = Color::rgba(0xFF, 0x80, 0x00, 255);
+
+    #[test]
+    fn a_burst_throws_off_its_count_from_where_it_went_off_in_its_colour() {
+        let mut effects = Effects::default();
+        // Each piece draws its direction, its speed and its life.
+        let mut chance = Script::of(&[0, 0, 0, 90, 40, 7]);
+        effects.apply(
+            &burst(2, 20, (30, 37), 0.0),
+            &scene(),
+            &looks(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [360, 41, 8, 360, 41, 8]);
+        let pieces = effects.particles();
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[0].at, at(10.0, 20.0));
+        assert!((pieces[0].velocity.y + 1.6).abs() < 1e-5, "{:?}", pieces[0]);
+        assert!(pieces[0].velocity.x.abs() < 1e-5, "{:?}", pieces[0]);
+        assert_eq!((pieces[0].life, pieces[0].color), (30, ORANGE));
+        assert!((pieces[1].velocity.x - 2.4).abs() < 1e-5, "{:?}", pieces[1]);
+        assert_eq!(pieces[1].life, 37);
+        assert_eq!(effects.explosions(), []);
+        assert_eq!(effects.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_burst_varies_no_speed_outside_1_to_99_percent_and_no_life_without_a_range() {
+        for variation in [0, 100, 150] {
+            let mut effects = Effects::default();
+            let mut chance = Script::of(&[90]);
+            effects.apply(
+                &burst(1, variation, (5, 5), 0.0),
+                &scene(),
+                &looks(),
+                &mut chance,
+            );
+            assert_eq!(chance.asked, [360], "{variation}");
+            let piece = effects.particles()[0];
+            assert!(
+                (piece.velocity.x - 2.0).abs() < 1e-5,
+                "{variation}: {piece:?}"
+            );
+            assert_eq!(piece.life, 5);
+        }
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        effects.apply(&burst(1, 0, (9, 4), 0.0), &scene(), &looks(), &mut chance);
+        assert_eq!(chance.asked, [360], "the least life above the most");
+        assert_eq!(effects.particles()[0].life, 9);
+    }
+
+    #[test]
+    fn a_spread_burst_starts_each_piece_up_to_its_spread_off() {
+        let mut effects = Effects::default();
+        // Its direction, speed and life, then its offset's direction and
+        // hundredths of a pixel.
+        let mut chance = Script::of(&[0, 0, 0, 90, 999]);
+        effects.apply(
+            &burst(1, 20, (30, 37), 10.0),
+            &scene(),
+            &looks(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [360, 41, 8, 360, 1000]);
+        let piece = effects.particles()[0];
+        assert!((piece.at.x - 19.99).abs() < 1e-3, "{piece:?}");
+        assert!((piece.at.y - 20.0).abs() < 1e-3, "{piece:?}");
+    }
+
+    #[test]
+    fn burst_pieces_move_by_their_own_velocity_and_expire() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[90]);
+        effects.apply(&burst(1, 0, (2, 2), 0.0), &scene(), &looks(), &mut chance);
+        steps(&mut effects, 1);
+        let moved = effects.particles()[0];
+        assert!((moved.at.x - 12.0).abs() < 1e-4, "{moved:?}");
+        assert!((moved.at.y - 20.0).abs() < 1e-4, "{moved:?}");
+        assert_eq!(moved.life, 1);
+        steps(&mut effects, 1);
+        assert_eq!(effects.particles(), []);
+    }
+
+    #[test]
+    fn a_bursts_pieces_are_drawn_as_dots_of_its_colour_and_debris_of_its_own() {
+        let mut effects = Effects::default();
+        effects.apply(
+            &burst(3, 20, (30, 37), 0.0),
+            &scene(),
+            &looks(),
+            &mut Script::default(),
+        );
+        effects.apply(
+            &destroyed(None, 0.0),
+            &scene(),
+            &looks(),
+            &mut Script::default(),
+        );
+        let mut list = DrawList::new();
+        effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
+        let colours: Vec<Color> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Dot { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        let mut expected = vec![ORANGE; 3];
+        expected.extend([DEBRIS_COLOR; 16]);
+        assert_eq!(colours, expected);
     }
 
     #[test]

@@ -1384,7 +1384,7 @@ fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
         arsenal,
         &nova_sim::Governments::default(),
         Rules::default(),
-        &mut [],
+        nova_sim::combat::Scenery::default(),
         &mut Straight,
     );
 }

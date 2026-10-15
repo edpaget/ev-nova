@@ -14272,7 +14272,7 @@ mod tests {
         let effects = view.effects();
         assert_eq!(effects.explosions().len(), 1);
         assert_eq!(effects.explosions()[0].boom, BoomId(128));
-        assert_eq!(effects.debris().len(), 16);
+        assert_eq!(effects.particles().len(), 16);
         let list = drawn(&view);
         let explosion = first(&list, sprite_of(400));
         assert_eq!(

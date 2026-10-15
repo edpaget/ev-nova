@@ -270,6 +270,25 @@ impl Shot {
             .map(|(t, ship)| (ship, was + (self.position - was) * t))
     }
 
+    /// The first of `targets` it can hit that it touched on its way here
+    /// from `was`, within the ship's hit radius alone, and where: what
+    /// [`Shot::hit`] finds without the weapon's `ProxRadius`, a contact
+    /// rather than the fuse.
+    #[must_use]
+    pub fn touches(&self, was: Vec2, targets: &[Target]) -> Option<(ShipRef, Vec2)> {
+        targets
+            .iter()
+            .filter(|target| self.can_hit(target))
+            .filter_map(|target| {
+                Some((
+                    contact(was, self.position, target.position, target.radius)?,
+                    target.ship,
+                ))
+            })
+            .min_by(|(a, _), (b, _)| a.total_cmp(b))
+            .map(|(t, ship)| (ship, was + (self.position - was) * t))
+    }
+
     /// Its blast where it is, hitting `direct` (or nothing, as it
     /// detonates).
     #[must_use]
@@ -580,6 +599,24 @@ mod tests {
             shot.hit(Vec2::ZERO, &[target(2, 50.0, 8.1, Condition::Intact)]),
             None
         );
+    }
+
+    #[test]
+    fn a_shot_touches_a_ship_within_its_radius_alone_not_its_fuses_reach() {
+        let shot = passing(3);
+        let fused = [target(2, 50.0, 7.9, Condition::Intact)];
+        assert!(shot.hit(Vec2::ZERO, &fused).is_some());
+        assert_eq!(shot.touches(Vec2::ZERO, &fused), None, "the fuse alone");
+        let touched = [
+            target(3, 80.0, 4.9, Condition::Intact),
+            target(2, 50.0, 4.9, Condition::Intact),
+        ];
+        let (ship, at) = shot.touches(Vec2::ZERO, &touched).expect("touched");
+        assert_eq!(ship, ShipRef::Npc(NpcId(2)), "the nearer along the way");
+        assert!(at.x > 48.0 && at.x < 50.0, "{at:?}");
+        let mut own = touched[1];
+        own.ship = FIRER;
+        assert_eq!(shot.touches(Vec2::ZERO, &[own]), None, "never its firer");
     }
 
     #[test]

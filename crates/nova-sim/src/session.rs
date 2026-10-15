@@ -456,7 +456,7 @@ use crate::combat::projectile::Shot;
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::weapon::Ammo;
 use crate::combat::{
-    Combat, CombatEvent, Downed, Fighter, GamePass, Rules, ShipRef, Shove, Strike,
+    Combat, CombatEvent, Downed, Fighter, GamePass, Rules, Scenery, ShipRef, Shove, Strike,
 };
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
@@ -2412,7 +2412,10 @@ impl Session {
             &self.arsenal,
             &self.govts,
             rules,
-            &mut stellars,
+            Scenery {
+                stellars: &mut stellars,
+                ..Scenery::default()
+            },
             chance,
         );
         // The lines are `_DamageShip`'s, said as each hit lands, so before
