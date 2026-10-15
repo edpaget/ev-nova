@@ -2941,12 +2941,12 @@ mod tests {
 
     #[test]
     fn diagnostics_are_taken_once() {
-        let mining = WeaponRecord {
-            flags2: 0x8000,
+        let disabling = WeaponRecord {
+            flags2: 0x1000,
             ..blaster()
         };
         let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(mining)];
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(disabling)];
         for _ in 0..3 {
             tick(&mut combat, &mut ships, &NovaDisable);
         }
@@ -3741,7 +3741,7 @@ mod tests {
             guidance: 1,
             count: 50,
             speed: 500,
-            seeker: 0x0001,
+            seeker: 0x0002,
             ..weapon(148)
         });
         let mut combat = Combat::default();
@@ -3759,7 +3759,7 @@ mod tests {
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(148),
                 field: flags::FlagField::Seeker,
-                bit: 0x0001,
+                bit: 0x0002,
             }]
         );
     }

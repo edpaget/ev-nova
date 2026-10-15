@@ -12650,7 +12650,7 @@ mod tests {
 
     #[test]
     fn the_sessions_diagnostics_come_through_the_screen() {
-        let mining = nova_sim::WeaponRecord {
+        let disabling = nova_sim::WeaponRecord {
             id: nova_sim::WeaponId(181),
             reload: 20,
             count: 12,
@@ -12666,7 +12666,7 @@ mod tests {
             blast_radius: 6,
             flags: 0,
             seeker: 0,
-            flags2: 0x8000,
+            flags2: 0x1000,
             flags3: 0,
             decay: 0,
             beam_length: 0,
@@ -12705,7 +12705,7 @@ mod tests {
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
-            weapons: vec![mining],
+            weapons: vec![disabling],
             hulls: vec![hull],
             looks: vec![(181, Ok(WeaponLook::default()))],
             ..trafficked(&[130], 1, 129, 3)
@@ -12720,7 +12720,7 @@ mod tests {
             [Diagnostic::Sim(SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: nova_sim::WeaponId(181),
                 field: nova_sim::combat::flags::FlagField::Flags2,
-                bit: 0x8000
+                bit: 0x1000
             })]
         );
         ticks(&mut view, 30);

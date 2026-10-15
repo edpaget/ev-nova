@@ -17956,7 +17956,7 @@ pub(super) mod tests {
     #[test]
     fn diagnostics_are_drained_once() {
         let mut catalog = armed();
-        catalog.weapons[0].flags2 = 0x8000;
+        catalog.weapons[0].flags2 = 0x1000;
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
         for _ in 0..5 {
@@ -17967,7 +17967,7 @@ pub(super) mod tests {
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(128),
                 field: crate::combat::flags::FlagField::Flags2,
-                bit: 0x8000
+                bit: 0x1000
             }]
         );
         assert_eq!(session.take_diagnostics(), []);
