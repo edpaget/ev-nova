@@ -264,7 +264,9 @@ pub const DEGREES: u32 = 360;
 pub const JUMP_IN_TICKS: u32 = 43;
 /// Its speed on the glide's first tick, in pixels a tick.
 pub const JUMP_IN_SPEED: f32 = 50.0;
-/// How much slower each tick of the glide is than the last.
+/// How much slower each tick of the glide is than the last: sub-goal
+/// 0xa's -1.165 (`_LowLevelAIHandler` @0x88136), which a burst out of a
+/// gate shares ([`EXIT_SLOWING`](crate::traffic::emerge::EXIT_SLOWING)).
 pub const JUMP_IN_SLOWING: f32 = 1.165;
 /// How far from the centre a glide of [`JUMP_IN_TICKS`] would end, the
 /// distance a ship's start is reckoned from.

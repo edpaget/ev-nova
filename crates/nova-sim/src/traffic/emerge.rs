@@ -48,8 +48,20 @@
 //!   player leads, made to come out of the exit gate after the player
 //!   (see [`session::gate_escorts`](crate::session)), starts at
 //!   [`LED_EXIT_SPEED`] instead: `_AIMakeShipEmergeFromHyperGate` sets
-//!   -15.0 for leader 0 and -30.0 otherwise (@0x895aa-0x895bd), so its
-//!   burst is the generic one from [`LED_BURST_TICK`].
+//!   -15.0 for leader 0 and -30.0 otherwise (@0x895aa-0x895bd), and the
+//!   burst slows from there at the same rate.
+//!
+//!   The slowing is sub-goal 0xa's -1.165 (`_LowLevelAIHandler`
+//!   @0x88114-0x8813d), the hyperspace glide's, not the emerge's own -3.0
+//!   (@0x895c4). `_DoPlayGameWork` runs the AI pass (`_AIDispatch`
+//!   @0x4429d) after the frame's spawns and before its `_HandleShip` pass
+//!   (@0x44483), and `_LowLevelAIHandler` zeroes +0x30 on every call
+//!   (@0x851f1), so the -3.0 is gone before the ship can move. Once the
+//!   wait is out, goal 0x15 becomes goal 8 (@0x8dd61-0x8dd93) and sub-goal
+//!   0xa (@0x8f3c8-0x8f3d9), whose block keeps the emerge's negative start
+//!   and sets +0x30 to -1.165 (@0x88136) before every tick of the burst.
+//!   Only a ship with AI type 0 or below, which `_AIDispatch` never runs
+//!   (@0x4427e-0x44286), would keep the -3.0; the engine has none.
 //! - **Drawn** (`_HandleShipDisplay` @0x2c090-0x2c18e): hidden while its
 //!   timer is above [`FADE_TICKS`], then fading in ([`emerge_level`]).
 //! - **Holding fire.** A ship coming out of a gate fires nothing while it
@@ -107,12 +119,13 @@ pub const EXIT_SPEED: f32 = 30.0;
 /// A ship the player leads starts its burst at 15.0 rather than 30.0
 /// (`_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd, leader 0).
 pub const LED_EXIT_SPEED: f32 = 15.0;
-/// The tick of the generic burst at which a led ship's burst starts:
-/// [`exit_speed`]`(5)` is [`LED_EXIT_SPEED`] (@0x895aa-0x895bd).
-pub const LED_BURST_TICK: u32 = 5;
-/// How much slower each tick of leaving a gate is than the last (-3.0,
-/// @0x895c4).
-pub const EXIT_SLOWING: f32 = 3.0;
+/// How much slower each tick of leaving a gate is than the last: sub-goal
+/// 0xa's -1.165 (`_LowLevelAIHandler` @0x88136), the hyperspace glide's
+/// [`JUMP_IN_SLOWING`](crate::traffic::spawn::JUMP_IN_SLOWING). The
+/// emerge's own -3.0 (@0x895c4) is dead: `_LowLevelAIHandler` zeroes
+/// +0x30 (@0x851f1) in the AI pass that follows the emerge in the same
+/// frame, and sets it to -1.165 before every tick of the burst.
+pub const EXIT_SLOWING: f32 = crate::traffic::spawn::JUMP_IN_SLOWING;
 /// The opacity [`emerge_level`] counts in: 32nds.
 pub const FULL_LEVEL: u8 = 32;
 
@@ -140,10 +153,17 @@ pub fn emerge_stellar<'s>(
 }
 
 /// How fast a ship leaving a gate moves on tick `tick` (from 0) of its
-/// burst.
+/// burst: from [`LED_EXIT_SPEED`] for a ship `led` out of the gate by the
+/// player, from [`EXIT_SPEED`] otherwise, [`EXIT_SLOWING`] slower each
+/// tick.
+///
+/// The original adds 1.165 to an f32 each frame (@0x34c2f-0x34c63), so
+/// its speed drifts from this closed form by about 1e-5 over a burst, a
+/// difference no player can see.
 #[must_use]
-pub fn exit_speed(tick: u32) -> f32 {
-    EXIT_SLOWING.mul_add(-(tick as f32), EXIT_SPEED)
+pub fn exit_speed(led: bool, tick: u32) -> f32 {
+    let start = if led { LED_EXIT_SPEED } else { EXIT_SPEED };
+    EXIT_SLOWING.mul_add(-(tick as f32), start)
 }
 
 /// How opaque a ship coming out of a gate with `ticks_left` of its wait
@@ -170,12 +190,14 @@ mod tests {
     use crate::testkit::{Draws, govt, planet};
 
     #[test]
-    fn a_led_burst_is_the_generic_burst_from_its_fifth_tick() {
-        assert_eq!(exit_speed(LED_BURST_TICK), LED_EXIT_SPEED);
-        assert_eq!(
-            exit_speed(LED_BURST_TICK - 1),
-            LED_EXIT_SPEED + EXIT_SLOWING
-        );
+    fn a_led_burst_starts_at_15_and_slows_by_the_same_rate() {
+        assert_eq!(exit_speed(true, 0), 15.0);
+        assert!((exit_speed(true, 1) - 13.835).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_gate_burst_slows_as_the_hyperspace_glide_does() {
+        assert_eq!(EXIT_SLOWING, crate::traffic::spawn::JUMP_IN_SLOWING);
     }
 
     const SHIP: Option<GovtId> = Some(GovtId(128));
@@ -412,10 +434,10 @@ mod tests {
     }
 
     #[test]
-    fn leaving_a_gate_starts_at_30_and_slows_by_3_a_tick() {
-        assert_eq!(exit_speed(0), 30.0);
-        assert_eq!(exit_speed(1), 27.0);
-        assert_eq!(exit_speed(5), 15.0);
+    fn leaving_a_gate_starts_at_30_and_slows_by_1_165_a_tick() {
+        assert_eq!(exit_speed(false, 0), 30.0);
+        assert!((exit_speed(false, 1) - 28.835).abs() < 1e-4);
+        assert!((exit_speed(false, 10) - 18.35).abs() < 1e-4);
     }
 
     #[test]

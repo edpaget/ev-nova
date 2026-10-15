@@ -1617,10 +1617,10 @@ mod tests {
             assert!(ticks < 100, "out");
         }
         assert_eq!(traffic.npcs()[0].trigger, firing, "the flying ship decides");
-        // Two ticks waiting; top speed 6: 30 down to 9 is 8 ticks; then,
-        // with no lead, 30 + Rand(30) holding its course, the draw its
-        // last, 29.
-        assert_eq!(ticks, 2 + 8 + 59);
+        // Two ticks waiting; top speed 6: 30 down to 6.7, 1.165 slower a
+        // tick, is 21 ticks; then, with no lead, 30 + Rand(30) holding its
+        // course, the draw its last, 29.
+        assert_eq!(ticks, 2 + 21 + 59);
         traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
         assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)]);
         assert_eq!(traffic.npcs()[1].trigger, firing, "its first decision");
@@ -1660,17 +1660,18 @@ mod tests {
         assert_eq!(traffic.npcs()[1].mode, Mode::LeavingGate { tick: 0 });
         assert_eq!(traffic.npcs()[1].state.position, Vec2::new(300.0, -400.0));
         assert_eq!(traffic.npcs()[1].emerges_from, Some(StellarId(129)));
-        for _ in 0..8 {
+        for _ in 0..21 {
             traffic.tick(&Keep, &sites, &mut Draws::of(&[2]));
         }
         let out = &traffic.npcs()[1];
         assert_eq!(
             out.mode,
             Mode::Coasting { ticks_left: 32 },
-            "top speed 6: 30 down to 9, then with no lead 30 + Rand(30), the draw 2"
+            "top speed 6: 30 down to 6.7, then with no lead 30 + Rand(30), the draw 2"
         );
         assert_eq!(out.emerges_from, None, "the burst over");
-        assert!((out.state.position - Vec2::new(456.0, -400.0)).length() < 1e-3);
+        // 30 - 1.165t for ticks 0 to 20: 630 - 1.165 x 210.
+        assert!((out.state.position - Vec2::new(685.35, -400.0)).length() < 1e-3);
     }
 
     #[test]
@@ -3203,7 +3204,7 @@ mod tests {
     /// Ticks `traffic` in `world` until NPC `id`'s burst ends, and gives
     /// the speed it flies on at.
     fn burst_speed(traffic: &mut Traffic, world: &World, id: NpcId) -> f32 {
-        for _ in 0..20 {
+        for _ in 0..64 {
             traffic.tick_in(&Keep, *world, &[], &mut Draws::of(&[]));
             let npc = traffic
                 .npcs()
@@ -3257,8 +3258,9 @@ mod tests {
 
     #[test]
     fn a_fleet_escort_ends_its_burst_at_its_slower_leads_top_speed() {
-        // Its own 6 would end the burst at 9 (30 - 3t, ending once the
-        // next tick's is at or below the cap); its lead's 3 ends it at 6.
+        // Its own 6 would end the burst at 6.7 (30 - 1.165t, ending once
+        // the next tick's is at or below the cap); its lead's 3 ends it at
+        // 3.205.
         let mut traffic = Traffic::new();
         let lead = traffic.add_npc(of_speed(0, 3.0));
         let escort = traffic.add_npc(bursting(Npc {
@@ -3266,7 +3268,7 @@ mod tests {
             ..of_speed(0, 6.0)
         }));
         let speed = burst_speed(&mut traffic, &World::new(&[]), escort);
-        assert!((speed - 6.0).abs() < 1e-4, "{speed}");
+        assert!((speed - 3.205).abs() < 1e-4, "{speed}");
     }
 
     #[test]
@@ -3277,14 +3279,14 @@ mod tests {
             ..of_speed(0, 6.0)
         }));
         let speed = burst_speed(&mut traffic, &World::new(&[]), escort);
-        assert!((speed - 9.0).abs() < 1e-4, "{speed}");
+        assert!((speed - 6.7).abs() < 1e-4, "{speed}");
     }
 
     #[test]
     fn a_led_ship_ends_its_burst_at_the_players_top_speed_times_the_led_speed() {
-        // The player's 4 x 1.5 = 6 ends the burst at 9; its own 10 x 1.5
-        // would end it at 18, its bare 10 at 12, and the player's bare 4
-        // at 6.
+        // The player's 4 x 1.5 = 6 ends the burst at 6.7; its own 10 x 1.5
+        // would end it at 16.02, its bare 10 at 10.195, and the player's
+        // bare 4 at 4.37.
         let mut traffic = Traffic::new();
         let escort = traffic.add_npc(bursting(Npc {
             escort: Some(duty(1)),
@@ -3298,7 +3300,7 @@ mod tests {
             ..World::new(&[])
         };
         let speed = burst_speed(&mut traffic, &world, escort);
-        assert!((speed - 9.0).abs() < 1e-4, "{speed}");
+        assert!((speed - 6.7).abs() < 1e-4, "{speed}");
     }
 
     #[test]

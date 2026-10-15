@@ -115,8 +115,9 @@ pub enum Mode {
         ticks_left: u32,
     },
     /// Bursting out of the gate along its heading, on this tick of the
-    /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed):
-    /// no steering and no decisions.
+    /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed)
+    /// from 30, or from 15 when [`led_out`](Npc::led_out): no steering and
+    /// no decisions.
     LeavingGate {
         /// The tick of the burst.
         tick: u32,
@@ -280,9 +281,9 @@ pub struct Npc {
     pub cloak_gear: CloakGear,
     /// Made to come out of a gate while the player led it, so its burst
     /// starts at [`LED_EXIT_SPEED`](crate::traffic::emerge::LED_EXIT_SPEED)
-    /// (`_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd). Read only as
-    /// its wait runs out: decided at the emerge, as the original decides
-    /// by the leader then.
+    /// (`_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd). Read through
+    /// its burst: decided at the emerge, as the original decides by the
+    /// leader then and fixes the burst's start speed (+0x34) there.
     pub led_out: bool,
     /// The gate it is coming out of, from its emerge until its burst is
     /// over: the original's travel stellar (+0x6c), which

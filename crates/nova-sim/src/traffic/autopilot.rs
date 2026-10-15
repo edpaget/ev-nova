@@ -70,8 +70,9 @@
 //!   every ship (@0x3501f-0x35048) and the original's goal 21 holds it
 //!   until its +0x4c runs out (`_HighLevelAIHandler` @0x8dd61-0x8dd93).
 //!   Then ([`Mode::LeavingGate`]) it bursts out along its heading at
-//!   [`exit_speed`] (from [`LED_BURST_TICK`] for a ship
-//!   [`led_out`](Npc::led_out) of the gate by the player, so from 15),
+//!   [`exit_speed`], from 30, or from 15 for a ship
+//!   [`led_out`](Npc::led_out) of the gate by the player, 1.165 slower
+//!   each tick (sub-goal 0xa, as the glide in),
 //!   with no steering, and flies on at that speed once
 //!   the next tick's would be at or below its cap
 //!   ([`TopSpeeds::burst_cap`]: the lower of its own top speed and its
@@ -124,7 +125,7 @@ use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::TypeWidth;
 use crate::landing::{LANDING_SPEED, landing_radius};
-use crate::traffic::emerge::{LED_BURST_TICK, exit_speed};
+use crate::traffic::emerge::exit_speed;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::spawn::glide_speed;
@@ -556,9 +557,7 @@ fn wait_at_gate(npc: &mut Npc, ticks_left: u32) {
     let left = ticks_left.saturating_sub(1);
     npc.mode = if left == 0 {
         npc.trigger = Trigger::default();
-        Mode::LeavingGate {
-            tick: if npc.led_out { LED_BURST_TICK } else { 0 },
-        }
+        Mode::LeavingGate { tick: 0 }
     } else {
         Mode::Emerging { ticks_left: left }
     };
@@ -584,7 +583,13 @@ fn hold_at_gate(npc: &mut Npc, ticks_left: u32) {
 /// Tick `tick` of `npc`'s burst out of a gate: along its heading at
 /// [`exit_speed`], ending as [`burst`] says.
 fn leave_gate(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Chance + ?Sized)) {
-    if !burst(npc, exit_speed(tick), exit_speed(tick + 1), speeds, chance) {
+    if !burst(
+        npc,
+        exit_speed(npc.led_out, tick),
+        exit_speed(npc.led_out, tick + 1),
+        speeds,
+        chance,
+    ) {
         npc.mode = Mode::LeavingGate { tick: tick + 1 };
     }
 }
@@ -810,7 +815,7 @@ mod tests {
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, planet};
-    use crate::traffic::emerge::{EMERGE_TICKS, LED_BURST_TICK};
+    use crate::traffic::emerge::EMERGE_TICKS;
     use crate::traffic::gate_entry::ENTRY_TICKS;
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
@@ -1187,7 +1192,7 @@ mod tests {
         let sites = [planet(140, 0.0, 0.0)];
         let mut ship = emerging(AVERAGE, 1);
         fly(&mut ship, &sites, None);
-        for _ in 0..20 {
+        for _ in 0..64 {
             let Mode::LeavingGate { tick } = ship.mode else {
                 panic!("not bursting: {:?}", ship.mode);
             };
@@ -1202,14 +1207,15 @@ mod tests {
     #[test]
     fn a_burst_ends_at_the_lower_of_its_own_and_its_leads_top_speed() {
         let speeds = |own, lead| TopSpeeds { own, lead };
-        // 30 - 3t: the burst ends once the next tick's is at or below the
-        // cap.
-        assert_eq!(exit_speed(9), 3.0);
-        assert_eq!(burst_ends(speeds(6.0, Some(3.0))), 8, "the lead's 3");
-        assert_eq!(burst_ends(speeds(6.0, Some(9.0))), 7, "its own 6");
-        assert_eq!(burst_ends(speeds(6.0, Some(6.0))), 7, "a tie: 6");
-        assert_eq!(burst_ends(speeds(6.0, None)), 7, "no lead: its own");
-        assert_eq!(burst_ends(speeds(3.0, None)), 8);
+        // 30 - 1.165t: the burst ends once the next tick's is at or below
+        // the cap, so at 3 after tick 23 (3.205, then 2.04), and at 6
+        // after tick 20 (6.7, then 5.535).
+        assert!((exit_speed(false, 23) - 3.205).abs() < 1e-4);
+        assert_eq!(burst_ends(speeds(6.0, Some(3.0))), 23, "the lead's 3");
+        assert_eq!(burst_ends(speeds(6.0, Some(9.0))), 20, "its own 6");
+        assert_eq!(burst_ends(speeds(6.0, Some(6.0))), 20, "a tie: 6");
+        assert_eq!(burst_ends(speeds(6.0, None)), 20, "no lead: its own");
+        assert_eq!(burst_ends(speeds(3.0, None)), 23);
         assert_eq!(speeds(6.0, Some(3.0)).burst_cap(), 3.0);
         assert_eq!(speeds(3.0, Some(6.0)).burst_cap(), 3.0);
         assert_eq!(speeds(6.0, None).burst_cap(), 6.0);
@@ -1247,8 +1253,9 @@ mod tests {
     #[test]
     fn a_ship_led_out_of_a_gate_bursts_from_15() {
         let sites = [planet(140, 0.0, 0.0)];
-        // Top speed 3: 15, 12, 9, then on at 6. Led by the player, whose
-        // top speed is its lead's.
+        // Top speed 3: 15 - 1.165t for ticks 0 to 10, then on at 3.35
+        // once 2.185 is next. Led by the player, whose top speed is its
+        // lead's.
         let speeds = TopSpeeds {
             own: 3.0,
             lead: Some(3.0),
@@ -1257,7 +1264,8 @@ mod tests {
         ship.led_out = true;
         fly(&mut ship, &sites, None);
         let mut x = 100.0;
-        for (tick, speed) in (LED_BURST_TICK..).zip([15.0, 12.0, 9.0, 6.0]) {
+        for tick in 0..=10 {
+            let speed = 1.165f32.mul_add(-(tick as f32), 15.0);
             assert_eq!(ship.mode, Mode::LeavingGate { tick });
             fly_at(&mut ship, &sites, None, speeds);
             x += speed;
@@ -1270,11 +1278,13 @@ mod tests {
     #[test]
     fn leaving_a_gate_it_bursts_out_on_its_heading_until_it_is_down_to_its_top_speed() {
         let sites = [planet(140, 0.0, 0.0)];
-        // Top speed 3: 30, 27, ... 6, then on at 6 once 3 is next.
+        // Top speed 3: 30 - 1.165t for ticks 0 to 23, then on at 3.205
+        // once 2.04 is next.
         let mut ship = emerging(AVERAGE, 1);
         fly(&mut ship, &sites, None);
         let mut x = 100.0;
-        for (tick, speed) in (0..9).zip([30.0, 27.0, 24.0, 21.0, 18.0, 15.0, 12.0, 9.0, 6.0]) {
+        for tick in 0..=23 {
+            let speed = 1.165f32.mul_add(-(tick as f32), 30.0);
             assert_eq!(ship.mode, Mode::LeavingGate { tick });
             assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
             x += speed;
@@ -1308,13 +1318,13 @@ mod tests {
             1,
         );
         fly(&mut still, &sites, None);
-        let ticks = (1..20)
+        let ticks = (1..64)
             .find(|_| {
                 fly(&mut still, &sites, None);
                 !matches!(still.mode, Mode::LeavingGate { .. })
             })
             .expect("out");
-        assert_eq!(ticks, 10, "30 down to 3");
+        assert_eq!(ticks, 26, "30 down to 0.875");
     }
 
     #[test]
@@ -1590,9 +1600,9 @@ mod tests {
             assert_eq!(ship.mode, Mode::Coasting { ticks_left: wait });
             assert_eq!(draws.asked, [30], "one Rand(30)");
             assert_eq!(ship.trigger, Trigger::default(), "holding fire");
-            // Top speed 3: on at 6, its last burst speed.
+            // Top speed 3: on at 3.205, its last burst speed.
             let velocity = ship.state.velocity;
-            assert!((velocity - Vec2::new(6.0, 0.0)).length() < 1e-4);
+            assert!((velocity - Vec2::new(3.205, 0.0)).length() < 1e-4);
             for left in (0..wait).rev() {
                 let before = ship.state;
                 assert_eq!(

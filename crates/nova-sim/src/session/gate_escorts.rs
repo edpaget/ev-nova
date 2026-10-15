@@ -107,7 +107,6 @@ mod tests {
     };
     use crate::session::mission_ships::tests::{accepted, jump_to, take_off, tick, ticks};
     use crate::testkit::{Draws, FakePilotCatalog};
-    use crate::traffic::emerge::LED_BURST_TICK;
     use crate::traffic::npc::Npc;
 
     /// A hired escort of ship 200.
@@ -246,12 +245,7 @@ mod tests {
         tick(&mut session, &catalog);
         for &id in &ids {
             let npc = session.npc(id).expect("here");
-            assert_eq!(
-                npc.mode,
-                Mode::LeavingGate {
-                    tick: LED_BURST_TICK
-                }
-            );
+            assert_eq!(npc.mode, Mode::LeavingGate { tick: 0 });
         }
         tick(&mut session, &catalog);
         for &id in &ids {
@@ -265,9 +259,11 @@ mod tests {
     #[test]
     fn a_led_ship_ends_its_burst_at_the_lower_of_its_own_and_the_players_top_speed() {
         // Every led ship is of ship 200, here 8 a tick to the player's 6.
-        // From 15, 3 slower a tick, its burst ends once the next tick's is
-        // at or below its cap: the player's 6 x 1.5 = 9 ends it at 12; its
-        // own 8 x 1.5 would at 15, its bare 8 or the player's bare 6 at 9.
+        // From 15, 1.165 slower a tick, its burst ends once the next
+        // tick's is at or below its cap: the player's 6 x 1.5 = 9 ends it
+        // after tick 5, at 9.175; its own 8 x 1.5 = 12 would after tick 2,
+        // at 12.67, its bare 8 after tick 6, at 8.01, or the player's bare
+        // 6 after tick 7, at 6.845.
         let mut catalog = catalog();
         catalog.ship_records[1] = crate::testkit::ship(
             200,
@@ -295,7 +291,7 @@ mod tests {
         for (id, speed) in ended {
             let own = session.npc(id).expect("here").stats.handling.max_speed;
             assert!((own - 8.0).abs() < 1e-4, "{id:?}: {own}");
-            assert!((speed - 12.0).abs() < 1e-3, "{id:?}: {speed}");
+            assert!((speed - 9.175).abs() < 1e-3, "{id:?}: {speed}");
         }
     }
 
