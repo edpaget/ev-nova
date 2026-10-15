@@ -293,7 +293,7 @@ mod tests {
         nova_view::spaceport::outfitter::BUY_KEY,
         nova_view::spaceport::outfitter::SELL_KEY,
         nova_view::spaceport::shipyard::BUY_KEY,
-        nova_view::spaceport::bar::MISSION_INFO_KEY,
+        nova_view::ui::mission_info::MISSION_INFO_KEY,
     ];
 
     /// The physical key that types `c` on a US-layout keyboard.

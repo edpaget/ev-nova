@@ -160,13 +160,13 @@ use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
-use crate::spaceport::bar::is_mission_info_press;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
 use crate::ui::desc::DescDialog;
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::quantity::QuantityDialog;
 
 /// The "Outfit" dialog's `DLOG` (and `DITL`) ID.
@@ -481,7 +481,7 @@ pub struct OutfitterScreen {
     offering: Option<VenueOffers>,
     style: ButtonStyle,
     closed: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// asked for the mission info screen.
     info_requested: bool,
     /// Whether a cell is highlighted, and with none, the outfit Buy and
@@ -583,7 +583,7 @@ impl OutfitterScreen {
             .is_some_and(VenueOffers::take_player_info_request)
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// has asked for the mission info screen since this was last asked,
     /// here or in its offer.
     pub fn take_info_request(&mut self) -> bool {
@@ -4253,7 +4253,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_for_the_mission_info_screen() {
-        let i = crate::spaceport::bar::MISSION_INFO_KEY;
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
         let mut screen = counting_screen();
         assert!(!screen.take_info_request());
         screen.input(&key(i, true, true));
@@ -4286,7 +4286,7 @@ mod tests {
     fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
         let mut screen = offering();
         screen.open_offer(prompt());
-        press(&mut screen, crate::spaceport::bar::MISSION_INFO_KEY);
+        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
         assert!(screen.take_info_request());
         assert!(screen.offer_dialog().is_some());
     }

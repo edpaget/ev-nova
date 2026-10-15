@@ -35,6 +35,8 @@
 //! - [`volume`]: a volume level with arrows that step it.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
+//! - [`mission_info`]: the key that asks for the mission info screen
+//!   ([`MISSION_INFO_KEY`](mission_info::MISSION_INFO_KEY)).
 //! - [`player_info`]: the player info screen ([`PlayerInfoScreen`]):
 //!   the pilot, the ship, its cargo, extras, ranks and honors.
 //! - [`plunder`]: the plunder dialog ([`PlunderDialog`]), taking what is
@@ -54,6 +56,7 @@ pub mod data;
 pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
+pub mod mission_info;
 pub mod new_pilot;
 pub mod note;
 pub mod player_info;

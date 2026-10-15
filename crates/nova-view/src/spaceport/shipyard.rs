@@ -144,11 +144,11 @@ use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
-use crate::spaceport::bar::is_mission_info_press;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 
@@ -215,7 +215,7 @@ pub const BUY_KEY: Key = Key::Char('b');
 /// Opens the info panel, as Info does: Space, which `_ShipyardFilter`
 /// maps to item 10 (@0x60526-0x60537). Nothing in it reads I, which asks
 /// for the mission info screen
-/// ([`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY), pref
+/// ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), pref
 /// +0x50 @0x60947-0x6096d).
 pub const INFO_KEY: Key = Key::Space;
 
@@ -901,7 +901,7 @@ struct InfoAsks {
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
     /// asked for the player info screen.
     player_info: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// asked for the mission info screen.
     mission_info: bool,
 }
@@ -1040,7 +1040,7 @@ impl ShipyardScreen {
         std::mem::take(&mut self.asks.player_info) || offer
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// has asked for the mission info screen since this was last asked,
     /// here or in its offer.
     pub fn take_info_request(&mut self) -> bool {
@@ -3908,7 +3908,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_from_the_shipyard_and_its_panel_not_its_prompt() {
-        let i = crate::spaceport::bar::MISSION_INFO_KEY;
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
         let mut screen = screen();
         assert!(!screen.take_info_request());
         screen.input(&key(i, true, true));
@@ -3933,7 +3933,7 @@ mod tests {
     fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
         let mut screen = offering();
         screen.open_offer(prompt());
-        press(&mut screen, crate::spaceport::bar::MISSION_INFO_KEY);
+        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
         assert!(screen.take_info_request());
         assert!(screen.offer_dialog().is_some());
     }

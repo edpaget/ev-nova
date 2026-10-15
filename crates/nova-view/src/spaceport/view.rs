@@ -61,7 +61,7 @@
 //! shipyard ask as they open and again once rearmed, the bar a quarter
 //! second after it opens and again once rearmed; the spaceport ticks the
 //! screen open for their timers.
-//! [`MISSION_INFO_KEY`], in the spaceport, the bar, the mission
+//! [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), in the spaceport, the bar, the mission
 //! computer, the trade center, the outfitter, the shipyard (and its Info
 //! panel) or an offer over any of them, asks for the mission info screen
 //! ([`SpaceportView::take_mission_info_request`]), which opens over
@@ -104,7 +104,6 @@ use nova_sim::{
     Reselection, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
 };
 
-use super::bar::MISSION_INFO_KEY;
 use super::bar::{BarScreen, BarTemplates, Hiring};
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
@@ -130,6 +129,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::mission_info::is_mission_info_press;
 #[cfg(doc)]
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::ui::player_info::{PlayerInfoScreen, is_player_info_press};
@@ -314,7 +314,7 @@ struct Missioning {
     /// Whether Mission BBS has asked for the mission computer since this
     /// was last taken.
     requested: bool,
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last taken.
     info_requested: bool,
 }
@@ -840,7 +840,7 @@ impl SpaceportView {
 
     /// The spaceport with the mission screens: Mission BBS opens the
     /// mission computer laid out by `computer`, its `DLOG` (or saying why
-    /// there is none); [`MISSION_INFO_KEY`] asks for the mission info
+    /// there is none); [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asks for the mission info
     /// screen, laid out by `info`; the spaceport, and the trade center,
     /// outfitter, shipyard and bar when given, offer missions in the offer
     /// dialog of each offer's variant laid out by `offer`, the spaceport
@@ -1127,7 +1127,7 @@ impl SpaceportView {
         std::mem::take(&mut self.player_info_jettison)
     }
 
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last asked, in the spaceport, the bar or the mission
     /// computer: whoever flies the ship answers with
     /// [`SpaceportView::open_mission_info`].
@@ -1413,14 +1413,8 @@ impl Screen for SpaceportView {
             }
             return ScreenAction::None;
         }
-        if let (
-            Input::Key {
-                key: MISSION_INFO_KEY,
-                pressed: true,
-                repeat: false,
-            },
-            Some(missioning),
-        ) = (*input, &mut self.missioning)
+        if is_mission_info_press(input)
+            && let Some(missioning) = &mut self.missioning
         {
             missioning.info_requested = true;
             return ScreenAction::None;
@@ -1575,6 +1569,7 @@ impl SpaceportView {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::ui::mission_info::MISSION_INFO_KEY;
     use std::cell::RefCell;
 
     use nova_sim::landing::StellarFlags;

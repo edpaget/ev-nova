@@ -41,7 +41,7 @@
 //! ([`BarScreen::rearm`]) with the gap drawn. The offer's choice is taken
 //! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
 //! again once rearmed. Nothing is asked while the hire screen, the news
-//! or an offer is open. [`MISSION_INFO_KEY`] asks for the mission info screen
+//! or an offer is open. [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asks for the mission info screen
 //! ([`BarScreen::take_info_request`]), and [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) for the
 //! player info screen, from the bar or its hire screen
 //! ([`BarScreen::take_player_info_request`], `_BarFilter` @0x47aaa,
@@ -80,6 +80,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 
 /// The bar dialog's `DLOG` (and `DITL`) ID.
@@ -128,28 +129,6 @@ pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
 /// The keys that press Holovid, the News button (`_BarFilter`: Mac
 /// virtual keys 0x2D and 0x0D, @0x47b33-0x47b48).
 pub const NEWS_KEYS: [Key; 2] = [Key::Char('n'), Key::Char('w')];
-
-/// The key that asks for the mission info screen from the bar, the
-/// spaceport, the mission computer, the trade center, the outfitter, the
-/// shipyard and its Info panel, an offer, and flight. The original reads
-/// it from the player's key settings (`_keyPrefs` +0x50), whose default
-/// is not in `Nova-DF.rsrc`; I is free on every spaceport screen (the
-/// shipyard's Info is Space, as `_ShipyardFilter` reads it @0x60526) and
-/// in flight.
-pub const MISSION_INFO_KEY: Key = Key::Char('i');
-
-/// Whether `input` is a fresh press of [`MISSION_INFO_KEY`], which asks
-/// for the mission info screen where the original's filters read
-/// `_keyPrefs` +0x50.
-#[must_use]
-pub fn is_mission_info_press(input: &Input) -> bool {
-    *input
-        == Input::Key {
-            key: MISSION_INFO_KEY,
-            pressed: true,
-            repeat: false,
-        }
-}
 
 /// How long after the bar opens it first asks for an offer: 15 of the
 /// Mac's ticks (`_DoBarDialog` @0x48f51-0x48f5f).
@@ -219,7 +198,7 @@ struct Laid {
 struct Asks {
     /// The ships for hire: Hire Escort was pressed.
     hire: bool,
-    /// The mission info screen: [`MISSION_INFO_KEY`] was pressed.
+    /// The mission info screen: [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) was pressed.
     info: bool,
     /// The player info screen: [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) was pressed.
     player_info: bool,
@@ -456,7 +435,7 @@ impl BarScreen {
         std::mem::take(&mut self.asks.hire)
     }
 
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last asked, in the bar or its offer.
     pub fn take_info_request(&mut self) -> bool {
         let offer = self
@@ -716,6 +695,7 @@ impl Screen for BarScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::ui::mission_info::MISSION_INFO_KEY;
     use std::cell::RefCell;
     use std::collections::BTreeSet;
 

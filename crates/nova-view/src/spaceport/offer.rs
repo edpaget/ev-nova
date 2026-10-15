@@ -33,7 +33,7 @@
 //! ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press) asks for the player info screen
 //! ([`OfferDialog::take_player_info_request`], @0xa3215), before the
 //! labels' letters are read; the dialog stays open under it. I
-//! ([`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY), a
+//! ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), a
 //! press) asks for the mission info screen
 //! ([`OfferDialog::take_info_request`], @0x98e0c-0x98e2a, opened by
 //! `_OfferOneMission` @0xa3344), also before the letters; the dialog
@@ -59,11 +59,11 @@ use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
-use crate::spaceport::bar::is_mission_info_press;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
+use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 
 /// The offer dialog's `DLOG` (and `DITL`) ID.
@@ -147,7 +147,7 @@ pub struct OfferDialog {
     answered: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// asked for the mission info screen.
     info_requested: bool,
     /// The picture variant's graphic, drawn in item 8 over
@@ -231,7 +231,7 @@ impl OfferDialog {
         std::mem::take(&mut self.player_info)
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// asked for the mission info screen since this was last taken, once.
     pub fn take_info_request(&mut self) -> bool {
         std::mem::take(&mut self.info_requested)
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_for_mission_info_before_the_labels_letters() {
-        let i = crate::spaceport::bar::MISSION_INFO_KEY;
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
         let mut dialog = offer();
         assert!(!dialog.take_info_request());
         dialog.input(&Input::Key {

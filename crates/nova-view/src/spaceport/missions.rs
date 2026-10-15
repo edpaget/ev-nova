@@ -46,7 +46,6 @@ use nova_sim::mission::screens::{
 };
 use nova_sim::{ComputerRow, InfoRow, MissionComputer, MissionId, MissionInfo};
 
-use super::bar::MISSION_INFO_KEY;
 use super::layout::LEAVE_LABEL;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -61,6 +60,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::RowList;
 
@@ -137,7 +137,7 @@ pub struct MissionComputerScreen {
     computer: MissionComputer,
     /// The mission Accept asked for, until it is taken.
     accepted: Option<MissionId>,
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last taken.
     info_requested: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
@@ -242,7 +242,7 @@ impl MissionComputerScreen {
         self.accepted.take()
     }
 
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last asked (`_DoMissionDialog` item 10,
     /// @0xa3e37-0xa3ec1).
     pub fn take_info_request(&mut self) -> bool {
@@ -349,13 +349,7 @@ impl Screen for MissionComputerScreen {
             self.closed = true;
             return ScreenAction::None;
         }
-        if *input
-            == (Input::Key {
-                key: MISSION_INFO_KEY,
-                pressed: true,
-                repeat: false,
-            })
-        {
+        if is_mission_info_press(input) {
             self.info_requested = true;
             return ScreenAction::None;
         }
@@ -703,6 +697,7 @@ impl Screen for MissionInfoScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::ui::mission_info::MISSION_INFO_KEY;
     use nova_sim::ComputerRow;
 
     use super::*;
