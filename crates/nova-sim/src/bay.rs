@@ -114,17 +114,24 @@ pub fn dock_window(maneuver: i16) -> f32 {
 }
 
 /// The velocity of a fighter launched along `heading` from a carrier
-/// moving at `carrier`, pushed `push` pixels a tick, of `top_speed`.
+/// moving at `carrier`, pushed `push` pixels a tick, of `top_speed`:
+/// `_AdjustedAccel` (@0x2ae4b-0x2af43). On each axis the push's share is
+/// added while the velocity is short of the top speed's share, when both
+/// shares are above none or both below; when they differ in sign, or one
+/// is none, it is added whatever the velocity (@0x2aecd-0x2aeee), so a
+/// negative push always pulls.
 #[must_use]
 pub fn launch_velocity(carrier: Vec2, heading: f32, push: f32, top_speed: f32) -> Vec2 {
     let along = facing(heading);
     let gain = |velocity: f32, share: f32| {
         let push = share * push;
         let top = share * top_speed;
-        let past = if push > 0.0 {
+        let past = if push > 0.0 && top > 0.0 {
             velocity >= top
-        } else {
+        } else if push < 0.0 && top < 0.0 {
             velocity <= top
+        } else {
+            false
         };
         if past { velocity } else { velocity + push }
     };
@@ -201,6 +208,22 @@ mod tests {
         let v = launch_velocity(Vec2::new(0.0, -8.0), 0.0, 4.0, 10.0);
         assert!((v.y + 12.0).abs() < 1e-5, "{v:?}");
         assert!(v.x.abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_push_against_the_top_speeds_sign_is_added_whatever_the_velocity() {
+        // A negative push with a positive top speed: the signs differ on
+        // each axis, so `_AdjustedAccel` adds it unchecked (@0x2aecd-0x2aeee).
+        let pulled = launch_velocity(Vec2::ZERO, 90.0, -0.5, 2.0);
+        assert!(
+            (pulled - Vec2::new(-0.5, 0.0)).length() < 1e-5,
+            "{pulled:?}"
+        );
+        let further = launch_velocity(Vec2::new(-5.0, 0.0), 90.0, -0.5, 2.0);
+        assert!((further.x + 5.5).abs() < 1e-5, "{further:?}");
+        // A positive push with no top speed: added too.
+        let unbounded = launch_velocity(Vec2::new(3.0, 0.0), 90.0, 0.5, 0.0);
+        assert!((unbounded.x - 3.5).abs() < 1e-5, "{unbounded:?}");
     }
 
     #[test]
