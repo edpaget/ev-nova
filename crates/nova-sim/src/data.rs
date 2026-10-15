@@ -838,6 +838,8 @@ impl CombatCatalog for GameData {
                     flags3: record.flags3.bits(),
                     decay: record.decay,
                     beam_length: record.beam_length,
+                    falloff: record.falloff,
+                    li_density: record.li_density,
                     burst_count: record.burst_count,
                     burst_reload: record.burst_reload,
                     guided_turn: record.guided_turn,
@@ -2972,13 +2974,13 @@ mod tests {
         bytes[0x1C..0x1E].copy_from_slice(&0x6102_u16.to_be_bytes());
         bytes[0x1E..0x20].copy_from_slice(&0x0021_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x22, &[100]);
-        put_i16s(&mut bytes, 0x30, &[300]);
+        put_i16s(&mut bytes, 0x30, &[300, 2, 9]);
         bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x56, &[12, 2]);
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
-        put_i16s(&mut bytes, 0x68, &[4, 70, 6]);
+        put_i16s(&mut bytes, 0x68, &[4, 70, 6, 3]);
         bytes
     }
 
@@ -3009,6 +3011,8 @@ mod tests {
             flags3: 0x0003,
             decay: 100,
             beam_length: 300,
+            falloff: 9,
+            li_density: 3,
             burst_count: 60,
             burst_reload: 30,
             guided_turn: 70,

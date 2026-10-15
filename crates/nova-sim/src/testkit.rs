@@ -401,6 +401,8 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         flags3: 0,
         decay: 0,
         beam_length: 0,
+        falloff: 0,
+        li_density: 0,
         burst_count: 0,
         burst_reload: 0,
         guided_turn: 0,

@@ -275,6 +275,10 @@ pub struct WeaponSpec {
     pub blast_radius: f32,
     /// A beam's length, in pixels.
     pub beam_length: f32,
+    /// Its `Falloff` as the original loads it ([`loaded_falloff`]): how
+    /// fast a beam's corona fades, and how long a decaying beam fades for
+    /// (see [`beam`](super::beam)).
+    pub falloff: i16,
     /// Shots a copy fires before the burst reload; none for no bursts.
     pub burst_count: u32,
     /// Ticks the burst reload takes.
@@ -353,6 +357,29 @@ pub fn line_count(record: &WeaponRecord) -> Option<WeaponId> {
         Some(record.id)
     } else {
         Some(WeaponId(FIRST_AMMO_WEAPON + ammo))
+    }
+}
+
+/// The corona falloff a beam of none or less loads with (`_LoadObjectData`
+/// @0x795e2-0x795f0).
+pub const DEFAULT_FALLOFF: i16 = 16;
+
+/// A weapon's `Falloff` as `_LoadObjectData` loads it from the `wëap`'s
+/// `falloff`, `beam_length` and `li_density` (@0x795e2-0x79645): a beam
+/// (a `BeamLength` above none) of a `Falloff` of none or less takes
+/// [`DEFAULT_FALLOFF`], and a lightning beam (a `LiDensity` above none)
+/// none at all, whatever it says. Any other weapon's is kept. The view
+/// draws a beam's corona from it too.
+#[must_use]
+pub fn loaded_falloff(beam_length: i16, falloff: i16, li_density: i16) -> i16 {
+    if beam_length <= 0 {
+        falloff
+    } else if li_density > 0 {
+        0
+    } else if falloff <= 0 {
+        DEFAULT_FALLOFF
+    } else {
+        falloff
     }
 }
 
@@ -458,6 +485,7 @@ impl WeaponSpec {
             prox_radius: ticks(record.prox_radius),
             blast_radius: ticks(record.blast_radius),
             beam_length: ticks(record.beam_length),
+            falloff: loaded_falloff(record.beam_length, record.falloff, record.li_density),
             burst_count: count(record.burst_count),
             burst_reload: ticks(record.burst_reload),
             flags: record.flags,
@@ -886,6 +914,28 @@ mod tests {
         });
         assert_eq!(beam.range(), 400.0);
         assert_eq!(beam.beam_length, 400.0);
+    }
+
+    #[test]
+    fn a_beams_falloff_loads_as_the_original_normalises_it() {
+        let falloff = |beam_length, falloff, li_density| {
+            WeaponSpec::new(&WeaponRecord {
+                guidance: 0,
+                beam_length,
+                falloff,
+                li_density,
+                ..weapon(146)
+            })
+            .falloff
+        };
+        assert_eq!(falloff(400, 0, 0), 16, "none is 16");
+        assert_eq!(falloff(400, -3, 0), 16);
+        assert_eq!(falloff(400, 1, 0), 1);
+        assert_eq!(falloff(400, 20, 0), 20, "kept above 16");
+        assert_eq!(falloff(400, 8, 3), 0, "a lightning beam has none");
+        assert_eq!(falloff(400, 0, 1), 0);
+        assert_eq!(falloff(0, 0, 0), 0, "a shot's is kept");
+        assert_eq!(falloff(0, 8, 3), 8);
     }
 
     #[test]
