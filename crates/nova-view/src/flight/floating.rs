@@ -144,8 +144,11 @@ pub const FADED_AT: u128 = 150;
 pub const SHOWN_FOR: u128 = 500;
 /// The zoom index the map starts at: 16/9 in [`SCALES`].
 pub const START_ZOOM: usize = 5;
-/// Half a click box's side, and at the largest scale.
+/// Half a click box's side: the current system's centre box, and a link's
+/// box below the largest scale.
 pub const BOX_HALF: f32 = 8.0;
+/// Half a link's click box's side at the largest scale (see
+/// [`FloatingMap::big_boxes`]).
 pub const BIG_BOX_HALF: f32 = 12.0;
 
 /// The original's zooms, the inverses of [`SCALES`], as the click boxes
