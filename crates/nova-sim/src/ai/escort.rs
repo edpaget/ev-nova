@@ -223,7 +223,13 @@ mod tests {
     use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::AiType;
 
-    /// A turret reaching 300 pixels (332 with the margin), and a gun.
+    /// A turret reaching 300 pixels (332 with the margin), and a gun, as
+    /// its class's stock weapons reach ([`HullSpec::stock_reach`]).
+    ///
+    /// [`HullSpec::stock_reach`]: crate::combat::hull::HullSpec::stock_reach
+    const STOCK_REACH: f32 = 332.0;
+
+    /// A turret reaching 300 pixels, and a gun.
     fn armed() -> Armament {
         Armament::new([
             (
@@ -255,6 +261,7 @@ mod tests {
         npc.govt = None;
         npc.class = EscortClass::Medium;
         npc.armament = armed();
+        npc.hull.stock_reach = Some(STOCK_REACH);
         npc.escort = Some(EscortDuty {
             formation: crate::escort::FormationSlot {
                 slot: 2,
@@ -470,7 +477,7 @@ mod tests {
             "drawn among both"
         );
         let mut unarmed = kept;
-        unarmed.armament = Armament::default();
+        unarmed.hull.stock_reach = None;
         let npcs = [unarmed, pirate(2, 10.0, 0.0)];
         assert_eq!(
             decide(&npcs, (0.0, 0.0), &[0]).1,

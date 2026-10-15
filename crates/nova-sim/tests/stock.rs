@@ -1550,10 +1550,12 @@ fn beam_hits(spec: &WeaponSpec, x: f32) -> u32 {
 
 /// Each stock weapon in scope, fired from rest into empty space: a shot
 /// leaves at `Speed`/100 (a rocket at its firer's rest, closing on that),
-/// lives `Count` ticks and reaches `Speed`/100 x `Count` (a beam hits for
+/// lives `Count` ticks and flies `Speed`/100 x `Count`, its own reach
+/// without its sub-munitions (a beam hits for
 /// `Count` ticks and reaches its `BeamLength` and the ship's radius), and
 /// it fires as often as item 7 of the plan says.
 #[test]
+#[allow(clippy::float_cmp)]
 fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
     let Some(dir) = common::nova_data() else {
         return;
@@ -1590,7 +1592,12 @@ fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
             // tick short of its range.
             let flown = last.length() + spec.speed;
             let range = spec.speed * spec.lifetime as f32;
-            assert!((spec.range() - range).abs() < 1e-3, "{id}");
+            assert!((spec.flight() - range).abs() < 1e-3, "{id}");
+            if spec.guidance == Guidance::FreefallBomb {
+                assert_eq!(spec.range(), 0.0, "{id}: a bomb reaches nothing");
+            } else {
+                assert!((spec.range() - range).abs() < 1e-3, "{id}: its own flight");
+            }
             if spec.guidance == Guidance::Rocket {
                 assert!(flown <= range + 1e-3, "{id}");
             } else {
@@ -1635,7 +1642,7 @@ fn every_stock_weapon_in_scope_takes_the_shields_before_the_armour() {
         let reach = if spec.guidance == Guidance::Beam {
             spec.beam_length / 2.0
         } else {
-            spec.range().clamp(1.0, 60.0)
+            spec.flight().clamp(1.0, 60.0)
         };
         let mut combat = Combat::default();
         let mut ships = [shooter(&spec), target(&data, &arsenal, toughest, reach)];
@@ -1800,7 +1807,7 @@ fn every_stock_homing_weapon_flies_its_speed_hits_its_target_and_turns_its_turn(
     );
     for spec in homing {
         let id = spec.id.0;
-        let ahead = (spec.range() / 2.0).min(300.0);
+        let ahead = (spec.flight() / 2.0).min(300.0);
         let mut combat = Combat::default();
         let mut ships = [aiming(&spec), target(&data, &arsenal, ShipId(128), ahead)];
         let full = ships[1].reserves;
@@ -1905,7 +1912,7 @@ fn a_stock_railgun_slug_loses_a_point_of_mass_and_energy_every_decay_plus_one_ti
         let spec = *arsenal.weapon(WeaponId(id)).expect("a railgun");
         assert!(spec.decay > 0, "{id}");
         let (near, near_tick) = slug_hit(&spec, 100.0);
-        let (far, far_tick) = slug_hit(&spec, spec.range() * 0.75);
+        let (far, far_tick) = slug_hit(&spec, spec.flight() * 0.75);
         let steps = |tick: u32| (tick / (spec.decay + 1)) as f32;
         assert_eq!(near, spec.energy_damage - steps(near_tick), "{id} near");
         assert_eq!(far, spec.energy_damage - steps(far_tick), "{id} far");
@@ -4242,10 +4249,22 @@ fn stock_repair_droids_are_the_only_repair_system_and_no_ship_class_carries_them
 // Which missile an NPC fires (`_AIFireMissile`), over the stock arsenal.
 
 /// What a stock NPC of class `ship`, armed as the traffic arms it, fires
-/// at the player 1000 pixels ahead flying stock class `target` at rest,
-/// its reserves too strong for any damage aimed to suffice. The NPC is a
-/// stock one of Fomalhaut's traffic made over into the class.
+/// at the player 1000 pixels ahead flying stock class `target` at rest
+/// ([`stock_pick_at`]).
 fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nova_sim::WeaponId> {
+    stock_pick_at(data, ship, target, 1000.0)
+}
+
+/// What a stock NPC of class `ship`, armed as the traffic arms it, fires
+/// at the player `distance` pixels ahead flying stock class `target` at
+/// rest, its reserves too strong for any damage aimed to suffice. The NPC
+/// is a stock one of Fomalhaut's traffic made over into the class.
+fn stock_pick_at(
+    data: &GameData,
+    ship: ShipId,
+    target: ShipId,
+    distance: f32,
+) -> Option<nova_sim::WeaponId> {
     let mut session = destroyer_in_fomalhaut(data);
     let mut chance = NeverFires;
     session.tick_traffic(data, &NovaAi::default(), &mut chance);
@@ -4270,7 +4289,7 @@ fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nov
     let strong = nova_sim::Reserves::full(1_000_000.0, 1_000_000.0, 100.0);
     let player = nova_sim::ai::PlayerSide {
         state: ShipState {
-            position: Vec2::new(0.0, -1000.0),
+            position: Vec2::new(0.0, -distance),
             ..ShipState::default()
         },
         condition: Condition::Intact,
@@ -4502,4 +4521,95 @@ fn stock_classes_load_one_slot_a_weapon_and_name_no_weapon_among_their_default_i
         .map(|ship| ship.id.0)
         .collect();
     assert_eq!(arming, Vec::<i16>::new());
+}
+
+// Every weapon's reach down its sub-munition chain (`_LoadObjectData`
+// @0x79e8c-0x79fa6).
+
+/// The Nanites (163) reach 2437.5 pixels down their chain to the Nanite
+/// swarm (229), and the Polaron Multi-Torpedoes (182, 185) 3510 down
+/// theirs to the Polaron Torpedo (148), each sub-munition at its own
+/// flight. Among the stock weapons that are not beams, those whose range
+/// is not their own flight are these three and every fighter bay, which
+/// reaches nothing.
+#[test]
+// Whole and half pixels, exactly.
+#[allow(clippy::float_cmp)]
+fn stock_nanites_and_polaron_multi_torpedoes_reach_down_their_sub_munition_chain() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let range = |id| {
+        arsenal
+            .weapon(nova_sim::WeaponId(id))
+            .map(WeaponSpec::range)
+            .expect("read")
+    };
+    let flight = |id| {
+        arsenal
+            .weapon(nova_sim::WeaponId(id))
+            .map(WeaponSpec::flight)
+            .expect("read")
+    };
+    assert_eq!((flight(163), range(163)), (187.5, 2437.5));
+    assert_eq!((flight(182), range(182)), (260.0, 3510.0));
+    assert_eq!(range(185), 3510.0);
+    assert_eq!(range(229), flight(229));
+    assert_eq!(range(148), flight(148));
+    let differing: Vec<i16> = arsenal
+        .weapons()
+        .filter(|spec| !spec.is_beam() && (spec.range() - spec.flight()).abs() > 1e-3)
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(
+        differing,
+        [
+            149, 150, 151, 152, 153, 154, 163, 169, 175, 176, 177, 178, 179, 180, 182, 185, 186,
+            187, 188, 189, 190, 191, 192, 193, 194, 195
+        ]
+    );
+    for spec in arsenal.weapons().filter(|spec| spec.guidance_99()) {
+        assert_eq!(spec.range(), 0.0, "{:?}", spec.id);
+    }
+}
+
+/// A stock Raven (164) fires its Polaron Multi-Torpedo (182, flying 260
+/// pixels) at a ship 3450 pixels off, within its 3510-pixel chain
+/// (3510² ≥ 0.95 d² up to about 3601), and nothing at 3700.
+#[test]
+fn a_stock_raven_fires_its_polaron_multi_torpedo_from_beyond_its_own_flight() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let raven = ShipId(164);
+    let carried: Vec<i16> = nova_sim::CombatCatalog::hulls(&data)
+        .into_iter()
+        .find(|hull| hull.id == raven)
+        .expect("the Raven")
+        .weapons
+        .iter()
+        .map(|slot| slot.weapon.0)
+        .collect();
+    assert_eq!(carried, [146, 182, 154], "a beam, the torpedo and a bay");
+    let torpedo = Some(nova_sim::WeaponId(182));
+    assert_eq!(stock_pick_at(&data, raven, ShipId(130), 3450.0), torpedo);
+    assert_eq!(stock_pick_at(&data, raven, ShipId(130), 3700.0), None);
+}
+
+/// A stock Krypt Pod (176), whose one weapon is the Nanites turret (163,
+/// flying 187.5 pixels), turns them on a ship 2000 pixels off, within its
+/// 2437.5-pixel chain and the margin, and not on one 2500 off.
+#[test]
+fn a_stock_krypt_pod_turns_its_nanites_on_a_ship_beyond_their_own_flight() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let pod = ShipId(176);
+    let nanites = Some(nova_sim::WeaponId(163));
+    assert_eq!(stock_pick_at(&data, pod, ShipId(130), 2000.0), nanites);
+    assert_ne!(stock_pick_at(&data, pod, ShipId(130), 2500.0), nanites);
 }

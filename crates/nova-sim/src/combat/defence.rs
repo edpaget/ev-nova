@@ -102,8 +102,9 @@ impl PointDefenceRule for Allegiance {
 }
 
 /// How near, in pixels, a missile must be for point defence `spec` to
-/// engage it: a beam's length, or a turret's range, truncated, times
-/// [`PD_RANGE_FACTOR`], truncated again.
+/// engage it: a beam's length, or a turret's range down its sub-munition
+/// chain ([`WeaponSpec::range`]), truncated, times [`PD_RANGE_FACTOR`],
+/// truncated again.
 #[must_use]
 pub fn engagement_range(spec: &WeaponSpec) -> f32 {
     if spec.guidance == Guidance::PointDefenceBeam {
@@ -214,6 +215,27 @@ mod tests {
             flags,
             ..weapon(133)
         })
+    }
+
+    #[test]
+    fn a_point_defence_turrets_engagement_range_runs_down_its_sub_munition_chain() {
+        let flak = WeaponRecord {
+            guidance: 9,
+            speed: 1050,
+            count: 3,
+            sub_count: 2,
+            sub_type: Some(crate::catalog::WeaponId(162)),
+            ..weapon(161)
+        };
+        let burst = WeaponRecord {
+            speed: 1000,
+            count: 2,
+            ..weapon(162)
+        };
+        let arsenal = crate::combat::armament::Arsenal::new(&[flak, burst], Vec::new());
+        let spec = arsenal.weapon(crate::catalog::WeaponId(161)).expect("read");
+        assert_eq!(spec.range(), 51.5, "31.5 and 20");
+        assert_eq!(engagement_range(spec), 76.0, "51.5 to 51, then 76.5 to 76");
     }
 
     #[test]

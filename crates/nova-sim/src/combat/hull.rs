@@ -163,6 +163,16 @@ pub struct HullSpec {
     /// @0x7a0db-0x7a0ef), as a hopeless chase compares them (see
     /// [`odds`](crate::ai::odds)); none below none.
     pub class_speed: f32,
+    /// How far its class's stock weapons reach, as `_AIInGunRange` asks
+    /// with no weapon named (@0x7fa2d-0x7faa8, see
+    /// [`fire::in_reach`](crate::ai::fire::in_reach)): the longest reach
+    /// among its stock slots of a count above none and a raw guidance of 8
+    /// or less, a beam (0 and 3) its length and 32, any other its range
+    /// ([`WeaponSpec::range`](super::weapon::WeaponSpec::range)) and 32,
+    /// truncated; none when it has no such weapon. Its person's and
+    /// outfits' weapons, its point defence and its bays never count. An
+    /// [`Arsenal`](super::armament::Arsenal) sets it.
+    pub stock_reach: Option<f32>,
     /// Whether it is hidden: its `Cost` is -1, and `_HandleShipDisplay`
     /// hides a ship of such a type and leaves its slot's layer as it was
     /// (@0x2b7f3 → @0x2cc6b; see
@@ -191,6 +201,7 @@ impl Default for HullSpec {
             planet_type: false,
             key_carried: None,
             class_speed: 0.0,
+            stock_reach: None,
             hidden: false,
         }
     }
@@ -220,6 +231,7 @@ impl HullSpec {
             planet_type: record.flags & PLANET_TYPE != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
+            stock_reach: None,
             hidden: record.cost == HIDDEN_COST,
         }
     }

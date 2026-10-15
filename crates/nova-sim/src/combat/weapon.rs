@@ -10,7 +10,7 @@
 //! - `Count` is a shot's or beam's life in ticks, so a projectile's range
 //!   from a resting firer is its speed times its life.
 //! - `Guidance` -1, 0, 1, 3-10 are the [`Guidance`] this simulation
-//!   flies; any other (2, or anything undocumented) is
+//!   flies, and 2 as 1 (see below); any other (anything undocumented) is
 //!   [`Guidance::Other`].
 //! - `Guidance` 99 is a fighter bay ([`Guidance::FighterBay`]) when its
 //!   `AmmoType` is a `shïp` ID, 128 or more (the Bible: "Carried ship
@@ -29,9 +29,15 @@
 //! - `SubCount`, `SubType`, `SubTheta` and `SubLimit` are its
 //!   [`Submunitions`]: none without a count above none and a type, and no
 //!   limit at none or below.
-//! - Its range is a beam's (0, 3 and 10) `BeamLength`, and any other's
-//!   `Speed` times its `Count`. (The original adds the range of its
-//!   sub-munitions' chain, which no stock point defence has.)
+//! - Its range ([`WeaponSpec::range`]) is a beam's (0, 3 and 10)
+//!   `BeamLength`; for guidance -1, 1, 4, 6, 7, 8 and 9, its `Speed` times
+//!   its `Count` and its sub-munitions' down their chain
+//!   ([`chain_range`]), so the Nanites (163) reach 2437.5 pixels and the
+//!   Polaron Multi-Torpedoes (182, 185) 3510; and nothing for a bomb (5),
+//!   a bay (99) or anything else. How far a shot itself flies is
+//!   [`WeaponSpec::flight`].
+//! - Guidance 2, which the Bible lists unused, flies as homing (1) with
+//!   its `Seeker` replaced by 0x30fe (@0x79b9f-0x79bb4).
 //! - `AmmoType` is decoded as [`Ammo`]: -1 unlimited, 0-255 the rounds
 //!   of `wëap` 128+n, and -1000 and below fuel, |n + 1000| / 10 units a
 //!   shot.
@@ -39,6 +45,8 @@
 //!   [`Explosion`]: 0-63 `bööm` 128+n, 1000-1063 the same with extra
 //!   type-0 explosions around it, anything else none.
 //! - Negative reloads, lives, radii, inaccuracies and bursts count as none.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::bay::{FIGHTER_BAY, FIRST_SHIP};
 use crate::catalog::{BoomId, ShipId, WeaponId, WeaponRecord};
@@ -148,7 +156,12 @@ impl Submunitions {
         Some(Self {
             weapon: record.sub_type?,
             count,
-            theta: record.sub_theta,
+            // -1 is no spread (@0x796c6-0x796cd).
+            theta: if record.sub_theta == NO_SPREAD_THETA {
+                0
+            } else {
+                record.sub_theta
+            },
             limit: u32::try_from(record.sub_limit).ok().filter(|&n| n > 0),
         })
     }
@@ -160,6 +173,10 @@ impl Submunitions {
         self.limit.is_none_or(|limit| generation < limit)
     }
 }
+
+/// The `SubTheta` that `_LoadObjectData` reads as no spread at all
+/// (@0x796c6-0x796cd), where any other negative is a starburst.
+pub const NO_SPREAD_THETA: i16 = -1;
 
 /// What a weapon spends on each shot, from its `AmmoType`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -281,6 +298,12 @@ pub struct WeaponSpec {
     /// Its `MaxAmmo`: the rounds each launcher holds at most; none for no
     /// limit of its own.
     pub max_ammo: u32,
+    /// How far it reaches, in pixels, down its sub-munition chain, as the
+    /// AI reads it ([`WeaponSpec::range`]): its own reach by
+    /// [`WeaponSpec::new`], the whole chain's once an
+    /// [`Arsenal`](super::armament::Arsenal) has read every weapon
+    /// ([`chain_range`]).
+    pub chain_range: f32,
     /// Its `ProxSafety`, none when that is below none: a shot of it hits
     /// no ship by contact until it has flown this many ticks, and none by
     /// its proximity fuse, nor a stellar, until it has flown more
@@ -381,9 +404,15 @@ impl WeaponSpec {
         let (guidance, ammo) = match carried {
             Some(_) => (Guidance::FighterBay, Ammo::Rounds(record.id)),
             None => (
-                Guidance::decode(record.guidance),
+                Guidance::decode(effective_guidance(record.guidance)),
                 Ammo::decode(record.ammo_type),
             ),
+        };
+        // Guidance 2 flies as homing with this `Seeker` (@0x79b9f-0x79bb4).
+        let seeker = if record.guidance == OLD_HOMING {
+            OLD_HOMING_SEEKER
+        } else {
+            record.seeker
         };
         Self {
             id: record.id,
@@ -403,7 +432,7 @@ impl WeaponSpec {
             burst_count: count(record.burst_count),
             burst_reload: ticks(record.burst_reload),
             flags: record.flags,
-            seeker: record.seeker,
+            seeker,
             flags2: record.flags2,
             flags3: record.flags3,
             turn: f32::from(record.guided_turn) / GUIDED_TURN_PER_DEGREE,
@@ -411,6 +440,7 @@ impl WeaponSpec {
             submunitions: Submunitions::of(record),
             carried,
             max_ammo: count(record.max_ammo),
+            chain_range: own_reach(record),
             prox_safety: count(record.prox_safety),
             decay: count(record.decay),
             line_count: line_count(record),
@@ -526,21 +556,120 @@ impl WeaponSpec {
         self.flags2 & HIDE_WHEN_EMPTY != 0
     }
 
-    /// How far it reaches, in pixels: a beam its length, and a shot its
-    /// speed for its life (from a resting firer, at its top speed).
+    /// How far it reaches, in pixels, as the AI reads it (the original's
+    /// +0x5c, `_LoadObjectData` @0x79e8c-0x79fa6): a beam (0, 3 and 10) its
+    /// length; a projectile of guidance -1, 1, 4, 6, 7, 8 or 9 its flight
+    /// and its sub-munitions' down their chain ([`chain_range`]); a bomb,
+    /// a bay and any other guidance nothing.
     #[must_use]
     pub fn range(&self) -> f32 {
-        if self.is_beam() {
-            self.beam_length
-        } else {
-            self.speed * self.lifetime as f32
+        self.chain_range
+    }
+
+    /// How far a shot of it flies, in pixels: its speed for its life, from
+    /// a resting firer at its top speed, whatever its guidance.
+    #[must_use]
+    pub fn flight(&self) -> f32 {
+        self.speed * self.lifetime as f32
+    }
+}
+
+/// The guidance that becomes homing, with [`OLD_HOMING_SEEKER`]
+/// (@0x79b9f-0x79bb4); the Bible lists it unused.
+pub const OLD_HOMING: i16 = 2;
+/// The `Seeker` a weapon of guidance [`OLD_HOMING`] takes in place of its
+/// own.
+pub const OLD_HOMING_SEEKER: u16 = 0x30fe;
+
+/// The guidance `raw` flies as: [`OLD_HOMING`] as homing (1), any other as
+/// it is.
+fn effective_guidance(raw: i16) -> i16 {
+    if raw == OLD_HOMING { 1 } else { raw }
+}
+
+/// Whether a weapon of raw `guidance` reaches down its sub-munition chain:
+/// -1, 1, 4, 6, 7, 8 and 9 (guidance 2 counting as 1).
+fn chains(guidance: i16) -> bool {
+    matches!(effective_guidance(guidance), -1 | 1 | 4 | 6 | 7 | 8 | 9)
+}
+
+/// Whether a weapon of raw `guidance` reaches its `BeamLength`: 0, 3 and
+/// 10.
+fn beams(guidance: i16) -> bool {
+    matches!(guidance, 0 | 3 | 10)
+}
+
+/// How far a shot of `record` flies, raw: `Count` x `Speed`, as the range
+/// sums it.
+fn raw_flight(record: &WeaponRecord) -> f32 {
+    f32::from(record.count) * f32::from(record.speed) / SPEED_PER_PIXEL_PER_TICK
+}
+
+/// `record`'s own reach, without its sub-munitions (see
+/// [`WeaponSpec::range`]).
+fn own_reach(record: &WeaponRecord) -> f32 {
+    if chains(record.guidance) {
+        raw_flight(record)
+    } else if beams(record.guidance) {
+        f32::from(record.beam_length)
+    } else {
+        0.0
+    }
+}
+
+/// How far weapon `id` among `records` reaches (see [`WeaponSpec::range`]),
+/// as `_LoadObjectData` sums it (@0x79e8c-0x79fa6): a beam its
+/// `BeamLength`; a weapon of guidance -1, 1, 4, 6, 7, 8 or 9 its `Count` x
+/// `Speed`, then, while the weapon reached has a `SubCount` above none,
+/// its sub-munition's in turn, whatever that one's guidance; a weapon
+/// whose `SubType` is itself adds `SubLimit` more of its own flights, when
+/// that is above none, and the chain ends there. A chain ends at a
+/// `SubType` it cannot read or outside 128-383 (-1 to the original,
+/// @0x796d5-0x796ee). One that comes back round to a weapon it passed
+/// (A to B to A), on which the original would loop for ever, ends there
+/// instead. None for a weapon that cannot be read, a bomb, a bay or any
+/// other guidance.
+#[must_use]
+pub fn chain_range(records: &BTreeMap<WeaponId, WeaponRecord>, id: WeaponId) -> f32 {
+    let Some(root) = records.get(&id) else {
+        return 0.0;
+    };
+    if !chains(root.guidance) {
+        return own_reach(root);
+    }
+    let mut reach = 0.0;
+    let mut passed = BTreeSet::new();
+    let mut at = root;
+    loop {
+        passed.insert(at.id);
+        reach += raw_flight(at);
+        if at.sub_count <= 0 {
+            break;
+        }
+        let Some(sub) = at.sub_type.filter(|sub| {
+            (FIRST_AMMO_WEAPON..=FIRST_AMMO_WEAPON + LAST_AMMO_TYPE).contains(&sub.0)
+        }) else {
+            break;
+        };
+        if sub == at.id {
+            if at.sub_limit > 0 {
+                reach += f32::from(at.sub_limit) * raw_flight(at);
+            }
+            break;
+        }
+        match records.get(&sub) {
+            Some(next) if !passed.contains(&next.id) => at = next,
+            _ => break,
         }
     }
+    reach
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::testkit::weapon;
 
@@ -679,7 +808,7 @@ mod tests {
 
     #[test]
     fn beams_are_guidance_0_3_and_10_and_reach_their_length() {
-        for raw in [-1, 1, 2, 4, 5, 6, 7, 8, 9, 99] {
+        for raw in [-1, 1, 2, 4, 6, 7, 8, 9] {
             let spec = WeaponSpec::new(&WeaponRecord {
                 guidance: raw,
                 count: 10,
@@ -689,6 +818,7 @@ mod tests {
             });
             assert!(!spec.is_beam(), "{raw}");
             assert_eq!(spec.range(), 30.0, "{raw}");
+            assert_eq!(spec.flight(), 30.0, "{raw}");
         }
         for raw in [0, 3, 10] {
             let spec = WeaponSpec::new(&WeaponRecord {
@@ -701,6 +831,130 @@ mod tests {
             assert!(spec.is_beam(), "{raw}");
             assert_eq!(spec.range(), 400.0, "{raw}");
         }
+    }
+
+    #[test]
+    fn bombs_bays_and_undocumented_guidances_reach_nothing() {
+        for (raw, ammo_type) in [(5, -1), (99, 144), (99, 5), (11, -1), (-2, -1)] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                guidance: raw,
+                ammo_type,
+                count: 10,
+                speed: 300,
+                beam_length: 400,
+                ..weapon(146)
+            });
+            assert_eq!(spec.range(), 0.0, "{raw} {ammo_type}");
+            assert_eq!(spec.flight(), 30.0, "{raw} {ammo_type}: it still flies");
+        }
+    }
+
+    #[test]
+    fn guidance_2_is_homing_with_the_seeker_0x30fe() {
+        let spec = WeaponSpec::new(&WeaponRecord {
+            guidance: 2,
+            seeker: 0x0001,
+            count: 10,
+            speed: 300,
+            ..weapon(146)
+        });
+        assert_eq!(spec.guidance, Guidance::Homing);
+        assert_eq!(spec.seeker, 0x30fe, "replaced, not added to");
+        assert_eq!(spec.range(), 30.0);
+        assert_eq!(Guidance::decode(2), Guidance::Other(2), "raw");
+    }
+
+    /// Weapon `id` flying `count` ticks at `speed` hundredths of a pixel
+    /// a tick, of `guidance`, releasing `sub_count` of `sub_type` up to
+    /// `sub_limit` generations.
+    fn chained(
+        id: i16,
+        (guidance, count, speed): (i16, i16, i16),
+        (sub_count, sub_type, sub_limit): (i16, Option<i16>, i16),
+    ) -> WeaponRecord {
+        WeaponRecord {
+            guidance,
+            count,
+            speed,
+            sub_count,
+            sub_type: sub_type.map(WeaponId),
+            sub_limit,
+            ..weapon(id)
+        }
+    }
+
+    fn range_of(records: &[WeaponRecord], id: i16) -> f32 {
+        let records: BTreeMap<WeaponId, WeaponRecord> =
+            records.iter().map(|record| (record.id, *record)).collect();
+        chain_range(&records, WeaponId(id))
+    }
+
+    #[test]
+    fn a_weapons_range_runs_down_its_sub_munition_chain() {
+        let a = chained(140, (-1, 10, 200), (1, Some(141), 0));
+        let b = chained(141, (-1, 30, 300), (0, None, 0));
+        assert_eq!(range_of(&[a, b], 140), 110.0, "20 and 90");
+        let c = chained(142, (1, 4, 100), (3, Some(140), 0));
+        assert_eq!(range_of(&[a, b, c], 142), 114.0, "4, 20 and 90");
+        assert_eq!(range_of(&[a, b], 141), 90.0);
+    }
+
+    #[test]
+    fn a_self_sub_munition_adds_its_sub_limit_flights_and_stops() {
+        let nanites = chained(163, (4, 10, 200), (1, Some(163), 3));
+        assert_eq!(range_of(&[nanites], 163), 80.0, "its own 20, and 3 more");
+    }
+
+    #[test]
+    fn a_self_sub_munition_of_no_limit_adds_nothing_more() {
+        for limit in [0, -1] {
+            let nanites = chained(163, (4, 10, 200), (1, Some(163), limit));
+            assert_eq!(range_of(&[nanites], 163), 20.0, "{limit}");
+        }
+    }
+
+    #[test]
+    fn a_chain_ends_at_a_sub_munition_of_no_count() {
+        let a = chained(140, (-1, 10, 200), (0, Some(141), 0));
+        let b = chained(141, (-1, 30, 300), (0, None, 0));
+        assert_eq!(range_of(&[a, b], 140), 20.0, "no count: no sub");
+        let a = chained(140, (-1, 10, 200), (-1, Some(141), 0));
+        assert_eq!(range_of(&[a, b], 140), 20.0);
+        let lost = chained(140, (-1, 10, 200), (1, Some(150), 0));
+        assert_eq!(range_of(&[lost], 140), 20.0, "a sub that cannot be read");
+        let odd = chained(140, (-1, 10, 200), (1, Some(100), 0));
+        assert_eq!(range_of(&[odd], 140), 20.0, "a sub outside 128-383");
+    }
+
+    #[test]
+    fn a_sub_munitions_guidance_does_not_change_what_it_adds() {
+        let a = chained(140, (1, 10, 200), (1, Some(141), 0));
+        let beam = WeaponRecord {
+            beam_length: 500,
+            ..chained(141, (0, 30, 300), (0, None, 0))
+        };
+        assert_eq!(range_of(&[a, beam], 140), 110.0, "Count x Speed, not 500");
+        let bay = chained(141, (99, 30, 300), (0, None, 0));
+        assert_eq!(range_of(&[a, bay], 140), 110.0);
+    }
+
+    #[test]
+    fn a_beam_reaches_its_length_whatever_its_sub_munitions() {
+        let beam = WeaponRecord {
+            beam_length: 500,
+            ..chained(140, (3, 10, 200), (1, Some(141), 0))
+        };
+        let b = chained(141, (-1, 30, 300), (0, None, 0));
+        assert_eq!(range_of(&[beam, b], 140), 500.0);
+        let bomb = chained(140, (5, 10, 200), (1, Some(141), 0));
+        assert_eq!(range_of(&[bomb, b], 140), 0.0, "a bomb reaches nothing");
+    }
+
+    #[test]
+    fn a_chain_that_loops_back_stops_where_the_original_hangs() {
+        let a = chained(140, (-1, 10, 200), (1, Some(141), 0));
+        let b = chained(141, (-1, 30, 300), (1, Some(140), 0));
+        assert_eq!(range_of(&[a, b], 140), 110.0, "A and B once each");
     }
 
     #[test]
@@ -760,6 +1014,23 @@ mod tests {
         assert_eq!(unlimited(0), Some(None));
         assert_eq!(unlimited(-1), Some(None));
         assert_eq!(unlimited(1), Some(Some(1)));
+    }
+
+    #[test]
+    fn a_sub_theta_of_minus_1_is_no_spread() {
+        let theta = |sub_theta| {
+            WeaponSpec::new(&WeaponRecord {
+                sub_count: 5,
+                sub_type: Some(WeaponId(148)),
+                sub_theta,
+                ..weapon(182)
+            })
+            .submunitions
+            .map(|subs| subs.theta)
+        };
+        assert_eq!(theta(-1), Some(0), "@0x796c6-0x796cd");
+        assert_eq!(theta(-2), Some(-2), "a starburst");
+        assert_eq!(theta(45), Some(45));
     }
 
     #[test]

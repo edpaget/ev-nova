@@ -17135,7 +17135,14 @@ pub(super) mod tests {
     #[test]
     fn the_players_hull_is_its_ship_types() {
         let session = Session::start(&armed()).expect("starts");
-        assert_eq!(session.hull(), HullSpec::new(&armed_hull(128, 128)));
+        assert_eq!(
+            HullSpec {
+                stock_reach: None,
+                ..session.hull()
+            },
+            HullSpec::new(&armed_hull(128, 128))
+        );
+        assert!(session.hull().stock_reach.is_some(), "its stock blaster's");
         assert_eq!(session.hull().death_delay, 2);
     }
 

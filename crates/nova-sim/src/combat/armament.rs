@@ -43,7 +43,7 @@
 //! - It leaves up to its `Inaccuracy` off its aim either way: the draw
 //!   `below(2n) - n`, never asked of a weapon that is accurate.
 //! - Nothing fires unless the ship is [`Condition::Intact`].
-//! - A weapon of a guidance the simulation does not fly (2, 99 without a
+//! - A weapon of a guidance the simulation does not fly (99 without a
 //!   ship to carry, anything undocumented) does not fire; firing one is
 //!   reported once ([`SimDiagnostic::UnimplementedGuidance`]), and so is
 //!   each flag a weapon that does fire sets and the simulation ignores.
@@ -113,7 +113,7 @@ use super::projectile::ShotId;
 use super::report::{Reports, SimDiagnostic};
 use super::weapon::{
     AI_WONT_USE, Ammo, FIRES_CLOAKED, FIRST_AMMO_WEAPON, Guidance, LAST_AMMO_TYPE, NEEDS_KEY_SHIP,
-    WeaponSpec,
+    WeaponSpec, chain_range,
 };
 use crate::catalog::{
     CombatCatalog, HullRecord, OutfitId, OutfitRecord, ShipId, StockWeapon, WeaponId, WeaponRecord,
@@ -799,13 +799,22 @@ pub struct Arsenal {
 }
 
 impl Arsenal {
-    /// The arsenal of `weapons` and `hulls`.
+    /// The arsenal of `weapons` and `hulls`, each weapon reaching down its
+    /// sub-munition chain ([`chain_range`]).
     #[must_use]
     pub fn new(weapons: &[WeaponRecord], hulls: Vec<HullRecord>) -> Self {
+        let records: BTreeMap<WeaponId, WeaponRecord> =
+            weapons.iter().map(|record| (record.id, *record)).collect();
         Self {
-            weapons: weapons
+            weapons: records
                 .iter()
-                .map(|record| (record.id, WeaponSpec::new(record)))
+                .map(|(&id, record)| {
+                    let spec = WeaponSpec {
+                        chain_range: chain_range(&records, id),
+                        ..WeaponSpec::new(record)
+                    };
+                    (id, spec)
+                })
                 .collect(),
             hulls: hulls.into_iter().map(|hull| (hull.id, hull)).collect(),
         }
@@ -828,10 +837,33 @@ impl Arsenal {
         self.weapons.get(&id)
     }
 
-    /// Ship type `ship`'s hull; a placeholder for one that cannot be read.
+    /// Ship type `ship`'s hull, with its stock weapons' reach
+    /// ([`HullSpec::stock_reach`]); a placeholder for one that cannot be
+    /// read.
     #[must_use]
     pub fn hull(&self, ship: ShipId) -> HullSpec {
-        self.hulls.get(&ship).map(HullSpec::new).unwrap_or_default()
+        self.hulls
+            .get(&ship)
+            .map(|record| HullSpec {
+                stock_reach: self.stock_reach(ship),
+                ..HullSpec::new(record)
+            })
+            .unwrap_or_default()
+    }
+
+    /// How far ship class `ship`'s stock weapons reach (see
+    /// [`HullSpec::stock_reach`]).
+    fn stock_reach(&self, ship: ShipId) -> Option<f32> {
+        self.stock_slots(ship)
+            .into_iter()
+            .filter(|&(_, (count, _))| count > 0)
+            .filter_map(|(weapon, _)| self.weapon(weapon))
+            .filter(|spec| in_gun_range_walk(spec))
+            .map(|spec| match spec.guidance {
+                Guidance::Beam | Guidance::TurretBeam => spec.beam_length + GUN_RANGE_MARGIN,
+                _ => (spec.range() + GUN_RANGE_MARGIN).trunc(),
+            })
+            .reduce(f32::max)
     }
 
     /// Ship type `ship`'s `Strength`, raw: none for one that cannot be
@@ -1042,6 +1074,21 @@ impl Arsenal {
     #[must_use]
     pub fn stock_outfits(&self, ship: ShipId, outfits: &[OutfitRecord]) -> BTreeMap<OutfitId, u16> {
         fitted(&self.stock_fits(ship, outfits))
+    }
+}
+
+/// What a gun reaches beyond its range, in pixels (32.0 @0xdd654, read by
+/// `_AIInGunRange`).
+pub const GUN_RANGE_MARGIN: f32 = 32.0;
+
+/// Whether `_AIInGunRange`'s walk with no weapon named counts `spec`: a
+/// raw guidance of 8 or less, signed (`jg` @0x7fa4d), so not point
+/// defence (9 and 10), a bay (99) or anything above.
+fn in_gun_range_walk(spec: &WeaponSpec) -> bool {
+    match spec.guidance {
+        Guidance::PointDefence | Guidance::PointDefenceBeam | Guidance::FighterBay => false,
+        Guidance::Other(raw) => raw <= 8,
+        _ => true,
     }
 }
 
@@ -1800,7 +1847,7 @@ mod tests {
             flags: 0x0040,
             ..blaster(131, 0)
         };
-        for guidance in [99, 2] {
+        for guidance in [99, 11] {
             let mut armament = mounted(bay(guidance), 1);
             let mut supplies = Supplies::none();
             assert_eq!(supplies.firing(&mut armament, PRIMARY, 5), [0_u32; 0]);
@@ -3044,6 +3091,32 @@ mod tests {
     }
 
     #[test]
+    fn an_arsenals_weapons_carry_their_chain_range() {
+        let nanites = WeaponRecord {
+            guidance: 4,
+            count: 10,
+            speed: 200,
+            sub_count: 1,
+            sub_type: Some(WeaponId(229)),
+            ..blaster(163, 0)
+        };
+        let swarm = WeaponRecord {
+            count: 30,
+            speed: 300,
+            ..blaster(229, 0)
+        };
+        assert_eq!(WeaponSpec::new(&nanites).range(), 20.0, "alone, its own");
+        let arsenal = Arsenal::new(&[nanites, swarm], Vec::new());
+        let spec = arsenal.weapon(WeaponId(163)).expect("read");
+        assert_eq!(spec.range(), 110.0);
+        assert_eq!(spec.flight(), 20.0);
+        assert_eq!(
+            arsenal.weapons().map(WeaponSpec::range).collect::<Vec<_>>(),
+            [110.0, 90.0]
+        );
+    }
+
+    #[test]
     fn a_ships_strength_is_its_records_raw_or_none() {
         let hull = |id, strength| HullRecord {
             strength,
@@ -3062,6 +3135,110 @@ mod tests {
         assert_eq!(arsenal.hull(ShipId(129)), HullSpec::default());
         assert_eq!(arsenal.weapon(WeaponId(150)).map(|w| w.reload), Some(5.0));
         assert_eq!(arsenal.weapon(WeaponId(151)), None);
+    }
+
+    /// A weapon `id` of raw `guidance` flying `count` ticks at 10 pixels a
+    /// tick, a beam 300 pixels long.
+    fn reaching(id: i16, guidance: i16, count: i16) -> WeaponRecord {
+        WeaponRecord {
+            guidance,
+            count,
+            speed: 1000,
+            beam_length: 300,
+            ..blaster(id, 0)
+        }
+    }
+
+    /// Ship 130's stock reach, stocking `slots` of `weapons`.
+    fn stock_reach(weapons: &[WeaponRecord], slots: &[(i16, i16, i16)]) -> Option<f32> {
+        stocking(weapons, slots).hull(ShipId(130)).stock_reach
+    }
+
+    #[test]
+    fn a_hulls_stock_reach_is_its_longest_stock_weapon_of_guidance_8_or_less() {
+        let near = reaching(150, -1, 10);
+        let far = reaching(151, 8, 20);
+        assert_eq!(
+            stock_reach(&[near, far], &[(150, 1, 0), (151, 2, 0)]),
+            Some(232.0),
+            "the rear turret's 200, and 32"
+        );
+        let odd = WeaponRecord {
+            speed: 1005,
+            ..reaching(152, 1, 3)
+        };
+        assert_eq!(
+            stock_reach(&[odd], &[(152, 1, 0)]),
+            Some(62.0),
+            "30.15 and 32, truncated"
+        );
+        assert_eq!(
+            stock_reach(&[near, far], &[(150, 1, 0), (151, 0, 0)]),
+            Some(132.0),
+            "a slot of no count reaches nothing"
+        );
+        assert_eq!(
+            stock_reach(&[near, far], &[(151, 2, 0), (150, 1, 0), (151, -1, 0)]),
+            Some(132.0),
+            "a later slot replaces an earlier"
+        );
+        let undocumented = reaching(153, -2, 10);
+        assert_eq!(
+            stock_reach(&[undocumented], &[(153, 1, 0)]),
+            Some(32.0),
+            "guidance below -1 is 8 or less, and reaches nothing"
+        );
+    }
+
+    #[test]
+    fn a_hulls_stock_reach_skips_point_defence_and_bays() {
+        let near = reaching(150, -1, 10);
+        let turret = reaching(151, 9, 50);
+        let beam = reaching(152, 10, 50);
+        let fighters = WeaponRecord {
+            ammo_type: 144,
+            ..reaching(153, 99, 50)
+        };
+        let odd_bay = reaching(154, 99, 50);
+        let weird = reaching(155, 11, 50);
+        assert_eq!(
+            stock_reach(
+                &[near, turret, beam, fighters, odd_bay, weird],
+                &[
+                    (150, 1, 0),
+                    (151, 1, 0),
+                    (152, 1, 0),
+                    (153, 1, 4),
+                    (154, 1, 0),
+                    (155, 1, 0)
+                ]
+            ),
+            Some(132.0)
+        );
+    }
+
+    #[test]
+    fn a_beams_stock_reach_is_its_length_and_32_and_a_bombs_is_32() {
+        for guidance in [0, 3] {
+            assert_eq!(
+                stock_reach(&[reaching(150, guidance, 10)], &[(150, 1, 0)]),
+                Some(332.0),
+                "{guidance}"
+            );
+        }
+        assert_eq!(
+            stock_reach(&[reaching(150, 5, 10)], &[(150, 1, 0)]),
+            Some(32.0)
+        );
+    }
+
+    #[test]
+    fn a_class_with_no_such_weapon_has_no_stock_reach() {
+        let turret = reaching(151, 9, 50);
+        assert_eq!(stock_reach(&[turret], &[(151, 1, 0)]), None);
+        assert_eq!(stock_reach(&[], &[]), None);
+        assert_eq!(arsenal().hull(ShipId(129)).stock_reach, None, "no record");
+        assert_eq!(HullSpec::default().stock_reach, None);
     }
 
     #[test]

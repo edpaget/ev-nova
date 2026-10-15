@@ -109,7 +109,7 @@ use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, angle_off, bearing, blind, lead};
 #[cfg(doc)]
 use crate::combat::armament::Armament;
-use crate::combat::armament::{Mount, Shooter, Trigger};
+use crate::combat::armament::{GUN_RANGE_MARGIN, Mount, Shooter, Trigger};
 use crate::combat::projectile::Target;
 use crate::combat::weapon::{AVOIDS_FAST_SHIPS, Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
@@ -120,7 +120,7 @@ use crate::traffic::npc::Npc;
 /// approaches (165.0 @0xdda24).
 pub const DOGFIGHT_BOX: f32 = 165.0;
 /// What a gun reaches beyond its range, in pixels (32.0 @0xdd654).
-pub const RANGE_MARGIN: f32 = 32.0;
+pub const RANGE_MARGIN: f32 = GUN_RANGE_MARGIN;
 /// How many of its `ProxRadius` a rocket's target must be away on both
 /// axes (2.5 @0xdda60).
 pub const PROX_CLEARANCE: f32 = 2.5;
@@ -222,17 +222,22 @@ pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
     lead(&npc.state, &target, speed)
 }
 
-/// Whether some weapon `npc` carries reaches a ship at `at`: within its
-/// range and [`RANGE_MARGIN`] (`_AIInGunRange` @0x7f9d5 with no weapon
-/// named).
+/// Whether a stock weapon of `npc`'s class reaches a ship at `at`: within
+/// its class's stock reach ([`HullSpec::stock_reach`]), as `_AIInGunRange`
+/// walks the class's stock weapons of guidance 8 or less with no weapon
+/// named (@0x7fa2d-0x7faa8). Its person's weapons, its point defence and
+/// its bays never count. The original truncates each axis to whole pixels
+/// before squaring them (@0x7f9e8-0x7fa25), which is arithmetic width and
+/// is not done here.
+///
+/// [`HullSpec::stock_reach`]: crate::combat::hull::HullSpec::stock_reach
 #[must_use]
 pub fn in_reach(npc: &Npc, at: &ShipState) -> bool {
     let off = at.position - npc.state.position;
     let squared = off.x * off.x + off.y * off.y;
-    npc.armament.mounts().iter().any(|mount| {
-        let reach = mount.spec.range() + RANGE_MARGIN;
-        squared <= reach * reach
-    })
+    npc.hull
+        .stock_reach
+        .is_some_and(|reach| squared <= reach * reach)
 }
 
 /// Whether `spec` destroys (see the module docs).
@@ -1039,30 +1044,96 @@ mod tests {
         Some(WeaponId(id))
     }
 
+    /// An NPC at [`SHOOTER`] facing up, carrying `id` of `records` as an
+    /// arsenal reads them, so its range runs down its sub-munition chain.
+    fn arsenal_shooter(records: &[WeaponRecord], id: i16) -> Npc {
+        let arsenal = crate::combat::armament::Arsenal::new(records, Vec::new());
+        let mut npc = shooter(&[], ATTACK);
+        npc.armament = Armament::new([(*arsenal.weapon(WeaponId(id)).expect("read"), 1)]);
+        npc
+    }
+
     #[test]
-    fn some_weapon_reaches_within_its_range_and_the_margin() {
-        // A turret reaching 300 pixels, and 332 with the margin.
+    fn a_turret_picks_a_sub_munition_weapon_at_its_chain_reach() {
+        let nanites = WeaponRecord {
+            sub_count: 1,
+            sub_type: Some(WeaponId(229)),
+            ..guided(163, 4)
+        };
+        let swarm = WeaponRecord {
+            count: 100,
+            ..gun(229, 5, 5)
+        };
+        let npc = arsenal_shooter(&[nanites, swarm], 163);
+        assert_eq!(
+            npc.armament.mounts()[0].spec.range(),
+            1200.0,
+            "200 and 1000"
+        );
+        assert_eq!(
+            fired(&npc, 0.0, -1000.0, 50.0),
+            Some(WeaponId(163)),
+            "beyond its own 232 pixels"
+        );
+        assert_eq!(fired(&npc, 0.0, -1232.0, 50.0), Some(WeaponId(163)));
+        assert_eq!(fired(&npc, 0.0, -1233.0, 50.0), None, "beyond the chain");
+    }
+
+    #[test]
+    fn a_missile_fires_at_its_chain_reach() {
+        let torpedo = WeaponRecord {
+            count: 26,
+            sub_count: 5,
+            sub_type: Some(WeaponId(148)),
+            ..missile(182)
+        };
+        let homer = missile(148);
+        let mut npc = arsenal_shooter(&[torpedo, homer], 182);
+        assert_eq!(npc.armament.mounts()[0].spec.range(), 560.0, "260 and 300");
+        // A gun of its own, so the missile is not fired as a gun.
+        npc.armament = Armament::new(
+            [
+                npc.armament.mounts()[0].spec,
+                WeaponSpec::new(&gun(128, 5, 5)),
+            ]
+            .map(|spec| (spec, 1)),
+        );
+        // 560² >= 0.95 d² up to d = 574.5.
+        assert_eq!(fired(&npc, 0.0, -574.0, 50.0), Some(WeaponId(182)));
+        assert_eq!(fired(&npc, 0.0, -575.0, 50.0), None);
+    }
+
+    #[test]
+    fn in_reach_counts_only_the_classs_stock_weapons_of_guidance_8_or_less() {
+        // The class's stock turret reaching 300 pixels, and 332 with the
+        // margin.
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         npc.state.position = crate::geometry::Vec2::new(100.0, 50.0);
         let at = |x: f32, y: f32| ShipState {
             position: crate::geometry::Vec2::new(x, y),
             ..ShipState::default()
         };
-        assert!(!in_reach(&npc, &at(101.0, 50.0)), "unarmed");
+        assert!(!in_reach(&npc, &at(101.0, 50.0)), "no stock reach");
         npc.armament = crate::combat::armament::Armament::new([(
             WeaponSpec::new(&crate::catalog::WeaponRecord {
                 guidance: 4,
                 speed: 1000,
-                count: 30,
+                count: 300,
                 ..crate::testkit::weapon(140)
             }),
             1,
         )]);
+        assert!(
+            !in_reach(&npc, &at(101.0, 50.0)),
+            "a long turret among its outfits or a person's counts for nothing"
+        );
+        npc.hull.stock_reach = Some(332.0);
         // 300² + 100² = 100000 is within 332² = 110224; 320² + 100² is not.
         assert!(in_reach(&npc, &at(400.0, 150.0)));
         assert!(in_reach(&npc, &at(-200.0, -50.0)));
         assert!(!in_reach(&npc, &at(420.0, 150.0)));
         assert!(!in_reach(&npc, &at(100.0, 383.0)));
+        assert!(in_reach(&npc, &at(100.0, 382.0)), "332 exactly");
     }
 
     #[test]

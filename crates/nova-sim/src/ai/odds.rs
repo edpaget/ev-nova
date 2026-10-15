@@ -756,6 +756,33 @@ mod tests {
     }
 
     #[test]
+    fn a_chase_reaches_with_a_missiles_chain_range() {
+        let (mut chaser, mut target) = chase(1.0);
+        let torpedo = WeaponRecord {
+            guidance: 1,
+            count: 10,
+            speed: 1000,
+            sub_count: 5,
+            sub_type: Some(WeaponId(148)),
+            ..weapon(182)
+        };
+        let homer = WeaponRecord {
+            guidance: 1,
+            count: 30,
+            speed: 1000,
+            ..weapon(148)
+        };
+        let arsenal = crate::combat::armament::Arsenal::new(&[torpedo, homer], Vec::new());
+        chaser.armament = Armament::new([(*arsenal.weapon(WeaponId(182)).expect("read"), 1)]);
+        chaser.rounds = LauncherRounds::from([(WeaponId(182), -1)]);
+        // 400 pixels' range: 160000 >= 0.8 d² up to d² = 200000.
+        target.state.position = Vec2::new(0.0, -447.0);
+        assert!(!hopeless(&chaser, target), "in reach down the chain");
+        target.state.position = Vec2::new(0.0, -448.0);
+        assert!(hopeless(&chaser, target), "beyond it");
+    }
+
+    #[test]
     fn a_missile_unsuitable_for_an_agile_target_is_out_of_reach() {
         let (mut chaser, mut target) = chase(1.0);
         let (armament, rounds) = missile();

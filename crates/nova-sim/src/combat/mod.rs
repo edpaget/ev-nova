@@ -4639,8 +4639,9 @@ mod tests {
 
     #[test]
     fn a_sub_munition_of_an_unimplemented_guidance_is_reported_and_not_released() {
-        // Guidance 2, and a fighter bay, which only a ship launches from.
-        for (guidance, ammo_type) in [(2, -1), (99, 144)] {
+        // An undocumented guidance, and a fighter bay, which only a ship
+        // launches from.
+        for (guidance, ammo_type) in [(11, -1), (99, 144)] {
             let (shell, arsenal) = cluster_of(WeaponRecord {
                 guidance,
                 ammo_type,
