@@ -58,7 +58,8 @@ pub enum AudioCommand {
     /// Plays `sound` once, at `volume`, unless the last `PlayUnlessPlaying`
     /// of the same `snd ` is still playing (`_ST_IsSoundPlaying`), when
     /// nothing happens: the klaxon, repeated while the player's ship
-    /// breaks up.
+    /// breaks up, and a looped spaceport ambient sound, asked for on every
+    /// frame the spaceport is frontmost.
     PlayUnlessPlaying {
         /// The `snd `.
         sound: SoundId,

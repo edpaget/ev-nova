@@ -100,6 +100,26 @@ pub enum UiSound {
     /// plays `_beepSnd[0]` once `_DoSystemMap` returns (`PlaySound`
     /// @0x6a85a). The hypergate's map does not raise it.
     MapClosed,
+    /// The stellar's ambient sound, its `CustSndID` (128 and up), plays
+    /// while the spaceport is frontmost: `_PortFilter` @0x4f041 plays
+    /// `_planetSnd` (@0x4f0e8, @0x4f106), and so does a press on the
+    /// landscape (`_DoPortDialog`'s item 5, @0x5fe2a-0x5fe5e). The
+    /// spaceport decides when (see [`spaceport::ambient`]).
+    ///
+    /// [`spaceport::ambient`]: crate::spaceport::ambient
+    PortAmbient {
+        /// The `snd `.
+        sound: SoundId,
+        /// Whether it plays only if it is not still playing, the
+        /// original's `ST_IsSoundPlaying` check for a stellar whose
+        /// `Flags2` has 0x0010 (@0x4f0cd-0x4f0de): a looped ambient
+        /// sound. Otherwise it plays over whatever is playing.
+        until_stopped: bool,
+    },
+    /// The spaceport closed: its ambient sound stops, as `_DoPortDialog`
+    /// halts `_planetSnd` as the port closes (`ST_HaltSound`
+    /// @0x601d2-0x601eb), whatever closed it.
+    PortAmbientHalted(SoundId),
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

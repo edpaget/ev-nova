@@ -9,6 +9,8 @@
 //! - [`layout`]: the decisions: which item shows what, which button each
 //!   service gets and what it says, and which picture is the landscape.
 //! - [`view`]: the [`SpaceportView`] screen.
+//! - [`ambient`]: the stellar's ambient sound, and when it plays while
+//!   the spaceport is frontmost.
 //! - [`service`]: the [`ServiceScreen`], a placeholder for each service
 //!   the spaceport is not given.
 //! - [`bar`]: the Bar's [`BarScreen`], the stellar's bar text and its
@@ -35,6 +37,7 @@
 //! - [`quantity_ask`]: the [`QuantityAsk`](quantity_ask::QuantityAsk),
 //!   the quantity dialog as the exchange and the outfitter host it.
 
+pub mod ambient;
 pub mod bar;
 pub mod catalog;
 pub mod credits;

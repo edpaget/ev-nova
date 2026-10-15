@@ -36,6 +36,10 @@ use crate::table::SoundTable;
 ///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
 ///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
 ///   which the port decides.
+/// - The spaceport's ambient sound plays its own `snd ` the same way: over
+///   anything, or unless still playing for a looped one
+///   ([`UiSound::PortAmbient`]); the spaceport's close halts it
+///   ([`UiSound::PortAmbientHalted`]), whatever the sound setting.
 /// - A key's click on a main-menu button plays the button-down sound,
 ///   then the button-up sound once the port says the first has ended.
 ///   Until then the click is waited on ([`AudioCore::click_waiting`]):
@@ -171,6 +175,10 @@ impl<A: Audio> AudioCore<A> {
             Sound::Sim(SimSound::Script {
                 sound,
                 exclusive: false,
+            })
+            | Sound::Ui(UiSound::PortAmbient {
+                sound,
+                until_stopped: false,
             }) => self.play(Some(sound)),
             Sound::Sim(SimSound::Script {
                 sound,
@@ -222,6 +230,11 @@ impl<A: Audio> AudioCore<A> {
             Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
             Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
             Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
+            Sound::Ui(UiSound::PortAmbient {
+                sound,
+                until_stopped: true,
+            }) => self.play_unless_playing(Some(sound)),
+            Sound::Ui(UiSound::PortAmbientHalted(sound)) => self.halt(&[sound]),
             Sound::Combat(fight) => {
                 let gain = distance_gain(fight.offset);
                 let volume = self.settings.effects_volume.amplitude() * gain;
@@ -257,7 +270,13 @@ impl<A: Audio> AudioCore<A> {
     /// Plays the klaxon, unless it is still playing, at the effects
     /// volume, while sound is on.
     fn sound_klaxon(&mut self) {
-        if let Some(sound) = self.table.klaxon
+        self.play_unless_playing(self.table.klaxon);
+    }
+
+    /// Plays `sound`, if there is one, unless it is still playing, at the
+    /// effects volume, while sound is on.
+    fn play_unless_playing(&mut self, sound: Option<SoundId>) {
+        if let Some(sound) = sound
             && self.settings.sound
         {
             self.audio.run(AudioCommand::PlayUnlessPlaying {
@@ -1053,6 +1072,62 @@ mod tests {
             &[Sound::Sim(SimSound::JumpCollapsed)],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    fn ambient(id: i16, until_stopped: bool) -> Sound {
+        Sound::Ui(UiSound::PortAmbient {
+            sound: SoundId(id),
+            until_stopped,
+        })
+    }
+
+    #[test]
+    fn the_ports_ambient_sound_plays_over_anything_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::Spaceport),
+            &[ambient(10_032, false), ambient(10_032, false)],
+        );
+        assert_eq!(drain(&log), [play(10_032, 0.5), play(10_032, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[ambient(10_032, false)]);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_looped_ambient_sound_plays_unless_still_playing() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::Spaceport), &[ambient(10_033, true)]);
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::PlayUnlessPlaying {
+                sound: SoundId(10_033),
+                volume: Volume::new(0.5),
+            }],
+            "the adapter decides"
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[ambient(10_033, true)]);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_ports_close_halts_its_ambient_sound_even_with_sound_off() {
+        let halted = Sound::Ui(UiSound::PortAmbientHalted(SoundId(10_032)));
+        let halt = AudioCommand::Halt {
+            sound: SoundId(10_032),
+        };
+        let (mut core, log) = original();
+        core.update(Some(Showing::Spaceport), &[halted]);
+        assert_eq!(drain(&log), [halt]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[halted]);
+        assert_eq!(drain(&log), [halt], "sound off halts too");
     }
 
     #[test]
