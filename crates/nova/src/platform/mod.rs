@@ -142,10 +142,10 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
         // Flight's jettison key, by position: K on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
-        // Double time's key: each press toggles it. winit 0.30 sends no
-        // Caps Lock key on macOS (its `key_to_modifier` maps Alt, Control,
-        // Super and Shift alone), so there it never arrives
-        // (rdm:phase/hud-fidelity/phase-21-double-time-follows-the-caps-lock-state).
+        // Double time's key: each press toggles it, an accepted difference
+        // from the original's following the lock state. winit 0.30.13
+        // sends no Caps Lock key on macOS (its `key_to_modifier` maps Alt,
+        // Control, Super and Shift alone), so there it never arrives.
         PhysicalKey::Code(KeyCode::CapsLock) => Key::CapsLock,
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, it reaches

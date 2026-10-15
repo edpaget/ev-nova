@@ -8,8 +8,9 @@
 //! lock state (`_QuickKeyCheck(0x39)` @0x463c3, reading the `GetKeys`
 //! map @0xa0f5). Ours takes the key's state from its caller
 //! ([`Session::set_double_time_key`]): the view toggles it on each Caps
-//! Lock press, which can drift from the lock itself
-//! (rdm:phase/hud-fidelity/phase-21-double-time-follows-the-caps-lock-state).
+//! Lock press, an accepted difference: it can drift from the lock itself
+//! when pressed while unfocused or already on at launch, and on macOS,
+//! where winit 0.30.13 reports no Caps Lock key, there is no double time.
 //! The switch's hold through a warp begun at double speed, and its
 //! release through an aligned warp begun at single speed (@0x463b3-0x463c1,
 //! @0x463d3-0x4640c), read the warp-up sounds' play state, which ours does

@@ -988,12 +988,12 @@ impl AppScreen {
     /// repeats nor its release, and tells flight, if built; a flight
     /// built later starts with it ([`FlightView::with_double_time`]).
     ///
-    /// The original follows Caps Lock's lock state (`_PlayGame` @0x463c3);
-    /// ours toggles on each press the platform reports, so it drifts from
-    /// the lock when Caps Lock is pressed while the window is not focused,
-    /// or is already on at launch. On macOS winit 0.30 reports no Caps
-    /// Lock key at all, so there double time never comes on
-    /// (rdm:phase/hud-fidelity/phase-21-double-time-follows-the-caps-lock-state).
+    /// The original follows Caps Lock's lock state (`_QuickKeyCheck(0x39)`
+    /// @0x463c3); ours toggles on each press the platform reports, an
+    /// accepted difference. It drifts from the lock when Caps Lock is
+    /// pressed while the window is not focused, or is already on at
+    /// launch. On macOS winit 0.30.13 reports no Caps Lock key at all, so
+    /// there double time never comes on.
     fn double_time_key(&mut self, input: &Input) {
         if let Input::Key {
             key: Key::CapsLock,
