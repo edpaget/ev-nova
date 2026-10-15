@@ -343,6 +343,7 @@ mod tests {
         assert_eq!(session.target, Some(ids[0]), "kept");
         assert_eq!(session.nav_target(), Some(StellarId(128)));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+        assert_eq!(session.nav_fly_in, started_fly_in(), "the brackets fly in");
     }
 
     #[test]
