@@ -1280,6 +1280,15 @@ impl Session {
         Ok(session)
     }
 
+    /// Turns the player's ship to a whole degree from 0 to 359 drawn on
+    /// `chance`, as `_LoadPilotData` faces every pilot it loads, docked or
+    /// not, with `Rand(0x168)` (@0x7535b-0x75372). For a pilot opened from
+    /// a save, after [`Session::fly`]; a new pilot keeps facing up. Taking
+    /// off keeps the heading.
+    pub fn face_on_load(&mut self, chance: &mut dyn Chance) {
+        self.player.heading = f32::from(chance.roll(360));
+    }
+
     /// This session with every disputed rule reading as `rules` says
     /// ([`Rulebook::source_for`]): by default, [`Rulebook::default`], every
     /// rule the engine's. The whole rule set is replaced, so a session is
@@ -6820,6 +6829,36 @@ pub(super) mod tests {
     fn resume_system_has_none_without_listers() {
         let galaxy = galaxy_of(&[(128, (0.0, 0.0))], &[]);
         assert_eq!(resume_system(&galaxy, &[]), None);
+    }
+
+    #[test]
+    fn facing_on_load_turns_a_docked_pilot_to_the_drawn_heading() {
+        let catalog = catalog();
+        let mut session = Session::fly(&catalog, landed_pilot(&catalog)).expect("flies");
+        let mut chance = Scripted::rolling(&[359]);
+        session.face_on_load(&mut chance);
+        assert_eq!(session.player().heading, 359.0);
+        assert_eq!(chance.sides_asked, [360], "a whole degree, 0 to 359");
+        assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
+    }
+
+    #[test]
+    fn facing_on_load_turns_an_undocked_pilot_too() {
+        let catalog = catalog();
+        for draw in [0, 123] {
+            let mut session = Session::start(&catalog).expect("starts");
+            let mut chance = Scripted::rolling(&[draw]);
+            session.face_on_load(&mut chance);
+            assert_eq!(session.player().heading, f32::from(draw));
+            assert_eq!(chance.sides_asked, [360]);
+        }
+    }
+
+    #[test]
+    fn flying_alone_leaves_the_heading_at_0() {
+        let catalog = catalog();
+        let session = Session::fly(&catalog, landed_pilot(&catalog)).expect("flies");
+        assert_eq!(session.player().heading, 0.0);
     }
 
     #[test]
