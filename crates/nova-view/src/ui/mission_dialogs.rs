@@ -4,7 +4,9 @@
 //! opens (in flight, `_HandlePlayer` @0x704bc-0x704e3). Whatever holds
 //! them (the spaceport, or the router over flight) passes its input,
 //! drawing and pointer through, and answers the info screen's Abort and
-//! the text it asks for.
+//! the text it asks for. It learns when the info screen closes
+//! ([`MissionDialogs::take_info_closed`]), as the spaceport does to let
+//! go of the keys of the screen beneath.
 //!
 //! In flight the same queue shows the `dësc`s a sabotaged player sees as
 //! it dies (`_HandlePlayer` @0x68739-0x68832) and the rescue's, with no
@@ -49,6 +51,9 @@ pub struct MissionDialogs {
     info: Option<MissionInfoScreen>,
     /// The sounds since they were last taken.
     sounds: Vec<Sound>,
+    /// Whether the mission info screen has closed since this was last
+    /// taken.
+    info_closed: bool,
 }
 
 impl std::fmt::Debug for MissionDialogs {
@@ -80,6 +85,7 @@ impl MissionDialogs {
             texts: VecDeque::new(),
             info: None,
             sounds: Vec::new(),
+            info_closed: false,
         }
     }
 
@@ -133,6 +139,7 @@ impl MissionDialogs {
             self.sounds.extend(screen.take_sounds());
             if screen.closed() {
                 self.info = None;
+                self.info_closed = true;
             }
         }
     }
@@ -171,6 +178,13 @@ impl MissionDialogs {
         self.info.as_ref()
     }
 
+    /// Whether the mission info screen has closed since this was last
+    /// taken, once: by its own input, or by [`set_info`](Self::set_info)
+    /// leaving nothing; never by a text closing over it.
+    pub fn take_info_closed(&mut self) -> bool {
+        std::mem::take(&mut self.info_closed)
+    }
+
     /// Whether a text or the mission info screen is open.
     #[must_use]
     pub fn is_open(&self) -> bool {
@@ -193,6 +207,7 @@ impl Screen for MissionDialogs {
             self.sounds.extend(info.take_sounds());
             if info.closed() {
                 self.info = None;
+                self.info_closed = true;
             }
         }
         ScreenAction::None
@@ -620,5 +635,51 @@ mod tests {
             ("Rescued.".to_owned(), Some(127)),
         ]);
         assert_eq!(widths(&mut dialogs), [(300.0, Some(200)), (200.0, None)]);
+    }
+
+    #[test]
+    fn the_info_screen_closing_on_input_is_reported_once() {
+        for close in [Key::Escape, Key::Enter] {
+            let mut dialogs = dialogs();
+            dialogs.open_info(info());
+            assert!(!dialogs.take_info_closed(), "{close:?}: just opened");
+            dialogs.input(&key(close));
+            assert!(dialogs.info().is_none(), "{close:?}");
+            assert!(dialogs.take_info_closed(), "{close:?}");
+            assert!(!dialogs.take_info_closed(), "{close:?}: once");
+        }
+    }
+
+    #[test]
+    fn a_text_closing_over_the_info_screen_is_not_an_info_close() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        dialogs.show_texts(vec![brief(128, "Over.")]);
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(shown(&dialogs), None);
+        assert!(!dialogs.take_info_closed());
+        let mut dialogs = dialogs_with_text_only();
+        dialogs.input(&key(Key::Enter));
+        assert!(!dialogs.is_open());
+        assert!(!dialogs.take_info_closed(), "a text alone");
+    }
+
+    fn dialogs_with_text_only() -> MissionDialogs {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "Alone.")]);
+        dialogs
+    }
+
+    #[test]
+    fn the_info_screen_closing_on_set_info_is_reported_once() {
+        let mut dialogs = dialogs();
+        dialogs.set_info(none());
+        assert!(!dialogs.take_info_closed(), "nothing was open");
+        dialogs.open_info(info());
+        dialogs.set_info(info());
+        assert!(!dialogs.take_info_closed(), "rows remain");
+        dialogs.set_info(none());
+        assert!(dialogs.take_info_closed());
+        assert!(!dialogs.take_info_closed(), "once");
     }
 }
