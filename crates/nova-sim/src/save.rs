@@ -85,6 +85,11 @@
 //!   ships fly under `Flags` 0x0800 (`uniform_type` in its `ships`). An
 //!   older save kept none, so the upgrade gives `null`, and such a
 //!   mission draws its type at its ships' next spawn.
+//! - Version 27: adds the system the player last jumped from
+//!   (`jumped_from`, a `sÿst` ID, or `null` before the first jump), the
+//!   side mission ships coming in enter from. An older save kept none,
+//!   so the upgrade gives `null`, and after its load they come in at a
+//!   drawn angle until the next jump.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -104,7 +109,7 @@
 //! gone for good (`gone_persons`) and those holding a grudge (`grudges`)
 //! are each a list of `përs` IDs. The control bits (`bits`) are the
 //! numbers of the bits set, ascending, and the `gender` is `male` or
-//! `female`. Strict Play (`strict_play`) is `true` or `false`. The combat rating (`combat_rating`) is its number. The `paint` is `null` when unpainted, or its red, green and
+//! `female`. Strict Play (`strict_play`) is `true` or `false`. The system last jumped from (`jumped_from`) is its `sÿst` ID, or `null` before the first jump. The combat rating (`combat_rating`) is its number. The `paint` is `null` when unpainted, or its red, green and
 //! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`). The once-only story
 //! subscriptions fired (`story_fired`) are each its consumer
 //! (`offers`, `mission_ships`, `missions`, `crons`, `nebulae`, `plugins`
@@ -182,7 +187,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 26;
+pub const CURRENT: u64 = 27;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -886,6 +891,9 @@ struct Saved {
     bits: Vec<Bit>,
     gender: SavedGender,
     strict_play: bool,
+    /// `None` before the first jump.
+    #[serde(deserialize_with = "Option::deserialize")]
+    jumped_from: Option<i16>,
     /// `None` when unpainted.
     #[serde(deserialize_with = "Option::deserialize")]
     paint: Option<SavedPaint>,
@@ -1014,6 +1022,7 @@ pub fn encode(pilot: &Pilot) -> String {
         bits: pilot.bits.iter().collect(),
         gender: pilot.gender.into(),
         strict_play: pilot.strict_play,
+        jumped_from: pilot.jumped_from.map(|system| system.0),
         paint: pilot.paint.map(SavedPaint::from),
         story_fired: pilot
             .story_fired
@@ -1061,7 +1070,16 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     ranks,
     strict_play,
     uniform_types,
+    jumped_from,
 ];
+
+/// Version 26 to 27: no system jumped from, so mission ships coming in
+/// before the next jump enter at a drawn angle.
+fn jumped_from(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("jumped_from".to_owned(), Value::Null);
+    }
+}
 
 /// Version 25 to 26: no active mission's ships keep a type, so a
 /// mission of `Flags` 0x0800 draws it at its ships' next spawn.
@@ -1369,6 +1387,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         bits: saved.bits.into_iter().collect(),
         gender: saved.gender.into(),
         strict_play: saved.strict_play,
+        jumped_from: saved.jumped_from.map(SystemId),
         paint: saved.paint.map(Rgb15::from),
         story_fired: saved
             .story_fired
@@ -1524,6 +1543,7 @@ mod tests {
             bits: [0, 512, 9999].into_iter().filter_map(Bit::new).collect(),
             gender: Gender::Female,
             strict_play: false,
+            jumped_from: Some(SystemId(130)),
             paint: Some(Rgb15 { r: 31, g: 0, b: 4 }),
             story_fired: all_fired(),
             galaxy: overlaid(),
@@ -1679,7 +1699,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 26);
+        assert_eq!(CURRENT, 27);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1763,7 +1783,8 @@ mod tests {
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert_eq!(value["strict_play"], false);
-        assert!(text.contains("\n  \"version\": 26"), "{text}");
+        assert_eq!(value["jumped_from"], 130);
+        assert!(text.contains("\n  \"version\": 27"), "{text}");
     }
 
     #[test]
@@ -3408,9 +3429,58 @@ mod tests {
         assert_eq!(uniform(9), Some(None));
     }
 
-    /// `pilot` saved at version 25: no mission's ships keep a type.
-    fn at_version_25(pilot: &Pilot) -> String {
+    /// `pilot` saved at version 26: no system jumped from.
+    fn at_version_26(pilot: &Pilot) -> String {
         let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(26);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("jumped_from");
+        value.to_string()
+    }
+
+    #[test]
+    fn jumped_from_either_way_survives_a_round_trip() {
+        for jumped_from in [None, Some(SystemId(130))] {
+            let pilot = Pilot {
+                jumped_from,
+                ..seasoned()
+            };
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{jumped_from:?}");
+        }
+    }
+
+    #[test]
+    fn a_current_save_missing_jumped_from_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_26(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("jumped_from"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    #[test]
+    fn a_version_26_save_loads_with_no_jumped_from() {
+        let pilot = decode(&at_version_26(&seasoned())).expect("loads");
+        assert_eq!(
+            pilot,
+            Pilot {
+                jumped_from: None,
+                ..seasoned()
+            }
+        );
+    }
+
+    /// `pilot` saved at version 25: no mission's ships keep a type, and
+    /// no system jumped from.
+    fn at_version_25(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_26(pilot)).expect("JSON");
         value["version"] = serde_json::Value::from(25);
         for mission in value["missions"].as_array_mut().expect("a list") {
             mission["ships"]
@@ -3435,9 +3505,10 @@ mod tests {
         assert_eq!(pilot, without_uniform_types(seasoned()));
     }
 
-    /// `pilot` with no mission's ships keeping a type, as a save from
-    /// before version 26 loads it.
+    /// `pilot` with no mission's ships keeping a type and no system
+    /// jumped from, as a save from before version 26 loads it.
     fn without_uniform_types(mut pilot: Pilot) -> Pilot {
+        pilot.jumped_from = None;
         for slot in 0..16 {
             if let Some(active) = pilot.missions.get_mut(slot) {
                 active.ships.uniform_type = None;
@@ -3778,12 +3849,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 26", "\"version\": 27");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 27 }));
+        let newer = encode(&seasoned()).replace("\"version\": 27", "\"version\": 28");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 28 }));
         assert_eq!(
-            SaveError::Newer { version: 27 }.to_string(),
+            SaveError::Newer { version: 28 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 27, and this version of Nova reads up to 26)."
+             (it is version 28, and this version of Nova reads up to 27)."
         );
     }
 

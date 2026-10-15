@@ -614,7 +614,7 @@ impl Session {
     /// The way from the player's system to the one it last jumped from,
     /// on the map: none before a jump, or when either is not on it.
     fn way_back(&self) -> Option<Vec2> {
-        let from = self.galaxy.position(self.jumped_from?)?;
+        let from = self.galaxy.position(self.pilot.jumped_from?)?;
         let here = self.galaxy.position(self.pilot.system)?;
         Some(from - here)
     }
@@ -1776,6 +1776,55 @@ pub(super) mod tests {
         for npc in session.npcs() {
             assert!(npc.state.position.x < -1500.0, "{:?}", npc.state.position);
         }
+    }
+
+    /// `session`'s pilot saved and loaded into a new session, its
+    /// `jumped_from` first set by `edit`.
+    fn saved_and_loaded(
+        session: &Session,
+        catalog: &FakePilotCatalog,
+        edit: impl FnOnce(&mut crate::pilot::Pilot),
+    ) -> Session {
+        let mut pilot = session.pilot().clone();
+        edit(&mut pilot);
+        let pilot = crate::save::decode(&crate::save::encode(&pilot)).expect("loads");
+        Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_strings(Rc::new(Names))
+    }
+
+    /// Runs the loaded session's first traffic tick, which sets its
+    /// system up, then the ships' appear timer down.
+    fn until_they_appear(session: &mut Session, catalog: &FakePilotCatalog) {
+        tick(session, catalog);
+        let appear = ships_of(session).appear;
+        assert!(appear > 0, "running");
+        ticks(session, catalog, usize::try_from(appear).expect("positive"));
+    }
+
+    #[test]
+    fn ships_coming_in_after_a_load_enter_from_the_system_jumped_from_before_the_save() {
+        let catalog = ships_catalog(shipping(131, 1));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        jump_to(&mut session, &catalog, 131);
+        let mut session = saved_and_loaded(&session, &catalog, |_| {});
+        until_they_appear(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0]);
+        for npc in session.npcs().iter().filter(|npc| npc.mission.is_some()) {
+            assert!(npc.state.position.x < -1500.0, "{:?}", npc.state.position);
+        }
+    }
+
+    #[test]
+    fn ships_coming_in_after_loading_a_save_with_no_jumped_from_still_arrive() {
+        let catalog = ships_catalog(shipping(131, 1));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        jump_to(&mut session, &catalog, 131);
+        let mut session = saved_and_loaded(&session, &catalog, |pilot| pilot.jumped_from = None);
+        until_they_appear(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0]);
     }
 
     // The enter-system hook.

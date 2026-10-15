@@ -641,10 +641,6 @@ pub struct Session {
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     traffic_due: bool,
-    /// The system the player last jumped from (the original's player
-    /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
-    /// from. None until the session's first jump.
-    jumped_from: Option<SystemId>,
     /// Every weapon and ship type's combat fields, read when the session
     /// starts.
     arsenal: Arsenal,
@@ -1090,7 +1086,6 @@ impl Session {
             date_affixes: catalog.date_affixes(),
             traffic: Traffic::new(),
             traffic_due: true,
-            jumped_from: None,
             arsenal,
             govts,
             // Refitted below, from the ship and the outfits the pilot owns.
@@ -2499,7 +2494,7 @@ impl Session {
         {
             self.emit(SessionEvent::GalaxyChanged);
         }
-        self.jumped_from = Some(from);
+        self.pilot.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).
