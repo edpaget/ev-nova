@@ -222,6 +222,9 @@
 //! reported once through [`Screen::take_prefs`] for the app to play
 //! and save. Flight follows the Hyperspace Effects preference: it is
 //! built with it, and a change reaches a flight already built. OK, Return or Escape closes it.
+//! Its close redraws nothing of the status bar, as the original's menu
+//! command `pref` calls `_DoPrefsDialog` alone (@0xcccf1); only the `pref`
+//! Apple Event's handler redraws (@0x56195).
 //!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`], and what it shows through
@@ -1232,7 +1235,9 @@ impl AppScreen {
 
     /// The input of the mission dialogs over flight: an Abort on the
     /// mission info screen goes through flight, and the screen shows the
-    /// missions left. They are dropped once nothing is open.
+    /// missions left. Its close, laid out, redraws the whole status bar
+    /// ([`FlightView::refresh_status`]), as `_DoMissionInfoDialog` ends in
+    /// `_RefreshSAT` (@0x9e769). They are dropped once nothing is open.
     fn missions_input(&mut self, input: &Input) -> ScreenAction {
         let missions = self.missions.as_mut().expect("open");
         missions.input(input);
@@ -1243,6 +1248,14 @@ impl AppScreen {
             if let Some(missions) = &mut self.missions {
                 missions.set_info(info);
             }
+        }
+        if self
+            .missions
+            .as_mut()
+            .is_some_and(FlightMissionDialogs::take_info_closed)
+            && let Some(flight) = &mut self.flight
+        {
+            flight.refresh_status();
         }
         self.drop_closed_missions();
         ScreenAction::None
@@ -1279,18 +1292,24 @@ impl AppScreen {
 
     /// The player info screen's input over flight: a confirmed Jettison
     /// jettisons everything through flight. Once it closes, the screen
-    /// below lets go of its keys.
+    /// below lets go of its keys, and, laid out, it redraws the whole
+    /// status bar ([`FlightView::refresh_status`]), as
+    /// `_DoPlayerInfoDialog` ends in `_RefreshSAT` (@0x5a725).
     fn player_info_input(&mut self, input: &Input) -> ScreenAction {
         let screen = self.player_info.as_mut().expect("open");
         screen.input(input);
         let jettison = screen.take_jettison();
         let closed = screen.closed();
+        let laid_out = screen.problem().is_none();
         if jettison && let Some(flight) = &mut self.flight {
             flight.jettison_all();
         }
         if closed {
             self.player_info = None;
             self.release_keys();
+            if laid_out && let Some(flight) = &mut self.flight {
+                flight.refresh_status();
+            }
         }
         ScreenAction::None
     }
@@ -2163,7 +2182,10 @@ impl AppScreen {
     /// ship named there is bought, and one declined there draws its roll
     /// again when the shipyard's list is next built, changing nothing
     /// else. Once it is left, the ship takes off
-    /// and flight shows.
+    /// and flight shows. Otherwise the input ends by redrawing the status
+    /// bar when a closing the original ends in `_RefreshSAT` came
+    /// (`refresh_status_bar`). Mission BBS and Hire Escort are answered
+    /// with the port dialogs' openings (`open_port_dialogs`).
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
@@ -2204,11 +2226,6 @@ impl AppScreen {
             if let (Some(news), Some(picture)) = (flight.news(), flight.news_picture()) {
                 spaceport.open_news(news, picture);
             }
-        }
-        if spaceport.take_hire_request()
-            && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()
-        {
-            spaceport.open_hire(list);
         }
         if let Some(ship) = spaceport.take_ship_request()
             && let Ok(naming) = self.flight.as_mut().expect(ENTERED).ship_naming(ship)
@@ -2289,6 +2306,9 @@ impl AppScreen {
         }
         self.serve_offers();
         self.serve_player_info();
+        if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
+            refresh_status_bar(spaceport, flight);
+        }
         ScreenAction::None
     }
 
@@ -2507,13 +2527,19 @@ impl AppScreen {
     }
 }
 
-/// Answers `spaceport`'s Mission BBS with `flight`'s mission computer, then
-/// tells `flight` of the port dialog that has opened
-/// ([`FlightView::open_port_dialog`]), which saves the nav before any
-/// order or offer run inside it.
+/// Answers `spaceport`'s Mission BBS with `flight`'s mission computer and
+/// the bar's Hire Escort with the ships for hire, then tells `flight` of
+/// the port dialog that has opened ([`FlightView::open_port_dialog`]),
+/// which saves the nav before any order or offer run inside it, in the
+/// input that opened it.
 fn open_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
     if spaceport.take_mission_computer_request() {
         spaceport.open_mission_computer(flight.mission_computer());
+    }
+    if spaceport.take_hire_request()
+        && let Some(list) = flight.escorts_for_hire()
+    {
+        spaceport.open_hire(list);
     }
     if spaceport.take_port_dialog_opened().is_some() {
         flight.open_port_dialog();
@@ -2521,13 +2547,26 @@ fn open_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<G
 }
 
 /// Tells `flight` of the port dialog of `spaceport` that has closed
-/// ([`FlightView::close_port_dialog`]): a shop's `_RefreshSAT`, then the
-/// nav's restore, as each of the original's dialogs closes; after the
-/// input's last order, and before any frame is drawn. A mission computer
-/// that closed under mission texts is told once they have closed.
+/// ([`FlightView::close_port_dialog`]): its `_RefreshSAT`, then the nav's
+/// restore, as each of the original's dialogs closes, the bar's hire
+/// screen among them; after the input's last order, and before any frame
+/// is drawn. A mission computer that closed under mission texts is told
+/// once they have closed.
 fn close_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
     if let Some(dialog) = spaceport.take_port_dialog_closed() {
         flight.close_port_dialog(dialog);
+    }
+}
+
+/// Redraws `flight`'s whole status bar ([`FlightView::refresh_status`])
+/// when a closing of `spaceport` that the original ends in `_RefreshSAT`
+/// has come ([`SpaceportView::take_status_refresh`]): the bar, News, a
+/// ship description, player info or mission info. It runs at the end of
+/// the spaceport's input, after the input's last order (an abort's
+/// mission info, a jettison), and before any frame is drawn.
+fn refresh_status_bar(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_status_refresh() {
+        flight.refresh_status();
     }
 }
 
@@ -9149,6 +9188,101 @@ pub(super) mod tests {
         let list = drawn(&screen);
         assert!(radar_black(&list));
         assert!(player_cyan(&list));
+    }
+
+    /// The mission info screen's shape, smaller: 300 x 150, fixed at
+    /// (0, 0), with Done (1), the list (2), the heading (3), the text (4),
+    /// Abort (5) and the date (7).
+    fn mission_info_template() -> DialogTemplate {
+        let item = |x, y, w, h| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 150.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(190.0, 120.0, 99.0, 25.0),
+                item(10.0, 24.0, 100.0, 84.0),
+                item(10.0, 1.0, 190.0, 12.0),
+                item(120.0, 26.0, 170.0, 80.0),
+                item(60.0, 120.0, 99.0, 25.0),
+                item(0.0, 300.0, 1.0, 1.0),
+                item(200.0, 4.0, 90.0, 12.0),
+            ],
+        }
+    }
+
+    /// Flies `screen` up, the thrust held, until the radar, refreshed
+    /// every 8 ticks, has just refreshed, then 7 ticks more: it holds the
+    /// ship as it was 7 ticks back.
+    fn stale_radar(screen: &mut AppScreen) {
+        screen.input(&key(Key::Up, true));
+        for _ in 0..200 {
+            screen.tick(TICK);
+        }
+        let mut before = radar_dots(&drawn(screen));
+        for _ in 0..8 {
+            screen.tick(TICK);
+            let after = radar_dots(&drawn(screen));
+            if after != before {
+                break;
+            }
+            before = after;
+        }
+        for _ in 0..7 {
+            screen.tick(TICK);
+        }
+    }
+
+    #[test]
+    fn player_infos_and_mission_infos_close_over_flight_redraw_the_whole_bar() {
+        type Close = fn(&mut AppScreen);
+        let rows: [(&str, Close); 2] = [
+            ("player info (@0x5a725)", |screen| {
+                screen.input(&key(PLAYER_INFO_KEY, true));
+                screen.input(&key(PLAYER_INFO_KEY, false));
+                assert!(screen.flight_player_info().is_some(), "open");
+                screen.input(&key(Key::Escape, true));
+                assert!(screen.flight_player_info().is_none(), "closed");
+            }),
+            ("mission info (@0x9e769)", |screen| {
+                let mut missions = FlightMissionDialogs::new(
+                    Err("no DLOG 3003".to_owned()),
+                    Ok(mission_info_template()),
+                    Rc::new(MonoMetrics),
+                    screen.data.button_style(),
+                );
+                missions.open_info(nova_sim::MissionInfo {
+                    rows: vec![nova_sim::InfoRow {
+                        slot: 0,
+                        name: "Run".to_owned(),
+                        failed: false,
+                        text: "Go.".to_owned(),
+                        abortable: true,
+                    }],
+                    today: String::new(),
+                });
+                assert!(missions.info().is_some(), "open");
+                screen.missions = Some(missions);
+                screen.input(&key(Key::Escape, true));
+                assert!(screen.missions.is_none(), "closed");
+            }),
+        ];
+        for (what, close) in rows {
+            let mut screen = AppScreen::new(barred_outfitting_data())
+                .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics));
+            fly(&mut screen);
+            stale_radar(&mut screen);
+            let held = radar_dots(&drawn(&screen));
+            close(&mut screen);
+            let shown = radar_dots(&drawn(&screen));
+            screen.flight.as_mut().expect("flying").refresh_status();
+            let now = radar_dots(&drawn(&screen));
+            assert_ne!(held, now, "{what}: the radar held what it drew before");
+            assert_eq!(shown, now, "{what}: redrawn as it closed");
+        }
     }
 
     const TANK: OutfitId = OutfitId(133);
