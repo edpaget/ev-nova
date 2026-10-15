@@ -33,8 +33,9 @@
 //!   other ship only from any other weapon (`_AIFireMissile`
 //!   @0x812b4-0x812fb, see [`fire`](crate::ai::fire)). It dies in an
 //!   explosion of no size and makes no shockwave (`_HandleShipDisplay`
-//!   tests the flag @0x2d90d), and no shockwave pushes it (`_DamageShip`
-//!   @0x3aacb). The original's explosion size for one is a stale stack
+//!   tests the flag @0x2d90d), and nothing pushes it, neither a hit nor
+//!   a shockwave (`_DamageShip` @0x3aacb), nor holds it in a tractor beam
+//!   (`_HandleBeams` @0x31210). The original's explosion size for one is a stale stack
 //!   value (copied @0x2d900 from a local only 0x2d968 writes); the engine
 //!   reads it as none.
 //! - Its `KeyCarried` ([`HullSpec::key_carried`]) is the ship a weapon of
@@ -154,7 +155,8 @@ pub struct HullSpec {
     /// (see [`cloak::on_screen`](crate::cloak::on_screen)).
     pub sprite_height: Option<f32>,
     /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`]: it
-    /// dies with no shockwave and no shockwave pushes it.
+    /// dies with no shockwave, and no hit, shockwave or tractor beam
+    /// pushes or holds it.
     pub planet_type: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.

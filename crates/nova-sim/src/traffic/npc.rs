@@ -8,6 +8,7 @@ use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
+use crate::combat::impact::TractorLock;
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
 use crate::mission::ships::ShipBehav;
@@ -238,6 +239,12 @@ pub struct Npc {
     /// original's +0xc8de). It forgets once intact, boarded or taken into
     /// the fleet again (see [`self_repair`](crate::self_repair)).
     pub former: Option<FormerEscort>,
+    /// Its tractor lock, if a tractor beam holds it or it holds itself
+    /// along its own (the original's +0xc8dc and +0xb4, see
+    /// [`impact`](crate::combat::impact)): none as it spawns or launches,
+    /// as the original's spawns and `_LaunchFighter` set it (@0x3c5c8,
+    /// @0x3cb1c, @0x3d71d). The fight sets and touches it.
+    pub tractor: Option<TractorLock>,
 }
 
 /// What marks an NPC as an active mission's special ship (see the

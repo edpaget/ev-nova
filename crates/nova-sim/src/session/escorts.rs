@@ -245,6 +245,7 @@ impl Session {
             led_out: false,
             self_repair: kind.self_repair,
             former: None,
+            tractor: None,
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),

@@ -377,6 +377,7 @@ impl Session {
             led_out: false,
             self_repair: kind.self_repair,
             former: None,
+            tractor: None,
         }
     }
 

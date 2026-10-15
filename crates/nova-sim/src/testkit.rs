@@ -536,6 +536,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         led_out: false,
         self_repair: false,
         former: None,
+        tractor: None,
     }
 }
 

@@ -325,6 +325,12 @@ pub struct WeaponSpec {
     /// Its `Recoil`, raw: the push its firer takes away from its heading,
     /// over the firer's mass, when it [recoils](WeaponSpec::recoils).
     pub recoil: f32,
+    /// Its `Impact`, raw (the original's weapon +0x10): the push a ship it
+    /// hits, blasts or holds in its beam takes, over that ship's mass (see
+    /// [`impact`](super::impact)); a negative one pulls, and a beam's is
+    /// a tractor's. It is never decayed, reduced by blast falloff or
+    /// doubled in double time.
+    pub impact: f32,
     /// The exit points it fires from, by its `ExitType`; none, the
     /// centre, for any but 0-3 (see [`exits`](super::exits)).
     pub exit: Option<ExitKind>,
@@ -502,6 +508,7 @@ impl WeaponSpec {
             decay: count(record.decay),
             line_count: line_count(record),
             recoil: f32::from(record.recoil),
+            impact: f32::from(record.impact),
             exit: ExitKind::from_raw(record.exit_type),
             nearest_exit: record.flags3 & NEAREST_EXIT != 0,
             broadside: if record.inaccuracy < 0 {
@@ -836,6 +843,17 @@ mod tests {
             });
             assert_eq!(spec.recoil, f32::from(raw), "{raw}");
             assert_eq!(spec.recoils(), recoils, "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_weapons_impact_is_its_raw_impact_either_way() {
+        for raw in [250, -5, 0] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                impact: raw,
+                ..light_blaster()
+            });
+            assert_eq!(spec.impact, f32::from(raw), "{raw}");
         }
     }
 

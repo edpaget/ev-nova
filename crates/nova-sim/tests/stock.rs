@@ -1336,8 +1336,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use nova_sim::combat::armament::{Arsenal, LauncherRounds, Rounds};
 use nova_sim::combat::flags::FlagField;
+use nova_sim::combat::impact::TractorLock;
 use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
-use nova_sim::combat::{Combat, Fighter, Rules};
+use nova_sim::combat::{Combat, Fighter, Rules, Shove};
 use nova_sim::{
     Armament, CombatCatalog, CombatEvent, Condition, HullSpec, Reserves, ShipRef, SimDiagnostic,
     Trigger, WeaponId,
@@ -1363,6 +1364,12 @@ struct Combatant {
     target: Option<ShipRef>,
     state: ShipState,
     hull: HullSpec,
+    /// Its class's top speed, its `Speed` alone: what a push soft-caps
+    /// against.
+    class_speed: f32,
+    /// Its top speed: what a push is clamped to.
+    top_speed: f32,
+    tractor: Option<TractorLock>,
     trigger: Trigger,
     reserves: Reserves,
     condition: Condition,
@@ -1389,9 +1396,10 @@ impl Combatant {
             condition: &mut self.condition,
             held_disabled: false,
             cloaked: false,
-            class_speed: 0.0,
-            top_speed: 0.0,
+            class_speed: self.class_speed,
+            top_speed: self.top_speed,
             jumping: false,
+            tractor: &mut self.tractor,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
             drawn_heading: self.state.heading,
@@ -1432,6 +1440,9 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
             ..ShipState::default()
         },
         hull: HullSpec::default(),
+        class_speed: 0.0,
+        top_speed: 0.0,
+        tractor: None,
         trigger: Trigger {
             primary: !weapon.secondary(),
             secondary: weapon.secondary().then_some(weapon.id),
@@ -1448,9 +1459,17 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
     }
 }
 
-/// NPC 0, a ship of `ship` type `x` pixels right of the centre, at rest,
-/// its reserves full as its stock fields and default items give them.
-fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant {
+/// What stock ship class `ship` gives a ship of it: its hull, its
+/// reserves full as its stock fields and default items give them, its
+/// class's top speed (its `Speed` alone) and its top speed.
+struct Kind {
+    hull: HullSpec,
+    reserves: Reserves,
+    class_speed: f32,
+    top_speed: f32,
+}
+
+fn class(data: &GameData, arsenal: &Arsenal, ship: ShipId) -> Kind {
     let record = data
         .ships()
         .into_iter()
@@ -1473,6 +1492,25 @@ fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant
                 })
         })
         .collect();
+    let stats = ShipStats::new(record.fields, &mods);
+    Kind {
+        hull: arsenal.hull(ship),
+        reserves: stats.full(),
+        class_speed: record.fields.class_speed(),
+        top_speed: stats.handling.max_speed,
+    }
+}
+
+/// NPC 0, a ship of `ship` type `x` pixels right of the centre, at rest,
+/// its reserves full as its stock fields and default items give them, and
+/// its class and top speeds its own.
+fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant {
+    let Kind {
+        hull,
+        reserves,
+        class_speed,
+        top_speed,
+    } = class(data, arsenal, ship);
     Combatant {
         id: ShipRef::Npc(nova_sim::NpcId(0)),
         ship_type: ship,
@@ -1481,9 +1519,12 @@ fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant
             position: Vec2::new(x, 0.0),
             ..ShipState::default()
         },
-        hull: arsenal.hull(ship),
+        hull,
+        class_speed,
+        top_speed,
+        tractor: None,
         trigger: Trigger::default(),
-        reserves: ShipStats::new(record.fields, &mods).full(),
+        reserves,
         condition: Condition::Intact,
         armament: Armament::default(),
         rounds: LauncherRounds::default(),
@@ -1779,6 +1820,9 @@ fn sponge(x: f32, y: f32) -> Combatant {
             ..ShipState::default()
         },
         hull: HullSpec::default(),
+        class_speed: 0.0,
+        top_speed: 0.0,
+        tractor: None,
         trigger: Trigger::default(),
         reserves: Reserves::full(100_000.0, 100_000.0, 0.0),
         condition: Condition::Intact,
@@ -1793,6 +1837,262 @@ fn aiming(weapon: &WeaponSpec) -> Combatant {
         target: Some(QUARRY),
         ..shooter(weapon)
     }
+}
+
+/// `aiming(weapon)` in a ship of stock class `ship`: its hull, mass
+/// included, and its class and top speeds its own, which a tractor beam's
+/// branch and its self-pull read; its reserves still the shooter's.
+fn aiming_from(data: &GameData, arsenal: &Arsenal, ship: ShipId, weapon: &WeaponSpec) -> Combatant {
+    let Kind {
+        hull,
+        class_speed,
+        top_speed,
+        ..
+    } = class(data, arsenal, ship);
+    Combatant {
+        ship_type: ship,
+        hull,
+        class_speed,
+        top_speed,
+        ..aiming(weapon)
+    }
+}
+
+/// A tick of `combat` among `ships`, sub-munitions read from `arsenal`,
+/// each pushed ship's velocity then set from the fight's shoves as the
+/// session sets them: the shoves.
+fn fight_shoving(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) -> Vec<Shove> {
+    fight_with(combat, ships, arsenal);
+    let shoves = combat.take_shoves();
+    for shove in &shoves {
+        if let Some(ship) = ships.iter_mut().find(|ship| ship.id == shove.ship) {
+            ship.state.velocity = shove.velocity;
+        }
+    }
+    shoves
+}
+
+/// The push of `impact` from `from` on a ship of `mass` at rest at `at`,
+/// under its caps: `impact` / `mass` along the whole-degree bearing.
+fn push_of(from: Vec2, at: Vec2, impact: f32, mass: f32) -> Vec2 {
+    nova_sim::flight::facing(f32::from(nova_sim::trig::intercept_angle(from, at))) * (impact / mass)
+}
+
+fn close(a: Vec2, b: Vec2) -> bool {
+    (a - b).length() < 1e-5
+}
+
+/// The stock data has 55 weapons of positive `Impact` and one tractor
+/// beam, 171, and no massless or planet-type ship class: so no stock
+/// shot pulls, and every stock ship can be pushed.
+#[test]
+fn stock_impacts_are_55_pushes_and_one_tractor_beam_on_ships_that_all_move() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let specs: Vec<WeaponSpec> = data.weapons().iter().map(WeaponSpec::new).collect();
+    assert_eq!(specs.iter().filter(|spec| spec.impact > 0.0).count(), 55);
+    let pulls: Vec<(i16, f32, Guidance, u32, u32)> = specs
+        .iter()
+        .filter(|spec| spec.impact < 0.0)
+        .map(|spec| {
+            (
+                spec.id.0,
+                spec.impact,
+                spec.guidance,
+                spec.lifetime,
+                spec.decay,
+            )
+        })
+        .collect();
+    assert_eq!(
+        pulls,
+        [(171, -5.0, Guidance::Beam, 1, 0)],
+        "one tick of life"
+    );
+    for record in data.ships() {
+        let hull = arsenal.hull(record.id);
+        assert!(hull.mass > 0.0, "{:?}", record.id);
+        assert!(!hull.planet_type, "{:?}", record.id);
+    }
+}
+
+/// The EMP Torp. (160), the Polaron Massive Torp. (199) and the Radar
+/// Missile (234), homing, hit a Leviathan (`Mass` 10000) dead ahead and
+/// push it once by `Impact` / 10000 straight on, their blasts sparing the
+/// ship they hit; the EMP Torp.'s 16.7 on a Shuttle (`Mass` 15) is held
+/// to the Shuttle's top speed.
+#[test]
+#[allow(clippy::float_cmp)]
+fn stock_torpedoes_push_the_ship_they_hit_by_impact_over_its_mass() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let spec = |id: i16| {
+        data.weapons()
+            .iter()
+            .map(WeaponSpec::new)
+            .find(|spec| spec.id.0 == id)
+            .expect("a stock weapon")
+    };
+    let hit = |spec: &WeaponSpec, ship: i16| {
+        let mut combat = Combat::default();
+        let ahead = (spec.flight() / 2.0).min(300.0);
+        let mut ships = [aiming(spec), target(&data, &arsenal, ShipId(ship), ahead)];
+        let mut shoves = fight_shoving(&mut combat, &mut ships, &arsenal);
+        ships[0].trigger = Trigger::default();
+        for _ in 0..spec.lifetime {
+            shoves.extend(fight_shoving(&mut combat, &mut ships, &arsenal));
+        }
+        (shoves, ships[1].top_speed)
+    };
+    for (id, impact, blast) in [(160, 250.0, 100.0), (199, 800.0, 20.0), (234, 650.0, 20.0)] {
+        let torpedo = spec(id);
+        assert_eq!(
+            (torpedo.guidance, torpedo.impact),
+            (Guidance::Homing, impact)
+        );
+        assert_eq!(torpedo.blast_radius, blast, "{id}");
+        let (shoves, _) = hit(&torpedo, 131);
+        assert_eq!(shoves.len(), 1, "{id}: the direct hit alone: {shoves:?}");
+        assert_eq!(shoves[0].ship, QUARRY);
+        let expected = Vec2::new(impact / 10_000.0, 0.0);
+        assert!(close(shoves[0].velocity, expected), "{id}: {shoves:?}");
+    }
+    let (shoves, top) = hit(&spec(160), 128);
+    assert_eq!(shoves.len(), 1, "{shoves:?}");
+    assert!(top < 250.0 / 15.0, "{top}");
+    assert!(
+        close(shoves[0].velocity, Vec2::new(top, 0.0)),
+        "held to the Shuttle's top speed {top}: {shoves:?}"
+    );
+}
+
+/// The Thunderhead Lance (166, `Impact` 50, `Count` 10) held on a
+/// Leviathan pushes it on each of its 10 hit ticks, 50 / 10000 a tick,
+/// from the beam's start.
+#[test]
+fn a_stock_beam_pushes_its_ship_on_every_hit_tick() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let lance = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .find(|spec| spec.id.0 == 166)
+        .expect("the Thunderhead Lance");
+    assert_eq!(
+        (lance.guidance, lance.impact, lance.lifetime, lance.decay),
+        (Guidance::Beam, 50.0, 10, 0)
+    );
+    let mut combat = Combat::default();
+    let mut ships = [shooter(&lance), target(&data, &arsenal, ShipId(131), 60.0)];
+    let mut shoves = fight_shoving(&mut combat, &mut ships, &arsenal);
+    ships[0].trigger = Trigger::default();
+    for _ in 0..12 {
+        shoves.extend(fight_shoving(&mut combat, &mut ships, &arsenal));
+    }
+    assert_eq!(shoves.len(), 10, "{shoves:?}");
+    assert!(
+        close(
+            ships[1].state.velocity,
+            Vec2::new(10.0 * 50.0 / 10_000.0, 0.0)
+        ),
+        "{:?}",
+        ships[1].state.velocity
+    );
+}
+
+/// The Flower of Spring (171) fired by a ship of stock class `firer` from
+/// the centre facing `heading` at a Shuttle at `at`, for one tick: the
+/// shoves, the firer and the Shuttle after it, and the beam's start.
+fn flower(
+    data: &GameData,
+    arsenal: &Arsenal,
+    firer: i16,
+    heading: f32,
+    at: Vec2,
+) -> (Vec<Shove>, [Combatant; 2], Vec2) {
+    let tractor = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .find(|spec| spec.id.0 == 171)
+        .expect("the Flower of Spring");
+    let mut ships = [
+        aiming_from(data, arsenal, ShipId(firer), &tractor),
+        target(data, arsenal, ShipId(128), 0.0),
+    ];
+    ships[0].state.heading = heading;
+    ships[1].state.position = at;
+    let mut combat = Combat::default();
+    let shoves = fight_shoving(&mut combat, &mut ships, arsenal);
+    let start = combat.beams().first().map_or(Vec2::ZERO, |beam| beam.start);
+    let hurt = ships[1].reserves.shield.now < class(data, arsenal, ShipId(128)).reserves.shield.now;
+    assert!(hurt, "the beam hit the Shuttle");
+    (shoves, ships, start)
+}
+
+/// A Vell-os Javelin (175, `Mass` 200) holds a Shuttle (`Mass` 15) in the
+/// Flower of Spring, pulling it 5 / 15 toward the beam's start where the
+/// Shuttle is off both of its axes, and not where it is dead ahead.
+#[test]
+#[allow(clippy::float_cmp)]
+fn a_vell_os_javelins_flower_of_spring_holds_a_shuttle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    assert_eq!(class(&data, &arsenal, ShipId(175)).hull.mass, 200.0);
+    assert_eq!(class(&data, &arsenal, ShipId(128)).hull.mass, 15.0);
+    let held = Some(TractorLock::by(ShipRef::Player));
+    // Down the Javelin's 130-degree frame, 150 pixels out.
+    let at = nova_sim::flight::facing(130.0) * 150.0;
+    let (shoves, [javelin, shuttle], start) = flower(&data, &arsenal, 175, 130.0, at);
+    assert_eq!(shuttle.tractor, held);
+    assert_eq!(javelin.tractor, None);
+    assert_eq!(shoves.len(), 1, "{shoves:?}");
+    assert_eq!(shoves[0].ship, QUARRY);
+    let pulled = push_of(start, at, -5.0, 15.0);
+    assert!(close(shoves[0].velocity, pulled), "{shoves:?}, {pulled:?}");
+    assert!(pulled.x < 0.0 && pulled.y < 0.0, "toward the Javelin");
+    let (shoves, [_, shuttle], _) = flower(&data, &arsenal, 175, 90.0, Vec2::new(100.0, 0.0));
+    assert_eq!(shuttle.tractor, held);
+    assert_eq!(shoves, [], "dead ahead");
+}
+
+/// A Vell-os Dart (173, `Mass` 6, below 0.75 x 15) firing the Flower of
+/// Spring at a Shuttle dead ahead pulls itself toward it by 5 / 6, holds
+/// itself, and leaves the Shuttle where it was.
+#[test]
+#[allow(clippy::float_cmp)]
+fn a_vell_os_darts_flower_of_spring_pulls_the_dart_to_a_shuttle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    assert_eq!(class(&data, &arsenal, ShipId(173)).hull.mass, 6.0);
+    let at = Vec2::new(100.0, 0.0);
+    let (shoves, [dart, shuttle], start) = flower(&data, &arsenal, 173, 90.0, at);
+    assert_eq!(dart.tractor, Some(TractorLock::by(ShipRef::Player)));
+    assert_eq!(shuttle.tractor, None);
+    assert_eq!(shuttle.state.velocity, Vec2::ZERO);
+    assert_eq!(shoves.len(), 1, "{shoves:?}");
+    assert_eq!(shoves[0].ship, ShipRef::Player);
+    // The bearing runs from the Shuttle to the start; the pull back along
+    // it, toward the Shuttle.
+    let pulled = push_of(at, start, -5.0, 6.0);
+    assert!(close(dart.state.velocity, pulled), "{shoves:?}, {pulled:?}");
+    assert!(pulled.x > 0.8, "toward the Shuttle: {pulled:?}");
 }
 
 /// Each stock homing weapon, fired at a stock ship dead ahead within its

@@ -24,6 +24,9 @@
 //! - [`hull`]: a ship type's [`HullSpec`](hull::HullSpec), its
 //!   [`Condition`](hull::Condition), and the [`DisableRule`](hull::DisableRule)
 //!   port with Nova's [`NovaDisable`](hull::NovaDisable).
+//! - [`impact`]: how a hit, blast, beam tick or shockwave pushes the ship
+//!   it lands on, and how a tractor beam holds its target or pulls its
+//!   firer ([`TractorLock`](impact::TractorLock)).
 //! - [`projectile`]: a [`Shot`](projectile::Shot) in flight, homing ones
 //!   steering at their target, and the [`Target`](projectile::Target)s it
 //!   may hit.
@@ -107,6 +110,15 @@
 //!    disabled by its armour as the hits before it this tick left it
 //!    (`_IsDisabled` @0x3a9ad).
 //!
+//!    Each hit first pushes its ship by its weapon's `Impact` over the
+//!    ship's `Mass` ([`impact`]): a shot's from where it met the ship, a
+//!    blast's from its centre (never the ship its shot hit), a beam's on
+//!    every tick it hits from its start; a breaking-up ship too, and none
+//!    of a massless, planet-type or jumping one, or the escape pod. A
+//!    beam of negative `Impact` is a tractor beam: its firer holds its
+//!    target, or, lighter, holds itself and pulls itself toward it. The
+//!    session takes each push as a [`Shove`] and sets the ship's velocity.
+//!
 //!    The original tests a shot's move in the next frame's collision
 //!    passes, before `_HandleShot` moves it again (`_DoPlayGameWork`
 //!    @0x43e70-0x44015, @0x44385); here the move is tested in the tick it
@@ -177,6 +189,7 @@ pub mod defence;
 pub mod exits;
 pub mod flags;
 pub mod hull;
+pub mod impact;
 pub mod projectile;
 pub mod report;
 pub mod shockwave;
@@ -197,6 +210,7 @@ use hull::{
     Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
     never_breaks_up,
 };
+use impact::{Body, Tractor, TractorLock};
 use projectile::{DecayStep, Fuse, Jam, Meeting, Shot, ShotId, Source, Target, contact};
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
@@ -375,8 +389,12 @@ pub struct Sortie {
     pub target: Option<ShipRef>,
 }
 
-/// A ship a shockwave pushed this tick, for the session to set its
-/// velocity (see [`shockwave::shove`]): a [`Fighter`]'s state is a copy.
+/// A ship the fight pushed this tick, for the session to set its
+/// velocity: a [`Fighter`]'s state is a copy. Every hit, blast and beam
+/// tick of a weapon of some `Impact`, a tractor beam's self-pull and a
+/// death shockwave push ([`impact`]), and so does an NPC's recoil
+/// ([`ai_fire`]); a ship pushed more than once in a tick has a shove for
+/// each, in order, the last holding where they left it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shove {
     /// The ship pushed.
@@ -428,17 +446,24 @@ pub struct Fighter<'a> {
     /// cloaked ([`Armament::has_ammo`]). The player never is.
     pub cloaked: bool,
     /// Its class's top speed, in pixels a tick: its `shïp` `Speed` alone,
-    /// none of its outfits' (the original's class +0x40), which a
-    /// shockwave pushes it against ([`shockwave::shove`]).
+    /// none of its outfits' (the original's class +0x40), which every
+    /// push soft-caps against ([`impact::push`]).
     pub class_speed: f32,
     /// Its top speed, in pixels a tick, outfits and lead included (the
-    /// original's `_ShipMaxSpeed`): a shockwave's push is clamped to it
-    /// on each axis.
+    /// original's `_ShipMaxSpeed`): every push is clamped to it on each
+    /// axis.
     pub top_speed: f32,
     /// Whether its jump is under way, the pre-jump stage included (the
-    /// original's +0x50 above 0): no shockwave pushes it. An NPC's jump
-    /// out has no stage in the simulation, so only the player's is.
+    /// original's +0x50 above 0): no hit, blast, beam or shockwave pushes
+    /// it, though a tractor still holds it and it still pulls itself
+    /// along its own tractor beam. An NPC's jump out has no stage in the
+    /// simulation, so only the player's is.
     pub jumping: bool,
+    /// Its tractor lock, if a tractor beam holds it, or it holds itself
+    /// along its own (the original's +0xc8dc and +0xb4): the fight sets
+    /// and touches it ([`impact`]); what it does to the ship is the
+    /// session's to come.
+    pub tractor: &'a mut Option<TractorLock>,
     /// Its weapons.
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
@@ -493,6 +518,23 @@ struct Landed {
     intended: bool,
     /// Whether it is a missile lock's ([`Strike::lock`]).
     lock: bool,
+    /// How it pushes the ship.
+    push: Push,
+}
+
+/// How a hit that landed pushes its ship ([`impact`]): `_DamageShip`'s
+/// point and `Impact`.
+#[derive(Clone, Copy, Debug)]
+struct Push {
+    /// Where it pushes the ship from (`_DamageShip`'s arg +0xc): where
+    /// its shot met the ship, its blast's centre, or its beam's start.
+    from: Vec2,
+    /// Its weapon's `Impact` ([`WeaponSpec::impact`](weapon::WeaponSpec::impact)):
+    /// none for a missile lock.
+    impact: f32,
+    /// Whether it is a beam's, whose negative `Impact` makes it a tractor
+    /// beam ([`impact::tractor`]).
+    beam: bool,
 }
 
 /// The share of a shot's mass and energy damage that counts as aimed at
@@ -632,8 +674,9 @@ impl Combat {
     /// not destroyed, breaking up or not, within the wreck's
     /// [`HullSpec::death_size`] on each axis, the wreck spared; each takes
     /// [`shockwave::hit`] as a [`Strike`] by the wreck, neither direct nor
-    /// intended, and is pushed as [`shockwave::shove`] says, reported as a
-    /// [`Shove`]. Then each intact or disabled ship hit settles its
+    /// intended, and is pushed by [`shockwave::IMPACT`] from the wreck
+    /// ([`impact::push`]), reported as a [`Shove`]; an escape pod or a
+    /// later class ([`immune`]) is neither hit nor pushed. Then each intact or disabled ship hit settles its
     /// condition as step 8 does, its strike marked when it is newly
     /// disabled; a breaking-up one is not counted down again.
     ///
@@ -676,20 +719,11 @@ impl Combat {
                 if hurt {
                     shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
                 }
-                let pushed = shockwave::shove(
-                    &fighter.state,
-                    at,
-                    &fighter.hull,
-                    fighter.jumping,
-                    fighter.class_speed,
-                    fighter.top_speed,
-                );
-                if let Some(velocity) = pushed {
-                    fighter.state.velocity = velocity;
-                    self.shoves.push(Shove { ship, velocity });
-                }
                 if !hurt {
                     continue;
+                }
+                if let Some(velocity) = impact::push(&fighter.body(), at, shockwave::IMPACT, None) {
+                    self.shove(fighter, velocity);
                 }
                 let downed = if condition.standing() {
                     self.update_condition(fighter, rule)
@@ -1043,13 +1077,19 @@ impl Combat {
             }
             let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
             if let Some(velocity) = pushed {
-                fighter.state.velocity = velocity;
-                self.shoves.push(Shove {
-                    ship: fighter.ship,
-                    velocity,
-                });
+                self.shove(fighter, velocity);
             }
         }
+    }
+
+    /// Sets `fighter`'s velocity to `velocity`, reporting it as a
+    /// [`Shove`].
+    fn shove(&mut self, fighter: &mut Fighter, velocity: Vec2) {
+        fighter.state.velocity = velocity;
+        self.shoves.push(Shove {
+            ship: fighter.ship,
+            velocity,
+        });
     }
 
     /// Step 2: each ship's point defence its trigger asks for
@@ -1251,6 +1291,11 @@ impl Combat {
                     direct: true,
                     intended: shot.aimed_at == Some(ship),
                     lock: false,
+                    push: Push {
+                        from: at,
+                        impact: shot.weapon.impact,
+                        beam: false,
+                    },
                 });
                 shot.position = at;
                 // Only the proximity pass releases sub-munitions
@@ -1280,6 +1325,11 @@ impl Combat {
                     direct: false,
                     intended: false,
                     lock: false,
+                    push: Push {
+                        from: blast.at,
+                        impact: shot.weapon.impact,
+                        beam: false,
+                    },
                 }));
             }
             if let Some(target) = subs {
@@ -1294,68 +1344,158 @@ impl Combat {
         for (parent, target) in released {
             self.release(&parent, target, sides, arsenal, chance);
         }
+        hits.extend(self.beam_hits(fighters, sides));
+        self.land(fighters, hits, rule);
+    }
+
+    /// Step 7's last pass: the hit each beam makes this tick among `sides`,
+    /// if any, each beam ending where it hit and exploding there; an
+    /// intended hit is on the ship it was fired at, or, for one fired at
+    /// nothing, its firer's target among `fighters`.
+    fn beam_hits(&mut self, fighters: &[Fighter], sides: &Sides) -> Vec<Landed> {
         let beam_rules = self.beam_rules;
+        let mut hits = Vec::new();
         for beam in &mut self.beams {
-            if let Some((ship, at)) = beam.hit(sides, beam_rules) {
-                beam.end = at;
-                let meant = beam.aimed_at.or_else(|| {
-                    fighters
-                        .iter()
-                        .find(|fighter| fighter.ship == beam.firer)
-                        .and_then(|firer| firer.target)
-                });
-                hits.push(Landed {
-                    ship,
-                    by: beam.firer,
-                    hit: Hit {
-                        cant_kill: beam.disable_only,
-                        ..Hit::of(&beam.weapon)
-                    },
-                    direct: true,
-                    intended: meant == Some(ship),
-                    lock: false,
-                });
-                if let Some(explosion) = beam.weapon.explosion {
-                    self.events.push(CombatEvent::Exploded { at, explosion });
-                }
+            let Some((ship, at)) = beam.hit(sides, beam_rules) else {
+                continue;
+            };
+            beam.end = at;
+            let meant = beam.aimed_at.or_else(|| {
+                fighters
+                    .iter()
+                    .find(|fighter| fighter.ship == beam.firer)
+                    .and_then(|firer| firer.target)
+            });
+            hits.push(Landed {
+                ship,
+                by: beam.firer,
+                hit: Hit {
+                    cant_kill: beam.disable_only,
+                    ..Hit::of(&beam.weapon)
+                },
+                direct: true,
+                intended: meant == Some(ship),
+                lock: false,
+                push: Push {
+                    from: beam.start,
+                    impact: beam.weapon.impact,
+                    beam: true,
+                },
+            });
+            if let Some(explosion) = beam.weapon.explosion {
+                self.events.push(CombatEvent::Exploded { at, explosion });
             }
         }
-        self.land(fighters, hits, rule);
+        hits
     }
 
     /// Takes each of `hits` in turn off the ship it landed on among
     /// `fighters`, as `rule` says when a ship is disabled, keeping each as
-    /// a [`Strike`] (see the module docs' step 7).
+    /// a [`Strike`] (see the module docs' step 7). Each pushes its ship by
+    /// its `Impact` first, as `_DamageShip` does (@0x3a9b8-0x3ab84,
+    /// [`impact::push`]), the push reported as a [`Shove`]; a beam's of
+    /// negative `Impact` is a tractor's, which holds the ship or pulls its
+    /// firer before that ([`Combat::tractor`]). A direct hit's negative
+    /// `Impact` is gated from its firer's centre, which a firer no longer
+    /// in the fight has none of.
+    ///
+    /// The original writes each push to the ship's velocity at once, and
+    /// the ship moves by it the next frame; here the session sets the
+    /// velocities from the shoves after the fight's tick
+    /// ([`Combat::take_shoves`]), before the next movement, which crosses
+    /// no boundary the player sees. The hits compound in the order they
+    /// land: locks, contacts, proximities, expiries, then beams.
     fn land(&mut self, fighters: &mut [Fighter], hits: Vec<Landed>, rule: &dyn DisableRule) {
         // A shot passes through the escape pod and every class after it
         // (`_ShotCanHitShip` @0x447b3-0x447d9), and a beam through the pod
         // itself (@0x30dd2); a blast still reaches it, or a beam a later
         // class, and `_DamageShip` then does nothing to it ([`immune`]).
         for landed in hits {
-            let fighter = fighters
-                .iter_mut()
-                .find(|fighter| fighter.ship == landed.ship && !immune(fighter.ship_type));
-            if let Some(fighter) = fighter {
-                let before = taken(fighter.reserves);
-                let was_disabled = fighter.held_disabled
-                    || *fighter.condition != Condition::Intact
-                    || damage::disabled(fighter.reserves.armor, &fighter.hull, rule);
-                damage::take(
-                    fighter.reserves,
-                    landed.hit,
-                    &fighter.hull,
-                    rule,
-                    was_disabled,
-                );
-                self.strikes.push(Strike {
-                    ship: landed.ship,
-                    by: landed.by,
-                    damage: before - taken(fighter.reserves),
-                    downed: None,
-                    direct: landed.direct,
-                    intended: landed.intended,
-                    lock: landed.lock,
-                });
+            let Some(index) = fighters
+                .iter()
+                .position(|fighter| fighter.ship == landed.ship)
+            else {
+                continue;
+            };
+            let Push { from, impact, beam } = landed.push;
+            let impact = if beam && impact < 0.0 {
+                self.tractor(fighters, index, landed.by, from, impact)
+            } else {
+                impact
+            };
+            let source = landed
+                .direct
+                .then(|| fighters.iter().find(|fighter| fighter.ship == landed.by))
+                .flatten()
+                .map(|firer| firer.state.position);
+            let fighter = &mut fighters[index];
+            if immune(fighter.ship_type) {
+                continue;
+            }
+            if let Some(velocity) = impact::push(&fighter.body(), from, impact, source) {
+                self.shove(fighter, velocity);
+            }
+            let before = taken(fighter.reserves);
+            let was_disabled = fighter.held_disabled
+                || *fighter.condition != Condition::Intact
+                || damage::disabled(fighter.reserves.armor, &fighter.hull, rule);
+            damage::take(
+                fighter.reserves,
+                landed.hit,
+                &fighter.hull,
+                rule,
+                was_disabled,
+            );
+            self.strikes.push(Strike {
+                ship: landed.ship,
+                by: landed.by,
+                damage: before - taken(fighter.reserves),
+                downed: None,
+                direct: landed.direct,
+                intended: landed.intended,
+                lock: landed.lock,
+            });
+        }
+    }
+
+    /// The tractor branch of a hit on `fighters[target]` by the beam of
+    /// `by` from `start`, of negative `impact` ([`impact::tractor`],
+    /// `_HandleBeams` @0x311d0-0x31450): the firer holds the target,
+    /// touching its lock, or holds itself and pulls itself toward it,
+    /// reported as a [`Shove`]. Gives the `Impact` the hit passes on: its
+    /// own when the firer holds the target, none otherwise.
+    ///
+    /// A firer no longer in the fight leaves no slot to read, so its beam
+    /// does nothing and passes none on. The original reads whatever is in
+    /// the slot (beam +0x16) then; stock's one tractor beam (`wëap` 171,
+    /// `Count` 1, no `Decay`) hits only on the tick its firer fires it.
+    fn tractor(
+        &mut self,
+        fighters: &mut [Fighter],
+        target: usize,
+        by: ShipRef,
+        start: Vec2,
+        impact: f32,
+    ) -> f32 {
+        let Some(firer) = fighters.iter().position(|fighter| fighter.ship == by) else {
+            return 0.0;
+        };
+        let body = fighters[firer].body();
+        match impact::tractor(&fighters[target].body(), &body, start, impact) {
+            // The original's i = 0 (@0x31450); the push would refuse a
+            // massless or planet-type target anyway.
+            Tractor::Slips => 0.0,
+            Tractor::Holds => {
+                *fighters[target].tractor = Some(TractorLock::by(by));
+                impact
+            }
+            Tractor::Pulls(pulled) => {
+                let firer = &mut fighters[firer];
+                TractorLock::touch_self(firer.tractor, by);
+                if let Some(velocity) = pulled {
+                    self.shove(firer, velocity);
+                }
+                0.0
             }
         }
     }
@@ -1603,7 +1743,7 @@ impl Combat {
         std::mem::take(&mut self.sorties)
     }
 
-    /// The ships shockwaves pushed since they were last taken, in order,
+    /// The ships the fight pushed since they were last taken, in order,
     /// each with its velocity after the push; taking them empties the
     /// list.
     pub fn take_shoves(&mut self) -> Vec<Shove> {
@@ -1649,6 +1789,19 @@ impl Fighter<'_> {
             leader: self.leader,
             govt: self.govt,
             booty: self.booty,
+        }
+    }
+
+    /// The ship as a push reads it ([`impact`]).
+    fn body(&self) -> Body {
+        Body {
+            position: self.state.position,
+            velocity: self.state.velocity,
+            mass: self.hull.mass,
+            planet_type: self.hull.planet_type,
+            class_speed: self.class_speed,
+            top_speed: self.top_speed,
+            jumping: self.jumping,
         }
     }
 
@@ -1783,6 +1936,11 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
         direct: true,
         intended: true,
         lock: true,
+        push: Push {
+            from: target.position,
+            impact: 0.0,
+            beam: false,
+        },
     })
 }
 
@@ -1852,6 +2010,7 @@ mod tests {
         class_speed: f32,
         top_speed: f32,
         jumping: bool,
+        tractor: Option<TractorLock>,
         armament: Armament,
         rounds: LauncherRounds,
         /// The heading it was last drawn at, when not its heading.
@@ -1899,6 +2058,7 @@ mod tests {
                 class_speed: 10.0,
                 top_speed: 10.0,
                 jumping: false,
+                tractor: None,
                 armament: Armament::default(),
                 rounds: LauncherRounds::default(),
                 drawn_heading: None,
@@ -1943,6 +2103,7 @@ mod tests {
                 class_speed: self.class_speed,
                 top_speed: self.top_speed,
                 jumping: self.jumping,
+                tractor: &mut self.tractor,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
@@ -2962,6 +3123,11 @@ mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                push: Push {
+                    from: Vec2::ZERO,
+                    impact: 0.0,
+                    beam: false,
+                },
             })
             .collect();
         combat.land(&mut [ship.fighter()], landed, &NovaDisable);
@@ -6172,7 +6338,9 @@ mod tests {
             assert_eq!(hurt(&ships[2]), !immune, "blasted, {ship_type:?}");
             let struck = combat.take_strikes().iter().any(|strike| strike.ship == C);
             assert_eq!(struck, !immune, "blasted, {ship_type:?}");
-            // A shockwave: the pod is still pushed.
+            // A shockwave neither hurts nor pushes it: its push is
+            // `_DamageShip`'s, past the early-out (@0x3a87c), the only call
+            // in the branch (@0x2da89).
             let mut combat = Combat::default();
             let mut pushed = pod(holding(1, 40.0, 0.0, 100.0, 300.0, 300.0), ship_type);
             pushed.hull.mass = 200.0;
@@ -6184,7 +6352,11 @@ mod tests {
                 "shockwave, {ship_type:?}"
             );
             assert_eq!(combat.take_strikes().is_empty(), immune);
-            assert_eq!(combat.take_shoves().len(), 1, "pushed all the same");
+            assert_eq!(
+                combat.take_shoves().is_empty(),
+                immune,
+                "pushed, {ship_type:?}"
+            );
         }
     }
 
@@ -6763,5 +6935,509 @@ mod tests {
             assert!(close_to(at, Vec2::new(0.0, behind)), "{source:?}: {at:?}");
         }
         assert_eq!(Compression::from(RuleSource::Bible), Compression::ByHeading);
+    }
+
+    // Knockback and tractor beams (`_DamageShip` @0x3a9b8-0x3ab84,
+    // `_HandleBeams` @0x311d0-0x31450; see the `impact` module).
+
+    /// A tick among `ships`, each pushed ship's velocity then set from the
+    /// fight's shoves as the session sets them; gives the shoves.
+    fn tick_shoving(combat: &mut Combat, ships: &mut [Ship]) -> Vec<Shove> {
+        tick(combat, ships, &NovaDisable);
+        let shoves = combat.take_shoves();
+        for shove in &shoves {
+            if let Some(ship) = ships.iter_mut().find(|ship| ship.id == shove.ship) {
+                ship.state.velocity = shove.velocity;
+            }
+        }
+        shoves
+    }
+
+    /// `ship` of `mass`, with a class and top speed of 100.
+    fn of_mass(ship: Ship, mass: f32) -> Ship {
+        let mut ship = ship;
+        ship.hull.mass = mass;
+        ship.class_speed = 100.0;
+        ship.top_speed = 100.0;
+        ship
+    }
+
+    /// The push `impact` from `from` gives a ship of `mass` at rest at `at`,
+    /// under its caps: `impact` / `mass` along the whole-degree bearing.
+    fn push_of(from: Vec2, at: Vec2, impact: f32, mass: f32) -> Vec2 {
+        crate::flight::facing(f32::from(crate::trig::intercept_angle(from, at))) * (impact / mass)
+    }
+
+    /// The velocity of each of `shoves` on `ship`, in order.
+    fn shoves_on(shoves: &[Shove], ship: ShipRef) -> Vec<Vec2> {
+        shoves
+            .iter()
+            .filter(|shove| shove.ship == ship)
+            .map(|shove| shove.velocity)
+            .collect()
+    }
+
+    fn close_by(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    /// Ticks `ships` until `ships[0]`'s one shot or beam is gone, at most
+    /// `ticks`, its trigger let go after the first: every shove and the
+    /// first explosion's place.
+    fn shoves_after_one(ships: &mut [Ship], ticks: u32) -> (Vec<Shove>, Option<Vec2>) {
+        let mut combat = Combat::default();
+        let mut shoves = Vec::new();
+        let mut at = None;
+        for _ in 0..ticks {
+            shoves.extend(tick_shoving(&mut combat, ships));
+            ships[0].trigger = QUIET;
+            at = at.or_else(|| {
+                combat.take_events().iter().find_map(|event| match *event {
+                    CombatEvent::Exploded { at, .. } => Some(at),
+                    _ => None,
+                })
+            });
+        }
+        (shoves, at)
+    }
+
+    /// The blaster with `impact` and an explosion.
+    fn pushing(impact: i16) -> WeaponRecord {
+        WeaponRecord {
+            impact,
+            explod_type: 0,
+            ..blaster()
+        }
+    }
+
+    #[test]
+    fn a_direct_hit_pushes_its_ship_by_impact_over_mass_from_where_it_met() {
+        let target = of_mass(Ship::at(2, 100.0, 10.0), 10.0);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(pushing(50)), target];
+        let (shoves, at) = shoves_after_one(&mut ships, 12);
+        let at = at.expect("it hit");
+        let pushed = shoves_on(&shoves, B);
+        let expected = push_of(at, Vec2::new(100.0, 10.0), 50.0, 10.0);
+        assert_eq!(pushed.len(), 1, "{shoves:?}");
+        assert!(close_by(pushed[0], expected), "{pushed:?}, {expected:?}");
+        let from_firer = push_of(Vec2::ZERO, Vec2::new(100.0, 10.0), 50.0, 10.0);
+        assert!(!close_by(pushed[0], from_firer), "not from the firer");
+        assert_eq!(ships[1].state.velocity, pushed[0]);
+        assert!(ships[1].reserves.shield.now < 10.0, "hurt too");
+        assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));
+    }
+
+    #[test]
+    fn a_decayed_shot_still_pushes_by_its_whole_impact() {
+        let mut combat = Combat::default();
+        combat.set_decay(DecayStep::EveryDecayPlusOne);
+        let slug = WeaponRecord {
+            impact: 50,
+            ..slug(0x0020)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(slug),
+            of_mass(Ship::at(2, 95.0, 0.0), 10.0),
+        ];
+        let mut shoves = tick_shoving(&mut combat, &mut ships);
+        ships[0].trigger = QUIET;
+        while !combat.shots().is_empty() {
+            shoves.extend(tick_shoving(&mut combat, &mut ships));
+        }
+        assert_eq!(ships[1].reserves.armor.now, 24.0, "the damage decayed");
+        let pushed = shoves_on(&shoves, B);
+        assert_eq!(pushed.len(), 1, "{shoves:?}");
+        assert!(close_by(pushed[0], Vec2::new(5.0, 0.0)), "{pushed:?}");
+    }
+
+    #[test]
+    fn a_hit_blast_pushes_each_ship_it_reaches_from_its_centre_but_not_the_ship_hit() {
+        let shell = WeaponRecord {
+            blast_radius: 30,
+            ..pushing(50)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell),
+            of_mass(Ship::at(2, 100.0, 0.0), 10.0),
+            of_mass(Ship::at(3, 100.0, 25.0), 10.0),
+        ];
+        let (shoves, at) = shoves_after_one(&mut ships, 12);
+        let at = at.expect("it hit");
+        let hit = shoves_on(&shoves, B);
+        assert_eq!(hit.len(), 1, "the direct hit alone: {shoves:?}");
+        assert!(close_by(
+            hit[0],
+            push_of(at, Vec2::new(100.0, 0.0), 50.0, 10.0)
+        ));
+        let blasted = shoves_on(&shoves, C);
+        assert_eq!(blasted.len(), 1, "{shoves:?}");
+        let expected = push_of(at, Vec2::new(100.0, 25.0), 50.0, 10.0);
+        assert!(close_by(blasted[0], expected), "{blasted:?}, {expected:?}");
+        assert!(blasted[0].y > 0.0, "away from the centre");
+    }
+
+    #[test]
+    fn an_expiry_blast_pushes_from_where_its_shot_ended() {
+        let flak = WeaponRecord {
+            count: 3,
+            speed: 1000,
+            explod_type: 2,
+            blast_radius: 40,
+            flags: 0x8000,
+            impact: 50,
+            ..blaster()
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(flak),
+            of_mass(Ship::at(3, 30.0, 35.0), 10.0),
+        ];
+        let (shoves, at) = shoves_after_one(&mut ships, 6);
+        let at = at.expect("it detonated");
+        let pushed = shoves_on(&shoves, C);
+        assert_eq!(pushed.len(), 1, "{shoves:?}");
+        let expected = push_of(at, Vec2::new(30.0, 35.0), 50.0, 10.0);
+        assert!(close_by(pushed[0], expected), "{pushed:?}, {expected:?}");
+    }
+
+    /// The laser with `impact`.
+    fn beam_of(impact: i16) -> WeaponRecord {
+        WeaponRecord { impact, ..laser() }
+    }
+
+    #[test]
+    fn a_beam_pushes_from_its_start_on_every_tick_it_hits_compounding() {
+        let mut combat = Combat::default();
+        let at = Vec2::new(100.0, 10.0);
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(beam_of(50)),
+            of_mass(Ship::at(2, at.x, at.y), 100.0),
+        ];
+        let step = push_of(Vec2::ZERO, at, 50.0, 100.0);
+        let mut ends = Vec::new();
+        let mut velocities = Vec::new();
+        for _ in 0..5 {
+            let shoves = tick_shoving(&mut combat, &mut ships);
+            ships[0].trigger = QUIET;
+            ends.extend(combat.beams().iter().map(|beam| beam.end));
+            velocities.extend(shoves_on(&shoves, B));
+        }
+        assert_eq!(velocities.len(), 3, "a push a hit tick: {velocities:?}");
+        for (k, velocity) in velocities.iter().enumerate() {
+            #[allow(clippy::cast_precision_loss)]
+            let hits = (k + 1) as f32;
+            assert!(close_by(*velocity, step * hits), "{k}: {velocity:?}");
+        }
+        let end = ends[0];
+        assert!(end.y.abs() < 1e-3, "it ends on its ray: {end:?}");
+        assert!(
+            !close_by(step, push_of(end, at, 50.0, 100.0)),
+            "not from its end"
+        );
+        assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));
+    }
+
+    #[test]
+    fn a_missile_lock_pushes_nothing() {
+        let heavy = WeaponRecord {
+            impact: 500,
+            ..missile()
+        };
+        let mut combat = Combat::default();
+        let mut ships = [player_with(heavy), of_mass(far_b(), 10.0)];
+        let mut shoves = Vec::new();
+        let mut locks = 0;
+        for _ in 0..40 {
+            shoves.extend(tick_shoving(&mut combat, &mut ships));
+            ships[0].trigger = QUIET;
+            locks += combat
+                .take_strikes()
+                .iter()
+                .filter(|strike| strike.lock)
+                .count();
+        }
+        assert_eq!(locks, 1);
+        assert_eq!(shoves, []);
+    }
+
+    #[test]
+    fn a_breaking_up_ship_is_pushed_by_a_hit() {
+        let mut dying = of_mass(Ship::at(2, 100.0, 0.0), 10.0);
+        dying.reserves.armor.now = -1.0;
+        dying.condition = Condition::Dying {
+            ticks_left: 50,
+            starting: false,
+        };
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(pushing(50)), dying];
+        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        let pushed = shoves_on(&shoves, B);
+        assert_eq!(pushed.len(), 1, "{shoves:?}");
+        assert!(close_by(pushed[0], Vec2::new(5.0, 0.0)), "{pushed:?}");
+    }
+
+    #[test]
+    fn an_escape_pod_reached_by_a_blast_is_not_pushed() {
+        let shell = WeaponRecord {
+            blast_radius: 30,
+            ..pushing(50)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell),
+            of_mass(Ship::at(4, 100.0, 0.0), 10.0),
+            pod(of_mass(Ship::at(3, 100.0, 25.0), 10.0), ESCAPE_POD_SHIP),
+        ];
+        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        assert_eq!(shoves_on(&shoves, ShipRef::Npc(NpcId(4))).len(), 1);
+        assert_eq!(shoves_on(&shoves, C), [], "the pod");
+    }
+
+    #[test]
+    fn a_ship_whose_jump_is_under_way_is_hit_directly_but_not_pushed() {
+        let mut jumping = of_mass(Ship::at(2, 100.0, 0.0), 10.0);
+        jumping.jumping = true;
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(pushing(50)), jumping];
+        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        assert!(ships[1].reserves.shield.now < 10.0, "hit");
+        assert_eq!(shoves, []);
+    }
+
+    #[test]
+    fn two_hits_on_a_ship_in_a_tick_compound_in_order() {
+        let mut combat = Combat::default();
+        // Two shots, 20 above and below B's centre, meet it on one tick.
+        let mut wide = of_mass(Ship::at(2, 100.0, 0.0), 10.0);
+        wide.hull.hit_radius = 50.0;
+        let mut ships = [
+            Ship::at(1, 0.0, -20.0).armed(pushing(50)),
+            Ship::at(3, 0.0, 20.0).armed(pushing(50)),
+            wide,
+        ];
+        let mut shoves = Vec::new();
+        for _ in 0..12 {
+            shoves.extend(tick_shoving(&mut combat, &mut ships));
+            ships[0].trigger = QUIET;
+            ships[1].trigger = QUIET;
+        }
+        let pushed = shoves_on(&shoves, B);
+        assert_eq!(pushed.len(), 2, "{shoves:?}");
+        assert!(pushed[0].y > 0.0, "down, from above: {pushed:?}");
+        assert!(
+            close_by(pushed[1], Vec2::new(pushed[0].x * 2.0, 0.0)),
+            "the second added to the first: {pushed:?}"
+        );
+        assert_eq!(ships[2].state.velocity, pushed[1]);
+    }
+
+    #[test]
+    fn a_negative_direct_hit_pulls_only_from_a_firer_off_both_axes_and_a_blast_always() {
+        // Fired down the diagonal, 100 off on each axis: pulled toward
+        // where it met.
+        let diagonal = of_mass(Ship::at(2, 100.0, 100.0), 10.0);
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(pushing(-50)).facing(135.0),
+            diagonal,
+        ];
+        let (shoves, at) = shoves_after_one(&mut ships, 12);
+        let pulled = shoves_on(&shoves, B);
+        assert_eq!(pulled.len(), 1, "{shoves:?}");
+        let at = at.expect("it hit");
+        assert!(close_by(
+            pulled[0],
+            push_of(at, Vec2::new(100.0, 100.0), -50.0, 10.0)
+        ));
+        assert!(
+            pulled[0].x < 0.0 && pulled[0].y < 0.0,
+            "toward it: {pulled:?}"
+        );
+        assert_eq!(
+            (ships[0].tractor, ships[1].tractor),
+            (None, None),
+            "no tractor"
+        );
+        // Dead ahead, on the firer's y: the hit pulls nothing, but its
+        // blast, no direct hit, pulls the ship beside it.
+        let shell = WeaponRecord {
+            blast_radius: 30,
+            ..pushing(-50)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell),
+            of_mass(Ship::at(2, 100.0, 0.0), 10.0),
+            of_mass(Ship::at(3, 100.0, 25.0), 10.0),
+        ];
+        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        assert_eq!(shoves_on(&shoves, B), [], "gated");
+        let blasted = shoves_on(&shoves, C);
+        assert_eq!(blasted.len(), 1, "{shoves:?}");
+        assert!(blasted[0].y < 0.0, "toward the centre: {blasted:?}");
+    }
+
+    /// A tractor beam: the laser at `Impact` -5.
+    fn tractor_beam() -> WeaponRecord {
+        beam_of(-5)
+    }
+
+    /// A tick of A, of `firer_mass` at the centre facing `heading`, firing a
+    /// tractor beam at B of `target_mass` at `at`: the shoves.
+    fn tractored(ships: &mut [Ship; 2]) -> Vec<Shove> {
+        let mut combat = Combat::default();
+        tick_shoving(&mut combat, ships)
+    }
+
+    /// A, of `mass`, at the centre facing `heading`, its tractor beam
+    /// held.
+    fn tractor_firer(mass: f32, heading: f32) -> Ship {
+        of_mass(Ship::at(1, 0.0, 0.0).armed(tractor_beam()), mass).facing(heading)
+    }
+
+    #[test]
+    fn a_tractor_slips_off_a_massless_or_planet_type_target_which_it_still_hurts() {
+        let massless = of_mass(Ship::at(2, 100.0, 100.0), 0.0);
+        let mut planet = of_mass(Ship::at(2, 100.0, 100.0), 100.0);
+        planet.hull.planet_type = true;
+        for target in [massless, planet] {
+            let mut ships = [tractor_firer(200.0, 135.0), target];
+            let shoves = tractored(&mut ships);
+            assert_eq!(shoves, []);
+            assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));
+            assert_eq!(ships[1].reserves.shield.now, 5.0, "hurt");
+        }
+    }
+
+    #[test]
+    fn a_firer_of_three_quarters_its_targets_mass_holds_it() {
+        let mut ships = [
+            tractor_firer(75.0, 90.0),
+            of_mass(Ship::at(2, 100.0, 0.0), 100.0),
+        ];
+        tractored(&mut ships);
+        assert_eq!(ships[1].tractor, Some(TractorLock::by(A)));
+        assert_eq!(ships[0].tractor, None);
+        let mut ships = [
+            tractor_firer(74.0, 90.0),
+            of_mass(Ship::at(2, 100.0, 0.0), 100.0),
+        ];
+        tractored(&mut ships);
+        assert_eq!(ships[1].tractor, None);
+        assert_eq!(
+            ships[0].tractor,
+            Some(TractorLock::by(A)),
+            "it holds itself"
+        );
+    }
+
+    #[test]
+    fn a_heavy_tractor_pulls_its_target_toward_its_start_only_off_both_of_its_firers_axes() {
+        let at = Vec2::new(100.0, 100.0);
+        let mut ships = [
+            tractor_firer(200.0, 135.0),
+            of_mass(Ship::at(2, at.x, at.y), 100.0),
+        ];
+        let shoves = tractored(&mut ships);
+        let pulled = shoves_on(&shoves, B);
+        assert_eq!(pulled.len(), 1, "{shoves:?}");
+        assert!(close_by(pulled[0], push_of(Vec2::ZERO, at, -5.0, 100.0)));
+        assert!(
+            pulled[0].x < 0.0 && pulled[0].y < 0.0,
+            "toward it: {pulled:?}"
+        );
+        assert_eq!(shoves_on(&shoves, A), [], "the firer stays");
+        // Dead ahead, on the firer's y: held, not pulled.
+        let mut ships = [
+            tractor_firer(200.0, 90.0),
+            of_mass(Ship::at(2, 100.0, 0.0), 100.0),
+        ];
+        assert_eq!(tractored(&mut ships), []);
+        assert_eq!(ships[1].tractor, Some(TractorLock::by(A)));
+        // A ship whose jump is under way: held, not pulled.
+        let mut jumping = of_mass(Ship::at(2, at.x, at.y), 100.0);
+        jumping.jumping = true;
+        let mut ships = [tractor_firer(200.0, 135.0), jumping];
+        assert_eq!(tractored(&mut ships), []);
+        assert_eq!(ships[1].tractor, Some(TractorLock::by(A)));
+    }
+
+    #[test]
+    fn a_light_firer_holds_itself_unless_held_and_is_touched_either_way() {
+        let mut held = tractor_firer(6.0, 90.0);
+        held.tractor = Some(TractorLock {
+            holder: C,
+            ticks_since_touch: 7,
+        });
+        let mut ships = [held, of_mass(Ship::at(2, 100.0, 0.0), 15.0)];
+        tractored(&mut ships);
+        assert_eq!(ships[0].tractor, Some(TractorLock::by(C)));
+        assert_eq!(ships[1].tractor, None);
+    }
+
+    #[test]
+    fn a_light_firer_pulls_itself_toward_its_target_and_leaves_the_target_alone() {
+        let mut ships = [
+            tractor_firer(6.0, 90.0),
+            of_mass(Ship::at(2, 100.0, 0.0), 15.0),
+        ];
+        let shoves = tractored(&mut ships);
+        assert_eq!(shoves_on(&shoves, B), [], "the target");
+        let pulled = shoves_on(&shoves, A);
+        assert_eq!(pulled.len(), 1, "{shoves:?}");
+        assert!(close_by(pulled[0], Vec2::new(5.0 / 6.0, 0.0)), "{pulled:?}");
+        assert_eq!(ships[0].state.velocity, pulled[0]);
+        assert_eq!(ships[0].tractor, Some(TractorLock::by(A)));
+        assert_eq!(ships[1].reserves.shield.now, 5.0, "hurt");
+        // Clamped to its top speed.
+        let mut slow = tractor_firer(1.0, 90.0);
+        slow.top_speed = 0.5;
+        let mut ships = [slow, of_mass(Ship::at(2, 100.0, 0.0), 15.0)];
+        let pulled = shoves_on(&tractored(&mut ships), A);
+        assert!(close_by(pulled[0], Vec2::new(0.5, 0.0)), "{pulled:?}");
+        // Off both of the firer's axes, where a hit could pull it, the
+        // target is still left alone: the beam's Impact is spent.
+        let mut ships = [
+            tractor_firer(6.0, 135.0),
+            of_mass(Ship::at(2, 100.0, 100.0), 15.0),
+        ];
+        let shoves = tractored(&mut ships);
+        assert_eq!(shoves_on(&shoves, B), [], "the target, diagonal");
+        assert_eq!(shoves_on(&shoves, A).len(), 1, "{shoves:?}");
+    }
+
+    #[test]
+    fn a_light_firer_is_not_pulled_near_its_target_on_both_axes_massless_or_planet_type() {
+        let near = of_mass(Ship::at(2, 30.0, 0.0), 15.0);
+        let mut ships = [tractor_firer(6.0, 90.0), near];
+        assert_eq!(tractored(&mut ships), []);
+        assert_eq!(
+            ships[0].tractor,
+            Some(TractorLock::by(A)),
+            "held all the same"
+        );
+        let mut planet = tractor_firer(6.0, 90.0);
+        planet.hull.planet_type = true;
+        for firer in [tractor_firer(0.0, 90.0), planet] {
+            let mut ships = [firer, of_mass(Ship::at(2, 100.0, 0.0), 15.0)];
+            assert_eq!(tractored(&mut ships), []);
+            assert_eq!(ships[0].tractor, Some(TractorLock::by(A)));
+        }
+    }
+
+    #[test]
+    fn a_tractor_beam_whose_firer_has_left_the_fight_neither_holds_nor_pulls() {
+        let mut combat = Combat::default();
+        let mut ships = vec![
+            tractor_firer(200.0, 135.0),
+            of_mass(Ship::at(2, 100.0, 100.0), 100.0),
+        ];
+        tick_shoving(&mut combat, &mut ships);
+        let mut target = ships.remove(1);
+        target.tractor = None;
+        target.state.velocity = Vec2::ZERO;
+        let mut ships = [target];
+        let shield = ships[0].reserves.shield.now;
+        assert_eq!(tick_shoving(&mut combat, &mut ships), []);
+        assert_eq!(ships[0].tractor, None);
+        assert_eq!(
+            ships[0].reserves.shield.now,
+            shield - 5.0,
+            "hurt all the same"
+        );
     }
 }

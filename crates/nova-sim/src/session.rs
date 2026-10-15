@@ -437,6 +437,7 @@ use crate::combat::armament::{
 };
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
+use crate::combat::impact::TractorLock;
 use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
@@ -541,6 +542,7 @@ impl FightTerms {
             armament,
             rounds,
             cloak,
+            tractor,
             ..
         } = npc;
         Fighter {
@@ -563,6 +565,7 @@ impl FightTerms {
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
+            tractor,
             armament,
             rounds,
             drawn_heading: self.drawn_heading,
@@ -743,6 +746,8 @@ pub struct Session {
     /// on its own frame boundary, so this crosses no boundary the player
     /// can see.
     player_exploded_this_tick: bool,
+    /// The player's tractor lock ([`Session::tractor`]).
+    tractor: Option<TractorLock>,
     /// The heading each ship in the fight was drawn at after the last
     /// [`Session::tick_combat`]: its heading as that tick ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
@@ -1293,6 +1298,7 @@ impl Session {
             armament: Armament::default(),
             condition: Condition::Intact,
             player_exploded_this_tick: false,
+            tractor: None,
             drawn: BTreeMap::new(),
             player_end: None,
             hold_expiry_due: false,
@@ -2091,11 +2097,14 @@ impl Session {
     /// first among the tick's sounds (see `sound_the_klaxon`), and on the
     /// player's explosion tick a [`SimSound::Halt`] of the klaxon and the
     /// warp sounds follows it
-    /// ([`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)). A heavy
-    /// ship's final explosion, the player's too, sends out a shockwave
-    /// ([`shockwave`](crate::combat::shockwave)) that sets the velocity of
-    /// each ship it pushes; the player's is not pushed while its jump is
-    /// under way, the pre-jump stage included. Before anything else,
+    /// ([`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)). Every
+    /// hit, blast and beam tick of a weapon with an `Impact`, a tractor
+    /// beam's self-pull, and the shockwave of a heavy ship's final
+    /// explosion, the player's too, set the velocity of each ship they push
+    /// ([`impact`](crate::combat::impact)); the player's is not pushed
+    /// while its jump is under way, the pre-jump stage included. A tractor
+    /// beam sets the lock of the ship it holds, the player's
+    /// ([`Session::tractor`]) or an NPC's. Before anything else,
     /// unless landed or jumping, the sabotage clock ticks, and what it sets
     /// off goes off (see the `sabotage` module), and the eject is checked
     /// (see the `eject` module), both before the scans. Each ship fires
@@ -2149,6 +2158,7 @@ impl Session {
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
             jumping: self.jump.is_some(),
+            tractor: &mut self.tractor,
             armament: &mut self.armament,
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
@@ -2236,7 +2246,7 @@ impl Session {
     /// What the fight needs of the player's ship and of each NPC, in
     /// order, that the ship does not carry: whether it is held disabled
     /// ([`Session::mission_ship_held`]; the player never is), its class
-    /// and top speeds, which a shockwave pushes it against, and the heading
+    /// and top speeds, which every push is capped against, and the heading
     /// it was last drawn at, its own for a ship new to the fight.
     fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
         let drawn = |ship: ShipRef, heading: f32| self.drawn.get(&ship).copied().unwrap_or(heading);
@@ -2261,7 +2271,7 @@ impl Session {
         (player, npcs)
     }
 
-    /// Sets the velocity of each ship the fight's shockwaves pushed this
+    /// Sets the velocity of each ship the fight pushed this
     /// tick ([`Combat::take_shoves`]), which takes effect on its next
     /// movement.
     fn take_shoves(&mut self) {
@@ -4429,6 +4439,16 @@ impl Session {
     #[must_use]
     pub fn player(&self) -> &ShipState {
         &self.player
+    }
+
+    /// The player's tractor lock, if a tractor beam holds its ship or it
+    /// holds itself along its own (see
+    /// [`impact`](crate::combat::impact)); none at the start of a session
+    /// and of a load, as it is never saved. The fight sets and touches it;
+    /// nothing else here reads or clears it yet.
+    #[must_use]
+    pub fn tractor(&self) -> Option<TractorLock> {
+        self.tractor
     }
 
     /// The pilot flying.
@@ -16066,6 +16086,173 @@ pub(super) mod tests {
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.pilot.reserves.shield.now, 68.0, "hit");
         assert_eq!(session.player().velocity, Vec2::ZERO, "not pushed");
+    }
+
+    // Knockback and tractor beams (see the `combat::impact` module).
+
+    /// The blaster at `Impact` 100.
+    fn knocker() -> WeaponRecord {
+        WeaponRecord {
+            impact: 100,
+            ..blaster()
+        }
+    }
+
+    /// A tractor beam: 200 pixels long, lasting 3 ticks, doing 1 energy
+    /// damage, at `Impact` -5.
+    fn tractor_beam() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 0,
+            count: 3,
+            reload: 10,
+            beam_length: 200,
+            energy_dmg: 1,
+            impact: -5,
+            ..weapon(130)
+        }
+    }
+
+    /// `armed()`'s session with the player at rest at the centre, facing
+    /// up, of `player_mass`, and NPC 0 at rest 100 above it, facing it, of
+    /// `npc_mass`; both with a top speed of 10 and full shields. The player
+    /// fires `player`'s weapon at NPC 0, if any, and NPC 0 its `npc`'s at
+    /// the player.
+    fn knocking(
+        catalog: &FakePilotCatalog,
+        (player, player_mass): (Option<WeaponRecord>, f32),
+        (npc, npc_mass): (Option<WeaponRecord>, f32),
+    ) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        session.player.position = Vec2::ZERO;
+        session.player.velocity = Vec2::ZERO;
+        session.hull.mass = player_mass;
+        session.stats.handling.max_speed = 10.0;
+        session.pilot.reserves.shield = crate::reserves::Gauge::full(1000.0);
+        if let Some(weapon) = player {
+            session.armament = crate::combat::armament::Armament::new([(
+                crate::combat::weapon::WeaponSpec::new(&weapon),
+                1,
+            )]);
+            session.hold_trigger(FIRE);
+            session.target = Some(NpcId(0));
+        }
+        let ship = &mut session.traffic.npcs_mut()[0];
+        ship.hull.mass = npc_mass;
+        ship.stats.handling.max_speed = 10.0;
+        ship.reserves.shield = crate::reserves::Gauge::full(1000.0);
+        if let Some(weapon) = npc {
+            ship.armament = crate::combat::armament::Armament::new([(
+                crate::combat::weapon::WeaponSpec::new(&weapon),
+                1,
+            )]);
+            ship.trigger = FIRE;
+            ship.target = Some(ShipRef::Player);
+        }
+        session
+    }
+
+    /// Ticks the fight until `hit` holds, at most 20 ticks.
+    fn fight_until(session: &mut Session, hit: impl Fn(&Session) -> bool) {
+        for _ in 0..20 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if hit(session) {
+                return;
+            }
+        }
+        panic!("never hit");
+    }
+
+    #[test]
+    fn the_players_impact_shot_pushes_the_npc_it_hits() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (Some(knocker()), 100.0), (None, 100.0));
+        fight_until(&mut session, |session| {
+            session.npcs()[0].reserves.shield.now < 1000.0
+        });
+        let velocity = session.npcs()[0].state.velocity;
+        assert!(near(velocity, Vec2::new(0.0, -1.0)), "away: {velocity:?}");
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn an_npcs_impact_shot_pushes_the_player() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (None, 100.0), (Some(knocker()), 100.0));
+        fight_until(&mut session, |session| {
+            session.reserves().shield.now < 1000.0
+        });
+        let velocity = session.player().velocity;
+        assert!(near(velocity, Vec2::new(0.0, 1.0)), "away: {velocity:?}");
+        assert_eq!(session.npcs()[0].state.velocity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_player_braking_for_its_jump_is_hit_by_an_impact_shot_but_not_pushed() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (None, 100.0), (Some(knocker()), 100.0));
+        session.jump = Some(Jump::PreJump {
+            to: SystemId(131),
+            bearing: None,
+            warp: None,
+        });
+        fight_until(&mut session, |session| {
+            session.reserves().shield.now < 1000.0
+        });
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn an_npcs_heavy_tractor_leaves_the_player_held_by_it() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (None, 100.0), (Some(tractor_beam()), 200.0));
+        assert_eq!(session.tractor(), None);
+        fight_until(&mut session, |session| {
+            session.reserves().shield.now < 1000.0
+        });
+        let held = Some(TractorLock::by(ShipRef::Npc(NpcId(0))));
+        assert_eq!(session.tractor(), held);
+        assert_eq!(session.npcs()[0].tractor, None);
+        // Kept on the session from tick to tick.
+        session.traffic.npcs_mut()[0].trigger = Trigger::default();
+        for _ in 0..5 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.tractor(), held);
+    }
+
+    #[test]
+    fn the_players_heavy_tractor_leaves_the_npc_held_by_the_player() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (Some(tractor_beam()), 200.0), (None, 100.0));
+        fight_until(&mut session, |session| {
+            session.npcs()[0].reserves.shield.now < 1000.0
+        });
+        let held = Some(TractorLock::by(ShipRef::Player));
+        assert_eq!(session.npcs()[0].tractor, held);
+        assert_eq!(session.tractor(), None);
+        // Kept on the NPC from tick to tick.
+        session.hold_trigger(Trigger::default());
+        for _ in 0..5 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.npcs()[0].tractor, held);
+    }
+
+    #[test]
+    fn the_players_light_tractor_on_a_heavy_npc_pulls_the_player_and_holds_itself() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (Some(tractor_beam()), 6.0), (None, 100.0));
+        fight_until(&mut session, |session| {
+            session.npcs()[0].reserves.shield.now < 1000.0
+        });
+        let velocity = session.player().velocity;
+        assert!(
+            near(velocity, Vec2::new(0.0, -5.0 / 6.0)),
+            "toward the NPC: {velocity:?}"
+        );
+        assert_eq!(session.tractor(), Some(TractorLock::by(ShipRef::Player)));
+        assert_eq!(session.npcs()[0].tractor, None);
+        assert_eq!(session.npcs()[0].state.velocity, Vec2::ZERO);
     }
 
     #[test]
