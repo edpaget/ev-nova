@@ -24,6 +24,21 @@
 //! left of, after `OnAccept`, whatever the goal, the person is swapped
 //! for that ship as the settling begins (see the `mission_ships`
 //! module). Only the hail swaps: a boarding never does.
+//!
+//! **`<OSN>`** reads the original's `_offeringShipIndex` by the engine
+//! ([`RuleKey::OfferingShipName`]): a hail of a person with a
+//! `LinkMission` and without `Flags` 0x0200 names its ship's slot
+//! whether or not the mission is offered, and keeps it after the dialog
+//! (@0x621de, @0x625a4); a board offer names the boarded ship only while
+//! it is open (@0x65882, @0x65a11); a hail quote, and the 0x0400 quote
+//! filter's check of a linked person, name nobody after (see the
+//! `persons` module); a new pilot or a load names nobody. The name is the
+//! person of the ship that holds the slot now ([`Npc::berth`], reused as
+//! the original's slots are), or, with the slot empty, the person it
+//! held. Left out: after an accept whose person is swapped for
+//! its mission ship, the original names the player's new target, the
+//! swapped-in ship (@0x6252f, @0x625a4); here the hailed slot stays
+//! named.
 
 use std::collections::BTreeMap;
 
@@ -63,6 +78,18 @@ pub(super) struct Offering {
     pub(super) mission: MissionId,
     /// What brought it.
     pub(super) by: OfferedBy,
+}
+
+/// The ship the original's `_offeringShipIndex` names when a hail or a
+/// boarding leaves it set, for `<OSN>` by the engine
+/// ([`RuleKey::OfferingShipName`]; see the module docs): its slot, and
+/// its person's name then, which an emptied slot still reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct OfferingShip {
+    /// Its ship-table slot ([`Npc::berth`]).
+    pub(super) berth: u32,
+    /// Its person's name as it was set.
+    pub(super) name: String,
 }
 
 /// What hailing the player's target opened ([`Session::open_hail`]).
@@ -158,6 +185,12 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<Hailed, HailRefusal> {
         self.talk = None;
+        let linked = self.linked_ship(self.answering()?, OfferedBy::Hail);
+        // The hail names a linked person's ship before it checks the
+        // mission, and keeps it after the dialog (@0x621de, @0x625a4).
+        if let Some(ship) = linked {
+            self.offering_ship = Some(ship);
+        }
         let npc = self.answering()?;
         let offered = self
             .person_offering(npc, OfferedBy::Hail)
@@ -190,6 +223,42 @@ impl Session {
                 by,
             },
         )
+    }
+
+    /// The ship `npc` is as `_offeringShipIndex` names it when its hail or
+    /// boarding, as `by` says, reaches its person's offer: one whose person
+    /// has a `LinkMission` and offers on its boarding with `Flags` 0x0200
+    /// and on its hail without (`_HandlePlayerCommunication` @0x621a9-0x621de,
+    /// `_HandlePlayerBoardAttempt` @0x6584d-0x65882), whether or not the
+    /// mission is then available; none from the player's escort.
+    pub(super) fn linked_ship(&self, npc: &Npc, by: OfferedBy) -> Option<OfferingShip> {
+        if npc.escort.is_some() {
+            return None;
+        }
+        let person = self.traffic.person(npc.person?.id)?;
+        let on_board = person.record.flags & MISSION_ON_BOARD != 0;
+        (person.record.link_mission.is_some() && on_board == (by == OfferedBy::Boarding)).then(
+            || OfferingShip {
+                berth: npc.berth,
+                name: person.record.name.clone(),
+            },
+        )
+    }
+
+    /// The name `<OSN>` reads by the engine (`_MungeBriefing`
+    /// @0x9cebe-0x9cf28): the person of the ship that now holds the slot
+    /// `_offeringShipIndex` names, none when it has none; a slot no ship
+    /// holds still reads the person it held, remembered as it was set.
+    /// None with no slot named.
+    pub(super) fn offering_ship_name(&self) -> Option<&str> {
+        let ship = self.offering_ship.as_ref()?;
+        match self.npcs().iter().find(|npc| npc.berth == ship.berth) {
+            Some(npc) => {
+                let person = self.traffic.person(npc.person?.id)?;
+                Some(&person.record.name)
+            }
+            None => Some(&ship.name),
+        }
     }
 
     /// Whether `options` list a way for `npc` to join the fleet, its hail
@@ -257,6 +326,9 @@ impl Session {
             }
             OfferedBy::Hail => {}
             OfferedBy::Boarding => {
+                // `_HandlePlayerBoardAttempt` names the boarded ship only
+                // around its offer (@0x65882 to @0x65a11).
+                self.offering_ship = None;
                 if accepted {
                     self.mark_boarded(offering.npc);
                 }
@@ -941,6 +1013,127 @@ mod tests {
         let _ = board(&mut session);
         assert_eq!(accept(&mut session), Ok(0));
         assert!(session.pilot().gone(PersonId(600)), "accepted");
+    }
+
+    // `<OSN>`: `_offeringShipIndex`.
+
+    /// `session` reading `<OSN>` as `rule` says.
+    fn osn(session: &Session, rule: RuleSource) -> String {
+        session
+            .clone()
+            .with_rules(Rulebook::default().with_override(RuleKey::OfferingShipName, rule))
+            .plain_text("<OSN>")
+    }
+
+    #[test]
+    fn a_new_session_names_no_offering_ship() {
+        let catalog = talking();
+        let session = targeting_ace(&catalog);
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "[Error]",
+            "_InitMissions @0x97bbf"
+        );
+        assert_eq!(osn(&session, RuleSource::Bible), "[Error]");
+    }
+
+    #[test]
+    fn by_the_engine_osn_names_the_last_hailed_person_after_the_dialog() {
+        let (_, mut session) = offered(0);
+        assert_eq!(osn(&session, RuleSource::Engine), "Ace", "while offering");
+        assert_eq!(osn(&session, RuleSource::Bible), "Ace", "while offering");
+        assert_eq!(
+            session.refuse_mission(MissionId(130), &mut NeverFires),
+            Ok(())
+        );
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "Ace",
+            "kept after the dialog (@0x625a4)"
+        );
+        assert_eq!(
+            osn(&session, RuleSource::Bible),
+            "[Error]",
+            "only when offering a mission from a ship"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_hailing_a_linked_person_names_it_whether_or_not_it_offers() {
+        let mut unavailable = talking();
+        unavailable.missions[0].avail_random = 50;
+        let mut session = targeting_ace(&unavailable);
+        session.offers.set_roll(MissionId(130), 51);
+        assert!(opened_comm(&hail(&mut session, &unavailable).0));
+        assert_eq!(osn(&session, RuleSource::Engine), "Ace", "@0x621de");
+        assert_eq!(osn(&session, RuleSource::Bible), "[Error]");
+    }
+
+    #[test]
+    fn hailing_a_person_offering_on_boarding_or_with_no_mission_names_nobody() {
+        let mut boarded = talking();
+        boarded.persons[0].flags = MISSION_ON_BOARD;
+        let mut session = targeting_ace(&boarded);
+        assert!(opened_comm(&hail(&mut session, &boarded).0));
+        assert_eq!(osn(&session, RuleSource::Engine), "[Error]", "0x0200");
+        let mut unlinked = talking();
+        unlinked.persons[0].link_mission = None;
+        let mut session = targeting_ace(&unlinked);
+        assert!(opened_comm(&hail(&mut session, &unlinked).0));
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "[Error]",
+            "no LinkMission"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_osn_reads_whoever_holds_the_hailed_ships_slot_now() {
+        let (_, mut session) = offered(0);
+        assert_eq!(
+            session.refuse_mission(MissionId(130), &mut NeverFires),
+            Ok(())
+        );
+        session.traffic.npcs_mut()[0].person = None;
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "[Error]",
+            "its person gone from the slot (+0xc8d0)"
+        );
+        session.traffic.remove(NpcId(0));
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "Ace",
+            "a slot left empty still holds what it last held: the name remembered"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_board_offer_names_the_boarded_person_then_nobody() {
+        let catalog = boardable(0);
+        let mut session = alongside_ace(&catalog);
+        let _ = board(&mut session);
+        assert_eq!(osn(&session, RuleSource::Engine), "Ace", "@0x65882");
+        assert_eq!(
+            session.refuse_mission(MissionId(130), &mut NeverFires),
+            Ok(())
+        );
+        assert_eq!(osn(&session, RuleSource::Engine), "[Error]", "-1 @0x65a11");
+    }
+
+    #[test]
+    fn by_the_engine_boarding_a_linked_person_with_no_offer_forgets_the_hailed_one() {
+        let mut unavailable = boardable(0);
+        unavailable.missions[0].avail_random = 50;
+        let mut session = alongside_ace(&unavailable);
+        session.offering_ship = Some(OfferingShip {
+            berth: 99,
+            name: "Earlier".to_owned(),
+        });
+        session.offers.set_roll(MissionId(130), 51);
+        let (boarded, _) = board(&mut session);
+        assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+        assert_eq!(osn(&session, RuleSource::Engine), "[Error]");
     }
 
     #[test]

@@ -1046,6 +1046,10 @@ pub struct Session {
     /// the crossed rank tags read them; never saved, as the original
     /// saves none of it.
     rank_govts: RankTagGovts,
+    /// The ship `<OSN>` names by the engine (`_offeringShipIndex`; see
+    /// the `person_offers` module); never saved, and none at a new pilot
+    /// or a load (`_InitMissions` @0x97bbf).
+    offering_ship: Option<person_offers::OfferingShip>,
     /// Whether the data turns on the `l33t` mode (`_leetMode`; see
     /// [`Session::with_strings`]); never saved.
     leet: bool,
@@ -1387,6 +1391,7 @@ impl Session {
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
             rank_govts: RankTagGovts::NONE,
+            offering_ship: None,
             leet: false,
             suppressed: BTreeSet::new(),
             offer_venue: None,
@@ -4576,8 +4581,15 @@ impl Session {
             downed: None,
             provokes: true,
         });
+        let linked = self.linked_ship(&npc, person_offers::OfferedBy::Boarding);
         if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
+            self.offering_ship = linked;
             return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
+        }
+        if linked.is_some() {
+            // Named and put back to none around the plunder
+            // (@0x65882, @0x65a11).
+            self.offering_ship = None;
         }
         self.mark_boarded(npc.id);
         if rule.repels(npc.booty) {

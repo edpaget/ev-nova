@@ -23,7 +23,7 @@
 //! | `<DL>` | the deadline, written long ([`long_date_text`]); one of today is `"[Error]"` (@0x9c715-0x9c78e) |
 //! | `<PN>`, `<PNN>` | the pilot's name; its nickname, or the name with none (@0x9cf2d-0x9cfb6) |
 //! | `<PSN>`, `<PST>` | the player's ship's name and its class's (@0x9cfbb-0x9d034) |
-//! | `<OSN>` | the name of the person offering (@0x9cebe-0x9cf28) |
+//! | `<OSN>` | the name of the person of the ship last named offering (@0x9cebe-0x9cf28; see [`RuleKey::OfferingShipName`](crate::RuleKey::OfferingShipName)) |
 //! | `<PRK>`, `<SRK>`, `<RRK>` | the ranks' names, `STR#` 2002 #341 ("captain") with none (@0x9d039-0x9d3b3; see [`rank`](crate::rank)) |
 //! | `<PAY>` | the amount [`pay_shown`] gives, written by [`comma_number`]; below 0 `"[Error]"` (@0x9c7a0-0x9c835, @0x9cd2a-0x9cdb6) |
 //! | `<REG>` | the registration's licence name (`_RT3_GetDisplayName` @0xd1517) |
@@ -77,8 +77,10 @@
 //!   first ([`load_leet`], `_LoadDescription` @0x7194f-0x71a5c), which
 //!   can break a tag (`<PAY>` to `<P4Y>`) that is then left as written.
 //!
-//! The original's quirk not reproduced here, a stale `<OSN>`, is
-//! rdm:phase/missions-fidelity/phase-2-text-substitution-quirks.
+//! - `<OSN>` reads the context's person, which the session gives as
+//!   [`RuleKey::OfferingShipName`](crate::RuleKey::OfferingShipName)
+//!   says: by the engine, the original's `_offeringShipIndex`, which a
+//!   hail leaves set, so a later text names the person last hailed.
 
 use crate::catalog::{DateAffixes, GovtId, StellarId, SystemId};
 use crate::chance::Chance;
