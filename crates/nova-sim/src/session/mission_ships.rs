@@ -462,6 +462,7 @@ impl Session {
             met: active.goals_met,
         };
         let failed_before = active.failed.is_some();
+        let done_before = ships.ship_done;
         let check = check_goals(&facts);
         if (check.met != facts.met || (check.failed && !failed_before))
             && let Some(active) = self.slot_holding(slot, record.id)
@@ -471,16 +472,22 @@ impl Session {
                 active.failed.get_or_insert(FailedBy::Marked);
             }
         }
-        if goals_met_moment(met_before(&facts), check, failed_before) {
+        let once = self.rules.source_for(RuleKey::ShipDoneOnce) == RuleSource::Bible;
+        if goals_met_moment(met_before(&facts), check, failed_before) && !(once && done_before) {
             self.ship_goals_met(slot, &record, chance);
         }
     }
 
     /// The moment the goals of `record`, the mission in `slot`, are met
-    /// (@0x9ec92-0x9ed87), drawing on `chance`: its `ShipDoneText`, its
+    /// (@0x9ec92-0x9ed87), drawing on `chance`: its moment marked come
+    /// ([`SpecialShips::ship_done`], under either reading of
+    /// [`RuleKey::ShipDoneOnce`]), its `ShipDoneText`, its
     /// `OnShipDone` with a `ShipGoal`, then with `Flags` 0x0001 its
     /// auto-abort, while the slot still holds it.
     fn ship_goals_met(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
+        if let Some(active) = self.slot_holding(slot, record.id) {
+            active.ships.ship_done = true;
+        }
         self.show_mission_text(MissionTextKind::ShipDone, record.id, Some(slot));
         if ShipGoal::from_code(record.ships.goal) != ShipGoal::None {
             self.run_mission_script(slot, &record.on_ship_done, chance);
@@ -1565,6 +1572,7 @@ pub(super) mod tests {
                 disabled: 0,
                 chased_off: 0,
                 uniform_type: None,
+                ship_done: false,
             }
         );
         assert_eq!(
@@ -3181,6 +3189,136 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "completed");
+    }
+
+    /// The rulebook with [`RuleKey::ShipDoneOnce`] read as `source`.
+    fn ship_done_once(source: crate::RuleSource) -> crate::Rulebook {
+        crate::Rulebook::default().with_override(RuleKey::ShipDoneOnce, source)
+    }
+
+    /// How many `ShipDone` texts were shown since last taken.
+    fn ship_dones(session: &mut Session) -> usize {
+        shown(session)
+            .iter()
+            .filter(|(kind, _)| *kind == MissionTextKind::ShipDone)
+            .count()
+    }
+
+    /// [`jump_to`], the tank filled first.
+    fn jump_refuelled(session: &mut Session, catalog: &FakePilotCatalog, to: i16) {
+        let fuel = &mut session.pilot.reserves.fuel;
+        fuel.now = fuel.max;
+        jump_to(session, catalog, to);
+    }
+
+    /// [`returning`]'s escort mission taken off with, then away from its
+    /// ships and back twice, under `source` of [`RuleKey::ShipDoneOnce`]:
+    /// the `ShipDone` texts shown at each moment its goals could be met,
+    /// and the bits set by then.
+    fn escort_round_trips(source: crate::RuleSource) -> (Vec<usize>, Vec<u16>) {
+        let catalog = returning(3, 0);
+        let mut session = accepted(&catalog).with_rules(ship_done_once(source));
+        take_off(&mut session, &catalog);
+        settle(&mut session, &catalog);
+        assert!(goals_met(&session), "{source:?}: met at take-off");
+        let mut done = vec![ship_dones(&mut session)];
+        for _ in 0..2 {
+            jump_refuelled(&mut session, &catalog, 131);
+            assert!(!goals_met(&session), "{source:?}: unmet without them");
+            jump_refuelled(&mut session, &catalog, 130);
+            settle(&mut session, &catalog);
+            assert!(goals_met(&session), "{source:?}: met again");
+            done.push(ship_dones(&mut session));
+        }
+        assert!(ships_of(&session).ship_done, "{source:?}: its moment came");
+        (done, bits(&session))
+    }
+
+    #[test]
+    fn an_escort_goal_runs_its_ship_done_each_time_its_ships_come_back_by_the_engine() {
+        let (done, bits) = escort_round_trips(crate::RuleSource::Engine);
+        assert_eq!(done, [1, 1, 1]);
+        assert_eq!(bits, [6]);
+    }
+
+    #[test]
+    fn by_the_other_reading_an_escort_goals_ship_done_runs_once() {
+        let (done, bits) = escort_round_trips(crate::RuleSource::Bible);
+        assert_eq!(done, [1, 0, 0]);
+        assert_eq!(bits, [6], "OnShipDone ran at take-off");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_later_moment_runs_no_ship_done_script() {
+        let mut catalog = returning(3, 0);
+        catalog.missions[0].on_ship_done = Script::parse("^b6");
+        for (source, toggled) in [
+            (crate::RuleSource::Engine, true),
+            (crate::RuleSource::Bible, false),
+        ] {
+            let mut session = accepted(&catalog).with_rules(ship_done_once(source));
+            take_off(&mut session, &catalog);
+            settle(&mut session, &catalog);
+            assert_eq!(bits(&session), [6], "{source:?}");
+            jump_refuelled(&mut session, &catalog, 131);
+            jump_refuelled(&mut session, &catalog, 130);
+            settle(&mut session, &catalog);
+            assert_eq!(
+                bits(&session).is_empty(),
+                toggled,
+                "{source:?}: toggled back"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ship_done_flag_survives_a_save_so_the_other_reading_still_runs_it_once() {
+        let catalog = returning(3, 0);
+        let bible = ship_done_once(crate::RuleSource::Bible);
+        let mut session = accepted(&catalog).with_rules(bible);
+        take_off(&mut session, &catalog);
+        settle(&mut session, &catalog);
+        assert_eq!(ship_dones(&mut session), 1);
+        jump_refuelled(&mut session, &catalog, 131);
+        assert!(!goals_met(&session));
+        let mut session = saved_and_loaded(&session, &catalog, |_| {}).with_rules(bible);
+        assert!(ships_of(&session).ship_done, "kept");
+        jump_refuelled(&mut session, &catalog, 130);
+        settle(&mut session, &catalog);
+        assert!(goals_met(&session), "met again");
+        assert_eq!(ship_dones(&mut session), 0, "not again after the load");
+    }
+
+    #[test]
+    fn an_escort_goal_met_at_its_return_has_had_no_moment_so_the_other_reading_still_runs_it() {
+        let mut catalog = returning(3, 0);
+        catalog.missions[0].ships.syst = 131;
+        catalog.missions[0].travel_stel = 140;
+        let mut session = accepted(&catalog).with_rules(ship_done_once(crate::RuleSource::Bible));
+        take_off(&mut session, &catalog);
+        assert!(marked(&session).is_empty());
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert!(!goals_met(&session), "the trailing check unmet it again");
+        // The escort branch alone, as the landing's return hook runs it
+        // (@0xa1a99-0xa1ab1): goals met, destination not reached.
+        session.mission_effect(
+            crate::session::missions::slot_hook(0, crate::session::missions::RETURN),
+            &StoryEvent::Landed {
+                stellar: StellarId(128),
+            },
+            &mut NeverFires,
+        );
+        assert!(goals_met(&session), "the escort branch met it");
+        assert!(!ships_of(&session).ship_done, "with no moment");
+        assert_eq!(ship_dones(&mut session), 0);
+        take_off(&mut session, &catalog);
+        assert!(!goals_met(&session), "unmet without them");
+        jump_to(&mut session, &catalog, 131);
+        settle(&mut session, &catalog);
+        assert!(goals_met(&session), "met with them");
+        assert_eq!(ship_dones(&mut session), 1, "its first moment");
+        assert!(ships_of(&session).ship_done);
     }
 
     #[test]
@@ -5457,6 +5595,8 @@ pub(super) mod tests {
         let before = SpecialShips {
             // Only Ace's type, kept under 0x0800.
             uniform_type: Some(ShipId(129)),
+            // And the escort goal's moment, met as it arrives.
+            ship_done: true,
             ..ships_of(&session)
         };
         settle(&mut session, &catalog);

@@ -840,7 +840,7 @@ fn holding(pilot: &Pilot, held: &[(usize, i16, Option<i16>, Option<i16>)]) -> Pi
                 "goals_met": false,
                 "aboard": false,
                 "failed": null,
-                "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0, "uniform_type": null},
+                "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0, "uniform_type": null, "ship_done": false},
                 "aux": {"countdown": 0, "arrived": 0, "left": 0},
             })
         })

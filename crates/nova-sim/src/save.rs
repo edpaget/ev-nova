@@ -90,6 +90,12 @@
 //!   side mission ships coming in enter from. An older save kept none,
 //!   so the upgrade gives `null`, and after its load they come in at a
 //!   drawn angle until the next jump.
+//! - Version 28: adds whether each active mission's goals-met moment has
+//!   come (`ship_done` in its `ships`), read by the other reading of
+//!   [`RuleKey::ShipDoneOnce`](crate::RuleKey::ShipDoneOnce). An older
+//!   save kept none, and the upgrade can't read a mission's `ShipGoal` to
+//!   tell goals met by the moment from an escort goal's met at its
+//!   return with none, so it gives `false` to every mission.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -144,9 +150,10 @@
 //! 130}`, `"follows_player"`, or `null` for nowhere), how many are `left`
 //! and have `arrived`, their `appear` timer (-1 when it does not run),
 //! their drawn `name` and `subtitle`, how many have been
-//! `destroyed`, `boarded`, `disabled` and `chased_off`, and the one ship
+//! `destroyed`, `boarded`, `disabled` and `chased_off`, the one ship
 //! type they fly (`uniform_type`, a `shïp` ID, or `null` for a type drawn
-//! for each). A slot past 15
+//! for each), and whether their goals-met moment has come (`ship_done`).
+//! A slot past 15
 //! is unusable.
 //!
 //! The crons (`crons`) are those running or holding off, by ascending
@@ -187,7 +194,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 27;
+pub const CURRENT: u64 = 28;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -682,6 +689,7 @@ struct SavedShips {
     chased_off: i16,
     #[serde(deserialize_with = "Option::deserialize")]
     uniform_type: Option<i16>,
+    ship_done: bool,
 }
 
 impl From<&SpecialShips> for SavedShips {
@@ -702,6 +710,7 @@ impl From<&SpecialShips> for SavedShips {
             disabled: ships.disabled,
             chased_off: ships.chased_off,
             uniform_type: ships.uniform_type.map(|ship| ship.0),
+            ship_done: ships.ship_done,
         }
     }
 }
@@ -724,6 +733,7 @@ impl From<SavedShips> for SpecialShips {
             disabled: saved.disabled,
             chased_off: saved.chased_off,
             uniform_type: saved.uniform_type.map(ShipId),
+            ship_done: saved.ship_done,
         }
     }
 }
@@ -1071,7 +1081,27 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     strict_play,
     uniform_types,
     jumped_from,
+    ship_done,
 ];
+
+/// Version 27 to 28: no active mission's goals-met moment has come. The
+/// upgrade reads no `mïsn`, so it can't tell goals met by a moment from
+/// an escort goal's met at its return with none
+/// ([`met_at_return`](crate::mission::goals::met_at_return)); giving
+/// `false` never holds back a `ShipDone` still to run, and at most lets
+/// one already run run once more, and only under the other reading of
+/// [`RuleKey::ShipDoneOnce`](crate::RuleKey::ShipDoneOnce).
+fn ship_done(save: &mut Value) {
+    let Some(entries) = save.get_mut("missions").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for ships in entries
+        .iter_mut()
+        .filter_map(|entry| entry.get_mut("ships")?.as_object_mut())
+    {
+        ships.insert("ship_done".to_owned(), Value::Bool(false));
+    }
+}
 
 /// Version 26 to 27: no system jumped from, so mission ships coming in
 /// before the next jump enter at a drawn angle.
@@ -1590,6 +1620,7 @@ mod tests {
                     disabled: 4,
                     chased_off: 5,
                     uniform_type: Some(ShipId(137)),
+                    ship_done: false,
                 },
                 aux: AuxShips {
                     countdown: 33,
@@ -1615,6 +1646,7 @@ mod tests {
                 failed: Some(FailedBy::Marked),
                 ships: SpecialShips {
                     system: ShipSystem::FollowsPlayer,
+                    ship_done: true,
                     ..SpecialShips::default()
                 },
                 aux: AuxShips::default(),
@@ -1699,7 +1731,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 27);
+        assert_eq!(CURRENT, 28);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1784,7 +1816,7 @@ mod tests {
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 27"), "{text}");
+        assert!(text.contains("\n  \"version\": 28"), "{text}");
     }
 
     #[test]
@@ -3295,7 +3327,8 @@ mod tests {
                         "boarded": 1,
                         "disabled": 4,
                         "chased_off": 5,
-                        "uniform_type": 137
+                        "uniform_type": 137,
+                        "ship_done": false
                     },
                     "aux": {"countdown": 33, "arrived": 1, "left": -2}
                 },
@@ -3324,7 +3357,8 @@ mod tests {
                         "boarded": 0,
                         "disabled": 0,
                         "chased_off": 0,
-                        "uniform_type": null
+                        "uniform_type": null,
+                        "ship_done": true
                     },
                     "aux": {"countdown": 0, "arrived": 0, "left": 0}
                 }
@@ -3429,9 +3463,77 @@ mod tests {
         assert_eq!(uniform(9), Some(None));
     }
 
-    /// `pilot` saved at version 26: no system jumped from.
-    fn at_version_26(pilot: &Pilot) -> String {
+    #[test]
+    fn a_missions_ship_done_survives_a_save_and_load() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        let done = |slot| {
+            back.missions()
+                .get(slot)
+                .map(|active| active.ships.ship_done)
+        };
+        assert_eq!(done(2), Some(false));
+        assert_eq!(done(9), Some(true));
+        assert_eq!(back, pilot);
+    }
+
+    /// `pilot` saved at version 27: no mission keeps whether its
+    /// goals-met moment has come.
+    fn at_version_27(pilot: &Pilot) -> String {
         let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(27);
+        for mission in value["missions"].as_array_mut().expect("a list") {
+            mission["ships"]
+                .as_object_mut()
+                .expect("an object")
+                .remove("ship_done");
+        }
+        value.to_string()
+    }
+
+    /// `pilot` with no mission's goals-met moment come, as a save from
+    /// before version 28 loads it.
+    fn without_ship_done(mut pilot: Pilot) -> Pilot {
+        for slot in 0..16 {
+            if let Some(active) = pilot.missions.get_mut(slot) {
+                active.ships.ship_done = false;
+            }
+        }
+        pilot
+    }
+
+    #[test]
+    fn a_version_27_save_loads_with_no_missions_ship_done_whatever_its_goals_met() {
+        let pilot = decode(&at_version_27(&seasoned())).expect("loads");
+        let met_and_done = |slot| {
+            pilot
+                .missions()
+                .get(slot)
+                .map(|active| (active.goals_met, active.ships.ship_done))
+        };
+        assert_eq!(met_and_done(2), Some((false, false)));
+        // Slot 9's goals are met with its destination not reached, as an
+        // escort goal met at its return leaves them with no moment
+        // (`met_at_return`): a goal-blind upgrade can't tell it from one
+        // met by a moment, so it leaves the moment to come.
+        assert_eq!(met_and_done(9), Some((true, false)));
+        assert_eq!(pilot, without_ship_done(seasoned()));
+    }
+
+    #[test]
+    fn a_current_save_missing_ship_done_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_27(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(unusable(&text).contains("ship_done"), "{}", unusable(&text));
+    }
+
+    /// `pilot` saved at version 26: no system jumped from, and no
+    /// mission's ship done kept.
+    fn at_version_26(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_27(pilot)).expect("JSON");
         value["version"] = serde_json::Value::from(26);
         value
             .as_object_mut()
@@ -3454,8 +3556,11 @@ mod tests {
     #[test]
     fn a_current_save_missing_jumped_from_is_unusable() {
         let mut value: serde_json::Value =
-            serde_json::from_str(&at_version_26(&seasoned())).expect("JSON");
-        value["version"] = serde_json::Value::from(CURRENT);
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("jumped_from");
         let text = value.to_string();
         assert!(
             unusable(&text).contains("jumped_from"),
@@ -3471,7 +3576,7 @@ mod tests {
             pilot,
             Pilot {
                 jumped_from: None,
-                ..seasoned()
+                ..without_ship_done(seasoned())
             }
         );
     }
@@ -3505,9 +3610,11 @@ mod tests {
         assert_eq!(pilot, without_uniform_types(seasoned()));
     }
 
-    /// `pilot` with no mission's ships keeping a type and no system
-    /// jumped from, as a save from before version 26 loads it.
-    fn without_uniform_types(mut pilot: Pilot) -> Pilot {
+    /// `pilot` with no mission's ships keeping a type, no system
+    /// jumped from and no mission's ship done, as a save from before
+    /// version 26 loads it.
+    fn without_uniform_types(pilot: Pilot) -> Pilot {
+        let mut pilot = without_ship_done(pilot);
         pilot.jumped_from = None;
         for slot in 0..16 {
             if let Some(active) = pilot.missions.get_mut(slot) {
@@ -3849,12 +3956,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 27", "\"version\": 28");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 28 }));
+        let newer = encode(&seasoned()).replace("\"version\": 28", "\"version\": 29");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 29 }));
         assert_eq!(
-            SaveError::Newer { version: 28 }.to_string(),
+            SaveError::Newer { version: 29 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 28, and this version of Nova reads up to 27)."
+             (it is version 29, and this version of Nova reads up to 28)."
         );
     }
 

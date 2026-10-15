@@ -85,6 +85,14 @@ pub struct SpecialShips {
     /// differ only if the `düde` changed between accept and spawn, which
     /// the engine does not model.
     pub uniform_type: Option<ShipId>,
+    /// Whether the moment its goals were met has come: set as its
+    /// `ShipDoneText` is shown and its `OnShipDone` runs, under either
+    /// reading of [`RuleKey::ShipDoneOnce`](crate::RuleKey::ShipDoneOnce),
+    /// and never cleared. Under that rule's other reading a later moment
+    /// shows and runs nothing. The original keeps no such flag. Goals met
+    /// with no moment, as an escort goal's at its return
+    /// ([`met_at_return`](super::goals::met_at_return)), leave it clear.
+    pub ship_done: bool,
 }
 
 impl Default for SpecialShips {
@@ -101,6 +109,7 @@ impl Default for SpecialShips {
             disabled: 0,
             chased_off: 0,
             uniform_type: None,
+            ship_done: false,
         }
     }
 }
@@ -381,6 +390,7 @@ impl SpecialShips {
             disabled: 0,
             chased_off: 0,
             uniform_type,
+            ship_done: false,
         }
     }
 }
@@ -1045,6 +1055,7 @@ mod tests {
                     disabled: 0,
                     chased_off: 0,
                     uniform_type: None,
+                    ship_done: false,
                 },
                 "{start}"
             );
