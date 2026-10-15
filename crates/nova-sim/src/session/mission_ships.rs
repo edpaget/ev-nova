@@ -64,10 +64,17 @@
 //! ships spawn: after the system's setup, for each slot the setup took,
 //! whether or not a ship came (`_SetupShipsInSystem` @0x43169-0x4317e),
 //! and after its appear timer brought them in by hyperspace
-//! (`_EnterMoreShips` @0x43abc-0x43ad4). Its ships stay in the system,
+//! (`_EnterMoreShips` @0x43abc-0x43ad4), whether or not a ship found a
+//! slot. Its ships stay in the system,
 //! losing their marks as the next think finds the slot free. The
 //! original aborts each slot inside setup's slot loop; here the aborts
 //! follow once the system's ships are all in, in slot order.
+//! Each mission ship takes a ship-table slot below the spawn reserve
+//! (`_MissionDudeSpawn` @0x3cd50, [`Session::spawn_reserve`]); one that
+//! finds none does not come and changes no count: the setup goes on to
+//! the next ship (@0x43128), and the timer, spent all the same, counts
+//! as arrived only the ships that came (@0x43971), so with `ShipStart` 1
+//! the rest are due again once the timer restarts.
 //! Escorted ships count while they are in the system: both spawn paths
 //! raise [`Fate::Arrived`] for each ship they bring in, and watch the
 //! ships of an unmet observe goal for their first sighting
@@ -130,9 +137,14 @@
 //! `OnAccept` queued. The ship comes through `_MissionDudeSpawn`
 //! ([`spawn::swapped_mission_ship`]), marked with the slot, and takes the
 //! person's position, velocity and heading; it flies the person's type
-//! under mission `Flags` 0x0800 when the `düde` lists it. The person's
-//! NPC is taken out of the system (ship +0xb8 cleared), without being
-//! gone for good, and the player's target moves to the ship. The ship
+//! under mission `Flags` 0x0800 when the `düde` lists it. It takes the
+//! first ship-table slot free below the spawn reserve while the person
+//! still holds its own, so never the person's. The person's NPC is then
+//! taken out of the system (ship +0xb8 cleared, @0x62520), without being
+//! gone for good, and the player's target moves to the ship. Nothing
+//! is swapped when the ship cannot be spawned or finds no slot
+//! (@0x62481 → @0x62593): the person stays, targeted as it was, and the
+//! mission's ship is left for a later setup. The ship
 //! raises [`Fate::Arrived`] as the other paths' ships do. It joins none
 //! of the hired escorts, and no count of the slot changes: it is the
 //! slot's one ship left, so a later setup brings one, never a second
@@ -169,6 +181,7 @@ use crate::session::mission_screens::MissionTextKind;
 use crate::story::{
     Consumer, Entrance, EventFilter, Fate, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
+use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{MissionMark, Npc, NpcId};
 use crate::traffic::spawn::{self, MissionSpawn, NewShip};
@@ -624,7 +637,10 @@ impl Session {
     /// into the system by hyperspace ([`spawn::arriving_mission_ships`]),
     /// their `düde`'s ships read from `catalog`, drawing on `chance`
     /// (@0x43821-0x43aa5): how many came, none for a mission of no
-    /// `düde`.
+    /// `düde`. Each takes a slot below the spawn reserve
+    /// ([`Session::spawn_reserve`]), and one that finds none does not come
+    /// and is not counted, as `_EnterMoreShips` skips the count and the
+    /// placement on `_MissionDudeSpawn`'s -1 (@0x43964 → @0x43aaa).
     fn bring_in_mission_ships(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -660,11 +676,12 @@ impl Session {
             self.gate(),
             chance,
         );
-        let count = i16::try_from(ships.len()).unwrap_or(i16::MAX);
         let last = self.last_npc();
-        self.traffic.bring_in(ships);
+        let came = self
+            .traffic
+            .bring_in_within(ships, self.spawn_reserve(SPAWN_RESERVE));
         self.mission_ships_came(last);
-        count
+        i16::try_from(came).unwrap_or(i16::MAX)
     }
 
     /// Swaps the person's NPC `npc`, its mission just accepted on its hail
@@ -677,9 +694,13 @@ impl Session {
     /// every other NPC letting it go; the ship raises [`Fate::Arrived`];
     /// and it becomes the player's target when the person was, its
     /// brackets settled (@0x62538; see the `brackets` module). No count
-    /// of the slot changes. Nothing when the NPC is no longer here, the
-    /// slot no longer holds a mission of a `düde`, or the ship cannot be
-    /// spawned. Of a `ShipBehav` 1 mission it joins the player's
+    /// of the slot changes. The ship takes its slot below the spawn
+    /// reserve ([`Session::spawn_reserve`]) while the person still holds
+    /// its own, as the original frees the person's slot only after the
+    /// spawn (@0x62520). Nothing when the NPC is no longer here, the slot
+    /// no longer holds a mission of a `düde`, or the ship cannot be
+    /// spawned or finds no slot (@0x62481 → @0x62593): the person stays,
+    /// targeted as it was. Of a `ShipBehav` 1 mission it joins the player's
     /// formation as it comes ([`Session::mission_ships_came`]); of
     /// another, it keeps its `düde`'s AI, as `_AIMakeEscortFlyInForm`
     /// (@0x62509) gives it no leader to follow (see the
@@ -733,11 +754,16 @@ impl Session {
         ) else {
             return;
         };
+        let last = self.last_npc();
+        let came = self
+            .traffic
+            .bring_in_within(vec![ship], self.spawn_reserve(SPAWN_RESERVE));
+        if came == 0 {
+            return;
+        }
         let targeted = self.target == Some(npc);
         self.drop_quarry(npc);
         self.traffic.remove(npc);
-        let last = self.last_npc();
-        self.traffic.bring_in(vec![ship]);
         if targeted {
             self.target = self.last_npc();
             self.target_fly_in.settle();
@@ -1631,6 +1657,81 @@ pub(super) mod tests {
         tick(&mut session, &catalog);
         assert_eq!(marked(&session), [0, 0], "3 left, 1 arrived");
         assert_eq!(ships_of(&session).arrived, 3);
+    }
+
+    /// Fills the system with disabled ships, which never leave, until
+    /// `berths` of the ship table are taken.
+    pub(in crate::session) fn crowd(session: &mut Session, berths: usize) {
+        while session.npcs().len() < berths {
+            let mut hulk = crate::testkit::npc(0, crate::stats::ShipStats::default());
+            hulk.condition = Condition::Disabled;
+            session.traffic.add_npc(hulk);
+        }
+    }
+
+    /// A session of `catalog` taken off with mission 140's ships due on
+    /// the next tick, `berths` of the ship table taken.
+    fn due_crowded(catalog: &FakePilotCatalog, berths: usize) -> Session {
+        let mut session = accepted(catalog);
+        take_off(&mut session, catalog);
+        ticks(&mut session, catalog, 198);
+        crowd(&mut session, berths);
+        session
+    }
+
+    #[test]
+    fn ships_coming_on_their_timer_find_no_slot_once_55_ships_are_in_and_arrive_none() {
+        let catalog = crate::testkit::far_129_reachable(ships_catalog(shipping(-1, 1)));
+        let mut session = due_crowded(&catalog, 55);
+        let left = ships_of(&session).left;
+        tick(&mut session, &catalog);
+        assert!(marked(&session).is_empty(), "no slot (@0x43964)");
+        let ships = ships_of(&session);
+        assert_eq!(
+            (ships.arrived, ships.appear, ships.left),
+            (0, -1, left),
+            "the timer spent, none counted (@0x4382c, @0x43971)"
+        );
+        ticks(&mut session, &catalog, 300);
+        assert!(marked(&session).is_empty(), "not due again in this system");
+        jump_to(&mut session, &catalog, 131);
+        jump_to(&mut session, &catalog, 130);
+        assert_eq!(ships_of(&session).appear, 199, "restarted on arrival");
+        ticks(&mut session, &catalog, 199);
+        assert_eq!(marked(&session), [0, 0], "with room they come");
+        assert_eq!(ships_of(&session).arrived, 2);
+    }
+
+    #[test]
+    fn a_timer_with_room_for_one_of_three_brings_one_and_counts_one() {
+        let catalog = ships_catalog(MissionShip {
+            count: 3,
+            ..shipping(-1, 1)
+        });
+        let mut session = due_crowded(&catalog, 54);
+        tick(&mut session, &catalog);
+        let marked: Vec<u32> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission.is_some())
+            .map(|npc| npc.berth)
+            .collect();
+        assert_eq!(marked, [55], "the one slot left");
+        assert_eq!(ships_of(&session).arrived, 1, "only the one that came");
+    }
+
+    #[test]
+    fn by_the_bible_reading_of_spawn_reserve_mission_ships_take_slots_above_55() {
+        let catalog = ships_catalog(shipping(-1, 1));
+        let rules =
+            crate::Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
+        let mut session = accepted(&catalog).with_rules(rules);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 198);
+        crowd(&mut session, 55);
+        tick(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0]);
+        assert_eq!(ships_of(&session).arrived, 2);
     }
 
     #[test]
@@ -3244,6 +3345,23 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_flag_0x0001_mission_auto_aborts_when_its_timer_fires_with_no_slot() {
+        let mut catalog = returning(0, 0x0001);
+        catalog.missions[0].ships.start = 1;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 198);
+        crowd(&mut session, 55);
+        tick(&mut session, &catalog);
+        assert!(marked(&session).is_empty(), "none came");
+        assert!(
+            session.pilot().missions().get(0).is_none(),
+            "auto-aborted all the same (@0x43abc)"
+        );
+        assert_eq!(bits(&session), [7], "OnAbort once");
+    }
+
+    #[test]
     fn a_flag_0x0001_mission_whose_ships_have_not_come_stays() {
         let mut catalog = returning(0, 0x0001);
         catalog.missions[0].ships.start = 1;
@@ -4489,6 +4607,42 @@ pub(super) mod tests {
         }
         assert_eq!(marked(&session), [0], "no second one comes");
         assert_eq!(ships_of(&session), before);
+    }
+
+    #[test]
+    fn a_swap_with_no_slot_leaves_the_person_targeted_and_the_mission_as_it_was() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace(&catalog);
+        crowd(&mut session, 55);
+        let npcs = session.npcs().len();
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        let before = ships_of(&session);
+        settle(&mut session, &catalog);
+        assert!(person_here(&session), "Ace stays (@0x62481 → @0x62593)");
+        assert_eq!(session.npcs().len(), npcs);
+        assert!(marked(&session).is_empty(), "no ship came");
+        assert_eq!(session.target, Some(NpcId(0)), "Ace still targeted");
+        assert_eq!(ships_of(&session), before, "no count changes");
+        assert_eq!(before.left, 1);
+        let active = session.pilot().missions().get(0).expect("held");
+        assert!(!active.goals_met, "no arrival raised");
+    }
+
+    #[test]
+    fn the_swapped_ship_takes_the_first_berth_free_while_the_person_holds_its_own() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let session = hailing_ace(&catalog);
+        assert_eq!(session.npcs()[0].berth, 1, "Ace at berth 1");
+        let session = swapped(&catalog);
+        let ship = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.mission.is_some())
+            .expect("swapped in");
+        assert_eq!(ship.berth, 2, "taken while Ace held 1 (@0x62520)");
     }
 
     #[test]

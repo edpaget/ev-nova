@@ -232,8 +232,8 @@ mod tests {
     use crate::rulebook::Rulebook;
     use crate::session::gate_follow::tests::{exit_gate, gated};
     use crate::session::mission_ships::tests::{
-        accepted, aux_catalog, aux_ships, jump_to, marked, settle, shipping, take_off, tick, ticks,
-        with_aux,
+        accepted, aux_catalog, aux_ships, crowd, jump_to, marked, settle, shipping, take_off, tick,
+        ticks, with_aux,
     };
     use crate::story::StoryEvent;
     use crate::testkit::{Draws, FakePilotCatalog, land_now};
@@ -313,16 +313,6 @@ mod tests {
         );
         ticks(&mut session, &catalog, 300);
         assert_eq!(aux_here(&session), 3, "no more come");
-    }
-
-    /// Fills the system with disabled ships, which never leave, until
-    /// `berths` of the ship table are taken.
-    fn crowd(session: &mut Session, berths: usize) {
-        while session.npcs().len() < berths {
-            let mut hulk = crate::testkit::npc(0, crate::stats::ShipStats::default());
-            hulk.condition = Condition::Disabled;
-            session.traffic.add_npc(hulk);
-        }
     }
 
     #[test]

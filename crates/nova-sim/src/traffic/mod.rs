@@ -416,12 +416,6 @@ impl Traffic {
     }
 
     /// Brings `ships` into the system as they are, numbered after every
-    /// other NPC, with no ship-table cap.
-    pub fn bring_in(&mut self, ships: Vec<NewShip>) {
-        self.add(ships, &BTreeSet::new(), None);
-    }
-
-    /// Brings `ships` into the system as they are, numbered after every
     /// other NPC, each leaving `reserve` slots of the ship table free
     /// ([`Traffic::free_berth`]), and gives how many came: one that finds
     /// no slot does not come. The auxiliary ships' spawn
