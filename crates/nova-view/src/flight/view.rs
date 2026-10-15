@@ -12890,12 +12890,15 @@ mod tests {
         view.input(&held(Key::Tab));
         view.input(&key(Key::Tab, false));
         assert_eq!(view.take_sounds(), [], "a repeat of Tab");
-        view.input(&key(Key::Alt, true));
-        tap(&mut view, NEAREST_KEY);
+        alt_tap(&mut view, NEAREST_KEY);
         view.take_sounds();
-        view.input(&key(NEAREST_KEY, true));
+        alt_tap(&mut view, NEAREST_KEY);
+        assert_eq!(view.take_sounds(), [], "a fresh Alt-R on the same ship");
+        // No ship threatens, so an acting R would beep the refusal.
+        let before = target_of(&view);
         view.input(&held(NEAREST_KEY));
-        assert_eq!(view.take_sounds(), [], "the same ship, then a repeat of R");
+        assert_eq!(view.take_sounds(), [], "a repeat of R");
+        assert_eq!(target_of(&view), before);
     }
 
     /// NPC 0 attacks the player; the rest idle.
