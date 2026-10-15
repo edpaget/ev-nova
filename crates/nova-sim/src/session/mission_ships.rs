@@ -772,9 +772,13 @@ impl Session {
     /// slot no longer holds a mission of a `düde`, or the ship cannot be
     /// spawned. Of a `ShipBehav` 1 mission it joins the player's
     /// formation as it comes ([`Session::mission_ships_came`]); of
-    /// another, it keeps its `düde`'s AI, as `_AIMakeEscortFlyInForm`
-    /// (@0x62509) gives it no leader to follow (see the
-    /// [`mission_escorts`](super::mission_escorts) module).
+    /// `ShipBehav` 0 it hunts the player. Of any other, for a `ShipGoal` 3
+    /// mission, it holds where it came ([`Goal::Hold`](crate::ai::Goal::Hold)), coasting, as
+    /// `_AIMakeEscortFlyInForm` (@0x62509, @0x89bbd-0x89bcd) gives it goal
+    /// 10 with no leader to follow, until provoked or its type's think
+    /// lifts the hold; under [`RuleKey::LeaderlessSwapHold`]'s other
+    /// reading, and for any other `ShipGoal`, it decides as its `düde`'s AI
+    /// (see the [`mission_escorts`](super::mission_escorts) module).
     pub(super) fn swap_in_mission_ship(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -825,7 +829,7 @@ impl Session {
             // Only the setup reads the time left (@0x42fe1-0x42ffa).
             expired: false,
         };
-        let Some(ship) = spawn::swapped_mission_ship(
+        let Some(mut ship) = spawn::swapped_mission_ship(
             self.traffic.table(),
             &spawn,
             state,
@@ -835,6 +839,9 @@ impl Session {
         ) else {
             return;
         };
+        if self.rules.source_for(RuleKey::LeaderlessSwapHold) == RuleSource::Bible {
+            ship.held = false;
+        }
         let targeted = self.target == Some(npc);
         self.drop_quarry(npc);
         self.traffic.remove(npc);
@@ -4663,6 +4670,64 @@ pub(super) mod tests {
         // (`nova_view::flight::cadence::retake_target`).
         assert_ne!(ship.id, NpcId(0), "a new target");
         assert!(!session.pilot().gone(PersonId(600)), "not gone for good");
+    }
+
+    /// [`swapped`], under `source` of [`RuleKey::LeaderlessSwapHold`].
+    fn swapped_by(catalog: &FakePilotCatalog, source: crate::RuleSource) -> Session {
+        let mut session = hailing_ace(catalog).with_rules(
+            crate::Rulebook::default().with_override(RuleKey::LeaderlessSwapHold, source),
+        );
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, catalog);
+        session
+    }
+
+    #[test]
+    fn a_leaderless_shipgoal_3_swap_holds_where_the_person_was() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = swapped_by(&catalog, crate::RuleSource::Engine);
+        let id = session.npcs()[0].id;
+        assert_eq!(session.npcs()[0].goal, Goal::Hold);
+        let ticks = 120;
+        for _ in 0..ticks {
+            session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        }
+        let ship = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .expect("still here, not landed");
+        assert_eq!(ship.goal, Goal::Hold);
+        assert_eq!(ship.state.velocity, ACE_AT.velocity, "coasting");
+        let drift = ACE_AT.position + ACE_AT.velocity * ticks as f32;
+        assert!(
+            (ship.state.position - drift).length() < 1e-2,
+            "on Ace's velocity: {:?}",
+            ship.state.position
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_leaderless_swap_decides_as_its_dudes_ai() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = swapped_by(&catalog, crate::RuleSource::Bible);
+        let id = session.npcs()[0].id;
+        assert_eq!(session.npcs()[0].goal, Goal::Idle);
+        for _ in 0..120 {
+            session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        }
+        let goal = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .map(|npc| npc.goal);
+        assert!(
+            matches!(goal, None | Some(Goal::Land(_) | Goal::JumpOut)),
+            "{goal:?}"
+        );
     }
 
     #[test]

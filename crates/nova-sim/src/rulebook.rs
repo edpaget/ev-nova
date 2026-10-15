@@ -75,6 +75,7 @@
 //! | [`OutfitSaleCargo`](RuleKey::OutfitSaleCargo) | `outfit_sale_cargo` | an outfit sale that leaves the fleet's holds below the cargo trims the commodities, as the sale's resets do (`_DoOutfitDialog` @0x5cff6, @0x5cffb; `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; [`Session`](crate::Session)) | no reset through the sale trims: the cargo stays past the hold until the next reset after it\* |
 //! | [`ReleaseCargoShare`](RuleKey::ReleaseCargoShare) | `release_cargo_share` | an escort released by hail takes its share of the fleet's cargo whatever its ship type, as the release tests no `InherentAI` (`_DoCommDialog` @0x96864, `_DoEscortDialog` @0x9549d, @0x9561d; [`Session`](crate::Session)) | only a trader takes a share, as for every other escort lost\* |
 //! | [`CaptureCargo`](RuleKey::CaptureCargo) | `capture_cargo` | Use As My Ship leaves the commodities with the old ship, the player taking the captured ship's, which carries none (`_DoShipCapture` @0x412e6-0x412fe, @0x41762-0x41779; [`Session`](crate::Session)) | the player keeps every commodity; either way the reset (@0x41a3e) trims them to the new fleet's holds\* |
+//! | [`LeaderlessSwapHold`](RuleKey::LeaderlessSwapHold) | `leaderless_swap_hold` | a ship swapped in for a person by a `ShipGoal` 3 mission, neither hunting nor escorting the player, holds goal 10 with no leader: it coasts with no thrust and no fire, picks no destination, target or ship to inspect, and leaves the hold only when provoked, at its government's word, or as a plundering warship (`_AIMakeEscortFlyInForm` @0x89b8e-0x89c3d, `_HighLevelAIHandler` @0x8ed18-0x8ed31; see [`Goal::Hold`](crate::ai::Goal::Hold)) | it decides as its `düde`'s AI from the start, landing or jumping out\* |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
@@ -161,6 +162,7 @@
 //! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
 //! `route_rewrite`, `scan_outfits_past_junk`, `gate_escorts`,
 //! `lost_cargo_share`, `outfit_sale_cargo`, `release_cargo_share`, `capture_cargo`,
+//! `leaderless_swap_hold`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box` or `comm_quote`
@@ -1066,6 +1068,21 @@ rule_keys! {
     /// alternative, not anything the Bible says (see
     /// [`Session::assign`](crate::Session::assign)).
     CaptureCargo => "capture_cargo",
+    /// What a ship swapped in for a person by a `ShipGoal` 3 mission
+    /// does when it neither hunts nor escorts the player. By the engine,
+    /// it holds, as the original's goal 10 with no leader: the swap calls
+    /// `_AIMakeEscortFlyInForm` (@0x624f6-0x62509), which gives a ship
+    /// with leader -1 goal 10 (@0x89bbd-0x89bcd), and no goal block of
+    /// `_HighLevelAIHandler` flies goal 10 without a leader
+    /// (@0x8ed18-0x8ed31). It coasts with no thrust and no fire, and keeps
+    /// the hold until provoked, until its government's word turns it on
+    /// the player, or, for a warship of a plundering government, at its
+    /// first think (see [`Goal::Hold`](crate::ai::Goal::Hold)). By the
+    /// other reading it decides as its `düde`'s AI from the start. The
+    /// Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see the session's
+    /// `mission_ships` module).
+    LeaderlessSwapHold => "leaderless_swap_hold",
     /// How a `jünk` of negative or zero price is traded. By the engine,
     /// `_DoTradeDialog` stores a `jünk`'s high price (@0x5dddb) and low
     /// price (@0x5de2f) in 16 bits with no floor, and every reader takes
@@ -2204,6 +2221,14 @@ mod tests {
     }
 
     #[test]
+    fn the_leaderless_swap_hold_rule_reads_the_engine() {
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::LeaderlessSwapHold),
+            RuleSource::Engine
+        );
+    }
+
+    #[test]
     fn the_gate_follow_rule_is_found_by_its_key_and_reads_the_engine() {
         assert_eq!(RuleKey::GateFollow.key(), "gate_follow");
         assert_eq!(RuleKey::from_key("gate_follow"), Some(RuleKey::GateFollow));
@@ -2773,6 +2798,11 @@ mod tests {
             RuleKey::from_key("capture_cargo"),
             Some(RuleKey::CaptureCargo)
         );
+        assert_eq!(RuleKey::LeaderlessSwapHold.key(), "leaderless_swap_hold");
+        assert_eq!(
+            RuleKey::from_key("leaderless_swap_hold"),
+            Some(RuleKey::LeaderlessSwapHold)
+        );
         assert_eq!(RuleKey::EventPrice.key(), "event_price");
         assert_eq!(RuleKey::from_key("event_price"), Some(RuleKey::EventPrice));
         assert_eq!(RuleKey::RaisedMax.key(), "raised_max");
@@ -2912,6 +2942,7 @@ mod tests {
                 RuleKey::OutfitSaleCargo,
                 RuleKey::ReleaseCargoShare,
                 RuleKey::CaptureCargo,
+                RuleKey::LeaderlessSwapHold,
                 RuleKey::JunkPrice,
                 RuleKey::JunkTrade,
                 RuleKey::OutfitLimit,
