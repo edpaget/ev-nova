@@ -156,7 +156,11 @@
 //!   `düde` lists it, drawing no type, and that type becomes the slot's,
 //!   so later setups bring it too; else it flies the slot's type. No
 //!   count changes: it is the slot's
-//!   one ship left (see the session's `mission_ships` module).
+//!   one ship left (see the session's `mission_ships` module). For a
+//!   `ShipGoal` 3 mission, `_AIMakeEscortFlyInForm` gives it goal 10 with
+//!   no leader (@0x89bbd-0x89bcd), and it holds there, coasting
+//!   ([`NewShip::held`], [`Goal::Hold`](crate::ai::Goal::Hold)), unless
+//!   it hunts or escorts the player.
 //!
 //! A `ShipBehav` 1 ship joins the player's formation as a mission escort
 //! as it comes by any of the three paths (see the session's
@@ -311,6 +315,9 @@ impl Stellars<'static> {
 }
 
 /// A ship to add to the system.
+// Each flag is its own part of how the ship starts, set and read on its
+// own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NewShip {
     /// Its ship type.
@@ -343,6 +350,11 @@ pub struct NewShip {
     /// cut just below where it is disabled, and disabled. A rescue
     /// mission's ship set up in the system starts so ([`mission_ships`]).
     pub derelict: bool,
+    /// Whether it starts holding ([`Goal::Hold`](crate::ai::Goal::Hold),
+    /// the original's goal 10 with no leader): a ship swapped in for a
+    /// person by a `ShipGoal` 3 mission, unless it escorts or hunts the
+    /// player ([`swapped_mission_ship`]).
+    pub held: bool,
     /// Whether it starts cloaking (`_DoShipCloak`): a `ShipStart` 2
     /// mission's ship set up in the system does ([`mission_ships`]).
     pub cloaked: bool,
@@ -433,6 +445,7 @@ impl<'a> PersonDraw<'a> {
             person: Some(id),
             mission: None,
             derelict: false,
+            held: false,
             boarded: false,
             cloaked: false,
             aux: None,
@@ -498,6 +511,7 @@ pub fn initial(
                 person: None,
                 mission: None,
                 derelict: false,
+                held: false,
                 boarded: false,
                 cloaked: false,
                 aux: None,
@@ -636,6 +650,7 @@ fn hyper_ship(
             person: None,
             mission: None,
             derelict: false,
+            held: false,
             boarded: false,
             cloaked: false,
             aux: None,
@@ -776,6 +791,7 @@ fn specific_dude_ship(
         person: None,
         mission: None,
         derelict: false,
+        held: false,
         boarded: false,
         cloaked: false,
         aux: None,
@@ -944,7 +960,13 @@ pub fn arriving_aux_ships(
 /// given ([`swapped_ship_type`](crate::mission::ships::swapped_ship_type)),
 /// then given the person's `state` (position +0x18, velocity +0x20,
 /// heading +0x44), not gliding in and never cloaked. `spawn`'s count and
-/// start are not read. `None`, after the place's draws, when the `düde`
+/// start are not read. For a `ShipGoal` 3 it is [`held`](NewShip::held):
+/// `_AIMakeEscortFlyInForm` (@0x624f6-0x62509, @0x89b8e-0x89c3d) gives it
+/// goal 10 with no leader. A `ShipBehav` 0 ship isn't held, since its
+/// mission block lifts the hold on the next frame and it hunts the
+/// player as before (a one-frame gap the player never sees), nor a
+/// `ShipBehav` 1 ship, which `_AIDispatch` makes the player's escort at
+/// its next think (@0x8fc03-0x8fc22). `None`, after the place's draws, when the `düde`
 /// has no record or no ship.
 pub fn swapped_mission_ship(
     table: &SpawnTable,
@@ -955,7 +977,16 @@ pub fn swapped_mission_ship(
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<NewShip> {
     let ship = mission_dude_ship(table, spawn, preset, gate, chance)?;
-    Some(NewShip { state, ..ship })
+    let held = spawn.goal == ShipGoal::Escort
+        && !matches!(
+            spawn.behav,
+            ShipBehav::AttackPlayer | ShipBehav::EscortPlayer
+        );
+    Some(NewShip {
+        state,
+        held,
+        ..ship
+    })
 }
 
 /// A `düde` ship: a `düde` by weight, a ship of it by `Probability`
@@ -1046,6 +1077,7 @@ pub fn fleet(
         person: None,
         mission: None,
         derelict: false,
+        held: false,
         boarded: false,
         cloaked: false,
         aux: None,
@@ -1085,6 +1117,7 @@ pub fn fleet(
                 person: None,
                 mission: None,
                 derelict: false,
+                held: false,
                 boarded: false,
                 cloaked: false,
                 aux: None,
@@ -1492,6 +1525,7 @@ mod tests {
                 person: None,
                 mission: None,
                 derelict: false,
+                held: false,
                 boarded: false,
                 cloaked: false,
                 aux: None,
@@ -2622,6 +2656,7 @@ mod tests {
                 person: Some(PersonId(510)),
                 mission: None,
                 derelict: false,
+                held: false,
                 boarded: false,
                 cloaked: false,
                 aux: None,
@@ -3051,6 +3086,7 @@ mod tests {
                     formation: None,
                 }),
                 derelict: false,
+                held: false,
                 boarded: false,
                 cloaked: false,
                 aux: None,
@@ -3681,6 +3717,7 @@ mod tests {
                     formation: None,
                 }),
                 derelict: false,
+                held: false,
                 boarded: false,
                 cloaked: false,
                 aux: None,
@@ -3738,6 +3775,35 @@ mod tests {
             Some(AiType::Interceptor),
             "ship 202's InherentAI 4"
         );
+    }
+
+    #[test]
+    fn a_swapped_escort_goal_ship_is_held_unless_it_escorts_or_hunts_the_player() {
+        let held = |goal: ShipGoal, behav: ShipBehav| {
+            swapped_mission_ship(
+                &with_mission_dude(),
+                &MissionSpawn {
+                    goal,
+                    behav,
+                    ..mission_spawn(1, 0)
+                },
+                PERSON_AT,
+                Some(ShipId(202)),
+                mission_gate(),
+                &mut Draws::of(&[0, 0, 0]),
+            )
+            .expect("a ship")
+            .held
+        };
+        for behav in [ShipBehav::Own, ShipBehav::AttackStellars] {
+            assert!(held(ShipGoal::Escort, behav), "{behav:?}");
+        }
+        for behav in [ShipBehav::AttackPlayer, ShipBehav::EscortPlayer] {
+            assert!(!held(ShipGoal::Escort, behav), "{behav:?}");
+        }
+        for goal in [ShipGoal::Destroy, ShipGoal::Observe, ShipGoal::Rescue] {
+            assert!(!held(goal, ShipBehav::Own), "{goal:?}");
+        }
     }
 
     #[test]
