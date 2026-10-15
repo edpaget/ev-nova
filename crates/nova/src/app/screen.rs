@@ -12,7 +12,9 @@
 //! ([`nova_sim::Session::load`], under the router's rules) is flown only
 //! once the note `STR#` 140 #52 over the menu is dismissed; its flight,
 //! built behind the note, doesn't tick meanwhile, and quitting with the
-//! note open saves the repaired pilot. Quit quits. Escape in
+//! note open saves the repaired pilot. Quit quits after
+//! [`QUIT_DELAY`], and each of the menu's keys first waits for its click
+//! to play (see `menu_input`). Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
 //! Each flight put away leaves its ship slots' draw-layer history, which
 //! every later flight of the run starts from, as the original's sprite
@@ -238,15 +240,15 @@ use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
-    Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
+    NovaPersons, OfferPrompt, PersonRules, Pilot, PilotCatalog, PilotKeeper, PilotStore,
+    PointDefenceRule, Rulebook, Session, Take, Taken, VenueOffer, pilot_key, text_tags,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::{FlightMissionDialogs, FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
-use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
+use nova_view::menu::{Chosen, ChosenBy, MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
@@ -304,6 +306,11 @@ pub const ABOUT_TEXT: i16 = 32767;
 /// `_LoadDescription(0x7ffe)`).
 pub const MENU_X_TEXT: i16 = 32766;
 
+/// How long the main menu's Quit waits after its click before the app
+/// quits: `_MainScreenChoice(2)` calls `Delay(15)` (@0x1a9f0-0x1a9fb)
+/// before it sends itself `quit`, which lets 601 sound.
+pub const QUIT_DELAY: Duration = nova_sim::mission::screens::mac_ticks(15);
+
 /// Why the spaceport cannot be laid out when the router has no dialogs.
 pub const NO_INTERFACE: &str = "no interface file";
 
@@ -320,6 +327,52 @@ enum Side {
     Galaxy,
     Flight,
     Spaceport,
+}
+
+/// What a main-menu key does once its click has played.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuAction {
+    /// The menu's own choice: New Pilot, Open Pilot or Quit.
+    Choice(MenuChoice),
+    /// E: Enter Ship, which with no pilot loaded is refused.
+    Enter,
+    /// P: the Preferences.
+    Preferences,
+    /// A: the About text.
+    About,
+    /// X: `dësc` 32766.
+    Text,
+}
+
+/// What the main menu waits on, as `_MainScreenKey` @0x1aba0 spins
+/// before its choice runs.
+///
+/// The original reads no event during the spin: what arrives meanwhile
+/// stays in the OS queue for whatever the choice opens. So while the
+/// menu waits, the router queues every input (and each letting go of the
+/// pointer or the keys, in its place) and replays them in order once
+/// the choice has run. The engine notices the click's end at its next
+/// audio feed, an input or a frame, not in a spin; the choice still runs
+/// in the pass that plays 601, before the next frame is drawn, so no
+/// frame shows the wait differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuHold {
+    /// E was typed with the physical E key held: the original spins on
+    /// `_QuickKeyCheck(0x0e)` (@0x1ac32-0x1ac57) until it is released,
+    /// and only then clicks.
+    EHeld,
+    /// A keyed click plays (`_PlayMainScreenClickSound` @0x177af); the
+    /// action runs once it has ([`Screen::keyed_click_ended`]).
+    Click(MenuAction),
+}
+
+/// An input held while the main menu waits, or a letting go in its
+/// place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Held {
+    Input(Input),
+    CancelPointer,
+    ReleaseKeys,
 }
 
 /// Every screen the app can show, and which side it is showing. The router
@@ -421,10 +474,30 @@ pub struct AppScreen {
     player_info: Option<PlayerInfoScreen>,
     /// Whether Command is held, for Command+comma.
     command_held: bool,
+    /// Whether the physical S, L and E keys are held: O does nothing
+    /// while S or L is (`_KeyCheck(0x01)`, `_KeyCheck(0x25)`
+    /// @0x1abd3-0x1abf5), and E waits for E's release.
+    keys_held: MenuKeys,
+    /// What the main menu waits on, if anything.
+    menu_hold: Option<MenuHold>,
+    /// What arrived while the main menu waited, in order.
+    held: Vec<Held>,
+    /// What is left of Quit's delay, while it runs ([`QUIT_DELAY`]).
+    quit_in: Option<Duration>,
+    /// Whether a quit is due, for [`Screen::take_quit`].
+    quit_due: bool,
     /// Whether double time is on: Caps Lock's presses toggle it, on any
     /// side, and every flight is told. Never saved, as the original's
     /// `_doubleTime` is not.
     double_time: bool,
+}
+
+/// The physical keys the main menu reads as held.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MenuKeys {
+    s: bool,
+    l: bool,
+    e: bool,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -508,6 +581,11 @@ impl AppScreen {
             fade_in: None,
             player_info: None,
             command_held: false,
+            keys_held: MenuKeys::default(),
+            menu_hold: None,
+            held: Vec::new(),
+            quit_in: None,
+            quit_due: false,
             double_time: false,
         }
     }
@@ -1018,12 +1096,30 @@ impl AppScreen {
     }
 
     /// Opens "Desc Dialog" on `dësc` `id` over the side shown, as
-    /// [`open_about`](Self::open_about) opens the About text.
+    /// [`open_about`](Self::open_about) opens the About text. The main
+    /// menu's X text ([`MENU_X_TEXT`]) is first run through the briefing
+    /// munge as before any pilot is loaded, as `_MainScreenKey` runs
+    /// `_MungeBriefing(0, -1)` (@0x1aca2-0x1acb1) before
+    /// `_ShowTextDialog` ([`text_tags::expand_before_any_pilot`]). The
+    /// About text is shown as it is: `_DoAboutBox` is not read here.
     fn open_text(&mut self, id: i16) {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        match desc_dialog(dialogs, &self.data, id) {
+        let dialog = self.data.description(id).and_then(|text| {
+            let text = if id == MENU_X_TEXT {
+                let ship_type = PilotCatalog::ships(&*self.data)
+                    .into_iter()
+                    .find(|ship| ship.id == nova_sim::ShipId(128))
+                    .map(|ship| ship.name)
+                    .unwrap_or_default();
+                text_tags::expand_before_any_pilot(&text, &ship_type)
+            } else {
+                text
+            };
+            desc_dialog(dialogs, &self.data, &text)
+        });
+        match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
                 below.cancel_pointer();
@@ -1956,15 +2052,36 @@ impl AppScreen {
         }
     }
 
-    /// The main menu's input: its choice opens the New Pilot dialog or the
-    /// saved pilots' list over it, or quits. Tab goes to the ship browser.
-    /// With dialogs, A and X click as `_MainScreenKey` does
-    /// (`_PlayMainScreenClickSound`), then A opens the About text (@0x1ac70)
-    /// and X `dësc` 32766 (@0x1ac7e). The X text shows as it is: the
-    /// original runs it through `_MungeBriefing` first, which needs a
-    /// pilot the menu has not got, so that is left out. With Command held
-    /// they, and the menu's typed N, O and Q, go to the original's menus
-    /// and do nothing here.
+    /// The main menu's input, as `_MainScreenKey` @0x1aba0 and
+    /// `_MainScreenMouse` read it.
+    ///
+    /// A click on New Pilot or Open Pilot opens the New Pilot dialog or
+    /// the saved pilots' list over the menu at once (its sounds have
+    /// played, under the pointer). A click on Quit waits out
+    /// [`QUIT_DELAY`] and then quits ([`Screen::take_quit`]), as
+    /// `_MainScreenMouse` (@0x1aea4-0x1aead) reaches the same
+    /// `_MainScreenChoice(2)` as the key. The engine's Escape quits at
+    /// once, silently. Tab goes to the ship browser.
+    ///
+    /// Each key clicks ([`UiSound::ButtonKeyed`]) and its choice waits
+    /// for the click to end ([`MenuHold`]): typed N, O and Q (the menu's
+    /// own), and, with dialogs, A (the About text, @0x1ac70) and X
+    /// (`dësc` 32766, @0x1ac7e, munged as before any pilot). P is the
+    /// router's ([`preferences_key`](Self::preferences_key)).
+    ///
+    /// - O does nothing while the physical S or L key is held
+    ///   (@0x1abd3-0x1abf5). No other code reads those two keys, so the
+    ///   guard's purpose is unknown; it is built as read.
+    /// - Typed E with the physical E key held waits for its release
+    ///   (@0x1ac32-0x1ac57) before it clicks; typed with the E key up
+    ///   (another layout) it clicks at once. Then it is Enter Ship
+    ///   (`_MainScreenChoice(3)`), which this menu, never holding a
+    ///   loaded pilot, always refuses: [`UiSound::EnterRefused`]. Choice
+    ///   3's entering the game and its dying-pilot refusal are left out
+    ///   (rdm:task/main-screen-loaded-pilot).
+    ///
+    /// With Command held, the typed keys and A and X go to the
+    /// original's menus and do nothing here.
     fn menu_input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: key @ Key::Char('a' | 'x'),
@@ -1975,11 +2092,10 @@ impl AppScreen {
             && !self.command_held
         {
             if pressed && !repeat {
-                self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
-                self.open_text(if key == Key::Char('a') {
-                    ABOUT_TEXT
+                self.click_then(if key == Key::Char('a') {
+                    MenuAction::About
                 } else {
-                    MENU_X_TEXT
+                    MenuAction::Text
                 });
             }
             return ScreenAction::None;
@@ -2001,15 +2117,93 @@ impl AppScreen {
         if matches!(input, Input::Text(_)) && self.command_held {
             return ScreenAction::None;
         }
+        match *input {
+            Input::Text('e' | 'E') => {
+                if self.keys_held.e {
+                    self.menu_hold = Some(MenuHold::EHeld);
+                } else {
+                    self.click_then(MenuAction::Enter);
+                }
+                return ScreenAction::None;
+            }
+            Input::Text('o' | 'O') if self.keys_held.s || self.keys_held.l => {
+                return ScreenAction::None;
+            }
+            _ => {}
+        }
         let menu = self.menu.as_mut().expect(MENU);
         menu.screen.input(input);
         match menu.screen.take_choice() {
-            Some(MenuChoice::NewPilot) => self.open_new_pilot(),
-            Some(MenuChoice::OpenPilot) => self.open_pilot_list(),
-            Some(MenuChoice::Quit) => return ScreenAction::Quit,
+            Some(Chosen {
+                choice,
+                by: ChosenBy::Shortcut,
+            }) => self.menu_hold = Some(MenuHold::Click(MenuAction::Choice(choice))),
+            Some(Chosen {
+                choice: MenuChoice::Quit,
+                by: ChosenBy::Escape,
+            }) => return ScreenAction::Quit,
+            Some(Chosen { choice, .. }) => self.run_menu_action(MenuAction::Choice(choice)),
             None => {}
         }
         ScreenAction::None
+    }
+
+    /// Clicks a main-menu key ([`UiSound::ButtonKeyed`]) and holds
+    /// `action` until the click has played.
+    fn click_then(&mut self, action: MenuAction) {
+        self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
+        self.menu_hold = Some(MenuHold::Click(action));
+    }
+
+    /// Runs a main-menu `action`, as `_MainScreenChoice` @0x1a72a does.
+    fn run_menu_action(&mut self, action: MenuAction) {
+        match action {
+            MenuAction::Choice(MenuChoice::NewPilot) => self.open_new_pilot(),
+            MenuAction::Choice(MenuChoice::OpenPilot) => self.open_pilot_list(),
+            MenuAction::Choice(MenuChoice::Quit) => self.quit_in = Some(QUIT_DELAY),
+            // `_MainScreenChoice(3)` with no game in progress beeps
+            // `_beepSnd[3]` and redraws (@0x1aa89-0x1aac2).
+            MenuAction::Enter => self.sounds.push(Sound::Ui(UiSound::EnterRefused)),
+            MenuAction::Preferences => self.open_preferences(),
+            MenuAction::About => self.open_text(ABOUT_TEXT),
+            MenuAction::Text => self.open_text(MENU_X_TEXT),
+        }
+    }
+
+    /// An input that arrives while the main menu waits ([`MenuHold`]):
+    /// queued for the replay, but for E's own while it is held. E's
+    /// release clicks and turns the wait into the click's; E's repeats
+    /// and their text are dropped (whether the OS queues autoKeys during
+    /// the original's spin is not read, and replaying them would type E
+    /// again).
+    fn hold_input(&mut self, hold: MenuHold, input: &Input) {
+        if hold == MenuHold::EHeld {
+            match *input {
+                Input::Key {
+                    key: Key::Char('e'),
+                    pressed: false,
+                    ..
+                } => {
+                    self.e_released();
+                    return;
+                }
+                Input::Key {
+                    key: Key::Char('e'),
+                    pressed: true,
+                    ..
+                }
+                | Input::Text('e' | 'E') => return,
+                _ => {}
+            }
+        }
+        self.held.push(Held::Input(*input));
+    }
+
+    /// E is let go of while E's wait holds: it clicks, and Enter Ship
+    /// waits on the click.
+    fn e_released(&mut self) {
+        self.keys_held.e = false;
+        self.click_then(MenuAction::Enter);
     }
 
     /// Opens the New Pilot dialog: the interface file's, or the built-in
@@ -2451,23 +2645,26 @@ impl AppScreen {
         if pressed && !repeat {
             // `_MainScreenKey`'s P (@0x1ac59) clicks first; a Command key
             // goes to the original's menus (`MenuKey`), which do not.
+            // It opens once the click has played.
             if self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held {
-                self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
+                self.click_then(MenuAction::Preferences);
+            } else {
+                self.open_preferences();
             }
-            self.open_preferences();
         }
         true
     }
 
     /// Routes one input, as [`Screen::input`] describes.
     fn route(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key: Key::Command,
-            pressed,
-            ..
-        } = *input
-        {
-            self.command_held = pressed;
+        if let Input::Key { key, pressed, .. } = *input {
+            match key {
+                Key::Command => self.command_held = pressed,
+                Key::Char('s') => self.keys_held.s = pressed,
+                Key::Char('l') => self.keys_held.l = pressed,
+                Key::Char('e') => self.keys_held.e = pressed,
+                _ => {}
+            }
         }
         if self.about.is_some() {
             return self.about_input(input);
@@ -2586,14 +2783,13 @@ fn refresh_spaceport(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<G
     }
 }
 
-/// "Desc Dialog" showing `dësc` `id`'s text as it is, from the dialogs
-/// and the game data.
-fn desc_dialog(dialogs: &Dialogs, data: &GameData, id: i16) -> Result<DescDialog, String> {
+/// "Desc Dialog" showing `text`, from the dialogs, in the game data's
+/// button style.
+fn desc_dialog(dialogs: &Dialogs, data: &GameData, text: &str) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
-    let text = data.description(id)?;
     Ok(DescDialog::new(
         &template,
-        &text,
+        text,
         data.button_style(),
         Rc::clone(&dialogs.metrics),
     ))
@@ -2654,7 +2850,11 @@ impl Screen for AppScreen {
     /// pilot flies it; one whose load fell back first shows its note over
     /// the menu, which takes every event until Return, Escape or OK
     /// dismisses it and flight shows. Escape in flight goes back to the menu, saving
-    /// the pilot and putting it away. Quit, or Escape, quits. I and P work
+    /// the pilot and putting it away. Escape quits at once; Quit quits
+    /// after [`QUIT_DELAY`] ([`Screen::take_quit`]), and its key first
+    /// waits for its click, as every main-menu key does (see
+    /// [`MenuHold`]): input meanwhile is held and replayed after, and
+    /// input during the delay is dropped. I and P work
     /// on the menu, and Tab goes to the ship browser; on the ship browser
     /// and the galaxy map, Escape goes back to the menu instead of
     /// quitting.
@@ -2670,6 +2870,14 @@ impl Screen for AppScreen {
     /// off, after a change in the spaceport ([`AppScreen::transact`]) and
     /// after a move by set operator.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // The original is inside Quit's `Delay`, then exits.
+        if self.quit_in.is_some() || self.quit_due {
+            return ScreenAction::None;
+        }
+        if let Some(hold) = self.menu_hold {
+            self.hold_input(hold, input);
+            return ScreenAction::None;
+        }
         self.double_time_key(input);
         let action = self.route(input);
         self.settle_script();
@@ -2686,6 +2894,15 @@ impl Screen for AppScreen {
     /// fade is over. What the set expressions queued is settled, and a
     /// save that is due is made.
     fn tick(&mut self, dt: Duration) {
+        if let Some(left) = self.quit_in {
+            match left.checked_sub(dt) {
+                Some(left) if !left.is_zero() => self.quit_in = Some(left),
+                _ => {
+                    self.quit_in = None;
+                    self.quit_due = true;
+                }
+            }
+        }
         match self.overlay_mut() {
             Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
@@ -2760,19 +2977,64 @@ impl Screen for AppScreen {
         }
     }
 
+    /// While the main menu waits, the cancel waits too, in its place
+    /// among the inputs.
     fn cancel_pointer(&mut self) {
+        if self.menu_hold.is_some() {
+            self.held.push(Held::CancelPointer);
+            return;
+        }
         match self.overlay_mut() {
             Some(overlay) => overlay.cancel_pointer(),
             None => self.shown_mut().cancel_pointer(),
         }
     }
 
+    /// While the main menu waits, the letting go waits too, in its place
+    /// among the inputs; while E's wait holds, it counts as E's release.
     fn release_keys(&mut self) {
+        if let Some(hold) = self.menu_hold {
+            self.held.push(Held::ReleaseKeys);
+            if hold == MenuHold::EHeld {
+                self.e_released();
+            }
+            return;
+        }
         self.command_held = false;
+        self.keys_held = MenuKeys::default();
         match self.overlay_mut() {
             Some(overlay) => overlay.release_keys(),
             None => self.shown_mut().release_keys(),
         }
+    }
+
+    /// Runs the main-menu action held for its keyed click, if any (E's
+    /// wait is left alone), then replays what arrived meanwhile, in
+    /// order, through [`Screen::input`]: a replayed key that holds again
+    /// queues the rest. A quit a replayed input asks is kept for
+    /// [`Screen::take_quit`].
+    fn keyed_click_ended(&mut self) {
+        let Some(MenuHold::Click(action)) = self.menu_hold else {
+            return;
+        };
+        self.menu_hold = None;
+        self.run_menu_action(action);
+        for held in std::mem::take(&mut self.held) {
+            match held {
+                Held::Input(input) => {
+                    if self.input(&input) == ScreenAction::Quit {
+                        self.quit_due = true;
+                    }
+                }
+                Held::CancelPointer => self.cancel_pointer(),
+                Held::ReleaseKeys => self.release_keys(),
+            }
+        }
+    }
+
+    /// Whether Quit's delay has run out, or a replayed input quit.
+    fn take_quit(&mut self) -> bool {
+        std::mem::take(&mut self.quit_due)
     }
 
     /// The sounds of the screens closed since, then of every live screen.
@@ -3281,9 +3543,10 @@ pub(super) mod tests {
         bytes
     }
 
-    /// The main menu's X text's `dësc`: two short lines.
+    /// The main menu's X text's `dësc`: two short lines, the second naming
+    /// the pilot, the ship type and a mission's destination.
     fn x_text() -> Vec<u8> {
-        let mut bytes = b"x 0\rx 1\0".to_vec();
+        let mut bytes = b"x 0\rx <PN>1 <PST> <DST>\0".to_vec();
         bytes.extend([0xFF; 2]);
         bytes.extend([0; 34]);
         bytes
@@ -4688,6 +4951,8 @@ pub(super) mod tests {
             command_comma(screen);
         } else {
             assert_eq!(screen.input(&key(PREFS, true)), ScreenAction::None);
+            // The menu's P opens them once its click has played.
+            screen.keyed_click_ended();
         }
         assert_eq!(screen.showing(), Showing::Preferences);
         assert_eq!(screen.now_showing(), Some(Showing::Preferences));
@@ -5312,13 +5577,72 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn quit_or_escape_on_the_main_menu_quits() {
+    fn quit_waits_out_the_quit_delay_and_escape_quits_at_once() {
         let store = MemoryPilots::new();
         let mut screen = menu(&store);
-        assert_eq!(choose(&mut screen, MenuChoice::Quit), ScreenAction::Quit);
+        ui_sounds(&mut screen);
+        assert_eq!(choose(&mut screen, MenuChoice::Quit), ScreenAction::None);
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::ButtonDown, UiSound::ButtonUp],
+            "601 already played, on the release"
+        );
+        assert!(!screen.take_quit());
+        screen.tick(QUIT_DELAY.saturating_sub(Duration::from_millis(1)));
+        assert!(!screen.take_quit(), "still waiting");
+        screen.tick(Duration::from_millis(1));
+        assert!(screen.take_quit(), "the delay is over");
+        assert!(!screen.take_quit(), "once");
+
         let mut screen = menu(&store);
         assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
         assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    #[test]
+    fn quits_delay_is_fifteen_ticks() {
+        assert_eq!(QUIT_DELAY, nova_sim::mission::screens::mac_ticks(15));
+    }
+
+    #[test]
+    fn input_during_the_quit_delay_does_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        choose(&mut screen, MenuChoice::Quit);
+        ui_sounds(&mut screen);
+        let new_pilot = screen
+            .main_menu()
+            .expect("a main menu")
+            .button(MenuChoice::NewPilot)
+            .rect
+            .center();
+        click_at(&mut screen, new_pilot);
+        screen.input(&Input::Text('o'));
+        screen.input(&key(Key::Char('p'), true));
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert_eq!(ui_sounds(&mut screen), [], "nothing clicked");
+        screen.tick(QUIT_DELAY);
+        assert!(screen.take_quit());
+    }
+
+    #[test]
+    fn keyed_q_quits_only_after_its_click_and_the_quit_delay() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        ui_sounds(&mut screen);
+        assert_eq!(screen.input(&Input::Text('q')), ScreenAction::None);
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed]);
+        screen.tick(QUIT_DELAY * 2);
+        assert!(!screen.take_quit(), "the click still plays");
+        screen.keyed_click_ended();
+        assert!(!screen.take_quit(), "601 has only started");
+        screen.tick(QUIT_DELAY.saturating_sub(Duration::from_millis(1)));
+        assert!(!screen.take_quit());
+        screen.tick(Duration::from_millis(1));
+        assert!(screen.take_quit());
+        assert!(!screen.take_quit(), "once");
     }
 
     /// The interface sounds `screen` reports.
@@ -5334,39 +5658,220 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn p_a_and_x_on_the_main_menu_click_then_open_their_screen() {
+    fn keyed_n_o_p_a_and_x_click_then_open_their_screen_once_the_click_ends() {
+        let store = MemoryPilots::new();
+        for (press, opens) in [
+            (Input::Text('n'), Showing::NewPilot),
+            (Input::Text('O'), Showing::OpenPilot),
+            (key(Key::Char('p'), true), Showing::Preferences),
+            (key(Key::Char('a'), true), Showing::About),
+            (key(Key::Char('x'), true), Showing::Note),
+        ] {
+            let mut screen = menu_with_dialogs(&store);
+            ui_sounds(&mut screen);
+            assert_eq!(screen.input(&press), ScreenAction::None);
+            assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "{press:?}");
+            screen.tick(Duration::from_secs(1));
+            assert_eq!(screen.showing(), Showing::MainMenu, "{press:?} waits");
+            screen.keyed_click_ended();
+            assert_eq!(screen.showing(), opens, "{press:?}");
+            screen.keyed_click_ended();
+            assert_eq!(ui_sounds(&mut screen), [], "{press:?} once");
+        }
+    }
+
+    #[test]
+    fn a_and_x_show_the_about_text_and_desc_32766_munged_before_any_pilot() {
         let store = MemoryPilots::new();
         let mut screen = menu_with_dialogs(&store);
-        ui_sounds(&mut screen);
-        screen.input(&key(Key::Char('p'), true));
-        assert_eq!(screen.showing(), Showing::Preferences);
-        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "p");
-        screen.input(&key(Key::Char('p'), false));
-        screen.input(&key(Key::Escape, true));
-        screen.input(&key(Key::Escape, false));
-        ui_sounds(&mut screen);
-
         screen.input(&key(Key::Char('a'), true));
-        assert_eq!(screen.showing(), Showing::About);
+        screen.keyed_click_ended();
         assert_eq!(about(&screen).lines()[..2], ["line 0", "line 1"]);
-        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "a");
         screen.input(&key(Key::Char('a'), false));
         screen.input(&key(Key::Enter, true));
         screen.input(&key(Key::Enter, false));
         assert_eq!(screen.showing(), Showing::MainMenu);
-        ui_sounds(&mut screen);
 
         screen.input(&key(Key::Char('x'), true));
+        screen.keyed_click_ended();
         assert_eq!(
             screen.showing(),
             Showing::Note,
             "a text over the menu, not the About box"
         );
-        assert_eq!(about(&screen).lines(), ["x 0", "x 1"], "dësc 32766, raw");
-        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "x");
+        assert_eq!(
+            about(&screen).lines(),
+            ["x 0", "x 1 First [Error]"],
+            "no pilot's name, ship 128's class, no mission"
+        );
         screen.input(&key(Key::Char('x'), false));
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::MainMenu);
+    }
+
+    #[test]
+    fn input_during_a_keyed_click_is_replayed_in_order_once_it_ends() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        screen.input(&Input::Text('n'));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&Input::Text('b'));
+        screen.input(&key(Key::Char('b'), false));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::NewPilot);
+        assert_eq!(screen.new_pilot().expect("open").name(), "b");
+    }
+
+    #[test]
+    fn letting_go_during_a_keyed_click_happens_in_its_place_in_the_replay() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        ui_sounds(&mut screen);
+        // E with the E key not held (another layout) clicks at once.
+        screen.input(&Input::Text('e'));
+        screen.input(&key(Key::Command, true));
+        screen.release_keys();
+        screen.input(&Input::Text('n'));
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed]);
+        screen.keyed_click_ended();
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::EnterRefused, UiSound::ButtonKeyed],
+            "Command let go before the N, which holds again"
+        );
+        assert_eq!(screen.showing(), Showing::MainMenu, "N's click plays");
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::NewPilot);
+    }
+
+    #[test]
+    fn a_pointer_cancelled_during_a_keyed_click_is_cancelled_in_its_place() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        let at = screen
+            .main_menu()
+            .expect("a main menu")
+            .button(MenuChoice::NewPilot)
+            .rect
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&Input::Text('e'));
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        ui_sounds(&mut screen);
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::MainMenu, "cancelled, no click");
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::EnterRefused, UiSound::ButtonDown]
+        );
+    }
+
+    // E.
+
+    #[test]
+    fn e_held_waits_for_its_release_to_click_then_refuses_with_no_pilot() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        ui_sounds(&mut screen);
+        screen.input(&key(Key::Char('e'), true));
+        screen.input(&Input::Text('e'));
+        assert_eq!(ui_sounds(&mut screen), [], "no click while E is held");
+        screen.keyed_click_ended();
+        assert_eq!(ui_sounds(&mut screen), [], "no click hold yet");
+        screen.input(&key(Key::Char('e'), false));
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "on release");
+        screen.keyed_click_ended();
+        assert_eq!(ui_sounds(&mut screen), [UiSound::EnterRefused]);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+    }
+
+    #[test]
+    fn typed_e_without_the_e_key_held_clicks_at_once() {
+        let store = MemoryPilots::new();
+        for typed in ['e', 'E'] {
+            let mut screen = menu(&store);
+            ui_sounds(&mut screen);
+            screen.input(&Input::Text(typed));
+            assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "{typed}");
+            screen.keyed_click_ended();
+            assert_eq!(ui_sounds(&mut screen), [UiSound::EnterRefused], "{typed}");
+        }
+    }
+
+    #[test]
+    fn while_e_is_held_its_repeats_are_dropped_and_the_rest_waits() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        screen.input(&key(Key::Char('e'), true));
+        screen.input(&Input::Text('e'));
+        for _ in 0..3 {
+            screen.input(&held(Key::Char('e')));
+            screen.input(&Input::Text('e'));
+        }
+        screen.input(&Input::Text('n'));
+        ui_sounds(&mut screen);
+        screen.release_keys();
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::ButtonKeyed],
+            "letting go of the keys releases E"
+        );
+        assert_eq!(screen.showing(), Showing::MainMenu, "N waits");
+        screen.keyed_click_ended();
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::EnterRefused, UiSound::ButtonKeyed],
+            "one refusal, then N clicks"
+        );
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::NewPilot);
+    }
+
+    #[test]
+    fn command_e_does_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        ui_sounds(&mut screen);
+        screen.input(&key(Key::Command, true));
+        screen.input(&key(Key::Char('e'), true));
+        screen.input(&Input::Text('e'));
+        screen.input(&key(Key::Char('e'), false));
+        screen.keyed_click_ended();
+        assert_eq!(ui_sounds(&mut screen), []);
+    }
+
+    // O's guard.
+
+    #[test]
+    fn o_does_nothing_while_s_or_l_is_held() {
+        let store = MemoryPilots::new();
+        for guard in [Key::Char('s'), Key::Char('l')] {
+            let mut screen = menu_with_dialogs(&store);
+            ui_sounds(&mut screen);
+            screen.input(&key(guard, true));
+            screen.input(&Input::Text('o'));
+            screen.keyed_click_ended();
+            assert_eq!(ui_sounds(&mut screen), [], "{guard:?}");
+            assert_eq!(screen.showing(), Showing::MainMenu, "{guard:?}");
+            screen.input(&key(guard, false));
+            screen.input(&Input::Text('o'));
+            screen.keyed_click_ended();
+            assert_eq!(screen.showing(), Showing::OpenPilot, "{guard:?} let go");
+
+            let mut screen = menu_with_dialogs(&store);
+            screen.input(&key(guard, true));
+            screen.release_keys();
+            screen.input(&Input::Text('O'));
+            screen.keyed_click_ended();
+            assert_eq!(screen.showing(), Showing::OpenPilot, "{guard:?} released");
+        }
     }
 
     #[test]
@@ -5382,6 +5887,7 @@ pub(super) mod tests {
         }
         screen.input(&key(Key::Command, false));
         screen.input(&Input::Text('n'));
+        screen.keyed_click_ended();
         assert_eq!(screen.showing(), Showing::NewPilot, "without Command");
     }
 
