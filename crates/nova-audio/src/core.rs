@@ -36,6 +36,8 @@ use crate::table::SoundTable;
 ///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
 ///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
 ///   which the port decides.
+/// - A key's click on a main-menu button plays the button-down sound,
+///   then the button-up sound once the port says the first has ended.
 /// - A halt halts each `snd ` it names, in order ([`AudioCommand::Halt`]),
 ///   whatever the sound setting: halting what is not playing is harmless.
 /// - Each of a fight's sounds plays its own `snd ` once, at the effects
@@ -56,6 +58,9 @@ pub struct AudioCore<A: Audio> {
     music: Music,
     /// Whether the engine loop has been started and not stopped since.
     loop_on: bool,
+    /// A keyed click's second half: the `snd ` it waits on to end, then
+    /// the one it plays.
+    keyed: Option<(SoundId, SoundId)>,
 }
 
 impl<A: Audio> AudioCore<A> {
@@ -76,12 +81,19 @@ impl<A: Audio> AudioCore<A> {
             thrusting: false,
             music: Music::Stopped,
             loop_on: false,
+            keyed: None,
         }
     }
 
     /// Takes in one frame's worth: the screen `showing` (`None` keeps the
     /// scene as it was), then each of `sounds` in order.
     pub fn update(&mut self, showing: Option<Showing>, sounds: &[Sound]) {
+        if let Some((waiting, then)) = self.keyed
+            && !self.audio.playing(waiting)
+        {
+            self.keyed = None;
+            self.play(Some(then));
+        }
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
         }
@@ -159,6 +171,7 @@ impl<A: Audio> AudioCore<A> {
             }
             Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
             Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
+            Sound::Ui(UiSound::ButtonKeyed) => self.click_keyed(),
             Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
             Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
             Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
@@ -199,6 +212,30 @@ impl<A: Audio> AudioCore<A> {
                 let volume = self.settings.effects_volume.amplitude() * gain;
                 self.play_at(Some(fight.sound), Volume::new(volume));
             }
+        }
+    }
+
+    /// Plays a key's click on a main-menu button, as
+    /// `_PlayMainScreenClickSound` @0x177af does: the button-down sound,
+    /// then, on the first update after it has ended, the button-up sound
+    /// (the original busy-waits on `ST_IsSoundPlaying`, @0x177e0-0x177f2).
+    /// A click still waiting is finished first, as the original finishes
+    /// one before it reads the next key. With no button-down sound, the
+    /// button-up sound plays at once. With sound off, nothing plays and
+    /// nothing waits.
+    fn click_keyed(&mut self) {
+        if let Some((_, then)) = self.keyed.take() {
+            self.play(Some(then));
+        }
+        if !self.settings.sound {
+            return;
+        }
+        match (self.table.button_down, self.table.button_up) {
+            (Some(down), up) => {
+                self.play(Some(down));
+                self.keyed = up.map(|up| (down, up));
+            }
+            (None, up) => self.play(up),
         }
     }
 
@@ -291,6 +328,7 @@ impl<A: Audio> AudioCore<A> {
         if self.settings.sound && !on {
             self.audio.run(AudioCommand::StopEffects);
             self.loop_on = false;
+            self.keyed = None;
         }
         self.settings.sound = on;
         self.reconcile();
@@ -551,6 +589,99 @@ mod tests {
                 play(601, 1.0)
             ]
         );
+    }
+
+    const KEYED: Sound = Sound::Ui(UiSound::ButtonKeyed);
+
+    /// The original table: a core, its log and a handle on its port, to
+    /// say what is still playing.
+    fn keyed() -> (AudioCore<RecordingAudio>, AudioLog, RecordingAudio) {
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let handle = audio.clone();
+        (AudioCore::new(audio), log, handle)
+    }
+
+    #[test]
+    fn a_keyed_button_plays_600_then_601_once_600_has_ended() {
+        let (mut core, log, audio) = keyed();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        assert_eq!(drain(&log), [play(600, 0.5)]);
+        audio.set_playing(SoundId(600), true);
+        core.update(None, &[]);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "600 still playing");
+        audio.set_playing(SoundId(600), false);
+        core.update(None, &[JUMP]);
+        assert_eq!(
+            drain(&log),
+            [play(601, 0.5), play(128, 0.5)],
+            "601 first, before the frame's events"
+        );
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "once");
+    }
+
+    #[test]
+    fn a_second_keyed_button_finishes_the_first_click_before_its_own() {
+        let (mut core, log, audio) = keyed();
+        audio.set_playing(SoundId(600), true);
+        core.update(Some(Showing::ShipBrowser), &[KEYED, KEYED]);
+        assert_eq!(
+            drain(&log),
+            [play(600, 1.0), play(601, 1.0), play(600, 1.0)]
+        );
+        core.update(None, &[]);
+        assert_eq!(drain(&log), []);
+        audio.set_playing(SoundId(600), false);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [play(601, 1.0)]);
+    }
+
+    #[test]
+    fn a_keyed_button_is_silent_with_sound_off_and_leaves_nothing_pending() {
+        let (mut core, log, _) = keyed();
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        core.set_sound(true);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "sound off");
+
+        let (mut core, log, _) = keyed();
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        core.set_sound(false);
+        core.set_sound(true);
+        drain(&log);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "turning sound off forgets 601");
+    }
+
+    #[test]
+    fn a_keyed_button_with_no_600_plays_601_at_once() {
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            button_down: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        assert_eq!(drain(&log), [play(601, 1.0)]);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "once");
+
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            button_up: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [play(600, 1.0)], "no 601 to play");
     }
 
     #[test]

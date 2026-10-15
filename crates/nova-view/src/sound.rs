@@ -12,10 +12,10 @@
 //!   dialog shows them, part of the [`Prefs`](crate::Prefs) a screen
 //!   reports through [`Screen::take_prefs`](crate::Screen::take_prefs).
 //!
-//! **A key that activates a button makes no sound.** Return, Enter,
-//! Escape, Space on a focused button, or a dialog's own letter keys raise
-//! neither [`UiSound::ButtonDown`] nor [`UiSound::ButtonUp`], as in the
-//! original: `_TextDialogFilter` maps Return, Enter and Escape straight
+//! **A key that activates a button makes no sound**, but on the main
+//! menu. Return, Enter, Escape, Space on a focused button, or a dialog's
+//! or the spaceport's own letter keys raise neither [`UiSound::ButtonDown`]
+//! nor [`UiSound::ButtonUp`], as in the original: `_TextDialogFilter` maps Return, Enter and Escape straight
 //! to an item (@0x51fca-0x51fef) with no hilite, flash or sound;
 //! `_CommFilter`, `_PlanetCommFilter`, `_PlunderFilter`, `_ShipDescFilter`,
 //! `_PlayerInfoFilter` and `_MyModalDialog` call no sound routine; the
@@ -26,6 +26,12 @@
 //! and 601, belong to its main screen alone: `_TrackMainScreenButtons`
 //! @0x195b9 plays them under the pointer, and `_PlayMainScreenClickSound`
 //! @0x177af plays both, one after the other, for `_MainScreenKey`'s keys.
+//! So the main menu's shortcut keys raise [`UiSound::ButtonKeyed`], once,
+//! with the choice they make. The spaceport's screens map their keys to
+//! items with no sound (`_PortFilter` @0x4f041, `_BarFilter` @0x47a4b,
+//! `_TradeFilter` @0x4e092, `_OutfitFilter` @0x58039, `_ShipyardFilter`
+//! @0x60449, `_MissionFilter` @0x9f7a9, `_MissionInfoFilter` @0x9d6e5,
+//! `_SingleMissionFilter` @0x98d9a).
 
 pub use nova_sim::{SimSound, SoundId};
 
@@ -39,6 +45,9 @@ pub enum UiSound {
     /// button or off it. A key that activates a button never raises it
     /// (see the module docs).
     ButtonUp,
+    /// A key activated a main-menu button: `_PlayMainScreenClickSound`
+    /// @0x177af, which plays snd 600, then 601 once 600 has ended.
+    ButtonKeyed,
     /// The interface refused what was asked of it: the original's
     /// `SysBeep`.
     Alert,
