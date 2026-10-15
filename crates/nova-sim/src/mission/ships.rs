@@ -3,7 +3,7 @@
 //! state its slot keeps of them ([`SpecialShips`]). How they spawn is the
 //! [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships".
 
-use crate::catalog::{CommCatalog, GovtId, MissionShip, ShipId, SystemId};
+use crate::catalog::{CommCatalog, DudeId, GovtId, MissionShip, ShipId, SystemId};
 use crate::chance::Chance;
 use crate::gate::GateKind;
 use crate::govt::{
@@ -76,6 +76,15 @@ pub struct SpecialShips {
     pub disabled: i16,
     /// How many of a chase-off goal's have left the system (+0x30).
     pub chased_off: i16,
+    /// The one ship type they all fly under [`UNIFORM_SHIP_TYPE`]
+    /// (+0x56): drawn from their `düde` at accept, or, for a slot that
+    /// has none (a save from before it was kept, or a `düde` that could
+    /// not be read then), at their next spawn, and a swapped person's
+    /// type ([`swapped_ship_type`]). None without the flag. The original
+    /// keeps the `düde`'s field index, the engine the type: the two
+    /// differ only if the `düde` changed between accept and spawn, which
+    /// the engine does not model.
+    pub uniform_type: Option<ShipId>,
 }
 
 impl Default for SpecialShips {
@@ -91,6 +100,7 @@ impl Default for SpecialShips {
             boarded: 0,
             disabled: 0,
             chased_off: 0,
+            uniform_type: None,
         }
     }
 }
@@ -325,13 +335,22 @@ impl SpecialShips {
     /// their `ShipCount`, and they have all arrived but for a `ShipStart`
     /// of 1 (@0xa0b39-0xa0b46, @0xa1468-0xa147d). None have been
     /// destroyed, boarded, disabled or chased off (@0xa1c35-0xa1c59).
+    /// For a mission of `Flags` `flags` with [`UNIFORM_SHIP_TYPE`] and a
+    /// `ShipDude`, the one type they all fly is `draw_type` of that
+    /// `düde` (@0xa0b9f-0xa0bfe), else none.
     pub fn at_accept(
         ships: &MissionShip,
+        flags: u16,
         facts: &ShipFacts,
         (map, govts): (&StarMap, &Governments),
         strings: &dyn CommCatalog,
+        draw_type: &mut dyn FnMut(DudeId, &mut dyn Chance) -> Option<ShipId>,
         chance: &mut dyn Chance,
     ) -> Self {
+        let uniform_type = ships
+            .dude
+            .filter(|_| flags & UNIFORM_SHIP_TYPE != 0)
+            .and_then(|dude| draw_type(dude, &mut *chance));
         let start = ShipStart::from_code(ships.start);
         let appear = if start.timed() {
             appear_timer(ships, chance)
@@ -356,6 +375,7 @@ impl SpecialShips {
             boarded: 0,
             disabled: 0,
             chased_off: 0,
+            uniform_type,
         }
     }
 }
@@ -866,10 +886,63 @@ mod tests {
     }
 
     fn accepted(ships: &MissionShip, draws: &[u32]) -> (SpecialShips, Vec<u32>) {
+        let (accepted, asked, _) = accepted_flagged(ships, 0, draws);
+        (accepted, asked)
+    }
+
+    /// The ships of a mission of `Flags` `flags`, accepted, drawing on
+    /// `draws`, a ship type of 201 drawn from any `düde`: with the draws
+    /// asked and the `düde`s the type was drawn from.
+    fn accepted_flagged(
+        ships: &MissionShip,
+        flags: u16,
+        draws: &[u32],
+    ) -> (SpecialShips, Vec<u32>, Vec<DudeId>) {
         let mut chance = Draws::of(draws);
-        let accepted =
-            SpecialShips::at_accept(ships, &facts(), (&map(), &govts()), &Strings, &mut chance);
-        (accepted, chance.asked)
+        let mut asked = Vec::new();
+        let mut draw = |dude: DudeId, _: &mut dyn Chance| {
+            asked.push(dude);
+            Some(ShipId(201))
+        };
+        let accepted = SpecialShips::at_accept(
+            ships,
+            flags,
+            &facts(),
+            (&map(), &govts()),
+            &Strings,
+            &mut draw,
+            &mut chance,
+        );
+        (accepted, chance.asked, asked)
+    }
+
+    #[test]
+    fn a_0x0800_missions_ships_take_one_type_drawn_at_accept() {
+        let ships = MissionShip {
+            dude: Some(DudeId(150)),
+            ..shipping(0)
+        };
+        let (accepted, _, drawn_from) = accepted_flagged(&ships, 0x0800 | 0x0001, &[1, 2, 0]);
+        assert_eq!(accepted.uniform_type, Some(ShipId(201)));
+        assert_eq!(drawn_from, [DudeId(150)], "once, from its düde");
+    }
+
+    #[test]
+    fn a_mission_without_0x0800_draws_no_type_at_accept() {
+        let ships = MissionShip {
+            dude: Some(DudeId(150)),
+            ..shipping(0)
+        };
+        let (accepted, _, drawn_from) = accepted_flagged(&ships, 0xf7ff, &[1, 2, 0]);
+        assert_eq!(accepted.uniform_type, None);
+        assert!(drawn_from.is_empty());
+    }
+
+    #[test]
+    fn a_0x0800_mission_with_no_dude_draws_none() {
+        let (accepted, _, drawn_from) = accepted_flagged(&shipping(0), 0x0800, &[1, 2, 0]);
+        assert_eq!(accepted.uniform_type, None);
+        assert!(drawn_from.is_empty());
     }
 
     #[test]
@@ -890,6 +963,7 @@ mod tests {
                     boarded: 0,
                     disabled: 0,
                     chased_off: 0,
+                    uniform_type: None,
                 },
                 "{start}"
             );

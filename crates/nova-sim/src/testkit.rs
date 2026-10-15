@@ -862,6 +862,10 @@ impl PilotCatalog for FakePilotCatalog {
     fn warp_sound(&self) -> Option<SoundLength> {
         self.warp_sound
     }
+
+    fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
+        TrafficCatalog::dude(self, id)
+    }
 }
 
 /// No traffic unless a test sets it.

@@ -709,6 +709,7 @@ impl From<SavedShips> for SpecialShips {
             boarded: saved.boarded,
             disabled: saved.disabled,
             chased_off: saved.chased_off,
+            uniform_type: None,
         }
     }
 }
@@ -1544,6 +1545,7 @@ mod tests {
                     boarded: 1,
                     disabled: 4,
                     chased_off: 5,
+                    uniform_type: None,
                 },
                 aux: AuxShips {
                     countdown: 33,

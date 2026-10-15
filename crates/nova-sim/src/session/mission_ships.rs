@@ -149,15 +149,19 @@
 
 use super::Session;
 use crate::board::{BoardRefusal, Boarding, MissionBoardLine};
-use crate::catalog::{DudeId, MissionId, MissionRecord, ShipId, TrafficCatalog};
+use std::collections::BTreeMap;
+
+use crate::catalog::{DudeId, MissionId, MissionRecord, PilotCatalog, ShipId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
-use crate::control::Script;
+use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
 use crate::mission::active::AUTO_ABORT;
 use crate::mission::cargo::PICKUP_BOARDING;
-use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer, swapped_ship_type};
+use crate::mission::ships::{
+    ShipBehav, ShipFacts, ShipStart, UNIFORM_SHIP_TYPE, appear_timer, swapped_ship_type,
+};
 use crate::mission::{
     ActiveMission, AssistLine, Departure, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem,
     SpecialShips, assists, check_goals, departure, fails_on_destroyed, fails_on_disabled,
@@ -171,7 +175,7 @@ use crate::story::{
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{MissionMark, Npc, NpcId};
 use crate::traffic::spawn::{self, MissionSpawn, NewShip};
-use crate::traffic::table::SpawnTable;
+use crate::traffic::table::{SpawnDude, SpawnTable, dude_ship_type};
 
 /// The appear timer's highest value that counts down (32000 @0x437f5).
 const COUNTED: i16 = 32_000;
@@ -241,12 +245,32 @@ fn restarts_on(how: Entrance) -> bool {
     )
 }
 
+/// The `düde`s of `missions` of `Flags` 0x0800 ([`UNIFORM_SHIP_TYPE`])
+/// with a `ShipDude`, read from `catalog` ([`PilotCatalog::mission_dude`]),
+/// each as the traffic spawns from it: what such a mission draws its
+/// ships' one type from at accept. One that cannot be read is left out,
+/// and its type is drawn at the ships' first spawn.
+pub(super) fn uniform_dudes(
+    missions: &[MissionRecord],
+    catalog: &(impl PilotCatalog + ?Sized),
+) -> BTreeMap<DudeId, SpawnDude> {
+    missions
+        .iter()
+        .filter(|record| record.flags & UNIFORM_SHIP_TYPE != 0)
+        .filter_map(|record| record.ships.dude)
+        .filter_map(|dude| Some((dude, SpawnDude::from(&catalog.mission_dude(dude)?))))
+        .collect()
+}
+
 impl Session {
     /// The special ships of `record`, just accepted as `active`, as
     /// `_LoadCurrentMissionData` loads them before `OnAccept`
     /// ([`SpecialShips::at_accept`]), from the player's system now, over
     /// the overlaid map and the governments, their names from the string
-    /// lists ([`Session::strings`]), drawing on `chance`.
+    /// lists ([`Session::strings`]), drawing on `chance`. Under `Flags`
+    /// 0x0800 their one type is drawn from their `düde` as the session
+    /// read it ([`dude_ship_type`]), its `AppearOn` read now, before
+    /// `OnAccept` runs.
     pub(super) fn ships_at_accept(
         &self,
         record: &MissionRecord,
@@ -260,13 +284,27 @@ impl Session {
             destination: held(active.destination),
             return_to: held(active.return_to),
         };
+        let mut draw_type = |dude: DudeId, chance: &mut dyn Chance| {
+            let dude = self.uniform_dudes.get(&dude)?;
+            dude_ship_type(dude, |ship| self.appear_on(ship), self.gate(), chance)
+        };
         SpecialShips::at_accept(
             &record.ships,
+            record.flags,
             &facts,
             (self.galaxy.map(), &self.govts),
             self.strings(),
+            &mut draw_type,
             chance,
         )
+    }
+
+    /// Ship type `ship`'s `AppearOn`: none when it has no record.
+    fn appear_on(&self, ship: ShipId) -> Option<&Test> {
+        self.ships
+            .iter()
+            .find(|record| record.id == ship)
+            .map(|record| &record.appear_on)
     }
 
     /// Registers `slot`'s hooks ([`ship_hook`]): its enter-system hook
@@ -1343,6 +1381,7 @@ pub(super) mod tests {
                 boarded: 0,
                 disabled: 0,
                 chased_off: 0,
+                uniform_type: None,
             }
         );
         assert_eq!(
