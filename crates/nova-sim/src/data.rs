@@ -40,7 +40,7 @@ use crate::catalog::{
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
     RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
     StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    TextGraphics, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -459,23 +459,29 @@ impl PilotCatalog for GameData {
 
     /// Each text from its `dësc`, none for -1 or one that cannot be read;
     /// the offer's is `dësc` 4000 + the mission's index (@0xa3a85-0xa3aad).
+    /// Each text's `Graphic` beside it, none for -1 too.
     fn mission_texts(&self) -> Vec<MissionTexts> {
         let text = |id: Option<i16>| -> Option<String> {
             let desc = self.get::<Desc>(id?)?.ok()?;
             Some(desc.record.text.as_str().to_owned())
+        };
+        let graphic = |id: Option<i16>| -> Option<i16> {
+            let desc = self.get::<Desc>(id?)?.ok()?;
+            Some(desc.record.graphic?.0)
         };
         self.records::<Mission>()
             .filter_map(|(id, mission)| {
                 let mission = mission.ok()?;
                 let record = mission.record;
                 let raw = |desc: Option<nova_data::DescId>| text(desc.map(|desc| desc.0));
+                let pict = |desc: Option<nova_data::DescId>| graphic(desc.map(|desc| desc.0));
+                let offer = id
+                    .checked_sub(FIRST_MISSION)
+                    .and_then(|index| FIRST_OFFER_DESC.checked_add(index));
                 Some(MissionTexts {
                     id: MissionId(id),
                     name: shown_resource_name(mission.name.unwrap_or_default()).to_owned(),
-                    offer: text(
-                        id.checked_sub(FIRST_MISSION)
-                            .and_then(|index| FIRST_OFFER_DESC.checked_add(index)),
-                    ),
+                    offer: text(offer),
                     brief: raw(record.brief_text),
                     quick_brief: raw(record.quick_brief),
                     comp: raw(record.comp_text),
@@ -486,6 +492,16 @@ impl PilotCatalog for GameData {
                     ship_done: raw(record.ship_done_text),
                     accept_button: record.accept_button.as_str().to_owned(),
                     refuse_button: record.refuse_button.as_str().to_owned(),
+                    graphics: TextGraphics {
+                        offer: graphic(offer),
+                        brief: pict(record.brief_text),
+                        comp: pict(record.comp_text),
+                        fail: pict(record.fail_text),
+                        refuse: pict(record.refuse_text),
+                        load_cargo: pict(record.load_carg_text),
+                        dump_cargo: pict(record.dump_cargo_text),
+                        ship_done: pict(record.ship_done_text),
+                    },
                 })
             })
             .collect()
@@ -4010,9 +4026,14 @@ mod tests {
 
     /// A `dësc` of `text`, with no picture.
     fn desc(text: &str) -> Vec<u8> {
+        pictured(text, -1)
+    }
+
+    /// A `dësc` of `text` whose `Graphic` is `graphic`.
+    fn pictured(text: &str, graphic: i16) -> Vec<u8> {
         let mut bytes = text.as_bytes().to_vec();
         bytes.push(0);
-        bytes.extend([0xFF; 2]);
+        bytes.extend(graphic.to_be_bytes());
         bytes.extend([0; 34]);
         bytes
     }
@@ -4064,15 +4085,15 @@ mod tests {
                 Some("Short"),
                 short(texted([-1; 8], b"\0", b"\0")),
             ),
-            (Desc::TYPE, 4002, None, desc("Offer <DST>.")),
-            (Desc::TYPE, 200, None, desc("Brief.")),
-            (Desc::TYPE, 201, None, desc("Quick <DL>.")),
-            (Desc::TYPE, 202, None, desc("Comp.")),
-            (Desc::TYPE, 203, None, desc("Fail.")),
-            (Desc::TYPE, 204, None, desc("Refuse.")),
-            (Desc::TYPE, 206, None, desc("Load <CQ>.")),
+            (Desc::TYPE, 4002, None, pictured("Offer <DST>.", 5008)),
+            (Desc::TYPE, 200, None, pictured("Brief.", 300)),
+            (Desc::TYPE, 201, None, pictured("Quick <DL>.", 301)),
+            (Desc::TYPE, 202, None, pictured("Comp.", 302)),
+            (Desc::TYPE, 203, None, pictured("Fail.", 303)),
+            (Desc::TYPE, 204, None, pictured("Refuse.", 304)),
+            (Desc::TYPE, 206, None, pictured("Load <CQ>.", 306)),
             (Desc::TYPE, 207, None, desc("Dump.")),
-            (Desc::TYPE, 209, None, desc("Done <SN>.")),
+            (Desc::TYPE, 209, None, pictured("Done <SN>.", 309)),
         ]);
         let texts = data.mission_texts();
         assert_eq!(
@@ -4092,6 +4113,16 @@ mod tests {
                     ship_done: Some("Done <SN>.".to_owned()),
                     accept_button: "I'm in".to_owned(),
                     refuse_button: "No way".to_owned(),
+                    graphics: TextGraphics {
+                        offer: Some(5008),
+                        brief: Some(300),
+                        comp: Some(302),
+                        fail: Some(303),
+                        refuse: Some(304),
+                        load_cargo: Some(306),
+                        dump_cargo: None,
+                        ship_done: Some(309),
+                    },
                 },
                 MissionTexts::named(MissionId(131), "Plain run"),
                 MissionTexts {
@@ -4099,7 +4130,7 @@ mod tests {
                     ..MissionTexts::named(MissionId(132), "")
                 },
             ],
-            "-1 and a missing dësc (0 among them) are none; the undecodable mïsn is skipped"
+            "each text carries its own dësc's graphic, none for a graphic of -1; -1 and a missing dësc (0 among them) are no text and no graphic; the undecodable mïsn is skipped"
         );
         assert_eq!(store(&[]).mission_texts(), []);
     }

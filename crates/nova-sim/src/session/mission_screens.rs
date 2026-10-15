@@ -110,6 +110,25 @@ impl MissionTextKind {
             Self::NoRoom => None,
         }
     }
+
+    /// The `Graphic` of this text's `dësc` in `texts`, raw. Every mission
+    /// `dësc` text allows its picture (`_ShowTextDialog`'s third argument
+    /// 1, as `_DoMissionAccept` @0xa1f0e and `_DoMissionSuccess` @0xa048c
+    /// pass it); the no-room text is `STR#` 2002's, passed 0 (@0xa1bb2,
+    /// @0x982ff), so it has none.
+    fn graphic_of(self, texts: &MissionTexts) -> Option<i16> {
+        let graphics = &texts.graphics;
+        match self {
+            Self::Brief => graphics.brief,
+            Self::Comp => graphics.comp,
+            Self::Fail => graphics.fail,
+            Self::Refuse => graphics.refuse,
+            Self::LoadCargo => graphics.load_cargo,
+            Self::DumpCargo => graphics.dump_cargo,
+            Self::ShipDone => graphics.ship_done,
+            Self::NoRoom => None,
+        }
+    }
 }
 
 /// A mission text to show in the "Desc Dialog" (`_ShowTextDialog`
@@ -122,6 +141,10 @@ pub struct MissionText {
     pub mission: MissionId,
     /// The text.
     pub text: String,
+    /// Its `dësc`'s `Graphic`, raw: none for -1, or for a text that is no
+    /// `dësc`'s. The view shows the picture variant of the dialog
+    /// (`DLOG` 3004) for one above 127 (`_ShowTextDialog` @0x5a89a).
+    pub graphic: Option<i16>,
 }
 
 /// One active mission the mission info screen lists.
@@ -173,11 +196,10 @@ impl Session {
         slot: Option<u8>,
         chance: &mut dyn Chance,
     ) -> bool {
-        let Some(raw) = self
+        let Some((raw, graphic)) = self
             .mission_texts
             .get(&mission)
-            .and_then(|texts| kind.of(texts))
-            .map(str::to_owned)
+            .and_then(|texts| Some((kind.of(texts)?.to_owned(), kind.graphic_of(texts))))
         else {
             return false;
         };
@@ -186,16 +208,23 @@ impl Session {
             Some(slot) => self.mission_text(slot, &raw),
             None => self.plain_text(&raw),
         };
-        self.show_text(kind, mission, text);
+        self.shown_texts.push(MissionText {
+            kind,
+            mission,
+            text,
+            graphic,
+        });
         true
     }
 
-    /// Queues `text`, `mission`'s `kind` text, to show as it is.
+    /// Queues `text`, `mission`'s `kind` text, to show as it is, with no
+    /// picture.
     pub(super) fn show_text(&mut self, kind: MissionTextKind, mission: MissionId, text: String) {
         self.shown_texts.push(MissionText {
             kind,
             mission,
             text,
+            graphic: None,
         });
     }
 
@@ -417,12 +446,14 @@ impl Session {
             texts.map_or("", |texts| texts.refuse_button.as_str()),
             can_refuse,
         );
+        let graphic = texts.and_then(|texts| texts.graphics.offer);
         let raw = raw.map(str::to_owned);
         let raw = self.load_desc(raw.as_deref(), chance);
         VenueOffer::Prompt(OfferPrompt {
             mission,
             text: self.offer_text(mission, &raw).unwrap_or_default(),
             labels,
+            graphic,
         })
     }
 
@@ -472,7 +503,9 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{DateAffixes, MissionRecord, PlaceNames, StellarId, SystemId};
+    use crate::catalog::{
+        DateAffixes, MissionRecord, PlaceNames, StellarId, SystemId, TextGraphics,
+    };
     use crate::control::{Bit, Script, SetExpr, Test};
     use crate::geometry::Vec2;
     use crate::mission::AbortRefusal;
@@ -1137,7 +1170,102 @@ mod tests {
             kind,
             mission: MissionId(mission),
             text: text.to_owned(),
+            graphic: None,
         }
+    }
+
+    #[test]
+    fn each_kind_reads_its_own_texts_graphic_and_no_room_none() {
+        let texts = MissionTexts {
+            graphics: TextGraphics {
+                offer: Some(1),
+                brief: Some(2),
+                comp: Some(3),
+                fail: Some(4),
+                refuse: Some(5),
+                load_cargo: Some(6),
+                dump_cargo: Some(7),
+                ship_done: Some(8),
+            },
+            ..MissionTexts::named(MissionId(130), "Run")
+        };
+        let graphics = [
+            MissionTextKind::Brief,
+            MissionTextKind::Comp,
+            MissionTextKind::Fail,
+            MissionTextKind::Refuse,
+            MissionTextKind::LoadCargo,
+            MissionTextKind::DumpCargo,
+            MissionTextKind::ShipDone,
+            MissionTextKind::NoRoom,
+        ]
+        .map(|kind| kind.graphic_of(&texts));
+        assert_eq!(
+            graphics,
+            [
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+                Some(7),
+                Some(8),
+                None
+            ],
+            "the STR# 2002 no-room text shows no picture (_ShowTextDialog's third argument 0, @0xa1bb2)"
+        );
+    }
+
+    #[test]
+    fn a_shown_text_carries_its_dëscs_graphic() {
+        let catalog = screens(
+            vec![
+                MissionRecord {
+                    on_refuse: Script::parse("S131"),
+                    ..to_mars(130)
+                },
+                MissionRecord {
+                    avail_loc: -1,
+                    ..to_mars(131)
+                },
+            ],
+            vec![
+                MissionTexts {
+                    refuse: Some("No.".to_owned()),
+                    graphics: TextGraphics {
+                        refuse: Some(5008),
+                        brief: Some(5009),
+                        ..TextGraphics::default()
+                    },
+                    ..MissionTexts::named(MissionId(130), "Run")
+                },
+                MissionTexts {
+                    brief: Some("Off.".to_owned()),
+                    graphics: TextGraphics {
+                        brief: Some(5010),
+                        ..TextGraphics::default()
+                    },
+                    ..MissionTexts::named(MissionId(131), "Walk")
+                },
+            ],
+        );
+        let mut session = docked(&catalog);
+        session
+            .refuse_mission(MissionId(130), &mut NeverFires)
+            .expect("refused");
+        assert_eq!(
+            session.take_mission_texts(),
+            [
+                MissionText {
+                    graphic: Some(5008),
+                    ..text(MissionTextKind::Refuse, 130, "No.")
+                },
+                MissionText {
+                    graphic: Some(5010),
+                    ..text(MissionTextKind::Brief, 131, "Off.")
+                },
+            ]
+        );
     }
 
     fn run(session: &mut Session, script: &str) {
@@ -1313,6 +1441,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_offer_carries_its_offer_dëscs_graphic() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![MissionTexts {
+                graphics: TextGraphics {
+                    offer: Some(5008),
+                    refuse: Some(5009),
+                    ..TextGraphics::default()
+                },
+                ..offering(142, "Ferry.", "", "")
+            }],
+        );
+        let mut session = docked(&catalog);
+        assert!(
+            matches!(
+                session.next_offer(BAR, &mut NeverFires),
+                Some(VenueOffer::Prompt(OfferPrompt {
+                    graphic: Some(5008),
+                    ..
+                }))
+            ),
+            "the offer's own, not another text's"
+        );
+    }
+
     fn prompted(offer: Option<VenueOffer>) -> MissionId {
         match offer {
             Some(VenueOffer::Prompt(prompt)) => prompt.mission,
@@ -1358,6 +1512,7 @@ mod tests {
                     accept: "I'm in".to_owned(),
                     refuse: Some(NO_LABEL.to_owned()),
                 },
+                graphic: None,
             })),
             "142 weighs 0, 141 below it; 140 is the spaceport's"
         );

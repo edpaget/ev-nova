@@ -61,6 +61,16 @@ pub enum SimSound {
     /// A person said its hail quote: `_beepSnd[4]`, `snd ` 154, at
     /// priority 1, not modelled (`_ShowPersonHailQuote` @0x445a2-0x445ad).
     HailQuote,
+    /// The player hailed a person who offers its mission: `_beepSnd[4]`,
+    /// `snd ` 154, played by `_HandlePlayerCommunication` before
+    /// `_OfferOneMission`, so for an offer accepted at once too
+    /// (@0x6221a-0x6223d). Its priority, 1, is not modelled.
+    PersonOfferHailed,
+    /// The player boarded a person who offers its mission: `snd ` 390
+    /// "Airlock" (loaded by `_LoadSounds` @0x1c277-0x1c289), played by
+    /// `_HandlePlayerBoardAttempt` before `_OfferOneMission`
+    /// (@0x658e5-0x65907). Its priority, 8, is not modelled.
+    PersonOfferBoarded,
     /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
     /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
     /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is

@@ -51,6 +51,7 @@ use crate::mission::VenueOffer;
 use crate::mission::{self, Offer, Venue};
 use crate::person::{GONE_ON_ACCEPT, LEAVES_ON_ACCEPT, MISSION_ON_BOARD, swaps_for_mission_ship};
 use crate::rulebook::{RuleKey, RuleSource};
+use crate::sound::SimSound;
 use crate::traffic::npc::{Npc, NpcId};
 
 /// The offers from a ship, by mission: each resolved as a person linked
@@ -284,12 +285,20 @@ impl Session {
     }
 
     /// Opens the offer dialog for `offering`, drawing on `chance`: it
-    /// stays pending until the player answers it.
+    /// stays pending until the player answers it. The hail or the board
+    /// that brought it sounds first, as the original plays it before
+    /// `_OfferOneMission`, so an offer accepted at once sounds too:
+    /// [`SimSound::PersonOfferHailed`] (@0x6223d) or
+    /// [`SimSound::PersonOfferBoarded`] (@0x65907).
     pub(super) fn offer_from_ship(
         &mut self,
         offering: Offering,
         chance: &mut dyn Chance,
     ) -> VenueOffer {
+        self.sounds.push(match offering.by {
+            OfferedBy::Hail => SimSound::PersonOfferHailed,
+            OfferedBy::Boarding => SimSound::PersonOfferBoarded,
+        });
         self.offering = Some(offering);
         self.offer_dialog(offering.mission, chance)
     }
@@ -590,6 +599,7 @@ mod tests {
                     accept: "Yes".to_owned(),
                     refuse: Some("No".to_owned()),
                 },
+                graphic: None,
             })))
         );
         assert!(asked.is_empty(), "no conversation rolled: {asked:?}");
@@ -1178,5 +1188,77 @@ mod tests {
         let mut session = alongside_ace(&hailed);
         let (boarded, _) = board(&mut session);
         assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+    }
+
+    // The sounds the offers from ships make.
+
+    /// The offer sounds among the sounds raised since the last taken.
+    fn offer_sounds(session: &mut Session) -> Vec<SimSound> {
+        session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| {
+                matches!(
+                    sound,
+                    SimSound::PersonOfferHailed | SimSound::PersonOfferBoarded
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_hailed_offer_beeps_and_a_boarded_one_plays_the_airlock() {
+        let catalog = talking();
+        let mut session = targeting_ace(&catalog);
+        let _ = session.take_sounds();
+        let _ = hail(&mut session, &catalog);
+        assert_eq!(
+            offer_sounds(&mut session),
+            [SimSound::PersonOfferHailed],
+            "_beepSnd[4] (@0x6223d)"
+        );
+        let catalog = boardable(0);
+        let mut session = alongside_ace(&catalog);
+        let _ = session.take_sounds();
+        let _ = board(&mut session);
+        assert_eq!(
+            offer_sounds(&mut session),
+            [SimSound::PersonOfferBoarded],
+            "snd 390 (@0x65907)"
+        );
+    }
+
+    #[test]
+    fn an_offer_accepted_at_once_still_sounds() {
+        let mut catalog = linked(0);
+        catalog.missions[0].flags = 0x0004;
+        let mut session = targeting_ace(&catalog);
+        let _ = session.take_sounds();
+        assert!(matches!(
+            hail(&mut session, &catalog).0,
+            Ok(Hailed::Offer(VenueOffer::Accepted { .. }))
+        ));
+        assert_eq!(
+            offer_sounds(&mut session),
+            [SimSound::PersonOfferHailed],
+            "played before _OfferOneMission"
+        );
+    }
+
+    #[test]
+    fn a_hail_or_board_with_no_offer_makes_neither_sound() {
+        let mut unavailable = talking();
+        unavailable.missions[0].avail_random = 50;
+        let mut session = targeting_ace(&unavailable);
+        session.offers.set_roll(MissionId(130), 51);
+        let _ = session.take_sounds();
+        assert!(opened_comm(&hail(&mut session, &unavailable).0));
+        assert_eq!(offer_sounds(&mut session), [], "the comm dialog");
+        let mut hailed = boardable(0);
+        hailed.persons[0].flags = 0;
+        let mut session = alongside_ace(&hailed);
+        let _ = session.take_sounds();
+        assert!(matches!(board(&mut session).0, Ok(Boarding::Opened(_))));
+        assert_eq!(offer_sounds(&mut session), [], "the plunder dialog");
     }
 }

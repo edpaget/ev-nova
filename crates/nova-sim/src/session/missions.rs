@@ -2614,6 +2614,7 @@ mod tests {
             kind: MissionTextKind::NoRoom,
             mission: MissionId(mission),
             text: text.to_owned(),
+            graphic: None,
         }
     }
 

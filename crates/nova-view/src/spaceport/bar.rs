@@ -1186,6 +1186,7 @@ mod tests {
         OfferPrompt {
             mission: MissionId(141),
             text: "Ferry this to Mars.".to_owned(),
+            graphic: None,
             labels: OfferLabels {
                 accept: "I'm in".to_owned(),
                 refuse: Some("No".to_owned()),

@@ -119,6 +119,12 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
                 Sound::Sim(SimSound::CargoJettisoned) => self.play(self.table.jettison),
                 Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
+                Sound::Sim(SimSound::PersonOfferHailed) => {
+                    self.play(self.table.person_offer_hail);
+                }
+                Sound::Sim(SimSound::PersonOfferBoarded) => {
+                    self.play(self.table.person_offer_boarding);
+                }
                 Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
                 Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
                 Sound::Sim(SimSound::Script {
@@ -559,6 +565,30 @@ mod tests {
         core.update(
             Some(Showing::ShipBrowser),
             &[Sound::Sim(SimSound::HailQuote)],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_persons_offer_plays_154_on_its_hail_and_390_on_its_boarding_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::PersonOfferHailed),
+                Sound::Sim(SimSound::PersonOfferBoarded),
+            ],
+        );
+        assert_eq!(drain(&log), [play(154, 0.5), play(390, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::PersonOfferHailed),
+                Sound::Sim(SimSound::PersonOfferBoarded),
+            ],
         );
         assert_eq!(drain(&log), [], "sound off");
     }

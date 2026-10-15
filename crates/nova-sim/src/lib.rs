@@ -365,8 +365,8 @@ pub use catalog::{
     ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
     OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
     PlaceNames, RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

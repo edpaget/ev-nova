@@ -702,6 +702,7 @@ fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled()
             OfferPrompt {
                 mission: MissionId(128),
                 text: "Go.".to_owned(),
+                graphic: None,
                 labels: OfferLabels {
                     accept: "Yes".to_owned(),
                     refuse: Some("No".to_owned()),

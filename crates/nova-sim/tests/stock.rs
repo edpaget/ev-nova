@@ -3660,11 +3660,12 @@ fn the_terrapin_hailed_in_kania_joins_the_player_under_person_join() {
             Ok(nova_sim::Hailed::Offer(nova_sim::VenueOffer::Prompt(
                 nova_sim::OfferPrompt {
                     mission: nova_sim::MissionId(132),
+                    graphic: Some(5008),
                     ..
                 }
             )))
         ),
-        "by the engine, the offer"
+        "by the engine, the offer, with its dësc 4004's PICT 5008"
     );
     let bible = nova_sim::HailOptions::nova(
         &nova_sim::Rulebook::default()

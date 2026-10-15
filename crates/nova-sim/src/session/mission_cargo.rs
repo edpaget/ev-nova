@@ -512,6 +512,7 @@ mod tests {
             kind,
             mission: MissionId(mission),
             text: text.to_owned(),
+            graphic: None,
         }
     }
 

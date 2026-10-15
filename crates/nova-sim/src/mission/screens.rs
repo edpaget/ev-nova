@@ -137,6 +137,10 @@ pub struct OfferPrompt {
     pub text: String,
     /// Its buttons' labels: no refuse button when it cannot be refused.
     pub labels: OfferLabels,
+    /// Its offer `dësc`'s `Graphic`, raw: none for -1 or a missing
+    /// `dësc`. The view shows the picture variant of the dialog (`DLOG`
+    /// 1020) for one above 127 (@0xa2344).
+    pub graphic: Option<i16>,
 }
 
 impl OfferPrompt {

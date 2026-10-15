@@ -915,6 +915,36 @@ pub struct MissionTexts {
     pub accept_button: String,
     /// Its `RefuseButton`, raw.
     pub refuse_button: String,
+    /// The `Graphic` of each text's `dësc`, the `PICT` shown with it.
+    pub graphics: TextGraphics,
+}
+
+/// The `Graphic` of each of a mission's text `dësc`s, raw: none for -1,
+/// or a `dësc` that is missing or does not decode. A `dësc` the original
+/// cannot find reads as graphic 0 (`_LoadDescription` @0x71a7c-0x71a81),
+/// which shows no picture either.
+///
+/// The view decides whether a graphic is shown: the original shows the
+/// picture variant of a dialog for a graphic above 127 (`_OfferOneMission`
+/// @0xa2344, `_ShowTextDialog` @0x5a89a).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextGraphics {
+    /// The offer's, `dësc` 4000 + the mission's index.
+    pub offer: Option<i16>,
+    /// The `BriefText`'s.
+    pub brief: Option<i16>,
+    /// The `CompText`'s.
+    pub comp: Option<i16>,
+    /// The `FailText`'s.
+    pub fail: Option<i16>,
+    /// The `RefuseText`'s.
+    pub refuse: Option<i16>,
+    /// The `LoadCargText`'s.
+    pub load_cargo: Option<i16>,
+    /// The `DumpCargoText`'s.
+    pub dump_cargo: Option<i16>,
+    /// The `ShipDoneText`'s.
+    pub ship_done: Option<i16>,
 }
 
 impl MissionTexts {
@@ -935,6 +965,7 @@ impl MissionTexts {
             ship_done: None,
             accept_button: String::new(),
             refuse_button: String::new(),
+            graphics: TextGraphics::default(),
         }
     }
 }

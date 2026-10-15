@@ -3570,6 +3570,7 @@ mod tests {
         click_item(&mut view, 11);
         view.open_mission_computer(Ok(offers()));
         let text = |mission, text: &str| MissionText {
+            graphic: None,
             kind: MissionTextKind::Brief,
             mission: MissionId(mission),
             text: text.to_owned(),
@@ -3603,6 +3604,7 @@ mod tests {
             kind: MissionTextKind::Comp,
             mission: MissionId(130),
             text: "Done.".to_owned(),
+            graphic: None,
         }]);
         let at = view
             .mission_text()
@@ -3668,6 +3670,7 @@ mod tests {
         OfferPrompt {
             mission: MissionId(141),
             text: "Ferry this.".to_owned(),
+            graphic: None,
             labels: OfferLabels {
                 accept: "Yes".to_owned(),
                 refuse: Some("No".to_owned()),
@@ -3747,6 +3750,7 @@ mod tests {
             kind: MissionTextKind::Comp,
             mission: MissionId(130),
             text: "Well done.".to_owned(),
+            graphic: None,
         }]);
         view.open_offer(offered());
         let offer = view.offer_dialog().expect("open");
@@ -3938,6 +3942,7 @@ mod tests {
             kind: MissionTextKind::Refuse,
             mission: MissionId(141),
             text: "Pity.".to_owned(),
+            graphic: None,
         }]);
         view.tick(FIRST_OFFER_DELAY);
         assert_eq!(view.take_offer_request(), None);

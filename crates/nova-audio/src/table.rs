@@ -66,6 +66,10 @@ pub struct SoundTable {
     /// Plays as a key's action is refused, whether or not the player is
     /// told why.
     pub refused: Option<SoundId>,
+    /// Plays as a hailed person offers its mission.
+    pub person_offer_hail: Option<SoundId>,
+    /// Plays as a boarded person offers its mission.
+    pub person_offer_boarding: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -155,6 +159,15 @@ impl SoundTable {
     ///   during a jump or while the ship breaks up (`PlaySound`
     ///   @0x7039a-0x703bd). The original plays it at priority 5, not
     ///   modelled.
+    /// - `person_offer_hail`: 154, `_beepSnd[4]`, which
+    ///   `_HandlePlayerCommunication` plays as a hailed person offers its
+    ///   mission, before `_OfferOneMission` (@0x6221a-0x6223d). The
+    ///   original plays it at priority 1, not modelled.
+    /// - `person_offer_boarding`: 390, "Airlock", which `_LoadSounds` loads
+    ///   (@0x1c277-0x1c289) and `_HandlePlayerBoardAttempt` plays as a
+    ///   boarded person offers its mission, before `_OfferOneMission`
+    ///   (@0x658e5-0x65907). The original plays it at priority 8, not
+    ///   modelled.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -182,6 +195,8 @@ impl SoundTable {
         onboard_explosion: Some(SoundId(300)),
         jump_collapsed: Some(SoundId(151)),
         refused: Some(SoundId(153)),
+        person_offer_hail: Some(SoundId(154)),
+        person_offer_boarding: Some(SoundId(390)),
     };
 }
 
@@ -218,5 +233,7 @@ mod tests {
         assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");
         assert_eq!(table.jump_collapsed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.person_offer_hail, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.person_offer_boarding, Some(SoundId(390)), "Airlock");
     }
 }

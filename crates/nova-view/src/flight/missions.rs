@@ -289,6 +289,7 @@ mod tests {
             kind: MissionTextKind::Brief,
             mission: MissionId(mission),
             text: text.to_owned(),
+            graphic: None,
         }
     }
 
