@@ -109,6 +109,7 @@
 //! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, and an accept in flight reaches no destination\* |
 //! | [`MissionStellarDraw`](RuleKey::MissionStellarDraw) | `mission_stellar_draw` | a random destination -2 is drawn as the original draws it: any inhabited, normal-landable non-station stellar of a visible system but the origin and the one excluded, at any distance, once its scan finds a distant inhabited stellar, station or not; the draw tests the distance of the scan's first hit, not of the stellar drawn (`_SelectMissionStellar` @0x9a26a, @0x9a2c7-0x9a330, the distance test @0x9a3ce-0x9a3db; see [`mission`](crate::mission))\*\*\*\*\* | only a candidate distant from the origin is drawn, as every other random code draws\* |
 //! | [`MissionStellarDistance`](RuleKey::MissionStellarDistance) | `mission_stellar_distance` | a random stellar is distant from an origin in a visible system when its system is not at the origin's place, neither system's own Con links reach a system at the other's place, and every system at its system's place lists it; with no origin, as availability asks, only by that last test; from an origin of no visible system nothing is distant (`_StellarsAreDistant` @0x9cb9-0x9ef6, the co-located chain walk @0x9e60-0x9ee4; see [`mission`](crate::mission)) | it is in another system that the visible map does not link with the origin's either way, and nothing is tested with no origin or an origin of no visible system\* |
+//! | [`MissionAllyIndex`](RuleKey::MissionAllyIndex) | `mission_ally_index` | a random destination 15000-19999 also takes a stellar of another government, not independent, when the system with the stellar's own ID has the target government in its catalog `Govt`, hidden or not; a stellar past the last system loaded reads government index 0, so matches only 15000 (`_SelectMissionStellar` @0x9a7af-0x9a7c8, @0x9a8e5-0x9a8fa; `_LoadObjectData` @0x77a7e-0x77d81; see [`mission`](crate::mission)) | only a stellar allied with the target government (`_GovtAllies`)\* |
 //! | [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) | `mission_stellar_identity` | a mission's destination or return is the stellar docked at when their IDs match, or when both have the same `xPos` and `yPos` and the same name, in any system (`_StellarsAreIdentical` @0xab35-0xac90, called by `_MissionLandCargoCheck` @0x9edfd, @0x9f01d and `_MissionLandCheck` @0xa1a37; see [`mission`](crate::mission)) | only the stellar of that ID, as `TravelStel` and `ReturnStel` each name one stellar by ID |
 //! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see [`legal`](crate::legal)) | one record a government, read through the system's (landing: the stellar's) government |
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
@@ -178,7 +179,7 @@
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
 //! `pay_millions`,
 //! `person_mission_stellar`,
-//! `mission_stellar_draw`, `mission_stellar_distance`,
+//! `mission_stellar_draw`, `mission_stellar_distance`, `mission_ally_index`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
 //! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
 //! `route_rewrite`, `scan_outfits_past_junk`, `gate_escorts`,
@@ -1578,6 +1579,21 @@ rule_keys! {
     /// other reading is the intended behaviour, not anything the Bible
     /// says (see [`mission`](crate::mission)).
     MissionStellarDistance => "mission_stellar_distance",
+    /// Which stellars a random mission destination of 15000-19999, an
+    /// ally of a government, takes (`_SelectMissionStellar`). By the
+    /// engine, as the original: beside a stellar allied with the
+    /// government (`_GovtAllies`), it takes a stellar of another
+    /// government, not independent, when the system record at the
+    /// stellar's own index, the `sÿst` with the stellar's ID, has the
+    /// government in its catalog `Govt` (the scan @0x9a7af-0x9a7c8, the
+    /// draw @0x9a8e5-0x9a8fa); a stellar past the last system loaded reads
+    /// a slot the loader never writes, taken as government index 0 (see
+    /// [`Stellar::index_govt`](crate::mission::select::Stellar::index_govt)).
+    /// By the other reading, the port's earlier test: only a stellar
+    /// allied with the government. The Bible says nothing of it, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see [`mission`](crate::mission)).
+    MissionAllyIndex => "mission_ally_index",
     /// Whether a mission's destination or return is reached at a stellar
     /// of another ID (`_StellarsAreIdentical` @0xab35-0xac90). By the
     /// engine, as the original tells it: the docked stellar is the stop
@@ -2315,7 +2331,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(62),
+            RuleKey::ALL.iter().rev().nth(63),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2332,7 +2348,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(61),
+            RuleKey::ALL.iter().rev().nth(62),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -2346,7 +2362,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(60),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::OfferShift)
         );
     }
@@ -2386,7 +2402,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(59),
+            RuleKey::ALL.iter().rev().nth(60),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2408,7 +2424,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(58),
+            RuleKey::ALL.iter().rev().nth(59),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2433,7 +2449,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(57),
+            RuleKey::ALL.iter().rev().nth(58),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2459,7 +2475,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(56),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2479,11 +2495,28 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(55),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
             Rulebook::default().source_for(RuleKey::MissionStellarDistance),
+            RuleSource::Engine
+        );
+    }
+
+    #[test]
+    fn the_mission_ally_index_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::MissionAllyIndex.key(), "mission_ally_index");
+        assert_eq!(
+            RuleKey::from_key("mission_ally_index"),
+            Some(RuleKey::MissionAllyIndex)
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(55),
+            Some(&RuleKey::MissionAllyIndex)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MissionAllyIndex),
             RuleSource::Engine
         );
     }
@@ -3408,7 +3441,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(64),
+            RuleKey::ALL.iter().rev().nth(65),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3556,6 +3589,7 @@ mod tests {
                 RuleKey::PersonMissionStellar,
                 RuleKey::MissionStellarDraw,
                 RuleKey::MissionStellarDistance,
+                RuleKey::MissionAllyIndex,
                 RuleKey::MissionStellarIdentity,
                 RuleKey::LegalRecords,
                 RuleKey::LeftRespawn,

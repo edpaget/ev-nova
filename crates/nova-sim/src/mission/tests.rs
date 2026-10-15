@@ -48,6 +48,7 @@ fn at(system: i16, id: i16, govt: Option<GovtId>) -> Stellar {
         govt,
         destroyed: false,
         listed_at_place: true,
+        index_govt: None,
     }
 }
 
@@ -146,6 +147,7 @@ impl Galaxy {
                 govts: &self.govts,
                 draw: self.rules.source_for(RuleKey::MissionStellarDraw),
                 distance: self.rules.source_for(RuleKey::MissionStellarDistance),
+                ally_index: self.rules.source_for(RuleKey::MissionAllyIndex),
             },
             player: Player {
                 record: 0,

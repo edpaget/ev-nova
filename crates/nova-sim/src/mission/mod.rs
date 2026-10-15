@@ -122,7 +122,12 @@
 //!    distant stellar (`_SelectMissionStellar` @0x9a3ce-0x9a3db), by the
 //!    other reading only a distant one, distance told as
 //!    [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
-//!    reads it;
+//!    reads it; an ally code, 15000-19999, by the engine's reading of
+//!    [`mission_ally_index`](crate::RuleKey::MissionAllyIndex) also takes
+//!    a stellar of another government when the system with the stellar's
+//!    own ID has the government it names (`_SelectMissionStellar`
+//!    @0x9a7af-0x9a7c8, @0x9a8e5-0x9a8fa), which `AvailStel`'s 15000-19999
+//!    never does (`_GovtAllies` alone, @0x9b3c2-0x9b3ef);
 //! 2. its return: the destination for `ReturnStel` -1, else the stellar
 //!    the code chooses, never the destination;
 //! 3. its cargo: `CargoType` 0-999 as it is, 1000 a `Rand(6)` commodity,
