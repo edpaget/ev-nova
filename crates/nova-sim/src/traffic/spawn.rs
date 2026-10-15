@@ -114,7 +114,11 @@
 //! `_MissionDudeSpawn` (@0x3cd3b, [`mission_ships`],
 //! [`arriving_mission_ships`], [`swapped_mission_ship`]): a ship drawn from the mission's `düde`,
 //! its government, `Booty`, `InfoTypes` and AI, aimed at the player for
-//! `ShipBehav` 0 (`_AIMakeShipAttackPlayer` @0x3d099-0x3d0bb).
+//! `ShipBehav` 0 (`_AIMakeShipAttackPlayer` @0x3d099-0x3d0bb). Each
+//! draws its own ship type, but under mission `Flags` 0x0800 every ship
+//! of the slot, on every path, flies the one type drawn at accept and
+//! kept on the slot ([`MissionSpawn::preset`], the slot's +0x56,
+//! @0x3cdea-0x3cdf3).
 //!
 //! - **At setup** (`_SetupShipsInSystem` @0x42dc4-0x43194), before the
 //!   system's own passes, none of which they use up: each slot in order
@@ -147,7 +151,9 @@
 //!   accepted on its hail, with one of its ships left, is swapped for that
 //!   one ship, which takes the person's position, velocity and heading.
 //!   With mission `Flags` 0x0800 it flies the person's own type when the
-//!   `düde` lists it, drawing no type. No count changes: it is the slot's
+//!   `düde` lists it, drawing no type, and that type becomes the slot's,
+//!   so later setups bring it too; else it flies the slot's type. No
+//!   count changes: it is the slot's
 //!   one ship left (see the session's `mission_ships` module).
 //!
 //! A `ShipBehav` 1 ship joins the player's formation as a mission escort
@@ -655,13 +661,17 @@ pub struct MissionSpawn<'a> {
     /// The system's `NavDefs` slots, in order: each its stellar's
     /// position, none for an empty slot.
     pub nav: &'a [Option<Vec2>],
+    /// The one ship type every ship flies (the slot's +0x56, its
+    /// [`uniform_type`](crate::mission::SpecialShips::uniform_type)),
+    /// drawing none; none to draw one for each.
+    pub preset: Option<ShipId>,
 }
 
 /// One of `spawn`'s ships as `_MissionDudeSpawn` (@0x3cd3b) brings it in:
 /// placed as any ship at setup, its aggression drawn first, then x and y
 /// (`_GenericRandomShipSpawn` @0x3c89f), with no heading drawn; then its
-/// ship type: `preset` when given, drawing nothing (the slot's +0x56,
-/// @0x3cdea-0x3cdf3); else drawn from the `düde` by `Probability` among
+/// ship type: `preset` when given, else `spawn`'s, drawing nothing (the
+/// slot's +0x56, @0x3cdea-0x3cdf3); else drawn from the `düde` by `Probability` among
 /// the ship types whose `AppearOn` holds by `gate`, or, with none, among
 /// them all (`_SelectShipFieldFromDude` with 0, then 1, @0x3cdf5-0x3ce36). It
 /// carries the `düde`'s government, `Booty` and `InfoTypes`, the `düde`'s
@@ -675,6 +685,7 @@ fn mission_dude_ship(
     gate: Gate,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<NewShip> {
+    let preset = preset.or(spawn.preset);
     let ship = specific_dude_ship(table, spawn.dude, preset, Fallback::AllShips, gate, chance)?;
     Some(NewShip {
         mission: Some(MissionMark {
@@ -2987,6 +2998,7 @@ mod tests {
             start: ShipStart::from_code(start),
             behav: ShipBehav::AttackPlayer,
             nav: &NAV,
+            preset: None,
         }
     }
 
@@ -3031,6 +3043,48 @@ mod tests {
                 cloaked: false,
                 aux: None,
             }]
+        );
+    }
+
+    #[test]
+    fn every_ship_of_a_preset_spawn_flies_it_drawing_no_type() {
+        let table = with_mission_dude();
+        let preset = MissionSpawn {
+            preset: Some(ShipId(203)),
+            ..mission_spawn(3, 0)
+        };
+        // Each draw 0: a type drawn would be 202.
+        let mut chance = Draws::of(&[0; 32]);
+        let ships = mission_ships(&table, &preset, mission_gate(), &mut chance);
+        assert_eq!(
+            ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
+            [ShipId(203); 3],
+            "set up"
+        );
+        assert!(!chance.asked.contains(&100), "no type drawn");
+
+        let mut chance = Draws::of(&[0; 32]);
+        let ships = arriving_mission_ships(&table, &preset, None, mission_gate(), &mut chance);
+        assert_eq!(
+            ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
+            [ShipId(203); 3],
+            "arriving"
+        );
+        assert!(!chance.asked.contains(&100), "no type drawn");
+
+        let mut chance = Draws::of(&[0; 32]);
+        let ship = swapped_mission_ship(
+            &table,
+            &preset,
+            ShipState::default(),
+            Some(ShipId(202)),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(
+            ship.map(|ship| ship.ship),
+            Some(ShipId(202)),
+            "a swap's own type first"
         );
     }
 

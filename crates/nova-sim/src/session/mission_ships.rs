@@ -129,7 +129,9 @@
 //! `OnAccept` queued. The ship comes through `_MissionDudeSpawn`
 //! ([`spawn::swapped_mission_ship`]), marked with the slot, and takes the
 //! person's position, velocity and heading; it flies the person's type
-//! under mission `Flags` 0x0800 when the `düde` lists it. The person's
+//! under mission `Flags` 0x0800 when the `düde` lists it, and that type
+//! becomes the slot's, so later setups bring it; else, under the flag,
+//! the slot's type. The person's
 //! NPC is taken out of the system (ship +0xb8 cleared), without being
 //! gone for good, and the player's target moves to the ship. The ship
 //! raises [`Fate::Arrived`] as the other paths' ships do. It joins none
@@ -141,6 +143,15 @@
 //! does (see the [`mission_escorts`](super::mission_escorts) module); of
 //! another `ShipBehav`, its `ShipGoal` 3 fly-in-form (@0x62509) follows a
 //! leader of -1 and it keeps its own AI.
+//!
+//! **One ship type** (mission `Flags` 0x0800): at accept, before
+//! `OnAccept`, the slot draws one type from its `düde` as the session
+//! read it at start, among the types whose `AppearOn` holds then, or
+//! with none among them all ([`Session::ships_at_accept`]); every ship of
+//! the slot then flies it, on all three paths. A slot of the flag with
+//! no type (a save from before it was kept, or a `düde` the catalog
+//! could not give at start) draws it at its next spawn from the
+//! traffic's `düde` and keeps it ([`Session::uniform_preset`]).
 //!
 //! **Mission escorts** are the [`mission_escorts`](super::mission_escorts)
 //! module's: `ShipBehav` 1 ships join the player's formation as they come
@@ -528,7 +539,7 @@ impl Session {
     /// `düde` among them: each is auto-aborted with `Flags` 0x0001
     /// ([`Session::abort_set_up`]).
     pub(super) fn setup_mission_ships(
-        &self,
+        &mut self,
         table: &SpawnTable,
         entering: Option<Entrance>,
         chance: &mut (impl Chance + ?Sized),
@@ -536,11 +547,16 @@ impl Session {
         let nav = self.nav_slots();
         let mut ships = Vec::new();
         let mut set_up = Vec::new();
-        for (slot, active) in self.pilot.missions.iter() {
+        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
+        for slot in slots {
+            let Some(active) = self.pilot.missions.get(slot) else {
+                continue;
+            };
             let record = self.lifecycle_record(active.mission);
             let state = &active.ships;
+            let left = state.left;
             if !self.ships_here(state.system)
-                || state.left <= 0
+                || left <= 0
                 || state.appear >= 0
                 || entering.is_some_and(|how| self.hook_restarts(&record, active, how))
             {
@@ -550,18 +566,54 @@ impl Session {
             let Some(dude) = record.ships.dude else {
                 continue;
             };
+            let preset = self.uniform_preset(slot, &record, Some(table), chance);
             let spawn = MissionSpawn {
                 slot,
                 dude,
-                count: state.left,
+                count: left,
                 goal: ShipGoal::from_code(record.ships.goal),
                 start: ShipStart::from_code(record.ships.start),
                 behav: ShipBehav::from_code(record.ships.behav),
                 nav: &nav,
+                preset,
             };
             ships.extend(spawn::mission_ships(table, &spawn, self.gate(), chance));
         }
         (ships, set_up)
+    }
+
+    /// The one ship type the special ships of `record`, the mission in
+    /// `slot`, fly under `Flags` 0x0800 ([`UNIFORM_SHIP_TYPE`]): the
+    /// slot's ([`SpecialShips::uniform_type`]), or, for a slot that has
+    /// none, one drawn now from its `düde` in `table` (else the traffic's
+    /// table) as at accept ([`dude_ship_type`]) on `chance`, and kept.
+    /// None without the flag, so each ship draws its own.
+    fn uniform_preset(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        table: Option<&SpawnTable>,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<ShipId> {
+        if record.flags & UNIFORM_SHIP_TYPE == 0 {
+            return None;
+        }
+        let kept = self.pilot.missions.get(slot)?.ships.uniform_type;
+        if kept.is_some() {
+            return kept;
+        }
+        let table = table.unwrap_or_else(|| self.traffic.table());
+        let dude = table.dude_records.get(&record.ships.dude?)?;
+        let drawn = dude_ship_type(
+            dude,
+            |ship| table.ships.get(&ship).map(|kind| &kind.appear_on),
+            self.gate(),
+            chance,
+        );
+        if let Some(active) = self.slot_holding(slot, record.id) {
+            active.ships.uniform_type = drawn;
+        }
+        drawn
     }
 
     /// The way from the player's system to the one it last jumped from,
@@ -681,6 +733,7 @@ impl Session {
             &self.arsenal,
         );
         let nav = Vec::new();
+        let preset = self.uniform_preset(slot, record, None, chance);
         let spawn = MissionSpawn {
             slot,
             dude,
@@ -689,6 +742,7 @@ impl Session {
             start: ShipStart::from_code(record.ships.start),
             behav: ShipBehav::from_code(record.ships.behav),
             nav: &nav,
+            preset,
         };
         let ships = spawn::arriving_mission_ships(
             self.traffic.table(),
@@ -709,7 +763,8 @@ impl Session {
     /// the `düde` read from `catalog`, drawing on `chance`
     /// (`_HandlePlayerCommunication` @0x6244b-0x6252f): the ship, of the
     /// person's type under mission `Flags` 0x0800 when the `düde` lists it
-    /// ([`swapped_ship_type`]), takes the person's place
+    /// ([`swapped_ship_type`]), kept as the slot's type, else of the
+    /// slot's type ([`Session::uniform_preset`]), takes the person's place
     /// ([`spawn::swapped_mission_ship`]); the person's NPC is taken out,
     /// every other NPC letting it go; the ship raises [`Fate::Arrived`];
     /// and it becomes the player's target when the person was, its
@@ -743,7 +798,7 @@ impl Session {
             .dude(dude)
             .map(|dude| dude.ships.iter().map(|&(ship, _)| ship).collect())
             .unwrap_or_default();
-        let preset = swapped_ship_type(record.flags, &dude_ships, person_ship);
+        let swapped = swapped_ship_type(record.flags, &dude_ships, person_ship);
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
@@ -751,6 +806,14 @@ impl Session {
             &self.outfits,
             &self.arsenal,
         );
+        let preset = if let Some(ship) = swapped {
+            if let Some(active) = self.slot_holding(slot, record.id) {
+                active.ships.uniform_type = Some(ship);
+            }
+            Some(ship)
+        } else {
+            self.uniform_preset(slot, &record, None, chance)
+        };
         let spawn = MissionSpawn {
             slot,
             dude,
@@ -759,6 +822,7 @@ impl Session {
             start: ShipStart::from_code(record.ships.start),
             behav: ShipBehav::from_code(record.ships.behav),
             nav: &[],
+            preset: None,
         };
         let Some(ship) = spawn::swapped_mission_ship(
             self.traffic.table(),
@@ -4230,6 +4294,177 @@ pub(super) mod tests {
         let session = swapped(&unlisted);
         assert_eq!(session.npcs()[0].ship, ShipId(200), "0x0800, not listed");
     }
+    // One ship type (`Flags` 0x0800).
+
+    /// Draws as [`NeverFires`] does, but below 37, the weights of
+    /// [`two_types`]' düde, it gives 0, then 36, in turn: a type drawn
+    /// for each ship differs from the last.
+    #[derive(Default)]
+    struct Alternating {
+        k: u32,
+    }
+
+    impl Chance for Alternating {
+        fn fires(&mut self, percent: u8) -> bool {
+            NeverFires.fires(percent)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            if n != 37 {
+                return NeverFires.below(n);
+            }
+            self.k += 1;
+            if self.k % 2 == 1 { 0 } else { 36 }
+        }
+
+        fn roll(&mut self, sides: u16) -> u16 {
+            NeverFires.roll(sides)
+        }
+    }
+
+    /// [`ships_catalog`] with mission 140 of `Flags` `flags` and three
+    /// ships starting `start`, of düde 150 flying ship 200 at 20 and ship
+    /// 129 at 17.
+    fn two_types(flags: u16, start: i16) -> FakePilotCatalog {
+        let mut catalog = ships_catalog(MissionShip {
+            count: 3,
+            ..shipping(-1, start)
+        });
+        catalog.ship_records.push(ship(129, FAST));
+        catalog.dudes[0].1.ships = vec![(ShipId(200), 20), (ShipId(129), 17)];
+        catalog.missions[0].flags = flags;
+        catalog
+    }
+
+    /// A session of `catalog`, docked at 128 with mission 140 accepted
+    /// into slot 0, drawing on `chance`.
+    fn accepted_drawing(catalog: &FakePilotCatalog, chance: &mut dyn Chance) -> Session {
+        let mut session = Session::start(catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Names));
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, catalog);
+        assert_eq!(session.accept_mission(MissionId(140), chance), Ok(0));
+        settle(&mut session, catalog);
+        session
+    }
+
+    /// The ship types of the mission ships in the system, in order.
+    fn marked_types(session: &Session) -> Vec<ShipId> {
+        session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission.is_some())
+            .map(|npc| npc.ship)
+            .collect()
+    }
+
+    #[test]
+    fn a_0x0800_mission_sets_up_all_its_ships_of_the_type_drawn_at_accept() {
+        let catalog = two_types(0x0800, 0);
+        let mut chance = Alternating::default();
+        let mut session = accepted_drawing(&catalog, &mut chance);
+        assert_eq!(ships_of(&session).uniform_type, Some(ShipId(200)));
+        session.take_off(&catalog, &mut chance).expect("takes off");
+        assert_eq!(marked_types(&session), [ShipId(200); 3]);
+    }
+
+    #[test]
+    fn a_mission_without_0x0800_draws_a_type_per_ship() {
+        let catalog = two_types(0, 0);
+        let mut chance = Alternating::default();
+        let mut session = accepted_drawing(&catalog, &mut chance);
+        assert_eq!(ships_of(&session).uniform_type, None);
+        session.take_off(&catalog, &mut chance).expect("takes off");
+        assert_eq!(
+            marked_types(&session),
+            [ShipId(200), ShipId(129), ShipId(200)]
+        );
+    }
+
+    #[test]
+    fn a_0x0800_missions_later_arrivals_fly_the_accept_type() {
+        let catalog = two_types(0x0800, 1);
+        let mut chance = Alternating::default();
+        let mut session = accepted_drawing(&catalog, &mut chance);
+        session.take_off(&catalog, &mut chance).expect("takes off");
+        assert!(marked(&session).is_empty(), "none at setup");
+        for _ in 0..199 {
+            session.tick_traffic(&catalog, &NovaAi::default(), &mut chance);
+        }
+        assert_eq!(marked_types(&session), [ShipId(200); 3]);
+    }
+
+    #[test]
+    fn the_accept_draw_reads_appear_on_before_on_accept() {
+        let mut catalog = two_types(0x0800, 0);
+        catalog.ship_records[1].appear_on = Test::parse("b5");
+        catalog.missions[0].on_accept = Script::parse("b5");
+        let mut chance = Alternating::default();
+        let session = accepted_drawing(&catalog, &mut chance);
+        let bit = crate::control::Bit::new(5).expect("a bit");
+        assert!(session.pilot().control_bits().get(bit), "OnAccept ran");
+        assert_eq!(
+            ships_of(&session).uniform_type,
+            Some(ShipId(129)),
+            "200 could not appear yet"
+        );
+    }
+
+    #[test]
+    fn a_0x0800_slot_without_a_type_draws_one_at_its_next_spawn_and_keeps_it() {
+        let catalog = two_types(0x0800, 0);
+        let mut chance = Alternating::default();
+        let mut session = accepted_drawing(&catalog, &mut chance);
+        // As a save from before the type was kept loads it.
+        session
+            .pilot
+            .missions
+            .get_mut(0)
+            .expect("held")
+            .ships
+            .uniform_type = None;
+        session.take_off(&catalog, &mut chance).expect("takes off");
+        let types = marked_types(&session);
+        assert_eq!(types.len(), 3);
+        assert!(types.iter().all(|ship| *ship == types[0]), "{types:?}");
+        assert_eq!(ships_of(&session).uniform_type, Some(types[0]), "kept");
+    }
+
+    #[test]
+    fn after_a_0x0800_swap_a_later_setup_spawns_the_persons_type() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = swapped(&catalog);
+        assert_eq!(session.npcs()[0].ship, ShipId(129), "Ace's type");
+        assert_eq!(ships_of(&session).uniform_type, Some(ShipId(129)));
+        // Drawn afresh, the düde would give 200.
+        session.populate(&catalog, &mut NeverFires);
+        assert_eq!(marked_types(&session), [ShipId(129)]);
+    }
+
+    #[test]
+    fn a_0x0800_swap_whose_dude_lacks_the_persons_type_flies_the_accept_type() {
+        /// Every draw its first outcome.
+        struct First;
+        impl Chance for First {
+            fn fires(&mut self, _percent: u8) -> bool {
+                false
+            }
+            fn below(&mut self, _n: u32) -> u32 {
+                0
+            }
+        }
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.dudes[0].1.ships = vec![(ShipId(200), 50), (ShipId(128), 50)];
+        let mut session = hailing_ace(&catalog);
+        assert_eq!(session.accept_mission(MissionId(140), &mut First), Ok(0));
+        assert_eq!(ships_of(&session).uniform_type, Some(ShipId(200)));
+        // The swap, drawing afresh, would give 128.
+        settle(&mut session, &catalog);
+        assert_eq!(marked_types(&session), [ShipId(200)]);
+        assert_eq!(session.npcs()[0].state, ACE_AT, "swapped");
+    }
+
     /// [`hailing_ace`], mission 140 refused or accepted as `accept` says,
     /// and settled: whether Ace was swapped for a mission ship.
     fn swaps(catalog: &FakePilotCatalog, accept: bool) -> bool {
@@ -4462,7 +4697,11 @@ pub(super) mod tests {
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
-        let before = ships_of(&session);
+        let before = SpecialShips {
+            // Only Ace's type, kept under 0x0800.
+            uniform_type: Some(ShipId(129)),
+            ..ships_of(&session)
+        };
         settle(&mut session, &catalog);
         assert_eq!(session.pilot().escorts, escorts);
         assert_eq!(session.npcs()[0].escort, None);

@@ -290,18 +290,23 @@ fn follows_through(kind: GateKind, flags2: u16, chance: &mut dyn Chance) -> bool
     }
 }
 
-/// `Flags`: the mission's ships all fly one ship type
-/// (`_MissionDudeSpawn` @0x3cda7; the type kept for later setups is
-/// rdm:phase/mission-ships-fidelity/phase-1-uniform-ship-type). A person
-/// swapped for the mission's ship hands it its own type through it.
+/// `Flags`: the mission's ships all fly one ship type, drawn at accept
+/// (`_LoadCurrentMissionData` @0xa0b9f-0xa0bfe) and kept on the slot
+/// ([`SpecialShips::uniform_type`]), which every spawn reads
+/// (`_MissionDudeSpawn` @0x3cdea-0x3ce36). A person swapped for the
+/// mission's ship hands it its own type through it, and it becomes the
+/// slot's (@0x3cd7e).
 pub const UNIFORM_SHIP_TYPE: u16 = 0x0800;
 
 /// The ship type a person flying `person_ship`, swapped for the ship of a
 /// mission of `Flags` `flags` whose `düde` lists `dude_ships`, gives that
 /// ship (`_MissionDudeSpawn` @0x3cd90-0x3cdd3): its own type under
-/// [`UNIFORM_SHIP_TYPE`] when the `düde` lists it; else none, and the
-/// type is drawn from the `düde` as for any mission ship. The swap's one
-/// ship left is the other half of the original's test (@0x3cdad).
+/// [`UNIFORM_SHIP_TYPE`] when the `düde` lists it, which the slot then
+/// keeps as its type for later setups (@0x3cd7e); else none, and the
+/// ship flies the slot's type under the flag (its value from accept), or
+/// one drawn from the `düde` as for any mission ship without it. The
+/// swap's one ship left is the other half of the original's test
+/// (@0x3cdad).
 #[must_use]
 pub fn swapped_ship_type(flags: u16, dude_ships: &[ShipId], person_ship: ShipId) -> Option<ShipId> {
     (flags & UNIFORM_SHIP_TYPE != 0 && dude_ships.contains(&person_ship)).then_some(person_ship)
