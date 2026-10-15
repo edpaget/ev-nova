@@ -1005,8 +1005,10 @@ fn burst_end(spec: &WeaponSpec, amount: u32, rounds: &mut dyn Rounds, fuel: &mut
 }
 
 /// How far off its heading a shot of a weapon `inaccuracy` degrees
-/// inaccurate leaves, drawn on `chance`.
-fn inaccuracy(inaccuracy: u32, chance: &mut dyn Chance) -> f32 {
+/// inaccurate leaves, drawn on `chance`: `Rand(2i) − i`, none with no draw
+/// for none. A beam turns by it every tick
+/// ([`Beam::follow`](super::beam::Beam::follow)).
+pub(super) fn inaccuracy(inaccuracy: u32, chance: &mut dyn Chance) -> f32 {
     if inaccuracy == 0 {
         return 0.0;
     }

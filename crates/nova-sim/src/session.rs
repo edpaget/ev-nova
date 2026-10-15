@@ -14311,6 +14311,34 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_npcs_beam_strikes_on_after_its_firer_has_left_the_system() {
+        let beam = WeaponRecord {
+            guidance: 0,
+            count: 5,
+            reload: 30,
+            beam_length: 200,
+            ..blaster()
+        };
+        let catalog = FakePilotCatalog {
+            weapons: vec![beam],
+            ..armed()
+        };
+        let mut session = facing_an_npc(&catalog, 180);
+        session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.beams().len(), 1, "fired at the player");
+        let shield = session.reserves().shield.now;
+        session.traffic.remove(NpcId(0));
+        session.take_combat_events();
+        session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.beams()[0].firer, ShipRef::Npc(NpcId(0)));
+        assert_eq!(session.reserves().shield.now, shield - 10.0, "struck on");
+        assert_eq!(session.player_condition(), Condition::Intact);
+        assert_eq!(session.npcs(), []);
+    }
+
+    #[test]
     fn the_players_ammunition_outfits_and_fuel_pay_for_its_shots() {
         let rocket = WeaponRecord {
             ammo_type: 10,

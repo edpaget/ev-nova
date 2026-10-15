@@ -60,10 +60,13 @@
 //! 4. Shots fly a tick, homing ones steering at their target, breaking up
 //!    or not, and each beam spends a tick of its life, or fades a tick at
 //!    its end ([`Beam::live`]), one that has ended going before it hits or
-//!    is drawn again. The rest follow their firers, each from its exit on the
-//!    frame its firer is drawn on this tick, held ahead, on its target or
-//!    on its missile; a beam whose firer is gone or no longer
-//!    intact, or whose target or missile is gone, goes with it. Before it
+//!    is drawn again. The rest follow their firers ([`Beam::follow`]),
+//!    each from its exit on the frame its firer is drawn on this tick,
+//!    pointing along that frame, at its target or at its missile, turned
+//!    by its jitter drawn on the tick's chance. A beam outlives its firer
+//!    disabled or breaking up, and stays where its firer last was once
+//!    the firer is destroyed or out of the fight; a beam whose target is
+//!    destroyed or gone, or whose missile is gone, goes with it. Before it
 //!    moves, any shot but point defence whose ship has gone (destroyed, or
 //!    out of the fight) is lost ([`Jam::Lost`](projectile::Jam::Lost)),
 //!    and hits no ship from then on. A player's homing missile not lost,
@@ -570,13 +573,11 @@ impl Combat {
             if !beam.live() {
                 return false;
             }
-            let firer = fighters.iter().find(|fighter| {
-                fighter.ship == beam.firer && *fighter.condition == Condition::Intact
-            });
-            firer.is_some_and(|firer| {
-                let exits = firer.hull.exits.as_ref();
-                beam.follow(&firer.state, exits, compression, &targets, shots)
-            })
+            let firer = fighters
+                .iter()
+                .find(|fighter| fighter.ship == beam.firer && fighter.condition.active())
+                .map(|firer| (&firer.state, firer.hull.exits.as_ref()));
+            beam.follow(firer, compression, &targets, shots, chance)
         });
         let locks: Vec<Landed> = self
             .shots
@@ -801,7 +802,10 @@ impl Combat {
     /// - A shot's heading is worked out once, from where it leaves
     ///   ([`Launch::heading_from`]): a turret that leads its target (4, 7
     ///   and 8) leads it from the exit (`_CalcLeadAngle` @0x3ecdc), turned
-    ///   by its inaccuracy. A beam's and a fighter's are from the centre.
+    ///   by its inaccuracy. A fighter's is from the centre. A beam takes
+    ///   neither its launch's heading nor its inaccuracy: it points anew
+    ///   each tick ([`Beam::follow`]), as `_SpawnBeam` never reads the
+    ///   angle it is given.
     /// - A point-defence shot steps its cursor twice by the engine, as
     ///   `_HandleShipPointDefense` sets its shot from `_SpawnShot`'s exit
     ///   back to the centre and takes the next (@0x396e5, @0x39707-0x3976c),
@@ -859,14 +863,7 @@ impl Combat {
             let mut beam = Beam {
                 ties,
                 aimed_at,
-                ..Beam::launch(
-                    weapon,
-                    ship,
-                    fleet,
-                    &from,
-                    launch.heading_from(&from),
-                    aiming,
-                )
+                ..Beam::launch(weapon, ship, fleet, &from, aiming)
             };
             if let Some((points, kind)) = exits {
                 let toward = toward.filter(|_| quarry.is_none());
@@ -3157,7 +3154,7 @@ mod tests {
     }
 
     #[test]
-    fn a_beam_follows_its_firer_and_goes_with_it() {
+    fn a_beam_follows_its_firer_and_outlives_its_disabling() {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser())];
         tick(&mut combat, &mut ships, &NovaDisable);
@@ -3165,23 +3162,103 @@ mod tests {
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.beams()[0].start, Vec2::new(5.0, 6.0));
         ships[0].condition = Condition::Disabled;
-        tick(
-            &mut combat,
-            &mut ships,
-            &Recording {
-                disabled: true,
-                ..Recording::default()
-            },
+        ships[0].state.position = Vec2::new(7.0, 8.0);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(
+            combat.beams()[0].start,
+            Vec2::new(7.0, 8.0),
+            "its firer disabled"
         );
-        assert_eq!(combat.beams(), [], "its firer no longer intact");
+    }
+
+    #[test]
+    fn a_beam_outlives_its_breaking_up_firer() {
+        let long = WeaponRecord {
+            count: 10,
+            ..laser()
+        };
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(long)];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        ships[0].condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        for x in [10.0, 20.0] {
+            ships[0].state.position = Vec2::new(x, 0.0);
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.beams()[0].start, Vec2::new(x, 0.0), "followed");
+        }
+    }
+
+    /// Each tick of `ticks` after a beam of 4 ticks fired from (0, 0)
+    /// facing right at a ship of 100 shield at (100, 0), its firer then
+    /// left at `left`, which may move it or take it away: the beams'
+    /// starts and ends, and the ship's shield.
+    fn beam_left(left: impl Fn(&mut [Ship; 2]) -> usize) -> Vec<(Vec<(Vec2, Vec2)>, f32)> {
+        let four = WeaponRecord {
+            count: 4,
+            ..laser()
+        };
+        let mut combat = Combat::default();
+        let mut target = Ship::at(2, 100.0, 0.0);
+        target.reserves.shield = Gauge::full(100.0);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(four), target];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        let from = left(&mut ships);
+        (0..4)
+            .map(|_| {
+                tick(&mut combat, &mut ships[from..], &NovaDisable);
+                let beams = combat
+                    .beams()
+                    .iter()
+                    .map(|beam| {
+                        (
+                            beam.start,
+                            Vec2::new(beam.end.x.round(), beam.end.y.round()),
+                        )
+                    })
+                    .collect();
+                (beams, ships[1].reserves.shield.now)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_beam_whose_firer_is_destroyed_or_gone_stays_where_it_was_until_its_life_ends() {
+        let there = vec![(Vec2::ZERO, Vec2::new(200.0, 0.0))];
+        let stays = [
+            (there.clone(), 90.0),
+            (there.clone(), 85.0),
+            (there, 80.0),
+            (Vec::new(), 80.0),
+        ];
+        let destroyed = beam_left(|ships| {
+            ships[0].condition = Condition::Destroyed;
+            ships[0].state.position = Vec2::new(0.0, 50.0);
+            ships[0].state.heading = 180.0;
+            0
+        });
+        assert_eq!(destroyed, stays, "destroyed");
+        assert_eq!(beam_left(|_| 1), stays, "gone from the fight");
+    }
+
+    #[test]
+    fn a_beam_jitters_on_the_fights_chance() {
+        let shaky = WeaponRecord {
+            inaccuracy: 3,
+            ..laser()
+        };
         let mut combat = Combat::default();
         tick(
             &mut combat,
-            &mut [Ship::at(1, 0.0, 0.0).armed(laser())],
+            &mut [Ship::at(1, 0.0, 0.0).armed(shaky)],
             &NovaDisable,
         );
-        tick(&mut combat, &mut [Ship::at(2, 0.0, 0.0)], &NovaDisable);
-        assert_eq!(combat.beams(), [], "its firer gone");
+        // `NeverFires` draws the last of `Rand(6)`: 5 - 3.
+        assert_eq!(combat.beams()[0].heading, 92.0);
     }
 
     #[test]
@@ -3627,7 +3704,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turreted_beam_follows_its_target_and_ends_with_it() {
+    fn a_turreted_beam_tracks_a_breaking_up_target_and_ends_with_its_destruction() {
         let beam = WeaponRecord {
             guidance: 3,
             count: 10,
@@ -3652,7 +3729,11 @@ mod tests {
             starting: false,
         };
         tick(&mut combat, &mut ships, &NovaDisable);
-        assert_eq!(combat.beams(), [], "its target breaking up");
+        assert_eq!(combat.beams().len(), 1, "its target breaking up");
+        assert_eq!(ships[1].reserves.shield.now, 7.0, "and hit");
+        ships[1].condition = Condition::Destroyed;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.beams(), [], "its target destroyed");
     }
 
     /// A missile 10 pixels a tick for 100 ticks, turning 7 degrees a tick,
@@ -6372,7 +6453,10 @@ mod tests {
         tick(&mut combat, &mut ships, &NovaDisable);
         let beam = combat.beams()[0];
         assert!(close_to(beam.start, Vec2::new(30.0, 0.0)), "{beam:?}");
-        let along = crate::flight::facing(aim::bearing(beam.start, Vec2::new(0.0, 100.0)));
+        // A whole degree from the exit: 196.7 truncates to 196.
+        let toward = crate::trig::intercept_angle(beam.start, Vec2::new(0.0, 100.0));
+        assert_eq!((toward, beam.heading), (196, 196.0), "{beam:?}");
+        let along = crate::flight::facing(beam.heading);
         assert!(close_to(beam.end, beam.start + along * 300.0), "{beam:?}");
     }
 

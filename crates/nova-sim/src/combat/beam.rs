@@ -20,20 +20,28 @@
 //! [`exits`](super::exits)) on the frame its firer is drawn on that tick,
 //! as `_HandleBeams` places it after every ship is drawn
 //! (@0x3076a-0x30922): at its firer's centre when it has none. A beam (0)
-//! is held along its firer's heading, plus the offset it left at. A
-//! turreted beam (3) is held along the bearing from its start to its
-//! target every tick (@0x30432-0x306bb), and ends once the target is gone
-//! or breaking up. A point-defence beam (10) is held on its missile the
-//! same way, ends once the missile is gone, and hits no ship.
+//! points along that frame's angle (@0x303bb-0x3042e). A turreted beam
+//! (3) points at its target's bearing from its start, a whole degree,
+//! every tick (@0x30432-0x306bb), while the target is active, breaking up
+//! included, and ends once it is destroyed or gone. A point-defence beam
+//! (10) is held on its missile the same way, ends once the missile is
+//! gone, and hits no ship. Any but a point-defence beam then turns by its
+//! jitter, `Rand(2i) − i` degrees for its `Inaccuracy` i, drawn anew every
+//! tick (@0x306ec-0x30727). Nothing ends a beam for its firer's sake: it
+//! follows a disabled or breaking-up firer, and once the firer is
+//! destroyed or out of the fight it stays where the firer last was, as
+//! the original's inactive slot stays put, until its life ends.
 
 use super::ShipRef;
-use super::aim::bearing;
+use super::armament::inaccuracy;
 use super::exits::{Compression, ExitKind, ExitPoints, drawn_frame, frame_angle};
 use super::projectile::{Shot, ShotId, Target, contact};
 use super::sides::{Sides, Ties};
-use super::weapon::WeaponSpec;
-use crate::flight::{ShipState, facing, normalized, shortest_turn};
+use super::weapon::{Guidance, WeaponSpec};
+use crate::chance::Chance;
+use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
+use crate::trig::intercept_angle;
 
 /// The most a decaying beam's fade plus its `Falloff` may come to for it
 /// to fade a tick more (`_HandleBeams` @0x30352).
@@ -42,7 +50,7 @@ pub const FADE_END: i64 = 15;
 /// What a beam is held on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Aiming {
-    /// Its firer's heading, plus its offset: a beam (0).
+    /// The frame its firer is drawn on: a beam (0).
     Ahead,
     /// This ship's bearing: a turreted beam (3).
     Ship(ShipRef),
@@ -62,14 +70,19 @@ pub struct Beam {
     /// A copy of the firer's ties as it fired, which the hit rules read
     /// should the firer leave the fight (see [`sides`](super::sides)).
     pub ties: Ties,
-    /// How far off the firer's heading it points, in degrees, when it is
-    /// held [`Aiming::Ahead`].
-    pub offset: f32,
     /// What it is held on.
     pub aiming: Aiming,
-    /// Where it starts: the firer's position.
+    /// Where it starts: its firer's exit, or where its firer last was.
     pub start: Vec2,
-    /// Where it ends, its length along its heading.
+    /// The angle, in degrees, of the frame its firer was drawn on when
+    /// last seen (the original's -0x48, `_HandleBeams` @0x303bb-0x3042e):
+    /// whole degrees, or the firer's heading itself for a hull with no
+    /// frames. A beam held [`Aiming::Ahead`] points along it.
+    pub frame: f32,
+    /// The heading it points along this tick, in degrees: its aim, turned
+    /// by its jitter and never wrapped, so it may lie outside 0-360.
+    pub heading: f32,
+    /// Where it ends: its length along its heading, or where it hit.
     pub end: Vec2,
     /// The ticks of life it has left (the original's beam +0x10): its
     /// weapon's `Count` at launch, spent a tick at a time ([`Beam::live`]).
@@ -96,55 +109,77 @@ pub struct Beam {
 }
 
 impl Beam {
-    /// A beam of `weapon` fired by `firer` of `fleet`, flying `from`,
-    /// along `heading`.
+    /// A beam of `weapon` fired by `firer` of `fleet`, flying `from`, held
+    /// on what `aiming` says. It points along its firer's heading from its
+    /// centre until it first follows ([`Beam::follow`]): `_SpawnBeam`
+    /// never reads the angle it is given, so a beam keeps no launch
+    /// heading and no launch inaccuracy.
     #[must_use]
     pub fn launch(
         weapon: WeaponSpec,
         firer: ShipRef,
         fleet: ShipRef,
         from: &ShipState,
-        heading: f32,
         aiming: Aiming,
     ) -> Self {
-        let mut beam = Self {
+        Self {
             weapon,
             firer,
             fleet,
             ties: Ties::default(),
-            offset: shortest_turn(from.heading, heading),
             aiming,
-            start: Vec2::ZERO,
-            end: Vec2::ZERO,
+            start: from.position,
+            frame: from.heading,
+            heading: from.heading,
+            end: from.position + facing(from.heading) * weapon.beam_length,
             life: weapon.lifetime,
             fade: 0,
             aimed_at: None,
             disable_only: weapon.disable_only(),
             kind: None,
             exit: None,
-        };
-        beam.point(from.position, heading);
-        beam
+        }
     }
 
-    /// Puts the beam on its firer, now `at`, at its exit among the firer's
-    /// `exits`, compressed as `compression` says, and held on what it aims
-    /// at among `targets` and `shots`; false, and left where it was, when
-    /// that is gone (see the module docs).
+    /// Puts the beam on its `firer`, flying as it is with its exit points,
+    /// at its exit, compressed as `compression` says, and points it at
+    /// what it aims at among `targets` and `shots`, turned by its jitter
+    /// drawn on `chance`, as `_HandleBeams` does every tick
+    /// (@0x303bb-0x30922):
+    ///
+    /// - Its firer gone (none: destroyed, or out of the fight), it stays
+    ///   where the firer last was, with that frame: the original's slot
+    ///   keeps its place and frame once inactive.
+    /// - A beam (0) points along the frame its firer is drawn on. A
+    ///   turreted beam (3) points at its target's bearing from its start,
+    ///   a whole degree (`_CalcInterceptAngle`), while the target is
+    ///   active, breaking up included; a point-defence beam (10) at its
+    ///   missile's while the missile is in flight. Either gone, the beam
+    ///   has ended: false, and it is left as it was.
+    /// - Any but a point-defence beam then turns by `Rand(2i) − i` degrees
+    ///   for its `Inaccuracy` i above none (@0x306ec-0x30727), about its
+    ///   start, the sum never wrapped.
     pub fn follow(
         &mut self,
-        at: &ShipState,
-        exits: Option<&ExitPoints>,
+        firer: Option<(&ShipState, Option<&ExitPoints>)>,
         compression: Compression,
         targets: &[Target],
         shots: &[Shot],
+        chance: &mut dyn Chance,
     ) -> bool {
+        if let Some((at, exits)) = firer {
+            self.frame = exits.map_or(at.heading, |exits| {
+                let frames = exits.frames();
+                frame_angle(drawn_frame(at.heading, frames), frames)
+            });
+            self.start = at.position + self.exit_offset(exits, compression);
+        }
         let toward = match self.aiming {
             Aiming::Ahead => None,
             Aiming::Ship(ship) => {
                 let target = targets
                     .iter()
-                    .find(|target| target.ship == ship && target.condition.standing());
+                    .find(|target| target.ship == ship && target.condition.active());
                 match target {
                     Some(target) => Some(target.position),
                     None => return false,
@@ -155,35 +190,27 @@ impl Beam {
                 None => return false,
             },
         };
-        let start = at.position + self.exit_offset(at.heading, exits, compression);
-        let heading = toward.map_or(normalized(at.heading + self.offset), |toward| {
-            bearing(start, toward)
+        let aim = toward.map_or(self.frame, |toward| {
+            f32::from(intercept_angle(self.start, toward))
         });
-        self.point(start, heading);
+        let jitter = if self.weapon.guidance == Guidance::PointDefenceBeam {
+            0.0
+        } else {
+            inaccuracy(self.weapon.inaccuracy, chance)
+        };
+        self.heading = aim + jitter;
+        self.end = self.start + facing(self.heading) * self.weapon.beam_length;
         true
     }
 
-    /// How far off its firer's centre, the firer facing `heading`, it
-    /// starts: its exit among `exits` on the frame the firer is drawn on,
-    /// and none without an exit (@0x30775-0x3079b).
-    fn exit_offset(
-        &self,
-        heading: f32,
-        exits: Option<&ExitPoints>,
-        compression: Compression,
-    ) -> Vec2 {
+    /// How far off its firer's centre it starts: its exit among `exits`
+    /// on the frame the firer is drawn on, and none without an exit
+    /// (@0x30775-0x3079b).
+    fn exit_offset(&self, exits: Option<&ExitPoints>, compression: Compression) -> Vec2 {
         let (Some(exits), Some(kind), Some(exit)) = (exits, self.kind, self.exit) else {
             return Vec2::ZERO;
         };
-        let frames = exits.frames();
-        let angle = frame_angle(drawn_frame(heading, frames), frames);
-        exits.offset(angle, kind, exit, compression)
-    }
-
-    /// Points the beam from `start` along `heading`.
-    fn point(&mut self, start: Vec2, heading: f32) {
-        self.start = start;
-        self.end = start + facing(heading) * self.weapon.beam_length;
+        exits.offset(self.frame, kind, exit, compression)
     }
 
     /// Whether it can hit `target`, among the fight's `sides`
@@ -247,11 +274,12 @@ mod tests {
     use super::*;
     use crate::catalog::WeaponRecord;
     use crate::catalog::{GovtId, GovtRecord, ShipId};
+    use crate::chance::NeverFires;
     use crate::combat::hull::Condition;
     use crate::combat::projectile::ShotId;
     use crate::combat::sides::PassThrough;
     use crate::govt::Governments;
-    use crate::testkit::{among, govt, weapon};
+    use crate::testkit::{Draws, among, govt, weapon};
     use crate::traffic::npc::NpcId;
 
     const FIRER: ShipRef = ShipRef::Npc(NpcId(1));
@@ -278,6 +306,18 @@ mod tests {
         }
     }
 
+    /// Has `beam` follow its firer flying `at`, with no exits, among
+    /// `targets` and `shots`, drawing no jitter.
+    fn follow(beam: &mut Beam, at: ShipState, targets: &[Target], shots: &[Shot]) -> bool {
+        beam.follow(
+            Some((&at, None)),
+            Compression::default(),
+            targets,
+            shots,
+            &mut NeverFires,
+        )
+    }
+
     fn close(a: Vec2, b: Vec2) -> bool {
         (a - b).length() < 1e-3
     }
@@ -289,50 +329,146 @@ mod tests {
                 flags2,
                 ..laser_record()
             });
-            let beam = Beam::launch(
-                weapon,
-                FIRER,
-                FIRER,
-                &at(0.0, 0.0, 90.0),
-                90.0,
-                Aiming::Ahead,
-            );
+            let beam = Beam::launch(weapon, FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
             assert_eq!(beam.disable_only, disable_only, "{flags2:#x}");
             assert_eq!(beam.aimed_at, None);
         }
     }
 
     #[test]
-    fn a_beam_lasts_its_count_and_follows_its_firer_as_it_moves_and_turns() {
-        let mut beam = Beam::launch(
-            laser(),
-            FIRER,
-            FIRER,
-            &at(10.0, 20.0, 90.0),
-            90.0,
-            Aiming::Ahead,
-        );
+    fn a_beam_follows_its_firer_as_it_moves_and_turns_and_stays_once_it_is_gone() {
+        let mut beam = Beam::launch(laser(), FIRER, FIRER, &at(10.0, 20.0, 90.0), Aiming::Ahead);
         assert_eq!(beam.start, Vec2::new(10.0, 20.0));
         assert!(close(beam.end, Vec2::new(110.0, 20.0)), "{beam:?}");
-        assert!(beam.follow(
-            &at(-5.0, 0.0, 180.0),
-            None,
-            Compression::default(),
-            &[],
-            &[]
-        ));
+        assert!(follow(&mut beam, at(-5.0, 0.0, 180.0), &[], &[]));
         assert_eq!(beam.start, Vec2::new(-5.0, 0.0));
         assert!(close(beam.end, Vec2::new(-5.0, 100.0)), "{beam:?}");
-        let offset = Beam::launch(
-            laser(),
-            FIRER,
-            FIRER,
-            &at(0.0, 0.0, 350.0),
-            90.0,
-            Aiming::Ahead,
+        let left = beam;
+        assert!(beam.follow(None, Compression::default(), &[], &[], &mut NeverFires));
+        assert_eq!(beam, left, "where its firer last was");
+    }
+
+    /// Beam exits on 36 frames: exit 1 30 pixels to the right of the
+    /// centre, the rest on it.
+    fn beam_exits() -> ExitPoints {
+        let raw = crate::catalog::ShipExits {
+            points: [
+                [(0, 0); 4],
+                [(0, 0); 4],
+                [(0, 0); 4],
+                [(0, 0), (30, 0), (0, 0), (0, 0)],
+            ],
+            up_compress: (100, 100),
+            down_compress: (100, 100),
+            frames: 36,
+            ..crate::catalog::ShipExits::default()
+        };
+        ExitPoints::new(&raw).expect("exits")
+    }
+
+    #[test]
+    fn a_fixed_beam_points_along_its_firers_drawn_frame() {
+        let exits = beam_exits();
+        let mut beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 350.0), Aiming::Ahead);
+        let mut heading = |at: ShipState, exits| {
+            let firer = Some((&at, exits));
+            assert!(beam.follow(firer, Compression::default(), &[], &[], &mut NeverFires));
+            assert!(
+                close(beam.end, at.position + facing(beam.heading) * 100.0),
+                "{beam:?}"
+            );
+            (beam.frame, beam.heading)
+        };
+        assert_eq!(heading(at(0.0, 0.0, 99.0), Some(&exits)), (90.0, 90.0));
+        assert_eq!(heading(at(5.0, 0.0, 359.0), Some(&exits)), (350.0, 350.0));
+        assert_eq!(
+            heading(at(0.0, 0.0, 99.0), None),
+            (99.0, 99.0),
+            "a hull with no frames"
         );
-        assert!(close(offset.end, Vec2::new(100.0, 0.0)), "{offset:?}");
-        assert_eq!(offset.offset, 100.0);
+        assert_eq!(
+            heading(at(0.0, 0.0, 0.0), None),
+            (0.0, 0.0),
+            "no launch offset"
+        );
+    }
+
+    #[test]
+    fn a_beam_jitters_each_tick_by_its_inaccuracy_about_its_start() {
+        let exits = beam_exits();
+        let shaky = WeaponSpec::new(&WeaponRecord {
+            inaccuracy: 2,
+            ..laser_record()
+        });
+        let mut beam = Beam {
+            kind: Some(ExitKind::Beam),
+            exit: Some(1),
+            ..Beam::launch(shaky, FIRER, FIRER, &at(0.0, 0.0, 0.0), Aiming::Ahead)
+        };
+        let mut draws = Draws::of(&[0, 3, 1]);
+        let mut ticks = Vec::new();
+        for _ in 0..3 {
+            let firer = Some((&at(100.0, 100.0, 99.0), Some(&exits)));
+            assert!(beam.follow(firer, Compression::ByOffset, &[], &[], &mut draws));
+            assert!(close(beam.start, Vec2::new(100.0, 130.0)), "{beam:?}");
+            assert!(close(beam.end, beam.start + facing(beam.heading) * 100.0));
+            ticks.push(beam.heading);
+        }
+        assert_eq!(ticks, [88.0, 91.0, 89.0], "frame 9's 90, turned");
+        assert_eq!(draws.asked, [4, 4, 4]);
+        let mut draws = Draws::of(&[]);
+        let mut steady = lasting(3, 0, 0, 0);
+        let firer = Some((&at(0.0, 0.0, 0.0), None));
+        assert!(steady.follow(firer, Compression::default(), &[], &[], &mut draws));
+        assert!(draws.asked.is_empty(), "no inaccuracy, no draw");
+    }
+
+    #[test]
+    fn a_turreted_beam_jitters_about_its_bearing_unwrapped() {
+        let spec = WeaponSpec::new(&WeaponRecord {
+            guidance: 3,
+            inaccuracy: 4,
+            ..laser_record()
+        });
+        let mut beam = Beam::launch(
+            spec,
+            FIRER,
+            FIRER,
+            &at(0.0, 0.0, 90.0),
+            Aiming::Ship(TARGET),
+        );
+        let mut heading = |draw| {
+            let firer = Some((&at(0.0, 0.0, 90.0), None));
+            let targets = [target(2, 0.0, -50.0)];
+            let mut draws = Draws::of(&[draw]);
+            assert!(beam.follow(firer, Compression::default(), &targets, &[], &mut draws));
+            assert_eq!(draws.asked, [8]);
+            beam.heading
+        };
+        assert_eq!(heading(0), -4.0);
+        assert_eq!(heading(7), 3.0);
+    }
+
+    #[test]
+    fn a_point_defence_beam_never_jitters() {
+        let spec = WeaponSpec::new(&WeaponRecord {
+            guidance: 10,
+            inaccuracy: 4,
+            ..laser_record()
+        });
+        let mut beam = Beam::launch(
+            spec,
+            FIRER,
+            FIRER,
+            &at(0.0, 0.0, 0.0),
+            Aiming::Shot(ShotId(5)),
+        );
+        let mut draws = Draws::of(&[]);
+        let shots = [missile(5, 40.0, 0.0)];
+        let firer = Some((&at(0.0, 0.0, 0.0), None));
+        assert!(beam.follow(firer, Compression::default(), &[], &shots, &mut draws));
+        assert!(draws.asked.is_empty());
+        assert_eq!(beam.heading, 90.0);
     }
 
     /// A beam lasting `count` ticks, of `decay`, `falloff` and
@@ -345,14 +481,7 @@ mod tests {
             li_density,
             ..laser_record()
         });
-        Beam::launch(
-            weapon,
-            FIRER,
-            FIRER,
-            &at(0.0, 0.0, 90.0),
-            90.0,
-            Aiming::Ahead,
-        )
+        Beam::launch(weapon, FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead)
     }
 
     /// The fade on each tick `beam` lives, until it ends.
@@ -382,33 +511,20 @@ mod tests {
 
     #[test]
     fn a_beam_starts_at_its_exit_on_the_frame_its_firer_is_drawn_on() {
-        let raw = crate::catalog::ShipExits {
-            points: [
-                [(0, 0); 4],
-                [(0, 0); 4],
-                [(0, 0); 4],
-                [(0, 0), (30, 0), (0, 0), (0, 0)],
-            ],
-            up_compress: (100, 100),
-            down_compress: (100, 100),
-            frames: 36,
-            ..crate::catalog::ShipExits::default()
-        };
-        let exits = ExitPoints::new(&raw).expect("exits");
+        let exits = beam_exits();
         let mut beam = Beam {
             kind: Some(ExitKind::Beam),
             exit: Some(1),
-            ..Beam::launch(
-                laser(),
-                FIRER,
-                FIRER,
-                &at(0.0, 0.0, 0.0),
-                0.0,
-                Aiming::Ahead,
-            )
+            ..Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 0.0), Aiming::Ahead)
         };
         let mut start = |at: ShipState, exits| {
-            assert!(beam.follow(&at, exits, Compression::ByOffset, &[], &[]));
+            assert!(beam.follow(
+                Some((&at, exits)),
+                Compression::ByOffset,
+                &[],
+                &[],
+                &mut NeverFires
+            ));
             beam.start
         };
         assert!(close(
@@ -444,14 +560,7 @@ mod tests {
 
     #[test]
     fn a_beam_hits_the_nearest_ship_it_reaches() {
-        let beam = Beam::launch(
-            laser(),
-            FIRER,
-            FIRER,
-            &at(10.0, 5.0, 90.0),
-            90.0,
-            Aiming::Ahead,
-        );
+        let beam = Beam::launch(laser(), FIRER, FIRER, &at(10.0, 5.0, 90.0), Aiming::Ahead);
         let (ship, point) = beam
             .hit(&among(&[
                 target(2, 90.0, 5.0),
@@ -467,14 +576,7 @@ mod tests {
 
     #[test]
     fn a_beam_reaches_its_length_and_the_ships_radius_and_no_further() {
-        let beam = Beam::launch(
-            laser(),
-            FIRER,
-            FIRER,
-            &at(0.0, 0.0, 90.0),
-            90.0,
-            Aiming::Ahead,
-        );
+        let beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
         let one = |x, y| beam.hit(&among(&[target(2, x, y)])).map(|(ship, _)| ship);
         assert_eq!(one(107.9, 0.0), Some(ShipRef::Npc(NpcId(2))));
         assert_eq!(one(108.1, 0.0), None, "beyond its length and the radius");
@@ -485,8 +587,7 @@ mod tests {
 
     const TARGET: ShipRef = ShipRef::Npc(NpcId(2));
 
-    /// A turreted beam from (0, 0), first aimed straight up at the
-    /// target.
+    /// A turreted beam from (0, 0), launched with its firer facing right.
     fn turreted() -> Beam {
         let spec = WeaponSpec::new(&WeaponRecord {
             guidance: 3,
@@ -497,33 +598,38 @@ mod tests {
             FIRER,
             FIRER,
             &at(0.0, 0.0, 90.0),
-            3.0,
             Aiming::Ship(TARGET),
         )
     }
 
     #[test]
-    fn a_turreted_beam_leaves_along_its_launch_then_re_aims_at_its_target_every_tick() {
+    fn a_turreted_beam_aims_a_whole_degree_at_its_target_every_tick() {
         let mut beam = turreted();
         assert!(
-            close(beam.end, facing(3.0) * 100.0),
-            "as launched: {beam:?}"
+            close(beam.end, Vec2::new(100.0, 0.0)),
+            "as its firer faces: {beam:?}"
         );
-        for (x, y) in [(0.0, -50.0), (50.0, 0.0), (-30.0, 30.0)] {
-            assert!(beam.follow(
-                &at(0.0, 0.0, 90.0),
-                None,
-                Compression::default(),
+        for (x, y, heading) in [
+            (0.0, -50.0, 0.0),
+            (50.0, 0.0, 90.0),
+            (50.0, 50.0, 134.0),
+            (-30.0, 30.0, 226.0),
+        ] {
+            assert!(follow(
+                &mut beam,
+                at(0.0, 0.0, 90.0),
                 &[target(2, x, y)],
                 &[]
             ));
-            let along = Vec2::new(x, y) * (100.0 / Vec2::new(x, y).length());
-            assert!(close(beam.end, along), "({x}, {y}): {beam:?}");
+            assert_eq!(beam.heading, heading, "({x}, {y})");
+            assert!(
+                close(beam.end, facing(heading) * 100.0),
+                "({x}, {y}): {beam:?}"
+            );
         }
-        assert!(beam.follow(
-            &at(10.0, 0.0, 0.0),
-            None,
-            Compression::default(),
+        assert!(follow(
+            &mut beam,
+            at(10.0, 0.0, 0.0),
             &[target(2, 10.0, 50.0)],
             &[]
         ));
@@ -535,38 +641,33 @@ mod tests {
     }
 
     #[test]
-    fn a_turreted_beam_ends_once_its_target_is_gone_or_breaking_up() {
-        let mut beam = turreted();
-        assert!(!beam.follow(
-            &at(0.0, 0.0, 90.0),
-            None,
-            Compression::default(),
+    fn a_turreted_beam_tracks_a_breaking_up_target_and_ends_once_it_is_destroyed_or_gone() {
+        let at_target = |condition| Target {
+            condition,
+            ..target(2, 0.0, -50.0)
+        };
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let firer = at(0.0, 0.0, 90.0);
+        assert!(follow(&mut turreted(), firer, &[at_target(dying)], &[]));
+        assert!(follow(
+            &mut turreted(),
+            firer,
+            &[at_target(Condition::Disabled)],
+            &[]
+        ));
+        assert!(!follow(
+            &mut turreted(),
+            firer,
+            &[at_target(Condition::Destroyed)],
+            &[]
+        ));
+        assert!(!follow(
+            &mut turreted(),
+            firer,
             &[target(3, 0.0, -50.0)],
-            &[]
-        ));
-        let dying = Target {
-            condition: Condition::Dying {
-                ticks_left: 3,
-                starting: false,
-            },
-            ..target(2, 0.0, -50.0)
-        };
-        assert!(!turreted().follow(
-            &at(0.0, 0.0, 90.0),
-            None,
-            Compression::default(),
-            &[dying],
-            &[]
-        ));
-        let disabled = Target {
-            condition: Condition::Disabled,
-            ..target(2, 0.0, -50.0)
-        };
-        assert!(turreted().follow(
-            &at(0.0, 0.0, 90.0),
-            None,
-            Compression::default(),
-            &[disabled],
             &[]
         ));
     }
@@ -595,65 +696,40 @@ mod tests {
             FIRER,
             FIRER,
             &at(0.0, 0.0, 0.0),
-            90.0,
             Aiming::Shot(ShotId(5)),
         );
-        assert!(close(beam.end, Vec2::new(100.0, 0.0)));
+        assert!(
+            close(beam.end, Vec2::new(0.0, -100.0)),
+            "as its firer faces"
+        );
         let shots = [missile(4, 0.0, -40.0), missile(5, 0.0, 40.0)];
-        assert!(beam.follow(
-            &at(0.0, 0.0, 0.0),
-            None,
-            Compression::default(),
-            &[],
-            &shots
-        ));
+        assert!(follow(&mut beam, at(0.0, 0.0, 0.0), &[], &shots));
         assert!(
             close(beam.end, Vec2::new(0.0, 100.0)),
             "at shot 5: {beam:?}"
         );
         assert_eq!(beam.hit(&among(&[target(2, 0.0, 50.0)])), None);
         assert!(
-            !beam.follow(
-                &at(0.0, 0.0, 0.0),
-                None,
-                Compression::default(),
-                &[],
-                &shots[..1]
-            ),
+            !follow(&mut beam, at(0.0, 0.0, 0.0), &[], &shots[..1]),
             "its shot gone"
         );
     }
 
     #[test]
-    fn a_beam_ahead_ignores_any_target() {
-        let mut beam = Beam::launch(
-            laser(),
-            FIRER,
-            FIRER,
-            &at(0.0, 0.0, 90.0),
-            80.0,
-            Aiming::Ahead,
-        );
-        assert!(beam.follow(
-            &at(0.0, 0.0, 0.0),
-            None,
-            Compression::default(),
+    fn a_beam_ahead_ignores_any_target_and_keeps_no_launch_offset() {
+        let mut beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
+        assert!(follow(
+            &mut beam,
+            at(0.0, 0.0, 0.0),
             &[target(2, 50.0, 0.0)],
             &[]
         ));
-        assert!(close(beam.end, facing(350.0) * 100.0), "{beam:?}");
+        assert!(close(beam.end, facing(0.0) * 100.0), "{beam:?}");
     }
 
     #[test]
     fn a_beam_never_hits_its_firer_or_a_destroyed_ship_and_hits_a_disabled_one() {
-        let beam = Beam::launch(
-            laser(),
-            FIRER,
-            FIRER,
-            &at(0.0, 0.0, 90.0),
-            90.0,
-            Aiming::Ahead,
-        );
+        let beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
         let firer = Target {
             ship: FIRER,
             ..target(1, 0.0, 0.0)
@@ -716,14 +792,7 @@ mod tests {
     ) -> Option<ShipRef> {
         let beam = Beam {
             ties,
-            ..Beam::launch(
-                laser(),
-                firer,
-                firer,
-                &at(0.0, 0.0, 90.0),
-                90.0,
-                Aiming::Ahead,
-            )
+            ..Beam::launch(laser(), firer, firer, &at(0.0, 0.0, 90.0), Aiming::Ahead)
         };
         let sides = Sides {
             targets,
