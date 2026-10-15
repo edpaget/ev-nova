@@ -276,7 +276,14 @@
 //!   ignored, P is refused, and a click in space selects nothing. The keys
 //!   held are still tracked through the jump, so a steering, thrust or fire
 //!   key still held at arrival acts on the first tick after it, as the
-//!   original reads the keys live. The stars streak when the session says
+//!   original reads the keys live. H, \`, `\` and J are polled each tick
+//!   with the original's latches ([`FlightView::held_keys_frame`]): H or
+//!   \` held through a jump's end, and a `\` first pressed (or pressed
+//!   again) during the jump and held, act once on the first tick after
+//!   the arrival tick, with their sounds; a `\` held from before the jump,
+//!   and J held through it, do nothing after it. J held into a disable, or
+//!   first pressed while disabled, acts on the first tick the ship is
+//!   intact again. The stars streak when the session says
 //!   the jump has begun ([`Session::jumping`]), at once for a ship already
 //!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
 //!   the session waits while the stars streak and the screen, HUD
@@ -644,9 +651,13 @@ pub fn assigned_ticks(assigned: Assigned) -> u16 {
 /// weapon select key back, Shift, which turns the target select key back,
 /// Command, which the jettison and eject keys need, the eject key, which
 /// works only held with Command, the land key, which holds the dock
-/// approach back while it is down, and H and `\`, which show the floating
-/// map while they are down.
-const FLIGHT_KEYS: [Key; 13] = [
+/// approach back while it is down, H and `\`, which show the floating map
+/// while they are down, and \` and J. H, `\`, \` and J act again when
+/// held across a jump's end, a release of Option or a repair, as the
+/// original polls them with a latch each ([`FlightView::held_keys_frame`]);
+/// the original's `_quickKeyCheckResult` counts \` and J as held too
+/// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
+const FLIGHT_KEYS: [Key; 15] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -660,6 +671,8 @@ const FLIGHT_KEYS: [Key; 13] = [
     EJECT_KEY,
     HYPERSPACE_MODE_KEY,
     HYPER_SELECT_KEY,
+    NAV_OFF_KEY,
+    JUMP_KEY,
 ];
 
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
@@ -1061,8 +1074,12 @@ pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
 /// original's default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32,
 /// handled in `_HandlePlayer` @0x69a94-0x69b63). With Option held it
 /// lets go of the ship target instead ([`Session::clear_target`],
-/// @0x69a17-0x69a90). While the dev overlay is built in, backquote
-/// toggles the overlay instead and never reaches flight.
+/// @0x69a17-0x69a90). It shares H's latch: held through a jump's end it
+/// turns the nav off after it, Option let go with it still down turns
+/// the nav off, and Option-\` held lets go of a target picked meanwhile
+/// on the next frame ([`FlightView::nav_keys_frame`]). While the dev
+/// overlay is built in, backquote toggles the overlay instead and never
+/// reaches flight.
 pub const NAV_OFF_KEY: Key = Key::Char('`');
 
 /// The Hyper Select key, which cycles the hyperspace selection through
@@ -1072,7 +1089,10 @@ pub const NAV_OFF_KEY: Key = Key::Char('`');
 /// `_loadKeys`). H is the original's separate Hyperspace Mode key. Held
 /// in nav mode 3, during a jump too, it shows the floating map
 /// (@0x69cdd-0x69ce7, @0x69be7; see the [`floating`](super::floating)
-/// module).
+/// module). One first pressed during a jump, or let go and pressed again
+/// then, and held past its end selects on the first frame after it; one
+/// held from before the jump does nothing after it
+/// ([`FlightView::select_frame`]).
 pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
 
 /// The Hyperspace Mode key, which puts the nav system in hyperspace mode
@@ -1080,7 +1100,9 @@ pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
 /// original's default, H (`_loadKeys` @0xcd5f8 `hyperMode`, keycode
 /// 0x04, handled in `_HandlePlayer` @0x69b76-0x69b89). Held outside a
 /// jump, it shows the floating map (@0x69b8e-0x69ba8; see the
-/// [`floating`](super::floating) module).
+/// [`floating`](super::floating) module). Held through a jump's end, it
+/// acts as a press on the first frame after it, as its latch is cleared
+/// on every frame of a jump ([`FlightView::nav_keys_frame`]).
 pub const HYPERSPACE_MODE_KEY: Key = Key::Char('h');
 
 /// The floating map's zoom-out key, `-` and the keypad's `-` (keycodes
@@ -1891,6 +1913,20 @@ pub struct FlightView<C> {
     elapsed: Duration,
     /// The flight keys held down.
     held: HashSet<Key>,
+    /// `_navModeSelectFlag` (0xdee04), the latch the Nav Off and
+    /// Hyperspace Mode block and Option-\` share: set as one of them acts,
+    /// so a key held acts once; cleared on a frame neither \` without
+    /// Option nor H is down, and on every frame of a jump
+    /// ([`FlightView::nav_keys_frame`]).
+    nav_latch: bool,
+    /// `_navTargetSelectFlag` (0xdee48), Hyper Select's latch: set as `\`
+    /// acts, cleared on a frame it is up, and left as it is during a jump
+    /// ([`FlightView::select_frame`]).
+    select_latch: bool,
+    /// The jump key's latch (0xdee44): set on every frame J runs its
+    /// block, a jump's included; cleared on a frame J is up, or down while
+    /// the player is not intact ([`FlightView::jump_frame`]).
+    jump_latch: bool,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
@@ -2223,6 +2259,9 @@ impl<
             alpha: 0.0,
             elapsed: Duration::ZERO,
             held: HashSet::new(),
+            nav_latch: false,
+            select_latch: false,
+            jump_latch: false,
             pending_landing,
             message: None,
             overlays: FlightOverlays::default(),
@@ -2832,9 +2871,11 @@ impl<
     /// tractor's #36 has no engine source). The original's second jump
     /// path clears them again (@0x6d601-0x6d7b1), once the pilot is past
     /// the tutorial, which the arrival line replaces anyway. The keys
-    /// held stay held: the session flies the jump without them, and one
-    /// still held at arrival acts then, as the original reads the keys
-    /// live and keeps no held state.
+    /// held stay held: the session flies the jump without them, and a
+    /// steering, thrust or fire key still held at arrival acts then, as
+    /// the original reads those live. J held through the jump does
+    /// nothing after it: its latch is set on every frame of the jump
+    /// ([`FlightView::jump_frame`]).
     fn jump(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -2975,6 +3016,65 @@ impl<
         self.session
             .as_ref()
             .is_ok_and(|session| session.preparing_jump().is_some())
+    }
+
+    /// The keys `_HandlePlayer` polls with a latch, once a frame, with
+    /// those held down, in its order: Option-\` and the Nav Off /
+    /// Hyperspace Mode block ([`FlightView::nav_keys_frame`]), Hyper
+    /// Select ([`FlightView::select_frame`]), then the jump key
+    /// ([`FlightView::jump_frame`]), each while the session takes its
+    /// command. A key held across a jump's end, a release of Option or a
+    /// repair acts here, as a press would, on the first frame its latch
+    /// lets it.
+    ///
+    /// It runs before the tick's steps, as `_HandlePlayer` runs before the
+    /// ships' `_HandleShip` (@0x43e19, @0x44483): a repair made in one
+    /// tick's steps is acted on at the next, the frame the original sees
+    /// it. And it runs before the jump effect's arrival, which is where
+    /// the original's arrival frame runs its keys (+0x50 still above 0):
+    /// the arrival tick still counts as jumping, and the first tick after
+    /// it is the original's first frame to act (@0x6c625).
+    fn held_keys_frame(&mut self) {
+        let down = |key: Key| self.held.contains(&key);
+        let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
+        let (select, jump) = (down(HYPER_SELECT_KEY), down(JUMP_KEY));
+        if self.takes(PlayerCommand::Nav) {
+            self.nav_keys_frame(nav_off, option, h);
+        }
+        if self.takes(PlayerCommand::SelectSystem) {
+            self.select_frame(select);
+        }
+        if self.takes(PlayerCommand::Jump) {
+            self.jump_frame(jump);
+        }
+    }
+
+    /// One frame of the jump key, with J down or not, as `_HandlePlayer`
+    /// runs it (@0x6b0da-0x6badf) on [`FlightView::jump_latch`]: during a
+    /// jump, the latch set (@0x6bad3), so J held through a jump does
+    /// nothing after it; with J down and the player intact, a jump begun
+    /// or refused when the latch is clear (@0x6b86d, @0x6b955), and the
+    /// latch set; otherwise, J up or the player disabled or breaking up
+    /// (`_IsDisabled`), the latch cleared (@0x6badf). So J held into a
+    /// disable, or first pressed while disabled, acts on the first frame
+    /// the player is intact again.
+    fn jump_frame(&mut self, down: bool) {
+        if self.jump_under_way() {
+            self.jump_latch = true;
+            return;
+        }
+        let intact = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.player_condition() == Condition::Intact);
+        if down && intact {
+            if !self.jump_latch {
+                self.jump();
+            }
+            self.jump_latch = true;
+        } else {
+            self.jump_latch = false;
+        }
     }
 
     /// Ends the jump: the ship arrives in the next system, caught up with
@@ -4769,36 +4869,124 @@ impl<C> FlightView<C> {
         match slot {
             Some(slot) => self.select_stellar(StellarPick::Slot(slot)),
             _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
-            _ if key == NAV_OFF_KEY => {
-                let option = self.held.contains(&Key::Alt);
-                if let Ok(session) = &mut self.session {
-                    if option {
-                        session.clear_target();
-                    } else {
-                        session.nav_off();
-                    }
-                }
-            }
+            _ if key == NAV_OFF_KEY => self.press_nav_block(key),
             _ => {}
         }
     }
 
     /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
     /// ([`HYPERSPACE_MODE_KEY`]). The press's own frame shows the floating
-    /// map when it leaves the mode at 3: H always does outside a jump, and
-    /// `\` unless it found no system. A tap released before the next tick
+    /// map: H's always (presses are taken only outside a jump), and
+    /// `\`'s when it leaves the mode at 3, unless it found no system. A tap released before the next tick
     /// still shows it, as the frame's key poll would see it down.
+    ///
+    /// Each runs its key's routine with the key counted as down, its latch
+    /// first cleared as the release before the press clears it: `\`'s
+    /// always, H's unless \` without Option is still down, when the
+    /// latch holds and H only shows the map (@0x69b8e-0x69ba3).
     fn hyperspace_key(&mut self, key: Key) {
+        if self.session.is_err() {
+            return;
+        }
+        if key == HYPER_SELECT_KEY {
+            self.select_latch = false;
+            self.select_frame(true);
+            if self
+                .session
+                .as_ref()
+                .is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)))
+            {
+                self.show_floating_map();
+            }
+        } else {
+            self.press_nav_block(key);
+            self.show_floating_map();
+        }
+    }
+
+    /// A fresh press of \` or H ([`NAV_OFF_KEY`], [`HYPERSPACE_MODE_KEY`]):
+    /// the OS sends one only after a release, which clears the block's
+    /// latch unless the block's other keys still hold it (H for \`; \`
+    /// without Option for H). Then the block runs with the key down
+    /// ([`FlightView::nav_keys_frame`]).
+    fn press_nav_block(&mut self, key: Key) {
+        let down = |held: Key| key == held || self.held.contains(&held);
+        let option = self.held.contains(&Key::Alt);
+        let others = if key == NAV_OFF_KEY {
+            self.held.contains(&HYPERSPACE_MODE_KEY)
+        } else {
+            self.held.contains(&NAV_OFF_KEY) && !option
+        };
+        let (nav_off, h) = (down(NAV_OFF_KEY), down(HYPERSPACE_MODE_KEY));
+        if !others {
+            self.nav_latch = false;
+        }
+        self.nav_keys_frame(nav_off, option, h);
+    }
+
+    /// Whether a jump is under way, the pre-jump stage included: the
+    /// original's +0x50 > 0, which its key blocks test.
+    fn jump_under_way(&self) -> bool {
+        self.jump.is_some()
+            || self
+                .session
+                .as_ref()
+                .is_ok_and(|session| session.preparing_jump().is_some())
+    }
+
+    /// One frame of Option-\` and the Nav Off / Hyperspace Mode block,
+    /// with \` (`nav_off`), Option and H down or not, as `_HandlePlayer`
+    /// runs them (@0x69a17-0x69baa) on [`FlightView::nav_latch`]:
+    ///
+    /// - With \` and Option down and the latch clear, the latch set and
+    ///   the ship target let go ([`Session::clear_target`], @0x69a17-0x69a90),
+    ///   during a jump too.
+    /// - Then, with \` without Option or H down outside a jump
+    ///   (@0x69aa1-0x69ad4), and the latch clear, the latch set and the
+    ///   block run ([`Session::nav_mode_keys`]); otherwise, the latch
+    ///   cleared (@0x69baa).
+    ///
+    /// So Option-\` held lets go of a target picked meanwhile on the next
+    /// frame, unless H is down; Option let go with \` still down is a
+    /// fresh Nav Off; H and \` block each other while one is held; and
+    /// either held through a jump's end acts after it.
+    fn nav_keys_frame(&mut self, nav_off: bool, option: bool, h: bool) {
+        let jumping = self.jump_under_way();
         let Ok(session) = &mut self.session else {
             return;
         };
-        if key == HYPER_SELECT_KEY {
-            session.select_next_system();
-        } else {
-            session.hyperspace_mode();
+        if nav_off && option && !self.nav_latch {
+            self.nav_latch = true;
+            session.clear_target();
         }
-        if matches!(session.nav_mode(), NavMode::Hyperspace(_)) {
-            self.show_floating_map();
+        if ((nav_off && !option) || h) && !jumping {
+            if !self.nav_latch {
+                self.nav_latch = true;
+                session.nav_mode_keys(nav_off, h);
+            }
+        } else {
+            self.nav_latch = false;
+        }
+    }
+
+    /// One frame of Hyper Select, with `\` down or not, as `_HandlePlayer`
+    /// runs it (@0x69bb2-0x69cee) on [`FlightView::select_latch`]: up, the
+    /// latch cleared (@0x69cee); down with the latch clear outside a jump,
+    /// the latch set (@0x69bf1) and the next linked system selected
+    /// ([`Session::select_next_system`]). During a jump the latch is left
+    /// as it is (@0x69be7): a `\` held from before stays latched, and one
+    /// first pressed during the jump acts after it.
+    fn select_frame(&mut self, down: bool) {
+        if !down {
+            self.select_latch = false;
+            return;
+        }
+        if self.select_latch || self.jump_under_way() {
+            return;
+        }
+        self.select_latch = true;
+        if let Ok(session) = &mut self.session {
+            session.select_next_system();
         }
     }
 
@@ -5033,7 +5221,9 @@ impl<C> FlightView<C> {
     /// I (@0x70424), and J, which changes nothing during a jump
     /// (@0x6b0da-0x6b10d). P is refused apart
     /// ([`FlightView::refuse_player_info`]); the flight keys are tracked
-    /// as held whatever this says.
+    /// as held whatever this says, so H, \` and `\` dropped here act after
+    /// the jump as their latches let them, and J, whose latch the jump
+    /// sets, does not ([`FlightView::held_keys_frame`]).
     fn taken_during_jump(key: Key, option: bool, menu_open: bool) -> bool {
         match key {
             TARGET_KEY | NEAREST_KEY | SELECT_KEY | BOARD_KEY | HAIL_KEY | JETTISON_KEY
@@ -5363,7 +5553,8 @@ impl<
     /// @0x6a7de, @0x7045e). The session refuses some taken commands
     /// itself, P with its beep among them. The flight keys are still
     /// tracked as held, so one held at arrival acts on the next tick, as
-    /// the original reads them live (see the module docs).
+    /// the original reads them live, H, \`, `\` and J as their latches
+    /// let them ([`FlightView::held_keys_frame`]; see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.cursor_input(input);
         let press = match *input {
@@ -5426,8 +5617,9 @@ impl<
                 return ScreenAction::None;
             }
             Some(JUMP_KEY) => {
-                self.jump();
-                return ScreenAction::None;
+                // A fresh press follows a release, which clears the latch.
+                self.jump_latch = false;
+                self.jump_frame(true);
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(),
@@ -5502,6 +5694,7 @@ impl<
             return;
         }
         self.elapsed += dt;
+        self.held_keys_frame();
         self.floating_frame();
         if self.jump.is_some() {
             let leading_in = self.session.as_ref().is_ok_and(Session::in_warp_lead_in);
@@ -10110,10 +10303,10 @@ mod tests {
         assert_eq!(view.session().expect("flying").system(), SystemId(132));
     }
 
-    /// Presses J and ticks until the streak begins, as the session says
-    /// the jump has begun.
+    /// Taps J and ticks until the streak begins, as the session says the
+    /// jump has begun.
     fn jump_now(view: &mut View) {
-        view.input(&key(JUMP, true));
+        tap(view, JUMP);
         for _ in 0..1000 {
             if view.jump_effect().is_some() {
                 return;
@@ -10282,13 +10475,13 @@ mod tests {
 
     /// Two of `build`'s flights, each with its course to Alpha Centauri
     /// plotted and flown out: the first braking and turning for the jump
-    /// on J, the second 300 ms into the jump's streak. Boxed: two flights
+    /// on a tap of J, the second 300 ms into the jump's streak. Boxed: two flights
     /// are too large for the stack together.
     fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
         let mut braking = Box::new(build());
         plot(&mut braking, 131);
         fly_out(&mut braking);
-        braking.input(&key(JUMP, true));
+        tap(&mut braking, JUMP);
         assert!(braking.preparing_jump(), "braking");
         let mut streaking = Box::new(build());
         plot(&mut streaking, 131);
@@ -23008,6 +23201,8 @@ mod tests {
             Key::Command,
             HYPERSPACE_MODE_KEY,
             HYPER_SELECT_KEY,
+            NAV_OFF_KEY,
+            JUMP_KEY,
             Key::Up,
         ] {
             let mut view = near();
@@ -23162,5 +23357,361 @@ mod tests {
                 DrawCommand::Line { color, .. } if *color == LINK)),
             "the link under it is left out"
         );
+    }
+
+    // Keys held across a jump's end, an Option release or a repair
+    // (`_HandlePlayer`'s latches 0xdee04, 0xdee48 and 0xdee44).
+
+    /// The times `view` raised `sound` since its sounds were last taken.
+    fn count(view: &mut View, sound: SimSound) -> usize {
+        sims(view).into_iter().filter(|&s| s == sound).count()
+    }
+
+    /// A flight on to Barnard's Star ([`FakeCatalog::onward`]) with a
+    /// course plotted to `to` and flown out, 300 ms into the jump's
+    /// streak, its sounds let go.
+    fn streaking_to(to: i16) -> View {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        plot(&mut view, to);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(300));
+        assert!(view.jump_effect().is_some());
+        view.take_sounds();
+        view
+    }
+
+    /// Ticks `view` through its arrival tick, asserting that no `sound`
+    /// was raised before or on it, then once more, giving how many times
+    /// that tick raised `sound`; then once more again, asserting it is not
+    /// raised a second time.
+    fn after_arrival(view: &mut View, sound: SimSound) -> (NavMode, usize, NavMode) {
+        tick_to_arrival(view);
+        assert_eq!(count(view, sound), 0, "not through the jump nor on arrival");
+        let arrived = nav_mode(view);
+        view.tick(TICK);
+        let acted = count(view, sound);
+        let after = nav_mode(view);
+        view.tick(TICK);
+        assert_eq!(count(view, sound), 0, "once only");
+        assert_eq!(nav_mode(view), after, "nothing more");
+        (arrived, acted, after)
+    }
+
+    #[test]
+    fn h_pressed_before_j_and_held_through_the_jump_acts_the_tick_after_arrival() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        jump_now(&mut view);
+        view.take_sounds();
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!(arrived, NavMode::Off, "the course flown");
+        assert_eq!(acted, 1);
+        assert_eq!(after, NavMode::Hyperspace(None));
+        assert_eq!(floating_alpha(&view), Some(255), "the map up");
+    }
+
+    #[test]
+    fn h_held_through_a_jump_that_cues_the_next_hop_only_beeps() {
+        let mut view = streaking_to(132);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!(arrived, NavMode::Hyperspace(Some(SystemId(132))));
+        assert_eq!((acted, after), (1, arrived), "the selection kept");
+    }
+
+    #[test]
+    fn h_first_pressed_during_the_jump_and_held_acts_after_arrival() {
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            view.input(&key(HYPERSPACE_MODE_KEY, true));
+            view.take_sounds();
+            let (_, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+            assert_eq!((acted, after), (1, NavMode::Hyperspace(None)), "{stage}");
+        }
+    }
+
+    #[test]
+    fn h_pressed_during_the_jump_and_let_go_before_arrival_does_nothing_after() {
+        let mut view = streaking_to(131);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(HYPERSPACE_MODE_KEY, false));
+        let (_, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!((acted, after), (0, NavMode::Off));
+    }
+
+    #[test]
+    fn nav_off_held_through_the_jump_turns_the_nav_off_after_arrival() {
+        let mut view = streaking_to(132);
+        view.input(&key(NAV_OFF_KEY, true));
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!(arrived, NavMode::Hyperspace(Some(SystemId(132))));
+        assert_eq!((acted, after), (1, NavMode::Off));
+    }
+
+    #[test]
+    fn option_backquote_turns_into_nav_off_when_option_is_let_go() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        view.input(&key(Key::Alt, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        ticks(&mut view, 3);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(count(&mut view, SimSound::NavSelected), 0, "Option held");
+        view.input(&key(Key::Alt, false));
+        assert_eq!(
+            count(&mut view, SimSound::NavSelected),
+            0,
+            "at the next frame"
+        );
+        view.tick(TICK);
+        assert_eq!(count(&mut view, SimSound::NavSelected), 1);
+        assert_eq!(nav_mode(&view), NavMode::Off);
+        ticks(&mut view, 2);
+        assert_eq!(count(&mut view, SimSound::NavSelected), 0, "once");
+    }
+
+    #[test]
+    fn h_held_blocks_a_press_of_nav_off() {
+        let mut view = flight();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.tick(TICK);
+        view.take_sounds();
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        assert_eq!(sims(&mut view), []);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+    }
+
+    #[test]
+    fn nav_off_held_blocks_a_press_of_h_which_still_shows_the_map() {
+        let mut view = flight();
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        view.take_sounds();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        assert_eq!(floating_alpha(&view), Some(255), "on the press's own frame");
+        view.tick(TICK);
+        assert_eq!(sims(&mut view), []);
+        assert_eq!(nav_mode(&view), NavMode::Off);
+    }
+
+    #[test]
+    fn a_key_of_the_block_let_go_frees_the_other_held_to_press_again() {
+        let mut view = flight();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        view.input(&key(HYPERSPACE_MODE_KEY, false));
+        view.tick(TICK);
+        view.take_sounds();
+        view.input(&key(NAV_OFF_KEY, false));
+        view.tick(TICK);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        assert_eq!(
+            count(&mut view, SimSound::NavSelected),
+            1,
+            "both up a frame"
+        );
+    }
+
+    #[test]
+    fn h_and_nav_off_held_through_the_jump_act_once_together_after_arrival() {
+        let mut view = streaking_to(131);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!(arrived, NavMode::Off);
+        assert_eq!((acted, after), (1, NavMode::Hyperspace(None)));
+    }
+
+    #[test]
+    fn option_backquote_held_lets_go_of_a_target_picked_the_next_tick() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        view.input(&key(Key::Alt, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        view.take_sounds();
+        tap(&mut view, NEAREST_KEY);
+        assert!(target_of(&view).is_some(), "Option-R picks");
+        view.take_sounds();
+        view.tick(TICK);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(count(&mut view, SimSound::TargetCleared), 1);
+    }
+
+    #[test]
+    fn option_backquote_held_blocks_h_but_not_its_map_nor_with_h_held_its_target() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        view.input(&key(Key::Alt, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        view.take_sounds();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        assert_eq!(floating_alpha(&view), Some(255), "the map shown");
+        view.tick(TICK);
+        assert_eq!(count(&mut view, SimSound::NavSelected), 0, "H blocked");
+        assert_eq!(nav_mode(&view), NavMode::Off);
+        tap(&mut view, NEAREST_KEY);
+        assert!(target_of(&view).is_some());
+        view.tick(TICK);
+        assert!(target_of(&view).is_some(), "the latch held by H");
+    }
+
+    /// The system Hyper Select picks first from Alpha Centauri (131), the
+    /// first of its links.
+    fn first_link_of_131() -> NavMode {
+        let mut view = flight();
+        run_set(&mut view, "M131");
+        view.settle_script();
+        tap(&mut view, HYPER_SELECT_KEY);
+        nav_mode(&view)
+    }
+
+    #[test]
+    fn backslash_first_pressed_during_the_jump_and_held_acts_after_arrival() {
+        let first = first_link_of_131();
+        assert!(matches!(first, NavMode::Hyperspace(Some(_))));
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            view.input(&key(HYPER_SELECT_KEY, true));
+            view.take_sounds();
+            let (_, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
+            assert_eq!((acted, after), (1, first), "{stage}");
+            assert_eq!(floating_alpha(&view), Some(255), "{stage}: the map up");
+        }
+    }
+
+    #[test]
+    fn backslash_pressed_before_j_and_held_through_does_nothing_after() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        assert_eq!(count(&mut view, SimSound::HyperSelected), 1);
+        jump_now(&mut view);
+        view.take_sounds();
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
+        assert_eq!((acted, after), (0, arrived));
+    }
+
+    #[test]
+    fn backslash_let_go_and_pressed_again_during_the_jump_acts_after_arrival() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        jump_now(&mut view);
+        view.input(&key(HYPER_SELECT_KEY, false));
+        view.tick(TICK);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        view.take_sounds();
+        let (_, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
+        assert_eq!(acted, 1);
+        assert!(matches!(after, NavMode::Hyperspace(Some(_))));
+    }
+
+    /// Sets the player's condition in `view` to `to`.
+    fn condition(view: &mut View, to: Condition) {
+        let Ok(session) = &mut view.session else {
+            panic!("flying");
+        };
+        nova_sim::fixture::set_player_condition(session, to);
+    }
+
+    /// Ticks `view` once with the player held disabled.
+    fn tick_disabled(view: &mut View) {
+        condition(view, Condition::Disabled);
+        view.tick(TICK);
+    }
+
+    #[test]
+    fn j_held_into_a_disable_acts_again_on_the_first_intact_tick() {
+        let mut view = new_pilot(flight());
+        view.input(&key(JUMP, true));
+        assert_eq!(view.take_sounds(), [REFUSED]);
+        assert_eq!(view.message(), Some(NO_DESTINATION));
+        view.tick(TICK);
+        assert!(!view.take_sounds().contains(&REFUSED), "held: no repeat");
+        tick_disabled(&mut view);
+        view.message = None;
+        condition(&mut view, Condition::Intact);
+        view.tick(TICK);
+        assert_eq!(
+            view.take_sounds()
+                .iter()
+                .filter(|&&sound| sound == REFUSED)
+                .count(),
+            1
+        );
+        assert_eq!(view.message(), Some(NO_DESTINATION));
+        ticks(&mut view, 2);
+        assert!(!view.take_sounds().contains(&REFUSED), "once");
+    }
+
+    #[test]
+    fn j_first_pressed_while_disabled_and_held_jumps_on_the_first_intact_tick() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        condition(&mut view, Condition::Disabled);
+        view.input(&key(JUMP, true));
+        tick_disabled(&mut view);
+        tick_disabled(&mut view);
+        assert!(
+            !view.preparing_jump() && view.jump_effect().is_none(),
+            "silent"
+        );
+        condition(&mut view, Condition::Intact);
+        view.tick(TICK);
+        assert!(view.preparing_jump() || view.jump_effect().is_some());
+    }
+
+    #[test]
+    fn j_let_go_while_disabled_does_nothing_on_the_repair() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        condition(&mut view, Condition::Disabled);
+        view.input(&key(JUMP, false));
+        tick_disabled(&mut view);
+        condition(&mut view, Condition::Intact);
+        ticks(&mut view, 2);
+        assert!(!view.preparing_jump() && view.jump_effect().is_none());
+    }
+
+    #[test]
+    fn j_held_while_intact_is_refused_once() {
+        let mut view = new_pilot(flight());
+        view.input(&key(JUMP, true));
+        ticks(&mut view, 5);
+        let refused = view
+            .take_sounds()
+            .iter()
+            .filter(|&&sound| sound == REFUSED)
+            .count();
+        assert_eq!(refused, 1);
+    }
+
+    #[test]
+    fn j_held_through_a_jump_does_nothing_after_arrival() {
+        let mut view = new_pilot(flight());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.preparing_jump());
+        view.take_sounds();
+        tick_to_arrival(&mut view);
+        view.take_sounds();
+        ticks(&mut view, 3);
+        assert!(!view.take_sounds().contains(&REFUSED));
+        assert!(!view.preparing_jump());
+        assert_eq!(view.session().expect("flying").jumping(), None);
     }
 }
