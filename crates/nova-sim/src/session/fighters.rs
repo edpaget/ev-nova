@@ -5,8 +5,10 @@
 //! ([`Sortie`]) is put in the system at its carrier, its shield and
 //! armour full, its class's stock weapons and rounds aboard, its AI type
 //! its `InherentAI`, pushed out at the bay's speed ([`launch_velocity`])
-//! along the launch heading. With no ship slot free
-//! ([`MAX_SHIPS_IN_SYSTEM`], the player counted), or no record of its
+//! along the launch heading. With no ship slot free below the
+//! reserve `_LaunchFighter` leaves (8 @0x3d648, so it stops at 55 NPCs,
+//! as [`RuleKey::SpawnReserve`] reads; see
+//! [`SPAWN_RESERVE`]), or no record of its
 //! ship type, it goes back into its bay, a round again.
 //!
 //! - **The player's fighter** joins the fleet as a carried escort
@@ -38,7 +40,6 @@ use std::collections::BTreeMap;
 use super::Session;
 use crate::ai::Goal;
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
-use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
@@ -49,6 +50,7 @@ use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
 use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
+use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 use crate::traffic::table::{self, ShipKind};
@@ -68,7 +70,11 @@ impl Session {
     /// Puts the fighter of `sortie` in the system, and says whether it
     /// did.
     fn launch_fighter(&mut self, sortie: &Sortie) -> bool {
-        if self.traffic.berths_taken() + 1 >= MAX_SHIPS_IN_SYSTEM {
+        if self
+            .traffic
+            .free_berth(self.spawn_reserve(SPAWN_RESERVE))
+            .is_none()
+        {
             return false;
         }
         let Some(record) = self.ship_record(sortie.ship).cloned() else {
@@ -966,32 +972,37 @@ mod tests {
     }
 
     #[test]
-    fn with_no_room_in_the_system_no_fighter_launches_and_its_round_is_kept() {
+    fn a_fighter_finds_no_slot_once_fifty_five_ships_are_in_the_system() {
         let catalog = carrying();
-        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-        for n in 0..63 {
-            pirate(&mut session, 1000.0 + n as f32, 1000.0);
-        }
-        launch(&mut session);
+        let crowded = |ships: u32, reserve: RuleSource| {
+            let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+            session.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
+            for n in 0..ships {
+                pirate(&mut session, 1000.0 + n as f32, 1000.0);
+            }
+            launch(&mut session);
+            session
+        };
+        let session = crowded(55, RuleSource::Engine);
         assert_eq!(session.pilot().owned(VIPERS), 2, "the round put back");
-        assert_eq!(session.npcs().len(), 63, "no fighter");
+        assert_eq!(session.npcs().len(), 55, "no fighter");
         assert_eq!(session.pilot().escorts(), []);
-        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-        for n in 0..62 {
-            pirate(&mut session, 1000.0 + n as f32, 1000.0);
-        }
-        launch(&mut session);
-        assert_eq!(session.npcs().len(), 63, "the last slot taken");
+        let session = crowded(54, RuleSource::Engine);
+        assert_eq!(session.npcs().len(), 55, "the last slot below 56 taken");
+        let session = crowded(55, RuleSource::Bible);
+        assert_eq!(session.npcs().len(), 56, "by the Bible, any slot");
+        let session = crowded(63, RuleSource::Bible);
+        assert_eq!(session.npcs().len(), 63, "by the Bible, the table full");
     }
 
     #[test]
     fn a_ship_left_behind_takes_a_slot_from_the_fighters() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-        for n in 0..63 {
+        for n in 0..55 {
             pirate(&mut session, 1000.0 + n as f32, 1000.0);
         }
-        let last = session.npcs().last().expect("63 pirates").id;
+        let last = session.npcs().last().expect("55 pirates").id;
         let keep: std::collections::BTreeSet<NpcId> = session
             .npcs()
             .iter()
@@ -1010,7 +1021,7 @@ mod tests {
         );
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 2, "the round put back");
-        assert_eq!(session.npcs().len(), 62, "no fighter");
+        assert_eq!(session.npcs().len(), 54, "no fighter");
     }
 
     // Return to Hangar and docking.

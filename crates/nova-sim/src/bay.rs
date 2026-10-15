@@ -16,9 +16,11 @@
 //!
 //! **Launching** (`_LaunchFighter` @0x3d62d): a launch spends a round and
 //! reloads `Reload` / bays, as any weapon. The fighter needs a free ship
-//! slot (none when the system holds
-//! [`MAX_SHIPS_IN_SYSTEM`](crate::board::MAX_SHIPS_IN_SYSTEM) ships, the
-//! player's counted), or the round is put back. It leaves from the
+//! slot below the 8 of the
+//! [`MAX_SHIPS_IN_SYSTEM`](crate::board::MAX_SHIPS_IN_SYSTEM) it leaves
+//! free (@0x3d648), so none once 55 NPCs are in the system by the engine
+//! ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)), or the round
+//! is put back. It leaves from the
 //! carrier's position along the carrier's heading, the bay's
 //! `Inaccuracy` drawn as a shot's, at the carrier's velocity plus the
 //! bay's `Speed`/100 pixels a tick along that heading

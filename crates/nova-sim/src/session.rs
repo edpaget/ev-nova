@@ -404,9 +404,9 @@ use crate::bay::FighterNote;
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, BoardTarget, Boarding, BoardingRule,
     CAPTURE_TRIP, CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE,
-    EscortCrew, HeldRounds, MARINES, MAX_ESCORTS, MAX_SHIPS_IN_SYSTEM, Plunder, PlunderView, Prize,
-    SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE,
-    Take, Taken, check_board,
+    EscortCrew, HeldRounds, MARINES, MAX_ESCORTS, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL,
+    TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken,
+    check_board,
 };
 use crate::catalog::{
     CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite, ListedStellar,
@@ -482,7 +482,7 @@ use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::SpawnTable;
-use crate::traffic::{Traffic, World, strength};
+use crate::traffic::{CAPTURE_RESERVE, SPAWN_RESERVE, Traffic, World, strength};
 use crate::wares::DayRolls;
 
 /// A jump, from J being accepted until the ship arrives.
@@ -1457,6 +1457,7 @@ impl Session {
                 pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
+            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
@@ -1602,8 +1603,19 @@ impl Session {
             led_speed: self.led_speed(),
             targeted: &targeted,
             type_widths: &type_widths,
+            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
         };
         f(&mut self.traffic, world);
+    }
+
+    /// The ship-table slots a spawn whose original leaves `reserve` free
+    /// leaves free, as [`RuleKey::SpawnReserve`] reads: `reserve` by the
+    /// engine, none by the Bible.
+    pub(crate) fn spawn_reserve(&self, reserve: u32) -> u32 {
+        match self.rules.source_for(RuleKey::SpawnReserve) {
+            RuleSource::Engine => reserve,
+            RuleSource::Bible => 0,
+        }
     }
 
     /// Shows the arrival quote of each announced fleet the traffic brought
@@ -1653,6 +1665,7 @@ impl Session {
             led_speed: self.led_speed(),
             targeted: &crate::ai::NO_AIMED_DAMAGE,
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
+            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
         }
     }
 
@@ -4389,8 +4402,8 @@ impl Session {
             return Some(Assigned::Escort);
         }
         let record = self.ship_record(npc.ship).cloned();
-        let Some(record) = record.filter(|_| self.traffic.berths_taken() + 1 < MAX_SHIPS_IN_SYSTEM)
-        else {
+        let reserve = self.spawn_reserve(CAPTURE_RESERVE);
+        let Some(record) = record.filter(|_| self.traffic.free_berth(reserve).is_some()) else {
             return Some(Assigned::Abandoned);
         };
         let hooks_first = self.hook_rules().capture_hook_order == RuleSource::Engine;
@@ -18526,14 +18539,20 @@ pub(super) mod tests {
     }
 
     /// [`boardable`] with `others` police besides the trader in the
-    /// system.
+    /// system: as many as setup brings (54, the trader making 55), the
+    /// rest copies of the last.
     fn crowded(others: usize) -> Session {
         let mut catalog = boardable();
-        catalog.traffic[0].1.avg_ships = (others + 1) as i16;
+        let set_up = others.min(54);
+        catalog.traffic[0].1.avg_ships = (set_up + 1) as i16;
         let mut placed = vec![(0, 0, 0, 0)];
-        placed.extend(std::iter::repeat_n((1, 0, 740, 0), others));
+        placed.extend(std::iter::repeat_n((1, 0, 740, 0), set_up));
         let mut session = Session::start(&catalog).expect("starts");
         session.populate(&catalog, &mut placing(2, &placed));
+        let police = session.npcs().last().cloned().expect("set up");
+        for _ in set_up..others {
+            session.traffic.add_npc(police.clone());
+        }
         assert_eq!(session.npcs().len(), others + 1);
         stop_npcs(&mut session);
         let trader = &mut session.traffic.npcs_mut()[0];
@@ -18545,30 +18564,44 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn with_no_ship_slot_free_for_the_old_ship_the_swap_is_dropped() {
-        let mut full = crowded(62);
+    fn use_as_my_ship_abandons_the_old_ship_with_sixty_two_ships_in_the_system() {
+        let mut full = crowded(61);
         let pilot = full.pilot().clone();
         assert_eq!(
             full.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::Abandoned),
-            "63 NPCs and the player: no slot"
+            "62 NPCs: slots 1-62 taken, slot 63 held back"
         );
         assert_eq!(full.pilot(), &pilot, "nothing changes");
-        assert_eq!(full.npcs().len(), 63);
+        assert_eq!(full.npcs().len(), 62);
         assert_eq!(full.boarding(), None, "the prize is lost");
         assert!(!full.take_save_due());
-        let mut roomy = crowded(61);
+        let mut roomy = crowded(60);
         assert_eq!(
             roomy.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::MyShip),
-            "62 NPCs and the player: one slot"
+            "61 NPCs: slot 62 free"
+        );
+        let mut bible = crowded(61);
+        bible.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
+        assert_eq!(
+            bible.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::MyShip),
+            "by the Bible, slot 63"
+        );
+        let mut bible = crowded(62);
+        bible.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
+        assert_eq!(
+            bible.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::Abandoned),
+            "by the Bible, the table full"
         );
     }
 
     #[test]
     fn a_ship_left_behind_takes_a_ship_slot_from_the_swap() {
-        let mut full = crowded(62);
-        let last = full.npcs().last().expect("63 NPCs").id;
+        let mut full = crowded(61);
+        let last = full.npcs().last().expect("62 NPCs").id;
         let keep: BTreeSet<NpcId> = full
             .npcs()
             .iter()
@@ -18584,11 +18617,11 @@ pub(super) mod tests {
                 to: SystemId(130),
             },
         );
-        assert_eq!(full.npcs().len(), 62, "one slot, but for the one left");
+        assert_eq!(full.npcs().len(), 61, "one slot, but for the one left");
         assert_eq!(
             full.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::Abandoned),
-            "62 NPCs, one left behind and the player: no slot"
+            "61 NPCs and one left behind: no slot below 63"
         );
     }
 
@@ -18606,7 +18639,7 @@ pub(super) mod tests {
             Some(Assigned::MyShip)
         );
         assert_eq!(mine.take_events(), [SessionEvent::ShipChanged], "my ship");
-        let mut full = crowded(62);
+        let mut full = crowded(61);
         full.take_events();
         assert_eq!(
             full.assign(Assignment::MyShip, &mut Draws::of(&[])),

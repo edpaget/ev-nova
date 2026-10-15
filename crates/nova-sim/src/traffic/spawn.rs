@@ -1042,6 +1042,12 @@ pub fn link_fleet(
 /// does not. The lead flies as the `call`'s AI type when it gives one,
 /// and carries the fleet's `Quote` when the `call` announces it (see
 /// [`FleetCall`]).
+///
+/// The whole fleet is rolled, even the ships that will find no ship-table
+/// slot: the cap (`_GenericRandomShipSpawn` giving -1 for the lead
+/// @0x41d02 or an escort @0x421b9) is applied as the traffic places them
+/// ([`Traffic`](crate::Traffic)'s `add`), in the same call and before any
+/// frame, so the draws it makes for them change nothing the player sees.
 pub fn fleet(
     table: &SpawnTable,
     id: FleetId,

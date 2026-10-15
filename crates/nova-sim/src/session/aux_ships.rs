@@ -57,6 +57,7 @@ use crate::mission::aux_ships::{aux_dude, aux_system_allows};
 use crate::mission::ships::LOST_AT_GATE;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Entrance;
+use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::npc::NpcId;
 use crate::traffic::spawn::{self, AuxSpawn};
 
@@ -69,8 +70,11 @@ impl Session {
     /// on `chance`: when some are coming ([`AuxShips::coming`]) and their
     /// `AuxShipSyst` allows the player's system ([`aux_system_allows`]),
     /// they come in by hyperspace ([`spawn::arriving_aux_ships`]), each
-    /// counted ([`AuxShips::came`]); then a mission of `Flags` 0x0001
-    /// auto-aborts. No save is due.
+    /// that finds a slot below the spawn reserve counted
+    /// ([`AuxShips::came`]): one `_SpecificDudeSpawn` finds none for
+    /// (reserve 8 @0x435a8, -1 @0x435c7) goes on to the next
+    /// (@0x4372f), counting nothing, so it is still to come. Then a
+    /// mission of `Flags` 0x0001 auto-aborts. No save is due.
     ///
     /// [`AuxShips::coming`]: crate::mission::aux_ships::AuxShips::coming
     /// [`AuxShips::came`]: crate::mission::aux_ships::AuxShips::came
@@ -107,8 +111,9 @@ impl Session {
             count: coming,
         };
         let ships = spawn::arriving_aux_ships(self.traffic.table(), &spawn, self.gate(), chance);
-        let came = ships.len();
-        self.traffic.bring_in(ships);
+        let came = self
+            .traffic
+            .bring_in_within(ships, self.spawn_reserve(SPAWN_RESERVE));
         if let Some(active) = self.pilot.missions.get_mut(slot) {
             for _ in 0..came {
                 active.aux.came(record.flags);
@@ -303,6 +308,49 @@ mod tests {
         );
         ticks(&mut session, &catalog, 300);
         assert_eq!(aux_here(&session), 3, "no more come");
+    }
+
+    /// Fills the system with disabled ships, which never leave, until
+    /// `berths` of the ship table are taken.
+    fn crowd(session: &mut Session, berths: usize) {
+        while session.npcs().len() < berths {
+            let mut hulk = crate::testkit::npc(0, crate::stats::ShipStats::default());
+            hulk.condition = Condition::Disabled;
+            session.traffic.add_npc(hulk);
+        }
+    }
+
+    #[test]
+    fn aux_ships_find_no_slot_once_fifty_five_ships_are_in_the_system_and_keep_their_count() {
+        let catalog = crate::testkit::far_129_reachable(aux_only(3, -1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 139);
+        crowd(&mut session, 55);
+        tick(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 0, "no slot");
+        assert_eq!(
+            aux_of(&session),
+            AuxShips {
+                countdown: 0,
+                arrived: 0,
+                left: 3
+            },
+            "none counted (@0x435c7 → @0x4372f)"
+        );
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 139);
+        crowd(&mut session, 54);
+        tick(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 1, "the one slot left");
+        assert_eq!(
+            (aux_of(&session).arrived, aux_of(&session).left),
+            (1, 2),
+            "only the one that came"
+        );
+        tick(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 1, "the rest still wait for a slot");
     }
 
     #[test]

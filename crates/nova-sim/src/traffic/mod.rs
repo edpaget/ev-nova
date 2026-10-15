@@ -42,7 +42,11 @@
 //!    timer is armed by its session ([`Traffic::arm_strength_timer`]),
 //!    and entering or going on into a system keeps it. Each announced
 //!    fleet that comes with a `Quote` queues it for its session to show
-//!    ([`Traffic::take_quotes`], see [`quote`]);
+//!    ([`Traffic::take_quotes`], see [`quote`]). Each ship the system's
+//!    traffic brings, at setup or as an arrival, takes a ship-table slot
+//!    below the [`World`]'s spawn reserve, 8 of the 64 by the engine
+//!    ([`SPAWN_RESERVE`]), and one that finds none does not come: a
+//!    fleet's lead with none brings no escorts and no quote;
 //! 2. each flying, intact NPC answers the fight's strikes since the last
 //!    tick ([`Behaviour::react`]): the ship it targets, its provocation,
 //!    and any goal it takes at once;
@@ -177,6 +181,11 @@ pub struct World<'a> {
     /// goes by ([`gate_entry::gate_reach`]); a gate it holds none for reads
     /// as a loaded master does.
     pub type_widths: &'a BTreeMap<StellarId, TypeWidth>,
+    /// The ship-table slots the system's own traffic leaves free as it
+    /// spawns ([`Traffic::free_berth`]): [`SPAWN_RESERVE`] by the engine,
+    /// 0 by the Bible
+    /// ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)).
+    pub spawn_reserve: u32,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -185,8 +194,8 @@ pub(crate) static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new
 impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
-    /// factor on the led ships' top speed, no damage aimed, and no gate's
-    /// width known.
+    /// factor on the led ships' top speed, no damage aimed, no gate's
+    /// width known, and the engine's [`SPAWN_RESERVE`].
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -201,6 +210,7 @@ impl<'a> World<'a> {
             led_speed: 1.0,
             targeted: bare.targeted,
             type_widths: &NO_TYPE_WIDTHS,
+            spawn_reserve: SPAWN_RESERVE,
         }
     }
 
@@ -356,9 +366,12 @@ impl Traffic {
     /// Enters a system as [`Traffic::enter_in`] does, with `missions`, the
     /// active missions' special ships set up there, first: as
     /// `_SetupShipsInSystem` sets them up before the system's own passes
-    /// (@0x42dc4-0x43194), none of which they use up. The scans not yet
-    /// taken are dropped: the original scans at once, so none outlives its
-    /// system.
+    /// (@0x42dc4-0x43194), none of which they use up. The system's own
+    /// ships each take a slot below the world's spawn reserve, those with
+    /// none not coming ([`Traffic::free_berth`]); the mission ships are
+    /// not capped (`_MissionDudeSpawn`'s -1 is not modelled). The scans
+    /// not yet taken are dropped: the original scans at once, so none
+    /// outlives its system.
     pub fn enter_with(
         &mut self,
         table: SpawnTable,
@@ -382,13 +395,23 @@ impl Traffic {
             world.stellars(),
             chance,
         );
-        self.add(ships, world.persons.grudges, None);
+        self.add(ships, world.persons.grudges, Some(world.spawn_reserve));
     }
 
     /// Brings `ships` into the system as they are, numbered after every
-    /// other NPC: the mission ships whose appear timer ran out.
+    /// other NPC, with no ship-table cap: the mission ships whose appear
+    /// timer ran out.
     pub fn bring_in(&mut self, ships: Vec<NewShip>) {
         self.add(ships, &BTreeSet::new(), None);
+    }
+
+    /// Brings `ships` into the system as [`Traffic::bring_in`] does, each
+    /// leaving `reserve` slots of the ship table free
+    /// ([`Traffic::free_berth`]), and gives how many came: one that finds
+    /// no slot does not come. The auxiliary ships' spawn
+    /// (`_SpecificDudeSpawn` from `_EnterMoreShips`, reserve 8 @0x435a8).
+    pub fn bring_in_within(&mut self, ships: Vec<NewShip>, reserve: u32) -> usize {
+        self.add(ships, &BTreeSet::new(), Some(reserve))
     }
 
     /// What the system's traffic is drawn from.
@@ -550,7 +573,9 @@ impl Traffic {
     /// rolling on `chance`: the arrival roll while the system is below
     /// its `AvgShips` (@0x43b14-0x43c01), then the escort-strength
     /// timer's tick (@0x43d1a-0x43dd7), as step 1 of the module docs
-    /// says. No NPC reacts, decides or moves, none departs, and no tick
+    /// says, each ship taking a slot below the world's spawn reserve
+    /// ([`Traffic::free_berth`]): a fleet whose lead finds none does not
+    /// come, nor does its quote. No NPC reacts, decides or moves, none departs, and no tick
     /// is counted. The original runs the pass once a frame
     /// (`_DoPlayGameWork` @0x44237), here first in each
     /// [`Traffic::tick_in`], and once more on a hypergate or wormhole
@@ -574,7 +599,7 @@ impl Traffic {
             world.stellars(),
             chance,
         );
-        self.add(arrivals, world.persons.grudges, None);
+        self.add(arrivals, world.persons.grudges, Some(world.spawn_reserve));
         self.escort_strength(&world, draw.world.gate(), chance);
     }
 
@@ -743,7 +768,7 @@ impl Traffic {
             chance,
             &mut fleet,
         );
-        self.add(fleet, world.persons.grudges, None);
+        self.add(fleet, world.persons.grudges, Some(world.spawn_reserve));
     }
 
     /// Each arrived ([`Npc::arrived`]), intact NPC answers each of
@@ -827,10 +852,9 @@ impl Traffic {
     /// How many slots of the ship table the traffic takes: its NPCs and
     /// the ships an in-flight move left behind ([`Leave::Held`]), which
     /// stay active in the ship table until the display pass frees them.
-    /// Every ship-table cap counts it: the swap of a captured ship
-    /// ([`Session::assign`](crate::Session::assign)), a fighter's launch,
-    /// and the spawn cap (`_GenericRandomShipSpawn` giving -1
-    /// @0x3c8e3-0x3c8f0) once it is ported.
+    /// The ship-table caps take the same ships slot by slot, as the
+    /// original does, not as a total ([`Traffic::free_berth`]).
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn berths_taken(&self) -> usize {
         self.npcs.len() + self.left_behind.values().map(Vec::len).sum::<usize>()
@@ -870,7 +894,8 @@ impl Traffic {
     /// left behind holds ([`Leave::Held`]), none is reserved for, and
     /// `skip` does not hold: `_GenericRandomShipSpawn` (@0x3c8b1-0x3c90b)
     /// takes the first slot whose active flag is clear, with no test of
-    /// the system.
+    /// the system. It has no bound: a spawn that leaves slots free takes
+    /// [`Traffic::free_berth`] instead.
     pub(crate) fn next_berth_skipping(&self, skip: &BTreeSet<u32>) -> u32 {
         let held: BTreeSet<u32> = self
             .left_behind
@@ -889,8 +914,7 @@ impl Traffic {
     }
 
     /// The berth a spawn that leaves `reserve` slots free takes: the first
-    /// free one ([`Traffic::next_berth`]: no NPC, ship left behind or
-    /// reservation holds it), when it is below
+    /// free one (no NPC, ship left behind or reservation holds it), when it is below
     /// [`MAX_SHIPS_IN_SYSTEM`](crate::board::MAX_SHIPS_IN_SYSTEM) less
     /// `reserve`; otherwise `None`. `_GenericRandomShipSpawn` searches
     /// slots 1..(63 - `reserve`) for one whose active flag is clear
@@ -898,7 +922,7 @@ impl Traffic {
     /// it goes by slot, not by count: a ship above the bound does not
     /// block it, and a free slot above it cannot be taken.
     #[must_use]
-    pub(crate) fn free_berth(&self, reserve: u32) -> Option<u32> {
+    pub fn free_berth(&self, reserve: u32) -> Option<u32> {
         let bound = u32::try_from(crate::board::MAX_SHIPS_IN_SYSTEM)
             .unwrap_or(u32::MAX)
             .saturating_sub(reserve);
@@ -4036,5 +4060,86 @@ mod tests {
         traffic.add(fleet, &BTreeSet::new(), None);
         assert_eq!(traffic.npcs(), [], "no lead, no escort");
         assert!(traffic.take_quotes().is_empty());
+    }
+
+    #[test]
+    fn setup_stops_at_fifty_five_ships() {
+        let draws: Vec<u32> = (0..60).flat_map(|i| placed(750 + i, 750)).collect();
+        let mut traffic = Traffic::new();
+        traffic.enter(table(60), &mut Draws::of(&draws));
+        assert_eq!(berths(&traffic), (1..=55).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn an_arrival_finds_no_slot_once_fifty_five_ships_are_in_the_system() {
+        let mut traffic = at_berths(1..=55);
+        traffic.table = table(60);
+        tick_arrival(&mut traffic);
+        assert_eq!(traffic.npcs().len(), 55);
+        let mut traffic = at_berths(1..=54);
+        traffic.table = table(60);
+        tick_arrival(&mut traffic);
+        assert_eq!(traffic.npcs().len(), 55, "the last slot taken");
+    }
+
+    #[test]
+    fn mission_ships_are_not_capped() {
+        let mut traffic = at_berths(1..=55);
+        traffic.bring_in(vec![mission_ship(-1, 0.0)]);
+        assert_eq!(traffic.npcs().last().map(|npc| npc.berth), Some(56));
+        let mut traffic = Traffic::new();
+        traffic.enter_with(
+            table(0),
+            World::new(&[]),
+            vec![mission_ship(-1, 0.0); 60],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(traffic.npcs().len(), 60, "set up whole");
+    }
+
+    /// [`armed`] of 0 to fire after 30 ticks, fleet 382 quoted with
+    /// `STR#` 7600, holding an NPC at each of berths 1 to `ships`.
+    fn crowded_strength(ships: u32) -> Traffic {
+        let mut traffic = armed(0, 0);
+        traffic
+            .table
+            .fleets
+            .get_mut(&FleetId(382))
+            .expect("fleet 382")
+            .quote = Some(7600);
+        for berth in 1..=ships {
+            traffic.add_npc_at(ship(), berth);
+        }
+        traffic
+    }
+
+    #[test]
+    fn the_escort_strength_fleet_finds_no_slot_once_fifty_five_ships_are_in_the_system() {
+        let mut traffic = crowded_strength(55);
+        ticked(&mut traffic, &escorted(60), 31);
+        assert_eq!(traffic.npcs().len(), 55, "no fleet");
+        assert!(traffic.take_quotes().is_empty(), "no line");
+        let mut traffic = crowded_strength(54);
+        ticked(&mut traffic, &escorted(60), 31);
+        assert_eq!(traffic.npcs().len(), 55);
+        assert_eq!(traffic.take_quotes(), [7600]);
+    }
+
+    #[test]
+    fn by_the_bible_a_spawn_may_take_any_slot() {
+        let bible = World {
+            spawn_reserve: 0,
+            ..escorted(60)
+        };
+        let mut traffic = crowded_strength(55);
+        ticked(&mut traffic, &bible, 31);
+        assert_eq!(traffic.npcs().last().map(|npc| npc.berth), Some(56));
+        let mut traffic = crowded_strength(62);
+        ticked(&mut traffic, &bible, 31);
+        assert_eq!(traffic.npcs().last().map(|npc| npc.berth), Some(63));
+        let mut traffic = crowded_strength(63);
+        ticked(&mut traffic, &bible, 31);
+        assert_eq!(traffic.npcs().len(), 63, "the table full");
+        assert_eq!(World::new(&[]).spawn_reserve, SPAWN_RESERVE);
     }
 }
