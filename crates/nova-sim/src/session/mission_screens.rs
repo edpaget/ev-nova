@@ -301,7 +301,8 @@ impl Session {
     /// offer, and its labels; or, for one that cannot be refused with no
     /// offer text, its accept at once (@0xa22ec-0xa231c), made before the
     /// dialog is, so with no offer dialog open
-    /// ([`Session::accept_offered`]).
+    /// ([`Session::accept_offered`]), and its offer then dropped when it
+    /// succeeds, as `_OfferMissionFromPort` drops it (@0xa3765-0xa37a1).
     pub(super) fn offer_dialog(
         &mut self,
         mission: MissionId,
@@ -316,6 +317,14 @@ impl Session {
             .unwrap_or_default();
         if !can_refuse && raw.is_empty() {
             let accepted = self.accept_offered(mission, chance);
+            if accepted.is_ok() {
+                // `_OfferMissionFromPort` drops the offer whenever
+                // `_OfferOneMission` returns other than -1 (@0xa3765-0xa37a1),
+                // and the accept at once returns 1 once it succeeds
+                // (@0xa2311, @0xa368e), though `_DoMissionAccept` refilters
+                // nothing with the dialog closed (@0xa200b).
+                self.offers.drop_offer(mission);
+            }
             return VenueOffer::Accepted { mission, accepted };
         }
         let labels = offer_labels(
@@ -925,7 +934,7 @@ mod tests {
     }
 
     #[test]
-    fn the_accept_at_once_is_outside_the_dialog_so_reaches_nothing_and_refilters_nothing() {
+    fn the_accept_at_once_drops_its_offer_but_reaches_nothing_and_refilters_nothing() {
         let catalog = screens(
             vec![
                 MissionRecord {
@@ -962,8 +971,9 @@ mod tests {
         assert!(!active.reached, "the dialog never opened (@0xa230a)");
         assert_eq!(
             ids(&session),
-            [MissionId(141), MissionId(143)],
-            "none dropped"
+            [MissionId(143)],
+            "the caller drops the accepted offer (@0xa3765-0xa37a1); the \
+             others stay unfiltered"
         );
     }
 

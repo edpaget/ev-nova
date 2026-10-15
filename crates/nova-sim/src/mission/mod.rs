@@ -249,7 +249,9 @@
 //!   and refilters as that accept does. An `S` anywhere else, and the
 //!   offer dialog's accept at once of an offer that cannot be refused and
 //!   has no text (@0xa230a), leave a destination with one unreached and
-//!   the offers as they are, unless the Rulebook key
+//!   the other offers as they are (the accept at once's own offer is
+//!   dropped by its caller, `_OfferMissionFromPort` @0xa3765-0xa37a1),
+//!   unless the Rulebook key
 //!   [`start_outside_dialog`](crate::RuleKey::StartOutsideDialog) reads
 //!   otherwise. `A` ends every slot holding the mission, running
 //!   `OnAbort`, whatever its `CanAbort`. `F` marks each failed, running
