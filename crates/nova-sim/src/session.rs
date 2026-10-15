@@ -1460,6 +1460,10 @@ impl Session {
         ));
         self.combat
             .set_decay(DecayStep::from(rules.source_for(RuleKey::ShotDecay)));
+        self.combat
+            .set_ai_spend(rules.source_for(RuleKey::AiSpendWithoutShot));
+        self.combat
+            .set_quadrant_arc(rules.source_for(RuleKey::QuadrantTurretArc));
         self.rules = rules;
         self
     }
@@ -2134,6 +2138,7 @@ impl Session {
             &mut stellars,
             chance,
         );
+        self.traffic.after_firing();
         self.take_shoves();
         self.eject_on_breakup(&mut &mut *chance);
         self.player_exploded_this_tick = !was_destroyed && self.condition == Condition::Destroyed;
@@ -4982,6 +4987,8 @@ impl Session {
             return;
         };
         npc.trigger = Trigger::default();
+        // `_DoShipCapture` clears the captured ship's pick (@0x41207).
+        npc.pick = None;
         npc.provoked = 0.0;
         let record = Escort {
             ship: npc.ship,
@@ -14057,6 +14064,7 @@ pub(super) mod tests {
         turrets_only: false,
         bays: false,
         point_defence: false,
+        keep: None,
     };
 
     /// The fight's events about NPC 0, other than its firing.
@@ -14195,7 +14203,8 @@ pub(super) mod tests {
         assert!(events.contains(&CombatEvent::Fired {
             ship: ShipRef::Player,
             weapon: WeaponId(128),
-            at: Vec2::ZERO
+            at: Vec2::ZERO,
+            sound: Some(crate::combat::FireSound::UNPORTED),
         }));
         assert_eq!(session.npcs().len(), 1, "disabled, and still alive");
         for _ in 0..60 {
@@ -14251,7 +14260,8 @@ pub(super) mod tests {
         assert!(events.contains(&CombatEvent::Fired {
             ship: ShipRef::Npc(NpcId(0)),
             weapon: WeaponId(128),
-            at: Vec2::new(0.0, -100.0)
+            at: Vec2::new(0.0, -100.0),
+            sound: Some(crate::combat::FireSound::UNPORTED),
         }));
         assert!(
             session.reserves().shield.now < 30.0,
@@ -18231,6 +18241,96 @@ pub(super) mod tests {
         assert!(launches(78) > 1, "the first falls short");
     }
 
+    /// A catalog whose NPC carries a short gun (135, 52 pixels' reach) and
+    /// a secondary missile (134) aiming 79 at the player, which 30 shield
+    /// and 45 armour make enough (1.05 x 75 = 78.75), flying 1 pixel a
+    /// tick so the first stays in flight.
+    fn kept_missile_catalog() -> FakePilotCatalog {
+        let missile = WeaponRecord {
+            speed: 100,
+            count: 400,
+            reload: 0,
+            mass_dmg: 79,
+            energy_dmg: 79,
+            flags: crate::combat::weapon::SECONDARY,
+            ..homing_missile(134, 0)
+        };
+        let short = WeaponRecord {
+            id: WeaponId(135),
+            count: 1,
+            ..blaster()
+        };
+        let mut catalog = arming(blaster(), missile, 0);
+        catalog.weapons.push(short);
+        catalog.hulls[1].weapons.insert(
+            0,
+            StockWeapon {
+                weapon: WeaponId(135),
+                count: 1,
+                ammo: 0,
+            },
+        );
+        catalog
+    }
+
+    /// How many of `session`'s combat events are its NPC firing the
+    /// missile (134).
+    fn missiles_fired(session: &mut Session) -> usize {
+        session
+            .take_combat_events()
+            .iter()
+            .filter(|event| {
+                matches!(event, CombatEvent::Fired { weapon, .. } if *weapon == WeaponId(134))
+            })
+            .count()
+    }
+
+    #[test]
+    fn an_npc_keeps_firing_its_missile_on_ticks_its_gun_pass_picks_nothing() {
+        // Its first missile covers the player, so the missile pass picks
+        // none from the second tick; the gun pass, its gun out of reach,
+        // fires the missile it kept (`_AIFireGun` @0x80213-0x8021d).
+        let catalog = kept_missile_catalog();
+        let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+        let mut fired = Vec::new();
+        for _ in 0..4 {
+            session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            fired.push(missiles_fired(&mut session));
+            assert_eq!(session.npcs()[0].pick, Some(WeaponId(134)), "kept");
+        }
+        assert_eq!(fired, [1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn a_disabled_npc_fires_no_kept_pick_and_keeps_it_until_it_recovers() {
+        let catalog = kept_missile_catalog();
+        let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+        session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(missiles_fired(&mut session), 1);
+        // Disabled by its armour, which it doesn't regenerate.
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.condition = Condition::Disabled;
+        npc.reserves.armor.now = 1.0;
+        for _ in 0..3 {
+            session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            assert_eq!(missiles_fired(&mut session), 0, "disabled");
+            assert_eq!(session.npcs()[0].pick, Some(WeaponId(134)), "kept");
+        }
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.condition = Condition::Intact;
+        npc.reserves.armor.now = npc.reserves.armor.max;
+        session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(
+            missiles_fired(&mut session),
+            1,
+            "its first gun pass fires it"
+        );
+    }
+
     /// Every NPC idles, targets the player and fires weapon 131 alone,
     /// skipping Nova's AI pick.
     #[derive(Debug)]
@@ -18251,6 +18351,58 @@ pub(super) mod tests {
         fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
             Some(ShipRef::Player)
         }
+    }
+
+    #[test]
+    fn the_rulebook_says_whether_an_npcs_pick_spends_on_a_copy_that_spawns_nothing() {
+        // A turret reaching 52 pixels, its own launcher's rounds, at the
+        // player 200 off: outside the box of its reach, it spawns nothing.
+        let turret = WeaponRecord {
+            id: WeaponId(131),
+            guidance: 4,
+            ammo_type: 10,
+            count: 1,
+            ..blaster()
+        };
+        let left = |rules: Rulebook| {
+            let catalog = arming(blaster(), turret, 0);
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180).with_rules(rules);
+            session.traffic.npcs_mut()[0].rounds =
+                crate::combat::armament::LauncherRounds::from([(WeaponId(131), 5)]);
+            session.tick_traffic(&catalog, &Picking, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.npcs()[0].rounds.slot(WeaponId(131))
+        };
+        assert_eq!(left(Rulebook::default()), 4, "by the engine");
+        let other =
+            Rulebook::default().with_override(RuleKey::AiSpendWithoutShot, RuleSource::Bible);
+        assert_eq!(left(other), 5);
+    }
+
+    #[test]
+    fn the_rulebook_says_how_an_npcs_quadrant_turret_measures_its_arc_as_it_fires() {
+        // A front turret facing up, the player 10 degrees to its left:
+        // across the seam by the engine.
+        let front = WeaponRecord {
+            id: WeaponId(131),
+            guidance: 7,
+            ..blaster()
+        };
+        let fires = |rules: Rulebook| {
+            let catalog = arming(blaster(), front, 0);
+            // Below the player and facing up at it: the player bears 350.
+            let mut session = with_an_npc_at(&catalog, 750, 850, 0).with_rules(rules);
+            session.traffic.npcs_mut()[0].state.position = Vec2::new(17.632_7, 100.0);
+            session.tick_traffic(&catalog, &Picking, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.take_combat_events().iter().any(|event| {
+                matches!(event, CombatEvent::Fired { weapon, .. } if *weapon == WeaponId(131))
+            })
+        };
+        assert!(!fires(Rulebook::default()), "by the engine");
+        let other =
+            Rulebook::default().with_override(RuleKey::QuadrantTurretArc, RuleSource::Bible);
+        assert!(fires(other));
     }
 
     #[test]
@@ -18310,7 +18462,8 @@ pub(super) mod tests {
             events.contains(&CombatEvent::Fired {
                 ship: ShipRef::Npc(NpcId(0)),
                 weapon: WeaponId(134),
-                at: Vec2::new(0.0, -200.0)
+                at: Vec2::new(0.0, -200.0),
+                sound: Some(crate::combat::FireSound::UNPORTED),
             }),
             "{events:?}"
         );

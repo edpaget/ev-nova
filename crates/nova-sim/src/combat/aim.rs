@@ -37,6 +37,7 @@ use super::projectile::Target;
 use super::weapon::{Guidance, WeaponSpec};
 use crate::flight::{ShipState, heading_of, shortest_turn};
 use crate::geometry::Vec2;
+use crate::rulebook::RuleSource;
 
 /// How far off the nose, in degrees, the front sector reaches; a
 /// front-quadrant turret's arc, and a rear-quadrant turret's off the tail.
@@ -74,6 +75,33 @@ pub fn bearing(from: Vec2, to: Vec2) -> f32 {
 #[must_use]
 pub fn angle_off(heading: f32, bearing: f32) -> f32 {
     shortest_turn(heading, bearing).abs()
+}
+
+/// How far `bearing` is off a quadrant turret's `reference` (its heading
+/// for a front turret, 7, or `(heading + 180) mod 360` for a rear one,
+/// 8), as the rulebook's
+/// [`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)
+/// entry `arc` says: by the engine, made absolute and taken mod 360 with
+/// no fold past 180 (`_AIFireTurret` @0x80c3d-0x80cf3, `_FireAIShipWeapon`
+/// @0x88ac4-0x88b7f), so a reference near 0 holds fire across the seam;
+/// by the other reading, folded ([`angle_off`]).
+#[must_use]
+pub fn quadrant_off(reference: f32, bearing: f32, arc: RuleSource) -> f32 {
+    match arc {
+        RuleSource::Engine => (bearing - reference).abs() % 360.0,
+        RuleSource::Bible => angle_off(reference, bearing),
+    }
+}
+
+/// A quadrant turret's reference: the heading for a front turret, and
+/// `(heading + 180) mod 360` for a rear one.
+#[must_use]
+pub fn quadrant_reference(guidance: Guidance, heading: f32) -> f32 {
+    if guidance == Guidance::RearTurret {
+        (heading + 180.0) % 360.0
+    } else {
+        heading
+    }
 }
 
 /// Whether a turret blind where `blind_spots` say is blind `off` degrees

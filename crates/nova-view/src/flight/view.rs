@@ -10401,6 +10401,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
     }
@@ -10437,6 +10438,7 @@ mod tests {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            recoil: 0,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -10568,6 +10570,7 @@ mod tests {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            recoil: 0,
         }
     }
 
@@ -11094,6 +11097,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
     }
@@ -12457,6 +12461,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
 

@@ -8710,6 +8710,7 @@ pub(super) mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
     }

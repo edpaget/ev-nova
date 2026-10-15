@@ -848,6 +848,7 @@ impl CombatCatalog for GameData {
                     sub_limit: record.sub_limit,
                     max_ammo: record.max_ammo,
                     prox_safety: record.prox_safety,
+                    recoil: record.recoil,
                 })
             })
             .collect()
@@ -2947,6 +2948,7 @@ mod tests {
         put_i16s(&mut bytes, 0x22, &[100]);
         put_i16s(&mut bytes, 0x30, &[300]);
         bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x56, &[12]);
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
@@ -2991,6 +2993,7 @@ mod tests {
             sub_limit: 2,
             max_ammo: 6,
             prox_safety: 8,
+            recoil: 12,
         };
         assert_eq!(
             data.weapons(),

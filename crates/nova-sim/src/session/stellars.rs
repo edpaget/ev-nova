@@ -1121,6 +1121,7 @@ mod tests {
         turrets_only: false,
         bays: false,
         point_defence: false,
+        keep: None,
     };
 
     /// Fires every tick for `ticks` ticks under `law`, then lets go: the

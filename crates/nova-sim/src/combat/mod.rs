@@ -3,6 +3,8 @@
 //!
 //! - [`weapon`]: a weapon's [`WeaponSpec`](weapon::WeaponSpec), its `wëap`
 //!   in the simulation's units.
+//! - [`ai_fire`]: how an NPC fires its pick, `_FireAIShipWeapon`'s
+//!   decisions: its copies, which spawn, its reload and its recoil.
 //! - [`aim`]: which way each guidance fires, and at what: the bearing, the
 //!   lead angle, the turrets' arcs and blind spots.
 //! - [`armament`]: a ship's [`Armament`](armament::Armament), firing its
@@ -43,7 +45,10 @@
 //!    as its guidance aims it at the ship's target ([`aim`]); a turret
 //!    that cannot fire spends nothing. A fighter bay's launch is no shot
 //!    but a [`Sortie`], which the session takes
-//!    ([`Combat::take_sorties`]) and puts in the system as a ship.
+//!    ([`Combat::take_sorties`]) and puts in the system as a ship. An NPC
+//!    fires its pick as `_FireAIShipWeapon` does ([`ai_fire`]): a copy
+//!    that spawns nothing still spends, by the engine, and a recoil sets
+//!    the firer's velocity, reported as a [`Shove`].
 //! 2. Each ship's point defence fires at the missile it picks, with no
 //!    target needed ([`defence`]).
 //! 3. Every reload timer counts down a tick.
@@ -150,6 +155,7 @@
 //! shots, their targets, durability and generations live only in flight,
 //! and a stellar's strength is the session's, which saves none either.
 
+pub mod ai_fire;
 pub mod aim;
 pub mod armament;
 pub mod beam;
@@ -212,6 +218,10 @@ pub enum CombatEvent {
         weapon: WeaponId,
         /// Where it was fired from: the ship, or the shot releasing them.
         at: Vec2,
+        /// How its weapon's `Sound` plays for it, if at all: none for an
+        /// NPC pick's later copies in one call, which the original plays
+        /// once after them all.
+        sound: Option<FireSound>,
     },
     /// Point defence destroyed a missile.
     ShotDown {
@@ -256,6 +266,28 @@ pub enum CombatEvent {
         size: f32,
     },
 }
+
+/// How a weapon's firing sounds: its `Sound` (`snd ` 200 + `Sound`,
+/// which the view reads from the weapon's looks), played at the priority
+/// the function that fires it gives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FireSound {
+    /// The priority it plays at; none where the function firing it isn't
+    /// ported yet (the player's `_FirePlayerWeapon`, point defence, a
+    /// fighter bay's launch and sub-munitions).
+    pub priority: Option<u8>,
+}
+
+impl FireSound {
+    /// A sound whose firing function isn't ported yet: no priority.
+    pub const UNPORTED: Self = Self { priority: None };
+}
+
+/// The priority an NPC's pick plays its weapon's sound at, once a call
+/// (`_FireAIShipWeapon` @0x88e30, `_PlaySoundDistance`). The original also
+/// passes channel 3 for guidance 0 and 3, which `_PlaySoundDistance`
+/// (@0xe007) never reads.
+pub const AI_FIRE_PRIORITY: u8 = 4;
 
 /// How a strike left the ship it hit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -467,6 +499,12 @@ pub struct Combat {
     pass_through: PassThrough,
     /// How often a decaying shot takes a step.
     decay: DecayStep,
+    /// Whether an NPC's pick spends on a copy that spawns nothing
+    /// ([`RuleKey::AiSpendWithoutShot`](crate::RuleKey::AiSpendWithoutShot)).
+    ai_spend: RuleSource,
+    /// How an NPC's quadrant turret measures its arc
+    /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)).
+    quadrant_arc: RuleSource,
 }
 
 impl Combat {
@@ -653,6 +691,18 @@ impl Combat {
         self.decay = step;
     }
 
+    /// Has an NPC's pick spend on a copy that spawns nothing as `spend`
+    /// says ([`Armament::fire_pick`]): by default, the engine's.
+    pub fn set_ai_spend(&mut self, spend: RuleSource) {
+        self.ai_spend = spend;
+    }
+
+    /// Has an NPC's quadrant turret measure its arc as `arc` says
+    /// ([`ai_fire::spawn`]): by default, the engine's.
+    pub fn set_quadrant_arc(&mut self, arc: RuleSource) {
+        self.quadrant_arc = arc;
+    }
+
     /// The next shot's number.
     fn next_id(&mut self) -> ShotId {
         let id = ShotId(self.next_shot);
@@ -694,22 +744,23 @@ impl Combat {
     }
 
     /// Puts `launch` in flight from `side`, at `from`, its damage aimed at
-    /// `aimed_at`: a fighter's [`Sortie`] from a bay, a beam held on the
-    /// missile `quarry`, on its target, or ahead, or a shot of its
-    /// government.
+    /// `aimed_at`, sounding as `sound` says: a fighter's [`Sortie`] from a
+    /// bay, a beam held on the missile `quarry`, on its target, or ahead,
+    /// or a shot of its government.
     fn launch(
         &mut self,
         (side, ties): (Side, Ties),
         from: &ShipState,
         launch: Launch,
-        quarry: Option<ShotId>,
-        aimed_at: Option<ShipRef>,
+        (quarry, aimed_at): (Option<ShotId>, Option<ShipRef>),
+        sound: Option<FireSound>,
     ) {
         let Side { ship, fleet, .. } = side;
         self.events.push(CombatEvent::Fired {
             ship,
             weapon: launch.weapon.id,
             at: from.position,
+            sound,
         });
         if let Some(carried) = launch.weapon.carried {
             self.sorties.push(Sortie {
@@ -745,7 +796,13 @@ impl Combat {
     }
 
     /// Step 1: each ship fires what its trigger holds, aimed at its target
-    /// among `targets` while that can be hit.
+    /// among `targets` while that can be hit. The player fires as
+    /// `_FirePlayerWeapon` does ([`Armament::fire`]). An NPC launches its
+    /// fighters with [`Trigger::bays`] and fires an escort's formation
+    /// trigger the same way, then fires its pick ([`Trigger::only`]) as
+    /// `_FireAIShipWeapon` does ([`Armament::fire_pick`], [`ai_fire`]), its
+    /// first copy sounding at [`AI_FIRE_PRIORITY`]; a recoil sets its
+    /// velocity, reported as a [`Shove`].
     fn fire(&mut self, fighters: &mut [Fighter], targets: &[Target], chance: &mut dyn Chance) {
         for fighter in fighters.iter_mut() {
             let (state, hull) = (fighter.state, fighter.hull);
@@ -754,8 +811,17 @@ impl Combat {
                     .iter()
                     .find(|target| target.ship == ship && target.condition.standing())
             });
+            let npc = matches!(fighter.ship, ShipRef::Npc(_));
+            let trigger = if npc {
+                Trigger {
+                    only: None,
+                    ..fighter.trigger
+                }
+            } else {
+                fighter.trigger
+            };
             let launches = fighter.armament.fire(
-                fighter.trigger,
+                trigger,
                 *fighter.condition,
                 fighter.shooter(),
                 fighter.rounds,
@@ -764,14 +830,49 @@ impl Combat {
                 &mut self.reports,
                 &mut |spec| aim::aim(spec, &state, &hull, target),
             );
+            let sides = (fighter.side(), fighter.ties());
             for launch in launches {
-                // A front-quadrant turret firing ahead aims at nothing
-                // (@0x88bf0); every other shot at the ship's target.
-                let ahead =
-                    launch.weapon.guidance == Guidance::FrontTurret && launch.target.is_none();
-                let aimed_at = if ahead { None } else { fighter.target };
-                let sides = (fighter.side(), fighter.ties());
-                self.launch(sides, &state, launch, None, aimed_at);
+                let aimed_at = aimed_at(&launch, fighter.target);
+                self.launch(
+                    sides,
+                    &state,
+                    launch,
+                    (None, aimed_at),
+                    Some(FireSound::UNPORTED),
+                );
+            }
+            let Some(pick) = fighter.trigger.only.filter(|_| npc) else {
+                continue;
+            };
+            let arc = self.quadrant_arc;
+            let volley = fighter.armament.fire_pick(
+                pick,
+                *fighter.condition,
+                fighter.shooter(),
+                fighter.rounds,
+                &mut fighter.reserves.fuel,
+                chance,
+                &mut self.reports,
+                self.ai_spend,
+                &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
+            );
+            let Some(volley) = volley else {
+                continue;
+            };
+            for (copy, launch) in volley.launches.into_iter().enumerate() {
+                let aimed_at = aimed_at(&launch, fighter.target);
+                let sound = (copy == 0).then_some(FireSound {
+                    priority: Some(AI_FIRE_PRIORITY),
+                });
+                self.launch(sides, &state, launch, (None, aimed_at), sound);
+            }
+            let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
+            if let Some(velocity) = pushed {
+                fighter.state.velocity = velocity;
+                self.shoves.push(Shove {
+                    ship: fighter.ship,
+                    velocity,
+                });
             }
         }
     }
@@ -808,7 +909,13 @@ impl Combat {
                 },
             );
             if let Some((launch, missile)) = fired {
-                self.launch((side, ties), &state, launch, Some(missile), None);
+                self.launch(
+                    (side, ties),
+                    &state,
+                    launch,
+                    (Some(missile), None),
+                    Some(FireSound::UNPORTED),
+                );
             }
         }
     }
@@ -1148,6 +1255,7 @@ impl Combat {
             ship: parent.firer,
             weapon: sub.id,
             at: parent.position,
+            sound: Some(FireSound::UNPORTED),
         });
         for shot in shots {
             let id = self.next_id();
@@ -1380,6 +1488,13 @@ impl Fighter<'_> {
     }
 }
 
+/// The ship `launch`'s damage is aimed at, its firer's `target`: none for
+/// a front-quadrant turret firing ahead (@0x88bf0).
+fn aimed_at(launch: &Launch, target: Option<ShipRef>) -> Option<ShipRef> {
+    let ahead = launch.weapon.guidance == Guidance::FrontTurret && launch.target.is_none();
+    if ahead { None } else { target }
+}
+
 /// The shield and armour `reserves` hold, together: what a hit takes is
 /// how much less this is after it.
 fn taken(reserves: &Reserves) -> f32 {
@@ -1523,6 +1638,7 @@ mod tests {
         turrets_only: false,
         bays: false,
         point_defence: true,
+        keep: None,
     };
 
     impl Ship {
@@ -1570,6 +1686,7 @@ mod tests {
                     turrets_only: false,
                     bays: false,
                     point_defence: true,
+                    keep: None,
                 },
                 ..self
             }
@@ -1908,7 +2025,8 @@ mod tests {
             [CombatEvent::Fired {
                 ship: A,
                 weapon: WeaponId(128),
-                at: Vec2::ZERO
+                at: Vec2::ZERO,
+                sound: Some(crate::combat::FireSound::UNPORTED),
             }]
         );
         assert_eq!(combat.take_events(), [], "taken");
@@ -4110,6 +4228,7 @@ mod tests {
             turrets_only: false,
             bays: false,
             point_defence: true,
+            keep: None,
         };
         let mut defender = Ship::at(1, 0.0, 0.0).armed(quad()).facing(0.0);
         defender.trigger = QUIET;
@@ -4152,6 +4271,7 @@ mod tests {
             turrets_only: false,
             bays: false,
             point_defence: true,
+            keep: None,
         };
         for _ in 0..12 {
             tick(&mut combat, &mut ships, &NovaDisable);
@@ -4387,7 +4507,8 @@ mod tests {
             Some(&CombatEvent::Fired {
                 ship: A,
                 weapon: WeaponId(148),
-                at
+                at,
+                sound: Some(crate::combat::FireSound::UNPORTED),
             })
         );
         let (shell, arsenal) = cluster(0x0020);
@@ -4435,7 +4556,8 @@ mod tests {
         assert!(events.contains(&CombatEvent::Fired {
             ship: A,
             weapon: WeaponId(148),
-            at
+            at,
+            sound: Some(crate::combat::FireSound::UNPORTED),
         }));
     }
 
@@ -4983,7 +5105,8 @@ mod tests {
             [CombatEvent::Fired {
                 ship: A,
                 weapon: WeaponId(149),
-                at: Vec2::new(10.0, 20.0)
+                at: Vec2::new(10.0, 20.0),
+                sound: Some(crate::combat::FireSound::UNPORTED),
             }],
             "heard at the carrier"
         );
@@ -5012,6 +5135,181 @@ mod tests {
         let sorties = combat.take_sorties();
         assert_eq!(sorties.len(), 1);
         assert_eq!(sorties[0].target, None);
+    }
+
+    // An NPC's pick (`_FireAIShipWeapon`).
+
+    impl Ship {
+        /// The ship firing `weapon` alone, as an NPC's pick.
+        fn picking(self, weapon: i16) -> Self {
+            Self {
+                trigger: Trigger {
+                    only: Some(WeaponId(weapon)),
+                    ..QUIET
+                },
+                ..self
+            }
+        }
+    }
+
+    /// The `Fired` events among `events`, each with its sound.
+    fn sounds(events: &[CombatEvent]) -> Vec<(WeaponId, Option<FireSound>)> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Fired { weapon, sound, .. } => Some((weapon, sound)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_npcs_recoiling_weapon_shoves_it_back() {
+        let kicking = WeaponRecord {
+            recoil: 100,
+            ..blaster()
+        };
+        // Facing right, of mass 50: pushed left 2 a tick.
+        let mut ship = Ship::at(1, 0.0, 0.0).armed(kicking).picking(128);
+        ship.hull.mass = 50.0;
+        let mut combat = Combat::default();
+        let mut ships = [ship];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shoves = combat.take_shoves();
+        assert_eq!(shoves.len(), 1, "{shoves:?}");
+        assert_eq!(shoves[0].ship, A);
+        assert!(
+            (shoves[0].velocity - Vec2::new(-2.0, 0.0)).length() < 1e-4,
+            "{shoves:?}"
+        );
+        // No recoil without one, nor when nothing spawned.
+        let mut still = Ship::at(1, 0.0, 0.0).armed(blaster()).picking(128);
+        still.hull.mass = 50.0;
+        let mut combat = Combat::default();
+        tick(&mut combat, &mut [still], &NovaDisable);
+        assert_eq!(combat.take_shoves(), []);
+    }
+
+    #[test]
+    fn on_a_launch_tick_the_kept_bay_fires_nothing_more() {
+        let mut combat = Combat::default();
+        let mut ships = carrier();
+        ships[0].trigger = Trigger {
+            bays: true,
+            only: Some(WeaponId(149)),
+            ..QUIET
+        };
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.take_sorties().len(), 1, "one sortie");
+        assert_eq!(ships[0].rounds.slot(WeaponId(149)), 1, "one round spent");
+        // Kept and ready with no launch, it drains a fighter.
+        let mut ships = carrier();
+        ships[0].trigger = Trigger {
+            only: Some(WeaponId(149)),
+            ..QUIET
+        };
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.take_sorties(), []);
+        assert_eq!(ships[0].rounds.slot(WeaponId(149)), 1, "drained");
+    }
+
+    #[test]
+    fn an_npc_weapon_sounds_once_a_call_at_priority_4() {
+        let together = WeaponRecord {
+            flags: crate::combat::weapon::SIMULTANEOUS,
+            ..blaster()
+        };
+        let mut ship = Ship::at(1, 0.0, 0.0).picking(128);
+        ship.armament = Armament::new([(WeaponSpec::new(&together), 3)]);
+        let mut combat = Combat::default();
+        tick(&mut combat, &mut [ship], &NovaDisable);
+        let npc = Some(FireSound {
+            priority: Some(AI_FIRE_PRIORITY),
+        });
+        assert_eq!(
+            sounds(&combat.take_events()),
+            [
+                (WeaponId(128), npc),
+                (WeaponId(128), None),
+                (WeaponId(128), None)
+            ]
+        );
+        // The player's still sound as before, by no priority of its own.
+        let player = Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(1, 0.0, 0.0).armed(blaster())
+        };
+        let mut combat = Combat::default();
+        tick(&mut combat, &mut [player], &NovaDisable);
+        assert_eq!(
+            sounds(&combat.take_events()),
+            [(WeaponId(128), Some(FireSound::UNPORTED))]
+        );
+        assert_eq!(AI_FIRE_PRIORITY, 4);
+    }
+
+    #[test]
+    fn a_glowing_weapon_raises_fired_only_when_something_spawned() {
+        use crate::combat::aim::BLIND_REAR;
+        let glowing = WeaponRecord {
+            flags2: 0x0200,
+            flags: BLIND_REAR,
+            ..turret(4)
+        };
+        let fired_at = |x: f32| {
+            let mut combat = Combat::default();
+            let mut ships = [
+                Ship::at(1, 0.0, 0.0)
+                    .armed(glowing)
+                    .picking(130)
+                    .targeting(B),
+                Ship::at(2, x, 0.0),
+            ];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            fired(&combat.take_events(), A)
+        };
+        assert_eq!(fired_at(100.0), 1, "ahead");
+        assert_eq!(fired_at(-100.0), 0, "astern, in its blind spot");
+    }
+
+    #[test]
+    fn the_fight_spends_and_measures_an_npcs_pick_as_its_rules_say() {
+        // A turret with its target astern, in its blind spot.
+        let blind = WeaponRecord {
+            flags: crate::combat::aim::BLIND_REAR,
+            ammo_type: 10,
+            ..turret(4)
+        };
+        let spent = |spend: RuleSource| {
+            let mut combat = Combat::default();
+            combat.set_ai_spend(spend);
+            let mut shooter = Ship::at(1, 0.0, 0.0).armed(blind).picking(130).targeting(B);
+            shooter.rounds = LauncherRounds::from([(WeaponId(130), 5)]);
+            let mut ships = [shooter, Ship::at(2, -100.0, 0.0)];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].rounds.slot(WeaponId(130))
+        };
+        assert_eq!(spent(RuleSource::Engine), 4);
+        assert_eq!(spent(RuleSource::Bible), 5);
+        // A front turret facing up, its target 10 degrees to the left.
+        let front = turret(7);
+        let fires = |arc: RuleSource| {
+            let mut combat = Combat::default();
+            combat.set_quadrant_arc(arc);
+            let mut ships = [
+                Ship::at(1, 0.0, 0.0)
+                    .facing(0.0)
+                    .armed(front)
+                    .picking(130)
+                    .targeting(B),
+                Ship::at(2, -17.632_7, -100.0),
+            ];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            fired(&combat.take_events(), A)
+        };
+        assert_eq!(fires(RuleSource::Engine), 0, "across the seam");
+        assert_eq!(fires(RuleSource::Bible), 1);
     }
 
     // Stellars.

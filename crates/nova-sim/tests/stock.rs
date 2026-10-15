@@ -1438,6 +1438,7 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
             turrets_only: false,
             bays: false,
             point_defence: false,
+            keep: None,
         },
         reserves: Reserves::full(0.0, 1_000_000.0, 1_000_000.0),
         condition: Condition::Intact,
@@ -4577,7 +4578,10 @@ fn stock_nanites_and_polaron_multi_torpedoes_reach_down_their_sub_munition_chain
 
 /// A stock Raven (164) fires its Polaron Multi-Torpedo (182, flying 260
 /// pixels) at a ship 3450 pixels off, within its 3510-pixel chain
-/// (3510² ≥ 0.95 d² up to about 3601), and nothing at 3700.
+/// (3510² ≥ 0.95 d² up to about 3601), and no torpedo at 3700: there its
+/// pick is the fighter bay (154) it launches, which its gun pass, finding
+/// nothing, fires as its kept pick (`_AILaunchFighter` @0x81411,
+/// `_AIFireGun` @0x80213), and which is reloading by then.
 #[test]
 fn a_stock_raven_fires_its_polaron_multi_torpedo_from_beyond_its_own_flight() {
     let Some(dir) = common::nova_data() else {
@@ -4596,7 +4600,8 @@ fn a_stock_raven_fires_its_polaron_multi_torpedo_from_beyond_its_own_flight() {
     assert_eq!(carried, [146, 182, 154], "a beam, the torpedo and a bay");
     let torpedo = Some(nova_sim::WeaponId(182));
     assert_eq!(stock_pick_at(&data, raven, ShipId(130), 3450.0), torpedo);
-    assert_eq!(stock_pick_at(&data, raven, ShipId(130), 3700.0), None);
+    let bay = Some(nova_sim::WeaponId(154));
+    assert_eq!(stock_pick_at(&data, raven, ShipId(130), 3700.0), bay);
 }
 
 /// A stock Krypt Pod (176), whose one weapon is the Nanites turret (163,
@@ -4612,4 +4617,39 @@ fn a_stock_krypt_pod_turns_its_nanites_on_a_ship_beyond_their_own_flight() {
     let nanites = Some(nova_sim::WeaponId(163));
     assert_eq!(stock_pick_at(&data, pod, ShipId(130), 2000.0), nanites);
     assert_ne!(stock_pick_at(&data, pod, ShipId(130), 2500.0), nanites);
+}
+
+/// The stock reads behind `_FireAIShipWeapon`'s port
+/// (`combat::ai_fire`): `Flags` 0x0040 (copies fire together) is set on
+/// fighter bays alone, each guidance 99; no weapon has a `Recoil` other
+/// than 0 or -1; none is exclusive (`Flags3` 0x0020); and every fighter bay is a secondary (`Flags` 0x0002), so an NPC keeps
+/// a bay it picked.
+#[test]
+fn stock_weapons_fire_ai_ship_weapon_reads() {
+    use nova_sim::CombatCatalog;
+    use nova_sim::combat::weapon::{EXCLUSIVE, SIMULTANEOUS};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    let ids = |keep: &dyn Fn(&nova_sim::WeaponRecord) -> bool| -> Vec<i16> {
+        weapons.iter().filter(|w| keep(w)).map(|w| w.id.0).collect()
+    };
+    let simultaneous = ids(&|w| w.flags & SIMULTANEOUS != 0);
+    assert_eq!(simultaneous, [151, 152, 186, 187, 188, 189]);
+    assert!(
+        weapons
+            .iter()
+            .filter(|w| simultaneous.contains(&w.id.0))
+            .all(|w| w.guidance == 99)
+    );
+    assert_eq!(ids(&|w| !matches!(w.recoil, 0 | -1)), [0_i16; 0]);
+    assert_eq!(ids(&|w| w.flags3 & EXCLUSIVE != 0), [0_i16; 0]);
+    let bays = ids(&|w| WeaponSpec::new(w).is_bay());
+    assert!(bays.len() >= 20, "{bays:?}");
+    assert_eq!(
+        ids(&|w| WeaponSpec::new(w).is_bay() && w.flags & 0x0002 == 0),
+        [0_i16; 0]
+    );
 }

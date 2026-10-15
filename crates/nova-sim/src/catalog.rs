@@ -1057,6 +1057,9 @@ pub struct WeaponRecord {
     /// Its `ProxSafety`: the ticks a shot of it flies before its fuse is
     /// armed.
     pub prox_safety: i16,
+    /// Its `Recoil`: the push its firer takes away from its heading, over
+    /// the firer's mass; none at 0 or -1.
+    pub recoil: i16,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`

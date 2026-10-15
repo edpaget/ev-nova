@@ -112,17 +112,23 @@ pub fn dock_window(maneuver: i16) -> f32 {
 }
 
 /// The velocity of a fighter launched along `heading` from a carrier
-/// moving at `carrier`, pushed `push` pixels a tick, of `top_speed`.
+/// moving at `carrier`, pushed `push` pixels a tick, of `top_speed`, as
+/// `_AdjustedAccel` (@0x2ae4b-0x2af38) gives it: each axis gains its
+/// share of the push unless it is already at or past its share of the
+/// top speed the way it is pushed; an axis pushed against its share (a
+/// negative push) always gains. Nothing is clamped after.
 #[must_use]
 pub fn launch_velocity(carrier: Vec2, heading: f32, push: f32, top_speed: f32) -> Vec2 {
     let along = facing(heading);
     let gain = |velocity: f32, share: f32| {
         let push = share * push;
         let top = share * top_speed;
-        let past = if push > 0.0 {
+        let past = if push > 0.0 && top > 0.0 {
             velocity >= top
-        } else {
+        } else if push < 0.0 && top < 0.0 {
             velocity <= top
+        } else {
+            false
         };
         if past { velocity } else { velocity + push }
     };
@@ -192,6 +198,18 @@ mod tests {
         assert_eq!(down.y, 12.0, "downwards past its share");
         let down = launch_velocity(Vec2::new(0.0, 9.0), 180.0, 4.0, 10.0);
         assert!((down.y - 13.0).abs() < 1e-5, "{down:?}");
+    }
+
+    #[test]
+    fn a_push_against_the_top_speeds_share_always_gains() {
+        // `_AdjustedAccel` @0x2aec2-0x2aeee tests an axis only while its
+        // push and its share of the top speed point the same way: a
+        // negative push (a recoil below -1) gains whatever the velocity.
+        let push = facing(0.0) * -4.0;
+        let fast = launch_velocity(Vec2::new(0.0, 30.0), 0.0, -4.0, 10.0);
+        assert!((fast.y - (30.0 + push.y)).abs() < 1e-5, "{fast:?}");
+        let slow = launch_velocity(Vec2::new(0.0, -30.0), 0.0, -4.0, 10.0);
+        assert!((slow.y - (-30.0 + push.y)).abs() < 1e-5, "{slow:?}");
     }
 
     #[test]

@@ -411,6 +411,7 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         sub_limit: 0,
         max_ammo: 0,
         prox_safety: 0,
+        recoil: 0,
     }
 }
 
@@ -512,6 +513,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         armament: Armament::default(),
         rounds: crate::combat::armament::LauncherRounds::default(),
         trigger: Trigger::default(),
+        pick: None,
         target: None,
         provoked: 0.0,
         aggression: 0,

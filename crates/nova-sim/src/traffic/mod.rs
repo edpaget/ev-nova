@@ -412,6 +412,11 @@ impl Traffic {
             .collect();
         for (npc, command) in self.npcs.iter_mut().zip(commands) {
             if let Some((trigger, target)) = command {
+                // No pass clears the pick (+0x72): passes that keep none,
+                // or none run, leave it as it was.
+                if trigger.keep.is_some() {
+                    npc.pick = trigger.keep;
+                }
                 npc.trigger = trigger;
                 npc.target = target;
             }
@@ -581,6 +586,14 @@ impl Traffic {
                     npc.goal = goal;
                 }
             }
+        }
+    }
+
+    /// What `_HandleShip` does with each NPC's pick once the fight has
+    /// fired it ([`after_firing`](crate::ai::fire::after_firing)).
+    pub fn after_firing(&mut self) {
+        for npc in &mut self.npcs {
+            crate::ai::fire::after_firing(npc);
         }
     }
 
@@ -794,6 +807,7 @@ impl Traffic {
                 armament: kind.armament.clone(),
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
+                pick: None,
                 target: hunts.then_some(ShipRef::Player),
                 provoked: 0.0,
                 aggression: ship.aggression,
@@ -1361,6 +1375,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             },
             ..Recording::deciding(Goal::Idle)
         };
@@ -1374,6 +1389,24 @@ mod tests {
         );
         traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[1].trigger, behaviour.trigger);
+    }
+
+    #[test]
+    fn the_pick_the_passes_keep_is_held_until_they_set_another() {
+        let mut traffic = populated(1, 1);
+        let keeping = Recording {
+            trigger: Trigger {
+                keep: Some(WeaponId(131)),
+                ..Trigger::default()
+            },
+            ..Recording::deciding(Goal::Idle)
+        };
+        traffic.tick(&keeping, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(131)));
+        // A trigger whose passes keep nothing (or didn't run) leaves it:
+        // no pass clears the pick.
+        traffic.tick(&Recording::deciding(Goal::Idle), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(131)));
     }
 
     #[test]

@@ -226,6 +226,7 @@ impl Session {
             armament: kind.armament,
             rounds: kind.rounds,
             trigger: Trigger::default(),
+            pick: None,
             target: None,
             provoked: 0.0,
             aggression: 0,

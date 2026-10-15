@@ -317,6 +317,9 @@ pub struct WeaponSpec {
     /// The weapon whose rounds the secondary weapon line counts for it,
     /// if it counts any ([`line_count`]).
     pub line_count: Option<WeaponId>,
+    /// Its `Recoil`, raw: the push its firer takes away from its heading,
+    /// over the firer's mass, when it [recoils](WeaponSpec::recoils).
+    pub recoil: f32,
 }
 
 /// The weapon whose rounds the status bar's secondary weapon line counts
@@ -349,6 +352,16 @@ pub const PASSES_SHIELDS: u16 = 0x0020;
 pub const SPARES_PLAYER: u16 = 0x0100;
 /// `Flags`: its shots detonate at the end of their life.
 pub const DETONATES: u16 = 0x8000;
+/// `Flags`: its copies fire together, one shot each a call, and it
+/// reloads by its whole `Reload` (`_WeaponMaxSimultShots` @0x8350,
+/// `_FireAIShipWeapon` @0x88f85).
+pub const SIMULTANEOUS: u16 = 0x0040;
+/// `Flags3`: exclusive: firing it holds every other weapon's reload at
+/// its own plus [`EXCLUSIVE_HOLD`] (`_FireAIShipWeapon` @0x891c8-0x8922a).
+pub const EXCLUSIVE: u16 = 0x0020;
+/// The ticks past an exclusive weapon's reload every other weapon is held
+/// (2.0 @0xdd074).
+pub const EXCLUSIVE_HOLD: f32 = 2.0;
 /// `Flags3`: it uses ammo only at the end of a burst.
 pub const AMMO_AT_BURST_END: u16 = 0x0001;
 /// `Flags3`: one shot at a time: while a shot of it is in flight, its
@@ -444,6 +457,7 @@ impl WeaponSpec {
             prox_safety: count(record.prox_safety),
             decay: count(record.decay),
             line_count: line_count(record),
+            recoil: f32::from(record.recoil),
         }
     }
 
@@ -566,6 +580,13 @@ impl WeaponSpec {
         self.chain_range
     }
 
+    /// Whether it pushes its firer back as it fires: a `Recoil` of neither
+    /// 0 nor -1 (`_FireAIShipWeapon` @0x88ee2-0x88efc).
+    #[must_use]
+    pub fn recoils(&self) -> bool {
+        self.recoil != 0.0 && self.recoil != NO_RECOIL
+    }
+
     /// How far a shot of it flies, in pixels: its speed for its life, from
     /// a resting firer at its top speed, whatever its guidance.
     #[must_use]
@@ -573,6 +594,9 @@ impl WeaponSpec {
         self.speed * self.lifetime as f32
     }
 }
+
+/// The `Recoil` that, like 0, pushes its firer not at all.
+pub const NO_RECOIL: f32 = -1.0;
 
 /// The guidance that becomes homing, with [`OLD_HOMING_SEEKER`]
 /// (@0x79b9f-0x79bb4); the Bible lists it unused.
@@ -704,6 +728,25 @@ mod tests {
     #[test]
     fn the_light_blasters_range_is_195_pixels() {
         assert_eq!(WeaponSpec::new(&light_blaster()).range(), 195.0);
+    }
+
+    #[test]
+    fn a_weapon_recoils_unless_its_recoil_is_0_or_minus_1() {
+        for (raw, recoils) in [
+            (0, false),
+            (-1, false),
+            (1, true),
+            (-2, true),
+            (300, true),
+            (i16::MIN, true),
+        ] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                recoil: raw,
+                ..light_blaster()
+            });
+            assert_eq!(spec.recoil, f32::from(raw), "{raw}");
+            assert_eq!(spec.recoils(), recoils, "{raw}");
+        }
     }
 
     #[test]

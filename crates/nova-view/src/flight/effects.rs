@@ -26,7 +26,10 @@
 //!   living 15-45 ticks, and carried on with the ship's velocity.
 //! - A weapon firing sounds its `snd ` from where it was fired (its ship,
 //!   or the shot releasing sub-munitions), and an explosion its own, each
-//!   heard from the player ([`CombatSound`]).
+//!   heard from the player ([`CombatSound`]), unless the fight raised it
+//!   with no sound: an NPC's pick sounds once a call, on its first copy
+//!   ([`FireSound`](nova_sim::FireSound)). The priority it carries isn't
+//!   played by yet (rdm phase audio-fidelity/phase-15).
 //! - A weapon whose sound loops (`Flags` 0x0010) is not heard again while
 //!   its sound is still playing: for its length in steps
 //!   ([`WeaponLook::sound_ticks`]) after it was heard. It plays out when
@@ -174,7 +177,12 @@ impl Effects {
         chance: &mut dyn Chance,
     ) {
         match *event {
-            CombatEvent::Fired { ship, weapon, at } => {
+            CombatEvent::Fired {
+                ship,
+                weapon,
+                at,
+                sound: Some(_),
+            } => {
                 let Some((sound, look)) = looks
                     .weapon(weapon)
                     .and_then(|look| Some((look.sound?, look)))
@@ -209,7 +217,9 @@ impl Effects {
                 }
                 self.scatter(point(at), point(velocity), chance);
             }
-            CombatEvent::Disabled { .. } | CombatEvent::BreakingUp { .. } => {}
+            CombatEvent::Fired { sound: None, .. }
+            | CombatEvent::Disabled { .. }
+            | CombatEvent::BreakingUp { .. } => {}
         }
     }
 
@@ -388,7 +398,7 @@ mod tests {
     use std::collections::{BTreeMap, VecDeque};
     use std::num::NonZeroU16;
 
-    use nova_sim::{NpcId, SoundId};
+    use nova_sim::{FireSound, NpcId, SoundId};
 
     use super::*;
     use crate::DrawCommand;
@@ -858,10 +868,35 @@ mod tests {
             } else {
                 NPC_AT
             },
+            sound: Some(FireSound::UNPORTED),
         }
     }
 
     const NPC: ShipRef = ShipRef::Npc(NpcId(1));
+
+    #[test]
+    fn a_fired_event_with_no_sound_plays_nothing() {
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        let pick = |sound| CombatEvent::Fired {
+            ship: NPC,
+            weapon: WeaponId(128),
+            at: NPC_AT,
+            sound,
+        };
+        let first = Some(FireSound { priority: Some(4) });
+        for event in [pick(first), pick(None), pick(None)] {
+            effects.apply(&event, &scene(), &looks(), &mut chance);
+        }
+        assert_eq!(
+            effects.take_sounds(),
+            [CombatSound {
+                sound: SoundId(208),
+                offset: (300, -400)
+            }],
+            "once a call"
+        );
+    }
 
     #[test]
     fn a_weapon_fired_sounds_from_where_it_was_fired() {
@@ -876,6 +911,7 @@ mod tests {
                 ship: NPC,
                 weapon: WeaponId(128),
                 at: Vec2::new(-5.0, 7.0),
+                sound: Some(FireSound::UNPORTED),
             },
         ] {
             effects.apply(&event, &scene(), &looks(), &mut chance);

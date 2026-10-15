@@ -815,6 +815,7 @@ impl Behaviour for Attacking {
             turrets_only: false,
             bays: false,
             point_defence: false,
+            keep: None,
         }
     }
 

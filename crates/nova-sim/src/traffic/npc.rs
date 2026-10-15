@@ -3,7 +3,7 @@
 
 use crate::ai::Goal;
 use crate::bay::Carrier;
-use crate::catalog::{GovtId, PersonId, ShipId};
+use crate::catalog::{GovtId, PersonId, ShipId, WeaponId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
@@ -171,6 +171,11 @@ pub struct Npc {
     pub rounds: LauncherRounds,
     /// The fire command it holds, as it last decided.
     pub trigger: Trigger,
+    /// The weapon it holds as its pick (the original's +0x72): set by its
+    /// AI's passes ([`Trigger::keep`]), kept from tick to tick and cleared
+    /// once a pick without `Flags` 0x0002 fires
+    /// ([`after_firing`](crate::ai::fire::after_firing)); none at first.
+    pub pick: Option<WeaponId>,
     /// The ship it targets, as it last decided.
     pub target: Option<ShipRef>,
     /// The shield and armour damage it has taken while it fights: none

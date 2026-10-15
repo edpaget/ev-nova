@@ -111,7 +111,8 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x0010, Any, Presentation),
     // Passes through shields.
     (Flags, 0x0020, Any, Implemented),
-    // Copies fire simultaneously.
+    // Copies fire simultaneously: an NPC's pick (`Armament::fire_pick`);
+    // the player's is weapons-fidelity phase 15, so it is still reported.
     (Flags, 0x0040, Any, Unimplemented),
     // Homing: point defence can't target it.
     (Flags, 0x0080, Guided, Implemented),
@@ -178,7 +179,8 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags3, 0x0004, Shots, Implemented),
     // Fires from the exit point nearest the target.
     (Flags3, 0x0010, Any, Unimplemented),
-    // Exclusive.
+    // Exclusive: an NPC's pick (`Armament::fire_pick`); the player's is
+    // weapons-fidelity phase 15, so it is still reported.
     (Flags3, 0x0020, Any, Unimplemented),
 ];
 

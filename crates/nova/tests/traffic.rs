@@ -311,6 +311,7 @@ impl Behaviour for Firing {
             turrets_only: false,
             bays: false,
             point_defence: false,
+            keep: None,
         }
     }
 }

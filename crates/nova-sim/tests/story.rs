@@ -60,6 +60,7 @@ impl CombatCatalog for Home {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            recoil: 0,
         }]
     }
 
@@ -309,6 +310,7 @@ fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_a_later_dispatch_sees() {
         turrets_only: false,
         bays: false,
         point_defence: false,
+        keep: None,
     });
     for _ in 0..2 {
         session.tick_combat(Rules::default(), &mut NeverFires);

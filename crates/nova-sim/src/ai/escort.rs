@@ -131,10 +131,7 @@ impl Behaviour for EscortAi {
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         match npc.goal {
-            Goal::Attack(_) => Trigger {
-                bays: false,
-                ..fire::trigger(npc, around, self.fire)
-            },
+            Goal::Attack(_) => fire::trigger_holding_fighters(npc, around, self.fire),
             // Keeping formation, `_LowLevelAIHandler` calls `_AIFireTurret`
             // only while the guard (+0x70) is within the box on both axes
             // (@0x8648e-0x864ad, @0x86666-0x86689).
@@ -350,6 +347,7 @@ mod tests {
         turrets_only: true,
         bays: false,
         point_defence: true,
+        keep: None,
     };
 
     #[test]

@@ -454,6 +454,7 @@ fn fighter(
         armament: kind.armament.clone(),
         rounds: kind.rounds.clone(),
         trigger: Trigger::default(),
+        pick: None,
         target: None,
         provoked: 0.0,
         aggression: 0,
@@ -779,6 +780,7 @@ mod tests {
                 ship: ShipRef::Player,
                 weapon: BAY,
                 at: session.player().position,
+                sound: Some(crate::combat::FireSound::UNPORTED),
             }),
             "the bay's sound is heard"
         );
