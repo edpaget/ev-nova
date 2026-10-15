@@ -1110,7 +1110,8 @@ fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
 /// it comes out of; white with the alpha of its [`emerge_level`] over
 /// its last [`FADE_TICKS`](nova_sim::traffic::emerge::FADE_TICKS) there;
 /// white with the alpha of its [`enter_level`] while it enters a gate to
-/// leave, fading out; plain white otherwise.
+/// leave, fading out; plain white otherwise, held at its gate by the
+/// player's hit too (its goal 4 is not the fade's goal 0x15).
 ///
 /// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) fades the hull in
 /// at 16-bit depth by a destination factor of twice the ticks left and a
@@ -9462,6 +9463,11 @@ mod tests {
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 30 };
         assert_eq!(session.cloak_shown(&npc), opaque);
         assert_eq!(npc_tint(&npc), None, "hidden at its gate");
+        // Held there by the player's hit, its goal is 4, not 0x15, so
+        // `_HandleShipDisplay`'s fade (@0x2c090) passes it by.
+        npc.mode = nova_sim::traffic::npc::Mode::HeldAtGate { ticks_left: 3 };
+        assert_eq!(npc_tint(&npc), Some(Color::WHITE), "held: drawn plain");
+        assert_eq!(session.cloak_shown(&npc), opaque, "held");
         npc.cloak = CLOAKED;
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
         assert_eq!(
