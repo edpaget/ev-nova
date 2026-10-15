@@ -1892,6 +1892,10 @@ impl AppScreen {
                     Ok(pilot) => {
                         self.close_pilot_list();
                         self.start_flight(pilot);
+                        // The load's heading, before any frame is drawn.
+                        if let Some(flight) = &mut self.flight {
+                            flight.resume();
+                        }
                     }
                     Err(error) => {
                         self.open_pilot.as_mut().expect("open").show_error(&error);
@@ -4853,6 +4857,49 @@ pub(super) mod tests {
         assert_eq!(*pilot(&screen), landed);
         assert!(screen.pilot_list().is_none());
         assert_eq!(screen.take_sounds(), [], "no landing sound");
+    }
+
+    /// Never fires, and draws the last outcome: a heading of 359.
+    struct LastOutcome;
+
+    impl Chance for LastOutcome {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            n - 1
+        }
+    }
+
+    fn last_outcome() -> SharedChance {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(LastOutcome));
+        SharedChance::new(shared)
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // A whole degree, exactly as drawn.
+    fn open_pilot_faces_the_pilot_on_a_drawn_heading() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
+        let mut screen = menu(&store).with_chance(last_outcome());
+        choose(&mut screen, MenuChoice::OpenPilot);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(ship(&screen).heading, 359.0);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // Facing up, exactly.
+    fn a_new_pilot_starts_facing_up_whatever_the_chance() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store).with_chance(last_outcome());
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(ship(&screen).heading, 0.0);
     }
 
     #[test]
