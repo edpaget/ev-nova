@@ -814,6 +814,34 @@ mod tests {
     }
 
     #[test]
+    fn a_move_to_the_stellar_docked_at_rolls_nothing() {
+        let catalog = with_missions(vec![
+            crate::testkit::mission(200),
+            crate::testkit::mission(201),
+        ]);
+        let mut session = docked(&catalog);
+        let slot = session
+            .accept_mission(crate::catalog::MissionId(200), &mut NeverFires)
+            .expect("accepted");
+        // An abort forgets the offers' stellar, so only the early return
+        // keeps the settling from rolling the visit's offers again.
+        session
+            .abort_mission(slot, &mut NeverFires)
+            .expect("aborted");
+        session.offers.set_roll(crate::catalog::MissionId(201), 77);
+        assert_eq!(
+            session.relocate(&catalog, SystemId(130), StellarId(128)),
+            Ok(())
+        );
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(
+            session.offer_rolls().roll(crate::catalog::MissionId(201)),
+            Some(77),
+            "the visit's offers not rolled again"
+        );
+    }
+
+    #[test]
     fn a_move_then_a_take_off_rolls_nothing_as_it_settles() {
         let catalog = with_missions(vec![crate::catalog::MissionRecord {
             avail_stel: 129,
