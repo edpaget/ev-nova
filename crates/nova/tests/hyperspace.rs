@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::RecordingAudio;
-use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -930,7 +930,7 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
         .collect();
     let play = |id| AudioCommand::Play {
         sound: nova_data::SoundId(id),
-        volume: Volume::FULL,
+        volume: AudioSettings::default().effects_volume,
     };
     assert_eq!(plays, [play(128), play(130)]);
 }

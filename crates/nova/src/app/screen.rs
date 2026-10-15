@@ -280,6 +280,7 @@ use nova_view::ui::{
 };
 use nova_view::{
     Color, Diagnostic, DrawList, Input, Key, Navigator, Point, Prefs, Screen, ScreenAction, Sound,
+    UiSound,
 };
 
 /// The hint the router draws over every screen, where it goes, its size and
@@ -301,6 +302,10 @@ pub const PREFERENCES_KEY: Key = Key::Char(',');
 
 /// The About text's `dësc`.
 pub const ABOUT_TEXT: i16 = 32767;
+
+/// The `dësc` the main menu's X shows (`_MainScreenKey` @0x1ac7e,
+/// `_LoadDescription(0x7ffe)`).
+pub const MENU_X_TEXT: i16 = 32766;
 
 /// Why the spaceport cannot be laid out when the router has no dialogs.
 pub const NO_INTERFACE: &str = "no interface file";
@@ -345,8 +350,10 @@ pub struct AppScreen {
     slot_sprites: SlotSprites,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
-    /// The About dialog, while it is open.
+    /// The About dialog, or the main menu's X text, while it is open.
     about: Option<DescDialog>,
+    /// The `dësc` the open [`about`](Self::about) dialog shows.
+    about_text: i16,
     /// The spaceport, while the ship is landed.
     spaceport: Option<SpaceportView>,
     /// The sounds of screens closed since the sounds were last taken.
@@ -471,6 +478,7 @@ impl AppScreen {
             slot_sprites: SlotSprites::default(),
             dialogs: None,
             about: None,
+            about_text: ABOUT_TEXT,
             spaceport: None,
             sounds: Vec::new(),
             prefs: Prefs::default(),
@@ -855,7 +863,7 @@ impl AppScreen {
         self.prefs
     }
 
-    /// The About dialog, while it is open.
+    /// The About dialog, or the main menu's X text, while it is open.
     #[must_use]
     pub fn about(&self) -> Option<&DescDialog> {
         self.about.as_ref()
@@ -871,7 +879,12 @@ impl AppScreen {
     #[must_use]
     pub fn showing(&self) -> Showing {
         if self.about.is_some() {
-            return Showing::About;
+            // The X text is no About box: it leaves the music playing.
+            return if self.about_text == ABOUT_TEXT {
+                Showing::About
+            } else {
+                Showing::Note
+            };
         }
         if self.preferences.is_some() {
             return Showing::Preferences;
@@ -1043,17 +1056,24 @@ impl AppScreen {
     /// to the dialog). With no dialogs, nothing opens; when the dialog
     /// cannot be built, nothing opens and the reason goes to stderr.
     fn open_about(&mut self) {
+        self.open_text(ABOUT_TEXT);
+    }
+
+    /// Opens "Desc Dialog" on `dësc` `id` over the side shown, as
+    /// [`open_about`](Self::open_about) opens the About text.
+    fn open_text(&mut self, id: i16) {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        match about_dialog(dialogs, &self.data) {
+        match desc_dialog(dialogs, &self.data, id) {
             Ok(dialog) => {
                 let below = self.shown_mut();
                 below.cancel_pointer();
                 below.release_keys();
                 self.about = Some(dialog);
+                self.about_text = id;
             }
-            Err(reason) => eprintln!("nova: cannot show the About text: {reason}"),
+            Err(reason) => eprintln!("nova: cannot show dësc {id}: {reason}"),
         }
     }
 
@@ -1996,7 +2016,32 @@ impl AppScreen {
 
     /// The main menu's input: its choice opens the New Pilot dialog or the
     /// saved pilots' list over it, or quits. Tab goes to the ship browser.
+    /// With dialogs, A and X click as `_MainScreenKey` does
+    /// (`_PlayMainScreenClickSound`), then A opens the About text (@0x1ac70)
+    /// and X `dësc` 32766 (@0x1ac7e). The X text shows as it is: the
+    /// original runs it through `_MungeBriefing` first, which needs a
+    /// pilot the menu has not got, so that is left out. With Command held
+    /// they, and the menu's typed N, O and Q, go to the original's menus
+    /// and do nothing here.
     fn menu_input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: key @ Key::Char('a' | 'x'),
+            pressed,
+            repeat,
+        } = *input
+            && self.dialogs.is_some()
+            && !self.command_held
+        {
+            if pressed && !repeat {
+                self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
+                self.open_text(if key == Key::Char('a') {
+                    ABOUT_TEXT
+                } else {
+                    MENU_X_TEXT
+                });
+            }
+            return ScreenAction::None;
+        }
         if let Input::Key {
             key: Key::Tab,
             pressed,
@@ -2006,6 +2051,12 @@ impl AppScreen {
             if pressed && !repeat {
                 self.switch_to(Side::Ships);
             }
+            return ScreenAction::None;
+        }
+        // A Command key goes to the original's menus (`MenuKey`, offered
+        // first by `_DoMainScreen` @0x1b259-0x1b2bb), never to
+        // `_MainScreenKey`, so it neither clicks nor chooses.
+        if matches!(input, Input::Text(_)) && self.command_held {
             return ScreenAction::None;
         }
         let menu = self.menu.as_mut().expect(MENU);
@@ -2464,6 +2515,11 @@ impl AppScreen {
             return false;
         }
         if pressed && !repeat {
+            // `_MainScreenKey`'s P (@0x1ac59) clicks first; a Command key
+            // goes to the original's menus (`MenuKey`), which do not.
+            if self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held {
+                self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
+            }
             self.open_preferences();
         }
         true
@@ -2646,8 +2702,6 @@ fn refresh_status_bar(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<
     }
 }
 
-/// "Desc Dialog" showing the About text, from the dialogs and the game
-/// data.
 /// Shows `spaceport` the exchange, outfitter and shipyard as `flight`
 /// now has them.
 fn refresh_spaceport(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
@@ -2662,9 +2716,11 @@ fn refresh_spaceport(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<G
     }
 }
 
-fn about_dialog(dialogs: &Dialogs, data: &GameData) -> Result<DescDialog, String> {
+/// "Desc Dialog" showing `dësc` `id`'s text as it is, from the dialogs
+/// and the game data.
+fn desc_dialog(dialogs: &Dialogs, data: &GameData, id: i16) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
-    let text = data.description(ABOUT_TEXT)?;
+    let text = data.description(id)?;
     Ok(DescDialog::new(
         &template,
         &text,
@@ -3216,6 +3272,7 @@ pub(super) mod tests {
             .resource(Spin::TYPE, 1000, None, &spin)
             .resource(Spin::TYPE, 650, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
+            .resource(Desc::TYPE, MENU_X_TEXT, None, &x_text())
     }
 
     /// The game data of `fork`'s resources.
@@ -3349,6 +3406,14 @@ pub(super) mod tests {
             .join("\r")
             .into_bytes();
         bytes.push(0);
+        bytes.extend([0xFF; 2]);
+        bytes.extend([0; 34]);
+        bytes
+    }
+
+    /// The main menu's X text's `dësc`: two short lines.
+    fn x_text() -> Vec<u8> {
+        let mut bytes = b"x 0\rx 1\0".to_vec();
         bytes.extend([0xFF; 2]);
         bytes.extend([0; 34]);
         bytes
@@ -3934,6 +3999,31 @@ pub(super) mod tests {
         fly(screen);
         assert_eq!(screen.input(&key(MAP, true)), ScreenAction::None);
         assert_eq!(screen.showing(), Showing::FlightMap);
+    }
+
+    #[test]
+    fn the_flight_maps_beeps_come_through_the_router_escape_closing_it_too() {
+        let mut screen = AppScreen::new(data());
+        open_flight_map(&mut screen);
+        let ui = |sounds: Vec<Sound>| -> Vec<Sound> {
+            sounds
+                .into_iter()
+                .filter(|sound| matches!(sound, Sound::Ui(_)))
+                .collect()
+        };
+        assert_eq!(
+            ui(screen.take_sounds()),
+            [Sound::Ui(UiSound::MapOpened)],
+            "opened"
+        );
+        screen.input(&key(MAP, false));
+        screen.input(&key(Key::Escape, true));
+        assert!(!flight(&screen).map_open());
+        assert_eq!(
+            ui(screen.take_sounds()),
+            [Sound::Ui(UiSound::MapClosed)],
+            "Escape closed it"
+        );
     }
 
     #[test]
@@ -4662,7 +4752,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn leaving_the_spaceport_by_leave_keeps_its_click_and_the_take_off() {
+    fn leaving_the_spaceport_by_leave_sounds_only_the_take_off() {
         let mut screen = with_dialogs(data());
         land(&mut screen);
         assert_eq!(
@@ -4683,13 +4773,14 @@ pub(super) mod tests {
             .center();
         assert_eq!(
             press_and_release(&mut screen, leave),
-            [vec![DOWN], vec![UP, Sound::Sim(SimSound::TookOff)]]
+            [vec![], vec![Sound::Sim(SimSound::TookOff)]]
         );
         assert!(screen.spaceport_view().is_none(), "gone");
     }
 
     #[test]
-    fn closing_the_about_text_by_done_keeps_its_click() {
+    /// `_TrackTextButtons` @0x26bb0 plays nothing under the pointer.
+    fn closing_the_about_text_by_done_is_silent() {
         let mut screen = with_dialogs(data());
         open_about(&mut screen);
         let done = about(&screen)
@@ -4697,7 +4788,7 @@ pub(super) mod tests {
             .item_bounds(1)
             .expect("Done")
             .center();
-        assert_eq!(press_and_release(&mut screen, done), [vec![DOWN], vec![UP]]);
+        assert_eq!(press_and_release(&mut screen, done), [vec![], vec![]]);
         assert!(screen.about().is_none(), "closed");
     }
 
@@ -5113,7 +5204,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn closing_by_ok_keeps_its_click() {
+    fn closing_by_ok_is_silent() {
         let mut screen = with_dialogs(data());
         open_prefs(&mut screen);
         let ok = prefs_dialog(&screen)
@@ -5121,7 +5212,7 @@ pub(super) mod tests {
             .item_bounds(1)
             .expect("OK")
             .center();
-        assert_eq!(press_and_release(&mut screen, ok), [vec![DOWN], vec![UP]]);
+        assert_eq!(press_and_release(&mut screen, ok), [vec![], vec![]]);
         assert!(screen.preferences().is_none(), "closed");
     }
 
@@ -5358,6 +5449,119 @@ pub(super) mod tests {
         let mut screen = menu(&store);
         assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
         assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    /// The interface sounds `screen` reports.
+    fn ui_sounds(screen: &mut AppScreen) -> Vec<UiSound> {
+        screen
+            .take_sounds()
+            .into_iter()
+            .filter_map(|sound| match sound {
+                Sound::Ui(sound) => Some(sound),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn p_a_and_x_on_the_main_menu_click_then_open_their_screen() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        ui_sounds(&mut screen);
+        screen.input(&key(Key::Char('p'), true));
+        assert_eq!(screen.showing(), Showing::Preferences);
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "p");
+        screen.input(&key(Key::Char('p'), false));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, false));
+        ui_sounds(&mut screen);
+
+        screen.input(&key(Key::Char('a'), true));
+        assert_eq!(screen.showing(), Showing::About);
+        assert_eq!(about(&screen).lines()[..2], ["line 0", "line 1"]);
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "a");
+        screen.input(&key(Key::Char('a'), false));
+        screen.input(&key(Key::Enter, true));
+        screen.input(&key(Key::Enter, false));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        ui_sounds(&mut screen);
+
+        screen.input(&key(Key::Char('x'), true));
+        assert_eq!(
+            screen.showing(),
+            Showing::Note,
+            "a text over the menu, not the About box"
+        );
+        assert_eq!(about(&screen).lines(), ["x 0", "x 1"], "dësc 32766, raw");
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "x");
+        screen.input(&key(Key::Char('x'), false));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+    }
+
+    #[test]
+    fn command_n_o_and_q_on_the_main_menu_neither_click_nor_choose() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        ui_sounds(&mut screen);
+        screen.input(&key(Key::Command, true));
+        for typed in ['n', 'o', 'q', 'N'] {
+            assert_eq!(screen.input(&Input::Text(typed)), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::MainMenu, "Command {typed}");
+            assert_eq!(ui_sounds(&mut screen), [], "Command {typed}");
+        }
+        screen.input(&key(Key::Command, false));
+        screen.input(&Input::Text('n'));
+        assert_eq!(screen.showing(), Showing::NewPilot, "without Command");
+    }
+
+    #[test]
+    fn the_main_menus_engine_keys_repeats_and_releases_are_silent() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        ui_sounds(&mut screen);
+        for k in [Key::Char('p'), Key::Char('a'), Key::Char('x')] {
+            screen.input(&held(k));
+            screen.input(&key(k, false));
+            assert_eq!(screen.showing(), Showing::MainMenu, "{k:?}");
+            assert_eq!(ui_sounds(&mut screen), [], "{k:?}");
+        }
+        screen.input(&key(Key::Char('i'), true));
+        assert_eq!(screen.showing(), Showing::About);
+        assert_eq!(ui_sounds(&mut screen), [], "the engine's About key");
+        screen.input(&key(Key::Enter, true));
+        ui_sounds(&mut screen);
+
+        // Command keys go to the original's menus, which do not click.
+        screen.input(&key(Key::Command, true));
+        screen.input(&key(Key::Char('p'), true));
+        assert_eq!(screen.showing(), Showing::Preferences);
+        assert_eq!(ui_sounds(&mut screen), [], "Command+P");
+        screen.input(&key(Key::Escape, true));
+        for k in [Key::Char('a'), Key::Char('x')] {
+            screen.input(&key(k, true));
+            assert_eq!(screen.showing(), Showing::MainMenu, "Command {k:?}");
+        }
+        screen.input(&key(Key::Command, false));
+        assert_eq!(ui_sounds(&mut screen), []);
+
+        // P away from the main menu is no main-screen key.
+        screen.input(&key(Key::Tab, true));
+        screen.input(&key(Key::Char('p'), true));
+        assert_eq!(screen.showing(), Showing::Preferences);
+        assert_eq!(ui_sounds(&mut screen), [], "the ship browser");
+    }
+
+    #[test]
+    fn without_dialogs_a_and_x_open_nothing_and_make_no_sound() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        ui_sounds(&mut screen);
+        for k in [Key::Char('a'), Key::Char('x')] {
+            screen.input(&key(k, true));
+            assert_eq!(screen.showing(), Showing::MainMenu, "{k:?}");
+        }
+        assert_eq!(ui_sounds(&mut screen), []);
     }
 
     #[test]
@@ -5949,17 +6153,10 @@ pub(super) mod tests {
             at: ok,
         };
         screen.input(&click(true));
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(nova_view::sound::UiSound::ButtonDown)]
-        );
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&click(false));
         assert_eq!(screen.showing(), Showing::Flight);
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(nova_view::sound::UiSound::ButtonUp)],
-            "OK's sound, kept as the note closes"
-        );
+        assert_eq!(screen.take_sounds(), [], "OK is silent as it closes");
     }
 
     /// Never fires, and draws the last outcome: a heading of 359.
@@ -6180,7 +6377,8 @@ pub(super) mod tests {
             .center();
         assert_eq!(
             press_and_release(&mut screen, cancel),
-            [vec![DOWN], vec![UP]]
+            [vec![], vec![]],
+            "the pilot list's Cancel is silent"
         );
         assert!(screen.pilot_list().is_none(), "closed");
         let at = screen
@@ -6189,7 +6387,7 @@ pub(super) mod tests {
             .button(MenuChoice::NewPilot)
             .rect
             .center();
-        press_and_release(&mut screen, at);
+        assert_eq!(press_and_release(&mut screen, at), [vec![DOWN], vec![UP]]);
         let ok = screen
             .new_pilot()
             .expect("open")
@@ -6197,7 +6395,11 @@ pub(super) mod tests {
             .item_bounds(2)
             .expect("Cancel")
             .center();
-        assert_eq!(press_and_release(&mut screen, ok), [vec![DOWN], vec![UP]]);
+        assert_eq!(
+            press_and_release(&mut screen, ok),
+            [vec![], vec![]],
+            "the new pilot dialog's Cancel is silent"
+        );
         assert!(screen.new_pilot().is_none(), "cancelled");
     }
 
@@ -8034,14 +8236,12 @@ pub(super) mod tests {
     /// the trader with Tab and boards it with B.
     fn board(screen: &mut AppScreen) {
         screen.tick(TICK);
-        for (k, pressed) in [
-            (Key::Tab, true),
-            (Key::Tab, false),
-            (Key::Char('b'), true),
-            (Key::Char('b'), false),
-        ] {
-            screen.input(&key(k, pressed));
-        }
+        screen.input(&key(Key::Tab, true));
+        screen.input(&key(Key::Tab, false));
+        // Tab's beep, so a test hears only what follows.
+        screen.take_sounds();
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Char('b'), false));
     }
 
     /// The router over [`boarding_data`] with dialogs, in the developer's
@@ -8125,10 +8325,7 @@ pub(super) mod tests {
         let mut screen = boarded();
         let cash = flight(&screen).pilot().expect("a pilot").cash();
         let sounds = plunder_click(&mut screen, 3);
-        assert_eq!(
-            sounds,
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(sounds, []);
         assert_eq!(
             flight(&screen).pilot().expect("a pilot").cash(),
             cash + 5750
@@ -8380,14 +8577,12 @@ pub(super) mod tests {
     /// Ticks once, targets the trader with Tab and hails it with Y.
     fn hail(screen: &mut AppScreen) {
         screen.tick(TICK);
-        for (k, pressed) in [
-            (Key::Tab, true),
-            (Key::Tab, false),
-            (Key::Char('y'), true),
-            (Key::Char('y'), false),
-        ] {
-            screen.input(&key(k, pressed));
-        }
+        screen.input(&key(Key::Tab, true));
+        screen.input(&key(Key::Tab, false));
+        // Tab's beep, so a test hears only what follows.
+        screen.take_sounds();
+        screen.input(&key(Key::Char('y'), true));
+        screen.input(&key(Key::Char('y'), false));
     }
 
     /// The router over [`boarding_data`] with dialogs, in the developer's
@@ -8560,10 +8755,7 @@ pub(super) mod tests {
             });
             sounds.extend(screen.take_sounds());
         }
-        assert_eq!(
-            sounds,
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(sounds, []);
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(screen.comm().is_none());
         assert_eq!(flight(screen).hailing(), None, "hung up");

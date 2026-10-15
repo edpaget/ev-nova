@@ -100,7 +100,9 @@
 //! every ship the player leads (hired and mission escorts, fighters out)
 //! follows, as it is, the new
 //! system's ships coming only with its arrivals over time (see
-//! [`Traffic::retarget`](crate::Traffic::retarget)). By the other
+//! [`Traffic::retarget`](crate::Traffic::retarget)); the rest stay in
+//! the ship table through the next traffic tick, or are dropped at once,
+//! as [`RuleKey::MoveLeftBehind`] says. By the other
 //! reading the move is an arrival: the system is explored and the course
 //! cleared at once, and in flight the fighters out are kept or abandoned
 //! as the fighter rules say and the system is populated
@@ -885,6 +887,69 @@ mod tests {
             session.npcs().iter().all(|npc| fleet.contains(&npc.id)),
             "no initial population"
         );
+    }
+
+    /// The rules with `MoveLeftBehind` read as `reading`.
+    fn left_behind(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::MoveLeftBehind, reading)
+    }
+
+    /// The berths of `session`'s NPCs, in order.
+    fn berths(session: &Session) -> Vec<u32> {
+        session.npcs().iter().map(|npc| npc.berth).collect()
+    }
+
+    #[test]
+    fn a_move_in_flight_holds_the_berths_left_behind_through_the_next_traffic_tick() {
+        let catalog = moving();
+        for (reading, berth) in [(RuleSource::Engine, 3), (RuleSource::Bible, 1)] {
+            let mut session = flying(&catalog).with_rules(left_behind(reading));
+            assert_eq!(berths(&session), [1, 2], "{reading:?}");
+            moved(&mut session, &catalog, "M131");
+            assert_eq!(session.npcs(), [], "{reading:?}");
+            let mut chance = crate::testkit::Draws::of(&[0, 6, 6, 0, 0, 0]);
+            session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut chance);
+            assert_eq!(berths(&session), [berth], "{reading:?}");
+            assert_eq!(
+                session.traffic.berths_taken(),
+                1,
+                "{reading:?}: freed by the tick's end"
+            );
+        }
+    }
+
+    #[test]
+    fn two_moves_in_one_settle_bring_the_ships_left_behind_back() {
+        let catalog = moving();
+        for (reading, back) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut session = flying(&catalog).with_rules(left_behind(reading));
+            let before = session.npcs().to_vec();
+            assert_eq!(before.len(), 2);
+            moved(&mut session, &catalog, "M131 M130");
+            assert_eq!(session.system(), SystemId(130), "{reading:?}");
+            let expected = if back { before } else { Vec::new() };
+            assert_eq!(session.npcs(), expected, "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn a_move_back_after_a_traffic_tick_brings_none_back() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        moved(&mut session, &catalog, "M131");
+        session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+        moved(&mut session, &catalog, "M130");
+        assert_eq!(session.npcs(), []);
+    }
+
+    #[test]
+    fn as_an_arrival_a_move_in_flight_holds_nothing_behind() {
+        let catalog = moving();
+        let mut session = flying(&catalog).with_rules(arrival(RuleSource::Bible));
+        moved(&mut session, &catalog, "M131");
+        assert_eq!(session.npcs().len(), 3, "populated");
+        assert_eq!(session.traffic.berths_taken(), 3, "none held");
+        assert_eq!(berths(&session), [1, 2, 3]);
     }
 
     #[test]

@@ -1710,21 +1710,25 @@ mod tests {
         }
     }
 
+    /// `id` played at the default effects volume.
     fn play(id: i16) -> AudioCommand {
         AudioCommand::Play {
             sound: nova_data::SoundId(id),
-            volume: Volume::FULL,
+            volume: AudioSettings::default().effects_volume,
         }
     }
 
-    const MUSIC: AudioCommand = AudioCommand::StartMusic {
-        volume: Volume::FULL,
-    };
+    /// The music started at its default volume.
+    fn music() -> AudioCommand {
+        AudioCommand::StartMusic {
+            volume: AudioSettings::default().music_volume,
+        }
+    }
 
-    /// An app over a screen on the galaxy map, with audio recorded.
+    /// An app over a screen on the main menu, with audio recorded.
     fn sounding(window: &FakeWindow) -> (App<NoImages, SoundingScreen>, AudioLog) {
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: vec![Sound::Sim(SimSound::JumpBegan)],
         };
         let audio = RecordingAudio::new();
@@ -1737,7 +1741,7 @@ mod tests {
     fn attaching_audio_takes_in_the_screen_and_its_sounds_at_once() {
         let window = FakeWindow::new((1024, 768), 1.0);
         let (app, log) = sounding(&window);
-        assert_eq!(*log.borrow(), [MUSIC, play(128)]);
+        assert_eq!(*log.borrow(), [music(), play(128)]);
         assert_eq!(app.screen().sounds, [], "taken");
     }
 
@@ -1766,7 +1770,12 @@ mod tests {
         app.handle(key(Key::Tab, true), &mut window, &mut gpu);
         assert_eq!(
             log.borrow()[3..],
-            [AudioCommand::StopMusic, play(600)],
+            [
+                AudioCommand::FadeOutMusic(nova_audio::music_fade(
+                    AudioSettings::default().music_volume
+                )),
+                play(600)
+            ],
             "the screen shown, then its sounds"
         );
     }
@@ -1877,7 +1886,7 @@ mod tests {
         let (saved, _) = crate::settings::SettingsKeeper::open(store.clone());
         assert_eq!(
             saved.settings().audio.effects_volume,
-            Volume::new(4.0 / 7.0)
+            nova_audio::settings::effects_level_volume(4)
         );
         app.handle(key(Key::Space, true), &mut window, &mut gpu);
         assert_eq!(store.writes(), 2, "no change, no save");
@@ -1928,7 +1937,7 @@ mod tests {
         let log = audio.log();
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: Vec::new(),
         };
         let mut app = App::new(
@@ -1945,7 +1954,14 @@ mod tests {
         app.handle(key(Key::Up, true), &mut window, &mut gpu);
         assert_eq!(
             *log.borrow(),
-            [AudioCommand::StopMusic, play(600)],
+            [
+                AudioCommand::SetMusicVolume(nova_audio::settings::music_level_volume(7)),
+                AudioCommand::StopMusic,
+                AudioCommand::Play {
+                    sound: nova_data::SoundId(600),
+                    volume: nova_audio::settings::effects_level_volume(7),
+                },
+            ],
             "the change, then the sounds"
         );
     }
@@ -1957,13 +1973,13 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let between = Volume::new(0.5);
+        let between = Volume::new(0.26);
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(AudioSettings {
             effects_volume: between,
             ..AudioSettings::default()
         });
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: Vec::new(),
         };
         let mut app = App::new(
@@ -1980,13 +1996,14 @@ mod tests {
         assert_eq!(
             *log.borrow(),
             [
+                AudioCommand::SetMusicVolume(nova_audio::settings::music_level_volume(7)),
                 AudioCommand::StopMusic,
                 AudioCommand::Play {
                     sound: nova_data::SoundId(600),
                     volume: between,
                 },
             ],
-            "level 4 already: the effects volume is kept"
+            "effects level 4 already: the effects volume is kept"
         );
     }
 

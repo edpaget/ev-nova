@@ -1715,11 +1715,7 @@ impl Screen for SpaceportView {
             return ScreenAction::None;
         }
         let event = match &mut self.port {
-            Ok(port) => {
-                let event = port.dialog.input(input);
-                self.sounds.extend(port.dialog.take_sound().map(Sound::Ui));
-                event
-            }
+            Ok(port) => port.dialog.input(input),
             Err(_) => match *input {
                 Input::Key {
                     key: Key::Enter | Key::Escape,
@@ -1802,7 +1798,9 @@ impl Screen for SpaceportView {
         }
     }
 
-    /// The buttons' sounds, the open service's included, in order.
+    /// The open service's sounds, in order. The spaceport's own buttons
+    /// are silent under the pointer, as `_TrackPlanetButtons` @0x2996f
+    /// plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -2397,11 +2395,9 @@ mod tests {
         assert!(format!("{view:?}").contains("TextMetrics"));
     }
 
-    const DOWN: Sound = Sound::Ui(UiSound::ButtonDown);
-    const UP: Sound = Sound::Ui(UiSound::ButtonUp);
-
+    /// `_TrackPlanetButtons` @0x2996f plays nothing under the pointer.
     #[test]
-    fn a_click_on_leave_sounds_it_going_down_then_up() {
+    fn pointer_click_on_leave_is_silent_as_the_original() {
         let mut view = earth();
         let leave = item(&view, 12).center();
         let button = |pressed| Input::PointerButton {
@@ -2410,25 +2406,25 @@ mod tests {
             at: leave,
         };
         view.input(&button(true));
-        assert_eq!(view.take_sounds(), [DOWN]);
+        assert_eq!(view.take_sounds(), []);
         view.input(&button(false));
         assert!(view.left());
-        assert_eq!(view.take_sounds(), [UP]);
+        assert_eq!(view.take_sounds(), []);
         assert_eq!(view.take_sounds(), []);
     }
 
     #[test]
-    fn a_service_sounds_its_button_and_its_done_even_as_it_closes() {
+    fn a_service_and_its_done_are_silent_under_the_pointer() {
         let mut view = earth();
         click_item(&mut view, 7);
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
         click(&mut view, super::super::service::DONE_BUTTON.center());
         assert!(view.open_service().is_none(), "closed");
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
         click_item(&mut view, 10);
         view.input(&key(Key::Escape));
         assert!(view.open_service().is_none());
-        assert_eq!(view.take_sounds(), [DOWN, UP], "Escape is silent");
+        assert_eq!(view.take_sounds(), [], "Escape is silent");
     }
 
     #[test]
@@ -2443,6 +2439,27 @@ mod tests {
         broken.input(&key(Key::Escape));
         assert!(broken.left());
         assert_eq!(broken.take_sounds(), []);
+    }
+
+    /// `_PortFilter` @0x4f041 maps Return, Enter and Escape to Leave
+    /// (@0x4f1e3-0x4f204) and the letters to their services (@0x4f209-0x4f257),
+    /// all with no click.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [Key::Enter, Key::Escape, MISSION_INFO_KEY, PLAYER_INFO_KEY]
+            .into_iter()
+            .chain(('a'..='z').map(Key::Char))
+        {
+            let mut view = earth();
+            view.take_sounds();
+            view.input(&key(k));
+            view.input(&Input::Key {
+                key: k,
+                pressed: false,
+                repeat: false,
+            });
+            assert_eq!(view.take_sounds(), [], "{k:?}");
+        }
     }
 
     // Recharging.
@@ -2490,7 +2507,7 @@ mod tests {
         assert!(!view.take_recharge(), "once");
         assert!(!view.left());
         assert!(view.open_service().is_none());
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
     }
 
     #[test]
@@ -2731,10 +2748,10 @@ mod tests {
     }
 
     #[test]
-    fn the_exchange_takes_cancel_pointer_and_its_sounds_are_kept() {
+    fn the_exchange_takes_cancel_pointer() {
         let mut view = trading(Ok(trade_template()));
         click_item(&mut view, 7);
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
         let buy = trade_item(&view, BUY_ITEM);
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
@@ -2745,11 +2762,11 @@ mod tests {
         view.cancel_pointer();
         view.input(&button(false));
         assert_eq!(view.take_trade(), None, "the click was abandoned");
-        assert_eq!(view.take_sounds(), [DOWN]);
+        assert_eq!(view.take_sounds(), []);
         let done = trade_item(&view, 1);
         click(&mut view, done);
         assert!(view.open_trade().is_none(), "closed");
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
     }
 
     #[test]
@@ -3234,10 +3251,10 @@ mod tests {
     }
 
     #[test]
-    fn the_outfitter_takes_cancel_pointer_and_its_sounds_are_kept() {
+    fn the_outfitter_takes_cancel_pointer() {
         let mut view = outfitting(Ok(outfit_template()));
         click_item(&mut view, 8);
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
         let buy = outfit_item(&view, 7);
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
@@ -3248,11 +3265,11 @@ mod tests {
         view.cancel_pointer();
         view.input(&button(false));
         assert_eq!(view.take_outfit(), None, "the click was abandoned");
-        assert_eq!(view.take_sounds(), [DOWN]);
+        assert_eq!(view.take_sounds(), []);
         let done = outfit_item(&view, 1);
         click(&mut view, done);
         assert!(view.open_outfitter().is_none(), "closed");
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
         let debug = format!("{view:?}");
         assert!(debug.contains("Outfitting"), "{debug}");
         assert!(debug.contains("Fuel Tank"), "{debug}");
@@ -3514,10 +3531,10 @@ mod tests {
     }
 
     #[test]
-    fn the_shipyard_takes_cancel_pointer_and_its_sounds_are_kept() {
+    fn the_shipyard_takes_cancel_pointer() {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
         let buy = shipyard_item(&view, 7);
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
@@ -3528,11 +3545,11 @@ mod tests {
         view.cancel_pointer();
         view.input(&button(false));
         assert_eq!(view.take_ship_request(), None, "the click was abandoned");
-        assert_eq!(view.take_sounds(), [DOWN]);
+        assert_eq!(view.take_sounds(), []);
         let done = shipyard_item(&view, 1);
         click(&mut view, done);
         assert!(view.open_shipyard().is_none(), "closed");
-        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        assert_eq!(view.take_sounds(), []);
         let debug = format!("{view:?}");
         assert!(debug.contains("Shipbuying"), "{debug}");
         assert!(debug.contains("Heavy Shuttle"), "{debug}");
@@ -4088,13 +4105,10 @@ mod tests {
             at,
         });
         assert!(view.mission_text().is_some(), "abandoned");
-        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(view.take_sounds(), []);
         click(&mut view, at);
         assert!(view.mission_text().is_none());
-        assert_eq!(
-            view.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(view.take_sounds(), []);
     }
 
     #[test]
@@ -4261,7 +4275,7 @@ mod tests {
     }
 
     #[test]
-    fn the_spaceports_offer_sounds_and_its_pointer_goes_through_it() {
+    fn the_spaceports_offer_pointer_goes_through_it_silently() {
         let mut view = missioned();
         view.open_offer(offered());
         let at = view
@@ -4279,7 +4293,7 @@ mod tests {
         view.cancel_pointer();
         view.input(&button(false));
         assert_eq!(view.take_offer_choice(), None, "abandoned");
-        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(view.take_sounds(), []);
         view.input(&button(true));
         view.input(&button(false));
         assert_eq!(

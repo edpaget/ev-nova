@@ -39,9 +39,9 @@ use crate::catalog::{
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    RankId, RankRecord, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -54,6 +54,22 @@ const SND: ResType = ResType::new(*b"snd ");
 /// The warp-up sound, `snd ` 128, whose length the warp's clock reads
 /// (`_LoadSounds` @0x1c0b5-0x1c12d).
 const WARP_UP_SOUND: i16 = 128;
+/// The double-time warp-up sound, `snd ` 129 "Warp up x2", whose length
+/// the warp's clock reads in double time (`_LoadSounds`
+/// @0x1c0b5-0x1c12d, `_WarpSoundDuration` @0x8210-0x8219).
+const WARP_UP_DOUBLE_SOUND: i16 = 129;
+
+/// The length of `data`'s `snd ` `id` as `_ParseSndHeader` gives it: its
+/// frames and the whole part of its rate; none when it is missing or
+/// cannot be decoded.
+fn sound_length(data: &GameData, id: i16) -> Option<SoundLength> {
+    let snd = data.resource(SND, id)?;
+    let pcm = decode_snd(snd.resource.data()).ok()?;
+    Some(SoundLength {
+        frames: u32::try_from(pcm.frames()).unwrap_or(u32::MAX),
+        rate: pcm.sample_rate().fixed() >> 16,
+    })
+}
 
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
@@ -229,6 +245,14 @@ impl PilotCatalog for GameData {
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
                     exit_angle: stellar.cust_snd_id,
                     tribute: stellar.tribute,
+                    animation: SiteAnimation {
+                        delay: stellar.anim_delay,
+                        frame0_bias: stellar.frame0_bias,
+                        open_frame: stellar.cust_pic_id,
+                        type_frames: frame_count(self, stellar.graphic_type),
+                        dead_frames: dead_frame_size
+                            .map_or(0, |_| frame_count(self, stellar.dead_type)),
+                    },
                 })
             })
             .collect()
@@ -628,12 +652,11 @@ impl PilotCatalog for GameData {
     }
 
     fn warp_sound(&self) -> Option<SoundLength> {
-        let snd = self.resource(SND, WARP_UP_SOUND)?;
-        let pcm = decode_snd(snd.resource.data()).ok()?;
-        Some(SoundLength {
-            frames: u32::try_from(pcm.frames()).unwrap_or(u32::MAX),
-            rate: pcm.sample_rate().fixed() >> 16,
-        })
+        sound_length(self, WARP_UP_SOUND)
+    }
+
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        sound_length(self, WARP_UP_DOUBLE_SOUND)
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
@@ -677,9 +700,21 @@ const LAST_RANK: i16 = 255;
 /// original's `_LoadMasterStellarSprite` multiplies them
 /// (@0x1ed8c-0x1ed97).
 fn counts_frames(data: &GameData, graphic: i16) -> bool {
-    stellar_spin_id(graphic)
-        .and_then(|spin| data.get::<Spin>(spin)?.ok())
-        .is_some_and(|spin| i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles) > 0)
+    tiles(data, graphic).is_some_and(|tiles| tiles > 0)
+}
+
+/// Graphic type `graphic`'s frame count in `data`, its `spïn`'s `xTiles` ×
+/// `yTiles` as [`counts_frames`] reckons it: 0 when it does not read or is
+/// not above 0, and at most `u16::MAX`.
+fn frame_count(data: &GameData, graphic: i16) -> u16 {
+    tiles(data, graphic).map_or(0, |tiles| u16::try_from(tiles.max(0)).unwrap_or(u16::MAX))
+}
+
+/// Graphic type `graphic`'s `spïn`'s `xTiles` × `yTiles` in 32 bits, when
+/// it reads.
+fn tiles(data: &GameData, graphic: i16) -> Option<i32> {
+    let spin = data.get::<Spin>(stellar_spin_id(graphic)?)?.ok()?;
+    Some(i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles))
 }
 
 /// Reads the records afresh on every call; a session asks each time it
@@ -732,6 +767,8 @@ impl TrafficCatalog for GameData {
                     govt: fleet.govt,
                     link_syst: fleet.link_syst,
                     appear_on: self.test_expr(fleet.appear_on.as_str()).into(),
+                    quote: fleet.quote.map(|id| id.0).filter(|&quote| quote > 0),
+                    flags: fleet.flags.0,
                 })
             })
             .collect()
@@ -945,6 +982,10 @@ impl CombatCatalog for GameData {
 impl CommCatalog for GameData {
     fn string_list(&self, id: i16) -> Vec<String> {
         strings(self, id)
+    }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        string_patch(self, id)
     }
 }
 
@@ -1794,6 +1835,12 @@ mod tests {
 
     /// `snd ` 128 of `samples` 8-bit mono samples at 22254.54 Hz.
     fn warp_up(samples: usize) -> (ResType, i16, Vec<u8>) {
+        let (ty, _, bytes) = warp_up_as(129, samples);
+        (ty, 128, bytes)
+    }
+
+    /// `snd ` `id` of `samples` 8-bit mono samples at 22254.54 Hz.
+    fn warp_up_as(id: i16, samples: usize) -> (ResType, i16, Vec<u8>) {
         use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
         let snd = SndBuilder::new(
             SndFormat::One,
@@ -1804,7 +1851,7 @@ mod tests {
                 samples: vec![0x80; samples],
             },
         );
-        (ResType::new(*b"snd "), 128, snd.bytes())
+        (ResType::new(*b"snd "), id, snd.bytes())
     }
 
     #[test]
@@ -1836,6 +1883,40 @@ mod tests {
         let broken = bytes[..bytes.len() - 10].to_vec();
         assert_eq!(
             store(&[(ty, 128, broken)]).warp_sound(),
+            None,
+            "undecodable"
+        );
+    }
+
+    #[test]
+    fn the_double_time_warp_sound_is_snd_129s() {
+        let data = store(&[warp_up(1000), warp_up_as(129, 44_508)]);
+        assert_eq!(
+            data.warp_sound_double_time(),
+            Some(SoundLength {
+                frames: 44_508,
+                rate: 22_254
+            })
+        );
+        assert_eq!(
+            data.warp_sound().map(|sound| sound.frames),
+            Some(1000),
+            "128 apart"
+        );
+    }
+
+    #[test]
+    fn without_a_readable_snd_129_there_is_no_double_time_warp_sound() {
+        assert_eq!(store(&[]).warp_sound_double_time(), None);
+        assert_eq!(
+            store(&[warp_up(44_508)]).warp_sound_double_time(),
+            None,
+            "128 is not it"
+        );
+        let (ty, id, bytes) = warp_up_as(129, 44_508);
+        let broken = bytes[..bytes.len() - 10].to_vec();
+        assert_eq!(
+            store(&[(ty, id, broken)]).warp_sound_double_time(),
             None,
             "undecodable"
         );
@@ -2166,6 +2247,11 @@ mod tests {
                     type_counts_frames: true,
                     exit_angle: 0,
                     tribute: 0,
+                    animation: SiteAnimation {
+                        type_frames: 1,
+                        dead_frames: 1,
+                        ..SiteAnimation::default()
+                    },
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -2185,6 +2271,10 @@ mod tests {
                     type_counts_frames: false,
                     exit_angle: 0,
                     tribute: 250,
+                    animation: SiteAnimation {
+                        dead_frames: 1,
+                        ..SiteAnimation::default()
+                    },
                 },
             ]
         );
@@ -2294,6 +2384,63 @@ mod tests {
             (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
         ]);
         assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
+    }
+
+    #[test]
+    fn a_landing_site_reads_its_animation_fields_and_its_sheets_frame_counts() {
+        let mut gate = dead_as(stellar(0, 0, 3, 1, 0), 6);
+        put_i16s(&mut gate, 0x18, &[17]);
+        put_i16s(&mut gate, 0x22, &[-1, 4]);
+        let tiles = |image, x: i16, y: i16| {
+            let mut bytes = spin(image);
+            put_i16s(&mut bytes, 0x08, &[x, y]);
+            bytes
+        };
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130])),
+            (Stellar::TYPE, 128, gate),
+            // A DeadType sheet that is not there counts no frames.
+            (Stellar::TYPE, 129, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+            // Tiles that multiply to 0 or less, or past a u16.
+            (Stellar::TYPE, 130, dead_as(stellar(0, 0, 7, 1, 0), 8)),
+            (Spin::TYPE, 1003, tiles(1003, 6, 7)),
+            (RLED, 1003, sheet(12, 30)),
+            (Spin::TYPE, 1004, tiles(1004, 2, 3)),
+            (RLED, 1004, sheet(12, 30)),
+            (Spin::TYPE, 1005, tiles(1005, 1, 9)),
+            (Spin::TYPE, 1006, tiles(1006, 4, 2)),
+            (RLED, 1006, sheet(50, 20)),
+            (Spin::TYPE, 1007, tiles(1007, -2, 3)),
+            (RLED, 1007, sheet(12, 30)),
+            (Spin::TYPE, 1008, tiles(1008, 300, 300)),
+            (RLED, 1008, sheet(12, 30)),
+        ]);
+        let animations: Vec<SiteAnimation> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.animation)
+            .collect();
+        assert_eq!(
+            animations,
+            [
+                SiteAnimation {
+                    delay: -1,
+                    frame0_bias: 4,
+                    open_frame: 17,
+                    type_frames: 42,
+                    dead_frames: 8,
+                },
+                SiteAnimation {
+                    type_frames: 6,
+                    ..SiteAnimation::default()
+                },
+                SiteAnimation {
+                    type_frames: 0,
+                    dead_frames: u16::MAX,
+                    ..SiteAnimation::default()
+                },
+            ]
+        );
     }
 
     #[test]
@@ -3467,6 +3614,8 @@ mod tests {
                     govt: Some(GovtId(129)),
                     link_syst: -1,
                     appear_on: Test::default(),
+                    quote: None,
+                    flags: 0,
                 },
                 FleetRecord {
                     id: FleetId(130),
@@ -3479,6 +3628,8 @@ mod tests {
                     govt: None,
                     link_syst: 10_000,
                     appear_on: Test::parse("b42"),
+                    quote: None,
+                    flags: 0,
                 },
             ],
             "by ID, the undecodable one skipped and the unused escort slots left out"
@@ -3491,6 +3642,35 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    #[test]
+    fn a_fleets_quote_above_0_is_carried() {
+        let quoting = |quote: i16| {
+            let mut bytes = fleet(140, &[], 129, -1);
+            put_i16s(&mut bytes, 0x11E, &[quote]);
+            store(&[(Fleet::TYPE, 128, bytes)])
+                .fleets()
+                .first()
+                .and_then(|record| record.quote)
+        };
+        assert_eq!(quoting(7600), Some(7600));
+        assert_eq!(quoting(0), None);
+        assert_eq!(quoting(-1), None);
+    }
+
+    #[test]
+    fn a_fleets_flags_are_carried() {
+        let flagged = |flags: i16| {
+            let mut bytes = fleet(140, &[], 129, -1);
+            put_i16s(&mut bytes, 0x120, &[flags]);
+            store(&[(Fleet::TYPE, 128, bytes)])
+                .fleets()
+                .first()
+                .map(|record| record.flags)
+        };
+        assert_eq!(flagged(0x0001), Some(0x0001));
+        assert_eq!(flagged(0), Some(0));
     }
 
     /// A `përs` linked to `link_syst`, of `govt`, AI type 3, `Aggress` 2

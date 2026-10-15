@@ -241,7 +241,9 @@
 //!   ([`left_respawn`](crate::RuleKey::LeftRespawn) has the other
 //!   reading). An AI ship that lands stays in the system, waiting at the
 //!   stellar, so a landing counts nothing
-//!   ([`landed_leaves`](crate::RuleKey::LandedLeaves)). Here the
+//!   ([`landed_leaves`](crate::RuleKey::LandedLeaves)). One that leaves
+//!   through a hypergate or wormhole is gone, but counts nothing either
+//!   ([`gate_exit_counts`](crate::RuleKey::GateExitCounts)). Here the
 //!   traffic's tick raises [`Fate::Departed`] for such a ship and counts
 //!   it. Chase off is met while those destroyed and those chased off
 //!   together reach `ShipCount`, and unmet otherwise (@0x9eb48-0x9eb78).

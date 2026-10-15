@@ -18,10 +18,8 @@ use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova::settings::{GameSettings, SettingsKeeper, game_settings};
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
-use nova_audio::settings::level_volume;
-use nova_audio::{
-    Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, SoundTable, Volume,
-};
+use nova_audio::settings::{effects_level_volume, music_level_volume};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, SoundTable};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -174,8 +172,8 @@ fn seeded() -> MemorySettings {
             audio: AudioSettings {
                 sound: true,
                 music: true,
-                effects_volume: level_volume(4),
-                music_volume: level_volume(6),
+                effects_volume: effects_level_volume(4),
+                music_volume: music_level_volume(6),
             },
             hyperspace_effects: true,
         })
@@ -200,12 +198,27 @@ impl Harness {
 
     /// The game started over `store`, its audio core playing `table`.
     fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
+        Self::build(store, table, false)
+    }
+
+    /// The game started over `store` on the main menu, where the music
+    /// plays.
+    fn on_main_menu(store: &MemorySettings) -> Self {
+        Self::build(store, SoundTable::ORIGINAL, true)
+    }
+
+    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool) -> Self {
         let data = game_data();
         let (keeper, settings, warning) =
             game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
         assert_eq!(warning, None);
         let keeper = keeper.expect("a keeper");
-        let screen = start_screen(Rc::clone(&data))
+        let mut screen = start_screen(Rc::clone(&data));
+        if main_menu {
+            let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
+            screen = screen.with_pilots(None, metrics);
+        }
+        let screen = screen
             .with_dialogs(
                 Rc::new(prefs_fixture::interface()),
                 Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
@@ -361,13 +374,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
     let flying = harness.frame();
-    assert_eq!(
-        harness.played(),
-        [AudioCommand::StartMusic {
-            volume: level_volume(6)
-        }],
-        "the seeded music volume"
-    );
+    assert_eq!(harness.played(), [], "no music in flight");
 
     harness.command_comma();
     assert_eq!(harness.showing(), Showing::Preferences);
@@ -392,7 +399,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
         solids(&flying),
         solids(&open)
     );
-    assert_eq!(harness.played(), [], "the music plays on");
+    assert_eq!(harness.played(), []);
 
     let music = harness.dialog().music().rect().center();
     harness.click(music);
@@ -409,12 +416,12 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     assert!(texts(&changed).iter().any(|text| text == "5"));
     harness.press(Key::Enter);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(harness.played(), [AudioCommand::StopMusic]);
+    assert_eq!(harness.played(), [], "saved, with no music to stop");
 
     // Later sounds play at the new effects volume.
     harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
-    let five = Volume::new(5.0 / 7.0);
+    let five = effects_level_volume(5);
     assert_eq!(
         harness.played(),
         [
@@ -444,7 +451,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
             sound: true,
             music: false,
             effects_volume: five,
-            music_volume: level_volume(5),
+            music_volume: music_level_volume(5),
         }
     );
     let mut again = Harness::new(&store);
@@ -460,8 +467,64 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     );
 }
 
+/// The real Preferences dialog over the main menu, where the music plays,
+/// drives the audio core: the music starts at the seeded level, a new
+/// music level changes its volume, and the Music checkbox off stops it.
 #[test]
-fn a_failed_save_is_a_warning_and_the_change_still_plays() {
+fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
+    let store = seeded();
+    let mut harness = Harness::on_main_menu(&store);
+    assert_eq!(harness.showing(), Showing::MainMenu);
+    harness.frame();
+    assert_eq!(
+        harness.played(),
+        [AudioCommand::StartMusic {
+            volume: music_level_volume(6)
+        }],
+        "the seeded music level"
+    );
+
+    // A lower music level turns the music down.
+    harness.press(Key::Char('p'));
+    assert_eq!(harness.showing(), Showing::Preferences);
+    for _ in 0..5 {
+        harness.press(Key::Tab);
+    }
+    harness.press(Key::Down);
+    assert_eq!(harness.dialog().prefs().sound.music_level, 5);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::MainMenu);
+    harness.frame();
+    let click = |id| AudioCommand::Play {
+        sound: SoundId(id),
+        volume: effects_level_volume(4),
+    };
+    assert_eq!(
+        harness.played(),
+        [
+            click(600),
+            click(601),
+            AudioCommand::SetMusicVolume(music_level_volume(5))
+        ],
+        "P's keyed click, at the seeded effects level, then the new music level"
+    );
+
+    // The Music checkbox off stops it.
+    harness.press(Key::Char('p'));
+    let music = harness.dialog().music().rect().center();
+    harness.click(music);
+    assert!(!harness.dialog().prefs().sound.music);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::MainMenu);
+    harness.frame();
+    assert_eq!(
+        harness.played(),
+        [click(600), click(601), AudioCommand::StopMusic]
+    );
+}
+
+#[test]
+fn a_failed_save_is_a_warning_and_the_change_still_applies() {
     let store = seeded();
     let mut harness = Harness::new(&store);
     harness.press(Key::Char('f'));
@@ -470,7 +533,8 @@ fn a_failed_save_is_a_warning_and_the_change_still_plays() {
     store.fail_writes(true);
     let music = harness.dialog().music().rect().center();
     harness.click(music);
-    assert_eq!(harness.played(), [AudioCommand::StopMusic]);
+    assert!(!harness.dialog().prefs().sound.music);
+    assert_eq!(harness.played(), [], "no music in flight to stop");
     assert_eq!(
         harness.app.take_warnings(),
         ["nova: cannot save the settings: the disk is full".to_owned()]
@@ -493,7 +557,7 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
         ..SoundTable::ORIGINAL
     };
     let mut harness = Harness::with_table(&store, table);
-    let effects = level_volume(4);
+    let effects = effects_level_volume(4);
     let engine = AudioCommand::StartLoop {
         sound: SoundId(ENGINE),
         volume: effects,
@@ -550,8 +614,8 @@ fn hyperspace_effects_toggle_by_click_and_key_and_survive_a_restart() {
         AudioSettings {
             sound: true,
             music: true,
-            effects_volume: level_volume(4),
-            music_volume: level_volume(6),
+            effects_volume: effects_level_volume(4),
+            music_volume: music_level_volume(6),
         },
         "the seeded audio settings intact"
     );

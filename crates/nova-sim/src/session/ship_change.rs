@@ -472,8 +472,9 @@ impl Session {
     /// picked evenly on `chance` as `_GetRandomIndString` (@0x72ef7) picks
     /// it: a roll of as many sides as the list holds. `None`, with no roll,
     /// for a missing or empty list; an empty string picked is given as
-    /// it is. The session's one port of that routine: the bar's news and
-    /// [`pick_string`](Self::pick_string) both draw through it.
+    /// it is. The session's one port of that routine: the bar's news, a
+    /// fleet's arrival quote and [`pick_string`](Self::pick_string) all
+    /// draw through it.
     pub(super) fn random_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
         let strings = self.strings.0.string_list(list);
         if strings.is_empty() {

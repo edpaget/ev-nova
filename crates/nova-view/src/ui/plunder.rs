@@ -33,7 +33,6 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::Input;
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -309,15 +308,6 @@ impl Screen for PlunderDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// The buttons' sounds as they are clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 /// The captured-ship assignment dialog (see the module docs).
@@ -446,15 +436,6 @@ impl Screen for AssignmentDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// The buttons' sounds as they are clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -464,7 +445,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::{Key, MouseButton};
-    use crate::sound::UiSound;
+    use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
 
     /// A trader with 13 tons of food, 2 rounds of rockets, credits and
@@ -620,18 +601,17 @@ mod tests {
         );
     }
 
+    /// A pointer click plays nothing: `_TrackPlunderButtons` @0x2732a
+    /// calls no sound routine.
     #[test]
-    fn a_click_gives_its_take_once() {
+    fn a_click_gives_its_take_once_silently() {
         for (item, _, take) in TAKE_BUTTONS {
             let mut dialog = dialog(loaded());
             let at = center(dialog.dialog(), item);
             let sounds = click(&mut dialog, at);
             assert_eq!(dialog.take_take(), Some(take), "{item}");
             assert_eq!(dialog.take_take(), None, "once");
-            assert_eq!(
-                sounds,
-                [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-            );
+            assert_eq!(sounds, []);
         }
         let mut dialog = dialog(loaded());
         let at = center(dialog.dialog(), TEXT_ITEM);
@@ -646,6 +626,25 @@ mod tests {
             dialog.input(&key(pressed));
             assert_eq!(dialog.take_take(), Some(Take::Abort), "{pressed:?}");
         }
+    }
+
+    /// A key that presses a button plays nothing in the original:
+    /// `_PlunderFilter` @0x92f20 calls no sound routine, and neither does
+    /// `_MyModalDialog` @0x59954.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for pressed in [Key::Enter, Key::Escape] {
+            let mut dialog = dialog(loaded());
+            assert_eq!(dialog.take_sounds(), []);
+            dialog.input(&key(pressed));
+            assert_eq!(dialog.take_take(), Some(Take::Abort), "{pressed:?}");
+            assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
+        }
+        let mut dialog = dialog(loaded());
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert!(dialog.take_take().is_some(), "Space on the focused button");
+        assert_eq!(dialog.take_sounds(), [], "Space");
     }
 
     #[test]
@@ -837,7 +836,7 @@ mod tests {
             let sounds = click(&mut dialog, at);
             assert_eq!(dialog.take_choice(), Some(choice));
             assert_eq!(dialog.take_choice(), None);
-            assert_eq!(sounds.len(), 2);
+            assert_eq!(sounds, [], "silent, as `_TrackCapAssignButtons` @0x291c7");
         }
         let mut dialog = assignment();
         for pressed in [Key::Enter, Key::Escape] {
@@ -846,6 +845,27 @@ mod tests {
         let at = center(dialog.dialog(), QUESTION_ITEM);
         click(&mut dialog, at);
         assert_eq!(dialog.take_choice(), None, "only a button chooses");
+    }
+
+    /// Keys play nothing in the original: `_DoCapturedShipAssignmentDialog`
+    /// runs `_MyModalDialog` @0x59954, which calls no sound routine. Its
+    /// `_beepSnd` plays (@0x5b56b, @0x5b66b) follow the choice, not the
+    /// input that made it, and are the caller's.
+    #[test]
+    fn assignment_keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = assignment();
+        assert_eq!(dialog.take_sounds(), []);
+        for pressed in [Key::Enter, Key::Escape] {
+            dialog.input(&key(pressed));
+            assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
+        }
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert!(
+            dialog.take_choice().is_some(),
+            "Space on the focused button"
+        );
+        assert_eq!(dialog.take_sounds(), [], "Space");
     }
 
     #[test]

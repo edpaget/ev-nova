@@ -537,6 +537,48 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     );
 }
 
+/// X on the main menu opens the stock `dësc` 32766 in "Desc Dialog" over
+/// it, as `_MainScreenKey` @0x1ac7e does, and Return closes it.
+#[test]
+fn x_shows_the_stock_desc_32766_over_the_main_menu() {
+    use nova_sim::fixture::MemoryPilots;
+    use nova_sim::{PilotKeeper, PilotStore};
+
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let interface = match nova_data::open_interface(&dir) {
+        Ok(interface) => interface,
+        Err(error) => {
+            eprintln!("skipping: {error}");
+            return;
+        }
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let keeper = PilotKeeper::new(Box::new(MemoryPilots::new()) as Box<dyn PilotStore>);
+    let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
+    let screen = start_screen(Rc::clone(&data))
+        .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
+        .with_pilots(Some(keeper), metrics);
+    let mut app: App<_> = App::new(&Window, data, screen);
+    let mut gpu = RecordingGpu::new();
+    let mut press = |app: &mut App<Rc<GameData>>, key| {
+        let event = WindowEvent::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        };
+        assert_eq!(app.handle(event, &mut Window, &mut gpu), Control::Continue);
+    };
+
+    press(&mut app, Key::Char('x'));
+    assert_eq!(app.screen().showing(), Showing::Note);
+    let text = app.screen().about().expect("open");
+    assert!(!text.lines().is_empty());
+    press(&mut app, Key::Enter);
+    assert_eq!(app.screen().showing(), Showing::MainMenu);
+}
+
 /// A new pilot saved docked at the first landable stellar of Kania and
 /// opened from the main menu lands in its spaceport, which offers the
 /// stock tutorial ("Head to Sol;Tutorial 001", `mïsn` 251, `AvailLoc` 3)

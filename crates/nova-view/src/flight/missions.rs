@@ -218,7 +218,9 @@ impl Screen for FlightMissionDialogs {
         }
     }
 
-    /// The buttons' sounds, in order, of the dialogs open and closed.
+    /// The sounds, in order, of the dialogs open and closed. Their
+    /// buttons are silent under the pointer, as `_TrackTextButtons`
+    /// @0x26bb0 and `_TrackMissionInfoButtons` @0x2850e play nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -372,10 +374,7 @@ mod tests {
             .expect("Done")
             .center();
         click(&mut dialogs, done);
-        assert_eq!(
-            dialogs.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(dialogs.take_sounds(), []);
         assert_eq!(shown(&dialogs).as_deref(), Some("Second."));
         dialogs.input(&key(Key::Enter));
         assert_eq!(shown(&dialogs), None);
@@ -413,11 +412,7 @@ mod tests {
         click(&mut dialogs, abort);
         assert_eq!(
             dialogs.take_sounds(),
-            [
-                Sound::Ui(UiSound::MissionInfoOpened),
-                Sound::Ui(UiSound::ButtonDown),
-                Sound::Ui(UiSound::ButtonUp)
-            ]
+            [Sound::Ui(UiSound::MissionInfoOpened)]
         );
         assert_eq!(dialogs.take_abort(), Some(2));
         assert_eq!(dialogs.take_abort(), None, "once");

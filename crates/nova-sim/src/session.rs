@@ -140,8 +140,9 @@
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending, and a set
 //! operator's message and sound), which the audio side drains with
-//! [`Session::take_sounds`]. A refused landing or
-//! jump emits nothing.
+//! [`Session::take_sounds`]. A refused landing beeps
+//! [`SimSound::Refused`] where the original's dock request does (see
+//! [`LandingRefusal::beeps`]).
 //!
 //! A change of the player's ship, or of the system or stellar it is at,
 //! is told as a [`SessionEvent`], which a view drains with
@@ -368,6 +369,7 @@ mod explored;
 mod fighters;
 mod gate_escorts;
 mod gate_follow;
+mod gate_sprites;
 mod hail;
 mod hire;
 mod hooks;
@@ -433,9 +435,9 @@ use crate::bay::FighterNote;
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, BoardTarget, Boarding, BoardingRule,
     CAPTURE_TRIP, CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE,
-    EscortCrew, HeldRounds, MARINES, MAX_ESCORTS, MAX_SHIPS_IN_SYSTEM, Plunder, PlunderView, Prize,
-    SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE,
-    Take, Taken, check_board,
+    EscortCrew, HeldRounds, MARINES, MAX_ESCORTS, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL,
+    TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken,
+    check_board,
 };
 use crate::catalog::{
     CombatCatalog, CronRecord, DateAffixes, DudeId, GateSite, GovtId, JunkId, LandingSite,
@@ -463,6 +465,7 @@ use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, WormholeRule, emerge, has_links, hypergate_exit,
     wormhole_exit,
 };
+use crate::gate_sprite::GateSprite;
 use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::govt::Governments;
@@ -513,7 +516,8 @@ use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::{SpawnDude, SpawnTable};
-use crate::traffic::{Traffic, World, strength};
+use crate::traffic::{CAPTURE_RESERVE, SPAWN_RESERVE, Traffic, World, strength};
+use crate::trig::intercept_angle;
 use crate::wares::DayRolls;
 use crate::warp;
 
@@ -602,7 +606,8 @@ enum Jump {
 }
 
 /// Which stellar [`Session::select_stellar`] makes the navigation
-/// target, by the original's means (`_HandlePlayer` @0x68390).
+/// target, by the original's keys (`_HandlePlayer` @0x68390); a click in
+/// space is [`Session::click_in_space`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StellarPick {
     /// The stellar in this slot of the system's navigation defaults,
@@ -612,11 +617,6 @@ pub enum StellarPick {
     /// target ([`nearest_stellar`]): the original's F5, which picks
     /// through the same `_FindNearestStellar` (@0x276c) its land key does.
     Nearest,
-    /// The stellar under a click at this point in the system
-    /// ([`stellar_under`]), each boxed by the frame of the sheet drawn for
-    /// it, so a destroyed one by its `DeadType` or graphic type 0's sheet:
-    /// the original's click in space (@0x6a5f9-0x6a6fc).
-    At(Vec2),
 }
 
 /// What [`Session::land`] did, when it was not refused.
@@ -688,15 +688,24 @@ pub struct Session {
     /// forgotten with the news at landing and take-off, so no later
     /// stay can put back a nav saved in an earlier one.
     bar_nav: Option<NavMode>,
+    /// The sprite of each hypergate shown, as it opens and closes (see
+    /// the `gate_sprites` module).
+    gate_sprites: BTreeMap<StellarId, GateSprite>,
     /// The galaxy every reader sees: the catalog's systems, read when the
     /// session starts, with the pilot's overlay (see the
     /// [`story`](crate::story) module's "Galaxy overlay").
     galaxy: OverlaidGalaxy,
     /// The jump under way, from J being accepted until the ship arrives.
     jump: Option<Jump>,
-    /// The warp sound's duration, in Mac ticks, read when the session
-    /// starts: the d of the warp's clock ([`warp::sound_duration`]).
-    warp_sound: u32,
+    /// The warp sounds' durations, in Mac ticks, read when the session
+    /// starts: `snd ` 128's and 129's, `_jumpSoundLength`, of which
+    /// [`Session::warp_sound`] gives the d of the warp's clock
+    /// ([`warp::sound_duration`]).
+    warp_sounds: [u32; 2],
+    /// Which warp-up sound is still playing, `snd ` 128 or 129, for the
+    /// warp start's still-playing skip and the double-time switch (see
+    /// [`warp::WarpUps`]); not saved, as the original's sounds are not.
+    warp_ups: warp::WarpUps,
     /// The rule a multi-jump follows.
     multi_jump: MultiJumpRule,
     /// The rule Hyper Select follows.
@@ -891,10 +900,16 @@ pub struct Session {
     /// The frame counter's value the last advance pass ran on, which the
     /// second pass runs on too (see the `double_time` module).
     pass_frame: i16,
-    /// Whether double time is on, as the key last said (see the
+    /// Whether double time is on, as the switch last said (see the
     /// `double_time` module); not saved, as the original's `_doubleTime`
     /// is a global, not a pilot field.
     double_time: bool,
+    /// Whether the double-time key is on, as its caller last said.
+    double_time_key: bool,
+    /// The player's desired heading, in whole degrees, the original's
+    /// +0x68, which the double-time switch reads (see the `double_time`
+    /// module); not saved, as a pilot's start zeroes it (@0x1c315).
+    aim: i16,
     /// The dock request the land key made, if any: the original's
     /// `_dockTarget` and `_dockPermission` (see the `clearance` module);
     /// not saved, as a flight start sets both to −1.
@@ -1316,9 +1331,12 @@ impl Session {
             nav: NavMode::Off,
             port_nav: None,
             bar_nav: None,
+            gate_sprites: BTreeMap::new(),
             galaxy,
             jump: None,
-            warp_sound: warp::sound_duration(catalog.warp_sound()),
+            warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
+                .map(warp::sound_duration),
+            warp_ups: warp::WarpUps::default(),
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
             hyperlinks: HyperlinkRule::default(),
@@ -1378,6 +1396,8 @@ impl Session {
             frame: 0,
             pass_frame: 0,
             double_time: false,
+            double_time_key: false,
+            aim: 0,
             dock: None,
             land_key: false,
             takeoff_grace: 0,
@@ -1683,6 +1703,10 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
+        // The warp-ups play in real time, a frame's worth on each advance
+        // pass, and the switch reads them.
+        self.warp_ups.step();
+        self.latch_double_time();
         self.takeoff_grace_tick();
         self.sound_script();
         let frame = self.frame;
@@ -1725,20 +1749,27 @@ impl Session {
             self.pod_tick();
             return;
         }
-        self.move_player(controls);
+        self.move_player(controls, pass);
         // After the ship moves, as `_HandlePlayer` runs the approach
         // (@0x6a965) after it moves the ship (@0x6864d); see the
         // `clearance` module.
         self.dock_approach();
     }
 
-    /// The ship's motion in [`Session::fly_player`]: by its condition and
-    /// the jump under way, under `controls`, then the fuel's regeneration.
-    fn move_player(&mut self, controls: Controls) {
+    /// The ship's motion in [`Session::fly_player`] on `pass`: by its
+    /// condition and the jump under way, under `controls`, then the fuel's
+    /// regeneration.
+    ///
+    /// The warp's clock moves on only on the advance pass: it is
+    /// `TickCount`, real time, which double time's second pass doesn't
+    /// move on (`_HandlePlayer` @0x6d1c1, @0x688bb), though that pass
+    /// flies the pre-jump again and can start the clock.
+    fn move_player(&mut self, controls: Controls, pass: GamePass) {
+        let again = pass == GamePass::Again;
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
-                self.collapse_jump();
+                self.collapse_jump(again);
                 Controls::default()
             }
             Condition::Destroyed => {
@@ -1750,6 +1781,9 @@ impl Session {
         };
         match self.jump {
             None => {
+                if controls.reverse {
+                    self.aim_in_reverse();
+                }
                 self.thrust(controls.thrust);
                 let handling = self.flying_handling();
                 if self.player_fate().row().drag {
@@ -1759,12 +1793,25 @@ impl Session {
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
                 let handling = self.flying_handling();
+                let slow_down = !self.stats.fast_jump;
+                if pre_jump::stage(&self.player, &handling, bearing, slow_down) == PreJump::Brake {
+                    // `_CalcInterceptAngle(v × 100, 0)` (@0x6b761).
+                    self.aim = intercept_angle(self.player.velocity * AIM_SCALE, Vec2::ZERO);
+                } else {
+                    self.aim_at_jump(to);
+                }
                 let thrust =
                     pre_jump::fly(&mut self.player, &handling, bearing, !self.stats.fast_jump);
                 self.thrust(thrust);
-                self.stage_jump(to, bearing, warp.map(|ticks| ticks.saturating_add(1)));
+                let warp = if again {
+                    warp
+                } else {
+                    warp.map(|ticks| ticks.saturating_add(1))
+                };
+                self.stage_jump(to, bearing, warp);
             }
             Some(Jump::Hyperspace { to, warp }) => {
+                self.aim_at_jump(to);
                 self.jump = Some(Jump::Hyperspace {
                     to,
                     warp: warp.saturating_add(1),
@@ -1774,6 +1821,29 @@ impl Session {
             }
         }
         regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+    }
+
+    /// Aims the player at the map bearing of `to`, the jump's next system,
+    /// from the current one, as the warp stage's turn does
+    /// (`_CalcInterceptAngle` @0x6b0cf; see the `double_time` module):
+    /// left alone when either is off the map.
+    fn aim_at_jump(&mut self, to: SystemId) {
+        let map = |id| self.galaxy.map().position(id);
+        if let Some((from, to)) = map(self.pilot.system).zip(map(to)) {
+            self.aim = intercept_angle(from, to);
+        }
+    }
+
+    /// Aims the player against its velocity, as the reverse key does
+    /// out of a jump, unless it moves slower than [`REVERSE_AIM_SPEED`] on
+    /// both axes (@0x6c7d8-0x6c88e; see the `double_time` module).
+    fn aim_in_reverse(&mut self) {
+        let velocity = self.player.velocity;
+        let fast = |speed: f32| f64::from(speed.abs()) >= REVERSE_AIM_SPEED;
+        if fast(velocity.x) || fast(velocity.y) {
+            let toward = intercept_angle(Vec2::ZERO, velocity * AIM_SCALE);
+            self.aim = (toward + 180) % 360;
+        }
     }
 
     /// `_HandlePlayer`'s dead branch (0x6870d-0x6888c), on each tick of a
@@ -1889,13 +1959,23 @@ impl Session {
     /// `mission_ships` module). Once the ships are in, each mission of
     /// `Flags` 0x0001 whose slot the setup took auto-aborts, in slot
     /// order.
+    ///
+    /// The ships dropped give their aux ships back, but the fleet's
+    /// escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
+    /// above 4 that the player leads, defending no stellar, of no
+    /// mission slot and not disabled, whole (@0x3bf7e-0x3bfb6). A
+    /// disabled escort has left the fleet already, and mission escorts
+    /// and fighters carry no aux mark, so the fleet is exactly the kept
+    /// ships with one; each keeps its mark into the new system.
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
         entering: Option<Entrance>,
     ) {
-        self.give_back_aux_ships(&BTreeSet::new());
+        let kept: BTreeSet<NpcId> = self.fleet.iter().copied().flatten().collect();
+        let marks = self.fleet_aux_marks();
+        self.give_back_aux_ships(&kept);
         let table = self.spawn_table(catalog);
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {
@@ -1913,6 +1993,7 @@ impl Session {
                 pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
+            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
@@ -1924,7 +2005,7 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths);
+        self.enter_escorts(&berths, &marks);
         if entering.is_none() {
             self.snap_mission_escorts();
         }
@@ -1979,7 +2060,10 @@ impl Session {
     /// the NPCs raises the first sighting of the ships watched
     /// ([`Session::watch_ship`]), and each mission ship that left the
     /// system raises [`Fate::Departed`] and is counted (see the
-    /// `mission_ships` module).
+    /// `mission_ships` module). Then, unless the ship is docked, each
+    /// hypergate shown steps its sprite (see the `gate_sprites` module),
+    /// while a jump plays too. The traffic ticks in the same [`World`] the
+    /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1996,37 +2080,14 @@ impl Session {
                 self.mission_ship_arrivals(catalog, None, chance);
                 self.unmark_inactive_mission_ships();
                 self.join_mission_escorts();
-                let system_govt = self.galaxy.govt(self.pilot.system);
-                let facts = control::Facts {
-                    pilot: &self.pilot,
-                    ammo_outfits: &self.ammo_outfits,
-                    armament: &self.armament,
-                };
-                let targeted = self.combat.targeted_damage();
-                let world = World {
-                    sites: &self.sites,
-                    player: Some(self.player_side()),
-                    govts: &self.govts,
-                    system_govt,
-                    record: self.system_record(),
-                    persons: PersonWorld {
-                        rules: &*self.person_rules.0,
-                        gone: &self.pilot.gone_persons,
-                        grudges: &self.pilot.grudges,
-                        control_bits: &*self.control_bits.0,
-                        pilot: &facts,
-                        fleet: &self.pilot.escorts,
-                    },
-                    escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
-                    led_speed: self.led_speed(),
-                    targeted: &targeted,
-                };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
                 let marks = self.mission_marks();
                 let still = self.held_through_the_warp();
-                self.traffic
-                    .tick_holding(behaviour, world, &strikes, &still, chance);
+                self.step_traffic(|traffic, world| {
+                    traffic.tick_holding(behaviour, world, &strikes, &still, chance);
+                });
+                self.announce_fleets(chance);
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -2034,16 +2095,109 @@ impl Session {
                 self.observe_watched();
             }
         }
+        if self.landed.is_none() {
+            self.step_gate_sprites(chance);
+        }
         self.clear_lost_target();
+    }
+
+    /// The NPCs answer the fight's strikes since the last traffic tick
+    /// now, as `behaviour` says ([`Traffic::answer`]): a ship the player
+    /// hit in its gate is held there and seen, and a person turned on the
+    /// player queues its quote. The original answers a hit inside
+    /// `_HandleShot` (@0x44385), before `_HandleShip`'s quotes and the
+    /// display pass, so the frame drawn after the fight shows the answer;
+    /// a flight calls this right after [`Session::tick_combat`]. Whatever
+    /// is left unanswered, [`Session::tick_traffic`] answers (as for a
+    /// caller that never calls this). While the ship is landed or jumping,
+    /// or before the system is set up, nothing is answered.
+    pub fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
+        if self.landed.is_some() || self.jumping().is_some() || self.traffic_due {
+            return;
+        }
+        let strikes = std::mem::take(&mut self.strikes);
+        self.step_traffic(|traffic, world| traffic.answer(behaviour, &world, &strikes));
+    }
+
+    /// Runs `f` on the traffic in the [`World`] it flies among in flight:
+    /// the system's stellars, the player, the governments, the system's
+    /// government and the player's legal record with it, the persons'
+    /// world, the escorts' tons, the led ships' speed factor, the damage
+    /// the fight's shots aim and the gates' widths. The tick
+    /// ([`Session::tick_traffic`]), the gate exit's arrivals pass
+    /// ([`Session::gate_exit_pass`]) and double time's second pass (see
+    /// the `double_time` module) step the traffic in it.
+    fn step_traffic(&mut self, f: impl FnOnce(&mut Traffic, World<'_>)) {
+        let system_govt = self.galaxy.govt(self.pilot.system);
+        let facts = control::Facts {
+            pilot: &self.pilot,
+            ammo_outfits: &self.ammo_outfits,
+            armament: &self.armament,
+        };
+        let targeted = self.combat.targeted_damage();
+        let type_widths = self.gate_type_widths();
+        let world = World {
+            sites: &self.sites,
+            player: Some(self.player_side()),
+            govts: &self.govts,
+            system_govt,
+            record: self.system_record(),
+            persons: PersonWorld {
+                rules: &*self.person_rules.0,
+                gone: &self.pilot.gone_persons,
+                grudges: &self.pilot.grudges,
+                control_bits: &*self.control_bits.0,
+                pilot: &facts,
+                fleet: &self.pilot.escorts,
+            },
+            escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
+            led_speed: self.led_speed(),
+            targeted: &targeted,
+            type_widths: &type_widths,
+            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
+            cloak_scanner: self.scanner().on_screen,
+        };
+        f(&mut self.traffic, world);
+    }
+
+    /// The ship-table slots a spawn whose original leaves `reserve` free
+    /// leaves free, as [`RuleKey::SpawnReserve`] reads: `reserve` by the
+    /// engine, none by the Bible.
+    pub(crate) fn spawn_reserve(&self, reserve: u32) -> u32 {
+        match self.rules.source_for(RuleKey::SpawnReserve) {
+            RuleSource::Engine => reserve,
+            RuleSource::Bible => 0,
+        }
+    }
+
+    /// Shows the arrival quote of each announced fleet the traffic brought
+    /// in, and beeps for it (`_HyperSpawnFleet` @0x42607-0x426f4): a line
+    /// of its `STR#` picked from the session's string lists
+    /// ([`random_string`](Self::random_string), `_GetRandomIndString`
+    /// @0x42642), its '#'s filled with digits
+    /// ([`fill_digits`](crate::traffic::quote::fill_digits)), both drawn on
+    /// `chance`. A missing or empty list gives an empty line, which is
+    /// shown and beeped for too, as the original's is. Both settle on the
+    /// tick the fleet comes, before the frame is drawn.
+    fn announce_fleets(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        for list in self.traffic.take_quotes() {
+            let line = self
+                .random_string(list, &mut &mut *chance)
+                .unwrap_or_default();
+            let text = crate::traffic::quote::fill_digits(&line, chance);
+            self.messages.push(SimMessage::FleetArrivalQuote(text));
+            self.sounds.push(SimSound::FleetArrivalQuote);
+        }
     }
 
     /// What the traffic flies among in flight: the system's stellars, the
     /// player, the governments, the system's government and the player's
     /// legal record with it (none in an independent system), and the
     /// persons' world: the session's rules and control bits, and the
-    /// pilot's persons gone and grudges. No damage is aimed in it: only
-    /// the traffic's tick fires, and it reads the fight's
-    /// ([`Session::tick_traffic`]).
+    /// pilot's persons gone and grudges. No damage is aimed in it, and no
+    /// gate's width is known: only the traffic's tick fires and flies, and
+    /// it reads the fight's and the gates' ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
         let system_govt = self.galaxy.govt(self.pilot.system);
         World {
@@ -2063,6 +2217,10 @@ impl Session {
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
             led_speed: self.led_speed(),
             targeted: &crate::ai::NO_AIMED_DAMAGE,
+            type_widths: &crate::traffic::NO_TYPE_WIDTHS,
+            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
+            cloak_scanner: self.scanner().on_screen,
         }
     }
 
@@ -2266,7 +2424,7 @@ impl Session {
         let strikes = self.combat.take_strikes();
         self.player_downed(player_was, &strikes, &mut &mut *chance);
         self.take_shoves();
-        self.eject_on_breakup(&mut &mut *chance);
+        self.eject_on_breakup(pass, &mut &mut *chance);
         let exploded = !was_destroyed && self.condition == Condition::Destroyed;
         if exploded {
             // Set only, never cleared here: double time's second pass
@@ -2279,11 +2437,10 @@ impl Session {
         }
         self.sound_the_klaxon(was_dying, exploded);
         if exploded {
-            self.sounds
-                .push(SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS));
+            self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
         }
         self.raise_disabled(&was, &mut &mut *chance);
-        self.answer_strikes(strikes, &was, rules.law);
+        self.settle_strikes(strikes, &was, rules.law);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties);
         self.sync_fleet();
@@ -2383,7 +2540,7 @@ impl Session {
     /// before it: refilling the invincible, holding persons' grudges,
     /// convicting the player by `law`, crediting kills and letting each
     /// hit NPC's cloak take its hit; then keeps them for the app.
-    fn answer_strikes(&mut self, mut strikes: Vec<Strike>, was: &[NpcBefore], law: &dyn LegalCode) {
+    fn settle_strikes(&mut self, mut strikes: Vec<Strike>, was: &[NpcBefore], law: &dyn LegalCode) {
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
         self.punish(&strikes, was, law);
@@ -2547,30 +2704,55 @@ impl Session {
     /// hyperspace included, until arrival clears the target. A pick that
     /// changes the target starts its brackets' fly-in
     /// ([`Session::target_brackets`]).
+    ///
+    /// Target Select (every [`TargetPick`] but the nearest two) raises
+    /// [`SimSound::TargetSelected`], `_beepSnd[2]`, on every pick, before
+    /// its search and whatever that finds (@0x69f4c-0x69f6f); Escort
+    /// Select is the same path, the searches reading Option themselves.
+    /// Closest Target raises [`SimSound::Refused`], `_beepSnd[3]`, when it
+    /// finds no ship (@0x6aab8-0x6aadb), [`SimSound::TargetSelected`]
+    /// when it picks a ship other than the target (@0x6aa32-0x6aa55), and
+    /// nothing when it picks the target again. Both beeps sit behind the
+    /// ship's +0x6e word being 1 (@0x69f41, @0x6aa16), but only
+    /// `_InitObjects` (@0x1c373) and the R pick (@0x6aa71) write it, both
+    /// with 1, so that gate is not modelled. The original's per-press
+    /// latches (`0xdede8`, `0xdee50`) are the view's press-only filter.
+    /// While landed the keys are silent.
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         let before = self.target;
         if self.landed.is_none() {
             let scanner = self.scanner();
             let npcs = self.traffic.npcs();
             let from = self.player.position;
+            let closest = |npc: &Npc| match pick {
+                TargetPick::NearestThreat => npc.threatens_player_among(npcs),
+                _ => true,
+            };
             match pick {
-                TargetPick::Nearest => {
-                    let nearest = targeting::nearest(npcs, from, scanner, |_| true);
-                    self.target = nearest.or(self.target);
+                TargetPick::Nearest | TargetPick::NearestThreat => {
+                    match targeting::nearest(npcs, from, scanner, closest) {
+                        None => self.sounds.push(SimSound::Refused),
+                        Some(id) if Some(id) == before => {}
+                        Some(id) => {
+                            self.sounds.push(SimSound::TargetSelected);
+                            self.target = Some(id);
+                        }
+                    }
                 }
-                TargetPick::NearestThreat => {
-                    let threat = |npc: &Npc| npc.threatens_player_among(npcs);
-                    let nearest = targeting::nearest(npcs, from, scanner, threat);
-                    self.target = nearest.or(self.target);
+                TargetPick::Next => {
+                    self.sounds.push(SimSound::TargetSelected);
+                    self.target = targeting::next(npcs, self.target, scanner);
                 }
-                TargetPick::Next => self.target = targeting::next(npcs, self.target, scanner),
                 TargetPick::NextEscort => {
+                    self.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::next_escort(npcs, self.target, scanner);
                 }
                 TargetPick::Previous => {
+                    self.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::previous(npcs, self.target, scanner);
                 }
                 TargetPick::PreviousEscort => {
+                    self.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::previous_escort(npcs, self.target, scanner);
                 }
             }
@@ -2854,7 +3036,13 @@ impl Session {
     /// to `bearing`, `warp` the warp's clock this tick (see [`Jump`]):
     /// none while it brakes, and from 0 on the tick it stops braking,
     /// which leaves the pilot past the tutorial (@0x6b603) and sounds the
-    /// warp-up ([`SimSound::JumpBegan`], `snd ` 128, @0x6b60d-0x6b690).
+    /// warp-up: `snd ` 129 in double time
+    /// ([`SimSound::JumpBeganInDoubleTime`], @0x6b60d-0x6b63f), else 128
+    /// ([`SimSound::JumpBegan`], @0x6b645-0x6b669), played at
+    /// @0x6b690, unless that warp-up is still playing
+    /// (`ST_IsSoundPlaying` @0x6b617-0x6b62b, @0x6b645-0x6b658), when it
+    /// skips the play alone: the clock and the tutorial's flag are already
+    /// set.
     /// Once the ship is ready to turn no further and slow no more, the
     /// jump begins: the thrust stops, the glow goes out and the led ships
     /// let go of their targets.
@@ -2876,11 +3064,34 @@ impl Session {
         if started {
             // The pilot is past the tutorial (`_HandlePlayer` @0x6b603).
             self.tutorial.jumped();
-            self.sounds.push(SimSound::JumpBegan);
+            self.sound_warp_up();
         }
         if self.jumping().is_some() {
             self.let_go_of_led_targets();
         }
+    }
+
+    /// Sounds the warp-up for the warp stage's start: 129 in double time,
+    /// else 128, unless it is still playing (see [`Session::stage_jump`]).
+    fn sound_warp_up(&mut self) {
+        let double_time = self.double_time;
+        if self.warp_ups.playing(double_time) {
+            return;
+        }
+        let duration = self.warp_sounds[usize::from(double_time)];
+        self.warp_ups.start(double_time, duration);
+        self.sounds.push(if double_time {
+            SimSound::JumpBeganInDoubleTime
+        } else {
+            SimSound::JumpBegan
+        });
+    }
+
+    /// Halts each of `sounds` that is playing ([`SimSound::Halt`]), the
+    /// warp-ups among them over for the session too.
+    pub(super) fn halt_sounds(&mut self, sounds: &'static [crate::catalog::SoundId]) {
+        self.warp_ups.halt(sounds);
+        self.sounds.push(SimSound::Halt(sounds));
     }
 
     /// The warp's clock: the engine's ticks since the warp stage began,
@@ -2890,6 +3101,13 @@ impl Session {
             Jump::PreJump { warp, .. } => warp,
             Jump::Hyperspace { warp, .. } => Some(warp),
         }
+    }
+
+    /// The warp sound's duration now, d, in Mac ticks: `snd ` 129's in
+    /// double time, else 128's, as `_WarpSoundDuration` gives it
+    /// (@0x8203-0x8224; [`warp::warp_sound_duration`]).
+    fn warp_sound(&self) -> u32 {
+        warp::warp_sound_duration(self.warp_sounds, self.double_time)
     }
 
     /// Whether `_ScanPlayer`'s jump-timing check holds a scan back now
@@ -2904,7 +3122,7 @@ impl Session {
         warp::held(
             self.warp_clock().map(warp::mac_ticks),
             warp::warp_factor(flags),
-            self.warp_sound,
+            self.warp_sound(),
             self.condition != Condition::Intact,
         )
     }
@@ -3009,8 +3227,14 @@ impl Session {
     /// [`SessionEvent::GalaxyChanged`] when it changed anything.
     ///
     /// Its first draw on `chance` arms the escort-strength timer (see
-    /// [`strength`]), before the days, the roll
-    /// table and the population, as the original does (@0x6c013).
+    /// [`strength`]). The original's order is `Rand(0x800)` (@0x6bfdd),
+    /// the escort-strength timer (@0x6c013), the roll table
+    /// (@0x6c040-0x6c066), the days (@0x6c144), then the setup
+    /// (@0x6c1f9). Ours lets the days go by (`take_jump_cost`) before
+    /// `enter_system` redraws the offers (`Offers::redraw`). That is
+    /// harmless: the fill reads nothing the days change, and the days
+    /// don't read the table. Only the order of the draws differs, and the
+    /// engine doesn't match that.
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -3020,6 +3244,9 @@ impl Session {
             return None;
         };
         self.jump = None;
+        // The warp-up has ended, or the warp's end halted it
+        // (`_HandlePlayer` @0x6c69d-0x6c6d2).
+        self.warp_ups.clear();
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
@@ -3233,7 +3460,26 @@ impl Session {
     /// destroyed ship's press is refused the same way before it selects
     /// anything, as the land key's breakup-timer gate refuses it
     /// (@0x6a8cb).
+    ///
+    /// A refusal from the dock request that [`LandingRefusal::beeps`]
+    /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
+    /// @0x676fe), once a press, a disabled ship's not-landable target
+    /// too, and a not-landable stellar the press selected itself, as its
+    /// dock request refuses it. A press with no target and nothing with
+    /// the can-land flag makes no dock request in the original
+    /// (`_FindNearestStellar` gives -1, @0x6a94c), so its
+    /// [`LandingRefusal::NothingLandable`] is silent.
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
+        let press = self.land_press();
+        if let Err(refusal) = &press
+            && refusal.beeps()
+        {
+            self.sounds.push(SimSound::Refused);
+        }
+        press
+    }
+
+    fn land_press(&mut self) -> Result<LandPress, LandingRefusal> {
         if self.jump.is_some() {
             return Err(LandingRefusal::Jumping);
         }
@@ -3418,8 +3664,13 @@ impl Session {
     /// path in the original (`_HandlePlayerDockRequest` @0x66f40,
     /// @0x6706f). The special ships following the player are decided
     /// next, as [`RuleKey::GateFollow`] says (see the `gate_follow`
-    /// module): those that follow come out of the exit gate after the
-    /// player, or where it arrived like a jump. Last, every ship the
+    /// module). Once the system is entered, the exit runs one more
+    /// `_EnterMoreShips` pass before the first frame
+    /// (`Session::gate_exit_pass`, @0x672f2): an arrival may come on
+    /// it, and the escort-strength timer counts down once, so it fires on
+    /// the n-th tick after the exit, not the (n + 1)-th as after a
+    /// take-off. Then the special ships that follow come out of the exit
+    /// gate after the player, or where it arrived like a jump. Last, every ship the
     /// player leads comes out of the exit gate after it, as
     /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module). The
     /// exit then starts the take-off grace, as the take-off's path ends
@@ -3450,9 +3701,12 @@ impl Session {
     /// Brings the ship out of `exit`, a gate of `kind`, in `system`: see
     /// [`Session::enter_wormhole`]. Before it enters, the exit decides
     /// what becomes of the special ships following the player
-    /// ([`Session::exit_gate_slots`]); once it has, those that follow come
+    /// ([`Session::exit_gate_slots`]); once it has, the exit's arrivals
+    /// pass runs ([`Session::gate_exit_pass`]), those that follow come
     /// out of the gate after it ([`Session::emerge_followers`]), and then
-    /// every ship the player leads ([`Session::lead_out_of_gate`]).
+    /// every ship the player leads ([`Session::lead_out_of_gate`]), in the
+    /// original's order (@0x67159, @0x672e0, @0x672f2, @0x67346,
+    /// @0x674ef).
     fn come_out(
         &mut self,
         system: SystemId,
@@ -3490,8 +3744,9 @@ impl Session {
             },
         };
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
-        self.emerge_followers(exit.position, catalog, chance);
-        self.lead_out_of_gate(exit.position, chance);
+        self.gate_exit_pass(catalog, chance);
+        self.emerge_followers(exit.id, exit.position, chance);
+        self.lead_out_of_gate(exit.id, exit.position, chance);
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
         self.start_takeoff_grace();
@@ -3509,6 +3764,8 @@ impl Session {
         let stellar_sound = site.and_then(|site| site.landing_sound);
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
+        // A warp-up still playing is taken as over (see `warp::WarpUps`).
+        self.warp_ups.clear();
         self.pilot.stellar = Some(stellar);
         self.bar_news = None;
         self.bar_nav = None;
@@ -5241,7 +5498,8 @@ impl Session {
             return Some(Assigned::Escort);
         }
         let record = self.ship_record(npc.ship).cloned();
-        let Some(record) = record.filter(|_| self.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM) else {
+        let reserve = self.spawn_reserve(CAPTURE_RESERVE);
+        let Some(record) = record.filter(|_| self.traffic.free_berth(reserve).is_some()) else {
             self.close_plunder();
             return Some(Assigned::Abandoned);
         };
@@ -5433,6 +5691,15 @@ impl Session {
         assert_eq!(self.talk, None, "the hail: {case}");
     }
 }
+
+/// What the player's velocity is scaled by before the brake and the
+/// reverse key aim against it (100.0, f32 @0xdd060; see the
+/// `double_time` module).
+const AIM_SCALE: f32 = 100.0;
+
+/// The speed, on either axis, from which the reverse key aims against the
+/// velocity (0.05, f64 @0xdd990, @0x6c7f4 and @0x6c81a).
+const REVERSE_AIM_SPEED: f64 = 0.05;
 
 /// The most restarts a counted sale makes before the port ends it (see
 /// [`Session::outfit_order`]): the list's [`LIST_SLOTS`]. Without an
@@ -5720,8 +5987,9 @@ pub(super) mod tests {
         FAST_JUMP, FAST_JUMP_HULL, HYPERSPACE_DAYS, HYPERSPACE_DISTANCE, MULTI_JUMP,
     };
     use crate::testkit::{
-        FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, edge_lander, fly_out,
-        hideable, hiding_bit, jump, jump_with, land_now, outfit, planet, star, starting,
+        FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, click_stellar,
+        edge_lander, fly_out, hideable, hiding_bit, jump, jump_with, land_now, outfit, planet,
+        star, starting,
     };
     use entry::NoTraffic;
 
@@ -6979,7 +7247,11 @@ pub(super) mod tests {
             assert!(braked < 1000, "never slowed");
         }
         assert_eq!(session.warp_clock(), Some(0), "stamped afresh");
-        assert_eq!(warp_ups(&session.take_sounds()), 1, "the warp-up again");
+        assert_eq!(
+            warp_ups(&session.take_sounds()),
+            0,
+            "128 still playing: the still-playing skip (@0x6b645-0x6b658)"
+        );
     }
 
     #[test]
@@ -8078,21 +8350,21 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_refused_landing_emits_nothing() {
+    fn a_refused_landing_beeps_only_from_the_dock_request() {
         let mut session = Session::start(&catalog()).expect("starts");
         for _ in 0..20 {
             session.tick(THRUST);
         }
         session.take_sounds();
         land_now(&mut session).expect_err("refused");
-        assert_eq!(session.take_sounds(), []);
+        assert_eq!(session.take_sounds(), [SimSound::Refused], "@0x676aa");
         let mut jumping = Session::start(&edge_lander()).expect("starts");
         jumping.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut jumping);
         jumping.begin_jump().expect("jumps");
         jumping.take_sounds();
         assert_eq!(jumping.land(), Err(LandingRefusal::Jumping));
-        assert_eq!(jumping.take_sounds(), []);
+        assert_eq!(jumping.take_sounds(), [], "@0x6a8cb");
     }
 
     #[test]
@@ -14075,7 +14347,8 @@ pub(super) mod tests {
     #[test]
     fn every_ai_type_lands_peacefully() {
         for ai_type in 1..=4 {
-            let how = Outcome::Landed(StellarId(129));
+            // 129, 2000 out, is beyond the 999 bound on a destination.
+            let how = Outcome::Landed(StellarId(128));
             let catalog = trafficked(130, 1, ai_type);
             let mut session = Session::start(&catalog).expect("starts");
             session.populate(&catalog, &mut NeverFires);
@@ -14270,7 +14543,7 @@ pub(super) mod tests {
 
     // Fleets.
 
-    use crate::catalog::{EscortRecord, FleetId, FleetRecord};
+    use crate::catalog::{CommCatalog, EscortRecord, FleetId, FleetRecord};
 
     /// `flët` `id`, linked by `link_syst`: a ship 129 lead and 1-3 ship
     /// 130 escorts, for govt 150.
@@ -14286,6 +14559,8 @@ pub(super) mod tests {
             govt: Some(GovtId(150)),
             link_syst,
             appear_on: Test::default(),
+            quote: None,
+            flags: 0,
         }
     }
 
@@ -14426,6 +14701,55 @@ pub(super) mod tests {
         let npc = &session.npcs()[0];
         assert!(npc.emerging(), "{:?}", npc.mode);
         assert_eq!(npc.state.position, Vec2::new(300.0, -400.0));
+    }
+
+    /// A session of `catalog` populated, its one NPC flying from the
+    /// centre at rest with `goal`.
+    fn flying_for(catalog: &FakePilotCatalog, goal: Goal) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.populate(catalog, &mut NeverFires);
+        assert_eq!(session.npcs().len(), 1);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.mode = crate::traffic::npc::Mode::Flying;
+        npc.emerges_from = None;
+        npc.state = ShipState::default();
+        npc.goal = goal;
+        session
+    }
+
+    #[test]
+    fn an_npc_set_on_a_hypergate_flies_to_it_and_leaves_the_system_through_it() {
+        let catalog = with_hypergate(trafficked(130, 1, 3), None);
+        for goal in [Goal::Land(StellarId(141)), Goal::EnterGate(StellarId(141))] {
+            let mut session = flying_for(&catalog, goal);
+            assert_eq!(
+                first_departure(&mut session, &catalog),
+                Outcome::EnteredGate(StellarId(141)),
+                "{goal:?}"
+            );
+            assert_eq!(session.npcs(), []);
+        }
+    }
+
+    #[test]
+    fn a_ship_of_a_government_preferring_wormholes_leaves_through_one() {
+        let mut catalog = trafficked(130, 1, 3);
+        catalog.sites[0].1.push(LandingSite {
+            flags2: crate::gate::WORMHOLE,
+            ..planet(142, -300.0, 400.0)
+        });
+        catalog.govts = vec![crate::catalog::GovtRecord {
+            flags2: crate::govt::PREFERS_WORMHOLES,
+            ..crate::testkit::govt(140)
+        }];
+        for goal in [Goal::Land(StellarId(142)), Goal::Idle] {
+            let mut session = flying_for(&catalog, goal);
+            assert_eq!(
+                first_departure(&mut session, &catalog),
+                Outcome::EnteredGate(StellarId(142)),
+                "{goal:?}: set on it, or picking it idle over planet 128"
+            );
+        }
     }
 
     #[test]
@@ -14572,6 +14896,364 @@ pub(super) mod tests {
         );
         assert_eq!(session.reserves().shield.now, 30.0, "untouched");
         assert_eq!(session.reserves().armor.now, 45.0);
+    }
+
+    #[test]
+    fn a_ship_led_out_of_a_gate_fires_nothing_while_it_waits_or_bursts() {
+        // `_HandleShip` skips a waiting ship's fire step (@0x34a54-0x34a72)
+        // and its burst, goal 8 sub-goal 0xa, fires nothing
+        // (@0x8dd61-0x8dd93, @0x8f3c8-0x8f3d9).
+        use crate::traffic::npc::Mode;
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let escort = &mut session.traffic.npcs_mut()[0];
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        escort.trigger = FIRE;
+        escort.target = Some(ShipRef::Player);
+        session.lead_out_of_gate(StellarId(310), Vec2::new(0.0, -100.0), &mut NeverFires);
+        assert!(session.npcs()[0].emerging());
+        let mut fired = 0;
+        let mut out = false;
+        for _ in 0..200 {
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            if !matches!(
+                session.npcs()[0].mode,
+                Mode::Emerging { .. } | Mode::LeavingGate { .. }
+            ) {
+                out = true;
+                break;
+            }
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            fired += session
+                .take_combat_events()
+                .iter()
+                .filter(|event| {
+                    matches!(event, CombatEvent::Fired { ship, .. } if *ship == ShipRef::Npc(NpcId(0)))
+                })
+                .count();
+        }
+        assert!(out, "it came out of the gate");
+        assert_eq!(fired, 0);
+    }
+
+    #[test]
+    fn a_ship_waiting_in_a_gate_can_be_hit() {
+        // No shot-collision path reads goal 0x15: the only readers are
+        // `_AIShipIsEmergingFromHypergate`'s callers, and
+        // `_AICalcFormationPositions` (@0x851a7), `_HighLevelAIHandler`
+        // (@0x8dd61) and `_AIDispatch` (@0x8ff18).
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        session.hold_trigger(FIRE);
+        let mut hit = false;
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let Some(npc) = session.npcs().first() else {
+                break;
+            };
+            assert!(npc.emerging(), "still waiting");
+            if npc.reserves.shield.now < 30.0 {
+                hit = true;
+                break;
+            }
+        }
+        assert!(hit, "shot while it waits");
+    }
+
+    /// The session facing a warship waiting 60 ticks in a gate 100 above
+    /// the player, read by `arrival_hits`, after the player's shots have
+    /// hit it and the traffic has ticked once since.
+    fn the_player_hits_a_ship_in_its_gate(arrival_hits: RuleSource) -> Session {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.rules = Rulebook::default().with_override(RuleKey::ArrivalHits, arrival_hits);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        npc.ai_type = crate::traffic::npc::AiType::Warship;
+        session.hold_trigger(FIRE);
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].reserves.shield.now < 30.0 {
+                break;
+            }
+        }
+        assert!(session.npcs()[0].reserves.shield.now < 30.0, "hit");
+        session.hold_trigger(Trigger::default());
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        session
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_can_be_targeted_and_once_out_fires_at_the_player() {
+        // `_DamageShip` calls `_AIMakeShipAttackPlayer` (@0x3be66-0x3be69):
+        // goal 4, so `_ShipVisibleToShip` (@0x972d) sees it.
+        use crate::traffic::npc::Mode;
+        let catalog = armed();
+        let mut session = the_player_hits_a_ship_in_its_gate(RuleSource::Engine);
+        assert!(
+            matches!(session.npcs()[0].mode, Mode::HeldAtGate { .. }),
+            "{:?}",
+            session.npcs()[0].mode
+        );
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+        let mut fired = 0;
+        for _ in 0..120 {
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            let npc = &session.npcs()[0];
+            let held = matches!(npc.mode, Mode::HeldAtGate { .. });
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let shots = session
+                .take_combat_events()
+                .iter()
+                .filter(|event| {
+                    matches!(event, CombatEvent::Fired { ship, .. } if *ship == ShipRef::Npc(NpcId(0)))
+                })
+                .count();
+            if held {
+                assert_eq!(shots, 0, "it fires nothing held");
+            }
+            fired += shots;
+        }
+        assert_eq!(session.npcs()[0].mode, Mode::Flying);
+        assert!(fired > 0, "once out it fires at the player");
+    }
+
+    /// [`armed`], `STR#` 7101 #1 "Prepare to die!".
+    fn quoting_armed() -> FakePilotCatalog {
+        FakePilotCatalog {
+            strings: vec![(7101, vec!["Prepare to die!".to_owned()])],
+            ..armed()
+        }
+    }
+
+    /// NPC 0 of `session` becomes a warship flown by a person of `Flags`
+    /// 0x0010, saying `STR#` 7101 #1.
+    fn make_quoting_warship(session: &mut Session) {
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.ai_type = crate::traffic::npc::AiType::Warship;
+        npc.person = Some(crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(151),
+            flags: crate::person::QUOTE_ON_ATTACK,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: 1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: false,
+            quoted: false,
+            quoted_at: None,
+        });
+    }
+
+    /// The fight's ticks with the trigger held until NPC 0's shield drops.
+    fn shoot_until_hit(session: &mut Session) {
+        session.hold_trigger(FIRE);
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].reserves.shield.now < 30.0 {
+                return;
+            }
+        }
+        panic!("never hit");
+    }
+
+    /// The hail quotes said this quote tick, and whether one beeped.
+    fn quotes_said(session: &mut Session, catalog: &FakePilotCatalog) -> (Vec<String>, bool) {
+        session.tick_quotes(catalog, &mut NeverFires);
+        let said = session.take_quotes().into_iter().map(|quote| quote.text);
+        let beeped = session.take_sounds().contains(&SimSound::HailQuote);
+        (said.collect(), beeped)
+    }
+
+    #[test]
+    fn the_players_hit_on_a_person_says_its_quote_and_beeps() {
+        // A flying ship the player hits targets it (`_DamageShip` +0x70
+        // @0x3bcf6) before `_AIMakeShipAttackPlayer` asks
+        // `_ExtendedIsThreatToPlayer` (@0x89c53), so the quote is
+        // `_HandleShip`'s, said as it threatens the player (@0x33d38).
+        let catalog = quoting_armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        make_quoting_warship(&mut session);
+        session.take_sounds();
+        shoot_until_hit(&mut session);
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        assert_eq!(
+            quotes_said(&mut session, &catalog),
+            (vec!["Prepare to die!".to_owned()], true)
+        );
+        let person = session.npcs()[0].person.expect("a person");
+        assert!(person.quoted);
+        assert!(person.quoted_at.is_some(), "`_HandleShip`'s quote");
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            assert_eq!(quotes_said(&mut session, &catalog), (vec![], false));
+        }
+    }
+
+    #[test]
+    fn the_players_hit_on_a_cloaked_person_says_its_quote_at_once_and_beeps() {
+        // `_ExtendedIsThreatToPlayer` asks `_ShipVisibleToShip(ship,
+        // player)` (@0x81bc6): a cloaked ship the player can't see is no
+        // threat as `_AIMakeShipAttackPlayer` asks (@0x89c53), so it says
+        // its quote at once.
+        let catalog = quoting_armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        make_quoting_warship(&mut session);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.take_sounds();
+        shoot_until_hit(&mut session);
+        session.hold_trigger(Trigger::default());
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert_eq!(
+            quotes_said(&mut session, &catalog),
+            (vec!["Prepare to die!".to_owned()], true)
+        );
+        let person = session.npcs()[0].person.expect("a person");
+        assert!(person.quoted);
+        assert_eq!(
+            person.quoted_at, None,
+            "the attack's quote, not `_HandleShip`'s"
+        );
+        // A shot still in flight that hits it while it is unseen says it
+        // again: `_DamageShip` asks the gate for each hit (@0x3be69), and
+        // the gate reads no "quoted" (+0xbc). Nothing else does.
+        let mut again = 0;
+        for tick in 0..60 {
+            let shield = session.npcs()[0].reserves.shield.now;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let hit = session.npcs()[0].reserves.shield.now < shield;
+            let unseen = session.npcs()[0].cloak.is_cloaked();
+            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            let said = quotes_said(&mut session, &catalog);
+            if hit && unseen {
+                again += 1;
+                assert_eq!(said, (vec!["Prepare to die!".to_owned()], true), "{tick}");
+            } else {
+                assert_eq!(said, (vec![], false), "{tick}");
+            }
+        }
+        assert!(again > 0, "a later hit, still unseen");
+        // Scanned on screen within 200, it is seen: a threat, whose quote
+        // is `_HandleShip`'s.
+        let catalog = FakePilotCatalog {
+            strings: vec![(7101, vec!["Prepare to die!".to_owned()])],
+            ..scanning(crate::cloak::SCAN_SCREEN)
+        };
+        let mut session = holding_260(&catalog);
+        make_quoting_warship(&mut session);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        shoot_until_hit(&mut session);
+        session.hold_trigger(Trigger::default());
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert!(
+            session.traffic.take_attack_quotes().is_empty(),
+            "no attack quote queued"
+        );
+    }
+
+    #[test]
+    fn the_worlds_cloak_scanner_is_the_players_on_screen_scanner() {
+        for (scan, on_screen) in [
+            (crate::cloak::SCAN_SCREEN, true),
+            (crate::cloak::SCAN_RADAR, false),
+        ] {
+            let catalog = scanning(scan);
+            let mut session = holding_260(&catalog);
+            assert_eq!(session.world().cloak_scanner, on_screen, "{scan:#x}");
+            let mut stepped = None;
+            session.step_traffic(|_, world| stepped = Some(world.cloak_scanner));
+            assert_eq!(stepped, Some(on_screen), "{scan:#x}: in flight");
+        }
+        let catalog = armed();
+        assert!(!facing_an_npc(&catalog, 180).world().cloak_scanner);
+    }
+
+    /// `catalog`'s session facing a warship waiting 60 ticks in a gate 100
+    /// above the player, flown by a person of `Flags` 0x0010, once the
+    /// player's shots have hit it, nothing answered yet.
+    fn hit_in_its_gate(catalog: &FakePilotCatalog) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        make_quoting_warship(&mut session);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        session.take_sounds();
+        shoot_until_hit(&mut session);
+        session.hold_trigger(Trigger::default());
+        session
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_is_held_and_seen_in_the_hits_step() {
+        // The original answers inside `_HandleShot` (@0x44385), before
+        // `_HandleShip` and the display pass.
+        use crate::traffic::npc::Mode;
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        let npc = &session.npcs()[0];
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 20 });
+        assert!(npc.arrived());
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+    }
+
+    #[test]
+    fn answered_strikes_are_not_answered_again_by_the_traffic_tick() {
+        use crate::traffic::npc::Mode;
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        let provoked = session.npcs()[0].provoked;
+        assert!(provoked > 0.0);
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        let npc = &session.npcs()[0];
+        assert_eq!(npc.provoked, provoked);
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 19 });
+    }
+
+    #[test]
+    fn a_held_person_says_its_quote_and_beeps_in_the_hits_step() {
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert_eq!(
+            quotes_said(&mut session, &catalog),
+            (vec!["Prepare to die!".to_owned()], true),
+            "not when the hold is out"
+        );
+    }
+
+    #[test]
+    fn strikes_are_left_unanswered_while_landed_jumping_or_before_the_system_is_set_up() {
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.landed = Some(crate::catalog::StellarId(128));
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert!(session.npcs()[0].emerging(), "landed");
+        session.landed = None;
+        session.traffic_due = true;
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        assert!(session.npcs()[0].emerging(), "not set up");
+        assert!(!session.strikes.is_empty(), "kept");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_ship_the_player_hits_in_its_gate_waits_on_unseen() {
+        use crate::traffic::npc::Mode;
+        let mut session = the_player_hits_a_ship_in_its_gate(RuleSource::Bible);
+        assert_eq!(session.npcs()[0].mode, Mode::Emerging { ticks_left: 59 });
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Next), None);
     }
 
     /// The fight's 60 ticks of the player and NPC 0, 100 above it, firing
@@ -16042,6 +16724,79 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn every_target_select_key_beeps_before_its_search_found_a_ship_or_not() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.take_sounds();
+        for pick in [
+            TargetPick::Next,
+            TargetPick::NextEscort,
+            TargetPick::Previous,
+            TargetPick::PreviousEscort,
+        ] {
+            session.select_target(pick);
+            assert_eq!(
+                session.take_sounds(),
+                [SimSound::TargetSelected],
+                "{pick:?}"
+            );
+        }
+        let mut empty = Session::start(&catalog).expect("starts");
+        empty.take_sounds();
+        assert_eq!(empty.select_target(TargetPick::Next), None);
+        assert_eq!(empty.take_sounds(), [SimSound::TargetSelected], "no ships");
+    }
+
+    #[test]
+    fn closest_target_beeps_a_new_pick_refuses_none_and_is_silent_on_the_same_ship() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.take_sounds();
+        session.target = Some(NpcId(0));
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(NpcId(0))
+        );
+        assert_eq!(session.take_sounds(), [SimSound::Refused], "no threat");
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+        assert_eq!(session.take_sounds(), [SimSound::TargetSelected]);
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+        assert_eq!(session.take_sounds(), [], "the same ship");
+        session.target = None;
+        session.traffic.npcs_mut()[0].goal = Goal::Attack(ShipRef::Player);
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(NpcId(0))
+        );
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::TargetSelected],
+            "a threat"
+        );
+        let mut empty = Session::start(&catalog).expect("starts");
+        empty.take_sounds();
+        assert_eq!(empty.select_target(TargetPick::Nearest), None);
+        assert_eq!(empty.take_sounds(), [SimSound::Refused], "no ships");
+    }
+
+    #[test]
+    fn the_target_keys_are_silent_while_landed() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.landed = Some(crate::catalog::StellarId(128));
+        session.take_sounds();
+        for pick in [
+            TargetPick::Next,
+            TargetPick::Nearest,
+            TargetPick::NearestThreat,
+        ] {
+            session.select_target(pick);
+        }
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
     fn a_held_target_of_an_untargetable_type_is_not_let_go() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
@@ -16664,6 +17419,164 @@ pub(super) mod tests {
         );
     }
 
+    // The land key's refusal beep, `_beepSnd[3]` (`snd ` 153), as
+    // `_HandlePlayerDockRequest` plays it.
+
+    /// [`catalog`] with no stellar landable.
+    fn unlandable() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        for site in &mut catalog.sites[0].1 {
+            site.flags = 0;
+        }
+        catalog
+    }
+
+    #[test]
+    fn l_on_an_unlandable_target_beeps() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut session = Session::start(&unlandable()).expect("starts");
+            session.condition = condition;
+            session.select_stellar(StellarPick::Slot(0));
+            let _ = session.take_sounds();
+            assert!(matches!(
+                session.land(),
+                Err(LandingRefusal::NotLandable { .. })
+            ));
+            assert_eq!(
+                session.take_sounds(),
+                [SimSound::Refused],
+                "@0x67e8f, before _IsDisabled: {condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn l_with_no_target_and_nothing_landable_is_silent() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut session = Session::start(&unlandable()).expect("starts");
+            session.condition = condition;
+            let _ = session.take_sounds();
+            assert_eq!(session.land(), Err(LandingRefusal::NothingLandable));
+            assert_eq!(
+                session.take_sounds(),
+                [],
+                "_FindNearestStellar gives -1, no dock request (@0x6a94c): {condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn l_with_no_target_beeps_as_the_nearest_it_selects_is_refused() {
+        let mut catalog = catalog();
+        for site in &mut catalog.sites[0].1 {
+            site.flags = StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED;
+        }
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.condition = condition;
+            let _ = session.take_sounds();
+            assert!(matches!(
+                session.land(),
+                Err(LandingRefusal::NotLandable { .. })
+            ));
+            assert!(
+                session.take_sounds().contains(&SimSound::Refused),
+                "the dock request refuses the pick (@0x66977, @0x67e8f): {condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn l_too_far_beeps_once() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("requests");
+        let _ = session.take_sounds();
+        assert!(matches!(session.land(), Err(LandingRefusal::TooFar { .. })));
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Refused],
+            "before the approach clears (@0x676fe)"
+        );
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.select_stellar(StellarPick::Slot(1));
+        session.land().expect("requests");
+        session.tick(Controls::default());
+        let _ = session.take_sounds();
+        assert!(matches!(session.land(), Err(LandingRefusal::TooFar { .. })));
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Refused],
+            "out of reach (@0x676aa)"
+        );
+    }
+
+    #[test]
+    fn l_too_fast_beeps() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("requests");
+        session.tick(Controls::default());
+        session.player.velocity.x = 5.0;
+        let _ = session.take_sounds();
+        assert!(matches!(
+            session.land(),
+            Err(LandingRefusal::TooFast { .. })
+        ));
+        assert_eq!(session.take_sounds(), [SimSound::Refused], "@0x676fe");
+    }
+
+    #[test]
+    fn l_denied_sounds_traffic_control_and_no_beep() {
+        let catalog = governed([Some(WANTED), Some(LAWFUL)], None);
+        let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
+        let _ = session.take_sounds();
+        assert!(matches!(session.land(), Err(LandingRefusal::Denied { .. })));
+        let sounds = session.take_sounds();
+        assert!(sounds.contains(&SimSound::TrafficControl), "@0x67ec6");
+        assert!(!sounds.contains(&SimSound::Refused), "{sounds:?}");
+    }
+
+    #[test]
+    fn l_refused_as_disabled_jumping_or_with_no_stellars_is_silent() {
+        let mut session = disabled(&catalog());
+        session.select_stellar(StellarPick::Slot(0));
+        let _ = session.take_sounds();
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.take_sounds(), [], "0x67eef");
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.condition = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        let _ = session.take_sounds();
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.take_sounds(), [], "@0x6a8cb");
+        let empty = FakePilotCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        };
+        let mut session = Session::start(&empty).expect("starts");
+        let _ = session.take_sounds();
+        assert_eq!(session.land(), Err(LandingRefusal::NoStellars));
+        assert_eq!(session.take_sounds(), [], "@0x6a90f");
+    }
+
+    #[test]
+    fn l_that_requests_or_lands_does_not_beep() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("requests");
+        assert!(!session.take_sounds().contains(&SimSound::Refused));
+        session.tick(Controls::default());
+        let _ = session.take_sounds();
+        session.land().expect("lands");
+        assert!(!session.take_sounds().contains(&SimSound::Refused));
+        let mut session = Session::start(&gated()).expect("starts");
+        session.land().expect("requests");
+        session.tick(Controls::default());
+        let _ = session.take_sounds();
+        let _ = session.land();
+        assert!(!session.take_sounds().contains(&SimSound::Refused));
+    }
+
     #[test]
     fn a_disabled_players_l_with_nothing_landable_selects_nothing_as_an_intact_one_does() {
         let mut catalog = catalog();
@@ -17127,6 +18040,17 @@ pub(super) mod tests {
             }
         }
         assert!(seen.len() > explosion + 3, "the hold is watched too");
+    }
+
+    #[test]
+    fn the_players_explosion_ends_a_warp_up_playing() {
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        session.warp_ups.start(true, 100_000);
+        session.warp_ups.start(false, 100_000);
+        from_the_breakup(&mut session, &catalog, 9);
+        assert_eq!(session.condition, Condition::Destroyed);
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
     }
 
     #[test]
@@ -19323,6 +20247,31 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn boarding_a_fleet_ship_offers_none_of_the_cargo_in_its_hold() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let trader = &mut session.traffic.npcs_mut()[0];
+        // A `Flags` 0x0001 fleet's trader: no düde, so no booty, and its
+        // random cargo in its hold.
+        trader.booty = 0;
+        trader.cargo = Some((Good::Commodity(3), 7));
+        let boarding = session.board(
+            &NovaLaw::default(),
+            &NovaBoarding::default(),
+            &mut Draws::of(&[]),
+        );
+        let Ok(Boarding::Opened(view)) = boarding else {
+            panic!("boards: {boarding:?}");
+        };
+        assert_eq!(view.cargo, None, "_SetPlunderValues reads the Booty alone");
+        assert_eq!(
+            session.npcs()[0].cargo,
+            Some((Good::Commodity(3), 7)),
+            "still in its hold"
+        );
+    }
+
+    #[test]
     fn boarding_changes_the_record_in_each_system_of_the_victims_government() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
@@ -21445,14 +22394,20 @@ pub(super) mod tests {
     }
 
     /// [`boardable`] with `others` police besides the trader in the
-    /// system.
+    /// system: as many as setup brings (54, the trader making 55), the
+    /// rest copies of the last.
     fn crowded(others: usize) -> Session {
         let mut catalog = boardable();
-        catalog.traffic[0].1.avg_ships = (others + 1) as i16;
+        let set_up = others.min(54);
+        catalog.traffic[0].1.avg_ships = (set_up + 1) as i16;
         let mut placed = vec![(0, 0, 0, 0)];
-        placed.extend(std::iter::repeat_n((1, 0, 740, 0), others));
+        placed.extend(std::iter::repeat_n((1, 0, 740, 0), set_up));
         let mut session = Session::start(&catalog).expect("starts");
         session.populate(&catalog, &mut placing(2, &placed));
+        let police = session.npcs().last().cloned().expect("set up");
+        for _ in set_up..others {
+            session.traffic.add_npc(police.clone());
+        }
         assert_eq!(session.npcs().len(), others + 1);
         stop_npcs(&mut session);
         let trader = &mut session.traffic.npcs_mut()[0];
@@ -21464,23 +22419,78 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn with_no_ship_slot_free_for_the_old_ship_the_swap_is_dropped() {
-        let mut full = crowded(62);
+    fn setup_stops_at_fifty_five_ships_and_by_the_bible_at_none() {
+        let mut catalog = boardable();
+        catalog.traffic[0].1.avg_ships = 60;
+        let placed = vec![(1, 0, 740, 0); 60];
+        for (reading, ships) in [(RuleSource::Engine, 55), (RuleSource::Bible, 60)] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::SpawnReserve, reading));
+            session.populate(&catalog, &mut placing(2, &placed));
+            assert_eq!(session.npcs().len(), ships, "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn use_as_my_ship_abandons_the_old_ship_with_sixty_two_ships_in_the_system() {
+        let mut full = crowded(61);
         let pilot = full.pilot().clone();
         assert_eq!(
             full.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::Abandoned),
-            "63 NPCs and the player: no slot"
+            "62 NPCs: slots 1-62 taken, slot 63 held back"
         );
         assert_eq!(full.pilot(), &pilot, "nothing changes");
-        assert_eq!(full.npcs().len(), 63);
+        assert_eq!(full.npcs().len(), 62);
         assert_eq!(full.boarding(), None, "the prize is lost");
         assert!(!full.take_save_due());
-        let mut roomy = crowded(61);
+        let mut roomy = crowded(60);
         assert_eq!(
             roomy.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::MyShip),
-            "62 NPCs and the player: one slot"
+            "61 NPCs: slot 62 free"
+        );
+        let mut bible = crowded(61);
+        bible.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
+        assert_eq!(
+            bible.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::MyShip),
+            "by the Bible, slot 63"
+        );
+        let mut bible = crowded(62);
+        bible.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
+        assert_eq!(
+            bible.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::Abandoned),
+            "by the Bible, the table full"
+        );
+    }
+
+    #[test]
+    fn a_ship_left_behind_takes_a_ship_slot_from_the_swap() {
+        let mut full = crowded(61);
+        let last = full.npcs().last().expect("62 NPCs").id;
+        let keep: BTreeSet<NpcId> = full
+            .npcs()
+            .iter()
+            .map(|npc| npc.id)
+            .filter(|&id| id != last)
+            .collect();
+        let table = full.traffic.table().clone();
+        full.traffic.retarget(
+            table,
+            &keep,
+            crate::traffic::Leave::Held {
+                from: SystemId(131),
+                to: SystemId(130),
+            },
+        );
+        assert_eq!(full.npcs().len(), 61, "one slot, but for the one left");
+        assert_eq!(
+            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::Abandoned),
+            "61 NPCs and one left behind: no slot below 63"
         );
     }
 
@@ -21498,7 +22508,7 @@ pub(super) mod tests {
             Some(Assigned::MyShip)
         );
         assert_eq!(mine.take_events(), [SessionEvent::ShipChanged], "my ship");
-        let mut full = crowded(62);
+        let mut full = crowded(61);
         full.take_events();
         assert_eq!(
             full.assign(Assignment::MyShip, &mut Draws::of(&[])),
@@ -21611,19 +22621,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_click_pick_selects_the_stellar_under_it_or_nothing() {
+    fn a_click_selects_the_stellar_under_it_or_nothing() {
         let mut session = Session::start(&three_stellars()).expect("starts");
         assert_eq!(
-            session.select_stellar(StellarPick::At(Vec2::new(940.0, 30.0))),
+            click_stellar(&mut session, Vec2::new(940.0, 30.0)),
             Some(StellarId(131))
         );
-        assert_eq!(
-            session.select_stellar(StellarPick::At(Vec2::new(500.0, 500.0))),
-            None
-        );
+        assert_eq!(click_stellar(&mut session, Vec2::new(500.0, 500.0)), None);
         assert_eq!(session.nav_target(), Some(StellarId(131)), "kept");
         assert_eq!(
-            session.select_stellar(StellarPick::At(Vec2::new(2000.0, 0.0))),
+            click_stellar(&mut session, Vec2::new(2000.0, 0.0)),
             Some(StellarId(129))
         );
     }
@@ -21635,13 +22642,10 @@ pub(super) mod tests {
             ..catalog()
         };
         let mut session = Session::start(&empty).expect("starts");
-        for pick in [
-            StellarPick::Slot(0),
-            StellarPick::Nearest,
-            StellarPick::At(Vec2::ZERO),
-        ] {
+        for pick in [StellarPick::Slot(0), StellarPick::Nearest] {
             assert_eq!(session.select_stellar(pick), None, "{pick:?}");
         }
+        assert_eq!(click_stellar(&mut session, Vec2::ZERO), None, "a click");
         assert_eq!(session.nav_target(), None);
     }
 
@@ -21688,13 +22692,14 @@ pub(super) mod tests {
         session.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
         for stage in ["pre-jump", "in hyperspace"] {
-            for pick in [
-                StellarPick::Slot(1),
-                StellarPick::Nearest,
-                StellarPick::At(Vec2::new(30.0, -40.0)),
-            ] {
+            for pick in [StellarPick::Slot(1), StellarPick::Nearest] {
                 assert_eq!(session.select_stellar(pick), None, "{stage} {pick:?}");
             }
+            assert_eq!(
+                click_stellar(&mut session, Vec2::new(30.0, -40.0)),
+                None,
+                "{stage} a click"
+            );
             assert!(!session.nav_off(), "{stage}");
             assert_eq!(
                 session.nav_mode(),
@@ -22711,7 +23716,7 @@ pub(super) mod tests {
     /// `flët` 382, led by ship 160, and 383, led by ship 161, which link
     /// to no system.
     fn strong() -> FakePilotCatalog {
-        let mut catalog = busy(catalog());
+        let mut catalog = busy(crate::testkit::far_129_reachable(catalog()));
         catalog.ship_records.extend([
             holds_record(150, 60, 1),
             holds_record(151, 250, 2),
@@ -22726,6 +23731,8 @@ pub(super) mod tests {
             govt: None,
             link_syst: 0,
             appear_on: Test::default(),
+            quote: None,
+            flags: 0,
         };
         catalog.fleets = vec![fleet(382, 160), fleet(383, 161)];
         catalog
@@ -22765,6 +23772,45 @@ pub(super) mod tests {
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(flying_as(&session, 160), [AiType::Interceptor]);
         assert_eq!(flying_as(&session, 161), []);
+    }
+
+    /// [`strong`] laid out as [`gated`]: the ship starts over hypergate
+    /// 300 in 130, linked to 310 in 131.
+    fn strong_gated() -> FakePilotCatalog {
+        let gated = gated();
+        FakePilotCatalog {
+            sites: gated.sites,
+            gates: gated.gates,
+            gate_listers: gated.gate_listers,
+            ..strong()
+        }
+    }
+
+    #[test]
+    fn escorts_above_49_tons_bring_fleet_382_on_the_59th_tick_after_a_gate_exit() {
+        // The gate exit's own `_EnterMoreShips` pass (@0x672f2) counts the
+        // timer, armed to 59, once before the first frame, under either
+        // reading of the gate's followers.
+        let catalog = strong_gated();
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = at_gate(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::GateFollow, source));
+            session.pilot.escorts = vec![fleet_escort(150)];
+            session
+                .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)
+                .expect("enters");
+            assert_eq!(flying_as(&session, 150).len(), 1, "{source:?}: led out");
+            for _ in 0..58 {
+                session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            }
+            assert_eq!(flying_as(&session, 160), [], "{source:?}");
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            assert_eq!(
+                flying_as(&session, 160),
+                [AiType::Interceptor],
+                "{source:?}"
+            );
+        }
     }
 
     #[test]
@@ -22807,6 +23853,161 @@ pub(super) mod tests {
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         }
         assert_eq!(flying_as(&session, 161), []);
+    }
+
+    /// The session's string lists for the arrival quotes: `STR#` 7600,
+    /// "Hail #", and no other.
+    struct QuoteLists;
+
+    impl CommCatalog for QuoteLists {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == 7600 {
+                vec!["Hail #".to_owned()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    /// [`strong`] with `flët` 382 quoting `STR#` `quote` on its arrival,
+    /// if any.
+    fn quoting(quote: Option<i16>) -> FakePilotCatalog {
+        let mut catalog = strong();
+        catalog.fleets[0].quote = quote;
+        catalog
+    }
+
+    /// The quote messages and sounds the 60th tick after an escorted
+    /// take-off raises, `fleet` 382 coming on it, the session reading its
+    /// strings from [`QuoteLists`].
+    fn quoted_on_the_60th_tick(catalog: &FakePilotCatalog) -> (Vec<SimMessage>, Vec<SimSound>) {
+        let mut session = escorted_take_off(catalog, &[150]).with_strings(Rc::new(QuoteLists));
+        for _ in 0..59 {
+            session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        }
+        session.take_messages();
+        session.take_sounds();
+        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(flying_as(&session, 160), [AiType::Interceptor]);
+        (session.take_messages(), session.take_sounds())
+    }
+
+    #[test]
+    fn an_announced_fleet_with_a_quote_shows_a_line_of_it_and_beeps() {
+        let (messages, sounds) = quoted_on_the_60th_tick(&quoting(Some(7600)));
+        assert_eq!(
+            messages,
+            [SimMessage::FleetArrivalQuote("Hail 9".to_owned())],
+            "the last outcome of Rand(9) + 1"
+        );
+        assert_eq!(sounds, [SimSound::FleetArrivalQuote]);
+    }
+
+    #[test]
+    fn an_announced_fleet_without_a_quote_shows_nothing() {
+        let (messages, sounds) = quoted_on_the_60th_tick(&quoting(None));
+        assert_eq!(messages, []);
+        assert_eq!(sounds, []);
+    }
+
+    #[test]
+    fn a_quote_list_with_no_strings_still_shows_an_empty_line_and_beeps() {
+        let catalog = quoting(Some(7601));
+        let (messages, sounds) = quoted_on_the_60th_tick(&catalog);
+        assert_eq!(messages, [SimMessage::FleetArrivalQuote(String::new())]);
+        assert_eq!(sounds, [SimSound::FleetArrivalQuote]);
+    }
+
+    #[test]
+    fn a_setup_fleet_with_a_quote_arrives_silently() {
+        let mut catalog = fleeted();
+        catalog.fleets[0].quote = Some(7600);
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(QuoteLists));
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(
+            !session
+                .take_messages()
+                .iter()
+                .any(|message| matches!(message, SimMessage::FleetArrivalQuote(_)))
+        );
+        assert!(!session.take_sounds().contains(&SimSound::FleetArrivalQuote));
+    }
+
+    /// A [`Chance`] answering 1 to the first `Rand(500)`, the arrival
+    /// roll's fleet, and as [`NeverFires`] does to every other question.
+    #[derive(Debug, Default)]
+    pub(super) struct FleetArrival {
+        rolled: bool,
+    }
+
+    impl Chance for FleetArrival {
+        fn fires(&mut self, percent: u8) -> bool {
+            NeverFires.fires(percent)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            if n == crate::traffic::spawn::ARRIVAL_ODDS && !self.rolled {
+                self.rolled = true;
+                return 1;
+            }
+            NeverFires.below(n)
+        }
+
+        fn roll(&mut self, sides: u16) -> u16 {
+            NeverFires.roll(sides)
+        }
+    }
+
+    /// [`gated`] with traffic in 131, of three ships on average, whose
+    /// `DudeTypes` name only [`fleet`] 132, of no `LinkSyst`, at 100 %,
+    /// quoting `STR#` 7600 on its arrival: its setup brings no ship.
+    fn quoting_gated() -> FakePilotCatalog {
+        let mut catalog = trafficked(131, 3, 3);
+        catalog.traffic[0].1.dude_types[0] = (-132, 100);
+        catalog.fleets = vec![FleetRecord {
+            quote: Some(7600),
+            ..fleet(132, 0)
+        }];
+        catalog.ship_records.push(ship(130, FAST));
+        let gated = gated();
+        FakePilotCatalog {
+            sites: gated.sites,
+            gates: gated.gates,
+            gate_listers: gated.gate_listers,
+            ..catalog
+        }
+    }
+
+    #[test]
+    fn a_fleet_arriving_on_the_gate_exits_pass_comes_with_its_quote_at_once() {
+        // The setup draws no `Rand(500)`: the first is the exit pass's
+        // arrival roll (@0x672f2), whose fleet `_HyperSpawnFleet` announces
+        // at once (@0x42607-0x426f4).
+        let catalog = quoting_gated();
+        let mut session = at_gate(&catalog).with_strings(Rc::new(QuoteLists));
+        session.take_messages();
+        session.take_sounds();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut FleetArrival::default())
+            .expect("enters");
+        assert!(
+            session
+                .npcs()
+                .iter()
+                .any(|npc| npc.ship == ShipId(129) && npc.govt == Some(GovtId(150))),
+            "the fleet's lead is in: {:?}",
+            fleet_of(&session)
+        );
+        assert!(
+            session
+                .take_messages()
+                .contains(&SimMessage::FleetArrivalQuote("Hail 9".to_owned()))
+        );
+        assert!(session.take_sounds().contains(&SimSound::FleetArrivalQuote));
     }
 
     // The galaxy overlay.

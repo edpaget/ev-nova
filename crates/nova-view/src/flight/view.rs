@@ -217,7 +217,11 @@
 //!   of the flight keys. While it is open flight is paused, as in the
 //!   original, only the map is drawn and every input goes to it, except
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
-//!   router's Escape). As it opens it selects the system the original's
+//!   router's Escape). It beeps as M opens it ([`UiSound::MapOpened`],
+//!   `_beepSnd[2]`, `_HandlePlayer` @0x6a809) and as it closes
+//!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says
+//!   nothing, and the hypergate map neither opens nor closes with a beep.
+//!   As it opens it selects the system the original's
 //!   `_DoSystemMap` does ([`Session::map_preselection`]): the one
 //!   selected in nav mode 3, or the current system in any other mode,
 //!   and its panel shows that system. It draws the system selected in
@@ -238,17 +242,23 @@
 //!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`], presses) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
 //!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest stellar,
-//!   as L does with none; a left click in space the stellar under it
-//!   (not in the status panel, the right [`STATUS_BAR_WIDTH`] of the
-//!   screen, where the radar takes no clicks). Backquote, Nav Off
+//!   as L does with none. A left click in space
+//!   ([`Session::click_in_space`]) picks a ship first: one under it
+//!   becomes the target, a click on the player's own ship lets go of the
+//!   target, and only a click that leaves the target as it was selects
+//!   the stellar under it. Neither the status panel, the right
+//!   [`STATUS_BAR_WIDTH`] of the screen, where the radar takes no clicks,
+//!   nor the open escort menu's frame takes a click in space. Backquote, Nav Off
 //!   ([`NAV_OFF_KEY`]), turns the nav system off, keeping the course; with
 //!   Option held it lets go of the ship target instead. H
 //!   ([`HYPERSPACE_MODE_KEY`]), Hyperspace Mode, selects the course's next
 //!   hop, or no destination. Closing the course map cues the course's
 //!   next hop too. The original has no stellar cycle key: Tab is its
-//!   Target Select, cycling the ships. During a jump none of these keys or
-//!   clicks does anything (@0x69ad4, @0x69d2e, @0x6a5ef), but Option-\`
-//!   still lets go of the ship target (@0x69a17-0x69a90).
+//!   Target Select, cycling the ships. During a jump none of these keys
+//!   does anything and a click selects no stellar (@0x69ad4, @0x69d2e,
+//!   @0x6a5ef), but Option-\` still lets go of the ship target
+//!   (@0x69a17-0x69a90) and a click on a ship still targets it, as the
+//!   click's ship walk reads no jump state (@0x6a353-0x6a5e4).
 //! - `\` (a press, not its repeats), the original's Hyper Select, selects
 //!   the next system linked with this one, as
 //!   [`Session::select_next_system`] says, so the nav area shows that
@@ -281,7 +291,8 @@
 //!   taken ([`FlightView::taken_during_jump`]): Tab, R, W, Option-\`, B,
 //!   Y, Command-K, the escort menu's keys and the floating map's zoom
 //!   keys. The rest, J included, are
-//!   ignored, P is refused, and a click in space selects nothing. The keys
+//!   ignored, P is refused, and a click in space selects no stellar,
+//!   though it still targets a ship under it. The keys
 //!   held are still tracked through the jump, so a steering, thrust or fire
 //!   key still held at arrival acts on the first tick after it, as the
 //!   original reads the keys live. H, \`, `\` and J are polled each tick
@@ -314,7 +325,11 @@
 //!   turn, R the nearest threat, and Alt-R (Option-R) the nearest ship
 //!   ([`TargetPick`]). Shift-Tab targets back through the ships, and
 //!   Shift-Alt-Tab (Shift-Option-Tab) back through the escorts, as the
-//!   original's `_FindPrevShipInSystem` does. Tab, R and W work during a
+//!   original's `_FindPrevShipInSystem` does. Every Tab press beeps
+//!   ([`SimSound::TargetSelected`](nova_sim::SimSound::TargetSelected)),
+//!   as does R picking a ship other than the target; R finding none
+//!   beeps the refusal. A held key's repeat does nothing, as the
+//!   original's per-press latches. Tab, R and W work during a
 //!   jump too, picking from the system being left until arrival lets go
 //!   of the target; Space and Control fire nothing then (@0x6aaf0,
 //!   @0x6ab75).
@@ -338,7 +353,10 @@
 //!   B works during a jump too, as `_HandlePlayerBoardAttempt` reads no
 //!   jump state (0x65000-0x66064): its checks run on the ship as it brakes,
 //!   or as it was when the jump began once the stars streak.
-//! - Y (a press) hails the target ([`Session::open_hail`]): a person
+//! - Y (a press) hails the target ([`Session::hail_key`]), and with no
+//!   ship target, or Alt (Option) held, the navigation stellar: one that
+//!   answers opens nothing yet, where the original opens its comm dialog
+//!   (`_DoPlanetCommDialog`), and any other says "No response.". A person
 //!   whose mission is available offers it in place of the comm dialog,
 //!   held for the router ([`FlightView::take_offer`]), which opens the
 //!   offer dialog over the paused flight and answers it through
@@ -438,7 +456,8 @@
 //!   as the session's rule set says ([`FlightView::with_rules`]), and
 //!   each step a person may
 //!   say its hail quote ([`Session::tick_quotes`], right after the
-//!   traffic's tick), shown in the message line for
+//!   fight and the answer to its hits, [`Session::answer_strikes`]),
+//!   shown in the message line for
 //!   [`HAIL_QUOTE_TICKS`], the last one said winning.
 //! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
 //!   message line, closes the escort menu and hides the floating map.
@@ -484,6 +503,7 @@ use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
+use nova_sim::traffic::gate_entry::enter_level;
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     ALERT_CICN, Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule,
@@ -909,8 +929,10 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
+        SimMessage::NoActiveMissions => NO_ACTIVE_MISSIONS,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
+        SimMessage::FleetArrivalQuote(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
         SimMessage::EscapingIn { ship } => {
             // "Escaping in", a space, the long name and a full stop
@@ -1318,8 +1340,10 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
         | SimMessage::DeadlineMissed
+        | SimMessage::NoActiveMissions
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
+        | SimMessage::FleetArrivalQuote(_)
         | SimMessage::JumpCollapsed
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
@@ -1648,19 +1672,24 @@ fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
 /// How `npc`'s sprite is tinted: `None` while it waits hidden at the gate
 /// it comes out of; white with the alpha of its [`emerge_level`] over
 /// its last [`FADE_TICKS`](nova_sim::traffic::emerge::FADE_TICKS) there;
-/// plain white otherwise.
+/// white with the alpha of its [`enter_level`] while it enters a gate to
+/// leave, fading out; plain white otherwise, held at its gate by the
+/// player's hit too (its goal 4 is not the fade's goal 0x15).
 ///
 /// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) fades the hull in
 /// at 16-bit depth by a destination factor of twice the ticks left and a
-/// bias of four times them, at most 32. That translucent blit was not
-/// traced; this draws the ship's alpha rising from none to full, as the
+/// bias of four times them, at most 32, and out again entering a gate
+/// (@0x2bf94-0x2c088). Those translucent blits were not traced; this
+/// draws the ship's alpha rising from none to full, or falling, as the
 /// cloak's fade does. An NPC gets no screen flash, as the player's own
 /// gate arrival does (see [`jump`](super::jump)).
 fn npc_tint(npc: &Npc) -> Option<Color> {
-    let Mode::Emerging { ticks_left } = npc.mode else {
-        return Some(Color::WHITE);
+    let level = match npc.mode {
+        Mode::Emerging { ticks_left } => emerge_level(ticks_left)?,
+        Mode::EnteringGate { ticks_left, .. } => enter_level(ticks_left),
+        _ => return Some(Color::WHITE),
     };
-    let level = u16::from(emerge_level(ticks_left)?);
+    let level = u16::from(level);
     let full = u16::from(FULL_LEVEL);
     let alpha = u8::try_from((level * 255 + full / 2) / full).unwrap_or(u8::MAX);
     Some(Color::rgba(255, 255, 255, alpha))
@@ -2155,12 +2184,29 @@ fn show_destroyed(scene: &mut SystemScene, session: &Session) {
     );
 }
 
+/// Draws each hypergate of `scene` on the frame `session` gives it
+/// (`Session::gate_frame`), opening while an NPC comes out of it: after
+/// each tick of the traffic, and as the system is laid out.
+fn show_gate_frames(scene: &mut SystemScene, session: &Session) {
+    scene.set_gate_frames(|id| session.gate_frame(id));
+}
+
 /// The system `session`'s player is in, read from `catalog`, with only the
 /// stellars the session shows ([`Session::stellars_shown`]), in navigation
 /// order.
 fn shown_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
     let shown: BTreeSet<StellarId> = session.stellars_shown().collect();
     SystemScene::load_shown(catalog, session.system(), &shown)
+}
+
+/// The scene a flight opens on: the stellars `session` shows, each
+/// destroyed one as it looks destroyed and each hypergate on the frame
+/// the session stepped it to.
+fn opening_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
+    let mut scene = shown_scene(catalog, session);
+    show_destroyed(&mut scene, session);
+    show_gate_frames(&mut scene, session);
+    scene
 }
 
 /// Text metrics, shared.
@@ -2250,11 +2296,7 @@ impl<
         let session = session.map_err(|err| err.to_string());
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
-                Some({
-                    let mut scene = shown_scene(&catalog, session);
-                    show_destroyed(&mut scene, session);
-                    scene
-                }),
+                Some(opening_scene(&catalog, session)),
                 catalog.ship_sheet(session.ship()),
                 Some(session.ship()),
                 hud::choose_status_bar(&catalog, session.interface_government()),
@@ -2521,21 +2563,26 @@ impl<
         }
     }
 
-    /// Hails the target ([`Session::open_hail`]), or says why not: a hail
-    /// answered is held for the router ([`FlightView::take_hail`]), and a
-    /// mission offered in its place too ([`FlightView::take_offer`]),
-    /// each letting go of the flight keys; one accepted at once shows
-    /// nothing.
+    /// Hails the target ([`Session::hail_key`]), Option held as Alt is,
+    /// or says why not: a hail answered is held for the router
+    /// ([`FlightView::take_hail`]), and a mission offered in its place
+    /// too ([`FlightView::take_offer`]), each letting go of the flight
+    /// keys; one accepted at once shows nothing, and so does a navigation
+    /// stellar that answers, as its comm dialog is not built.
     fn hail(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        match session.open_hail(&self.catalog, &self.hail_options, &mut self.chance) {
+        let option = self.held.contains(&Key::Alt);
+        match session.hail_key(&self.catalog, &self.hail_options, option, &mut self.chance) {
             Ok(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
                 self.held.clear();
             }
             Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
+            // The planet comm dialog (`_DoPlanetCommDialog`) is not built
+            // yet: rdm:task/planet-domination opens it here.
+            Ok(Hailed::Stellar(_)) => {}
             Err(refusal) => {
                 if let Some(text) = hail_refusal_message(refusal) {
                     self.say_for(text, MESSAGE_TICKS);
@@ -2627,16 +2674,22 @@ impl<
     }
 
     /// Presses [`MISSION_INFO_KEY`], as `_HandlePlayer` does
-    /// (@0x70405-0x705a8): with an active mission shown, asks the router
-    /// for the mission info screen, letting go of the flight keys; with
-    /// none, says #354 on the message line.
+    /// (@0x70405-0x705a8), through [`Session::press_mission_info`]: with
+    /// an active mission shown, asks the router for the mission info
+    /// screen, letting go of the flight keys; with none, says the
+    /// session's beep and #354 on the message line. A flight whose session
+    /// never started says #354 alone, with no session to beep.
     fn ask_mission_info(&mut self) {
-        let info = self.mission_info();
-        if info.rows.is_empty() {
+        let Ok(session) = self.session.as_mut() else {
             self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
-        } else {
-            self.pending_mission_info = Some(info);
-            self.held.clear();
+            return;
+        };
+        match session.press_mission_info() {
+            Some(info) => {
+                self.pending_mission_info = Some(info);
+                self.held.clear();
+            }
+            None => self.say_messages(),
         }
     }
 
@@ -3044,11 +3097,18 @@ impl<
                     }
                     if !again {
                         session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                        session.tick_quotes(&self.catalog, &mut self.chance);
-                        quotes.extend(session.take_quotes());
                         session.tick_assistance(&*self.disable_rule);
                         notes.extend(session.take_comm());
                         session.tick_combat(rules, &mut self.chance);
+                        // The hit is answered, and the quote block runs,
+                        // before the frame is drawn, as `_HandleShot`
+                        // answers it (@0x44385) before `_HandleShip` and the
+                        // display pass. The second pass's strikes wait for
+                        // the next advance pass's answers (see the session's
+                        // `double_time` module).
+                        session.answer_strikes(&*self.behaviour);
+                        session.tick_quotes(&self.catalog, &mut self.chance);
+                        quotes.extend(session.take_quotes());
                     }
                     let player = point(session.player().position);
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
@@ -3059,6 +3119,9 @@ impl<
                         self.effects.apply(&event, &scene, &self.looks, chance);
                     }
                 }
+            }
+            if let Some(scene) = &mut self.scene {
+                show_gate_frames(scene, session);
             }
         }
         for note in &notes {
@@ -3321,7 +3384,11 @@ impl<
         let Ok(session) = &self.session else {
             return;
         };
-        self.scene = Some(shown_scene(&self.catalog, session));
+        self.scene = Some({
+            let mut scene = shown_scene(&self.catalog, session);
+            show_gate_frames(&mut scene, session);
+            scene
+        });
         self.map.show_course(system, &session.course_shown());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
@@ -3643,12 +3710,18 @@ impl<
     /// with the Hyperspace Effects preference off); with no pick, the jump
     /// is cancelled ([`HYPERGATE_CANCELLED`]). Closing the course map cues
     /// the course's next hop ([`Session::cue_course`]), as the original's
-    /// map does unless it is the hypergate's (`_DoSystemMap` @0x13c16).
+    /// map does unless it is the hypergate's (`_DoSystemMap` @0x13c16),
+    /// and beeps [`UiSound::MapClosed`], as `_HandlePlayer` does once
+    /// `_DoSystemMap` returns (@0x6a85a). The hypergate map closes
+    /// silently: `_PlayerEnterHypergate` plays no beep around it
+    /// (@0x6385b).
     ///
     /// Docked, its close is `_DoSystemMap`'s in port: the whole bar is
     /// redrawn (`_RefreshSAT` @0x13bc9), showing the nav as the map left
     /// it, and the course is not cued (@0x13be2-0x13c0a skips
-    /// `_CueNextHyperRouteDest` in port). When the bar opened it
+    /// `_CueNextHyperRouteDest` in port). It beeps nothing: the
+    /// [`UiSound::MapClosed`] beep is `_HandlePlayer`'s, around the map M
+    /// opens in flight. When the bar opened it
     /// ([`FlightView::open_bar_map`]), the bar's close of it follows: the
     /// nav the bar opened with is put back ([`Session::restore_bar_nav`],
     /// `_DoBarDialog` @0x492b7-0x492d3) with no redraw, as
@@ -3677,6 +3750,7 @@ impl<
                 }
                 return;
             }
+            self.ui_sounds.push(UiSound::MapClosed);
             if let Ok(session) = &mut self.session {
                 session.cue_course();
             }
@@ -5380,16 +5454,31 @@ impl<C> FlightView<C> {
     }
 
     /// A click at screen point `at`, as the original's in space
-    /// (`_HandlePlayer` @0x6a000-0x6a717): one in the status panel, the
+    /// (`_HandlePlayer` @0x6a000-0x6a764): one in the status panel, the
     /// right [`STATUS_BAR_WIDTH`] (0xc2) of the screen, radar included, is
-    /// no click in space and does nothing; any other selects the stellar
-    /// under it ([`StellarPick::At`]).
+    /// no click in space and does nothing (@0x6a065, @0x6a36d); nor does
+    /// one in the open escort menu's frame, which the original's menu
+    /// branch takes and ends (@0x6a060-0x6a12b; its row selection is left
+    /// out, task escorts-follow-up). Any other goes to
+    /// [`Session::click_in_space`], the ships boxed where they are drawn
+    /// ([`ViewShips`]): a ship under it is targeted, during a jump too, and
+    /// otherwise the stellar under it selected.
     fn click_in_space(&mut self, at: Point) {
-        if at.x >= VIEW_SIZE.0 - STATUS_BAR_WIDTH {
+        if at.x >= VIEW_SIZE.0 - STATUS_BAR_WIDTH || self.escort_menu.holds_click(at) {
             return;
         }
         let world = self.camera().screen_to_world(at);
-        self.select_stellar(StellarPick::At(Vec2::new(world.x, world.y)));
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let ships = ViewShips {
+            view: self,
+            session,
+        };
+        let drawn = DrawnNow::of(&ships);
+        if let Ok(session) = &mut self.session {
+            session.click_in_space(Vec2::new(world.x, world.y), &drawn);
+        }
     }
 
     /// The floating map's clock: the flight's elapsed time in Mac ticks
@@ -5995,6 +6084,9 @@ impl<
                 }
             }
             Some(MAP_KEY) => {
+                // `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
+                // not the map's: the hypergate's map opens without it.
+                self.ui_sounds.push(UiSound::MapOpened);
                 self.open_map();
                 return ScreenAction::None;
             }
@@ -6043,19 +6135,26 @@ impl<
     /// First catches the screen up with what the session has told since
     /// (see the module docs), map open or not. Then runs the simulation's
     /// steps for `dt` with the keys held ([`FlightView::run_steps`]), and
-    /// advances the stellars' animations. While the map is open nothing
-    /// moves. During the pre-jump stage the session flies on, and the
-    /// streak starts on the step the session begins the jump, which is the
-    /// last step run. While the stars streak and the old system fades out
-    /// the jump's effect moves, and the session runs its steps only while
-    /// its warp is in its lead-in ([`Session::in_warp_lead_in`]): the
-    /// ship stays where it is, but the traffic flies on and the scans are
-    /// taken, as the original still scans a warping player then. The ship
-    /// arrives when the effect says, after the last step. From then on
-    /// the session flies again while the rest of the effect, the fade-in
-    /// or the white flash, plays over it; that plays on with the map open
-    /// too, as the original's display fade does. The escort menu times out
-    /// on every step the map is shut, the streak's included.
+    /// advances the stellars' animations, each hypergate drawing the frame
+    /// the session stepped it to ([`show_gate_frames`]). While the map is
+    /// open nothing moves. During the pre-jump stage the session flies on,
+    /// and the streak starts on the step the session begins the jump,
+    /// which is the last step run. While the stars streak and the old
+    /// system fades out the jump's effect moves, and the session runs its
+    /// steps only while its warp is in its lead-in
+    /// ([`Session::in_warp_lead_in`]): the ship stays where it is, but the
+    /// traffic flies on and the scans are taken, as the original still
+    /// scans a warping player then. The ship arrives when the effect says,
+    /// after the last step. From then on the session flies again while the
+    /// rest of the effect, the fade-in or the white flash, plays over it;
+    /// that plays on with the map open too, as the original's display fade
+    /// does. The escort menu times out on every step the map is shut, the
+    /// streak's included.
+    ///
+    /// Each step runs the session's tick, the traffic's, the assistance's
+    /// and the fight's, then has the NPCs answer the fight's hits
+    /// ([`Session::answer_strikes`]) and the persons say their quotes, so
+    /// a ship hit in its gate is drawn on the frame of the hit.
     ///
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
@@ -6263,6 +6362,40 @@ impl<C> DrawnShips for ViewShips<'_, C> {
             drawn_size(framed.and_then(|ship| self.view.npc_sheets.get(&ship)))
         };
         Some(drawn_box(self.view.shown_position(), size))
+    }
+}
+
+/// [`ViewShips`]' boxes as they stand, taken so the session can be
+/// changed by what they decide: a click in space.
+struct DrawnNow {
+    /// Each NPC's box, by id.
+    npcs: BTreeMap<NpcId, DrawnBox>,
+    /// The player's box.
+    player: Option<DrawnBox>,
+}
+
+impl DrawnNow {
+    /// The boxes `ships` gives now, for every NPC of its session.
+    fn of<C>(ships: &ViewShips<'_, C>) -> Self {
+        Self {
+            npcs: ships
+                .session
+                .npcs()
+                .iter()
+                .filter_map(|npc| Some((npc.id, ships.npc(npc.id)?)))
+                .collect(),
+            player: ships.player(),
+        }
+    }
+}
+
+impl DrawnShips for DrawnNow {
+    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
+        self.npcs.get(&id).copied()
+    }
+
+    fn player(&self) -> Option<DrawnBox> {
+        self.player
     }
 }
 
@@ -6711,6 +6844,7 @@ mod tests {
             type_counts_frames: true,
             exit_angle: -1,
             tribute: 0,
+            animation: nova_sim::catalog::SiteAnimation::default(),
         }
     }
 
@@ -8842,7 +8976,7 @@ mod tests {
     }
 
     #[test]
-    fn l_requests_clearance_and_a_second_l_lands() {
+    fn l_requests_clearance_an_early_second_l_beeps_too_far_and_a_later_l_lands() {
         // The Moon (129), in the scene, over the ship.
         let mut view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
         assert_eq!(view.take_landing(), None);
@@ -8855,6 +8989,11 @@ mod tests {
         assert_eq!(view.take_sounds(), [], "no sound for a silent request");
         assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
         assert_eq!(view.take_landing(), None, "no approach yet");
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "too far before the approach clears: _beepSnd[3] (@0x66c23 -> 0x676db, @0x676fe)"
+        );
 
         view.input(&key(LAND, false));
         ticks(&mut view, 1);
@@ -12757,6 +12896,22 @@ mod tests {
         assert!(view.map_open());
     }
 
+    /// The map's beeps are `_HandlePlayer`'s, around the map M opens in
+    /// flight (@0x6a809, @0x6a85a): the map opened in port makes neither.
+    #[test]
+    fn the_map_in_port_beeps_neither_as_it_opens_nor_as_it_closes() {
+        let mut view = in_the_bar(None);
+        view.take_sounds();
+        view.open_bar_map();
+        assert_eq!(map_sounds(&mut view), [], "the bar's map opened");
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), [], "the bar's map closed");
+        view.open_map();
+        view.close_map();
+        assert_eq!(map_sounds(&mut view), [], "another map in port");
+    }
+
     /// Ours cues a route's first hop at the click ([`Session::plot_course`]),
     /// so the port close's skipped cue (`_DoSystemMap` @0x13be2-0x13c0a)
     /// shows only with a course plotted before the map opened, whose cue
@@ -13857,13 +14012,18 @@ mod tests {
         let mut npc = session.npcs()[0].clone();
         let opaque = CloakShown::Opaque;
         assert_eq!(session.cloak_shown(&npc), opaque, "flying");
-        npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert_eq!(session.cloak_shown(&npc), opaque, "jumping in");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
         assert_eq!(session.cloak_shown(&npc), opaque, "fading in at its gate");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 30 };
         assert_eq!(session.cloak_shown(&npc), opaque);
         assert_eq!(npc_tint(&npc), None, "hidden at its gate");
+        // Held there by the player's hit, its goal is 4, not 0x15, so
+        // `_HandleShipDisplay`'s fade (@0x2c090) passes it by.
+        npc.mode = nova_sim::traffic::npc::Mode::HeldAtGate { ticks_left: 3 };
+        assert_eq!(npc_tint(&npc), Some(Color::WHITE), "held: drawn plain");
+        assert_eq!(session.cloak_shown(&npc), opaque, "held");
         npc.cloak = CLOAKED;
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
         assert_eq!(
@@ -14014,6 +14174,216 @@ mod tests {
         ticks(&mut view, 8);
         assert_eq!(mode(&view), Mode::LeavingGate { tick: 0 });
         assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE]);
+    }
+
+    /// Idles, and answers a hit on itself by taking its attacker.
+    #[derive(Debug)]
+    struct Answering;
+
+    impl Behaviour for Answering {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            Goal::Idle
+        }
+
+        fn react(
+            &self,
+            npc: &nova_sim::Npc,
+            strike: &nova_sim::Strike,
+            _around: &nova_sim::Surroundings,
+        ) -> nova_sim::Reaction {
+            if strike.ship == nova_sim::ShipRef::Npc(npc.id) {
+                nova_sim::Reaction {
+                    target: Some(strike.by),
+                    provoked: strike.damage,
+                    goal: None,
+                }
+            } else {
+                nova_sim::Reaction::default()
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_is_drawn_on_the_frame_of_the_hit() {
+        // The original answers the hit inside `_HandleShot` (@0x44385),
+        // before the display pass draws the frame.
+        let mut catalog = armed(1, &[BLASTER]);
+        for weapon in &mut catalog.weapons {
+            weapon.energy_dmg = 5;
+        }
+        catalog.sites.push(LandingSite {
+            flags2: nova_sim::gate::HYPERGATE,
+            exit_angle: 90,
+            ..site(141, (0.0, -100.0), StellarFlags::CAN_LAND)
+        });
+        // Setup brings nobody; then an arrival comes out of the gate, the
+        // third of the stellars, straight ahead of the player.
+        let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Answering));
+        ticks(&mut view, 2);
+        let npc = |view: &View| view.session().expect("flying").npcs()[0].clone();
+        assert!(matches!(npc(&view).mode, Mode::Emerging { .. }));
+        let left = |npc: &nova_sim::Npc| npc.reserves.shield.now + npc.reserves.armor.now;
+        let mut shield = left(&npc(&view));
+        view.input(&key(FIRE_KEY, true));
+        for _ in 0..60 {
+            view.tick(TICK);
+            let hit = npc(&view);
+            if left(&hit) < shield {
+                assert!(
+                    matches!(hit.mode, Mode::HeldAtGate { .. }),
+                    "{:?}",
+                    hit.mode
+                );
+                assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE], "seen");
+                return;
+            }
+            assert!(matches!(hit.mode, Mode::Emerging { .. }), "{:?}", hit.mode);
+            shield = left(&hit);
+        }
+        panic!("never hit");
+    }
+
+    /// `catalog` with hypergate 141 at (200, 100) in Sol, of 6 frames
+    /// stepping every tick (`AnimDelay` 0, as stock's), drawing `rlëD` 1141.
+    fn with_hypergate(mut catalog: FakeCatalog) -> FakeCatalog {
+        catalog.sites.push(LandingSite {
+            flags2: nova_sim::gate::HYPERGATE,
+            exit_angle: 90,
+            animation: nova_sim::catalog::SiteAnimation {
+                type_frames: 6,
+                ..nova_sim::catalog::SiteAnimation::default()
+            },
+            ..site(141, (200.0, 100.0), StellarFlags::CAN_LAND)
+        });
+        catalog.sol_more.push(stellar(141, "Gate", (200, 100), 6));
+        catalog
+    }
+
+    /// The frames hypergate 141's sheet is drawn on.
+    fn gate_frames(list: &DrawList) -> Vec<u16> {
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, .. } if image.id == 1141 => Some(image.frame),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Sends every NPC into hypergate 141.
+    #[derive(Debug)]
+    struct Entering;
+
+    impl Behaviour for Entering {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            Goal::EnterGate(nova_sim::catalog::StellarId(141))
+        }
+    }
+
+    #[test]
+    fn a_ship_entering_a_gate_fades_out_by_two_32nds_a_tick() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let mut npc = view.session().expect("flying").npcs()[0].clone();
+        let gate = nova_sim::catalog::StellarId(141);
+        let entering = |ticks_left| Mode::EnteringGate { gate, ticks_left };
+        npc.mode = entering(15);
+        assert_eq!(
+            npc_tint(&npc),
+            Some(Color::rgba(255, 255, 255, 239)),
+            "30/32"
+        );
+        npc.mode = entering(8);
+        assert_eq!(
+            npc_tint(&npc),
+            Some(Color::rgba(255, 255, 255, 128)),
+            "half"
+        );
+        npc.mode = entering(1);
+        assert_eq!(npc_tint(&npc), Some(Color::rgba(255, 255, 255, 16)), "2/32");
+        npc.mode = entering(16);
+        assert_eq!(npc_tint(&npc), Some(Color::WHITE));
+    }
+
+    #[test]
+    fn a_hypergate_animates_while_an_npc_heads_in_to_enter_it_and_the_npc_fades_into_it() {
+        let busy = with_hypergate(trafficked(&[130], 1, 129, 3));
+        // Setup places the ship at (700, 700), far from the gate.
+        let (_, chance) = scripted(&placed(1450, 1450, 90));
+        let mut view = FlightView::new(busy)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Entering));
+        assert_eq!(gate_frames(&drawn(&view)), [0], "closed at first");
+        let mut heading_in = Vec::new();
+        let mut tints = Vec::new();
+        let mut after = Vec::new();
+        for _ in 0..2000 {
+            ticks(&mut view, 1);
+            let list = drawn(&view);
+            let frames = gate_frames(&list);
+            match view
+                .session()
+                .expect("flying")
+                .npcs()
+                .first()
+                .map(|npc| npc.mode)
+            {
+                Some(Mode::Flying) => heading_in.extend(frames),
+                Some(Mode::EnteringGate { .. }) => tints.extend(npc_tints(&list)),
+                Some(_) => {}
+                None => after.extend(frames),
+            }
+        }
+        assert_eq!(heading_in.first(), Some(&0), "closed while it is far");
+        assert!(heading_in.iter().any(|&frame| frame > 0), "{heading_in:?}");
+        assert_eq!(tints.len(), 15, "drawn for 15 frames: {tints:?}");
+        assert_eq!(tints.first(), Some(&Color::rgba(255, 255, 255, 239)));
+        assert_eq!(tints.last(), Some(&Color::rgba(255, 255, 255, 16)));
+        assert_eq!(after.last(), Some(&0), "closed once it is gone");
+    }
+
+    #[test]
+    fn a_hypergate_animates_while_an_npc_waits_in_it_and_rests_otherwise() {
+        let busy = with_hypergate(trafficked(&[130], 1, 129, 3));
+        // As in the test above: an arrival comes out of the gate.
+        let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
+        let mut view = FlightView::new(busy)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        assert_eq!(gate_frames(&drawn(&view)), [0], "closed at first");
+        ticks(&mut view, 2);
+        let mode = |view: &View| view.session().expect("flying").npcs()[0].mode;
+        assert_eq!(mode(&view), Mode::Emerging { ticks_left: 59 });
+        let mut frames = Vec::new();
+        while matches!(mode(&view), Mode::Emerging { .. }) {
+            frames.extend(gate_frames(&drawn(&view)));
+            ticks(&mut view, 1);
+        }
+        assert_eq!(frames[..3], [1, 2, 3], "opening a frame a tick");
+        assert!(frames.iter().all(|&frame| frame > 0), "{frames:?}");
+        assert!(frames[3..].iter().all(|&frame| frame >= 3), "{frames:?}");
+        assert!(frames.contains(&5), "its loop plays: {frames:?}");
+
+        let mut quiet = FlightView::new(with_hypergate(catalog()));
+        for _ in 0..60 {
+            ticks(&mut quiet, 1);
+            assert_eq!(gate_frames(&drawn(&quiet)), [0], "no ship in it");
+        }
     }
 
     #[test]
@@ -14698,6 +15068,33 @@ mod tests {
         view.input(&held(NEAREST_KEY));
         assert_eq!(target_of(&view), None, "a repeat does nothing");
         assert_eq!((TARGET_KEY, NEAREST_KEY), (Key::Tab, Key::Char('r')));
+    }
+
+    #[test]
+    fn a_target_key_press_beeps_once_and_its_repeat_is_silent() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        view.take_sounds();
+        view.input(&key(Key::Tab, true));
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
+        view.input(&held(Key::Tab));
+        view.input(&key(Key::Tab, false));
+        assert_eq!(view.take_sounds(), [], "a repeat of Tab");
+        alt_tap(&mut view, NEAREST_KEY);
+        view.take_sounds();
+        alt_tap(&mut view, NEAREST_KEY);
+        assert_eq!(view.take_sounds(), [], "a fresh Alt-R on the same ship");
+        // No ship threatens, so an acting R would beep the refusal.
+        let before = target_of(&view);
+        view.input(&held(NEAREST_KEY));
+        assert_eq!(view.take_sounds(), [], "a repeat of R");
+        assert_eq!(target_of(&view), before);
+        view.input(&key(NEAREST_KEY, false));
+        tap(&mut view, NEAREST_KEY);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "a fresh R finds no threat"
+        );
     }
 
     /// NPC 0 attacks the player; the rest idle.
@@ -17223,6 +17620,60 @@ mod tests {
     }
 
     #[test]
+    fn a_hail_refused_beeps_through_the_view() {
+        let mut view = hailable(false);
+        view.take_sounds();
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Refused)]);
+        let mut alone = flight();
+        alone.take_sounds();
+        tap(&mut alone, HAIL_KEY);
+        assert_eq!(
+            alone.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "no target"
+        );
+    }
+
+    #[test]
+    fn y_with_a_stellar_selected_and_no_ship_target_opens_nothing_and_says_nothing() {
+        let mut view = flight();
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+        view.take_sounds();
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail(), None);
+        assert_eq!(view.take_offer(), None);
+        assert_eq!(view.message(), None, "the planet comm dialog is not built");
+        assert_eq!(view.take_sounds(), [], "an answer beeps nothing");
+    }
+
+    #[test]
+    fn y_with_an_uninhabited_stellar_selected_says_no_response() {
+        let mut view = flight_among(vec![site(
+            128,
+            (0.0, -600.0),
+            StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+        )]);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail(), None);
+        assert_lasts(&mut view, NO_RESPONSE, 240);
+    }
+
+    #[test]
+    fn alt_y_hails_the_selected_stellar_over_the_ship_target() {
+        let mut view = hailable(true);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+        alt_tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail(), None, "no comm dialog for the ship");
+        assert_eq!(view.message(), None);
+        tap(&mut view, HAIL_KEY);
+        assert!(view.take_hail().is_some(), "Y alone hails the ship");
+    }
+
+    #[test]
     fn a_hail_dialog_keeps_the_message() {
         let mut view = hailable(true);
         view.say_for(MISSION_FAILED, 240);
@@ -17604,6 +18055,12 @@ mod tests {
     /// one of them; its traffic ship (NPC 0) placed 100 above the player;
     /// all idle. A tick has placed the escort (NPC 1).
     fn escorted() -> View {
+        escorted_with_traffic(750, 650)
+    }
+
+    /// [`escorted`] with its traffic ship (NPC 0) placed as
+    /// [`placed`]`(x, y, 0)` places it.
+    fn escorted_with_traffic(x: u32, y: u32) -> View {
         let mut catalog = boardable();
         for record in &mut catalog.ships {
             if record.id == ShipId(130) {
@@ -17612,7 +18069,7 @@ mod tests {
             }
         }
         let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
-        let (_, chance) = scripted(&placed(750, 650, 0));
+        let (_, chance) = scripted(&placed(x, y, 0));
         let mut view = FlightView::with_pilot(catalog, pilot)
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
@@ -17804,6 +18261,30 @@ mod tests {
         view.tick(super::super::escorts::MENU_TIMEOUT + TICK);
         assert!(!view.escort_menu().is_open());
         assert_eq!(ui_sounds(&mut view), [], "it fades silently");
+    }
+
+    #[test]
+    fn a_click_in_the_open_escort_menu_over_a_ship_does_nothing() {
+        let menu = Point::new(MENU_AT.x + MENU_WIDTH / 2.0, MENU_AT.y + MENU_HEIGHT / 2.0);
+        let under = escorted().camera().screen_to_world(menu);
+        let place = |at: f32| u32::try_from((at + 750.0).round() as i64).expect("placeable");
+        let mut view = escorted_with_traffic(place(under.x), place(under.y));
+        let traffic = NpcId(0);
+        let over = npc_on_screen(&view, traffic);
+        assert!(
+            (over.x - menu.x).abs() < 2.0 && (over.y - menu.y).abs() < 2.0,
+            "{over:?}"
+        );
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        view.take_sounds();
+        click(&mut view, over);
+        assert_eq!(target_of(&view), None, "not targeted");
+        assert_eq!(view.take_sounds(), [], "silent");
+        tap(&mut view, MENU_KEY);
+        assert!(!view.escort_menu().is_open());
+        click(&mut view, over);
+        assert_eq!(target_of(&view), Some(traffic), "shut, it targets");
     }
 
     #[test]
@@ -18894,6 +19375,15 @@ mod tests {
     }
 
     #[test]
+    fn a_fleets_arrival_quote_says_its_line() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        let quote = SimMessage::FleetArrivalQuote("Hail 9".to_owned());
+        assert_eq!(sim_message_text(&quote, session).as_deref(), Some("Hail 9"));
+        assert_eq!(arrival_lead(&quote), None);
+    }
+
+    #[test]
     fn the_players_downed_lines_are_str_2002_287_288_and_284() {
         let view = flight();
         let session = view.session().expect("flying");
@@ -18909,6 +19399,17 @@ mod tests {
             );
             assert_eq!(arrival_lead(&message), None, "{message:?}");
         }
+    }
+
+    #[test]
+    fn the_no_active_missions_message_is_str_2002_354() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(&SimMessage::NoActiveMissions, session).as_deref(),
+            Some(NO_ACTIVE_MISSIONS)
+        );
+        assert_eq!(arrival_lead(&SimMessage::NoActiveMissions), None);
     }
 
     #[test]
@@ -20950,9 +21451,29 @@ mod tests {
     #[test]
     fn i_with_no_mission_says_you_have_no_active_missions() {
         let mut view = flight();
+        let _ = view.take_sounds();
         tap(&mut view, MISSION_INFO_KEY);
         assert_eq!(view.take_mission_info_request(), None);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "_beepSnd[3], snd 153"
+        );
         assert_lasts(&mut view, NO_ACTIVE_MISSIONS, 240);
+    }
+
+    #[test]
+    fn i_in_a_flight_that_never_started_says_no_active_missions_without_a_beep() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert!(view.session().is_err());
+        let _ = view.take_sounds();
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.take_mission_info_request(), None);
+        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_eq!(view.take_sounds(), [], "no session to beep");
     }
 
     #[test]
@@ -21324,8 +21845,10 @@ mod tests {
         // edge, which decides.
         let left_of_c = on_screen(&view, (330.0 - 26.0, 0.0)).x;
         assert!(left_of_c < edge && edge < c.x);
+        view.take_sounds();
         click(&mut view, at(edge, c.y));
         assert_eq!(nav_target(&view), Some(StellarId(128)), "the edge is panel");
+        assert_eq!(view.take_sounds(), [], "the panel is silent");
         click(&mut view, at(edge - 0.5, c.y));
         assert_eq!(
             nav_target(&view),
@@ -22188,6 +22711,94 @@ mod tests {
         );
         assert_eq!(HYPERGATE_CANCELLED, "Hypergate jump cancelled.");
         assert_eq!(HYPERGATE_DENIED, "Hypergate usage denied.");
+    }
+
+    /// The course map's sounds `view` holds, taken with the rest.
+    fn map_sounds(view: &mut View) -> Vec<UiSound> {
+        ui_sounds(view)
+            .into_iter()
+            .filter(|sound| matches!(sound, UiSound::MapOpened | UiSound::MapClosed))
+            .collect()
+    }
+
+    #[test]
+    fn m_beeps_as_it_opens_and_closes_the_course_map() {
+        let mut view = flight();
+        view.take_sounds();
+        tap(&mut view, MAP);
+        assert!(view.map_open());
+        assert_eq!(ui_sounds(&mut view), [UiSound::MapOpened], "opened");
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(ui_sounds(&mut view), [UiSound::MapClosed], "closed");
+    }
+
+    #[test]
+    fn escape_closing_the_course_map_beeps_its_close() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        view.take_sounds();
+        view.close_map();
+        assert_eq!(ui_sounds(&mut view), [UiSound::MapClosed]);
+    }
+
+    #[test]
+    fn the_course_map_makes_no_map_sound_on_its_own_input_or_ms_repeats() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        view.take_sounds();
+        view.input(&held(MAP));
+        view.input(&key(MAP, false));
+        for k in [Key::Up, Key::Down, Key::Left, Key::Right] {
+            tap(&mut view, k);
+        }
+        let somewhere = on_map(&view, 131);
+        click(&mut view, somewhere);
+        assert!(view.map_open());
+        assert_eq!(map_sounds(&mut view), []);
+    }
+
+    #[test]
+    fn a_refused_m_makes_no_map_sound() {
+        let mut view = breaking_up();
+        view.take_sounds();
+        tap(&mut view, MAP_KEY);
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), [], "breaking up");
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            view.take_sounds();
+            tap(&mut view, MAP);
+            assert!(!view.map_open(), "{stage}");
+            assert_eq!(map_sounds(&mut view), [], "{stage}");
+        }
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        view.take_sounds();
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), [], "the take-off grace");
+    }
+
+    #[test]
+    fn the_hypergate_map_makes_no_map_sound() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_eq!(map_sounds(&mut view), [], "opened");
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(map_sounds(&mut view), [], "closed on a pick");
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        view.take_sounds();
+        view.close_map();
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+        assert_eq!(map_sounds(&mut view), [], "cancelled");
     }
 
     #[test]
@@ -23537,6 +24148,54 @@ mod tests {
 
     /// A point on screen over nothing at all.
     const NOWHERE: Point = Point::new(40.0, 400.0);
+
+    #[test]
+    fn a_left_click_on_a_drawn_ship_targets_it_with_the_target_beep() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        assert!(over.x < VIEW_SIZE.0 - STATUS_BAR_WIDTH, "{over:?} in space");
+        view.take_sounds();
+        click(&mut view, over);
+        assert_eq!(
+            view.session().expect("flying").target().map(|npc| npc.id),
+            Some(id)
+        );
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
+    }
+
+    #[test]
+    fn a_click_on_a_ship_targets_it_during_a_jump() {
+        // A still NPC at (0, -750), where the ship flies out past.
+        let mut catalog = trafficked(&[130], 1, 129, 3);
+        for record in &mut catalog.ships {
+            if record.id == ShipId(129) {
+                record.fields.speed = 0;
+            }
+        }
+        let (_, chance) = scripted(&placed(750, 0, 0));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let id = npc_ids(&view)[0];
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        let over = npc_on_screen(&view, id);
+        assert!(
+            (0.0..VIEW_SIZE.0 - STATUS_BAR_WIDTH).contains(&over.x)
+                && (0.0..VIEW_SIZE.1).contains(&over.y),
+            "{over:?} in space"
+        );
+        view.take_sounds();
+        click(&mut view, over);
+        assert_eq!(
+            view.session().expect("flying").target().map(|npc| npc.id),
+            Some(id)
+        );
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
+    }
 
     #[test]
     fn the_cursor_animates_over_an_npc_and_rests_off_it() {

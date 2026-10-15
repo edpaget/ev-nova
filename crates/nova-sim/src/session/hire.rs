@@ -30,7 +30,15 @@
 //! system's ships stay in the table until take-off; a loaded pilot's
 //! escorts not placed yet keep the berths they will take. So it keeps
 //! that berth at take-off, and a mission escort set up then can come
-//! before it in the formation. A refused hire changes nothing.
+//! before it in the formation. The berth must be below the spawn reserve
+//! ([`Session::spawn_reserve`]), as `_SpawnEscort` passes 8 (@0x3fe73).
+//! With none free, by the engine reading of
+//! [`RuleKey::HireNoSlot`](crate::RuleKey::HireNoSlot), the hire still
+//! takes the fee, so a save is due, and draws the class's roll again,
+//! but no escort joins ([`Hired::joined`]): `_DoShipyardDialog` ignores
+//! `_SpawnEscort`'s -1 (@0x5f1f1-0x5f221), and the original's escort is
+//! its slot, so nothing is kept of it. By the other reading the hire is
+//! refused ([`HireRefusal::NoSlot`]). A refused hire changes nothing.
 //!
 //! **Paying.** Each hired escort is paid its wage for each day of a jump,
 //! once the date has moved on, and for one day at each take-off, whatever
@@ -63,7 +71,7 @@ use crate::hire::{Bar, HireList, HireRefusal, HireTerms, Hired, PayNote};
 use crate::landing::StellarFlags;
 use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
-use crate::traffic::table;
+use crate::traffic::{SPAWN_RESERVE, table};
 use crate::wares::Roll;
 
 /// A port the session keeps, shared: equal to another when it is the
@@ -190,6 +198,8 @@ impl Session {
             contributed: self.contributed(),
             cash: self.pilot.cash,
             room: self.pilot.escort_count() < MAX_ESCORTS,
+            slot: self.hire_berth().is_some()
+                || self.rules.source_for(RuleKey::HireNoSlot) == RuleSource::Engine,
             terms: &*self.hire_terms.0,
             rank_mult: self.price_mults().second,
             control_bits: &*self.control_bits.0,
@@ -218,7 +228,9 @@ impl Session {
     /// # Errors
     ///
     /// The [`HireRefusal`] that applies, and nothing changes:
-    /// [`HireRefusal::NoBar`] when not landed at a stellar with a bar.
+    /// [`HireRefusal::NoBar`] when not landed at a stellar with a bar,
+    /// and, by the other reading of [`RuleKey::HireNoSlot`],
+    /// [`HireRefusal::NoSlot`] when the system has no slot for it.
     pub fn hire(&mut self, ship: ShipId, chance: &mut dyn Chance) -> Result<Hired, HireRefusal> {
         let list = self.escorts_for_hire(chance).ok_or(HireRefusal::NoBar)?;
         list.check(ship)?;
@@ -235,30 +247,51 @@ impl Session {
         let reserves = table::kind(&record, &self.outfits, &self.arsenal)
             .stats
             .full();
+        let berth = self.hire_berth();
         self.transact(|pilot| {
             pilot.cash -= fee;
-            pilot.escorts.push(Escort {
-                ship,
-                reserves,
-                order: None,
-                carried: false,
-                wage: Some(wage),
-                person: None,
-            });
+            if berth.is_some() {
+                pilot.escorts.push(Escort {
+                    ship,
+                    reserves,
+                    order: None,
+                    carried: false,
+                    wage: Some(wage),
+                    person: None,
+                });
+            }
         });
         self.hire_rolls.redraw(&ship);
-        let index = self.pilot.escorts.len() - 1;
-        self.fleet.resize(index, None);
+        if let Some(berth) = berth {
+            let index = self.pilot.escorts.len() - 1;
+            self.fleet.resize(index, None);
+            let placed = self.place_escort_at(index, Some(berth));
+            self.fleet.push(placed);
+            self.reform();
+        }
+        Ok(Hired {
+            ship,
+            fee,
+            wage,
+            joined: berth.is_some(),
+        })
+    }
+
+    /// The berth a ship hired now takes: the first free one below the
+    /// spawn reserve ([`Session::spawn_reserve`]), as `_SpawnEscort`
+    /// passes 8 (@0x3fe73), skipping the berths a loaded pilot's escorts
+    /// not placed yet will take, which the original's table already
+    /// holds; `None` when there is none.
+    fn hire_berth(&self) -> Option<u32> {
         let berths = self.fleet_berths();
-        let unplaced: BTreeSet<u32> = (0..index)
-            .filter(|&earlier| self.fleet[earlier].is_none())
-            .map(|earlier| berths[earlier])
+        let unplaced: BTreeSet<u32> = berths
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| self.fleet.get(index).copied().flatten().is_none())
+            .map(|(_, &berth)| berth)
             .collect();
-        let berth = self.traffic.next_berth_skipping(&unplaced);
-        let placed = self.place_escort_at(index, Some(berth));
-        self.fleet.push(placed);
-        self.reform();
-        Ok(Hired { ship, fee, wage })
+        self.traffic
+            .free_berth_skipping(self.spawn_reserve(SPAWN_RESERVE), &unplaced)
     }
 }
 
@@ -277,6 +310,7 @@ mod tests {
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;
     use crate::session::entry::NoTraffic;
+    use crate::session::mission_ships::tests::crowd;
     use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
@@ -781,7 +815,8 @@ mod tests {
             Ok(Hired {
                 ship: ShipId(129),
                 fee: 1000,
-                wage: 100
+                wage: 100,
+                joined: true,
             })
         );
         assert_eq!(session.pilot().cash(), 24_000);
@@ -872,6 +907,114 @@ mod tests {
         let mut full = landed(&catalog, 25_000);
         full.pilot.escorts = vec![escort(false); MAX_ESCORTS];
         refused(&mut full, 129, HireRefusal::FleetFull);
+    }
+
+    // The slot cap: `_SpawnEscort`'s reserve.
+
+    #[test]
+    fn a_hire_with_no_slot_takes_the_fee_and_redraws_the_roll_but_no_escort_joins() {
+        let catalog = barred(vec![hireable(129, 50), hireable(130, 50)]);
+        let mut session = landed(&catalog, 25_000);
+        crowd(&mut session, 55);
+        let npcs = session.npcs().len();
+        let mut chance = Scripted::answering(&[true, true, false]);
+        assert_eq!(
+            session.hire(ShipId(129), &mut chance),
+            Ok(Hired {
+                ship: ShipId(129),
+                fee: 1000,
+                wage: 100,
+                joined: false,
+            }),
+            "the -1 ignored (@0x5f1f1)"
+        );
+        assert_eq!(session.pilot().cash(), 24_000, "the fee is gone");
+        assert_eq!(session.pilot().escorts(), [], "no escort record");
+        assert_eq!(session.fleet, []);
+        assert_eq!(session.npcs().len(), npcs, "nothing placed");
+        assert!(session.take_save_due(), "the pilot changed (@0x5f1df)");
+        let list = session.escorts_for_hire(&mut chance).expect("a bar");
+        assert_eq!(listed(&list), [130]);
+        assert_eq!(chance.asked, [50, 50, 50], "129's roll drawn again");
+        assert_eq!(
+            session.rules().source_for(RuleKey::HireNoSlot),
+            RuleSource::Engine,
+            "by default"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_of_hire_no_slot_a_hire_with_no_slot_is_refused_and_changes_nothing() {
+        let catalog = barred(vec![hireable(129, 50)]);
+        let rules = Rulebook::default().with_override(RuleKey::HireNoSlot, RuleSource::Bible);
+        let mut session = landed(&catalog, 25_000).with_rules(rules);
+        crowd(&mut session, 55);
+        let before = session.pilot().clone();
+        let mut chance = Scripted::answering(&[true]);
+        assert_eq!(
+            session.hire(ShipId(129), &mut chance),
+            Err(HireRefusal::NoSlot)
+        );
+        assert_eq!(session.pilot(), &before);
+        assert!(!session.take_save_due());
+        let list = session.escorts_for_hire(&mut chance).expect("a bar");
+        assert_eq!(row(&list, 129).hire, Err(HireRefusal::NoSlot));
+        assert_eq!(chance.asked, [50], "the roll kept");
+        let mut poor = landed(&catalog, 999).with_rules(rules);
+        crowd(&mut poor, 55);
+        assert_eq!(
+            row(&list_drawn(&mut poor), 129).hire,
+            Err(HireRefusal::NoSlot),
+            "before the fee"
+        );
+        let mut full = landed(&catalog, 25_000).with_rules(rules);
+        full.pilot.escorts = vec![escort(false); MAX_ESCORTS];
+        crowd(&mut full, 55);
+        assert_eq!(
+            row(&list_drawn(&mut full), 129).hire,
+            Err(HireRefusal::FleetFull),
+            "after the room"
+        );
+        let mut roomy = landed(&catalog, 25_000).with_rules(rules);
+        crowd(&mut roomy, 54);
+        assert_eq!(row(&list_drawn(&mut roomy), 129).hire, Ok(()));
+    }
+
+    /// The hire list, every roll holding.
+    fn list_drawn(session: &mut Session) -> HireList {
+        session
+            .escorts_for_hire(&mut Scripted::answering(&[true; 8]))
+            .expect("a bar")
+    }
+
+    #[test]
+    fn a_hire_counts_a_loaded_escorts_berth_as_held() {
+        let catalog = paying();
+        let mut pilot = crate::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.cash = 1_000_000;
+        pilot.escorts = vec![paid(129, None, false)];
+        pilot.stellar = Some(BAR_AT);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.fleet, [], "none placed yet");
+        for berth in 2..=55 {
+            let hulk = crate::testkit::npc(0, ShipStats::default());
+            session.traffic.add_npc_at(hulk, berth);
+        }
+        let hired = session.hire(ShipId(129), &mut NeverFires).expect("hired");
+        assert!(!hired.joined, "berth 1 is the loaded escort's");
+        assert_eq!(session.pilot().escorts().len(), 1);
+    }
+
+    #[test]
+    fn by_the_bible_reading_of_spawn_reserve_a_hire_takes_berth_56() {
+        let catalog = barred(vec![hireable(129, 100)]);
+        let rules = Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
+        let mut session = landed(&catalog, 25_000).with_rules(rules);
+        crowd(&mut session, 55);
+        let hired = session.hire(ShipId(129), &mut NeverFires).expect("hired");
+        assert!(hired.joined);
+        let id = session.fleet[0].expect("placed");
+        assert_eq!(session.npc(id).map(|npc| npc.berth), Some(56));
     }
 
     /// Adds a pirate at (`x`, `y`).

@@ -18,11 +18,26 @@ pub enum SimSound {
     },
     /// The ship took off.
     TookOff,
-    /// The warp stage of a jump began, as the brake ended or at once
-    /// when the ship needed none: the warp-up, `snd ` 128 (`_HandlePlayer`
-    /// @0x6b60d-0x6b690), before the turn to the jump's bearing.
+    /// The warp stage of a jump began out of double time, as the brake
+    /// ended or at once when the ship needed none: the warp-up,
+    /// `_warpUpSnd[0]`, `snd ` 128 "Warp up" (`_HandlePlayer`
+    /// @0x6b645-0x6b690), before the turn to the jump's bearing. None
+    /// sounds while 128 still plays from an earlier start: the
+    /// still-playing skip (@0x6b645-0x6b658), which the session decides
+    /// (see the [`warp`](crate::warp) module's `WarpUps`).
     JumpBegan,
-    /// A jump ended in the next system.
+    /// The warp stage of a jump began in double time: the double-time
+    /// warp-up, `_warpUpSnd[1]`, `snd ` 129 "Warp up x2" (`_HandlePlayer`
+    /// @0x6b60d-0x6b63f, @0x6b66f-0x6b690), in place of
+    /// [`SimSound::JumpBegan`], with its own still-playing skip
+    /// (@0x6b617-0x6b62b).
+    JumpBeganInDoubleTime,
+    /// A jump ended in the next system: the warp-out, `snd ` 130
+    /// (`_HandlePlayer` @0x6bbd3-0x6bc08; the hypergate @0x63e57 and the
+    /// wormhole @0x6443d play it too). The original may start it up to a
+    /// frame before the system switch, from the end of the warp-up
+    /// (`_WarpUpCallback` @0x31ff3, the fallback @0x6c62a-0x6c706); that
+    /// lag isn't visible to the player.
     Arrived,
     /// The player became threatened: the Red Alert, `snd ` 370
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see
@@ -58,6 +73,20 @@ pub enum SimSound {
     /// A disabled former escort or fighter repaired itself and rejoined
     /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
     EscortRepaired,
+    /// An announced fleet arrived with its `flët`'s `Quote`:
+    /// `_beepSnd[4]`, `snd ` 154 (`_HyperSpawnFleet` @0x42698-0x426bb),
+    /// even when the line is empty.
+    FleetArrivalQuote,
+    /// A person's mission was offered on its hail, in place of the comm
+    /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
+    /// @0x62232-0x6223d).
+    HailOffer,
+    /// A person's hail quote was said in flight, by its own filters
+    /// (`_HandleShip` @0x33f9e) or as it turned on the player
+    /// (`_AIMakeShipAttackPlayer` @0x89ce1): `_beepSnd[4]`, `snd ` 154
+    /// (`_ShowPersonHailQuote` @0x44586-0x445ad), for every hail quote
+    /// said, even when its line is empty.
+    HailQuote,
     /// The player's ship was newly disabled or newly started to break up:
     /// `_beepSnd[1]`, `snd ` 151 (`_DamageShip` @0x3b11e, @0x3b221; see
     /// the session's `player_downed` module).
@@ -66,6 +95,17 @@ pub enum SimSound {
     /// 0x0004 mission: `_beepSnd[1]`, `snd ` 151 (`_DamageShip`
     /// @0x3b04e, @0x3b2f1), hidden or not.
     DownedMissionFailed,
+    /// A mission's special ship lost (destroyed or disabled) failed a
+    /// mission that isn't hidden, with
+    /// [`SimMessage::MissionShipLost`](crate::SimMessage::MissionShipLost):
+    /// `_beepSnd[1]`, `snd ` 151 (`_HandleShipDisplay` @0x2db31-0x2db5a,
+    /// `_DamageShip` @0x3aee8-0x3af11).
+    MissionShipLost,
+    /// The comm line said as a mission's special ship is boarded, on the
+    /// pickup path or the assist path: `_beepSnd[4]`, `snd ` 154
+    /// (`_HandlePlayerBoardAttempt` @0x65548-0x6556b, @0x656cb-0x656ee).
+    /// A board off the assist path says nothing and is silent.
+    MissionShipBoarded,
     /// A nav key was taken: Nav Off and Hyperspace Mode on every press
     /// (`_HandlePlayer` @0x69b19), a stellar key that found a stellar,
     /// even the one selected (@0x69ebc), and a click on a stellar not
@@ -75,8 +115,20 @@ pub enum SimSound {
     /// (`_HandlePlayer` @0x69c89): `_beepSnd[2]`, `snd ` 152. With no
     /// links it is silent.
     HyperSelected,
+    /// A target key was taken: Target Select (Tab, with Shift or Option or
+    /// both) on every press, before its search and whatever it finds
+    /// (`_HandlePlayer` @0x69f6f), Closest Target (R, with or without
+    /// Option) when it picks a ship other than the target (@0x6aa55), and
+    /// a click in space on a ship other than the target
+    /// ([`Session::click_in_space`](crate::Session::click_in_space),
+    /// @0x6a585): `_beepSnd[2]`, `snd ` 152. Closest Target finding no
+    /// ship raises [`SimSound::Refused`] instead.
+    TargetSelected,
     /// Option-backquote let go of the ship target (`_HandlePlayer`
-    /// @0x69a7d): `_beepSnd[0]`, `snd ` 150. With no target it is silent.
+    /// @0x69a7d), or a click on the player's own ship did
+    /// ([`Session::click_in_space`](crate::Session::click_in_space),
+    /// @0x6a585): `_beepSnd[0]`, `snd ` 150. With no target either is
+    /// silent.
     TargetCleared,
     /// A first-flight tutorial hint was shown: `_beepSnd[4]`, `snd ` 154
     /// (`_HandlePlayer` @0x70a1c, @0x70c12, @0x70dab, @0x70e59; see
@@ -99,7 +151,8 @@ pub enum SimSound {
     Klaxon,
     /// Each named `snd ` is halted if it is playing, as the original asks
     /// `ST_IsSoundPlaying` and then calls `ST_HaltSound`: every instance
-    /// of it, on any channel. The player's final explosion raises it with
+    /// of it, on any channel. A halted warp-up is over for the session's
+    /// still-playing skip and the double-time switch too. The player's final explosion raises it with
     /// [`PLAYER_EXPLOSION_HALTS`]; the eject, a sabotage kill outfit going
     /// off and a disabled player's jump collapse with [`WARP_UP_HALTS`],
     /// 128 and 129.
@@ -125,9 +178,18 @@ pub enum SimSound {
     /// @0x7039a-0x703bd, priority 5, not modelled; see
     /// [`Session::press_player_info`](crate::Session::press_player_info)),
     /// as do the jump key's (@0x6b89f, @0x6b9cc, @0x6ba72; see
-    /// [`Session::jump_refusal_told`](crate::Session::jump_refusal_told)),
-    /// and every other refusal that beeps reuses it rather than adding a
-    /// variant of its own.
+    /// [`Session::jump_refusal_told`](crate::Session::jump_refusal_told))
+    /// and every refusal of a hail, with no target too
+    /// (`_HandlePlayerCommunication` @0x626cf, @0x6206c, @0x6261c,
+    /// @0x6264e, its `PlaySound` argument of 1 or 5 not modelled; see
+    /// [`HailRefusal`](crate::hail::HailRefusal)), as do the land key's
+    /// not-landable, too-far and too-fast refusals from the dock request
+    /// (@0x67e8f, @0x676aa, @0x676fe; see
+    /// [`LandingRefusal::beeps`](crate::landing::LandingRefusal::beeps)),
+    /// and Closest Target finding no ship (`_HandlePlayer` @0x6aadb; see
+    /// [`Session::select_target`](crate::Session::select_target)),
+    /// and every other refusal
+    /// that beeps reuses it rather than adding a variant of its own.
     Refused,
 }
 

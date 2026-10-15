@@ -113,8 +113,11 @@
 //!   [`Session`](crate::Session) refuses up front with
 //!   [`LandingRefusal::Disabled`]:
 //!   rdm:phase/player-death/phase-16-handle-player-left-out-gates.
-//! - The refusals' `snd ` 153 (@0x67e8f, @0x676aa, @0x676fe):
-//!   rdm:phase/audio-fidelity/phase-4-audio-refusal-beep.
+//! - The cloak refusal (`_ShipIsCloaked` @0x66a8e, STR# 2002 #73),
+//!   which beeps `snd ` 153 at the shared tail (@0x67e8f): the engine
+//!   has no player cloak (rdm:task/cloaking-device).
+//! - The fee refusal (@0x669b4-0x66a80), which is silent
+//!   (rdm:task/landing-fee).
 //! - The per-axis 0.75 speed gate (@0x66c3c-0x66c66):
 //!   rdm:phase/stellar-fidelity/phase-6-per-axis-landing-speed.
 //! - The player's AI wait (+0x4c, tested @0x66c2f and zeroed @0x66b6d):
@@ -152,9 +155,13 @@
 //! [`landing_radius`] of the centre.
 //!
 //! NPCs land by their own rule, which stays on the [`landing_radius`]
-//! circle under either reading: the original's is a quarter of the same
-//! width, inclusive (story-runtime phase 16, npc-landing-reach). The
-//! original's speed gate is per axis (story-runtime phase 17,
+//! circle under either reading: the original's NPC landing is
+//! `_HighLevelAIHandler` state 1, whose box goes by the ship's turn rate
+//! (`phase/stellar-fidelity/phase-5-npc-landing-reach`). The quarter of
+//! the width, inclusive (@0x8dbdf), is state 20's box for entering a
+//! hypergate or wormhole, not a landing ([`stellar_width`], see
+//! [`gate_entry`](crate::traffic::gate_entry)).
+//! The original's speed gate is per axis (story-runtime phase 17,
 //! per-axis-landing-speed).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
@@ -253,6 +260,33 @@ pub enum LandingRefusal {
     },
 }
 
+impl LandingRefusal {
+    /// Whether `_HandlePlayerDockRequest` beeps `_beepSnd[3]` (`snd ` 153)
+    /// for this refusal: a stellar that can't be landed on (wrong
+    /// government or inactive, @0x66977-0x669ae, `PlaySound` @0x67e8f,
+    /// before `_IsDisabled`, so a disabled ship's beeps too), out of
+    /// reach (@0x66cfd, @0x676aa), or pressed again before the approach
+    /// clears or moving too fast (@0x66c23-0x66c66, @0x676fe). The
+    /// others are silent of it: [`Self::Jumping`], [`Self::NoStellars`]
+    /// and [`Self::NothingLandable`] never reach the dock request
+    /// (`_HandlePlayer` @0x6a8cb, @0x6a90f, and `_FindNearestStellar`
+    /// giving -1 @0x6a94c), [`Self::Disabled`] goes to its bare epilogue
+    /// (0x67eef), and [`Self::Denied`] plays `_beepSnd[1]` instead
+    /// (@0x67ec6).
+    ///
+    /// A [`Self::NotLandable`] from a press with no target beeps too: the
+    /// press selects the nearest stellar with the can-land flag
+    /// ([`nearest_stellar`]) and makes its dock request, which refuses it
+    /// as the original's does (@0x66977 -> 0x67cda).
+    #[must_use]
+    pub fn beeps(&self) -> bool {
+        matches!(
+            self,
+            Self::NotLandable { .. } | Self::TooFar { .. } | Self::TooFast { .. }
+        )
+    }
+}
+
 /// Half the larger side of `site`'s sprite's frame, which is what the
 /// player sees as its disc, or [`UNKNOWN_STELLAR_RADIUS`] without a
 /// sprite: the landing radius of [`RuleKey::LandingDistance`]'s other
@@ -326,6 +360,19 @@ impl LandingReach {
     }
 }
 
+/// `site`'s width as `_GetStellarSpriteXSize` gives it (@0xac91-0xad2d),
+/// its `Type` master giving `type_width`: the `Type` frame's width,
+/// [`OUT_OF_RANGE_FRAME_WIDTH`], or [`UNLOADED_TYPE_WIDTH`] (also for a
+/// frame of no size known).
+#[must_use]
+pub fn stellar_width(site: &LandingSite, type_width: TypeWidth) -> u32 {
+    match (type_width, site.frame_size) {
+        (TypeWidth::Frame, Some((width, _))) => width,
+        (TypeWidth::OutOfRange, _) => OUT_OF_RANGE_FRAME_WIDTH,
+        (TypeWidth::Frame | TypeWidth::Unloaded, _) => UNLOADED_TYPE_WIDTH,
+    }
+}
+
 /// `site`'s landing reach under `source`, given what it shows: see the
 /// module docs.
 #[must_use]
@@ -336,11 +383,7 @@ pub fn landing_reach(site: &LandingSite, shown: StellarShown, source: RuleSource
     if !shown.frame {
         return LandingReach::Box(NO_FRAME_REACH);
     }
-    let width = match (shown.type_width, site.frame_size) {
-        (TypeWidth::Frame, Some((width, _))) => width,
-        (TypeWidth::OutOfRange, _) => OUT_OF_RANGE_FRAME_WIDTH,
-        (TypeWidth::Frame | TypeWidth::Unloaded, _) => UNLOADED_TYPE_WIDTH,
-    };
+    let width = stellar_width(site, shown.type_width);
     // Truncated, as `cvttsd2si` does: rounding, not a word wrap.
     #[allow(clippy::cast_possible_truncation)]
     let reach = (f64::from(width) * REACH_PER_WIDTH).trunc() as f32;
@@ -494,6 +537,18 @@ pub(crate) fn landable(flags: u32, destroyed: bool) -> bool {
 #[must_use]
 pub fn is_dockable(site: &LandingSite) -> bool {
     GateKind::of(site.flags2).is_none() && is_landable(site)
+}
+
+/// Whether `site`, the player's navigation target, answers a hail with
+/// its comm dialog: it is [dockable](is_dockable) and not
+/// [uninhabited](StellarFlags::UNINHABITED), as
+/// `_HandlePlayerCommunication` reads it (`_StellarIsLandable` @0x61fda,
+/// `Flags` 0x20 @0x61fe5, `Flags2` 0x3000 @0x61fff-0x62006). Its active
+/// byte (+0x44 @0x62009) is the session's to test: a stellar shown in the
+/// player's system.
+#[must_use]
+pub fn answers_hail(site: &LandingSite) -> bool {
+    is_dockable(site) && !has(site, StellarFlags::UNINHABITED)
 }
 
 /// Whether a pilot may be docked at `site` whatever its destroyed state:
@@ -764,6 +819,7 @@ mod tests {
             type_counts_frames: true,
             exit_angle: -1,
             tribute: 0,
+            animation: crate::catalog::SiteAnimation::default(),
         }
     }
 
@@ -1013,6 +1069,39 @@ mod tests {
         assert!(!is_dockable(&gate(WORMHOLE)), "a wormhole");
     }
 
+    #[test]
+    fn a_hail_is_answered_by_a_dockable_inhabited_stellar_alone() {
+        use crate::gate::{HYPERGATE, WORMHOLE};
+        let gate = |flags2| LandingSite {
+            flags2,
+            ..with_flags(StellarFlags::CAN_LAND)
+        };
+        assert!(answers_hail(&with_flags(StellarFlags::CAN_LAND)));
+        assert!(!answers_hail(&with_flags(0)), "not landable");
+        assert!(
+            !answers_hail(&LandingSite {
+                destroyed: true,
+                ..with_flags(StellarFlags::CAN_LAND)
+            }),
+            "destroyed"
+        );
+        assert!(
+            answers_hail(&LandingSite {
+                destroyed: true,
+                ..with_flags(StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED)
+            }),
+            "landable only once destroyed, and destroyed"
+        );
+        assert!(
+            !answers_hail(&with_flags(
+                StellarFlags::CAN_LAND | StellarFlags::UNINHABITED
+            )),
+            "uninhabited"
+        );
+        assert!(!answers_hail(&gate(HYPERGATE)), "a hypergate");
+        assert!(!answers_hail(&gate(WORMHOLE)), "a wormhole");
+    }
+
     /// `_FindNearestStellar` (@0x276c-0x2888) skips a stellar without the
     /// can-land flag (@0x27cd), and nothing else for its flags.
     #[test]
@@ -1230,6 +1319,19 @@ mod tests {
             engine(&unknown, shown(true, TypeWidth::OutOfRange)),
             box_of(56.0)
         );
+    }
+
+    #[test]
+    fn a_stellars_width_is_its_type_frames_or_150_unloaded_or_32_out_of_range() {
+        assert_eq!(stellar_width(&sized(140, 85), TypeWidth::Frame), 140);
+        assert_eq!(stellar_width(&sized(140, 85), TypeWidth::Unloaded), 150);
+        assert_eq!(stellar_width(&sized(140, 85), TypeWidth::OutOfRange), 32);
+        let unknown = LandingSite {
+            frame_size: None,
+            ..site(128, 0.0, 0.0)
+        };
+        assert_eq!(stellar_width(&unknown, TypeWidth::Frame), 150);
+        assert_eq!(stellar_width(&unknown, TypeWidth::OutOfRange), 32);
     }
 
     #[test]
@@ -2131,5 +2233,36 @@ mod tests {
     fn an_uninhabited_stellar_offers_nothing() {
         assert_eq!(services(StellarFlags::UNINHABITED), []);
         assert_eq!(services(0xFF), []);
+    }
+
+    #[test]
+    fn only_the_dock_requests_not_landable_too_far_and_too_fast_beep() {
+        let (stellar, station) = (StellarId(128), false);
+        let beeping = [
+            LandingRefusal::NotLandable { stellar, station },
+            LandingRefusal::TooFar { stellar, station },
+            LandingRefusal::TooFast {
+                stellar,
+                station,
+                speed: 2.0,
+            },
+        ];
+        for refusal in beeping {
+            assert!(refusal.beeps(), "{refusal:?}");
+        }
+        let silent = [
+            LandingRefusal::Jumping,
+            LandingRefusal::Disabled,
+            LandingRefusal::NoStellars,
+            LandingRefusal::NothingLandable,
+            LandingRefusal::Denied {
+                stellar,
+                station,
+                min_status: 10,
+            },
+        ];
+        for refusal in silent {
+            assert!(!refusal.beeps(), "{refusal:?}");
+        }
     }
 }

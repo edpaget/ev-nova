@@ -554,6 +554,20 @@ mod tests {
         assert_eq!(session.take_messages(), []);
     }
 
+    #[test]
+    fn a_moves_dock_ends_a_warp_up_playing() {
+        // The move docks by the entry table's `Reset::Dock`, not through
+        // a landing, so it ends the warp-ups itself (see `warp::WarpUps`).
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.warp_ups.start(false, 364);
+        session.warp_ups.start(true, 252);
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+    }
+
     /// The original redraws the rolls only in its daily step
     /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
     /// them: a move, passing no day, keeps them, and only the redraw due
@@ -696,6 +710,31 @@ mod tests {
         session.take_off(&catalog, &mut NeverFires);
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(session.npcs().len(), 3);
+    }
+
+    /// `_ResetPlayer` disarms the timer (@0x1d73f), and relocation's
+    /// `TrafficStep::Reset` builds a fresh traffic, which holds it
+    /// disarmed. No flight can show it, as every take-off arms it again,
+    /// so it is checked as state.
+    #[test]
+    fn a_relocation_disarms_an_armed_escort_strength_timer() {
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.arm_strength_timer(&mut NeverFires);
+        assert!(session.traffic.strength_armed(), "armed before the move");
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert!(!session.traffic.strength_armed(), "a move");
+        let mut session = landed(&catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert!(session.traffic.strength_armed(), "armed by the take-off");
+        session
+            .land_at(&catalog, SystemId(131), StellarId(140))
+            .expect("lands");
+        assert!(!session.traffic.strength_armed(), "a landing from flight");
     }
 
     #[test]

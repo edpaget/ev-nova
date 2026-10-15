@@ -22,7 +22,7 @@ use std::time::Duration;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
-use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -653,25 +653,19 @@ fn drain(log: &AudioLog) -> Vec<AudioCommand> {
 fn play(id: i16) -> AudioCommand {
     AudioCommand::Play {
         sound: nova_data::SoundId(id),
-        volume: Volume::FULL,
+        volume: AudioSettings::default().effects_volume,
     }
 }
 
 #[test]
-fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
+fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
     let (mut harness, log) = Harness::sounding(0);
     harness.frame();
     assert_eq!(drain(&log), [], "the ship browser is silent");
 
     harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(
-        drain(&log),
-        [AudioCommand::StartMusic {
-            volume: Volume::FULL
-        }],
-        "music in space"
-    );
+    assert_eq!(drain(&log), [], "no music in space");
     harness.frame();
 
     // Requesting clearance over the planet is silent; the approach's
@@ -681,24 +675,25 @@ fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
     assert_eq!(drain(&log), []);
     harness.approach();
     assert_eq!(drain(&log), [play(151)], "traffic control");
-    // The landing beep, then the planet's own sound; the music plays on.
+    // The landing beep, then the planet's own sound.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     assert_eq!(drain(&log), [play(151), play(LANDING_SOUND)]);
     harness.frame();
 
-    // Leave's button going down and coming up; taking off is silent.
+    // Leave is silent under the pointer, as `_TrackPlanetButtons`
+    // @0x2996f plays nothing; taking off is silent too.
     let leave = harness.item(LEAVE_ITEM).center();
     harness.click(leave);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(drain(&log), [play(600), play(601)]);
+    assert_eq!(drain(&log), []);
     harness.frame();
     assert_eq!(drain(&log), []);
 
-    // Back to the ship browser flight was entered from: the music stops.
+    // Back to the ship browser flight was entered from: still silent.
     harness.press_physical(KeyCode::Escape);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
-    assert_eq!(drain(&log), [AudioCommand::StopMusic]);
+    assert_eq!(drain(&log), []);
 }
 
 /// Where flight draws its hover cursor.

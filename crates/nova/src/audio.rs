@@ -35,7 +35,7 @@ mod tests {
     use std::path::PathBuf;
 
     use nova_audio::recording::RecordingAudio;
-    use nova_audio::{AudioCommand, Volume};
+    use nova_audio::{AudioCommand, AudioSettings};
     use nova_view::Showing;
     use nova_view::sound::{SimSound, Sound};
 
@@ -48,16 +48,16 @@ mod tests {
         let (core, warning) = game_audio::<_, String>(Ok(audio));
         assert_eq!(warning, None);
         let mut core = core.expect("a core");
-        core.update(Some(Showing::GalaxyMap), &[Sound::Sim(SimSound::JumpBegan)]);
+        core.update(Some(Showing::MainMenu), &[Sound::Sim(SimSound::JumpBegan)]);
         assert_eq!(
             *log.borrow(),
             [
                 AudioCommand::StartMusic {
-                    volume: Volume::FULL
+                    volume: AudioSettings::default().music_volume
                 },
                 AudioCommand::Play {
                     sound: nova_data::SoundId(128),
-                    volume: Volume::FULL
+                    volume: AudioSettings::default().effects_volume
                 },
             ]
         );

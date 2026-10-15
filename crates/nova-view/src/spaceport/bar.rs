@@ -578,7 +578,6 @@ impl Screen for BarScreen {
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
-        self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
         }
@@ -641,8 +640,9 @@ impl Screen for BarScreen {
         }
     }
 
-    /// The buttons' sounds, the hire screen's and the news' included, in
-    /// order.
+    /// The sounds of the hire screen, the news and the offer, in order.
+    /// The bar's own buttons are silent under the pointer, as
+    /// `_TrackBarButtons` @0x26fd5 plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -1054,14 +1054,12 @@ mod tests {
         assert!(screen.closed());
     }
 
-    const DOWN: Sound = Sound::Ui(crate::sound::UiSound::ButtonDown);
-    const UP: Sound = Sound::Ui(crate::sound::UiSound::ButtonUp);
-
+    /// `_TrackBarButtons` @0x26fd5 plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {
         let mut screen = bar();
         click_item(&mut screen, HIRE_ITEM);
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_sounds(), [], "taken");
         assert!(screen.take_hire_request());
         let at = screen
@@ -1079,11 +1077,12 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert!(!screen.take_hire_request(), "the click was abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
+    /// `_TrackEscortButtons` @0x27987 plays nothing under the pointer.
     #[test]
-    fn the_hire_screens_sounds_and_pointer_go_through_the_bar() {
+    fn the_hire_screens_pointer_goes_through_the_bar_silently() {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
@@ -1132,11 +1131,11 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_hire(), None, "the click was abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&button(true));
         screen.input(&button(false));
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
     #[test]
@@ -1270,8 +1269,9 @@ mod tests {
         );
     }
 
+    /// `_TrackSingleMissionButtons` @0x28188 plays nothing under the pointer.
     #[test]
-    fn the_offers_buttons_sound_and_its_pointer_goes_through_the_bar() {
+    fn the_offers_pointer_goes_through_the_bar_silently() {
         let mut screen = offering();
         screen.open_offer(prompt());
         let at = screen
@@ -1289,14 +1289,14 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_offer_choice(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&button(true));
         screen.input(&button(false));
         assert_eq!(
             screen.take_offer_choice(),
             Some((MissionId(141), OfferChoice::Refuse))
         );
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
     // The news.
@@ -1510,5 +1510,30 @@ mod tests {
         );
         screen.input(&key(MAP_KEY, false));
         assert!(!screen.take_map_request(), "without the bar's dialog");
+    }
+
+    /// `_BarFilter` @0x47a4b maps its keys to items with no click.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let keys = [
+            Key::Enter,
+            Key::Escape,
+            MISSION_INFO_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+        ]
+        .into_iter()
+        .chain(HIRE_KEYS)
+        .chain(NEWS_KEYS);
+        for k in keys {
+            let mut screen = bar();
+            screen.take_sounds();
+            screen.input(&key(k, false));
+            screen.input(&Input::Key {
+                key: k,
+                pressed: false,
+                repeat: false,
+            });
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
     }
 }

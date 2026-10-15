@@ -14,8 +14,9 @@
 //! with no sound:
 //!
 //! - the `STR ` of ID `Message` + 999 when one exists in any open file
-//!   (`_LoadPluginString` @0x71a8e-0x71af4 calls `GetResource`, not
-//!   `Get1Resource`), the base data's included;
+//!   (`_LoadPluginString` @0x71a8e-0x71af4, read by
+//!   [`patched_string`](crate::catalog::patched_string)), the base
+//!   data's included;
 //! - otherwise `STR#` 1000 #`Message` (`GetIndString` @0x52b3-0x52c7),
 //!   which is empty for an index the list does not hold: 0, below 0, past
 //!   its count, or with no `STR#` 1000 at all.
@@ -36,7 +37,7 @@
 //! the original's empty line by the engine, the arrival line by the other
 //! reading.
 
-use crate::catalog::StringPatch;
+use crate::catalog::{self, StringPatch};
 
 /// The `STR#` holding the buoy strings, "Message Buoy Strings".
 pub const BUOY_STRINGS: i16 = 1000;
@@ -45,28 +46,20 @@ pub const BUOY_STRINGS: i16 = 1000;
 const PATCH_OFFSET: i16 = 999;
 
 /// The ID of the `STR ` that patches buoy `index`, `index` + 999, or
-/// `None` when the sum does not fit (see the module docs).
+/// `None` when the sum does not fit (see the module docs and
+/// [`catalog::patch_id`](crate::catalog::patch_id)).
 #[must_use]
 pub fn patch_id(index: i16) -> Option<i16> {
-    index.checked_add(PATCH_OFFSET)
+    catalog::patch_id(index, PATCH_OFFSET)
 }
 
 /// The text buoy `index` shows, given the `STR ` `patch` of its
-/// [`patch_id`] and `strings`, `STR#` 1000 whole: the patch's text when
-/// there is one (empty for one that is [`StringPatch::Empty`] or
-/// [`StringPatch::Unreadable`]), else `strings`' #`index`, else `None`,
-/// an index the list does not hold (see the module docs).
+/// [`patch_id`] and `strings`, `STR#` 1000 whole: the
+/// [`patched_string`](crate::catalog::patched_string), or `None` for an
+/// index the list does not hold (see the module docs).
 #[must_use]
 pub fn buoy_text(index: i16, patch: StringPatch, strings: &[String]) -> Option<String> {
-    match patch {
-        StringPatch::Text(text) => Some(text),
-        StringPatch::Empty | StringPatch::Unreadable => Some(String::new()),
-        StringPatch::Absent => usize::try_from(index)
-            .ok()
-            .and_then(|index| index.checked_sub(1))
-            .and_then(|at| strings.get(at))
-            .cloned(),
-    }
+    catalog::patched_string(index, patch, strings)
 }
 
 #[cfg(test)]

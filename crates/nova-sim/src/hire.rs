@@ -57,7 +57,14 @@
 //! A class listed can be hired when its `Availability` holds (through
 //! [`ControlBits`]), the fleet has room ([`MAX_ESCORTS`](crate::board::MAX_ESCORTS)
 //! escorts that are not fighters, `_CanHireEscorts` @0x5795) and its fee
-//! is no more than the cash. The hire branch never checks `Require`,
+//! is no more than the cash. Neither `_CanHireEscorts` nor
+//! `_CalcShipCanBuy` checks for a free ship-table slot (@0x5795-0x57e4),
+//! so by the engine reading of
+//! [`RuleKey::HireNoSlot`] a hire with none
+//! goes on, taking the fee with no escort joining
+//! ([`Session::hire`](crate::Session::hire)); by the other reading it is
+//! refused ([`HireRefusal::NoSlot`]), after the fleet's room and before
+//! the cash. The hire branch never checks `Require`,
 //! whereas buying does: the rulebook's
 //! [`RuleKey::HireRequire`](crate::RuleKey::HireRequire) chooses
 //! ([`Session::with_rules`](crate::Session::with_rules)).
@@ -291,6 +298,9 @@ pub enum HireRefusal {
     CannotAfford,
     /// The fleet holds as many escorts as it can.
     FleetFull,
+    /// By the other reading of [`RuleKey::HireNoSlot`], the system has
+    /// no ship-table slot for it below the spawn reserve.
+    NoSlot,
 }
 
 /// One ship class for hire in the bar.
@@ -345,6 +355,10 @@ pub struct Hired {
     pub fee: i64,
     /// The daily wage it was hired at.
     pub wage: i64,
+    /// Whether an escort joined the fleet: not when, by the engine reading
+    /// of [`RuleKey::HireNoSlot`], it found no ship-table slot, the fee
+    /// taken all the same.
+    pub joined: bool,
 }
 
 /// What paying the escorts did, for the flight's message line.
@@ -366,6 +380,9 @@ pub(crate) struct Bar<'a> {
     pub(crate) cash: i64,
     /// Whether the fleet has room for another escort.
     pub(crate) room: bool,
+    /// Whether the system has a ship-table slot for it, or the hire may
+    /// go on without one ([`RuleKey::HireNoSlot`]).
+    pub(crate) slot: bool,
     /// The fee and wage.
     pub(crate) terms: &'a dyn HireTerms,
     /// The ranks' price multiplier the fee reads, `_priceFluxMult[1]`.
@@ -439,6 +456,8 @@ impl Bar<'_> {
                 Err(HireRefusal::NotForHire)
             } else if !self.room {
                 Err(HireRefusal::FleetFull)
+            } else if !self.slot {
+                Err(HireRefusal::NoSlot)
             } else if self.cash < fee {
                 Err(HireRefusal::CannotAfford)
             } else {
@@ -717,6 +736,7 @@ mod tests {
             contributed: 0,
             cash: 0,
             room: true,
+            slot: true,
             terms: &NovaHire::default(),
             rank_mult: 1.0,
             control_bits: Gate::FRESH.control_bits,
@@ -758,6 +778,7 @@ mod tests {
                 contributed: 0,
                 cash: 0,
                 room: true,
+                slot: true,
                 terms: &NovaHire::default(),
                 rank_mult: 1.0,
                 control_bits: Gate::FRESH.control_bits,

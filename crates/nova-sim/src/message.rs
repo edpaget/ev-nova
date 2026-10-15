@@ -27,6 +27,10 @@ pub enum SimMessage {
     /// mission whose `Flags` lacks 0x0400 (`_MissionObjectivesCheck`
     /// @0x9ebd0-0x9ec53).
     DeadlineMissed,
+    /// The mission info key was pressed with no active mission whose
+    /// `Flags` lacks 0x0400: "No active missions.", `STR#` 2002 #354
+    /// (`_HandlePlayer` @0x7055c-0x705a8).
+    NoActiveMissions,
     /// A mission failed as one of its special ships was destroyed or
     /// disabled, for a mission whose `Flags` lacks 0x0400
     /// (`_HandleShipDisplay` @0x2db31-0x2dbab, `_DamageShip`
@@ -103,6 +107,11 @@ pub enum SimMessage {
         /// The credits fined: none for no fine.
         fine: i64,
     },
+    /// An announced fleet arrived, showing this line of its `flët`'s
+    /// `Quote`, its '#'s filled with digits, empty when the list has none
+    /// (`_HyperSpawnFleet` @0x42607-0x426f4; see
+    /// [`quote`](crate::traffic::quote)).
+    FleetArrivalQuote(String),
     /// The ship took off past the tutorial with no `Q` message: the
     /// take-off greeting, "{lead} {the stellar} on {the date}."
     /// (`_PlayerLandOnStellar` @0x635f7-0x63732; see
@@ -179,6 +188,8 @@ impl SimMessage {
     /// - [`Buoy`](Self::Buoy): 480 (`_DisplayMessage` @0x5300).
     /// - [`ExitedHypergate`](Self::ExitedHypergate): 360
     ///   (`_PlayerEnterHypergate` @0x63f1d).
+    /// - [`FleetArrivalQuote`](Self::FleetArrivalQuote): 360
+    ///   (`_HyperSpawnFleet` @0x426e9).
     /// - [`PassedWormhole`](Self::PassedWormhole): 240
     ///   (`_PlayerEnterWormhole` @0x645be).
     /// - [`MissionFailed`](Self::MissionFailed),
@@ -193,6 +204,8 @@ impl SimMessage {
     ///   (`_DamageShip` @0x3b181, @0x3b3b9, @0x3b0b6, @0x3b353).
     /// - [`DeadlineMissed`](Self::DeadlineMissed): 240
     ///   (`_MissionObjectivesCheck` @0x9ec53).
+    /// - [`NoActiveMissions`](Self::NoActiveMissions): 240
+    ///   (`_HandlePlayer` @0x705a8).
     /// - [`MissionScanned`](Self::MissionScanned),
     ///   [`Smuggling`](Self::Smuggling),
     ///   [`IllegalJunk`](Self::IllegalJunk) and
@@ -220,7 +233,7 @@ impl SimMessage {
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
-            Self::ExitedHypergate(_) | Self::Sabotaged { .. } => 360,
+            Self::ExitedHypergate(_) | Self::FleetArrivalQuote(_) | Self::Sabotaged { .. } => 360,
             Self::MissionScanned
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
@@ -230,6 +243,7 @@ impl SimMessage {
             | Self::PassedWormhole(_)
             | Self::MissionFailed
             | Self::DeadlineMissed
+            | Self::NoActiveMissions
             | Self::MissionShipLost
             | Self::ShipDisabled
             | Self::ShipDestroyed
@@ -264,9 +278,11 @@ mod tests {
             (SimMessage::Arrived(SystemId(128)), 240),
             (SimMessage::Buoy("Message Buoy: hello.".into()), 480),
             (SimMessage::ExitedHypergate(SystemId(128)), 360),
+            (SimMessage::FleetArrivalQuote("Hail 1".to_owned()), 360),
             (SimMessage::PassedWormhole(SystemId(128)), 240),
             (SimMessage::MissionFailed, 240),
             (SimMessage::DeadlineMissed, 240),
+            (SimMessage::NoActiveMissions, 240),
             (SimMessage::MissionShipLost, 240),
             (SimMessage::ShipDisabled, 240),
             (SimMessage::ShipDestroyed, 240),

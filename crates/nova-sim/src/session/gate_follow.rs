@@ -5,7 +5,9 @@
 //!
 //! The original's gate path (`_HandlePlayerDockRequest` @0x67159-0x674a5)
 //! runs the enter-system hook, then loop A over the slots, then the
-//! system's setup, then one `_EnterMoreShips` frame, then loop B. Loop A
+//! system's setup, then one `_EnterMoreShips` frame
+//! ([`Session::gate_exit_pass`]), then loop B
+//! ([`Session::emerge_followers`]). Loop A
 //! overwrites the hook's restart of a -6 slot, so here the hook leaves a
 //! -6 slot alone on a gate's exit (see the `mission_ships` module), and
 //! the exit's setup takes a -6 slot of escorts at once. The follow rolls
@@ -13,10 +15,15 @@
 //! draws first, where the original draws them after the hook's restarts;
 //! they follow the escort-strength timer's arming (@0x6706f), as there.
 //!
+//! Loop B gives each follower the player's heading (@0x67453-0x67456)
+//! after `_AIMakeShipEmergeFromHyperGate` has rolled `Rand(360)` for an
+//! exit angle outside 0-359 (@0x8958e-0x895a5), so the exit's angle never
+//! decides a follower's heading.
+//!
 //! By the other reading the exit leaves the slots as a jump does.
 
 use super::Session;
-use crate::catalog::TrafficCatalog;
+use crate::catalog::{StellarId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::gate::{GateArrivalRule, GateKind};
@@ -25,7 +32,6 @@ use crate::mission::ShipSystem;
 use crate::mission::ships::{GateSlot, NOT_APPEARING, ShipBehav, through_gate};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Entrance;
-use crate::traffic::npc::Mode;
 
 /// `Rand(50) + 100`: the ticks a follower waits in the gate (@0x6745c).
 const EMERGE_DRAW: u32 = 50;
@@ -84,29 +90,61 @@ impl Session {
         }
     }
 
-    /// The player just out of a gate at `exit`, the system entered: under
-    /// the engine's reading of [`RuleKey::GateFollow`], one frame of the
-    /// appear timers (`_EnterMoreShips` @0x672f2,
-    /// [`Session::mission_ship_arrivals`]) brings the followers in, their
+    /// The gate exit's one `_EnterMoreShips` pass (@0x672f2), after the
+    /// system is entered and before the followers come out
+    /// ([`Session::emerge_followers`]), all before the first frame, drawn
+    /// on `chance`. Under the engine's reading of [`RuleKey::GateFollow`]
+    /// only, its mission-slot loop: one frame of the appear timers
+    /// ([`Session::mission_ship_arrivals`]) brings the followers in, their
     /// `düde`s read from `catalog`, leaving to the enter-system hook the
-    /// slots it is about to restart. Then each ship of a slot following
-    /// the player, attacking it, its timer just stopped (loop B, @0x67346-0x67487) comes out after the player, in
-    /// order: at rest at `exit`, or where the player arrived under
+    /// slots it is about to restart; by the other reading the exit leaves
+    /// the slots as a jump does, and a hyperspace arrival has no extra
+    /// pass. Under either, its traffic part
+    /// ([`Traffic::enter_more_ships`](crate::traffic::Traffic::enter_more_ships)):
+    /// the arrival roll and the escort-strength timer's tick, so a timer
+    /// armed at the exit fires on the n-th tick after it. Each announced
+    /// fleet it brings shows its quote at once, as `_HyperSpawnFleet`
+    /// does (@0x42607-0x426f4), and each person it brings has its offer
+    /// resolved, as after every spawn (see the `person_offers` module).
+    pub(super) fn gate_exit_pass(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if self.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine {
+            self.mission_ship_arrivals(catalog, Some(Entrance::Gate), chance);
+        }
+        let last = self.last_npc();
+        self.step_traffic(|traffic, world| traffic.enter_more_ships(world, chance));
+        self.announce_fleets(chance);
+        self.resolve_person_offers(last, &mut &mut *chance);
+    }
+
+    /// The player just out of `gate` at `exit`, the system entered and its
+    /// exit pass run ([`Session::gate_exit_pass`]): under the engine's
+    /// reading of [`RuleKey::GateFollow`], each ship of a slot following
+    /// the player, attacking it, its timer just stopped (loop B,
+    /// @0x67346-0x67487) comes out after the player, in order: at rest at
+    /// `exit`, or where the player arrived under
     /// [`GateArrivalRule::LikeJump`], with the player's heading, waiting
-    /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, then
+    /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, with no
+    /// target and its trigger released
+    /// ([`Npc::emerge_from_gate`](crate::traffic::npc::Npc::emerge_from_gate),
+    /// @0x89544), then
     /// bursting out of it as any ship coming out of a gate does (see the
-    /// traffic's [`emerge`](crate::traffic::emerge)). A mission that
-    /// auto-aborted as they came in leaves its ships as they came.
+    /// traffic's [`emerge`](crate::traffic::emerge)), coming out of
+    /// `gate` ([`Npc::emerges_from`](crate::traffic::npc::Npc::emerges_from),
+    /// @0x8954a) wherever it waits. A mission that auto-aborted as they
+    /// came in leaves its ships as they came.
     pub(super) fn emerge_followers(
         &mut self,
+        gate: StellarId,
         exit: Vec2,
-        catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
         if self.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
             return;
         }
-        self.mission_ship_arrivals(catalog, Some(Entrance::Gate), chance);
         let followers: Vec<u8> = self
             .pilot
             .missions
@@ -140,7 +178,7 @@ impl Session {
                 heading,
             };
             let wait = chance.below(EMERGE_DRAW) + EMERGE_LEAST;
-            npc.mode = Mode::Emerging { ticks_left: wait };
+            npc.emerge_from_gate(gate, wait);
         }
     }
 }
@@ -152,6 +190,7 @@ pub(super) mod tests {
     use crate::catalog::{GateSite, MissionShip, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
+    use crate::combat::armament::Trigger;
     use crate::gate::{HYPERGATE, WORMHOLE};
     use crate::geometry::Vec2;
     use crate::govt::{
@@ -167,7 +206,7 @@ pub(super) mod tests {
     use crate::story::{Fate, StoryEvent};
     use crate::testkit::Draws;
     use crate::testkit::{FakePilotCatalog, govt, land_now, planet};
-    use crate::traffic::npc::Npc;
+    use crate::traffic::npc::{Mode, Npc};
 
     /// Where hypergate 300 is in 130.
     const HYPERGATE_AT: Vec2 = Vec2::new(-3000.0, 0.0);
@@ -421,6 +460,14 @@ pub(super) mod tests {
         }
     }
 
+    /// The exit gate of `kind` in 131.
+    pub(in crate::session) fn exit_gate_of(kind: GateKind) -> StellarId {
+        match kind {
+            GateKind::Hypergate => StellarId(310),
+            GateKind::Wormhole => StellarId(410),
+        }
+    }
+
     /// The special ships in the system.
     fn specials(session: &Session) -> Vec<Npc> {
         session
@@ -457,6 +504,7 @@ pub(super) mod tests {
                     "{kind:?}"
                 );
                 assert_eq!(ship.mode, Mode::Emerging { ticks_left: 149 }, "{kind:?}");
+                assert_eq!(ship.emerges_from, Some(exit_gate_of(kind)), "{kind:?}");
             }
             let arrived: Vec<StoryEvent> = ships
                 .iter()
@@ -490,6 +538,79 @@ pub(super) mod tests {
                 assert_eq!(ship.goal.quarry(), Some(ShipRef::Player), "{kind:?}");
             }
             assert_eq!(marked(&session), [0, 0], "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_follower_comes_out_of_the_gate_with_no_target_and_its_trigger_released() {
+        let catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        let firing = Trigger {
+            primary: true,
+            ..Trigger::default()
+        };
+        for npc in session.traffic.npcs_mut() {
+            npc.trigger = firing;
+            npc.target = Some(ShipRef::Player);
+        }
+        session.emerge_followers(
+            exit_gate_of(GateKind::Hypergate),
+            exit_of(GateKind::Hypergate),
+            &mut NeverFires,
+        );
+        let ships = specials(&session);
+        assert_eq!(ships.len(), 2);
+        for ship in ships {
+            assert!(ship.emerging());
+            assert_eq!(ship.trigger, Trigger::default());
+            assert_eq!(ship.target, None);
+        }
+    }
+
+    #[test]
+    fn a_follower_takes_the_players_heading_whatever_the_exits_angle() {
+        // `_AIMakeShipEmergeFromHyperGate` rolls `Rand(360)` for an exit
+        // angle outside 0-359 (@0x8958e-0x895a5), but loop B overwrites
+        // the heading with the player's (@0x67453-0x67456).
+        /// The player's `Rand(360)` gives 123, a heading no other
+        /// `Rand(360)` here gives: every other draw is its last outcome.
+        struct PlayerRolls123 {
+            rolled: bool,
+        }
+        impl Chance for PlayerRolls123 {
+            fn fires(&mut self, _percent: u8) -> bool {
+                false
+            }
+            fn below(&mut self, n: u32) -> u32 {
+                if n == 360 && !self.rolled {
+                    self.rolled = true;
+                    123
+                } else {
+                    n - 1
+                }
+            }
+        }
+        let mut catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
+        for site in &mut catalog.gates {
+            site.exit_angle = -1;
+        }
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        exit_gate_raising(
+            &mut session,
+            &catalog,
+            GateKind::Hypergate,
+            &mut PlayerRolls123 { rolled: false },
+        );
+        let heading = session.player().heading;
+        assert_eq!(heading, 123.0, "the player's roll, not the exit's angle");
+        let ships = specials(&session);
+        assert_eq!(ships.len(), 2);
+        for ship in ships {
+            assert!(ship.emerging());
+            assert_eq!(ship.state.heading, heading);
         }
     }
 
@@ -556,6 +677,11 @@ pub(super) mod tests {
             assert_eq!(ship.state.heading, player.heading);
             assert_eq!(ship.state.velocity, Vec2::ZERO);
             assert!(ship.emerging());
+            assert_eq!(
+                ship.emerges_from,
+                Some(exit_gate_of(GateKind::Hypergate)),
+                "still the exit gate, as +0x6c is"
+            );
         }
         assert_eq!(specials(&session).len(), 2);
     }
@@ -615,5 +741,26 @@ pub(super) mod tests {
             "the exit's frame does not bring in ships the hook restarts"
         );
         assert_eq!(timer(&session), (199, 0), "restarted");
+    }
+
+    #[test]
+    fn the_gate_exit_runs_a_slots_appear_timer_once_by_the_engine_and_not_by_the_other_reading() {
+        // Ships of 131 starting 0: neither loop A, which only takes -6
+        // slots, nor the hook, which only restarts `ShipStart` 1, touches
+        // the timer, left at 5 when the player last left 131. The exit's
+        // one `_EnterMoreShips` frame (@0x672f2) counts it down by the
+        // engine; by the other reading the exit leaves it as a jump does.
+        for (source, expected) in [(RuleSource::Engine, 4), (RuleSource::Bible, 5)] {
+            let catalog = gated(shipping(131, 0), 0);
+            let mut session = accepted(&catalog).with_rules(reading(source));
+            take_off(&mut session, &catalog);
+            if let Some(active) = session.pilot.missions.get_mut(0) {
+                active.ships.appear = 5;
+                active.ships.arrived = 0;
+            }
+            exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+            assert_eq!(timer(&session), (expected, 0), "{source:?}");
+            assert!(marked(&session).is_empty(), "{source:?}: still to come");
+        }
     }
 }

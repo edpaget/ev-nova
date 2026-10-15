@@ -54,9 +54,11 @@
 //!   @0x69e1f-0x69f17): the beep whenever they find a stellar, even the
 //!   one selected (@0x69ebc); then, unless it is selected in mode 2
 //!   already (@0x69ec4-0x69ed6), mode 2 with it, its brackets flying in.
-//! - A click on a stellar (@0x6a68f-0x6a6fc): nothing when it is selected
-//!   in mode 2 already; otherwise the beep (@0x6a6c1), mode 2 with it and
-//!   the fly-in.
+//! - A click in space ([`Session::click_in_space`], @0x6a5e9-0x6a717),
+//!   when no ship took it and no jump is under way: the first stellar
+//!   under it, passing over the one selected in mode 2 (@0x6a69d →
+//!   @0x6a703), with the beep (@0x6a6c1), mode 2 with it and the fly-in;
+//!   a click on none is silent.
 //! - The land key ([`Session::land`], @0x6a8ed-0x6a932): with no stellar
 //!   selected in mode 2, mode 2 with the nearest, in silence.
 //! - Landing writes neither: the ship lands in mode 2, the land key
@@ -184,7 +186,7 @@ use crate::StellarPick;
 use crate::catalog::{StellarId, SystemId};
 use crate::hyperspace::{HyperSelectRule, next_hyper_destination};
 use crate::landing::nearest_stellar;
-use crate::navigation::{NavMode, stellar_under};
+use crate::navigation::NavMode;
 use crate::sound::SimSound;
 
 impl Session {
@@ -378,19 +380,20 @@ impl Session {
     }
 
     /// Makes the stellar `pick` finds the stellar selected, as the
-    /// original's stellar slot keys, F5 and a click in space do, and
-    /// gives it. The course is left alone. `None`, and nothing changes,
-    /// during a jump (pre-jump stage too, as the original skips its nav
-    /// inputs while jumping) or when `pick` finds nothing: an empty slot,
-    /// no stellar with the can-land flag, or a click on none.
+    /// original's stellar slot keys and F5 do, and gives it. The course
+    /// is left alone. `None`, and nothing changes, during a jump
+    /// (pre-jump stage too, as the original skips its nav inputs while
+    /// jumping) or when `pick` finds nothing: an empty slot or no
+    /// stellar with the can-land flag.
     ///
     /// A key that finds a stellar raises [`SimSound::NavSelected`], even
-    /// for the one selected. Selecting changes the mode to 2 and starts
-    /// the brackets' fly-in ([`Session::nav_brackets`]), and drops the dock
-    /// request (@0x69efd-0x69f12, @0x6a6e7-0x6a6fc), only when it is not
-    /// the stellar selected in mode 2 already (@0x69ec4-0x69ed6). A
-    /// click on that stellar does nothing at all, and makes no sound
-    /// (@0x6a68f-0x6a69d).
+    /// for the one selected (@0x69ebc). Selecting changes the mode to 2
+    /// and starts the brackets' fly-in ([`Session::nav_brackets`]), and
+    /// drops the dock request (@0x69efd-0x69f12), only when it is not the
+    /// stellar selected in mode 2 already (@0x69ec4-0x69ed6). A click in
+    /// space is [`Session::click_in_space`], whose walk passes over the
+    /// stellar selected in mode 2 and goes on to any under it
+    /// (@0x6a69d → @0x6a703).
     pub fn select_stellar(&mut self, pick: StellarPick) -> Option<StellarId> {
         if self.jump.is_some() {
             return None;
@@ -398,14 +401,8 @@ impl Session {
         let picked = match pick {
             StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
             StellarPick::Nearest => nearest_stellar(self.player.position, &self.sites),
-            StellarPick::At(at) => {
-                stellar_under(&self.sites, at, |site| self.drawn_frame_size(site))
-            }
         }?;
         let selected = self.nav == NavMode::Stellar(Some(picked));
-        if selected && matches!(pick, StellarPick::At(_)) {
-            return Some(picked);
-        }
         self.sounds.push(SimSound::NavSelected);
         if !selected {
             self.nav_fly_in.start();
@@ -509,7 +506,9 @@ mod tests {
     };
     use crate::sound::SimSound;
     use crate::targeting::TargetPick;
-    use crate::testkit::{FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, starting};
+    use crate::testkit::{
+        FakePilotCatalog, begin_jump_now, catalog, click_stellar, fly_out, land_now, starting,
+    };
 
     fn ids(route: &[i16]) -> Vec<SystemId> {
         route.iter().copied().map(SystemId).collect()
@@ -784,14 +783,14 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_the_stellar_selected_does_nothing_and_makes_no_sound() {
+    fn a_click_on_the_stellar_selected_alone_does_nothing_and_makes_no_sound() {
         let mut session = quiet(Session::start(&three_stellars()).expect("starts"));
-        let on_131 = StellarPick::At(crate::geometry::Vec2::new(900.0, 0.0));
-        assert_eq!(session.select_stellar(on_131), Some(StellarId(131)));
+        let on_131 = crate::geometry::Vec2::new(900.0, 0.0);
+        assert_eq!(click_stellar(&mut session, on_131), Some(StellarId(131)));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
         session.tick(Controls::default());
         let expand = session.nav_brackets().expect("bracketed").expand;
-        assert_eq!(session.select_stellar(on_131), Some(StellarId(131)));
+        assert_eq!(click_stellar(&mut session, on_131), None);
         assert_eq!(session.take_sounds(), []);
         assert_eq!(session.nav_mode(), stellar(131));
         assert_eq!(
@@ -806,8 +805,8 @@ mod tests {
         let mut session = Session::start(&three_stellars()).expect("starts");
         session.hyperspace_mode();
         let mut session = quiet(session);
-        let on_131 = StellarPick::At(crate::geometry::Vec2::new(900.0, 0.0));
-        assert_eq!(session.select_stellar(on_131), Some(StellarId(131)));
+        let on_131 = crate::geometry::Vec2::new(900.0, 0.0);
+        assert_eq!(click_stellar(&mut session, on_131), Some(StellarId(131)));
         assert_eq!(session.nav_mode(), stellar(131));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
     }

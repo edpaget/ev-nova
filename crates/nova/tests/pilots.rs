@@ -20,6 +20,8 @@ use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
+use nova_audio::recording::{AudioLog, RecordingAudio};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, music_fade};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -293,6 +295,8 @@ struct Harness {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
     frames: u64,
+    /// What the app's audio was asked to play.
+    log: AudioLog,
 }
 
 impl Harness {
@@ -305,10 +309,14 @@ impl Harness {
         let screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(interface()), metrics);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
         Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, screen).with_audio(core),
             gpu: RecordingGpu::new(),
             frames: 0,
+            log,
         }
     }
 
@@ -381,6 +389,22 @@ impl Harness {
             .button(choice)
             .rect
             .center()
+    }
+
+    /// The music commands since the last call; the effects let go.
+    fn music(&self) -> Vec<AudioCommand> {
+        std::mem::take(&mut *self.log.borrow_mut())
+            .into_iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    AudioCommand::StartMusic { .. }
+                        | AudioCommand::StopMusic
+                        | AudioCommand::FadeOutMusic(_)
+                        | AudioCommand::SetMusicVolume(_)
+                )
+            })
+            .collect()
     }
 
     fn showing(&self) -> Showing {
@@ -538,4 +562,40 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
         }),
         Control::Exit
     );
+}
+
+#[test]
+fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    game.frame();
+    assert_eq!(game.showing(), Showing::MainMenu);
+    assert_eq!(
+        game.music(),
+        [AudioCommand::StartMusic {
+            volume: AudioSettings::default().music_volume
+        }]
+    );
+
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    assert_eq!(game.showing(), Showing::NewPilot);
+    game.frame();
+    assert_eq!(game.music(), [], "the dialog keeps it");
+
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(
+        game.music(),
+        [AudioCommand::FadeOutMusic(music_fade(
+            AudioSettings::default().music_volume
+        ))]
+    );
+    game.frame();
+
+    game.press(KeyCode::Escape);
+    assert_eq!(game.showing(), Showing::MainMenu);
+    game.frame();
+    assert_eq!(game.music(), [], "spent for the rest of the run");
 }

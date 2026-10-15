@@ -251,6 +251,7 @@ mod tests {
             type_counts_frames: true,
             exit_angle: -1,
             tribute: 0,
+            animation: crate::catalog::SiteAnimation::default(),
         }
     }
 

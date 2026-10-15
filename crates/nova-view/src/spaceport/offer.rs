@@ -92,7 +92,6 @@ pub struct OfferDialog {
     answered: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info: bool,
-    sounds: Vec<Sound>,
 }
 
 impl OfferDialog {
@@ -151,7 +150,6 @@ impl OfferDialog {
             choice: None,
             answered: false,
             player_info: false,
-            sounds: Vec::new(),
         }
     }
 
@@ -245,7 +243,6 @@ impl Screen for OfferDialog {
             return ScreenAction::None;
         };
         let event = dialog.input(input);
-        self.sounds.extend(dialog.take_sound().map(Sound::Ui));
         match event {
             Some(DialogEvent::Item(ACCEPT_ITEM | SINGLE_ITEM)) => self.choose(OfferChoice::Accept),
             Some(DialogEvent::Item(REFUSE_ITEM)) => self.choose(OfferChoice::Refuse),
@@ -276,11 +273,6 @@ impl Screen for OfferDialog {
         if let Ok(dialog) = &mut self.laid {
             dialog.cancel_pointer();
         }
-    }
-
-    /// The buttons' sounds, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -717,11 +709,9 @@ mod tests {
         assert_eq!(dialog.prompt().mission, MissionId(141));
     }
 
-    const DOWN: Sound = Sound::Ui(crate::sound::UiSound::ButtonDown);
-    const UP: Sound = Sound::Ui(crate::sound::UiSound::ButtonUp);
-
+    /// `_TrackSingleMissionButtons` @0x28188 plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {
         let mut dialog = offer();
         let at = dialog
             .dialog()
@@ -737,9 +727,9 @@ mod tests {
         dialog.cancel_pointer();
         dialog.input(&button(false));
         assert_eq!(dialog.take_choice(), None, "abandoned");
-        assert_eq!(dialog.take_sounds(), [DOWN]);
+        assert_eq!(dialog.take_sounds(), []);
         click_item(&mut dialog, ACCEPT_ITEM);
-        assert_eq!(dialog.take_sounds(), [DOWN, UP]);
+        assert_eq!(dialog.take_sounds(), []);
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
@@ -826,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn an_open_offers_sounds_pointer_and_drawing_go_through_them() {
+    fn an_open_offers_pointer_and_drawing_go_through_them() {
         let mut offers = VenueOffers::asking(Ok(template()));
         let mut list = DrawList::new();
         offers.draw(&mut list);
@@ -853,7 +843,7 @@ mod tests {
         assert!(offers.cancel_pointer());
         offers.input(&button(false), &mut sounds);
         assert_eq!(offers.take_choice(), None, "abandoned");
-        assert_eq!(sounds, [DOWN]);
+        assert_eq!(sounds, []);
     }
 
     #[test]
@@ -864,5 +854,29 @@ mod tests {
             offers.dialog().and_then(OfferDialog::problem),
             Some("no DLOG 1016")
         );
+    }
+
+    /// The original's `_SingleMissionFilter` (@0x98d9a) maps Return, Escape
+    /// and the labels' first letters to items without a click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [
+            Key::Enter,
+            Key::Escape,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+        ]
+        .into_iter()
+        .chain(('a'..='z').map(Key::Char))
+        {
+            let mut dialog = offer();
+            for pressed in [true, false] {
+                dialog.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(dialog.take_sounds(), [], "{k:?}");
+        }
     }
 }

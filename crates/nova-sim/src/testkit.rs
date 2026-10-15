@@ -119,6 +119,9 @@ pub(crate) struct FakePilotCatalog {
     /// The warp-up sound's length: none, by default, so the warp's clock
     /// takes 350 Mac ticks.
     pub(crate) warp_sound: Option<SoundLength>,
+    /// The double-time warp-up sound's length: none, by default, so the
+    /// warp's clock takes 350 Mac ticks in double time too.
+    pub(crate) warp_sound_double_time: Option<SoundLength>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -307,6 +310,7 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         type_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
+        animation: crate::catalog::SiteAnimation::default(),
     }
 }
 
@@ -520,6 +524,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         booty: 0,
         boarded: false,
         info_types: 0,
+        cargo: None,
         spared: false,
         assisting: 0,
         carrier: None,
@@ -529,6 +534,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         cloak: crate::cloak::Cloak::default(),
         cloak_gear: crate::cloak::CloakGear::default(),
         led_out: false,
+        emerges_from: None,
         self_repair: false,
         former: None,
     }
@@ -607,7 +613,21 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         ranks: Vec::new(),
         nebulae: Vec::new(),
         warp_sound: None,
+        warp_sound_double_time: None,
     }
+}
+
+/// `catalog` with system 130's planet 129 at (-2000, 0): as far out as
+/// at (2000, 0), but on the side the 999 bound on a destination does not
+/// reach (see [`destination`](crate::traffic::destination)), so an idle
+/// NPC drawing the last candidate heads for it, far from 128.
+pub(crate) fn far_129_reachable(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+    for (_, sites) in &mut catalog.sites {
+        for site in sites.iter_mut().filter(|site| site.id == StellarId(129)) {
+            site.position = Vec2::new(-2000.0, 0.0);
+        }
+    }
+    catalog
 }
 
 /// `catalog` with variants in system 130 marked as `_StellarsAreIdentical`
@@ -882,6 +902,10 @@ impl PilotCatalog for FakePilotCatalog {
         self.warp_sound
     }
 
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        self.warp_sound_double_time
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         TrafficCatalog::dude(self, id)
     }
@@ -952,6 +976,12 @@ impl CommCatalog for FakePilotCatalog {
             .iter()
             .find(|(list, _)| *list == id)
             .map_or_else(Vec::new, |(_, strings)| strings.clone())
+    }
+
+    /// [`FakePilotCatalog::string_patches`]' `'STR '` `id`, as
+    /// [`PilotCatalog::string_patch`] reads it.
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        self.string_patch(id)
     }
 }
 
@@ -1195,6 +1225,28 @@ pub(crate) struct AllowAll;
 impl ControlBits for AllowAll {
     fn allows(&self, _test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
         true
+    }
+}
+
+/// No ship drawn anywhere, so a click in space falls through to the
+/// stellars.
+pub(crate) struct NoShips;
+
+impl crate::hover::DrawnShips for NoShips {
+    fn npc(&self, _id: NpcId) -> Option<crate::hover::DrawnBox> {
+        None
+    }
+
+    fn player(&self) -> Option<crate::hover::DrawnBox> {
+        None
+    }
+}
+
+/// The stellar a click at `at` in space, with no ship drawn, selects.
+pub(crate) fn click_stellar(session: &mut Session, at: Vec2) -> Option<StellarId> {
+    match session.click_in_space(at, &NoShips) {
+        Some(crate::hover::Hover::Stellar(id)) => Some(id),
+        _ => None,
     }
 }
 

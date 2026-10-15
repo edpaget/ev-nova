@@ -13,7 +13,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 
@@ -126,9 +126,27 @@ impl MainMenu {
 
 impl Screen for MainMenu {
     /// A click on a button (pressed and let go of on it) chooses it, and
-    /// an Escape press chooses Quit. The router acts on the choice; the
-    /// menu itself never quits.
+    /// an Escape press chooses Quit, silently: an engine key, as the
+    /// original's main screen ignores Escape (`_MainScreenKey` @0x1ac2d).
+    /// Typing N, O or Q, in either case, chooses New Pilot, Open Pilot or
+    /// Quit with [`UiSound::ButtonKeyed`], as `_MainScreenKey` @0x1aba0
+    /// does through `_PlayMainScreenClickSound`. Its other keys are not
+    /// built here: E (enter the game with the pilot loaded, @0x1ac32) has
+    /// no counterpart on this menu, the router takes P, A and X, and O's
+    /// held-key guard (@0x1abd3-0x1abf5) is left out. The router acts on
+    /// the choice; the menu itself never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Text(typed) = *input {
+            let choice = match typed.to_ascii_lowercase() {
+                'n' => MenuChoice::NewPilot,
+                'o' => MenuChoice::OpenPilot,
+                'q' => MenuChoice::Quit,
+                _ => return ScreenAction::None,
+            };
+            self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
+            self.choice = Some(choice);
+            return ScreenAction::None;
+        }
         if let Input::Key {
             key: Key::Escape,
             pressed: true,
@@ -186,7 +204,7 @@ impl Screen for MainMenu {
         self.tracked = None;
     }
 
-    /// The buttons' sounds as they are clicked.
+    /// The buttons' sounds as they are clicked or keyed.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -197,7 +215,6 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
-    use crate::sound::UiSound;
     use crate::text::fixture::MonoMetrics;
 
     fn menu() -> MainMenu {
@@ -308,9 +325,47 @@ mod tests {
         assert_eq!(menu.take_choice(), None);
         menu.input(&key(Key::Escape, true, false));
         assert_eq!(menu.take_choice(), Some(MenuChoice::Quit));
-        for other in [key(Key::Enter, true, false), Input::Text('q')] {
+        assert_eq!(menu.take_sounds(), [], "silently");
+    }
+
+    #[test]
+    fn n_o_and_q_choose_their_button_with_a_keyed_click_in_either_case() {
+        for (typed, choice) in [
+            ('n', MenuChoice::NewPilot),
+            ('N', MenuChoice::NewPilot),
+            ('o', MenuChoice::OpenPilot),
+            ('O', MenuChoice::OpenPilot),
+            ('q', MenuChoice::Quit),
+            ('Q', MenuChoice::Quit),
+        ] {
+            let mut menu = menu();
+            assert_eq!(menu.input(&Input::Text(typed)), ScreenAction::None);
+            assert_eq!(
+                menu.take_sounds(),
+                [Sound::Ui(UiSound::ButtonKeyed)],
+                "{typed}"
+            );
+            assert_eq!(menu.take_choice(), Some(choice), "{typed}");
+            assert_eq!(menu.take_choice(), None, "once");
+        }
+    }
+
+    #[test]
+    fn other_keys_choose_nothing_and_make_no_sound() {
+        let mut menu = menu();
+        for other in [
+            Input::Text('x'),
+            Input::Text('a'),
+            Input::Text('e'),
+            Input::Text(' '),
+            Input::Text('\r'),
+            key(Key::Enter, true, false),
+            key(Key::Char(' '), true, false),
+            key(Key::Char('n'), true, false),
+        ] {
             menu.input(&other);
             assert_eq!(menu.take_choice(), None, "{other:?}");
+            assert_eq!(menu.take_sounds(), [], "{other:?}");
         }
     }
 

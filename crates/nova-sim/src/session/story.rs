@@ -29,6 +29,7 @@ use crate::story::{
     Consumer, Countdown, Fate, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StoryEvent,
     StoryEventKind, Subscription, SubscriptionId,
 };
+use crate::traffic::Leave;
 use crate::traffic::npc::NpcId;
 use crate::{hire, outfitter, shipyard, wares};
 
@@ -502,7 +503,7 @@ impl Session {
         if moved || self.galaxy.govt(self.pilot.system) != govt {
             let table = self.spawn_table(catalog);
             let every: BTreeSet<NpcId> = self.traffic.npcs().iter().map(|npc| npc.id).collect();
-            self.traffic.retarget(table, &every);
+            self.traffic.retarget(table, &every, Leave::Dropped);
         }
         self.emit(SessionEvent::GalaxyChanged);
     }
@@ -595,6 +596,7 @@ impl Session {
                 .filter(|site| held.contains(&site.id))
                 .copied()
                 .collect();
+            self.keep_gate_sprites();
         }
         if waiting_stale {
             let sites = self.read_sites(catalog, self.pilot.system);

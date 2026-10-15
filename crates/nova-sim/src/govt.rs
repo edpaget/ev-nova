@@ -68,15 +68,15 @@ pub const ALWAYS_FOLLOWS_THROUGH_HYPERGATE: u16 = 0x0040;
 /// `Flags2`: its mission ships that attack the player always follow the
 /// player through a wormhole (@0x6726b).
 pub const ALWAYS_FOLLOWS_THROUGH_WORMHOLE: u16 = 0x0080;
-/// `Flags2`: its ships never take a hypergate for a stellar to come out
-/// of (`_SelectRandomStellarDest` @0x80625, see
-/// [`emerge`](crate::traffic::emerge)).
+/// `Flags2`: its ships never take a hypergate as a destination, nor to
+/// come out of (`_SelectRandomStellarDest` @0x80625, see
+/// [`destination`](crate::traffic::destination)).
 pub const AVOIDS_HYPERGATES: u16 = 0x0020;
-/// `Flags2`: its ships come out of a hypergate whenever one will do
-/// (@0x80989).
+/// `Flags2`: its ships take a hypergate as a destination, and to come
+/// out of, whenever one will do (@0x80989).
 pub const PREFERS_HYPERGATES: u16 = 0x0040;
-/// `Flags2`: its ships may come out of wormholes, and do whenever one
-/// will do (@0x80947).
+/// `Flags2`: its ships may take a wormhole as a destination, and to come
+/// out of, and do whenever one will do (@0x80947).
 pub const PREFERS_WORMHOLES: u16 = 0x0080;
 /// The least `MaxOdds` a government has, as a fraction.
 pub const MIN_ODDS: f32 = 0.01;

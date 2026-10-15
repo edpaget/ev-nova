@@ -10,6 +10,8 @@ use std::cell::{Cell, RefCell};
 use std::io;
 use std::rc::Rc;
 
+use nova_data::SoundId;
+
 use crate::port::{Audio, AudioCommand};
 use crate::settings::SettingsStore;
 
@@ -20,6 +22,9 @@ pub type AudioLog = Rc<RefCell<Vec<AudioCommand>>>;
 #[derive(Clone, Debug, Default)]
 pub struct RecordingAudio {
     log: AudioLog,
+    music_ended: Rc<Cell<bool>>,
+    /// The sounds that count as playing.
+    playing: Rc<RefCell<Vec<SoundId>>>,
 }
 
 impl RecordingAudio {
@@ -34,11 +39,38 @@ impl RecordingAudio {
     pub fn log(&self) -> AudioLog {
         Rc::clone(&self.log)
     }
+
+    /// Makes the music last started count as played to its end, for this
+    /// mock and its clones, until music is started again.
+    pub fn end_music(&self) {
+        self.music_ended.set(true);
+    }
+
+    /// Makes `sound` count as playing (`true`) or not, for this mock and
+    /// its clones.
+    pub fn set_playing(&self, sound: SoundId, playing: bool) {
+        let mut sounds = self.playing.borrow_mut();
+        sounds.retain(|&other| other != sound);
+        if playing {
+            sounds.push(sound);
+        }
+    }
 }
 
 impl Audio for RecordingAudio {
     fn run(&mut self, command: AudioCommand) {
+        if matches!(command, AudioCommand::StartMusic { .. }) {
+            self.music_ended.set(false);
+        }
         self.log.borrow_mut().push(command);
+    }
+
+    fn music_ended(&self) -> bool {
+        self.music_ended.get()
+    }
+
+    fn playing(&self, sound: SoundId) -> bool {
+        self.playing.borrow().contains(&sound)
     }
 }
 
@@ -130,6 +162,31 @@ mod tests {
         let expected = [AudioCommand::StopEffects, AudioCommand::StopMusic];
         assert_eq!(*before.borrow(), expected);
         assert_eq!(*after.borrow(), expected);
+    }
+
+    #[test]
+    fn the_music_ends_when_told_to_until_it_starts_again() {
+        let mut audio = RecordingAudio::new();
+        let other = audio.clone();
+        assert!(!audio.music_ended());
+        other.end_music();
+        assert!(audio.music_ended());
+        audio.run(AudioCommand::StartMusic {
+            volume: crate::port::Volume::FULL,
+        });
+        assert!(!audio.music_ended());
+    }
+
+    #[test]
+    fn a_sound_plays_while_told_it_does_for_every_clone() {
+        let audio = RecordingAudio::new();
+        let other = audio.clone();
+        assert!(!audio.playing(SoundId(600)));
+        other.set_playing(SoundId(600), true);
+        assert!(audio.playing(SoundId(600)));
+        assert!(!audio.playing(SoundId(601)));
+        other.set_playing(SoundId(600), false);
+        assert!(!audio.playing(SoundId(600)));
     }
 
     #[test]

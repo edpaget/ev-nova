@@ -96,6 +96,8 @@
 //! - [`gate`]: hypergates and wormholes: which a stellar is
 //!   ([`GateKind`]), where each leads, and how a ship comes out of one,
 //!   under the [`GateArrivalRule`] and [`WormholeRule`].
+//! - [`gate_sprite`]: which frame a hypergate's sprite shows, opening
+//!   while a ship comes out of it and closing once none does.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
 //! - [`govt`]: the [`Governments`] and their relations: allies, enemies,
@@ -300,6 +302,7 @@ pub mod fixture;
 pub mod flight;
 pub mod fuel;
 pub mod gate;
+pub mod gate_sprite;
 pub mod geometry;
 pub mod glow;
 pub mod govt;
@@ -353,6 +356,7 @@ mod testkit;
 pub mod text_tags;
 pub mod top_speed;
 pub mod traffic;
+pub mod trig;
 pub mod tutorial;
 pub mod wares;
 pub mod warp;
@@ -417,7 +421,7 @@ pub use landing::{
     DockPress, DockSaid, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH,
     OUT_OF_RANGE_FRAME_WIDTH, REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth,
     UNLOADED_TYPE_WIDTH, check_landing, cleared, is_landable, land_or_select, landing_radius,
-    landing_reach, nearest_stellar, nearest_stellar_station, services,
+    landing_reach, nearest_stellar, nearest_stellar_station, services, stellar_width,
 };
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
@@ -466,6 +470,6 @@ pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
-pub use traffic::{Traffic, World};
+pub use traffic::{Leave, Traffic, World};
 pub use tutorial::{Tutorial, TutorialHint};
 pub use wares::{ShownTons, TonUnit};

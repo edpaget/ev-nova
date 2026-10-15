@@ -1,12 +1,14 @@
 //! The audio core: sound events and the screen shown in, playback
 //! commands out.
 
+use std::time::Duration;
+
 use nova_data::SoundId;
 use nova_view::Showing;
 use nova_view::sound::{SimSound, Sound, UiSound};
 
 use crate::port::{Audio, AudioCommand, Volume};
-use crate::settings::AudioSettings;
+use crate::settings::{AudioSettings, music_volume_level};
 use crate::table::SoundTable;
 
 /// Decides what plays: turns each frame's sound events and the screen
@@ -16,12 +18,17 @@ use crate::table::SoundTable;
 /// loop on) and what it has been told (the scene, whether the ship is
 /// thrusting), and sends a command only when what it wants changes.
 ///
-/// - Music plays in menus (the galaxy map, flight's course map and the
-///   spaceport) and in space (flight, and a system opened from the map),
-///   while the music setting is on. The ship browser, the developer's
-///   viewer the app opens on, is silent. The About text and the
-///   Preferences dialog, over another screen, keep the scene below them. Moving between music scenes does
-///   not restart the track.
+/// - Music is the original's one-shot intro track: it plays on the main
+///   menu, and the dialogs over it, while the music setting is on (the
+///   scene rule in `has_music`: the main menu and its dialogs only;
+///   flight, the spaceport, the maps and the system view are silent). It
+///   is spent for good, as in the original, once it has
+///   played to its end, or once a pilot enters the game or the About text
+///   opens, which fade it out ([`music_fade`]). Spent music never plays
+///   again in the run.
+/// - Known divergence: the original reads its Intro Music checkbox only
+///   at launch. Here the music setting acts at once: off stops the music,
+///   and on, before the music is spent, starts it again from the top.
 /// - Each event with a `snd ` in the table plays it once, at the effects
 ///   volume, while the sound setting is on. A landing plays the table's
 ///   landing sound, then the stellar's own. A `P` set operator's sound
@@ -29,6 +36,8 @@ use crate::table::SoundTable;
 ///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
 ///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
 ///   which the port decides.
+/// - A key's click on a main-menu button plays the button-down sound,
+///   then the button-up sound once the port says the first has ended.
 /// - A halt halts each `snd ` it names, in order ([`AudioCommand::Halt`]),
 ///   whatever the sound setting: halting what is not playing is harmless.
 /// - Each of a fight's sounds plays its own `snd ` once, at the effects
@@ -45,10 +54,13 @@ pub struct AudioCore<A: Audio> {
     scene: Option<Showing>,
     /// Whether the ship is thrusting, as the events last said.
     thrusting: bool,
-    /// Whether the music has been started and not stopped since.
-    music_on: bool,
+    /// Where the music stands.
+    music: Music,
     /// Whether the engine loop has been started and not stopped since.
     loop_on: bool,
+    /// A keyed click's second half: the `snd ` it waits on to end, then
+    /// the one it plays.
+    keyed: Option<(SoundId, SoundId)>,
 }
 
 impl<A: Audio> AudioCore<A> {
@@ -67,16 +79,30 @@ impl<A: Audio> AudioCore<A> {
             settings: AudioSettings::default(),
             scene: None,
             thrusting: false,
-            music_on: false,
+            music: Music::Stopped,
             loop_on: false,
+            keyed: None,
         }
     }
 
     /// Takes in one frame's worth: the screen `showing` (`None` keeps the
     /// scene as it was), then each of `sounds` in order.
     pub fn update(&mut self, showing: Option<Showing>, sounds: &[Sound]) {
+        if let Some((waiting, then)) = self.keyed
+            && !self.audio.playing(waiting)
+        {
+            self.keyed = None;
+            self.play(Some(then));
+        }
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
+        }
+        // Entering the game (`_EnterGameFromMainScreen` @0x19ec6) and the
+        // About box (`_DoAboutBox` @0x15fbf) cancel the music for good.
+        if showing == Some(Showing::About)
+            || self.scene.is_some_and(|scene| scene != Showing::MainMenu)
+        {
+            self.spend_music();
         }
         // The Preferences dialog, the boarding dialogs, the comm dialogs,
         // a person's offer dialog, the mission dialogs and the player info
@@ -102,80 +128,121 @@ impl<A: Audio> AudioCore<A> {
         }
         self.reconcile();
         for &sound in sounds {
-            match sound {
-                // Thrust counts only in flight, where the ship flies.
-                Sound::Sim(SimSound::ThrustStarted) => {
-                    self.thrusting = self.scene == Some(Showing::Flight);
-                }
-                Sound::Sim(SimSound::ThrustStopped) => self.thrusting = false,
-                Sound::Sim(SimSound::Landed { stellar_sound }) => {
-                    self.play(self.table.landing);
-                    self.play(stellar_sound);
-                }
-                Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
-                Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
-                Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
-                Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
-                Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
-                Sound::Sim(SimSound::CargoJettisoned) => self.play(self.table.jettison),
-                Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
-                Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
-                Sound::Sim(SimSound::Script {
-                    sound,
-                    exclusive: false,
-                }) => self.play(Some(sound)),
-                Sound::Sim(SimSound::Script {
-                    sound,
-                    exclusive: true,
-                }) => {
-                    if self.settings.sound {
-                        self.audio.run(AudioCommand::PlayExclusive {
-                            sound,
-                            volume: self.settings.effects_volume,
-                        });
-                    }
-                }
-                Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
-                Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
-                Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
-                Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
-                Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
-                Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
-                Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
-                Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
-                Sound::Sim(SimSound::TutorialHint) => self.play(self.table.tutorial_hint),
-                Sound::Sim(SimSound::ShipDowned) => self.play(self.table.ship_downed),
-                Sound::Sim(SimSound::DownedMissionFailed) => {
-                    self.play(self.table.downed_mission_failed);
-                }
-                Sound::Sim(SimSound::TrafficControl) => self.play(self.table.traffic_control),
-                Sound::Sim(SimSound::Klaxon) => self.sound_klaxon(),
-                Sound::Sim(SimSound::Ejected) => self.play(self.table.eject),
-                Sound::Sim(SimSound::OnboardExplosion) => {
-                    self.play(self.table.onboard_explosion);
-                }
-                Sound::Sim(SimSound::JumpCollapsed) => self.play(self.table.jump_collapsed),
-                Sound::Sim(SimSound::Refused) => self.play(self.table.refused),
-                Sound::Sim(SimSound::Halt(sounds)) => self.halt(sounds),
-                Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
-                Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
-                Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
-                Sound::Ui(UiSound::NewsOpened | UiSound::MissionInfoOpened) => {
-                    self.play(self.table.news_open);
-                }
-                Sound::Ui(UiSound::NewsClosed | UiSound::MissionInfoClosed) => {
-                    self.play(self.table.news_close);
-                }
-                Sound::Ui(UiSound::FloatingMapZoomed) => {
-                    self.play(self.table.floating_map_zoom);
-                }
-                Sound::Combat(fight) => {
-                    let gain = distance_gain(fight.offset);
-                    let volume = self.settings.effects_volume.amplitude() * gain;
-                    self.play_at(Some(fight.sound), Volume::new(volume));
+            self.take(sound);
+            self.reconcile();
+        }
+    }
+
+    /// Takes in one of a frame's `sounds`.
+    fn take(&mut self, sound: Sound) {
+        match sound {
+            // Thrust counts only in flight, where the ship flies.
+            Sound::Sim(SimSound::ThrustStarted) => {
+                self.thrusting = self.scene == Some(Showing::Flight);
+            }
+            Sound::Sim(SimSound::ThrustStopped) => self.thrusting = false,
+            Sound::Sim(SimSound::Landed { stellar_sound }) => {
+                self.play(self.table.landing);
+                self.play(stellar_sound);
+            }
+            Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
+            Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
+            Sound::Sim(SimSound::JumpBeganInDoubleTime) => self.play(self.table.jump_double_time),
+            Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
+            Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
+            Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
+            Sound::Sim(SimSound::CargoJettisoned) => self.play(self.table.jettison),
+            Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
+            Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
+            Sound::Sim(SimSound::Script {
+                sound,
+                exclusive: false,
+            }) => self.play(Some(sound)),
+            Sound::Sim(SimSound::Script {
+                sound,
+                exclusive: true,
+            }) => {
+                if self.settings.sound {
+                    self.audio.run(AudioCommand::PlayExclusive {
+                        sound,
+                        volume: self.settings.effects_volume,
+                    });
                 }
             }
-            self.reconcile();
+            Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
+            Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
+            Sound::Ui(UiSound::ButtonKeyed) => self.click_keyed(),
+            Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
+            Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
+            Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
+            Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
+            Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
+            Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
+            Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
+            Sound::Sim(SimSound::TargetSelected) => self.play(self.table.target_selected),
+            Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
+            Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
+            Sound::Sim(SimSound::TutorialHint) => self.play(self.table.tutorial_hint),
+            Sound::Sim(SimSound::ShipDowned) => self.play(self.table.ship_downed),
+            Sound::Sim(SimSound::DownedMissionFailed) => {
+                self.play(self.table.downed_mission_failed);
+            }
+            Sound::Sim(SimSound::MissionShipLost) => self.play(self.table.mission_ship_lost),
+            Sound::Sim(SimSound::MissionShipBoarded) => {
+                self.play(self.table.mission_ship_boarded);
+            }
+            Sound::Sim(SimSound::TrafficControl) => self.play(self.table.traffic_control),
+            Sound::Sim(SimSound::Klaxon) => self.sound_klaxon(),
+            Sound::Sim(SimSound::Ejected) => self.play(self.table.eject),
+            Sound::Sim(SimSound::OnboardExplosion) => {
+                self.play(self.table.onboard_explosion);
+            }
+            Sound::Sim(SimSound::JumpCollapsed) => self.play(self.table.jump_collapsed),
+            Sound::Sim(SimSound::Refused) => self.play(self.table.refused),
+            Sound::Sim(SimSound::Halt(sounds)) => self.halt(sounds),
+            Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
+            Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
+            Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
+            Sound::Ui(UiSound::NewsOpened | UiSound::MissionInfoOpened) => {
+                self.play(self.table.news_open);
+            }
+            Sound::Ui(UiSound::NewsClosed | UiSound::MissionInfoClosed) => {
+                self.play(self.table.news_close);
+            }
+            Sound::Ui(UiSound::FloatingMapZoomed) => {
+                self.play(self.table.floating_map_zoom);
+            }
+            Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
+            Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
+            Sound::Combat(fight) => {
+                let gain = distance_gain(fight.offset);
+                let volume = self.settings.effects_volume.amplitude() * gain;
+                self.play_at(Some(fight.sound), Volume::new(volume));
+            }
+        }
+    }
+
+    /// Plays a key's click on a main-menu button, as
+    /// `_PlayMainScreenClickSound` @0x177af does: the button-down sound,
+    /// then, on the first update after it has ended, the button-up sound
+    /// (the original busy-waits on `ST_IsSoundPlaying`, @0x177e0-0x177f2).
+    /// A click still waiting is finished first, as the original finishes
+    /// one before it reads the next key. With no button-down sound, the
+    /// button-up sound plays at once. With sound off, nothing plays and
+    /// nothing waits.
+    fn click_keyed(&mut self) {
+        if let Some((_, then)) = self.keyed.take() {
+            self.play(Some(then));
+        }
+        if !self.settings.sound {
+            return;
+        }
+        match (self.table.button_down, self.table.button_up) {
+            (Some(down), up) => {
+                self.play(Some(down));
+                self.keyed = up.map(|up| (down, up));
+            }
+            (None, up) => self.play(up),
         }
     }
 
@@ -217,16 +284,25 @@ impl<A: Audio> AudioCore<A> {
     /// Starts or stops the music and the engine loop where what is wanted
     /// differs from what was last asked for.
     fn reconcile(&mut self) {
-        let music = self.settings.music && self.scene.is_some_and(has_music);
-        if music != self.music_on {
-            self.music_on = music;
-            self.audio.run(if music {
-                AudioCommand::StartMusic {
-                    volume: self.settings.music_volume,
-                }
-            } else {
-                AudioCommand::StopMusic
-            });
+        if self.music == Music::Playing && self.audio.music_ended() {
+            self.music = Music::Spent;
+        }
+        if self.music != Music::Spent {
+            let wanted = self.settings.music && self.scene.is_some_and(has_music);
+            if wanted != (self.music == Music::Playing) {
+                self.music = if wanted {
+                    Music::Playing
+                } else {
+                    Music::Stopped
+                };
+                self.audio.run(if wanted {
+                    AudioCommand::StartMusic {
+                        volume: self.settings.music_volume,
+                    }
+                } else {
+                    AudioCommand::StopMusic
+                });
+            }
         }
         let engine = self.table.engine.filter(|_| {
             self.settings.sound && self.thrusting && self.scene == Some(Showing::Flight)
@@ -243,12 +319,23 @@ impl<A: Audio> AudioCore<A> {
         }
     }
 
+    /// Spends the music for good, fading it out if it is playing.
+    fn spend_music(&mut self) {
+        if self.music == Music::Playing {
+            self.audio.run(AudioCommand::FadeOutMusic(music_fade(
+                self.settings.music_volume,
+            )));
+        }
+        self.music = Music::Spent;
+    }
+
     /// Turns sound effects on or off. Turning them off stops every effect
     /// playing.
     pub fn set_sound(&mut self, on: bool) {
         if self.settings.sound && !on {
             self.audio.run(AudioCommand::StopEffects);
             self.loop_on = false;
+            self.keyed = None;
         }
         self.settings.sound = on;
         self.reconcile();
@@ -271,7 +358,7 @@ impl<A: Audio> AudioCore<A> {
     /// Sets how loud the music is.
     pub fn set_music_volume(&mut self, volume: Volume) {
         self.settings.music_volume = volume;
-        if self.music_on {
+        if self.music == Music::Playing {
             self.audio.run(AudioCommand::SetMusicVolume(volume));
         }
     }
@@ -311,6 +398,18 @@ impl<A: Audio> AudioCore<A> {
     pub fn audio(&self) -> &A {
         &self.audio
     }
+}
+
+/// Where the music stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Music {
+    /// Not playing, and may start.
+    Stopped,
+    /// Started and not stopped since.
+    Playing,
+    /// Played to its end, or faded out by leaving the main menu or
+    /// opening About: it never plays again.
+    Spent,
 }
 
 /// Within this many pixels of the player, a sound is heard at full volume.
@@ -368,18 +467,39 @@ fn is_overlay(showing: Showing) -> bool {
     )
 }
 
-/// Whether music plays on `scene`: menus and space do; the ship browser,
-/// the developer's viewer, does not.
+/// How long the music at `volume` fades out over: 4 ticks for each
+/// Preferences level, at the music level nearest `volume` (32 ticks at the
+/// top level, 8). `_StopIntroMusic(1)` @0x61c82 starts at level x 32 and takes
+/// 8 off a tick until it reaches 0, so the fade lasts level x 4 ticks.
+#[must_use]
+pub fn music_fade(volume: Volume) -> Duration {
+    Duration::from_secs(4 * u64::from(music_volume_level(volume))) / 60
+}
+
+/// Whether music plays on `scene`: the main menu only, while the music is
+/// not spent; the dialogs over it keep it. The original's intro music
+/// starts once a launch (`_InitEVNova` @0x471ec, `_SpawnIntroMusicThread`
+/// @0x61a5c), plays once and is not looped (`_MusicThread` @0x61e10 ends at
+/// `IsMovieDone` @0x61e3d), and is cancelled for good when a pilot enters
+/// the game (`_EnterGameFromMainScreen` @0x19ec6) or About opens
+/// (`_DoAboutBox` @0x15fbf). Flight, the spaceport, the maps and the system
+/// view never play it.
+///
+/// Known divergence: the original reads its Intro Music checkbox
+/// (`-[EVPrefsDialogController accept:]` @0xcfeae) only at launch; here
+/// turning the setting off stops the music at once, and turning it on
+/// before the music is spent restarts it from the top.
 fn has_music(scene: Showing) -> bool {
     match scene {
-        Showing::MainMenu
-        | Showing::GalaxyMap
+        Showing::MainMenu => true,
+        // The game's screens never play it; the overlays are never the
+        // scene, as they keep the one below.
+        Showing::GalaxyMap
         | Showing::FlightMap
         | Showing::Spaceport
         | Showing::Flight
-        | Showing::System => true,
-        // The overlays are never the scene: they keep the one below.
-        Showing::ShipBrowser
+        | Showing::System
+        | Showing::ShipBrowser
         | Showing::About
         | Showing::Preferences
         | Showing::NewPilot
@@ -416,6 +536,11 @@ mod tests {
             stellar_sound: stellar_sound.map(SoundId),
         })
     }
+
+    /// The default effects volume, level 4's: a quarter of full.
+    const EFFECTS: f32 = 0.25;
+    /// The default music volume, level 4's: half of full.
+    const MUSIC: f32 = 0.5;
 
     fn play(id: i16, volume: f32) -> AudioCommand {
         AudioCommand::Play {
@@ -470,12 +595,105 @@ mod tests {
         assert_eq!(
             drain(&log),
             [
-                play(128, 1.0),
-                play(130, 1.0),
-                play(600, 1.0),
-                play(601, 1.0)
+                play(128, EFFECTS),
+                play(130, EFFECTS),
+                play(600, EFFECTS),
+                play(601, EFFECTS)
             ]
         );
+    }
+
+    const KEYED: Sound = Sound::Ui(UiSound::ButtonKeyed);
+
+    /// The original table: a core, its log and a handle on its port, to
+    /// say what is still playing.
+    fn keyed() -> (AudioCore<RecordingAudio>, AudioLog, RecordingAudio) {
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let handle = audio.clone();
+        (AudioCore::new(audio), log, handle)
+    }
+
+    #[test]
+    fn a_keyed_button_plays_600_then_601_once_600_has_ended() {
+        let (mut core, log, audio) = keyed();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        assert_eq!(drain(&log), [play(600, 0.5)]);
+        audio.set_playing(SoundId(600), true);
+        core.update(None, &[]);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "600 still playing");
+        audio.set_playing(SoundId(600), false);
+        core.update(None, &[JUMP]);
+        assert_eq!(
+            drain(&log),
+            [play(601, 0.5), play(128, 0.5)],
+            "601 first, before the frame's events"
+        );
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "once");
+    }
+
+    #[test]
+    fn a_second_keyed_button_finishes_the_first_click_before_its_own() {
+        let (mut core, log, audio) = keyed();
+        audio.set_playing(SoundId(600), true);
+        core.update(Some(Showing::ShipBrowser), &[KEYED, KEYED]);
+        assert_eq!(
+            drain(&log),
+            [play(600, EFFECTS), play(601, EFFECTS), play(600, EFFECTS)]
+        );
+        core.update(None, &[]);
+        assert_eq!(drain(&log), []);
+        audio.set_playing(SoundId(600), false);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [play(601, EFFECTS)]);
+    }
+
+    #[test]
+    fn a_keyed_button_is_silent_with_sound_off_and_leaves_nothing_pending() {
+        let (mut core, log, _) = keyed();
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        core.set_sound(true);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "sound off");
+
+        let (mut core, log, _) = keyed();
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        core.set_sound(false);
+        core.set_sound(true);
+        drain(&log);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "turning sound off forgets 601");
+    }
+
+    #[test]
+    fn a_keyed_button_with_no_600_plays_601_at_once() {
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            button_down: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        assert_eq!(drain(&log), [play(601, EFFECTS)]);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "once");
+
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            button_up: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [play(600, EFFECTS)], "no 601 to play");
     }
 
     #[test]
@@ -493,10 +711,10 @@ mod tests {
         assert_eq!(
             drain(&log),
             [
-                play(150, 1.0),
-                play(151, 1.0),
-                play(152, 1.0),
-                play(153, 1.0)
+                play(150, EFFECTS),
+                play(151, EFFECTS),
+                play(152, EFFECTS),
+                play(153, EFFECTS)
             ]
         );
     }
@@ -514,7 +732,7 @@ mod tests {
         );
         assert_eq!(
             drain(&log),
-            [play(150, 1.0), play(152, 1.0), play(150, 1.0)]
+            [play(150, EFFECTS), play(152, EFFECTS), play(150, EFFECTS)]
         );
     }
 
@@ -538,7 +756,20 @@ mod tests {
             Some(Showing::ShipBrowser),
             &[Sound::Ui(UiSound::FloatingMapZoomed)],
         );
-        assert_eq!(drain(&log), [play(160, 1.0)]);
+        assert_eq!(drain(&log), [play(160, EFFECTS)]);
+    }
+
+    #[test]
+    fn a_target_key_beeps_152_and_closest_target_finding_none_153() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::TargetSelected),
+                Sound::Sim(SimSound::Refused),
+            ],
+        );
+        assert_eq!(drain(&log), [play(152, EFFECTS), play(153, EFFECTS)]);
     }
 
     #[test]
@@ -572,7 +803,34 @@ mod tests {
             Some(Showing::ShipBrowser),
             &[Sound::Sim(SimSound::EscortRepaired)],
         );
-        assert_eq!(drain(&log), [play(154, 1.0)]);
+        assert_eq!(drain(&log), [play(154, EFFECTS)]);
+    }
+
+    #[test]
+    fn an_announced_fleets_arrival_quote_beeps() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::FleetArrivalQuote)],
+        );
+        assert_eq!(drain(&log), [play(154, EFFECTS)]);
+    }
+
+    #[test]
+    fn a_hail_refused_an_offer_on_a_hail_and_a_hail_quote_beep() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::Refused),
+                Sound::Sim(SimSound::HailOffer),
+                Sound::Sim(SimSound::HailQuote),
+            ],
+        );
+        assert_eq!(
+            drain(&log),
+            [play(153, EFFECTS), play(154, EFFECTS), play(154, EFFECTS)]
+        );
     }
 
     #[test]
@@ -582,7 +840,7 @@ mod tests {
             Some(Showing::ShipBrowser),
             &[Sound::Sim(SimSound::ScriptMessage)],
         );
-        assert_eq!(drain(&log), [play(154, 1.0)]);
+        assert_eq!(drain(&log), [play(154, EFFECTS)]);
         core.set_sound(false);
         drain(&log);
         core.update(None, &[Sound::Sim(SimSound::ScriptMessage)]);
@@ -611,6 +869,24 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_jump_begun_in_double_time_plays_warp_up_x2_at_the_effects_volume() {
+        let jump = Sound::Sim(SimSound::JumpBeganInDoubleTime);
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::Flight), &[jump]);
+        assert_eq!(drain(&log), [play(129, 0.5)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            jump_double_time: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::Flight), &[jump]);
+        assert_eq!(drain(&log), [], "none in the table");
     }
 
     #[test]
@@ -778,7 +1054,7 @@ mod tests {
                 Sound::Ui(UiSound::NewsClosed),
             ],
         );
-        assert_eq!(drain(&log), [play(151, 1.0), play(152, 1.0)]);
+        assert_eq!(drain(&log), [play(151, EFFECTS), play(152, EFFECTS)]);
         let audio = RecordingAudio::new();
         let log = audio.log();
         let table = SoundTable {
@@ -794,7 +1070,44 @@ mod tests {
                 Sound::Ui(UiSound::NewsOpened),
             ],
         );
-        assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
+        assert_eq!(
+            drain(&log),
+            [play(301, EFFECTS), play(300, EFFECTS)],
+            "the table's"
+        );
+    }
+
+    #[test]
+    fn the_course_map_beeps_as_it_opens_and_closes() {
+        const MAP: [Sound; 2] = [Sound::Ui(UiSound::MapOpened), Sound::Ui(UiSound::MapClosed)];
+        let (mut core, log) = original();
+        core.update(None, &MAP);
+        assert_eq!(drain(&log), [play(152, EFFECTS), play(150, EFFECTS)]);
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(152, 0.5), play(150, 0.5)],
+            "at the effects volume"
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &MAP);
+        assert_eq!(drain(&log), [], "sound off");
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            map_open: Some(SoundId(300)),
+            map_close: Some(SoundId(301)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(300, EFFECTS), play(301, EFFECTS)],
+            "the table's"
+        );
     }
 
     #[test]
@@ -807,7 +1120,7 @@ mod tests {
                 Sound::Ui(UiSound::MissionInfoClosed),
             ],
         );
-        assert_eq!(drain(&log), [play(151, 1.0), play(152, 1.0)]);
+        assert_eq!(drain(&log), [play(151, EFFECTS), play(152, EFFECTS)]);
         let audio = RecordingAudio::new();
         let log = audio.log();
         let table = SoundTable {
@@ -823,14 +1136,18 @@ mod tests {
                 Sound::Ui(UiSound::MissionInfoOpened),
             ],
         );
-        assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
+        assert_eq!(
+            drain(&log),
+            [play(301, EFFECTS), play(300, EFFECTS)],
+            "the table's"
+        );
     }
 
     #[test]
     fn a_refusal_beeps_beep4() {
         let (mut core, log) = original();
         core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Refused)]);
-        assert_eq!(drain(&log), [play(153, 1.0)]);
+        assert_eq!(drain(&log), [play(153, EFFECTS)]);
         let audio = RecordingAudio::new();
         let log = audio.log();
         let table = SoundTable {
@@ -839,7 +1156,7 @@ mod tests {
         };
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Refused)]);
-        assert_eq!(drain(&log), [play(302, 1.0)], "the table's");
+        assert_eq!(drain(&log), [play(302, EFFECTS)], "the table's");
     }
 
     #[test]
@@ -861,10 +1178,44 @@ mod tests {
         };
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::ShipBrowser), &DOWNED);
-        assert_eq!(drain(&log), [play(301, 1.0), play(302, 1.0)], "the table's");
+        assert_eq!(
+            drain(&log),
+            [play(301, EFFECTS), play(302, EFFECTS)],
+            "the table's"
+        );
         core.set_sound(false);
         drain(&log);
         core.update(Some(Showing::ShipBrowser), &DOWNED);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_mission_ship_lost_and_one_boarded_each_beep_their_table_entry() {
+        const MISSION_SHIPS: [Sound; 2] = [
+            Sound::Sim(SimSound::MissionShipLost),
+            Sound::Sim(SimSound::MissionShipBoarded),
+        ];
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &MISSION_SHIPS);
+        assert_eq!(drain(&log), [play(151, 0.5), play(154, 0.5)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            mission_ship_lost: Some(SoundId(301)),
+            mission_ship_boarded: Some(SoundId(302)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &MISSION_SHIPS);
+        assert_eq!(
+            drain(&log),
+            [play(301, EFFECTS), play(302, EFFECTS)],
+            "the table's"
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &MISSION_SHIPS);
         assert_eq!(drain(&log), [], "sound off");
     }
 
@@ -883,7 +1234,7 @@ mod tests {
         };
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::ShipBrowser), &ANSWERED);
-        assert_eq!(drain(&log), [play(303, 1.0)], "the table's");
+        assert_eq!(drain(&log), [play(303, EFFECTS)], "the table's");
         core.set_sound(false);
         drain(&log);
         core.update(Some(Showing::ShipBrowser), &ANSWERED);
@@ -925,9 +1276,9 @@ mod tests {
     fn a_landing_plays_the_beep_then_the_stellars_own_sound() {
         let (mut core, log) = original();
         core.update(Some(Showing::ShipBrowser), &[landed(Some(10_032))]);
-        assert_eq!(drain(&log), [play(151, 1.0), play(10_032, 1.0)]);
+        assert_eq!(drain(&log), [play(151, EFFECTS), play(10_032, EFFECTS)]);
         core.update(None, &[landed(None)]);
-        assert_eq!(drain(&log), [play(151, 1.0)]);
+        assert_eq!(drain(&log), [play(151, EFFECTS)]);
     }
 
     #[test]
@@ -954,14 +1305,14 @@ mod tests {
         };
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::ShipBrowser), &[ALERT]);
-        assert_eq!(drain(&log), [play(150, 1.0)]);
+        assert_eq!(drain(&log), [play(150, EFFECTS)]);
     }
 
     #[test]
     fn a_take_off_sound_plays_when_the_table_has_one() {
         let (mut core, log) = engine();
         core.update(Some(Showing::ShipBrowser), &[TOOK_OFF]);
-        assert_eq!(drain(&log), [play(201, 1.0)]);
+        assert_eq!(drain(&log), [play(201, EFFECTS)]);
     }
 
     #[test]
@@ -975,7 +1326,7 @@ mod tests {
         };
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::ShipBrowser), &[landed(Some(10_000)), JUMP]);
-        assert_eq!(drain(&log), [play(10_000, 1.0)]);
+        assert_eq!(drain(&log), [play(10_000, EFFECTS)]);
     }
 
     // The engine.
@@ -985,7 +1336,7 @@ mod tests {
         let (mut core, log) = engine();
         core.set_music(false);
         core.update(Some(Showing::Flight), &[THRUST]);
-        assert_eq!(drain(&log), [start_loop(200, 1.0)]);
+        assert_eq!(drain(&log), [start_loop(200, EFFECTS)]);
         core.update(Some(Showing::Flight), &[THRUST]);
         assert_eq!(drain(&log), [], "already looping");
         core.update(Some(Showing::Flight), &[COAST]);
@@ -996,9 +1347,9 @@ mod tests {
         assert_eq!(
             drain(&log),
             [
-                start_loop(200, 1.0),
+                start_loop(200, EFFECTS),
                 AudioCommand::StopLoop,
-                start_loop(200, 1.0)
+                start_loop(200, EFFECTS)
             ]
         );
     }
@@ -1010,7 +1361,7 @@ mod tests {
         core.update(Some(Showing::Flight), &[THRUST]);
         drain(&log);
         core.update(Some(Showing::Flight), &[COAST, landed(None)]);
-        assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, 1.0)]);
+        assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, EFFECTS)]);
     }
 
     #[test]
@@ -1116,52 +1467,32 @@ mod tests {
 
     // Music.
 
-    #[test]
-    fn music_plays_in_menus_and_in_space_without_restarting() {
-        let (mut core, log) = original();
-        core.update(None, &[]);
-        core.update(Some(Showing::ShipBrowser), &[]);
-        assert_eq!(drain(&log), [], "the ship browser is silent");
-        core.update(Some(Showing::GalaxyMap), &[]);
-        assert_eq!(drain(&log), [start_music(1.0)]);
-        for scene in [
-            Showing::System,
-            Showing::Flight,
-            Showing::FlightMap,
-            Showing::Spaceport,
-            Showing::About,
-            Showing::MainMenu,
-            Showing::NewPilot,
-            Showing::OpenPilot,
-            Showing::Note,
-            Showing::GalaxyMap,
-        ] {
-            core.update(Some(scene), &[]);
-            assert_eq!(drain(&log), [], "{scene:?} keeps it playing");
-        }
-        core.update(None, &[]);
-        assert_eq!(drain(&log), []);
-        core.update(Some(Showing::ShipBrowser), &[]);
-        assert_eq!(drain(&log), [AudioCommand::StopMusic]);
-        core.update(Some(Showing::About), &[]);
-        assert_eq!(drain(&log), [], "over the ship browser, still silent");
-        core.update(Some(Showing::Flight), &[]);
-        assert_eq!(drain(&log), [start_music(1.0)], "from the top");
+    fn fade_out(volume: f32) -> AudioCommand {
+        AudioCommand::FadeOutMusic(music_fade(Volume::new(volume)))
+    }
+
+    /// The original table on a mock whose music can be ended: a core, its
+    /// log and the mock's other handle.
+    fn ending() -> (AudioCore<RecordingAudio>, AudioLog, RecordingAudio) {
+        let audio = RecordingAudio::new();
+        let other = audio.clone();
+        let log = audio.log();
+        (AudioCore::new(audio), log, other)
     }
 
     #[test]
-    fn each_music_scene_starts_the_music() {
+    fn music_plays_on_the_main_menu_only() {
         for scene in [
+            Showing::ShipBrowser,
             Showing::GalaxyMap,
             Showing::System,
             Showing::Flight,
             Showing::FlightMap,
             Showing::Spaceport,
-            Showing::MainMenu,
         ] {
             let (mut core, log) = original();
             core.update(Some(scene), &[]);
-            assert_eq!(drain(&log), [start_music(1.0)], "{scene:?}");
+            assert_eq!(drain(&log), [], "{scene:?}");
         }
         for overlay in [
             Showing::About,
@@ -1173,15 +1504,159 @@ mod tests {
             core.update(Some(overlay), &[]);
             assert_eq!(drain(&log), [], "{overlay:?} over nothing");
         }
+        let (mut core, log) = original();
+        core.update(None, &[]);
+        assert_eq!(drain(&log), []);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [start_music(MUSIC)]);
+    }
+
+    #[test]
+    fn leaving_the_main_menu_fades_the_music_out_for_good() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[]);
+        assert_eq!(drain(&log), [fade_out(MUSIC)]);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [], "back on the main menu");
+        core.set_music(false);
+        core.set_music(true);
+        assert_eq!(drain(&log), [], "the setting off and on");
+    }
+
+    #[test]
+    fn about_over_the_main_menu_fades_it_out_for_good() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::About), &[]);
+        assert_eq!(drain(&log), [fade_out(MUSIC)]);
+        core.update(Some(Showing::MainMenu), &[]);
+        core.set_music(false);
+        core.set_music(true);
+        assert_eq!(drain(&log), []);
+    }
+
+    /// The original cancels the music on entering the game and opening
+    /// About whatever the Music checkbox says (`_CancelMusicThread` from
+    /// @0x19ec6 and @0x15fbf), so stopped music is spent too.
+    #[test]
+    fn music_off_on_the_main_menu_is_still_spent_by_leaving_it() {
+        for leave in [Showing::Flight, Showing::About] {
+            let (mut core, log) = original();
+            core.update(Some(Showing::MainMenu), &[]);
+            core.set_music(false);
+            assert_eq!(
+                drain(&log),
+                [start_music(MUSIC), AudioCommand::StopMusic],
+                "{leave:?}"
+            );
+            core.update(Some(leave), &[]);
+            assert_eq!(drain(&log), [], "{leave:?}: no fade while stopped");
+            core.update(Some(Showing::MainMenu), &[]);
+            core.set_music(true);
+            assert_eq!(drain(&log), [], "{leave:?}: spent, nothing starts");
+        }
+    }
+
+    #[test]
+    fn a_game_scene_before_the_main_menu_spends_the_music() {
+        for scene in [Showing::Flight, Showing::ShipBrowser] {
+            let (mut core, log) = original();
+            core.update(Some(scene), &[]);
+            core.update(Some(Showing::MainMenu), &[]);
+            assert_eq!(drain(&log), [], "{scene:?} first");
+        }
+    }
+
+    #[test]
+    fn the_menu_dialogs_keep_the_music() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        for overlay in [
+            Showing::Preferences,
+            Showing::NewPilot,
+            Showing::OpenPilot,
+            Showing::Note,
+        ] {
+            core.update(Some(overlay), &[]);
+            core.update(Some(Showing::MainMenu), &[]);
+            assert_eq!(drain(&log), [], "{overlay:?}");
+        }
+    }
+
+    #[test]
+    fn the_fade_lasts_four_ticks_a_preferences_level() {
+        use crate::settings::music_level_volume;
+        assert_eq!(
+            music_fade(music_level_volume(8)),
+            Duration::from_secs(32) / 60
+        );
+        assert_eq!(music_fade(Volume::FULL), Duration::from_secs(32) / 60);
+        assert_eq!(
+            music_fade(music_level_volume(2)),
+            Duration::from_secs(8) / 60
+        );
+        assert_eq!(
+            music_fade(music_level_volume(1)),
+            Duration::from_secs(4) / 60
+        );
+        assert_eq!(music_fade(Volume::new(0.25)), Duration::from_secs(8) / 60);
+        assert_eq!(music_fade(Volume::SILENT), Duration::ZERO);
+        let (mut core, log) = original();
+        core.set_music_volume(Volume::new(0.25));
+        core.update(Some(Showing::MainMenu), &[]);
+        core.update(Some(Showing::Flight), &[]);
+        assert_eq!(drain(&log), [start_music(0.25), fade_out(0.25)]);
+    }
+
+    /// An engine divergence the original lacks: it reads the checkbox only
+    /// at launch.
+    #[test]
+    fn engine_divergence_music_toggled_on_the_main_menu_stops_and_restarts_it() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.set_music(false);
+        assert_eq!(drain(&log), [AudioCommand::StopMusic]);
+        core.set_music(true);
+        assert_eq!(drain(&log), [start_music(MUSIC)], "from the top");
+    }
+
+    #[test]
+    fn music_played_to_its_end_is_spent() {
+        let (mut core, log, audio) = ending();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        audio.end_music();
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [], "it stopped on its own");
+        core.set_music(false);
+        core.set_music(true);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [], "the setting off and on starts nothing");
+    }
+
+    #[test]
+    fn music_off_before_its_end_is_not_spent_by_it() {
+        let (mut core, log, audio) = ending();
+        core.update(Some(Showing::MainMenu), &[]);
+        core.set_music(false);
+        drain(&log);
+        audio.end_music();
+        core.set_music(true);
+        assert_eq!(drain(&log), [start_music(MUSIC)]);
     }
 
     #[test]
     fn the_screen_is_taken_in_before_the_sounds() {
         let (mut core, log) = engine();
         core.update(Some(Showing::Flight), &[THRUST]);
-        assert_eq!(drain(&log), [start_music(1.0), start_loop(200, 1.0)]);
+        assert_eq!(drain(&log), [start_loop(200, EFFECTS)]);
         core.update(Some(Showing::Spaceport), &[COAST, landed(None)]);
-        assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, 1.0)]);
+        assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, EFFECTS)]);
     }
 
     // The settings.
@@ -1189,19 +1664,19 @@ mod tests {
     #[test]
     fn music_off_stops_it_and_keeps_it_stopped() {
         let (mut core, log) = original();
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         drain(&log);
         core.set_music(false);
         assert!(!core.settings().music);
         assert_eq!(drain(&log), [AudioCommand::StopMusic]);
         core.set_music(false);
-        for scene in [Showing::Flight, Showing::ShipBrowser, Showing::Spaceport] {
+        for scene in [Showing::NewPilot, Showing::MainMenu, Showing::Note] {
             core.update(Some(scene), &[]);
         }
         assert_eq!(drain(&log), []);
         core.set_music(true);
         assert!(core.settings().music);
-        assert_eq!(drain(&log), [start_music(1.0)], "in the spaceport");
+        assert_eq!(drain(&log), [start_music(MUSIC)], "on the main menu");
         core.set_music(true);
         assert_eq!(drain(&log), []);
     }
@@ -1210,11 +1685,11 @@ mod tests {
     fn music_on_away_from_a_music_scene_waits_for_one() {
         let (mut core, log) = original();
         core.set_music(false);
-        core.update(Some(Showing::ShipBrowser), &[]);
+        core.update(None, &[]);
         core.set_music(true);
         assert_eq!(drain(&log), []);
-        core.update(Some(Showing::GalaxyMap), &[]);
-        assert_eq!(drain(&log), [start_music(1.0)]);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [start_music(MUSIC)]);
     }
 
     #[test]
@@ -1243,7 +1718,7 @@ mod tests {
         assert_eq!(drain(&log), []);
         core.set_sound(true);
         assert!(core.settings().sound);
-        assert_eq!(drain(&log), [start_loop(200, 1.0)], "still thrusting");
+        assert_eq!(drain(&log), [start_loop(200, EFFECTS)], "still thrusting");
         core.set_sound(true);
         assert_eq!(drain(&log), []);
         core.update(Some(Showing::Flight), &[COAST]);
@@ -1259,11 +1734,11 @@ mod tests {
         core.update(Some(Showing::Spaceport), &[]);
         assert_eq!(drain(&log), [AudioCommand::StopEffects]);
         let (mut core, log) = engine();
-        core.update(Some(Showing::Flight), &[THRUST]);
+        core.update(Some(Showing::MainMenu), &[]);
         drain(&log);
         core.set_music(false);
-        core.update(Some(Showing::Flight), &[JUMP]);
-        assert_eq!(drain(&log), [AudioCommand::StopMusic, play(128, 1.0)]);
+        core.update(Some(Showing::MainMenu), &[JUMP]);
+        assert_eq!(drain(&log), [AudioCommand::StopMusic, play(128, EFFECTS)]);
     }
 
     #[test]
@@ -1274,20 +1749,19 @@ mod tests {
         assert_eq!(drain(&log), [], "nothing playing to change");
         assert_eq!(core.settings().effects_volume, Volume::new(0.5));
         assert_eq!(core.settings().music_volume, Volume::new(0.25));
-        core.update(Some(Showing::Flight), &[THRUST, JUMP]);
-        assert_eq!(
-            drain(&log),
-            [start_music(0.25), start_loop(200, 0.5), play(128, 0.5)]
-        );
-        core.set_effects_volume(Volume::new(0.75));
-        assert_eq!(
-            drain(&log),
-            [AudioCommand::SetLoopVolume(Volume::new(0.75))]
-        );
+        core.update(Some(Showing::MainMenu), &[JUMP]);
+        assert_eq!(drain(&log), [start_music(0.25), play(128, 0.5)]);
         core.set_music_volume(Volume::new(0.125));
         assert_eq!(
             drain(&log),
             [AudioCommand::SetMusicVolume(Volume::new(0.125))]
+        );
+        core.update(Some(Showing::Flight), &[THRUST]);
+        assert_eq!(drain(&log), [fade_out(0.125), start_loop(200, 0.5)]);
+        core.set_effects_volume(Volume::new(0.75));
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::SetLoopVolume(Volume::new(0.75))]
         );
         core.update(Some(Showing::Flight), &[ARRIVED]);
         assert_eq!(drain(&log), [play(130, 0.75)]);
@@ -1318,12 +1792,12 @@ mod tests {
         assert_eq!(
             drain(&log),
             [AudioCommand::StopLoop],
-            "the music goes on; the engine stops, as flight is paused"
+            "the engine stops, as flight is paused"
         );
         core.update(Some(Showing::Flight), &[]);
         assert_eq!(drain(&log), [], "the thrust is forgotten on return");
         core.update(Some(Showing::Flight), &[THRUST]);
-        assert_eq!(drain(&log), [start_loop(200, 1.0)], "a fresh thrust");
+        assert_eq!(drain(&log), [start_loop(200, EFFECTS)], "a fresh thrust");
         let (mut core, log) = original();
         core.update(Some(Showing::Preferences), &[]);
         assert_eq!(drain(&log), [], "over nothing");
@@ -1333,7 +1807,7 @@ mod tests {
     }
 
     #[test]
-    fn the_boarding_and_comm_dialogs_pause_flight_and_keep_its_music() {
+    fn the_boarding_and_comm_dialogs_pause_flight() {
         for overlay in [
             Showing::Plunder,
             Showing::Assignment,
@@ -1351,7 +1825,7 @@ mod tests {
             assert_eq!(
                 drain(&log),
                 [AudioCommand::StopLoop],
-                "{overlay:?}: the music goes on; the engine stops"
+                "{overlay:?}: the engine stops"
             );
             core.update(Some(Showing::Flight), &[]);
             assert_eq!(drain(&log), [], "{overlay:?}: the thrust is forgotten");
@@ -1377,10 +1851,12 @@ mod tests {
         let mut core = core.with_settings(quiet());
         assert_eq!(core.settings(), quiet());
         assert_eq!(drain(&log), []);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [start_music(0.25)]);
         core.update(Some(Showing::Flight), &[THRUST, JUMP]);
         assert_eq!(
             drain(&log),
-            [start_music(0.25), start_loop(200, 0.5), play(128, 0.5)]
+            [fade_out(0.25), start_loop(200, 0.5), play(128, 0.5)]
         );
         let (core, log) = engine();
         let mut core = core.with_settings(AudioSettings {
@@ -1406,13 +1882,13 @@ mod tests {
         core.update(Some(Showing::Flight), &[JUMP]);
         assert_eq!(drain(&log), [], "silent");
         core.apply(AudioSettings::default());
-        assert_eq!(drain(&log), [start_loop(200, 1.0)], "still thrusting");
+        assert_eq!(drain(&log), [start_loop(200, EFFECTS)], "still thrusting");
     }
 
     #[test]
     fn applying_music_off_and_on_stops_and_starts_it() {
         let (mut core, log) = original();
-        core.update(Some(Showing::Spaceport), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         drain(&log);
         let off = AudioSettings {
             music: false,
@@ -1422,7 +1898,7 @@ mod tests {
         assert_eq!(drain(&log), [AudioCommand::StopMusic]);
         assert_eq!(core.settings(), off);
         core.apply(AudioSettings::default());
-        assert_eq!(drain(&log), [start_music(1.0)]);
+        assert_eq!(drain(&log), [start_music(MUSIC)]);
     }
 
     #[test]
@@ -1433,24 +1909,30 @@ mod tests {
         core.apply(quiet());
         assert_eq!(
             drain(&log),
-            [
-                AudioCommand::SetLoopVolume(Volume::new(0.5)),
-                AudioCommand::SetMusicVolume(Volume::new(0.25)),
-            ]
+            [AudioCommand::SetLoopVolume(Volume::new(0.5))],
+            "no music in flight"
         );
         assert_eq!(core.settings(), quiet());
         core.update(Some(Showing::Flight), &[JUMP]);
         assert_eq!(drain(&log), [play(128, 0.5)]);
+        let (mut core, log) = engine();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.apply(quiet());
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::SetMusicVolume(Volume::new(0.25))]
+        );
     }
 
     #[test]
     fn applying_a_volume_with_nothing_playing_sends_nothing() {
         let (mut core, log) = engine();
-        core.update(Some(Showing::ShipBrowser), &[]);
+        core.update(None, &[]);
         core.apply(quiet());
         assert_eq!(drain(&log), []);
         assert_eq!(core.settings(), quiet());
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         assert_eq!(drain(&log), [start_music(0.25)]);
     }
 
@@ -1458,7 +1940,7 @@ mod tests {
     fn applying_music_on_with_a_new_volume_starts_it_at_that_volume() {
         let (mut core, log) = original();
         core.set_music(false);
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         core.apply(quiet());
         assert_eq!(drain(&log), [start_music(0.25)]);
     }
@@ -1478,7 +1960,7 @@ mod tests {
     #[test]
     fn the_core_plays_through_its_port() {
         let (mut core, _) = original();
-        core.update(Some(Showing::GalaxyMap), &[]);
-        assert_eq!(*core.audio().log().borrow(), [start_music(1.0)]);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(*core.audio().log().borrow(), [start_music(MUSIC)]);
     }
 }

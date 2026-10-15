@@ -940,9 +940,11 @@ impl Session {
             return;
         }
         let record = self.lifecycle_record(active.mission);
-        // The comm message, `STR#` 2002 #285, before the failure, unless
+        // The beep, `_beepSnd[3]` (`snd ` 153, @0x9ebd9-0x9ec02), and the
+        // comm message, `STR#` 2002 #285, before the failure, unless
         // `Flags` has 0x0400 (@0x9ebd0-0x9ec53).
         if record.flags & HIDDEN == 0 {
+            self.sounds.push(crate::SimSound::Refused);
             self.messages.push(SimMessage::DeadlineMissed);
         }
         self.quick_failure(slot, &record, chance);
@@ -3267,6 +3269,52 @@ mod tests {
             session.take_messages(),
             [took_off(), SimMessage::DeadlineMissed],
             "after the greeting"
+        );
+    }
+
+    #[test]
+    fn a_deadline_missed_in_flight_beeps() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        let _ = session.take_sounds();
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        settle(&mut session, &catalog);
+        let refused = session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == crate::sound::SimSound::Refused)
+            .count();
+        assert_eq!(refused, 1, "_beepSnd[3], snd 153");
+    }
+
+    #[test]
+    fn a_hidden_missions_missed_deadline_does_not_beep() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            flags: crate::mission::screens::HIDDEN,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        settle(&mut session, &catalog);
+        assert_eq!(held(&session), [], "failed all the same");
+        assert!(
+            !session
+                .take_sounds()
+                .contains(&crate::sound::SimSound::Refused)
         );
     }
 

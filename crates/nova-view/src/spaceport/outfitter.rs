@@ -1110,7 +1110,6 @@ impl Screen for OutfitterScreen {
             && let Ok(laid) = &mut self.laid
         {
             let event = laid.dialog.input(input);
-            self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
             if let Some(DialogEvent::Item(item)) = event {
                 self.activate(item);
             }
@@ -1180,8 +1179,9 @@ impl Screen for OutfitterScreen {
         self.quantity.release_keys();
     }
 
-    /// The buttons' sounds, the quantity dialog's and the alert's, in
-    /// order.
+    /// The quantity dialog's and the alert's sounds, in order. The
+    /// buttons are silent under the pointer, as `_TrackOutfitButtons`
+    /// @0x2a029 plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -3308,8 +3308,9 @@ mod tests {
         assert!(!held.closed());
     }
 
+    /// `_TrackOutfitButtons` @0x2a029 plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_as_they_are_clicked() {
+    fn pointer_click_is_silent_as_the_original() {
         let mut screen = screen();
         let buy = item(&screen, BUY_ITEM).center();
         screen.input(&Input::PointerButton {
@@ -3317,13 +3318,13 @@ mod tests {
             pressed: true,
             at: buy,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,
             pressed: false,
             at: buy,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(screen.take_sounds(), []);
         press(&mut screen, BUY_KEY);
         press(&mut screen, Key::Enter);
         assert_eq!(screen.take_sounds(), []);
@@ -3631,7 +3632,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dialog_is_drawn_over_the_outfitter_and_its_sounds_come_out() {
+    fn the_dialog_is_drawn_over_the_outfitter_and_its_alert_comes_out() {
         let mut screen = counting_screen();
         let under = drawn(&screen);
         alt_click(&mut screen, BUY_ITEM);
@@ -3647,10 +3648,7 @@ mod tests {
         assert_eq!(field_text(&screen), Some("3"), "reset to the maximum");
         let ok = quantity_item(&screen, 1);
         click(&mut screen, ok);
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_order(), Some(counted(128, Direction::Buy, 3)));
     }
 
@@ -3784,7 +3782,7 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_offer_choice(), None, "abandoned");
-        assert!(!screen.take_sounds().is_empty(), "its sounds go through");
+        assert_eq!(screen.take_sounds(), [], "silent under the pointer");
         screen.input(&button(true));
         screen.input(&button(false));
         assert_eq!(
@@ -4200,8 +4198,9 @@ mod tests {
         assert!(unlaid.alert_dialog().is_none(), "no metrics to lay it out");
     }
 
+    /// `_TrackTextButtons` @0x26bb0 plays nothing under the pointer.
     #[test]
-    fn the_alerts_sounds_come_out() {
+    fn the_alerts_done_is_silent_under_the_pointer() {
         let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
         let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
         screen.input(&Input::PointerButton {
@@ -4209,13 +4208,13 @@ mod tests {
             pressed: true,
             at: done,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,
             pressed: false,
             at: done,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(screen.take_sounds(), []);
         assert!(screen.alert_dialog().is_none());
     }
 
@@ -4233,5 +4232,30 @@ mod tests {
         screen.release_keys();
         screen.input(&button(false));
         assert!(screen.alert_dialog().is_some(), "Done was not clicked");
+    }
+
+    /// The original's `_OutfitFilter` @0x58039 maps keys to items with no click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [
+            Key::Right,
+            Key::Down,
+            Key::Left,
+            Key::Up,
+            BUY_KEY,
+            SELL_KEY,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            let mut screen = screen();
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
+        }
     }
 }
