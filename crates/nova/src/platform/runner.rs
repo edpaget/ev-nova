@@ -282,7 +282,7 @@ mod tests {
     use nova_rsrc::{Fork, ForkReader};
 
     use nova_audio::recording::{MemorySettings, RecordingAudio};
-    use nova_audio::{AudioCommand, AudioSettings, SettingsStore, Volume};
+    use nova_audio::{AudioCommand, AudioSettings, SettingsStore};
 
     use crate::settings::{GameSettings, SettingsKeeper};
     use nova_view::Showing;
@@ -362,7 +362,7 @@ mod tests {
         assert_eq!(
             *log.borrow(),
             [AudioCommand::StartMusic {
-                volume: Volume::FULL
+                volume: AudioSettings::default().music_volume
             }]
         );
     }

@@ -21,7 +21,7 @@ use std::time::Duration;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
-use nova_audio::{Audio, AudioCommand, AudioCore, Volume, music_fade};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, music_fade};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -573,7 +573,7 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
     assert_eq!(
         game.music(),
         [AudioCommand::StartMusic {
-            volume: Volume::FULL
+            volume: AudioSettings::default().music_volume
         }]
     );
 
@@ -588,7 +588,9 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(
         game.music(),
-        [AudioCommand::FadeOutMusic(music_fade(Volume::FULL))]
+        [AudioCommand::FadeOutMusic(music_fade(
+            AudioSettings::default().music_volume
+        ))]
     );
     game.frame();
 

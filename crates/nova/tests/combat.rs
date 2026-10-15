@@ -673,7 +673,7 @@ fn space_fires_the_blaster_whose_shots_are_drawn_and_heard() {
     assert!(
         harness.log.borrow().contains(&AudioCommand::Play {
             sound: SoundId(208),
-            volume: nova_audio::Volume::FULL,
+            volume: nova_audio::AudioSettings::default().effects_volume,
         }),
         "{:?}",
         harness.log.borrow()
@@ -717,7 +717,7 @@ fn a_trader_shot_down_explodes_scatters_debris_and_is_no_longer_targeted() {
     assert!(
         harness.log.borrow().contains(&AudioCommand::Play {
             sound: SoundId(300),
-            volume: nova_audio::Volume::FULL,
+            volume: nova_audio::AudioSettings::default().effects_volume,
         }),
         "the explosion, within 200 pixels: {:?}",
         harness.log.borrow()

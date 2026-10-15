@@ -22,7 +22,7 @@ use std::time::Duration;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
-use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -653,7 +653,7 @@ fn drain(log: &AudioLog) -> Vec<AudioCommand> {
 fn play(id: i16) -> AudioCommand {
     AudioCommand::Play {
         sound: nova_data::SoundId(id),
-        volume: Volume::FULL,
+        volume: AudioSettings::default().effects_volume,
     }
 }
 

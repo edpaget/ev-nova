@@ -35,7 +35,7 @@ mod tests {
     use std::path::PathBuf;
 
     use nova_audio::recording::RecordingAudio;
-    use nova_audio::{AudioCommand, Volume};
+    use nova_audio::{AudioCommand, AudioSettings};
     use nova_view::Showing;
     use nova_view::sound::{SimSound, Sound};
 
@@ -53,11 +53,11 @@ mod tests {
             *log.borrow(),
             [
                 AudioCommand::StartMusic {
-                    volume: Volume::FULL
+                    volume: AudioSettings::default().music_volume
                 },
                 AudioCommand::Play {
                     sound: nova_data::SoundId(128),
-                    volume: Volume::FULL
+                    volume: AudioSettings::default().effects_volume
                 },
             ]
         );

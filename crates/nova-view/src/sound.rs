@@ -95,8 +95,16 @@ pub enum Sound {
     Combat(CombatSound),
 }
 
-/// The loudest volume level; levels run from 0 (silent) to this.
-pub const MAX_LEVEL: u8 = 7;
+/// The loudest volume level; levels run from 0 (silent) to this. The
+/// original's Preferences stepper (`Keys.nib`) has `NSMaxValue` 8, and
+/// `-[EVPrefsDialogController setStatusForVolume:]` @0xd0059 labels all
+/// nine levels, 0 "No Bloody Noise" to 8 "Hoo Boy!".
+pub const MAX_LEVEL: u8 = 8;
+
+/// The level a player starts at, the original's "Normal": `_LoadPrefs`
+/// defaults a missing `Volume` to 4 (@0xcef6c-0xcef8f), as does the
+/// stepper's `NSValue` in `Keys.nib`.
+pub const DEFAULT_LEVEL: u8 = 4;
 
 /// The player's sound preferences, as the Preferences dialog shows them:
 /// sound effects and music on or off, and each one's volume level, 0
@@ -116,7 +124,7 @@ pub struct SoundPrefs {
 impl SoundPrefs {
     /// Whether the effects are quiet enough for the Red Alert to blink its
     /// icon: off, or at level 1 or less. The original's one `Volume` level
-    /// (0-7) blinks it at 1 or less (`_HandlePlayer` @0x68d04-0x68d15);
+    /// (0-8) blinks it at 1 or less (`_HandlePlayer` @0x68d04-0x68d15);
     /// here sound off stands for its 0.
     #[must_use]
     pub fn alert_quiet(self) -> bool {
@@ -125,13 +133,13 @@ impl SoundPrefs {
 }
 
 impl Default for SoundPrefs {
-    /// Sound and music on, both at the loudest level.
+    /// Sound and music on, both at [`DEFAULT_LEVEL`].
     fn default() -> Self {
         Self {
             sound: true,
             music: true,
-            effects_level: MAX_LEVEL,
-            music_level: MAX_LEVEL,
+            effects_level: DEFAULT_LEVEL,
+            music_level: DEFAULT_LEVEL,
         }
     }
 }
@@ -178,15 +186,16 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_everything_on_at_the_loudest_level() {
-        assert_eq!(MAX_LEVEL, 7);
+    fn the_default_is_everything_on_at_the_normal_level() {
+        assert_eq!(MAX_LEVEL, 8);
+        assert_eq!(DEFAULT_LEVEL, 4);
         assert_eq!(
             SoundPrefs::default(),
             SoundPrefs {
                 sound: true,
                 music: true,
-                effects_level: 7,
-                music_level: 7,
+                effects_level: 4,
+                music_level: 4,
             }
         );
     }

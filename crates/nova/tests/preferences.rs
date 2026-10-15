@@ -18,10 +18,8 @@ use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova::settings::{GameSettings, SettingsKeeper, game_settings};
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
-use nova_audio::settings::level_volume;
-use nova_audio::{
-    Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, SoundTable, Volume,
-};
+use nova_audio::settings::{effects_level_volume, music_level_volume};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, SoundTable};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -174,8 +172,8 @@ fn seeded() -> MemorySettings {
             audio: AudioSettings {
                 sound: true,
                 music: true,
-                effects_volume: level_volume(4),
-                music_volume: level_volume(6),
+                effects_volume: effects_level_volume(4),
+                music_volume: music_level_volume(6),
             },
             hyperspace_effects: true,
         })
@@ -423,7 +421,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     // Later sounds play at the new effects volume.
     harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
-    let five = Volume::new(5.0 / 7.0);
+    let five = effects_level_volume(5);
     assert_eq!(
         harness.played(),
         [
@@ -453,7 +451,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
             sound: true,
             music: false,
             effects_volume: five,
-            music_volume: level_volume(5),
+            music_volume: music_level_volume(5),
         }
     );
     let mut again = Harness::new(&store);
@@ -481,7 +479,7 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     assert_eq!(
         harness.played(),
         [AudioCommand::StartMusic {
-            volume: level_volume(6)
+            volume: music_level_volume(6)
         }],
         "the seeded music level"
     );
@@ -499,14 +497,14 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     harness.frame();
     let click = |id| AudioCommand::Play {
         sound: SoundId(id),
-        volume: level_volume(4),
+        volume: effects_level_volume(4),
     };
     assert_eq!(
         harness.played(),
         [
             click(600),
             click(601),
-            AudioCommand::SetMusicVolume(level_volume(5))
+            AudioCommand::SetMusicVolume(music_level_volume(5))
         ],
         "P's keyed click, at the seeded effects level, then the new music level"
     );
@@ -559,7 +557,7 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
         ..SoundTable::ORIGINAL
     };
     let mut harness = Harness::with_table(&store, table);
-    let effects = level_volume(4);
+    let effects = effects_level_volume(4);
     let engine = AudioCommand::StartLoop {
         sound: SoundId(ENGINE),
         volume: effects,
@@ -616,8 +614,8 @@ fn hyperspace_effects_toggle_by_click_and_key_and_survive_a_restart() {
         AudioSettings {
             sound: true,
             music: true,
-            effects_volume: level_volume(4),
-            music_volume: level_volume(6),
+            effects_volume: effects_level_volume(4),
+            music_volume: music_level_volume(6),
         },
         "the seeded audio settings intact"
     );
