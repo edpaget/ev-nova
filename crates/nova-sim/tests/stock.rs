@@ -1837,6 +1837,184 @@ fn every_stock_homing_weapon_flies_its_speed_hits_its_target_and_turns_its_turn(
     }
 }
 
+// The shot tick: decay, the proximity fuse and the missile lock.
+
+/// The stock shots whose direct hits decay are the 22 non-beam weapons
+/// of `Decay` above 0; the two beams of `Decay` (146 and 173) are beams,
+/// which no decay reads.
+#[test]
+fn the_stock_shots_that_decay() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let decaying: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.decay > 0 && !spec.is_beam())
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(
+        decaying,
+        [
+            143, 144, 145, 148, 156, 157, 158, 159, 161, 162, 163, 182, 183, 184, 185, 197, 198,
+            199, 200, 219, 229, 233
+        ]
+    );
+    let beams: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.decay > 0 && spec.is_beam())
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(beams, [146, 173]);
+}
+
+/// The shield a stock railgun slug takes off a sponge `x` pixels ahead,
+/// and the tick it hit on.
+fn slug_hit(spec: &WeaponSpec, x: f32) -> (f32, u32) {
+    let mut combat = Combat::default();
+    let mut ships = [aiming(spec), sponge(x, 0.0)];
+    let full = ships[1].reserves.shield.now;
+    for tick in 1..=spec.lifetime {
+        fight(&mut combat, &mut ships);
+        ships[0].trigger = Trigger::default();
+        let now = ships[1].reserves.shield.now;
+        if now < full {
+            return (full - now, tick);
+        }
+    }
+    panic!("wëap {} never hit at {x}", spec.id.0);
+}
+
+/// Each stock railgun (156-159), its slug fired at a ship near and far,
+/// takes a point of its energy damage off the shield for each `Decay` + 1
+/// ticks it has flown.
+#[test]
+// Whole points of damage and fields read whole.
+#[allow(clippy::float_cmp)]
+fn a_stock_railgun_slug_loses_a_point_of_mass_and_energy_every_decay_plus_one_ticks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    for id in 156..=159 {
+        let spec = *arsenal.weapon(WeaponId(id)).expect("a railgun");
+        assert!(spec.decay > 0, "{id}");
+        let (near, near_tick) = slug_hit(&spec, 100.0);
+        let (far, far_tick) = slug_hit(&spec, spec.range() * 0.75);
+        let steps = |tick: u32| (tick / (spec.decay + 1)) as f32;
+        assert_eq!(near, spec.energy_damage - steps(near_tick), "{id} near");
+        assert_eq!(far, spec.energy_damage - steps(far_tick), "{id} far");
+        assert!(steps(far_tick) >= 2.0, "{id}: {far_tick}");
+        assert_eq!(near - far, steps(far_tick) - steps(near_tick), "{id}");
+    }
+}
+
+/// The stock Nanite launcher (163, `ProxRadius` 0) touching a ship in its
+/// path releases no Nanite (229); fired at a ship out of its reach, it
+/// releases its Nanite at the end of its life, aimed at that ship.
+#[test]
+// Whole points of damage and fields read whole.
+#[allow(clippy::float_cmp)]
+fn stock_nanites_release_their_sub_229_only_at_expiry() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let nanites = *arsenal.weapon(WeaponId(163)).expect("the Nanites");
+    assert_eq!(nanites.prox_radius, 0.0);
+    let released = |x: f32| {
+        let mut combat = Combat::default();
+        let mut ships = [aiming(&nanites), sponge(x, 0.0)];
+        let full = ships[1].reserves;
+        let mut subs = Vec::new();
+        for _ in 0..=nanites.lifetime + 1 {
+            fight_with(&mut combat, &mut ships, &arsenal);
+            ships[0].trigger = Trigger::default();
+            subs.extend(
+                combat
+                    .shots()
+                    .iter()
+                    .filter(|shot| shot.weapon.id == WeaponId(229))
+                    .map(|shot| shot.aimed_at),
+            );
+        }
+        (ships[1].reserves != full, subs)
+    };
+    let (hit, subs) = released(60.0);
+    assert!(hit, "it touched the ship");
+    assert_eq!(subs, [], "and released nothing");
+    let (hit, subs) = released(5000.0);
+    assert!(!hit);
+    assert!(!subs.is_empty(), "released at the end of its life");
+    assert!(subs.iter().all(|&aimed| aimed == Some(QUARRY)), "{subs:?}");
+    // The stock shots whose contact hits no longer release theirs.
+    let fused: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.prox_radius > 0.0 && spec.submunitions.is_some())
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(fused, [182, 185]);
+}
+
+/// Each stock homing missile, fired by the player at an NPC out of its
+/// reach, strikes it once with no damage, a lock, on the tick its age
+/// passes 30; the three of `Count` 20 (182, 185 and 199) never live that
+/// long.
+#[test]
+fn every_stock_player_homing_missile_locks_its_target_at_31_ticks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let homing = guided(&data, &[Guidance::Homing]);
+    let ids: Vec<i16> = homing.iter().map(|spec| spec.id.0).collect();
+    assert_eq!(
+        ids,
+        [
+            134, 135, 136, 137, 148, 160, 182, 184, 185, 199, 229, 230, 234
+        ]
+    );
+    let mut short = Vec::new();
+    for spec in homing {
+        let id = spec.id.0;
+        let mut combat = Combat::default();
+        let mut ships = [aiming(&spec), sponge(20_000.0, 0.0)];
+        let full = ships[1].reserves;
+        let mut locks = Vec::new();
+        for tick in 1..=40 {
+            fight(&mut combat, &mut ships);
+            ships[0].trigger = Trigger::default();
+            locks.extend(
+                combat
+                    .take_strikes()
+                    .into_iter()
+                    .map(|strike| (tick, strike)),
+            );
+        }
+        if spec.lifetime < 30 {
+            short.push(id);
+            assert_eq!(locks, [], "wëap {id}");
+            continue;
+        }
+        assert_eq!(locks.len(), 1, "wëap {id}: {locks:?}");
+        let (tick, strike) = locks[0];
+        assert_eq!(tick, 31, "wëap {id}");
+        assert!(strike.lock && strike.direct && strike.intended, "{id}");
+        assert_eq!((strike.ship, strike.by), (QUARRY, ShipRef::Player));
+        assert_eq!((strike.damage, strike.downed), (0.0, None), "{id}");
+        assert_eq!(ships[1].reserves, full, "wëap {id}");
+    }
+    assert_eq!(short, [182, 185, 199]);
+}
+
 /// Whether `spec`, on a ship of `hull`, facing right, fires at a ship
 /// 100 pixels away at `bearing`, and which way: a shot's heading, or, for
 /// a beam (over within the tick when it lasts a tick), the bearing when
