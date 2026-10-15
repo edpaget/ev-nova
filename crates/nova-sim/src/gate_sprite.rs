@@ -14,7 +14,10 @@
 //!   @0x2e83c-0x2e864) is its `CustPicID`, or frames / 2 when that is 0
 //!   or less or at least frames - 1. Frames 0 to `o` - 1 are the opening,
 //!   `o` to frames - 1 the open loop.
-//! - **Held open** ([`held_open`], @0x2e867-0x2e9b0): by an NPC coming out
+//! - **Held open** ([`held_open`], @0x2e867-0x2e9b0): first by the
+//!   player's dock stellar, its request's counter above 0
+//!   (@0x2e867-0x2e87e; see [`DockRequest`]), `None` standing for
+//!   `_dockTarget` -1, which matches no gate; then by an NPC coming out
 //!   of it ([`Npc::holds_gate_open`]): waiting in it (goal 0x15), not
 //!   bursting (goal 8, +0x6c = -1, @0x8dd8a-0x8dd93); or by one heading in to enter it
 //!   (@0x2e8dd-0x2e9a2, [`Npc::approaches_gate`]): an NPC, active and not
@@ -56,11 +59,6 @@
 //!
 //! Left out of the hypergate branch, with the reason:
 //!
-//! - **The player's trigger** (@0x2e867-0x2e87e): the gate is the player's
-//!   dock stellar (0x3b505c) with `_dockPermission` (0x3b544c) above 0.
-//!   The engine has neither: L at a gate enters it at once. Its clause
-//!   joins [`held_open`] with the request counter
-//!   (`phase/hud-fidelity/phase-19-clearance-request-and-dock-approach`).
 //! - **The sequential branch** (@0x2ec4b-0x2ee05), every other stellar's:
 //!   the view's stellar animation.
 //! - **Sprite-slot plumbing** (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a):
@@ -70,6 +68,7 @@
 
 use crate::catalog::{LandingSite, SiteAnimation};
 use crate::chance::Chance;
+use crate::clearance::DockRequest;
 use crate::traffic::npc::Npc;
 
 /// `Flags2` 0x0001: show the open frame between every other frame.
@@ -296,18 +295,21 @@ impl GateSprite {
     }
 }
 
-/// Whether `gate` is held open this tick: by any of `npcs` coming out of
+/// Whether `gate` is held open this tick: tested first, by the player's
+/// `dock` request when it is for `gate` with its counter above 0
+/// (`_dockTarget` and `_dockPermission`, @0x2e867-0x2e87e); then by any
+/// of `npcs` coming out of
 /// it ([`Npc::holds_gate_open`]; `_HandleStellarSprites`
 /// @0x2e884-0x2e8d7), waiting in it (goal 0x15), not bursting (goal 8,
 /// +0x6c = -1, @0x8dd8a-0x8dd93), or heading in to land on or enter it strictly
 /// inside `reach` of it on both axes ([`Npc::approaches_gate`],
-/// @0x2e8dd-0x2e9a2; see [`approach_reach`]). The original tests the
-/// player's trigger first; see the module docs.
+/// @0x2e8dd-0x2e9a2; see [`approach_reach`]).
 #[must_use]
-pub fn held_open(gate: &LandingSite, reach: f32, npcs: &[Npc]) -> bool {
-    npcs.iter().any(|npc| {
-        npc.holds_gate_open(gate.id) || npc.approaches_gate(gate.id, gate.position, reach)
-    })
+pub fn held_open(gate: &LandingSite, reach: f32, dock: Option<DockRequest>, npcs: &[Npc]) -> bool {
+    dock.is_some_and(|request| request.stellar == gate.id && request.permission > 0)
+        || npcs.iter().any(|npc| {
+            npc.holds_gate_open(gate.id) || npc.approaches_gate(gate.id, gate.position, reach)
+        })
 }
 
 /// How near a ship heading in must be to hold a gate open, on each axis,
@@ -678,6 +680,34 @@ mod tests {
     }
 
     #[test]
+    fn the_players_dock_gate_is_held_open_while_its_counter_is_above_0() {
+        use crate::clearance::{CLEARED, DockRequest, EXPIRES_PAST, REQUESTED_NEAR};
+        let gate = gate_site(130);
+        let request = |stellar, permission| {
+            Some(DockRequest {
+                stellar,
+                permission,
+            })
+        };
+        for permission in [REQUESTED_NEAR, CLEARED, 0x2ef, EXPIRES_PAST, 1] {
+            assert!(
+                held_open(&gate, 0.0, request(gate.id, permission), &[]),
+                "{permission:#x}"
+            );
+        }
+        for permission in [0, -1] {
+            assert!(!held_open(&gate, 0.0, request(gate.id, permission), &[]));
+        }
+        assert!(!held_open(&gate, 0.0, None, &[]));
+        assert!(!held_open(
+            &gate,
+            0.0,
+            request(StellarId(131), CLEARED),
+            &[]
+        ));
+    }
+
+    #[test]
     fn a_gate_is_held_open_by_any_ship_coming_out_of_it() {
         use crate::stats::ShipStats;
         use crate::traffic::npc::Mode;
@@ -689,10 +719,15 @@ mod tests {
             ..crate::testkit::npc(2, ShipStats::default())
         };
         let (gate, other) = (gate_site(130), gate_site(131));
-        assert!(!held_open(&gate, 0.0, &[]));
-        assert!(!held_open(&gate, 0.0, std::slice::from_ref(&flying)));
-        assert!(held_open(&gate, 0.0, &[flying.clone(), emerging.clone()]));
-        assert!(!held_open(&other, 0.0, &[flying, emerging]));
+        assert!(!held_open(&gate, 0.0, None, &[]));
+        assert!(!held_open(&gate, 0.0, None, std::slice::from_ref(&flying)));
+        assert!(held_open(
+            &gate,
+            0.0,
+            None,
+            &[flying.clone(), emerging.clone()]
+        ));
+        assert!(!held_open(&other, 0.0, None, &[flying, emerging]));
     }
 
     #[test]
@@ -710,7 +745,7 @@ mod tests {
             },
             ..crate::testkit::npc(1, ShipStats::default())
         };
-        let held = |npc: Npc| held_open(&gate, 200.0, &[npc]);
+        let held = |npc: Npc| held_open(&gate, 200.0, None, &[npc]);
         for goal in [Goal::Land(gate.id), Goal::EnterGate(gate.id)] {
             assert!(held(at(goal, 199.9, -199.9)), "{goal:?}");
             assert!(held(at(goal, -199.9, 199.9)), "{goal:?}");

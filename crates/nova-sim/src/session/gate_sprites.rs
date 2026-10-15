@@ -68,18 +68,21 @@ impl Session {
     }
 
     /// One tick of every hypergate shown, held open by the NPCs as they
-    /// are now ([`held_open`]), its random picks drawn on `chance`. A ship
+    /// are now or by the player's dock request ([`held_open`]), read after
+    /// this tick's approach ran in `fly_player`, as `_HandleStellarSprites`
+    /// runs after `_HandlePlayer`; its random picks drawn on `chance`. A ship
     /// heading in holds it within [`approach_reach`] of the width of the
     /// frame its slot draws ([`NO_SPRITE_WIDTH`] with none), grown by
     /// whether it was open before this step.
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.keep_gate_sprites();
+        let dock = self.dock;
         for site in self.sites.iter().filter(|site| is_hypergate(site)) {
             let width = self.slot_sprite_width(site);
             let anim = GateAnimation::of(site);
             if let Some(sprite) = self.gate_sprites.get_mut(&site.id) {
                 let reach = approach_reach(width, sprite.is_open(&anim));
-                let held = held_open(site, reach, self.traffic.npcs());
+                let held = held_open(site, reach, dock, self.traffic.npcs());
                 sprite.step(&anim, site.destroyed, held, chance);
             }
         }
@@ -179,6 +182,48 @@ mod tests {
             goal: crate::ai::Goal::EnterGate(StellarId(300)),
             ..crate::testkit::npc(0, crate::stats::ShipStats::new(fields, &[]))
         });
+    }
+
+    #[test]
+    fn a_gate_opens_while_it_is_the_players_dock_stellar_and_closes_once_the_request_goes() {
+        use crate::clearance::{CLEARED, DockRequest, REQUESTED_NEAR};
+        let catalog = gated();
+        for permission in [REQUESTED_NEAR, CLEARED] {
+            let mut session = flying(&catalog);
+            session.dock = Some(DockRequest {
+                stellar: StellarId(300),
+                permission,
+            });
+            let mut frames = Vec::new();
+            for _ in 0..10 {
+                tick(&mut session, &catalog);
+                frames.push(session.gate_frame(StellarId(300)).expect("a gate"));
+            }
+            assert_eq!(frames.first(), Some(&1), "{permission:#x}: {frames:?}");
+            assert!(session.gate_open(StellarId(300)), "{permission:#x}");
+            session.dock = None;
+            for _ in 0..30 {
+                tick(&mut session, &catalog);
+            }
+            assert_eq!(session.gate_frame(StellarId(300)), Some(0));
+        }
+    }
+
+    #[test]
+    fn a_gate_stays_closed_for_a_request_at_0_or_at_another_stellar() {
+        use crate::clearance::{CLEARED, DockRequest};
+        let catalog = gated();
+        for (stellar, permission) in [(300, 0), (128, CLEARED)] {
+            let mut session = flying(&catalog);
+            session.dock = Some(DockRequest {
+                stellar: StellarId(stellar),
+                permission,
+            });
+            for _ in 0..30 {
+                tick(&mut session, &catalog);
+                assert_eq!(session.gate_frame(StellarId(300)), Some(0));
+            }
+        }
     }
 
     #[test]

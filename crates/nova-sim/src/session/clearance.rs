@@ -52,10 +52,10 @@
 //!
 //! Left out: the bribe's counter and the domination writes
 //! (`_DoPlanetCommDialog` @0x97112-0x97125, @0x973e1-0x973fe,
-//! @0x978be-0x978d3), rdm:task/planet-domination's; and
-//! `_HandleStellarSprites`' read of the counter for the player's dock
-//! hypergate (@0x2e867-0x2e87e), whose gate sprites are not yet on this
-//! branch.
+//! @0x978be-0x978d3), rdm:task/planet-domination's.
+//!
+//! [`gate_sprite::held_open`](crate::gate_sprite::held_open) reads the
+//! counter for the player's dock hypergate (@0x2e867-0x2e87e).
 //!
 //! **Ordering.** The original's request sets `_dockTryFlag`
 //! (@0x6a938-0x6a956), so its approach never runs in the frame of the
