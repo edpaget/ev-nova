@@ -119,6 +119,9 @@ pub(crate) struct FakePilotCatalog {
     /// The warp-up sound's length: none, by default, so the warp's clock
     /// takes 350 Mac ticks.
     pub(crate) warp_sound: Option<SoundLength>,
+    /// The double-time warp-up sound's length: none, by default, so the
+    /// warp's clock takes 350 Mac ticks in double time too.
+    pub(crate) warp_sound_double_time: Option<SoundLength>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -610,6 +613,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         ranks: Vec::new(),
         nebulae: Vec::new(),
         warp_sound: None,
+        warp_sound_double_time: None,
     }
 }
 
@@ -896,6 +900,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn warp_sound(&self) -> Option<SoundLength> {
         self.warp_sound
+    }
+
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        self.warp_sound_double_time
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {

@@ -136,11 +136,12 @@ mod tests {
     use crate::combat::{CombatEvent, ShipRef};
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
-    use crate::session::tests::{armed, facing_an_npc};
+    use crate::session::tests::{OUT, armed, bound_for_131, facing_an_npc};
     use crate::testkit::{
         Draws, FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, npc,
     };
     use crate::traffic::npc::NpcId;
+    use crate::warp::SoundLength;
 
     const THRUST: Controls = Controls {
         thrust: true,
@@ -154,6 +155,74 @@ mod tests {
 
     fn again(session: &mut Session, controls: Controls) {
         session.tick_again(controls, Rules::default(), &mut NeverFires);
+    }
+
+    /// [`catalog`] with a double-time warp-up, `snd ` 129, of 44100 frames
+    /// at 22050 Hz: 120 Mac ticks, where 128, of which there is none, lasts
+    /// 350.
+    fn with_warp_up_x2() -> FakePilotCatalog {
+        FakePilotCatalog {
+            warp_sound_double_time: Some(SoundLength {
+                frames: 44_100,
+                rate: 22_050,
+            }),
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn double_time_ends_the_warps_lead_in_by_the_double_time_warp_up() {
+        // w = 1.3: the lead-in lasts while t ≤ 0.35 × d / 1.69, 24.85 Mac
+        // ticks for 129's 120 and 72.49 for 128's 350, through engine tick
+        // 12 and 36.
+        let catalog = with_warp_up_x2();
+        for (double_time, last) in [(true, 12), (false, 36)] {
+            let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
+            session.set_double_time_key(double_time);
+            session.begin_jump().expect("jumps");
+            assert_eq!(session.warp_clock(), Some(0), "at once");
+            for _ in 0..last {
+                session.tick(Controls::default());
+            }
+            assert_eq!(session.warp_clock(), Some(last));
+            assert!(session.in_warp_lead_in(), "{double_time}");
+            session.tick(Controls::default());
+            assert!(!session.in_warp_lead_in(), "{double_time}");
+        }
+    }
+
+    #[test]
+    fn a_collapse_in_double_time_reads_the_double_time_warp_up() {
+        // Facing up, the turn to east runs 30 ticks; disabled on the 15th,
+        // the collapse reads t = 32 Mac ticks.
+        let catalog = with_warp_up_x2();
+        let w = crate::warp::warp_factor(0);
+        let speed = crate::warp::lead_in_speed(32, w, 120);
+        assert!(crate::warp::lead_in_speed(32, w, 350) < 0.0, "none by 128");
+        for double_time in [true, false] {
+            let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+            session.set_double_time_key(double_time);
+            session.begin_jump().expect("jumps");
+            for _ in 0..15 {
+                session.tick(Controls::default());
+            }
+            assert_eq!(session.warp_clock(), Some(15));
+            let before = *session.player();
+            session.condition = crate::combat::hull::Condition::Disabled;
+            session.tick(Controls::default());
+            assert_eq!(session.preparing_jump(), None, "collapsed");
+            let expected = if double_time {
+                assert!(speed > 0.0 && speed < session.top_speed(), "{speed}");
+                crate::cargo_box::accel(45, speed)
+            } else {
+                before.velocity
+            };
+            assert_eq!(
+                session.player().velocity,
+                expected * crate::flight::DISABLED_DRAG,
+                "{double_time}"
+            );
+        }
     }
 
     #[test]

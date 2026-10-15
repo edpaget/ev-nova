@@ -30,10 +30,11 @@
 //!   `_LoadSounds` (@0x1c0b5-0x1c12d) stores 350 (0x15e @0x1c0d2) and
 //!   then, when `snd ` 128 exists, its frames × 60 / the whole part of
 //!   its rate (`_ParseSndHeader`, `imull $0x3c`, `divl`), in Mac ticks;
-//!   stock 128 gives 364. The session's `warp_sound`
-//!   ([`warp::sound_duration`]). Entry [1], from `snd ` 129, is read only
-//!   in double-time mode, which the engine lacks
-//!   (rdm:phase/hud-fidelity/phase-20-audio-double-speed-warp).
+//!   stock 128 gives 364 ([`warp::sound_duration`]). In double time it
+//!   is entry [1], from `snd ` 129 (@0x8210-0x8219; stock 252). The
+//!   session's `warp_sound` ([`warp::warp_sound_duration`]). The term
+//!   stays −35/C in double time: only the move-off's is −52.5/C
+//!   ([`warp::move_off_speed`]).
 //!
 //! When s > 0 (@0x68976) the velocity is zeroed (@0x689b6, 0x689bf) and
 //! `_Accel` gives it min(s, `_ShipMaxSpeed`) (@0x6897e/0x6899d) along the
@@ -120,7 +121,7 @@ impl Session {
         let speed = warp::lead_in_speed(
             collapse_ticks(warp),
             warp::warp_factor(flags),
-            self.warp_sound,
+            self.warp_sound(),
         );
         self.player.velocity = collapsed_velocity(
             self.player.velocity,
@@ -198,7 +199,7 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.warp_clock(), None, "braking");
-        session.warp_sound = duration;
+        session.warp_sounds[0] = duration;
         session.take_sounds();
         session.take_messages();
         session
@@ -244,7 +245,7 @@ mod tests {
     fn a_player_disabled_while_turning_collapses_on_the_clock_from_the_turns_start() {
         // At rest facing up, 90 degrees off east: J turns at once.
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
-        session.warp_sound = 25;
+        session.warp_sounds[0] = 25;
         session.begin_jump().expect("jumps");
         assert_eq!(
             session.take_sounds(),
@@ -341,7 +342,7 @@ mod tests {
     #[test]
     fn a_disabled_player_with_no_jump_collapses_nothing() {
         let mut session = bound_for_131(&catalog(), OUT, Vec2::new(1.0, 0.0), 0.0);
-        session.warp_sound = 9;
+        session.warp_sounds[0] = 9;
         disable_and_tick(&mut session);
         assert_eq!(session.take_messages(), []);
         assert_eq!(session.take_sounds(), []);

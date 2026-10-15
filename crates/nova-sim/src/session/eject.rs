@@ -960,7 +960,7 @@ mod tests {
             }
         }
         let mut session = flying(&catalog, &[POD, AUTO]);
-        session.warp_sound = 9;
+        session.warp_sounds[0] = 9;
         session.jump = Some(BRAKING);
         session.take_messages();
         let sounds = to_the_breakup(&mut session, &catalog, false);
@@ -1005,7 +1005,7 @@ mod tests {
         // An escape ship's notice follows the collapse's.
         let catalog = escaping();
         let (mut session, sounds) = escaped(&catalog, &[], |session| {
-            session.warp_sound = 9;
+            session.warp_sounds[0] = 9;
             session.jump = Some(BRAKING);
         });
         assert_eq!(

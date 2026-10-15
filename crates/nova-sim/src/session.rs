@@ -692,9 +692,11 @@ pub struct Session {
     galaxy: OverlaidGalaxy,
     /// The jump under way, from J being accepted until the ship arrives.
     jump: Option<Jump>,
-    /// The warp sound's duration, in Mac ticks, read when the session
-    /// starts: the d of the warp's clock ([`warp::sound_duration`]).
-    warp_sound: u32,
+    /// The warp sounds' durations, in Mac ticks, read when the session
+    /// starts: `snd ` 128's and 129's, `_jumpSoundLength`, of which
+    /// [`Session::warp_sound`] gives the d of the warp's clock
+    /// ([`warp::sound_duration`]).
+    warp_sounds: [u32; 2],
     /// The rule a multi-jump follows.
     multi_jump: MultiJumpRule,
     /// The rule Hyper Select follows.
@@ -1296,7 +1298,8 @@ impl Session {
             gate_sprites: BTreeMap::new(),
             galaxy,
             jump: None,
-            warp_sound: warp::sound_duration(catalog.warp_sound()),
+            warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
+                .map(warp::sound_duration),
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
             hyperlinks: HyperlinkRule::default(),
@@ -2971,6 +2974,13 @@ impl Session {
         }
     }
 
+    /// The warp sound's duration now, d, in Mac ticks: `snd ` 129's in
+    /// double time, else 128's, as `_WarpSoundDuration` gives it
+    /// (@0x8203-0x8224; [`warp::warp_sound_duration`]).
+    fn warp_sound(&self) -> u32 {
+        warp::warp_sound_duration(self.warp_sounds, self.double_time)
+    }
+
     /// Whether `_ScanPlayer`'s jump-timing check holds a scan back now
     /// ([`warp::held`]): the warp is past its lead-in, by its clock as Mac
     /// ticks, the warp factor of the player's ship class and the warp
@@ -2983,7 +2993,7 @@ impl Session {
         warp::held(
             self.warp_clock().map(warp::mac_ticks),
             warp::warp_factor(flags),
-            self.warp_sound,
+            self.warp_sound(),
             self.condition != Condition::Intact,
         )
     }

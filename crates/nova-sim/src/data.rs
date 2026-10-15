@@ -54,6 +54,10 @@ const SND: ResType = ResType::new(*b"snd ");
 /// The warp-up sound, `snd ` 128, whose length the warp's clock reads
 /// (`_LoadSounds` @0x1c0b5-0x1c12d).
 const WARP_UP_SOUND: i16 = 128;
+/// The double-time warp-up sound, `snd ` 129 "Warp up x2", whose length
+/// the warp's clock reads in double time (`_LoadSounds`
+/// @0x1c0b5-0x1c12d, `_WarpSoundDuration` @0x8210-0x8219).
+const WARP_UP_DOUBLE_SOUND: i16 = 129;
 
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
@@ -62,6 +66,18 @@ const WARP_UP_SOUND: i16 = 128;
 /// and 0x136, which the Bible leaves undocumented and the ResForge template
 /// labels the starting day and month (stock: 23 and 6, with `StartYear`
 /// 1177).
+/// The length of `data`'s `snd ` `id` as `_ParseSndHeader` gives it: its
+/// frames and the whole part of its rate; none when it is missing or
+/// cannot be decoded.
+fn sound_length(data: &GameData, id: i16) -> Option<SoundLength> {
+    let snd = data.resource(SND, id)?;
+    let pcm = decode_snd(snd.resource.data()).ok()?;
+    Some(SoundLength {
+        frames: u32::try_from(pcm.frames()).unwrap_or(u32::MAX),
+        rate: pcm.sample_rate().fixed() >> 16,
+    })
+}
+
 impl PilotCatalog for GameData {
     fn first_character(&self) -> Result<CharacterStart, StartError> {
         let (_, first) = self
@@ -618,12 +634,11 @@ impl PilotCatalog for GameData {
     }
 
     fn warp_sound(&self) -> Option<SoundLength> {
-        let snd = self.resource(SND, WARP_UP_SOUND)?;
-        let pcm = decode_snd(snd.resource.data()).ok()?;
-        Some(SoundLength {
-            frames: u32::try_from(pcm.frames()).unwrap_or(u32::MAX),
-            rate: pcm.sample_rate().fixed() >> 16,
-        })
+        sound_length(self, WARP_UP_SOUND)
+    }
+
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        sound_length(self, WARP_UP_DOUBLE_SOUND)
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
@@ -1802,6 +1817,12 @@ mod tests {
 
     /// `snd ` 128 of `samples` 8-bit mono samples at 22254.54 Hz.
     fn warp_up(samples: usize) -> (ResType, i16, Vec<u8>) {
+        let (ty, _, bytes) = warp_up_as(129, samples);
+        (ty, 128, bytes)
+    }
+
+    /// `snd ` `id` of `samples` 8-bit mono samples at 22254.54 Hz.
+    fn warp_up_as(id: i16, samples: usize) -> (ResType, i16, Vec<u8>) {
         use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
         let snd = SndBuilder::new(
             SndFormat::One,
@@ -1812,7 +1833,7 @@ mod tests {
                 samples: vec![0x80; samples],
             },
         );
-        (ResType::new(*b"snd "), 128, snd.bytes())
+        (ResType::new(*b"snd "), id, snd.bytes())
     }
 
     #[test]
@@ -1844,6 +1865,40 @@ mod tests {
         let broken = bytes[..bytes.len() - 10].to_vec();
         assert_eq!(
             store(&[(ty, 128, broken)]).warp_sound(),
+            None,
+            "undecodable"
+        );
+    }
+
+    #[test]
+    fn the_double_time_warp_sound_is_snd_129s() {
+        let data = store(&[warp_up(1000), warp_up_as(129, 44_508)]);
+        assert_eq!(
+            data.warp_sound_double_time(),
+            Some(SoundLength {
+                frames: 44_508,
+                rate: 22_254
+            })
+        );
+        assert_eq!(
+            data.warp_sound().map(|sound| sound.frames),
+            Some(1000),
+            "128 apart"
+        );
+    }
+
+    #[test]
+    fn without_a_readable_snd_129_there_is_no_double_time_warp_sound() {
+        assert_eq!(store(&[]).warp_sound_double_time(), None);
+        assert_eq!(
+            store(&[warp_up(44_508)]).warp_sound_double_time(),
+            None,
+            "128 is not it"
+        );
+        let (ty, id, bytes) = warp_up_as(129, 44_508);
+        let broken = bytes[..bytes.len() - 10].to_vec();
+        assert_eq!(
+            store(&[(ty, id, broken)]).warp_sound_double_time(),
             None,
             "undecodable"
         );
