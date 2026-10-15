@@ -56,7 +56,9 @@
 //! - The rank tags read the context's [`RankNames`]: `<PRKnnn>` and
 //!   `<SRKnnn>` for nnn 128-383, any other nnn left as written, each
 //!   read uncrossed, as government nnn's highest active rank's
-//!   `ShortName`. The original crosses the two governments, which
+//!   `ShortName`; by the Bible's reading of
+//!   [`RuleKey::PrkNnnName`](crate::RuleKey::PrkNnnName), `<PRKnnn>` reads
+//!   its `ConvName`, "same as `<PRK>`". The original crosses the two governments, which
 //!   rdm:phase/missions-fidelity/phase-2-text-substitution-quirks
 //!   ports. A context with no ranks wired ([`RankNames::none`]) reads
 //!   "captain" ([`NO_RANK`](crate::person::NO_RANK)) for each.
@@ -279,6 +281,9 @@ pub struct TagRules {
     /// What a text with no mission reads for the mission tags
     /// ([`RuleKey::MissionlessTags`](crate::RuleKey::MissionlessTags)).
     pub missionless: RuleSource,
+    /// Which name of a rank `<PRKnnn>` reads
+    /// ([`RuleKey::PrkNnnName`](crate::RuleKey::PrkNnnName)).
+    pub prk_nnn_name: RuleSource,
 }
 
 impl TagRules {
@@ -289,6 +294,7 @@ impl TagRules {
         Self {
             pay_slot_offset: rules.source_for(RuleKey::PaySlotOffset),
             missionless: rules.source_for(RuleKey::MissionlessTags),
+            prk_nnn_name: rules.source_for(RuleKey::PrkNnnName),
         }
     }
 }
@@ -446,7 +452,12 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
         text.replace(tag, value)
     });
     let short_of = |govt| context.ranks.short_of(govt);
-    let filled = fill_ranked(&filled, "<PRK", short_of);
+    let filled = match context.rules.prk_nnn_name {
+        RuleSource::Engine => fill_ranked(&filled, "<PRK", short_of),
+        RuleSource::Bible => {
+            fill_ranked(&filled, "<PRK", |govt| context.ranks.conversation_of(govt))
+        }
+    };
     fill_ranked(&filled, "<SRK", short_of)
 }
 
@@ -1009,6 +1020,64 @@ mod tests {
             "Cdr Cdr Ad Ad sir sir",
             "uncrossed, each its own government's"
         );
+    }
+
+    /// [`context`] with [`ranks`] all held, `<PRKnnn>` named as
+    /// `prk_nnn_name` reads it.
+    fn ranked<'a>(
+        records: &'a [RankRecord],
+        active: &'a BTreeSet<RankId>,
+        prk_nnn_name: RuleSource,
+    ) -> TagContext<'a> {
+        let mut tags = TagContext {
+            ranks: RankNames {
+                records,
+                active,
+                recent: None,
+                fallback: "sir".into(),
+            },
+            ..context(Some(values()))
+        };
+        tags.rules.prk_nnn_name = prk_nnn_name;
+        tags
+    }
+
+    #[test]
+    fn by_the_engine_prk_nnn_reads_short_name() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let tags = ranked(&records, &active, RuleSource::Engine);
+        assert_eq!(
+            expand("<PRK128> <PRK129>", &tags, &names()),
+            "Cdr Ad",
+            "+0xde @0x9d1ef, @0x9d2d0"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_prk_nnn_reads_conv_name() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let tags = ranked(&records, &active, RuleSource::Bible);
+        assert_eq!(
+            expand("<PRK128> <PRK129> <PRK130>", &tags, &names()),
+            "Cmdr Adm sir",
+            "same as <PRK>"
+        );
+    }
+
+    #[test]
+    fn srk_nnn_reads_short_name_by_either_reading() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        for rule in RuleSource::ALL {
+            let tags = ranked(&records, &active, rule);
+            assert_eq!(
+                expand("<SRK128> <SRK129>", &tags, &names()),
+                "Cdr Ad",
+                "{rule:?}"
+            );
+        }
     }
 
     #[test]

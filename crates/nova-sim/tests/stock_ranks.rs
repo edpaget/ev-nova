@@ -24,12 +24,13 @@ mod common;
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_data::records::desc::Desc;
 use nova_sim::news;
 use nova_sim::player_info::Words;
 use nova_sim::rank::{self, Blessed, Held, LOST_TO_CRIME, LOST_TO_VIOLENCE};
 use nova_sim::{
-    CommCatalog, Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleSource, Session,
-    SetExpr, SetOp, Standing, StellarId, cleared,
+    CommCatalog, Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleKey, RuleSource,
+    Rulebook, Session, SetExpr, SetOp, Standing, StellarId, cleared,
 };
 
 #[test]
@@ -74,6 +75,37 @@ fn a_stock_rank_granted_by_its_mission_shows_in_the_pilot_info_and_pays() {
         ranked.pilot().cash(),
         control.pilot().cash() + 200,
         "a day's salary"
+    );
+}
+
+#[test]
+fn stock_desc_5066_names_the_ambassador_by_short_name_and_by_the_bible_by_conv_name() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let Some(Ok(desc)) = data.get::<Desc>(5066) else {
+        panic!("stock dësc 5066");
+    };
+    let text = desc.record.text.as_str().to_owned();
+    let read = |rule: RuleSource| {
+        let mut session = Session::start(&*data)
+            .expect("the stock first chär starts")
+            .with_strings(data.clone())
+            .with_rules(Rulebook::default().with_override(RuleKey::PrkNnnName, rule));
+        // Rank 129, govt 128: ConvName "Federation Ambassador", ShortName
+        // "Ambassador".
+        session.run_set(&SetExpr::parse("K129").expect("parses"), &mut NeverFires);
+        session.plain_text(&text)
+    };
+    let engine = read(RuleSource::Engine);
+    assert!(engine.contains("rank of 'Ambassador'"), "{engine}");
+    assert!(engine.contains("Good luck 'Ambassador'"), "{engine}");
+    let bible = read(RuleSource::Bible);
+    assert!(bible.contains("rank of 'Federation Ambassador'"), "{bible}");
+    assert!(
+        bible.contains("Good luck 'Ambassador'"),
+        "<SRKnnn> under both: {bible}"
     );
 }
 
