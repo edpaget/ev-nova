@@ -173,7 +173,8 @@ use crate::mission::active::AUTO_ABORT;
 use crate::mission::cargo::PICKUP_BOARDING;
 use crate::mission::screens::HIDDEN;
 use crate::mission::ships::{
-    ShipBehav, ShipFacts, ShipStart, UNIFORM_SHIP_TYPE, appear_timer, swapped_ship_type,
+    NOT_APPEARING, ShipBehav, ShipFacts, ShipStart, UNIFORM_SHIP_TYPE, appear_timer,
+    swapped_ship_type,
 };
 use crate::mission::{
     ActiveMission, AssistLine, Departure, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem,
@@ -880,7 +881,11 @@ impl Session {
     /// original also marks the target panel for redraw
     /// (`_statusRedraw[6]`, @0x62543); ours gets that from the ship's
     /// fresh `NpcId`, on which `nova_view::flight::cadence::retake_target`
-    /// redraws the panel at once. No count of the slot changes. Nothing when the NPC is no longer here, the
+    /// redraws the panel at once. By the engine's reading of
+    /// [`RuleKey::SwapArrives`] no count of the slot changes and its appear
+    /// timer runs on; by the other, the ship is the timer's arrival: the
+    /// timer stops and, for `ShipStart` 1, the arrived count goes up by
+    /// one. Nothing when the NPC is no longer here, the
     /// slot no longer holds a mission of a `düde`, or the ship cannot be
     /// spawned. Of a `ShipBehav` 1 mission it joins the player's
     /// formation as it comes ([`Session::mission_ships_came`]); of
@@ -962,6 +967,14 @@ impl Session {
         if targeted {
             self.target = self.last_npc();
             self.target_fly_in.settle();
+        }
+        if self.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
+            && let Some(active) = self.slot_holding(slot, record.id)
+        {
+            active.ships.appear = NOT_APPEARING;
+            if ShipStart::from_code(record.ships.start) == ShipStart::ComesLater {
+                active.ships.arrived = active.ships.arrived.saturating_add(1);
+            }
         }
         self.mission_ships_came(last);
     }
@@ -5032,15 +5045,65 @@ pub(super) mod tests {
 
     /// [`swapped`], under `source` of [`RuleKey::LeaderlessSwapHold`].
     fn swapped_by(catalog: &FakePilotCatalog, source: crate::RuleSource) -> Session {
-        let mut session = hailing_ace(catalog).with_rules(
+        swapped_under(
+            catalog,
             crate::Rulebook::default().with_override(RuleKey::LeaderlessSwapHold, source),
-        );
+        )
+    }
+
+    /// [`swapped`], under `rules`.
+    fn swapped_under(catalog: &FakePilotCatalog, rules: crate::Rulebook) -> Session {
+        let mut session = hailing_ace(catalog).with_rules(rules);
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
         settle(&mut session, catalog);
         session
+    }
+
+    /// [`swapping`] a person of `Flags` 0x0040 for mission 140's ship of
+    /// `ShipStart` `start`, swapped under `source` of
+    /// [`RuleKey::SwapArrives`], then ticked past its appear timer as it
+    /// stood after the swap: the timer and arrived count after the swap,
+    /// and the slots of the mission ships here after the ticks.
+    fn swap_then_timer(start: i16, source: crate::RuleSource) -> (i16, i16, Vec<u8>) {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].ships.start = start;
+        let mut session = swapped_under(
+            &catalog,
+            crate::Rulebook::default().with_override(RuleKey::SwapArrives, source),
+        );
+        assert_eq!(marked(&session), [0], "{start} {source:?}: the swap");
+        let SpecialShips {
+            appear, arrived, ..
+        } = ships_of(&session);
+        ticks(
+            &mut session,
+            &catalog,
+            usize::try_from(appear.max(0)).expect("positive") + 1,
+        );
+        (appear, arrived, marked(&session))
+    }
+
+    #[test]
+    fn by_the_engine_the_timer_brings_a_second_ship_beside_a_swapped_one() {
+        for (start, arrived) in [(1, 0), (2, 1)] {
+            let (appear, now_arrived, marked) = swap_then_timer(start, crate::RuleSource::Engine);
+            assert!(appear > 0, "{start}: the timer runs on");
+            assert_eq!(now_arrived, arrived, "{start}: no count changes");
+            assert_eq!(marked, [0, 0], "{start}");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_no_ship_arrives_beside_a_swapped_one_on_the_timer() {
+        for start in [1, 2] {
+            let (appear, arrived, marked) = swap_then_timer(start, crate::RuleSource::Bible);
+            assert_eq!(appear, crate::mission::ships::NOT_APPEARING, "{start}");
+            assert_eq!(arrived, 1, "{start}: the swap is the arrival");
+            assert_eq!(marked, [0], "{start}");
+        }
     }
 
     #[test]
