@@ -82,10 +82,17 @@
 //!   a system the current one lists (@0x137b3-0x137bb), or its cue as the
 //!   map closes for a longer route (@0x13c16); no route lets go of the
 //!   selection and keeps the mode (@0x13788-0x13790).
+//! - A click on the floating map ([`Session::select_on_floating_map`],
+//!   `_HandlePlayer` @0x6a16c-0x6a762): on the current system's centre,
+//!   mode 3 with nothing selected (@0x6a1d5-0x6a1de); on the box of one of
+//!   its links ([`Session::floating_map_links`]), mode 3 with that link
+//!   (@0x6a719-0x6a727). Either with [`SimSound::HyperSelected`]
+//!   (`_beepSnd[2]`, @0x6a73a-0x6a75d). The flight view shows the map and
+//!   tests the click.
 //!
-//! **Left out.** The floating map that shows while H or `\` is held, its
-//! clicks (@0x6a1d5-0x6a1e4, @0x6a719-0x6a762) and its preselect
-//! (`_ShowFloatingMap` @0x11488); the map dialog's Tab / `\` cycling
+//! **Left out.** The floating map's preselect
+//! (`_ShowFloatingMap` @0x11488), which only its names would read (the
+//! galaxy-map-fidelity roadmap's); the map dialog's Tab / `\` cycling
 //! (`_MapFilter` @0x13f0f-0x13fac); the map panel's titles by the mode
 //! (`_MapDialogUpdate` @0x10b68-0x10c76); and the destroyed player's and the ship swap's per-frame clears
 //! (@0x68712-0x68718, @0x6f41b-0x6f421). The landed `M` / `N`'s +0x6c, the
@@ -297,6 +304,39 @@ impl Session {
         }
         self.nav = NavMode::Hyperspace(Some(next));
         Some(next)
+    }
+
+    /// The links the floating map's clicks test, as `_HandlePlayer` walks
+    /// them (@0x6a1e9-0x6a332): the current system's raw Con slots, in
+    /// record order, repeats and itself kept, each only when it is in the
+    /// catalog and a visible system stands at its place
+    /// (`_FindActiveCoLocatedSystem` @0x6a21f). Each is the raw slot, not
+    /// the system standing for it: its box is at the slot's own position
+    /// (@0x6a25c-0x6a2af), and mode 3 selects it raw (@0x6a719-0x6a727).
+    #[must_use]
+    pub fn floating_map_links(&self) -> Vec<SystemId> {
+        self.galaxy
+            .con_slots(self.pilot.system)
+            .iter()
+            .copied()
+            .filter(|&slot| self.galaxy.exists(slot) && self.galaxy.same_place(slot).is_some())
+            .collect()
+    }
+
+    /// A click hit on the floating map, as `_HandlePlayer` takes it: mode
+    /// 3 with `link` selected, one of [`Session::floating_map_links`]
+    /// (@0x6a719-0x6a727), or with nothing for the current system's centre
+    /// (@0x6a1d5-0x6a1de), with [`SimSound::HyperSelected`] (`_beepSnd[2]`,
+    /// @0x6a73a-0x6a75d). The course is kept. During a jump (pre-jump
+    /// stage too) nothing changes and it says so, as the click is gated
+    /// on the jump state (@0x6a145).
+    pub fn select_on_floating_map(&mut self, link: Option<SystemId>) -> bool {
+        if self.jump.is_some() {
+            return false;
+        }
+        self.nav = NavMode::Hyperspace(link);
+        self.sounds.push(SimSound::HyperSelected);
+        true
     }
 }
 
@@ -876,5 +916,62 @@ mod tests {
             None,
             "nothing stands there: no selection, not the current system"
         );
+    }
+
+    // The floating map.
+
+    #[test]
+    fn the_floating_maps_links_are_the_raw_slots_in_order_that_exist() {
+        let session = Session::start(&hub()).expect("starts");
+        assert_eq!(
+            session.floating_map_links(),
+            ids(&[134, 131, 131, 130, 135]),
+            "repeats and itself kept, 999 left out"
+        );
+    }
+
+    #[test]
+    fn a_floating_map_link_with_nothing_visible_at_its_place_is_left_out() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.floating_map_links(), ids(&[131]));
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.floating_map_links(),
+            ids(&[131]),
+            "134 stands at its place: the raw slot is kept"
+        );
+        hide(&mut session, &catalog, &[134]);
+        assert_eq!(session.floating_map_links(), []);
+    }
+
+    #[test]
+    fn a_floating_map_click_sets_mode_3_with_its_system_or_nothing_and_beeps() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        session.take_sounds();
+        assert!(session.select_on_floating_map(Some(SystemId(135))));
+        assert_eq!(session.nav_mode(), hyperspace(135));
+        assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+        assert_eq!(session.course(), ids(&[131]), "the course kept");
+        session.select_stellar(StellarPick::Slot(0));
+        session.take_sounds();
+        assert!(session.select_on_floating_map(None));
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+        assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+    }
+
+    #[test]
+    fn a_floating_map_click_does_nothing_during_a_jump() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        let mode = session.nav_mode();
+        session.take_sounds();
+        assert!(!session.select_on_floating_map(None));
+        assert_eq!(session.nav_mode(), mode);
+        assert_eq!(session.take_sounds(), []);
     }
 }
