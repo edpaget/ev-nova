@@ -38,6 +38,8 @@ use crate::table::SoundTable;
 ///   which the port decides.
 /// - A key's click on a main-menu button plays the button-down sound,
 ///   then the button-up sound once the port says the first has ended.
+///   Until then the click is waited on ([`AudioCore::click_waiting`]):
+///   the main menu holds the key's choice until the app sees it is not.
 /// - A halt halts each `snd ` it names, in order ([`AudioCommand::Halt`]),
 ///   whatever the sound setting: halting what is not playing is harmless.
 /// - Each of a fight's sounds plays its own `snd ` once, at the effects
@@ -83,6 +85,18 @@ impl<A: Audio> AudioCore<A> {
             loop_on: false,
             keyed: None,
         }
+    }
+
+    /// Whether a keyed click is still waited on: its button-down sound
+    /// was asked for, and its button-up sound has not been played yet, as
+    /// `_PlayMainScreenClickSound` @0x177af spins until 600 has ended
+    /// (@0x177e0-0x177f2) and plays 601 before `_MainScreenChoice` runs.
+    /// False before any keyed click, with sound off, with no button-down
+    /// sound in the table, and from the [`update`](Self::update) that
+    /// plays the button-up sound.
+    #[must_use]
+    pub fn click_waiting(&self) -> bool {
+        self.keyed.is_some()
     }
 
     /// Takes in one frame's worth: the screen `showing` (`None` keeps the
@@ -203,6 +217,7 @@ impl<A: Audio> AudioCore<A> {
             Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
             Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
             Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
+            Sound::Ui(UiSound::EnterRefused) => self.play(self.table.enter_refused),
             Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
             Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
             Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
@@ -687,6 +702,54 @@ mod tests {
         core.update(Some(Showing::ShipBrowser), &[KEYED]);
         core.update(None, &[]);
         assert_eq!(drain(&log), [play(600, EFFECTS)], "no 601 to play");
+    }
+
+    #[test]
+    fn a_keyed_click_is_waited_on_from_600_until_the_update_that_plays_601() {
+        let (mut core, log, audio) = keyed();
+        assert!(!core.click_waiting(), "no click yet");
+        core.update(Some(Showing::MainMenu), &[KEYED]);
+        assert!(core.click_waiting(), "600 has just been asked for");
+        audio.set_playing(SoundId(600), true);
+        core.update(None, &[]);
+        assert!(core.click_waiting(), "600 still playing");
+        audio.set_playing(SoundId(600), false);
+        drain(&log);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [play(601, EFFECTS)]);
+        assert!(!core.click_waiting(), "601 has started");
+    }
+
+    #[test]
+    fn a_keyed_click_is_not_waited_on_with_sound_off_or_no_600() {
+        let (mut core, _, audio) = keyed();
+        audio.set_playing(SoundId(600), true);
+        core.set_sound(false);
+        core.update(Some(Showing::MainMenu), &[KEYED]);
+        assert!(!core.click_waiting(), "sound off");
+
+        let audio = RecordingAudio::new();
+        audio.set_playing(SoundId(600), true);
+        let table = SoundTable {
+            button_down: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::MainMenu), &[KEYED]);
+        assert!(!core.click_waiting(), "no 600");
+    }
+
+    #[test]
+    fn enter_refused_on_the_main_menu_beeps_153_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_music(false);
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::MainMenu), &[Sound::Ui(UiSound::EnterRefused)]);
+        assert_eq!(drain(&log), [play(153, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &[Sound::Ui(UiSound::EnterRefused)]);
+        assert_eq!(drain(&log), [], "sound off");
     }
 
     #[test]
