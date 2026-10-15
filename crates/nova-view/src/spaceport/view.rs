@@ -461,6 +461,11 @@ pub struct SpaceportView {
     recharge: bool,
     /// Whether the outfitter has opened since this was last taken.
     outfitter_opened: bool,
+    /// Whether the outfitter open has yet to be shown its listing
+    /// ([`SpaceportView::set_opened_outfitter`]): until then it asks for
+    /// no offer, as `_DoOutfitDialog` builds its list before it offers
+    /// anything, and with nothing listed never offers.
+    outfitter_unlisted: bool,
     /// The port dialog opened since this was last taken.
     port_dialog_opened: Option<PortDialog>,
     /// The port dialog closed since this was last taken.
@@ -557,6 +562,7 @@ impl SpaceportView {
             left: false,
             recharge: false,
             outfitter_opened: false,
+            outfitter_unlisted: false,
             empty_outfitter: false,
             port_dialog_opened: None,
             port_dialog_closed: None,
@@ -812,9 +818,12 @@ impl SpaceportView {
     /// (@0x5bbf7 → @0x5dbd6): the outfitter is dropped with no close, so
     /// no close tail runs (@0x5da33-0x5dbd1) and nothing redraws, the nav
     /// saved as it opened is never restored (nothing ran in between, so
-    /// it changes nothing), and no offer is asked for. That is told once
+    /// it changes nothing), and no offer is asked for: the outfitter asks
+    /// for none until its listing is shown here, so its ask is dropped
+    /// with it, whenever the offers are served. That is told once
     /// ([`SpaceportView::take_empty_outfitter`]).
     pub fn set_opened_outfitter(&mut self, outfitter: Outfitter) {
+        self.outfitter_unlisted = false;
         let empty = outfitter.rows.is_empty();
         self.set_outfitter(outfitter);
         if empty && matches!(self.open, Some(Open::Outfitter(_))) {
@@ -1105,11 +1114,14 @@ impl SpaceportView {
     /// by its `AvailLoc`: the screen open's ([`BAR`], [`TRADE_CENTER`],
     /// [`OUTFITTER`] or [`SHIPYARD`]), or, with nothing open, the
     /// spaceport's ([`SPACEPORT`]); never the mission computer's or a
-    /// placeholder's. Whoever flies the ship answers with
+    /// placeholder's; nor the outfitter's before its listing is shown
+    /// ([`SpaceportView::set_opened_outfitter`]), its ask kept until then.
+    /// Whoever flies the ship answers with
     /// [`SpaceportView::open_offer`], or rearms it
     /// ([`SpaceportView::rearm_offers`]).
     pub fn take_offer_request(&mut self) -> Option<i16> {
         let (asked, venue) = match &mut self.open {
+            Some(Open::Outfitter(_)) if self.outfitter_unlisted => return None,
             Some(Open::Bar(screen)) => (screen.take_offer_request(), BAR),
             Some(Open::Trade(screen)) => (screen.take_offer_request(), TRADE_CENTER),
             Some(Open::Outfitter(screen)) => (screen.take_offer_request(), OUTFITTER),
@@ -1603,6 +1615,7 @@ impl SpaceportView {
                 }
                 (_, Some(outfitting), _, Service::Outfitter) => {
                     self.outfitter_opened = true;
+                    self.outfitter_unlisted = true;
                     let layout = outfitting
                         .template
                         .clone()
@@ -4316,7 +4329,11 @@ mod tests {
         click_item(&mut view, 8);
         assert!(view.take_outfitter_opened());
         assert!(!view.take_empty_outfitter(), "not until it is shown");
-        view.take_offer_request();
+        assert_eq!(
+            view.take_offer_request(),
+            None,
+            "no offer until its listing is shown"
+        );
         view.set_opened_outfitter(Outfitter {
             rows: Vec::new(),
             ..tanks(0)
@@ -4333,7 +4350,13 @@ mod tests {
         let mut view = shopping();
         click_item(&mut view, 8);
         assert!(view.take_outfitter_opened());
+        assert_eq!(view.take_offer_request(), None, "not yet listed");
         view.set_opened_outfitter(tanks(1));
+        assert_eq!(
+            view.take_offer_request(),
+            Some(OUTFITTER),
+            "a listing shown asks"
+        );
         assert_eq!(
             view.open_outfitter()
                 .map(|open| open.outfitter().rows[0].owned),
@@ -4374,6 +4397,9 @@ mod tests {
             let mut view = venues();
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             click_item(&mut view, item);
+            if view.take_outfitter_opened() {
+                view.set_opened_outfitter(tanks(1));
+            }
             assert_eq!(view.take_offer_request(), Some(venue), "{venue}");
             assert_eq!(view.take_offer_request(), None, "{venue}: once");
             view.open_offer(offered());
@@ -4693,6 +4719,9 @@ mod tests {
                 _ => 9,
             };
             click_item(&mut view, item);
+            if view.take_outfitter_opened() {
+                view.set_opened_outfitter(tanks(1));
+            }
             view.tick(FIRST_OFFER_DELAY);
             assert_eq!(view.take_offer_request(), Some(venue));
             view.open_offer(offered());

@@ -9106,6 +9106,46 @@ pub(super) mod tests {
         assert_eq!(shop_offer(OUTFITTER, 8), Some(MissionId(130)));
     }
 
+    /// [`shipbuying_data`] with an outfitter selling nothing, as no `oütf`
+    /// exists, and mission 130 at the outfitter ([`venue_mission`]),
+    /// unrefusable and with no offer text, so an offer of it is its
+    /// accept at once.
+    fn empty_outfitter_offering_data() -> Rc<GameData> {
+        let mut mission = venue_mission(OUTFITTER);
+        mission[0x50..0x52].copy_from_slice(&0x0004_u16.to_be_bytes());
+        let mut built = game_data_fork(true, false, true, 100, b"", b"", None)
+            .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
+            .build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        loaded_bytes(built.bytes)
+    }
+
+    /// An outfitter listing nothing never opens, so it offers nothing
+    /// (`_DoOutfitDialog` @0x5bbf7 → @0x5dbd6 skips its offer): its
+    /// mission, accepted at once on any offer, stays unaccepted.
+    #[test]
+    fn an_empty_outfitter_offers_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, empty_outfitter_offering_data());
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::outfitter::NO_ITEMS.to_owned())
+        );
+        screen.input(&key(Key::Enter, true));
+        screen.tick(Duration::from_secs(5));
+        assert!(spaceport(&screen).offer_dialog().is_none());
+        assert_eq!(active(&screen), [], "nothing offered, nothing accepted");
+        assert_eq!(pilot(&screen).cash(), 1000);
+    }
+
     #[test]
     fn entering_the_shipyard_offers_its_mission_at_once() {
         assert_eq!(shop_offer(SHIPYARD, 9), Some(MissionId(130)));
