@@ -1549,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn with_no_target_l_selects_the_nearest_stellar_stellar_and_requests_it() {
+    fn with_no_target_l_selects_the_nearest_stellar_and_requests_it() {
         // Even at rest over it, it does not land.
         assert_eq!(
             press(None, &parked(), &system()),
