@@ -1,7 +1,8 @@
 //! The cargo boxes a jettison leaves behind the player's ship and its
-//! trader escorts: how many each ship drops, where each box starts, how
-//! it drifts, spins and fades, and when it is gone. Where they are drawn,
-//! and with which `spïn`, is the view's.
+//! trader escorts, and the scoopable ones a destroyed asteroid drops: how
+//! many each ship drops, where each box starts, how it drifts, spins and
+//! fades, and when it is gone. Where they are drawn, and with which
+//! `spïn`, is the view's.
 //!
 //! # The original
 //!
@@ -27,6 +28,15 @@
 //!   without a sprite, `_GetSpriteXSize` @0x26fc), and kicked
 //!   `(Rand(40) + 30) / 100` px a tick from `Rand(30) − Rand(15)` degrees
 //!   off straight behind, both along the whole-degree heading.
+//! - **The scoopable box** ([`CargoBoxes::spawn_scoopable`],
+//!   `_SpawnScoopableBox` @0x3e3c5-0x3e54f, called only by
+//!   `_DestroyAsteroid` @0xae73): the first free slot of 64, none when all
+//!   are taken; where the asteroid was, from rest; a life of `Rand(200) +
+//!   300` ticks; frame `Rand(36)`; a spin of −1, 0, 0 or +1 by `Rand(4)`;
+//!   scoopable (+0x24), holding the asteroid's `YieldType` (+0x22), of
+//!   the graphic given, 1-4 (+0x1e); kicked `(Rand(81) + 60) × 0.2 ×
+//!   0.01` px a tick along `Rand(360)`, 0.12-0.28. A jettisoned box is
+//!   written not scoopable (`_SpawnBox` @0x3de76).
 //! - **The step** ([`CargoBoxes::step`]): a box whose life is below 0 is
 //!   gone (life −2.0, @0x2dfa4-0x2dfee); otherwise its frame turns by its
 //!   spin, wrapped into `[0, 36)`, its life falls by 1 and it moves by its
@@ -37,10 +47,11 @@
 //! where the original sets `_killBoxes` for the next `_HandleBoxes`.
 //! Boxes are never saved.
 //!
-//! Left out (rdm:phase/cargo-and-scanning/phase-5-scoopable-cargo-boxes):
-//! scoopable boxes, which only an asteroid's destruction drops
-//! (`_SpawnScoopableBox` @0x3e3c5), their pickup and the AI that steers
-//! for them; graphics 1-4; the player's wrap shift; and the sprite murk.
+//! Spawning the scoopable boxes is
+//! rdm:phase/asteroids/phase-2-shoot-and-break-asteroids's. Left out:
+//! their pickup (rdm:phase/asteroids/phase-4-scoopable-boxes) and the AI
+//! that steers for them (rdm:phase/asteroids/phase-5-ai-mining); the
+//! player's wrap shift; and the sprite murk.
 //!
 //! [`Jettisoned::total`]: crate::mission::cargo::Jettisoned::total
 
@@ -69,6 +80,19 @@ pub const MAX_FADE: u8 = 31;
 /// The width `_GetSpriteXSize` gives a ship with no sprite (@0x26fc).
 pub const NO_SPRITE_WIDTH: f32 = 32.0;
 
+/// The sides of a scoopable box's life draw: `Rand(200) + 300` ticks.
+const SCOOPABLE_LIFE_SIDES: u16 = 200;
+
+/// The least life of a scoopable box, in ticks.
+const SCOOPABLE_LIFE_BASE: u16 = 300;
+
+/// The sides of a scoopable box's kick draw: `(Rand(81) + 60) × 0.2 ×
+/// 0.01` pixels a tick.
+const SCOOPABLE_KICK_SIDES: u16 = 81;
+
+/// The least of a scoopable box's kick draw.
+const SCOOPABLE_KICK_BASE: u16 = 60;
+
 /// One cargo box in space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CargoBox {
@@ -83,8 +107,13 @@ pub struct CargoBox {
     /// How many frames it turns each tick: −1, 0 or +1.
     pub spin: i8,
     /// Which box graphic it is drawn with, `spïn` 500 + graphic: 0 for a
-    /// jettisoned box.
+    /// jettisoned box, 1-4 for an asteroid's.
     pub graphic: u16,
+    /// Whether it can be scooped up: only an asteroid's box.
+    pub scoopable: bool,
+    /// What it holds: an asteroid's `YieldType`, a commodity 0-6 or a
+    /// `jünk` 1000-1127; none for a jettisoned box.
+    pub contents: Option<i16>,
 }
 
 impl CargoBox {
@@ -173,11 +202,7 @@ impl CargoBoxes {
         }
         let life = f32::from(chance.roll(90) + 180);
         let frame = chance.roll(FRAMES);
-        let spin = match chance.roll(4) {
-            0 => -1,
-            3 => 1,
-            _ => 0,
-        };
+        let spin = spin_of(chance.roll(4));
         // The whole-degree heading, in [0, 360).
         #[allow(clippy::cast_possible_truncation)]
         let heading = ship.heading.trunc() as i32;
@@ -193,6 +218,41 @@ impl CargoBoxes {
             frame,
             spin,
             graphic: 0,
+            scoopable: false,
+            contents: None,
+        });
+    }
+
+    /// Spawns one scoopable box at `at`, holding `contents`, of `graphic`,
+    /// as `_SpawnScoopableBox` does (see the module docs), drawing on
+    /// `chance`; nothing when the table is full.
+    pub fn spawn_scoopable(
+        &mut self,
+        at: Vec2,
+        contents: Option<i16>,
+        graphic: u16,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if self.boxes.len() >= MAX_BOXES {
+            return;
+        }
+        let life = f32::from(chance.roll(SCOOPABLE_LIFE_SIDES) + SCOOPABLE_LIFE_BASE);
+        let frame = chance.roll(FRAMES);
+        let spin = spin_of(chance.roll(4));
+        let angle = i32::from(chance.roll(360));
+        let kick = f64::from(chance.roll(SCOOPABLE_KICK_SIDES) + SCOOPABLE_KICK_BASE) * 0.2 * 0.01;
+        // A third of a pixel at most.
+        #[allow(clippy::cast_possible_truncation)]
+        let velocity = accel(angle, kick as f32);
+        self.boxes.push(CargoBox {
+            position: at,
+            velocity,
+            life,
+            frame,
+            spin,
+            graphic,
+            scoopable: true,
+            contents,
         });
     }
 
@@ -211,6 +271,15 @@ impl CargoBoxes {
     /// Empties the table: every box is gone.
     pub fn clear(&mut self) {
         self.boxes.clear();
+    }
+}
+
+/// A box's spin by its `Rand(4)` draw `roll`: −1, 0, 0 or +1.
+fn spin_of(roll: u16) -> i8 {
+    match roll {
+        0 => -1,
+        3 => 1,
+        _ => 0,
     }
 }
 
@@ -301,6 +370,8 @@ mod tests {
             let made = spawned(&ship, Some(40.0), &mut chance);
             assert_eq!((made.life, made.frame, made.spin), expected);
             assert_eq!(made.graphic, 0);
+            assert!(!made.scoopable, "a jettisoned box is not scoopable");
+            assert_eq!(made.contents, None);
             assert_eq!(
                 chance.sides_asked,
                 [90, 36, 4, 40, 30, 15],
@@ -364,6 +435,53 @@ mod tests {
         assert!(close(kick, facing(208.0) * 0.69), "{kick:?}");
     }
 
+    /// A scoopable box's rolls, in `_SpawnScoopableBox`'s order: life,
+    /// frame, spin, then the kick's direction and speed.
+    fn scooped(life: u16, frame: u16, spin: u16, angle: u16, speed: u16) -> CargoBox {
+        let mut boxes = CargoBoxes::default();
+        let mut chance = Scripted::rolling(&[life, frame, spin, angle, speed]);
+        boxes.spawn_scoopable(Vec2::new(30.0, -40.0), Some(1003), 3, &mut chance);
+        assert_eq!(chance.sides_asked, [200, 36, 4, 360, 81]);
+        assert_eq!(boxes.boxes().len(), 1);
+        boxes.boxes()[0]
+    }
+
+    #[test]
+    fn a_scoopable_box_holds_its_yield_and_graphic_where_the_asteroid_was() {
+        let made = scooped(0, 7, 1, 0, 0);
+        assert!(made.scoopable);
+        assert_eq!((made.contents, made.graphic), (Some(1003), 3));
+        assert_eq!(made.position, Vec2::new(30.0, -40.0));
+        assert_eq!(made.frame, 7);
+    }
+
+    #[test]
+    fn a_scoopable_box_lives_300_to_499_ticks_and_spins_by_its_draw() {
+        assert_eq!(scooped(0, 0, 0, 0, 0).life, 300.0);
+        assert_eq!(scooped(199, 0, 0, 0, 0).life, 499.0);
+        let spins: Vec<i8> = (0..4).map(|roll| scooped(0, 0, roll, 0, 0).spin).collect();
+        assert_eq!(spins, [-1, 0, 0, 1]);
+    }
+
+    #[test]
+    fn a_scoopable_box_is_kicked_0_12_to_0_28_px_a_tick_any_way_from_rest() {
+        let slow = scooped(0, 0, 0, 0, 0);
+        assert!(close(slow.velocity, Vec2::new(0.0, -0.12)), "{slow:?}");
+        let fast = scooped(0, 0, 0, 90, 80);
+        assert!(close(fast.velocity, Vec2::new(0.28, 0.0)), "{fast:?}");
+        let back = scooped(0, 0, 0, 359, 80);
+        assert!(close(back.velocity, facing(359.0) * 0.28), "{back:?}");
+    }
+
+    #[test]
+    fn a_full_table_spawns_no_scoopable_box() {
+        let mut boxes = CargoBoxes::default();
+        for _ in 0..MAX_BOXES + 3 {
+            boxes.spawn_scoopable(Vec2::ZERO, None, 1, &mut Scripted::default());
+        }
+        assert_eq!(boxes.boxes().len(), MAX_BOXES);
+    }
+
     #[test]
     fn a_full_table_spawns_nothing() {
         let mut boxes = CargoBoxes::default();
@@ -391,6 +509,8 @@ mod tests {
                 frame,
                 spin,
                 graphic: 0,
+                scoopable: false,
+                contents: None,
             }],
         }
     }
