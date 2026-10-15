@@ -1632,6 +1632,16 @@ impl<
         }
     }
 
+    /// Resumes a pilot opened from a save as [`Session::face_on_load`]
+    /// does, on the flight's chance: its ship faces a drawn heading, as
+    /// `_LoadPilotData` faces every pilot it loads (@0x7535b-0x75372). A
+    /// session that failed resumes nothing.
+    pub fn resume(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.face_on_load(&mut self.chance);
+        }
+    }
+
     fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
         let session = session.map_err(|err| err.to_string());
         let (scene, sheet, sheet_ship, status_bar) = match &session {
@@ -9164,6 +9174,39 @@ mod tests {
         let mut broken = FlightView::new(broken);
         broken.begin();
         assert_eq!(broken.pilot(), None);
+    }
+
+    #[test]
+    fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
+        let (script, chance) = scripted(&[123]);
+        let mut view = FlightView::with_pilot(catalog(), docked_pilot("Ada")).with_chance(chance);
+        assert_eq!(player(&view).heading, 0.0, "flying alone faces up");
+        view.resume();
+        assert_eq!(player(&view).heading, 123.0);
+        assert_eq!(script.borrow().asked, [360]);
+    }
+
+    #[test]
+    fn beginning_a_new_pilot_leaves_it_facing_up() {
+        let (_, chance) = scripted(&[123]);
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        let mut view = FlightView::with_pilot(catalog, pilot).with_chance(chance);
+        view.begin();
+        assert_eq!(player(&view).heading, 0.0);
+    }
+
+    #[test]
+    fn a_failed_flight_resumes_nothing() {
+        let (script, chance) = scripted(&[123]);
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        let mut broken = FlightView::new(broken).with_chance(chance);
+        broken.resume();
+        assert_eq!(broken.pilot(), None);
+        assert!(script.borrow().asked.is_empty(), "nothing drawn");
     }
     // Traffic.
 
