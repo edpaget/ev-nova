@@ -15,9 +15,9 @@
 //! while the fleet has no room (`_CanHireEscorts` @0x5795). Whoever holds
 //! the session answers with the list ([`BarScreen::open_hire`]): the hire
 //! screen ([`HireScreen`]) opens over the bar, or, with nothing for hire,
-//! the bar says so (`STR#` 2002 #224) in its text box in place of its
-//! text, until the next button is activated, as the spaceport shows a
-//! refusal. A ship the hire screen asks for is taken through the bar
+//! nothing opens, and `STR#` 2002 #224 shows in the text dialog over the
+//! spaceport, as `_DoShipyardDialog` shows it by `_ShowTextDialog`
+//! (@0x5e8ab → @0x5e8da). A ship the hire screen asks for is taken through the bar
 //! ([`BarScreen::take_hire`]), and after the hire the screen closes back
 //! to the bar ([`BarScreen::set_hire`]).
 //!
@@ -62,7 +62,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::hire::{HIRE_ESCORT, NONE_FOR_HIRE};
+use nova_sim::hire::HIRE_ESCORT;
 use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
 use nova_sim::{HireList, MissionId, News, OfferPrompt, ShipId};
 
@@ -175,10 +175,6 @@ impl std::fmt::Debug for MetricsHandle {
 struct Laid {
     dialog: Dialog,
     metrics: MetricsHandle,
-    /// The bar's text, to show again after a message.
-    text: String,
-    /// The message shown in its place, if any.
-    said: Option<&'static str>,
 }
 
 /// What the bar has asked whoever holds the session for.
@@ -254,7 +250,7 @@ impl BarScreen {
                 (
                     TEXT_ITEM,
                     Role::ScrollText {
-                        text: text.clone(),
+                        text,
                         font: Font::Geneva,
                         size: BODY_SIZE,
                         color: BODY_COLOR,
@@ -270,8 +266,6 @@ impl BarScreen {
             Laid {
                 dialog,
                 metrics: MetricsHandle(metrics),
-                text,
-                said: None,
             }
         });
         Self {
@@ -390,12 +384,6 @@ impl BarScreen {
         self.laid.as_ref().err().map(String::as_str)
     }
 
-    /// The message shown in place of the bar's text, if any.
-    #[must_use]
-    pub fn message(&self) -> Option<&str> {
-        self.laid.as_ref().ok()?.said
-    }
-
     /// Whether the player has left the bar.
     #[must_use]
     pub fn closed(&self) -> bool {
@@ -439,14 +427,13 @@ impl BarScreen {
     }
 
     /// Opens the hire screen over the bar on `list`; with nothing for
-    /// hire, the bar says so instead.
+    /// hire, nothing opens, and whoever shows the bar says so
+    /// ([`SpaceportView::open_hire`](super::SpaceportView::open_hire)).
     pub fn open_hire(&mut self, list: HireList) {
-        let Ok(laid) = &mut self.laid else {
+        let Ok(laid) = &self.laid else {
             return;
         };
         if list.rows.is_empty() {
-            laid.dialog.set_text(TEXT_ITEM, NONE_FOR_HIRE);
-            laid.said = Some(NONE_FOR_HIRE);
             // The hire dialog returns at once (`_DoShipyardDialog`
             // @0x5e8df), so the bar's reset after it runs.
             self.hire_closed = true;
@@ -473,7 +460,7 @@ impl BarScreen {
 
     /// Whether the hire screen has closed since this was last asked,
     /// once each time: after a hire ([`BarScreen::set_hire`]), on Cancel,
-    /// or when the bar said nothing is for hire in its place, each where
+    /// or when there was nothing for hire, each where
     /// the original's `_DoBarDialog` resets after the hire dialog returns
     /// (@0x49235).
     pub fn take_hire_closed(&mut self) -> bool {
@@ -490,18 +477,11 @@ impl BarScreen {
         }
     }
 
-    /// Asks for the ships for hire, if the fleet has room, showing the
-    /// bar's text again in place of a message.
+    /// Asks for the ships for hire, if the fleet has room.
     fn ask(&mut self) {
-        if !self.room {
-            return;
+        if self.room {
+            self.asks.hire = true;
         }
-        if let Ok(laid) = &mut self.laid
-            && laid.said.take().is_some()
-        {
-            laid.dialog.set_text(TEXT_ITEM, &laid.text);
-        }
-        self.asks.hire = true;
     }
 
     /// Activates dialog item `item`: Leave leaves, and Hire Escort and
@@ -926,7 +906,6 @@ mod tests {
             "Gamble shown"
         );
         assert_eq!(screen.problem(), None);
-        assert_eq!(screen.message(), None);
     }
 
     #[test]
@@ -974,28 +953,6 @@ mod tests {
         click_item(&mut screen, HIRE_ITEM);
         screen.input(&key(Key::Char('h'), false));
         assert!(!screen.take_hire_request());
-    }
-
-    #[test]
-    fn with_nothing_for_hire_the_bar_says_so_until_the_next_button() {
-        let mut screen = bar();
-        click_item(&mut screen, HIRE_ITEM);
-        screen.open_hire(list(0));
-        assert!(screen.hire_screen().is_none());
-        assert_eq!(screen.message(), Some(NONE_FOR_HIRE));
-        let lines = |screen: &BarScreen| {
-            screen
-                .dialog()
-                .expect("laid out")
-                .scroll_text()
-                .expect("text")
-                .lines()
-                .join(" ")
-        };
-        assert_eq!(lines(&screen), NONE_FOR_HIRE);
-        click_item(&mut screen, HIRE_ITEM);
-        assert_eq!(screen.message(), None);
-        assert_eq!(lines(&screen), "dësc 10029.");
     }
 
     #[test]

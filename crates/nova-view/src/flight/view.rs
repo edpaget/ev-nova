@@ -4002,11 +4002,13 @@ impl<C> FlightView<C> {
     ///   spaceport; player info and mission info over flight too.
     ///
     /// The shipyard's name prompt redraws the same way as it closes
-    /// ([`FlightView::buy_ship`], [`FlightView::decline_ship`], @0x5eb73).
-    /// The closings the original redraws at that ours can't reach (the
-    /// bar's Gamble text and map, mission info from the shops, the
-    /// description or an offer, an empty shop, Preferences' menu command,
-    /// the shops' faded text dialogs, an OS update event) are recorded,
+    /// ([`FlightView::buy_ship`], [`FlightView::decline_ship`], @0x5eb73),
+    /// and so does the bar's map in port ([`FlightView::close_map`],
+    /// @0x13bc9). The closings the original redraws at that ours can't
+    /// reach (the bar's Gamble text, the map from the other port screens,
+    /// mission info from the shops, the description or an offer,
+    /// Preferences' menu command, the shops' faded text dialogs, an OS
+    /// update event) are recorded,
     /// with their addresses, in the spaceport's module docs
     /// ([`crate::spaceport::view`]).
     pub fn refresh_status(&mut self) {
