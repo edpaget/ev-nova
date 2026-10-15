@@ -68,7 +68,7 @@ impl Session {
     /// Puts the fighter of `sortie` in the system, and says whether it
     /// did.
     fn launch_fighter(&mut self, sortie: &Sortie) -> bool {
-        if self.traffic.npcs().len() + 1 >= MAX_SHIPS_IN_SYSTEM {
+        if self.traffic.berths_taken() + 1 >= MAX_SHIPS_IN_SYSTEM {
             return false;
         }
         let Some(record) = self.ship_record(sortie.ship).cloned() else {
@@ -982,6 +982,35 @@ mod tests {
         }
         launch(&mut session);
         assert_eq!(session.npcs().len(), 63, "the last slot taken");
+    }
+
+    #[test]
+    fn a_ship_left_behind_takes_a_slot_from_the_fighters() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+        for n in 0..63 {
+            pirate(&mut session, 1000.0 + n as f32, 1000.0);
+        }
+        let last = session.npcs().last().expect("63 pirates").id;
+        let keep: std::collections::BTreeSet<NpcId> = session
+            .npcs()
+            .iter()
+            .map(|npc| npc.id)
+            .filter(|&id| id != last)
+            .collect();
+        let table = session.traffic.table().clone();
+        let system = session.system();
+        session.traffic.retarget(
+            table,
+            &keep,
+            crate::traffic::Leave::Held {
+                from: crate::catalog::SystemId(system.0 + 1),
+                to: system,
+            },
+        );
+        launch(&mut session);
+        assert_eq!(session.pilot().owned(VIPERS), 2, "the round put back");
+        assert_eq!(session.npcs().len(), 62, "no fighter");
     }
 
     // Return to Hangar and docking.

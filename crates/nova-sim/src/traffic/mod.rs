@@ -251,8 +251,9 @@ pub struct Traffic {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Leave {
     /// They stay behind in `from`, in the ship table, until the end of
-    /// the next tick. Those left behind in `to` before then come back as
-    /// they were.
+    /// the next tick: an in-flight `M` or `N` by the engine
+    /// ([`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind)).
+    /// Those left behind in `to` before then come back as they were.
     Held {
         /// The system left.
         from: SystemId,
@@ -810,11 +811,11 @@ impl Traffic {
     /// How many slots of the ship table the traffic takes: its NPCs and
     /// the ships an in-flight move left behind ([`Leave::Held`]), which
     /// stay active in the ship table until the display pass frees them.
+    /// Every ship-table cap counts it: the swap of a captured ship
+    /// ([`Session::assign`](crate::Session::assign)), a fighter's launch,
+    /// and the spawn cap (`_GenericRandomShipSpawn` giving -1
+    /// @0x3c8e3-0x3c8f0) once it is ported.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the ship-table caps count it next")
-    )]
     pub(crate) fn berths_taken(&self) -> usize {
         self.npcs.len() + self.left_behind.values().map(Vec::len).sum::<usize>()
     }

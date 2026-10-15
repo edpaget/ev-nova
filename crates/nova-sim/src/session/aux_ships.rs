@@ -617,14 +617,20 @@ mod tests {
         ids
     }
 
+    /// The rules with [`RuleKey::MoveLeftBehind`] read as the Bible.
+    fn dropped_at_the_move() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::MoveLeftBehind, RuleSource::Bible)
+    }
+
     /// Under the original only a ship with leader 0 is carried
     /// (`_EvalSetExp` @0x15807-0x1583e): an aux ship only once captured,
     /// `_DoShipCapture` @0x41419 setting its leader 0, the capture
-    /// keeping `npc.aux`.
+    /// keeping `npc.aux`. By the other reading of
+    /// [`RuleKey::MoveLeftBehind`], the rest are given back at the move.
     #[test]
     fn a_move_in_flight_to_another_system_gives_back_the_aux_ships_but_those_the_player_leads() {
         let catalog = aux_only(3, -1, 0);
-        let mut session = accepted(&catalog);
+        let mut session = accepted(&catalog).with_rules(dropped_at_the_move());
         let ids = three_in(&mut session, &catalog);
         session.fleet_up(ids[0], None);
         session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
@@ -637,7 +643,7 @@ mod tests {
     #[test]
     fn a_move_in_flight_to_another_system_gives_back_up_to_the_count() {
         let catalog = aux_only(3, -1, 0);
-        let mut session = accepted(&catalog);
+        let mut session = accepted(&catalog).with_rules(dropped_at_the_move());
         let _ = three_in(&mut session, &catalog);
         let aux = aux_of(&session);
         set_aux(&mut session, AuxShips { left: 2, ..aux });
@@ -645,6 +651,51 @@ mod tests {
         settle(&mut session, &catalog);
         assert_eq!(aux_here(&session), 0, "retargeted");
         assert_eq!(aux_of(&session).left, 3, "capped at the count");
+    }
+
+    /// By the engine the ships left behind are freed by the display pass
+    /// (`_HandleShipDisplay` @0x2ded6-0x2dee7), which gives nothing back,
+    /// before any `_DeleteAllComputerShips` could.
+    #[test]
+    fn a_move_in_flight_loses_the_aux_ships_it_leaves_behind() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let _ = three_in(&mut session, &catalog);
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(aux_here(&session), 0, "left behind");
+        assert_eq!(aux_of(&session).left, 0, "none given back at the move");
+        assert!(session.take_save_due());
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("decodes");
+        assert_eq!(
+            saved.missions().get(0).expect("held").aux.left,
+            0,
+            "and none in the save"
+        );
+        tick(&mut session, &catalog);
+        assert_eq!(aux_of(&session).left, 0, "nor as they are freed");
+        assert!(land_now(&mut session).is_ok());
+        settle(&mut session, &catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(aux_of(&session).left, 0, "nor by the setup after");
+    }
+
+    #[test]
+    fn a_setup_after_the_move_drops_the_ships_left_behind_and_gives_back_none() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let _ = three_in(&mut session, &catalog);
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert_eq!(session.traffic.berths_taken(), 3, "held");
+        session.populate(&catalog, &mut NeverFires);
+        assert_eq!(
+            session.traffic.berths_taken(),
+            session.npcs().len(),
+            "dropped"
+        );
+        assert_eq!(aux_of(&session).left, 0, "none given back");
     }
 
     #[test]

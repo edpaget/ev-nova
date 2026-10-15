@@ -143,6 +143,7 @@
 //! | [`HiddenShipHoverBox`](RuleKey::HiddenShipHoverBox) | `hidden_ship_hover_box` | while `hidden_ships` reads the engine, the pointer hovers a hidden ship by the box of the frames its slot last cloned, its last shown type's or `shïp` 128's in a slot nothing shown has used, as `_HandleShipDisplay` skips `_SWCloneFramesFromMaster` (@0x2b824) and `_HandleMouse` boxes the stale sprite (@0x38171; `_InitSprites` @0x1f193; see [`Session::framed_by`](crate::Session::framed_by)) | the box of its own type's sheet\* |
 //! | [`PatrolUninhabited`](RuleKey::PatrolUninhabited) | `patrol_uninhabited` | an interceptor's patrol, picking plain stellars only, can pick an uninhabited one: the count that lets it pick needs an inhabited one, but the pick does not test for one (`_SelectRandomStellarDest` @0x808b6, @0x80911-0x80940; see [`destination`](crate::traffic::destination)) | it leaves uninhabited stellars out too\* |
 //! | [`GateExitCounts`](RuleKey::GateExitCounts) | `gate_exit_counts` | a mission ship that leaves through a hypergate or wormhole counts nothing, and comes back at the next setup: `_HandleShipDisplay` frees its slot (@0x2c078) without the end of a warp out's count (`_LowLevelAIHandler` @0x85960-0x859aa; see [`gate_entry`](crate::traffic::gate_entry)) | it is counted as one that jumped out\* |
+//! | [`MoveLeftBehind`](RuleKey::MoveLeftBehind) | `move_left_behind` | the ships an in-flight `M` or `N` leaves behind stay in the ship table until that frame's display pass frees them (`_EvalSetExp` @0x15807, @0x1590b; `_HandleShipDisplay` @0x2ded6-0x2dee7): through the next traffic tick they hold their berths and persons, a move back brings them back as they were, and no aux ship of theirs is given back ([`Traffic::retarget`](crate::Traffic::retarget)) | they are dropped at the move, their aux ships given back as a setup gives them back (`_DeleteAllComputerShips` @0x3bfce-0x3c028)\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -162,7 +163,7 @@
 //! `lost_cargo_share`, `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box`, `patrol_uninhabited`,
-//! `gate_exit_counts` or `comm_quote`
+//! `gate_exit_counts`, `move_left_behind` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count` and `nebula_explore_once`
 //! ("the explored state of the nebulae isn't saved from game to game ...
@@ -898,7 +899,10 @@ rule_keys! {
     /// system filling only with arrivals over time; otherwise the move is
     /// an arrival, exploring the system and clearing the course at once,
     /// and in flight populating it at once, the fighters out kept or
-    /// abandoned as the fighter rules say. The Bible is silent here, so
+    /// abandoned as the fighter rules say. What becomes of the ships
+    /// left behind by the engine's reading is
+    /// [`RuleKey::MoveLeftBehind`]'s; by the other, populating drops
+    /// them. The Bible is silent here, so
     /// the other reading is the intended behaviour, not anything the
     /// Bible says (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
     MoveArrival => "move_arrival",
@@ -1768,6 +1772,25 @@ rule_keys! {
     /// one that jumped out. The Bible says nothing of it, so the other
     /// reading is the intended behaviour, not anything the Bible says.
     GateExitCounts => "gate_exit_counts",
+    /// What becomes of the ships an in-flight `M` or `N` leaves behind in
+    /// the system left: every ship the player does not lead (see
+    /// [`Traffic::retarget`](crate::Traffic::retarget)). By the engine,
+    /// they stay in the ship table until that frame's display pass frees
+    /// them: `_EvalSetExp` moves only the ships the player leads
+    /// (@0x15807-0x1583e, @0x1590b-0x1593d), and `_HandleShipDisplay`
+    /// frees a ship outside the player's system (@0x2ded6-0x2dee7),
+    /// counting nothing and giving nothing back. So through the next
+    /// traffic tick they hold their berths and their persons, a move back
+    /// before then brings them back as they were, and none of their aux
+    /// ships is given back to its mission. By the other reading they are
+    /// dropped at the move, each aux ship given back as a setup gives it
+    /// back (`_DeleteAllComputerShips` @0x3bfce-0x3c028). Only a move
+    /// that goes on in the new system reads it: by the other reading of
+    /// [`RuleKey::MoveArrival`] an in-flight move populates the system,
+    /// which drops every ship there. The Bible says nothing of it, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says.
+    MoveLeftBehind => "move_left_behind",
 }
 
 impl RuleKey {
@@ -1983,7 +2006,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2023,7 +2046,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2045,7 +2068,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2070,7 +2093,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2096,7 +2119,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2116,7 +2139,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2136,7 +2159,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2156,7 +2179,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2170,7 +2193,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2187,7 +2210,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -2204,7 +2227,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -2221,7 +2244,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::NonStrictSpeed)
         );
     }
@@ -2238,7 +2261,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::HunterBribe)
         );
     }
@@ -2255,7 +2278,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::ShipOverlap)
         );
     }
@@ -2272,7 +2295,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::QuadrantTurretArc)
         );
     }
@@ -2289,7 +2312,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::HiddenShips)
         );
     }
@@ -2306,7 +2329,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::HiddenShipHoverBox)
         );
     }
@@ -2323,7 +2346,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::PatrolUninhabited)
         );
     }
@@ -2339,7 +2362,24 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateExitCounts),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::GateExitCounts));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::GateExitCounts)
+        );
+    }
+
+    #[test]
+    fn the_move_left_behind_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::MoveLeftBehind.key(), "move_left_behind");
+        assert_eq!(
+            RuleKey::from_key("move_left_behind"),
+            Some(RuleKey::MoveLeftBehind)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MoveLeftBehind),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::MoveLeftBehind));
     }
 
     #[test]
@@ -2350,7 +2390,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(35), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(36), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2362,7 +2402,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -2376,7 +2416,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -2389,7 +2429,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2407,7 +2447,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -2424,7 +2464,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(30),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -2441,10 +2481,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(30),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(28), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(29), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -2459,7 +2499,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -2478,15 +2518,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -2503,7 +2543,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -2517,11 +2557,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -2542,11 +2582,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -2560,11 +2600,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::BlessingLanding)
         );
     }
@@ -2584,7 +2624,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::BlessingAlwaysAttacks)
         );
     }
@@ -2601,7 +2641,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::ExploredByPlace)
         );
     }
@@ -2618,7 +2658,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::RouteRewrite)
         );
     }
@@ -2635,7 +2675,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::NebulaExploreOnce)
         );
     }
@@ -2652,7 +2692,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::NebulaNewPilot)
         );
     }
@@ -2666,11 +2706,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::ScanOutfitsPastJunk)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::OutfitScanFine)
         );
     }
@@ -2774,7 +2814,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2956,7 +2996,8 @@ mod tests {
                 RuleKey::HiddenShips,
                 RuleKey::HiddenShipHoverBox,
                 RuleKey::PatrolUninhabited,
-                RuleKey::GateExitCounts
+                RuleKey::GateExitCounts,
+                RuleKey::MoveLeftBehind
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

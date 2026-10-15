@@ -4389,7 +4389,8 @@ impl Session {
             return Some(Assigned::Escort);
         }
         let record = self.ship_record(npc.ship).cloned();
-        let Some(record) = record.filter(|_| self.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM) else {
+        let Some(record) = record.filter(|_| self.traffic.berths_taken() + 1 < MAX_SHIPS_IN_SYSTEM)
+        else {
             return Some(Assigned::Abandoned);
         };
         let hooks_first = self.hook_rules().capture_hook_order == RuleSource::Engine;
@@ -18491,6 +18492,33 @@ pub(super) mod tests {
             roomy.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::MyShip),
             "62 NPCs and the player: one slot"
+        );
+    }
+
+    #[test]
+    fn a_ship_left_behind_takes_a_ship_slot_from_the_swap() {
+        let mut full = crowded(62);
+        let last = full.npcs().last().expect("63 NPCs").id;
+        let keep: BTreeSet<NpcId> = full
+            .npcs()
+            .iter()
+            .map(|npc| npc.id)
+            .filter(|&id| id != last)
+            .collect();
+        let table = full.traffic.table().clone();
+        full.traffic.retarget(
+            table,
+            &keep,
+            crate::traffic::Leave::Held {
+                from: SystemId(131),
+                to: SystemId(130),
+            },
+        );
+        assert_eq!(full.npcs().len(), 62, "one slot, but for the one left");
+        assert_eq!(
+            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::Abandoned),
+            "62 NPCs, one left behind and the player: no slot"
         );
     }
 

@@ -120,7 +120,11 @@ impl AuxShips {
 
     /// One of `aux`'s ships, still in the system as its ships are
     /// dropped, given back: one more left to come, no more than its count
-    /// ([`aux_count`]) (`_DeleteAllComputerShips` @0x3bfce-0x3c028).
+    /// ([`aux_count`]) (`_DeleteAllComputerShips` @0x3bfce-0x3c028). The
+    /// ships an in-flight `M` or `N` leaves behind give nothing back by
+    /// the engine: the display pass frees them first
+    /// (`_HandleShipDisplay` @0x2ded6-0x2dee7;
+    /// [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind)).
     pub fn give_back(&mut self, aux: &AuxShip) {
         self.left = self.left.saturating_add(1).min(aux_count(aux));
     }

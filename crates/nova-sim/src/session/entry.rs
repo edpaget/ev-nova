@@ -45,6 +45,21 @@
 //! galaxy change between rebuild points reads the stellars shown again
 //! but never changes which are shown.
 //!
+//! **The ships left behind.** An in-flight `M` or `N` into another
+//! system takes along only the ships the player leads. By the engine
+//! reading of [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind)
+//! the rest stay in the ship table, out of the system, until the end of
+//! the next traffic tick ([`Traffic::retarget`]): the original's display
+//! pass frees them later in the frame (`_HandleShipDisplay`
+//! @0x2ded6-0x2dee7), so the one arrivals pass before it still sees
+//! their slots and persons. A move back before then brings them back;
+//! none of their aux ships is given back. They are never drawn, saved or
+//! counted toward `AvgShips`, and every setup and reset drops them. The
+//! engine settles every script after the frame's traffic tick, so a move
+//! the original makes after its arrivals pass (in `_AIDispatch`,
+//! `_HandleShot` or the ship loop) holds them through one pass more than
+//! the original would; none of it is drawn.
+//!
 //! The last step announces the arrival, and tells a view what to redraw
 //! ([`scene_event`], see the `events` module): measured against the
 //! system whose stellars are shown, which after a landed move is still
@@ -63,7 +78,7 @@ use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
-use crate::rulebook::{RuleSource, Rulebook};
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 #[cfg(doc)]
 use crate::story::OverlaidGalaxy;
@@ -243,7 +258,10 @@ pub(super) enum TrafficStep {
     /// It goes on in the new system with the NPCs the player leads only
     /// (`Session::player_led`), the new
     /// system's ships coming with its arrivals over time
-    /// ([`Traffic::retarget`]).
+    /// ([`Traffic::retarget`]). The rest stay in the ship table through
+    /// the next traffic tick, nothing given back, or are dropped at once,
+    /// their aux ships given back, as
+    /// [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind) says.
     Retarget,
     /// It is emptied, the fleet with it, and the next traffic tick in
     /// flight populates the system.
@@ -378,7 +396,8 @@ fn script_move_landed(arrival: bool) -> Resets {
 /// out dealt with and the system populated, even within the same
 /// system; otherwise only into another system does the traffic go on,
 /// with the ships the player leads alone (`_EvalSetExp` @0x15807,
-/// @0x1590b).
+/// @0x1590b), the rest left behind as
+/// [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind) says.
 fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     let mut set = vec![
         Reset::Jump,
@@ -516,6 +535,7 @@ impl Session {
             self.emit(SessionEvent::GalaxyChanged);
         }
         let system = resolved.to;
+        let left = self.pilot.system;
         let facts = EntryFacts {
             system_changed: system != self.pilot.system,
             jump_pending: self.jump.is_some(),
@@ -564,7 +584,7 @@ impl Session {
         if resets.has(Reset::RedrawOffers) {
             self.offers.redraw(&mut &mut *chance);
         }
-        self.bring_in_traffic(resets.traffic, how.into(), catalog, chance);
+        self.bring_in_traffic(resets.traffic, how.into(), (left, system), catalog, chance);
         if resets.has(Reset::ShopRolls) {
             self.land_day_rolls();
             self.open_outfit_visit();
@@ -738,13 +758,14 @@ impl Session {
         }
     }
 
-    /// Does `step` to the traffic of a system entered `how`, reading
-    /// `catalog` and drawing on `chance` to populate: the only draw
-    /// entering a system makes.
+    /// Does `step` to the traffic of a system entered `how`, going `from`
+    /// one system `to` another, reading `catalog` and drawing on `chance`
+    /// to populate: the only draw entering a system makes.
     fn bring_in_traffic<C, R>(
         &mut self,
         step: TrafficStep,
         how: Entrance,
+        (from, to): (SystemId, SystemId),
         catalog: &C,
         chance: &mut R,
     ) where
@@ -759,8 +780,17 @@ impl Session {
                 // Every ship the player leads, as `_EvalSetExp`
                 // (@0x15807-0x1583e, @0x1590b-0x1593d) carries.
                 let led: BTreeSet<_> = self.player_led().map(|npc| npc.id).collect();
-                self.give_back_aux_ships(&led);
-                self.traffic.retarget(table, &led, Leave::Dropped);
+                // By the engine the rest stay in the ship table until the
+                // display pass frees them, nothing given back
+                // (`_HandleShipDisplay` @0x2ded6-0x2dee7).
+                let leave = if self.rules.source_for(RuleKey::MoveLeftBehind) == RuleSource::Engine
+                {
+                    Leave::Held { from, to }
+                } else {
+                    self.give_back_aux_ships(&led);
+                    Leave::Dropped
+                };
+                self.traffic.retarget(table, &led, leave);
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
