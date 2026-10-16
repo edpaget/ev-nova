@@ -9219,9 +9219,9 @@ pub(super) mod tests {
 
     /// [`deadly_data`] where the player's ship carries an escape pod
     /// (`oütf` 200, `ModType` 11) and auto-eject (201, `ModType` 20), with
-    /// the pod's class (`shïp` 895) and, when `desc` says, the rescue's
-    /// `dësc` 13999.
-    fn escape_pod_data(desc: bool) -> Rc<GameData> {
+    /// the pod's class (`shïp` 895) and, when `desc` gives its text, the
+    /// rescue's `dësc` 13999.
+    fn escape_pod_data(desc: Option<&str>) -> Rc<GameData> {
         let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
             for (i, value) in values.iter().enumerate() {
                 bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -9239,27 +9239,30 @@ pub(super) mod tests {
             Some(b"Escape Pod"),
             &pod,
         );
-        if desc {
-            loaded(&fork.resource(
+        match desc {
+            Some(text) => loaded(&fork.resource(
                 Desc::TYPE,
                 13999,
                 None,
-                &pictured_desc_of(RESCUE_TEXT, RESCUE_GRAPHIC),
-            ))
-        } else {
-            loaded(&fork)
+                &pictured_desc_of(text, RESCUE_GRAPHIC),
+            )),
+            None => loaded(&fork),
         }
     }
 
-    /// The router over [`escape_pod_data`] (with its `dësc` when `desc`
-    /// says), flying with the killer above the player, until the player is
-    /// in the escape pod.
-    fn ejected(store: &MemoryPilots, desc: bool) -> AppScreen {
+    /// The router over [`escape_pod_data`] (with its `dësc` of the text
+    /// `desc` gives, if any), flying with the killer above the player,
+    /// until the player is in the escape pod.
+    fn ejected(store: &MemoryPilots, desc: Option<&str>) -> AppScreen {
         ejected_by(store, desc, create)
     }
 
     /// [`ejected`], the pilot made by `create`.
-    fn ejected_by(store: &MemoryPilots, desc: bool, create: fn(&mut AppScreen, &str)) -> AppScreen {
+    fn ejected_by(
+        store: &MemoryPilots,
+        desc: Option<&str>,
+        create: fn(&mut AppScreen, &str),
+    ) -> AppScreen {
         let mut screen = with_dialogs(escape_pod_data(desc))
             .with_chance(above_the_player())
             .with_behaviour(Rc::new(Firing))
@@ -9277,7 +9280,7 @@ pub(super) mod tests {
     #[test]
     fn a_rescue_desc_that_cannot_be_read_is_skipped_with_a_warning() {
         let store = MemoryPilots::new();
-        let mut screen = ejected(&store, false);
+        let mut screen = ejected(&store, None);
         tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
             fate(screen) == nova_sim::PlayerFate::Flying
         });
@@ -9291,7 +9294,7 @@ pub(super) mod tests {
     #[test]
     fn the_rescue_shows_its_desc_over_flight_and_stops_stepping() {
         let store = MemoryPilots::new();
-        let mut screen = ejected(&store, true);
+        let mut screen = ejected(&store, Some(RESCUE_TEXT));
         let ticks = tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
             screen.showing() == Showing::MissionText
         });
@@ -9312,9 +9315,23 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_rescue_desc_reads_its_conditional_text_through_flight() {
+        let store = MemoryPilots::new();
+        let mut screen = ejected(&store, Some("Rescued, {G \"sir\" \"ma'am\"}."));
+        tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
+            screen.showing() == Showing::MissionText
+        });
+        assert_eq!(
+            shown_text(&screen).as_deref(),
+            Some("Rescued, sir."),
+            "loaded as _LoadDescription loads it (@0x68e90)"
+        );
+    }
+
+    #[test]
     fn a_strict_pilot_rescued_from_the_pod_is_saved_before_the_rescue_is_drawn() {
         let store = MemoryPilots::new();
-        let mut screen = ejected_by(&store, true, create_strict);
+        let mut screen = ejected_by(&store, Some(RESCUE_TEXT), create_strict);
         let before = store.writes();
         tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
             screen.showing() == Showing::MissionText
@@ -9328,7 +9345,7 @@ pub(super) mod tests {
     #[test]
     fn a_pilot_rescued_from_the_pod_without_strict_play_is_not_saved() {
         let store = MemoryPilots::new();
-        let mut screen = ejected_by(&store, true, create);
+        let mut screen = ejected_by(&store, Some(RESCUE_TEXT), create);
         let before = store.writes();
         tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
             screen.showing() == Showing::MissionText
@@ -9756,6 +9773,24 @@ pub(super) mod tests {
         (128, 5000, Some("Your ship was sabotaged.")),
         (129, 5001, Some("Twice over.")),
     ];
+
+    #[test]
+    fn a_sabotage_desc_reads_its_conditional_text_through_flight() {
+        let store = MemoryPilots::new();
+        let mut screen = sabotaged_and_took_off(
+            &store,
+            &[(128, 5000, Some("Sabotaged, {G \"sir\" \"ma'am\"}."))],
+        );
+        until_exploded(&mut screen);
+        tick_until(&mut screen, nova_sim::HOLD_TICKS + 2, |screen| {
+            screen.showing() == Showing::MissionText
+        });
+        assert_eq!(
+            shown_text(&screen).as_deref(),
+            Some("Sabotaged, sir."),
+            "loaded as _LoadDescription loads it (@0x687c9)"
+        );
+    }
 
     #[test]
     fn a_sabotaged_pilot_sees_each_outfits_desc_after_the_hold_and_then_fades() {
