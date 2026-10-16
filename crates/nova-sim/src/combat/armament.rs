@@ -124,7 +124,6 @@ use super::ai_fire;
 use super::aim::{Aim, Pointing};
 use super::exits::ExitCursors;
 use super::hull::{Condition, HullSpec};
-use super::projectile::ShotId;
 use super::report::{Reports, SimDiagnostic};
 use super::weapon::{
     AI_WONT_USE, Ammo, EXCLUSIVE, EXCLUSIVE_HOLD, FIRES_CLOAKED, FIRST_AMMO_WEAPON, Guidance,
@@ -864,12 +863,14 @@ impl Armament {
     /// `rounds` and `fuel`, the inaccuracy drawn on `chance`: the ready
     /// point-defence weapon `shooter` has the ammunition for
     /// ([`Armament::has_ammo`], `_HandleShipPointDefense` @0x3933b) with
-    /// the lowest ID, pointing as `pick` says at the missile it gives, if any.
-    /// Nothing fires, and nothing is spent, when `pick` gives none. What it
-    /// reports goes to `reports`.
+    /// the lowest ID, pointing as `pick` says at the quarry it gives, if
+    /// any: the fight's [`Quarry`](super::defence::Quarry), a missile or a
+    /// ship, which goes through the same tail either way (@0x39931). Nothing
+    /// fires, and nothing is spent, when `pick` gives none. What it reports
+    /// goes to `reports`.
     // Each is a separate borrow the fight holds, as for `fire`.
     #[allow(clippy::too_many_arguments)]
-    pub fn fire_point_defence(
+    pub fn fire_point_defence<Q>(
         &mut self,
         condition: Condition,
         shooter: Shooter,
@@ -877,8 +878,8 @@ impl Armament {
         fuel: &mut Gauge,
         chance: &mut dyn Chance,
         reports: &mut Reports,
-        pick: &mut dyn FnMut(&WeaponSpec) -> Option<(Pointing, ShotId)>,
-    ) -> Option<(Launch, ShotId)> {
+        pick: &mut dyn FnMut(&WeaponSpec) -> Option<(Pointing, Q)>,
+    ) -> Option<(Launch, Q)> {
         if condition != Condition::Intact {
             return None;
         }
@@ -896,7 +897,7 @@ impl Armament {
             .min_by_key(|(_, mount)| mount.spec.id)?
             .0;
         let mount = &mut self.mounts[index];
-        let (pointing, missile) = pick(&mount.spec)?;
+        let (pointing, quarry) = pick(&mount.spec)?;
         let inaccuracy = if mount.spec.guidance == Guidance::PointDefenceBeam {
             0.0
         } else {
@@ -909,7 +910,7 @@ impl Armament {
             inaccuracy,
             target: None,
         };
-        Some((launch, missile))
+        Some((launch, quarry))
     }
 
     /// The bay `trigger` launches from with [`Trigger::bays`]: the one of
@@ -1511,6 +1512,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
     use crate::combat::flags::FlagField;
+    use crate::combat::projectile::ShotId;
     use crate::testkit::{Draws, hull, outfit, weapon};
     use crate::traffic::npc::NpcId;
 

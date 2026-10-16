@@ -1128,6 +1128,8 @@ pub struct HullRecord {
     pub id: ShipId,
     /// Its `Flags`.
     pub flags: u16,
+    /// Its `Flags2`.
+    pub flags2: u16,
     /// Its `DeathDelay`, in ticks.
     pub death_delay: i16,
     /// Its `Explode1`, encoded.

@@ -62,11 +62,13 @@
 //!    that spawns nothing still spends, by the engine, and a recoil sets
 //!    the firer's velocity, reported as a [`Shove`].
 //! 2. Each ship's point defence fires at the missile it picks, with no
-//!    target needed ([`defence`]), from its exit point, aimed from there,
-//!    sounding at [`PD_FIRE_PRIORITY`]; a ship whose jump is under way
-//!    ([`Fighter::jumping`]) runs none. It asks the fight's
-//!    [`PointDefenceRule`] which missiles are hostile only by the other
-//!    reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility).
+//!    target needed ([`defence`]), or, with none, at a ship of `Flags2`
+//!    0x0008 fighting it or its leader, leading it, from its exit point,
+//!    aimed from there, sounding at [`PD_FIRE_PRIORITY`]; a ship whose
+//!    jump is under way ([`Fighter::jumping`]) runs none. It asks the
+//!    fight's [`PointDefenceRule`] which missiles are hostile only by the
+//!    other reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility),
+//!    and never of a ship.
 //! 3. Every reload timer counts down a tick.
 //! 4. Shots fly a tick, homing ones steering at their target, breaking up
 //!    or not, and each beam spends a tick of its life, or fades a tick at
@@ -86,7 +88,10 @@
 //!    the NPC answers ([`Strike::lock`]). Each shot of a weapon that fires
 //!    one shot at a time (`Flags3` 0x0004) holds its firer's reload for
 //!    it at its `Reload` ([`Armament::hold`]).
-//! 5. A point-defence shot whose sprite overlaps a homing missile's where
+//! 5. A point-defence shot still in point defence's layer (fired at a
+//!    missile; one fired at a ship is in the shot layer, contact-tested
+//!    like any shot and meeting no missile, [`ShotLayer`](projectile::ShotLayer))
+//!    whose sprite overlaps a homing missile's where
 //!    both ended the tick, seen from the player ([`defence`]), is spent
 //!    on every such missile, whoever fired it and whatever it is aimed
 //!    at, but one that touches a ship this tick, whose hit comes first; a
@@ -220,7 +225,7 @@ use aim::Pointing;
 use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
 use damage::{Blast, Hit};
-use defence::{PointDefenceRule, Side};
+use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 use exits::{Compression, ExitCursors, ExitPoints, drawn_frame, frame_angle};
 use hull::{
     Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
@@ -228,7 +233,9 @@ use hull::{
 };
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion};
-use projectile::{BombLaunch, DecayStep, Fuse, Jam, Meeting, Shot, ShotId, Source, Target};
+use projectile::{
+    BombLaunch, DecayStep, Fuse, Jam, Meeting, Shot, ShotId, ShotLayer, Source, Target,
+};
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
@@ -439,6 +446,8 @@ pub struct Shove {
 
 /// One ship in a fight, for a tick: what it is, where, what it holds and
 /// how it is holding up, borrowed from wherever the ship is kept.
+// Each flag is its own fact about the ship, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Fighter<'a> {
     /// Which ship.
     pub ship: ShipRef,
@@ -477,8 +486,26 @@ pub struct Fighter<'a> {
     /// newly disabled, and the [`DisableRule`] is not asked of it.
     pub held_disabled: bool,
     /// Whether it is cloaked: it fires only its weapons that fire while
-    /// cloaked ([`Armament::has_ammo`]). The player never is.
+    /// cloaked ([`Armament::has_ammo`]), and point defence sees it only
+    /// with a cloak scanner ([`defence::choose_ship`]). The player never is.
     pub cloaked: bool,
+    /// The ship it attacks or snipes at, which point defence reads as
+    /// fighting that ship (`_IsShipFightingMe` @0x827fa: the original's
+    /// +0x70 in AI state 4; [`defence::choose_ship`]); fleeing never
+    /// counts. None for the player, whose own is never read.
+    pub attacking: Option<ShipRef>,
+    /// Whether it threatens the player (`_ExtendedIsThreatToPlayer`
+    /// @0x81b70): only then does its point defence fire at the player
+    /// ([`defence::choose_ship`]). Never the player's own.
+    pub threatens_player: bool,
+    /// Whether it waits in the gate it comes out of: point defence never
+    /// sees it (`_ShipVisibleToShip` @0x972d). The player never does.
+    pub emerging: bool,
+    /// Whether it has a cloak scanner on screen
+    /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)): its
+    /// point defence sees a cloaked ship within 200 pixels on each axis
+    /// (`_ShipVisibleToShip` @0x97a4-0x97f8).
+    pub cloak_scanner: bool,
     /// Its class's top speed, in pixels a tick: its `shïp` `Speed` alone,
     /// none of its outfits' (the original's class +0x40), which every
     /// push soft-caps against ([`impact::push`]).
@@ -656,7 +683,7 @@ impl Combat {
             pass_through: self.pass_through,
         };
         self.fire(fighters, &targets, chance);
-        self.defend(fighters, rules.defence, govts, chance);
+        self.defend(fighters, &targets, rules.defence, govts, chance);
         for fighter in fighters.iter_mut() {
             fighter.armament.reload();
         }
@@ -912,8 +939,8 @@ impl Combat {
     /// Puts `launch` in flight from `side`, from `muzzle`, its damage aimed
     /// at `aimed_at` among `targets`, sounding as `sound` says, its miss
     /// roll drawn on `chance`: a fighter's
-    /// [`Sortie`] from a bay, a beam held on the missile `quarry`, on its
-    /// target, or ahead, or a shot of its government. Its firing is heard
+    /// [`Sortie`] from a bay, a beam held on point defence's `quarry`, on
+    /// its target, or ahead, or a shot of its government. Its firing is heard
     /// at the ship's centre (`_PlaySoundDistance(&ship)`).
     ///
     /// A shot or beam whose weapon names a set of exit points its ship has
@@ -935,8 +962,18 @@ impl Combat {
     ///   so a ship's point defence fires from every other exit; once by
     ///   the other reading. It takes the exit nearest its missile under
     ///   `Flags3` 0x0010, and is aimed from it (`_CalcInterceptAngle`
-    ///   @0x39790). A point-defence beam never takes the nearest
-    ///   (@0x398d2, kind 1).
+    ///   @0x39790). A point-defence beam at a missile never takes the
+    ///   nearest (@0x398d2, kind 1).
+    /// - A point-defence shot at a ship takes its exit the same way, the
+    ///   ship standing in for the original's toward point, the shot slot
+    ///   numbered like the ship (@0x39740-0x3975e), which the engine has no
+    ///   slots for and no stock point defence reads (`Flags3` 0x0010). It
+    ///   leads the ship from its exit (`_CalcLeadAngle` @0x397c6), has no
+    ///   target and is aimed at none (`_SpawnShot(.., -1, ..)` @0x396e5),
+    ///   and moves to the shot layer ([`ShotLayer::Shots`], @0x398a7). A
+    ///   point-defence beam at a ship is held on it and aimed at it, and
+    ///   under `Flags3` 0x0010 takes the exit nearest it (kind -1,
+    ///   @0x398fb-0x3990a).
     /// - A shot's velocity is [`projectile::launch_velocity`]'s along its
     ///   heading, a bomb's or rocket's as the fight's [`BombLaunch`] reading
     ///   gives for its ship: an NPC's, an escort's too, thrown at the ship's
@@ -962,7 +999,7 @@ impl Combat {
         (side, ties): (Side, Ties),
         muzzle: &mut Muzzle,
         launch: Launch,
-        (quarry, aimed_at): (Option<ShotId>, Option<ShipRef>),
+        (quarry, aimed_at): (Option<Quarry>, Option<ShipRef>),
         sound: Option<FireSound>,
         targets: &[Target],
         chance: &mut dyn Chance,
@@ -991,7 +1028,8 @@ impl Combat {
             });
         } else if weapon.is_beam() {
             let aiming = match (quarry, launch.target) {
-                (Some(missile), _) => Aiming::Shot(missile),
+                (Some(Quarry::Missile(missile)), _) => Aiming::Shot(missile),
+                (Some(Quarry::Ship(target)), _) => Aiming::Ship(target.ship),
                 (None, Some(target)) => Aiming::Ship(target),
                 (None, None) => Aiming::Ahead,
             };
@@ -1001,7 +1039,8 @@ impl Combat {
                 ..Beam::launch(weapon, ship, fleet, &from, aiming)
             };
             if let Some((points, kind)) = exits {
-                let toward = toward.filter(|_| quarry.is_none());
+                // A point-defence beam at a missile is aimed at no ship, so
+                // it never takes the nearest exit (kind 1, @0x398d2).
                 let exit = muzzle.cursors.beam_exit(
                     points,
                     kind,
@@ -1015,10 +1054,15 @@ impl Combat {
             }
             self.beams.push(beam);
         } else {
-            let missile = quarry
-                .and_then(|id| self.shots.iter().find(|shot| shot.id == id))
-                .map(|shot| shot.position);
-            let (start, side_of_exit) = self.shot_exit(muzzle, &launch, missile, toward);
+            let defended = quarry.and_then(|quarry| match quarry {
+                Quarry::Missile(id) => self
+                    .shots
+                    .iter()
+                    .find(|shot| shot.id == id)
+                    .map(|shot| shot.position),
+                Quarry::Ship(target) => Some(target.position),
+            });
+            let (start, side_of_exit) = self.shot_exit(muzzle, &launch, defended, toward);
             let leaving = ShipState {
                 position: start,
                 ..from
@@ -1041,6 +1085,9 @@ impl Combat {
                 miss_roll: rolls.then(|| chance.below(muzzle.miss_class) + 1),
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
+            if let Some(Quarry::Ship(_)) = quarry {
+                shot.layer = ShotLayer::Shots;
+            }
             // A dropped bomb or rocket reads no heading, so it is never sent
             // broadside, as the gate it fails holds the broadside
             // (@0x3ede8-0x3ee0a).
@@ -1058,20 +1105,20 @@ impl Combat {
     /// Where a shot of `launch` leaves `muzzle` from, and the side of the
     /// exit it leaves from ([`ExitPoints::side`]): from the centre, on no
     /// side, without an exit; else from the exit its cursor or the nearest
-    /// to `toward` gives, a point-defence shot at its `missile` taking two
-    /// steps by the engine (see `Combat::launch`).
+    /// to `toward` gives, a point-defence shot at the missile or ship at
+    /// `defended` taking two steps by the engine (see `Combat::launch`).
     fn shot_exit(
         &self,
         muzzle: &mut Muzzle,
         launch: &Launch,
-        missile: Option<Vec2>,
+        defended: Option<Vec2>,
         toward: Option<Vec2>,
     ) -> (Vec2, f32) {
         let from = muzzle.from;
         let Some((points, kind)) = muzzle.exits.zip(launch.weapon.exit) else {
             return (from.position, 0.0);
         };
-        let toward = if missile.is_some() {
+        let toward = if defended.is_some() {
             if self.pd_exit_step == RuleSource::Engine {
                 // `_SpawnShot`'s own exit, toward no ship, then undone.
                 muzzle.cursors.shot_start(
@@ -1083,7 +1130,7 @@ impl Combat {
                     self.compression,
                 );
             }
-            missile.filter(|_| launch.weapon.nearest_exit)
+            defended.filter(|_| launch.weapon.nearest_exit)
         } else {
             toward
         };
@@ -1204,17 +1251,23 @@ impl Combat {
     /// fires at the missile it picks ([`defence::choose`]), asking `rule`
     /// which are hostile, with the relations in `govts`, only by the
     /// other reading of
-    /// [`RuleKey::PdHostility`](crate::RuleKey::PdHostility). A ship whose
-    /// jump is under way ([`Fighter::jumping`]) runs none
-    /// (`_HandleShipPointDefense` @0x392d6-0x392de). Each shot or beam
-    /// sounds at [`PD_FIRE_PRIORITY`].
+    /// [`RuleKey::PdHostility`](crate::RuleKey::PdHostility); with none, at
+    /// the ship it picks among the fighters as they were when the step
+    /// began ([`defence::choose_ship`]), asking no rule, its exit's toward
+    /// point among `targets`. A ship whose jump is under way
+    /// ([`Fighter::jumping`]) runs none (`_HandleShipPointDefense`
+    /// @0x392d6-0x392de). Each shot or beam sounds at
+    /// [`PD_FIRE_PRIORITY`], through the same tail for a missile or a ship
+    /// (@0x39931-0x39bb3).
     fn defend(
         &mut self,
         fighters: &mut [Fighter],
+        targets: &[Target],
         rule: &dyn PointDefenceRule,
         govts: &Governments,
         chance: &mut dyn Chance,
     ) {
+        let candidates: Vec<Candidate> = fighters.iter().map(Fighter::as_candidate).collect();
         for fighter in fighters
             .iter_mut()
             .filter(|fighter| fighter.trigger.point_defence && !fighter.jumping)
@@ -1222,7 +1275,9 @@ impl Combat {
             let (state, hull) = (fighter.state, fighter.hull);
             let side = fighter.side();
             let ties = fighter.ties();
+            let guard = fighter.guard();
             let shots = &self.shots;
+            let candidates = &candidates;
             let rule = (self.pd_hostility == RuleSource::Bible).then_some(rule);
             let fired = fighter.armament.fire_point_defence(
                 *fighter.condition,
@@ -1232,11 +1287,25 @@ impl Combat {
                 chance,
                 &mut self.reports,
                 &mut |spec| {
-                    let missile = defence::choose(side, &state, &hull, spec, shots, rule, govts)?;
-                    Some((Pointing::At(missile.position), missile.id))
+                    if let Some(missile) =
+                        defence::choose(side, &state, &hull, spec, shots, rule, govts)
+                    {
+                        return Some((Pointing::At(missile.position), Quarry::Missile(missile.id)));
+                    }
+                    let ship = defence::choose_ship(guard, &state, &hull, spec, candidates)?;
+                    // A beam reads no launch heading (`Beam::launch`).
+                    let pointing = aim::led(spec, &ship.target).pointing;
+                    Some((pointing, Quarry::Ship(ship.target)))
                 },
             );
-            if let Some((launch, missile)) = fired {
+            if let Some((launch, quarry)) = fired {
+                // `_SpawnBeam`'s target, beam +0x18. A shot is aimed at none
+                // (`_SpawnShot(.., -1, ..)` @0x396e5), as its every step
+                // leaves a point-defence shot anyway (`Shot::step`).
+                let aimed_at = match quarry {
+                    Quarry::Ship(target) if launch.weapon.is_beam() => Some(target.ship),
+                    _ => None,
+                };
                 let drawn = fighter.drawn_heading;
                 let mut muzzle =
                     Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
@@ -1244,11 +1313,11 @@ impl Combat {
                     (side, ties),
                     &mut muzzle,
                     launch,
-                    (Some(missile), None),
+                    (Some(quarry), aimed_at),
                     Some(FireSound {
                         priority: Some(PD_FIRE_PRIORITY),
                     }),
-                    &[],
+                    targets,
                     chance,
                 );
             }
@@ -1280,7 +1349,8 @@ impl Combat {
         }
     }
 
-    /// Step 5: each point-defence shot meets every homing missile whose
+    /// Step 5: each point-defence shot in point defence's layer
+    /// ([`ShotLayer::PointDefence`]) meets every homing missile whose
     /// sprite its own overlaps where both ended the tick, seen from
     /// `camera`, the player's position or the origin in a fight without
     /// it ([`defence::sprites_meet`]), and is
@@ -1304,7 +1374,7 @@ impl Combat {
     /// and the order crosses no boundary the player sees.
     fn intercept(&mut self, camera: Vec2, (was, sides): (&[Vec2], &Sides), gone: &mut [bool]) {
         for pd in 0..self.shots.len() {
-            if self.shots[pd].weapon.guidance != Guidance::PointDefence {
+            if self.shots[pd].layer != ShotLayer::PointDefence {
                 continue;
             }
             for missile in 0..self.shots.len() {
@@ -1944,6 +2014,29 @@ impl Fighter<'_> {
         }
     }
 
+    /// The ship as point defence weighs it as a quarry
+    /// ([`defence::choose_ship`]).
+    fn as_candidate(&self) -> Candidate {
+        Candidate {
+            target: self.as_target(),
+            pd_target: self.hull.pd_target,
+            held_disabled: self.held_disabled,
+            cloaked: self.cloaked,
+            emerging: self.emerging,
+            attacking: self.attacking,
+        }
+    }
+
+    /// The ship as its point defence's ship branch reads it.
+    fn guard(&self) -> Guard {
+        Guard {
+            ship: self.ship,
+            leader: self.leader,
+            threatens_player: self.threatens_player,
+            scanner: self.cloak_scanner,
+        }
+    }
+
     /// The ship as shots and beams see it.
     fn as_target(&self) -> Target {
         Target {
@@ -2147,6 +2240,7 @@ mod tests {
     use crate::testkit::weapon;
 
     /// A ship in a test fight, owning what a fighter borrows.
+    #[allow(clippy::struct_excessive_bools)]
     struct Ship {
         id: ShipRef,
         class: ShipId,
@@ -2164,6 +2258,10 @@ mod tests {
         condition: Condition,
         held_disabled: bool,
         cloaked: bool,
+        attacking: Option<ShipRef>,
+        threatens_player: bool,
+        emerging: bool,
+        cloak_scanner: bool,
         class_speed: f32,
         top_speed: f32,
         jumping: bool,
@@ -2213,6 +2311,10 @@ mod tests {
                 condition: Condition::Intact,
                 held_disabled: false,
                 cloaked: false,
+                attacking: None,
+                threatens_player: false,
+                emerging: false,
+                cloak_scanner: false,
                 class_speed: 10.0,
                 top_speed: 10.0,
                 jumping: false,
@@ -2259,6 +2361,10 @@ mod tests {
                 condition: &mut self.condition,
                 held_disabled: self.held_disabled,
                 cloaked: self.cloaked,
+                attacking: self.attacking,
+                threatens_player: self.threatens_player,
+                emerging: self.emerging,
+                cloak_scanner: self.cloak_scanner,
                 class_speed: self.class_speed,
                 top_speed: self.top_speed,
                 jumping: self.jumping,
@@ -8579,5 +8685,437 @@ mod tests {
         );
         assert!(close_to(bomb, Vec2::new(4.0, 0.0)), "{bomb:?}");
         assert_eq!(facing, 94.0, "the player's facing takes it too");
+    }
+
+    // Point defence against ships (`_HandleShipPointDefense`
+    // @0x394ce-0x3969d).
+
+    impl Ship {
+        /// The ship, of a class point defence fires on (`Flags2` 0x0008),
+        /// attacking `ship`.
+        fn attacking(self, ship: ShipRef) -> Self {
+            Self {
+                hull: HullSpec {
+                    pd_target: true,
+                    ..self.hull
+                },
+                attacking: Some(ship),
+                ..self
+            }
+        }
+
+        /// The ship moving `velocity` a tick.
+        fn moving(self, velocity: Vec2) -> Self {
+            Self {
+                state: ShipState {
+                    velocity,
+                    ..self.state
+                },
+                ..self
+            }
+        }
+    }
+
+    /// The defender A at the centre facing up with `defence`, its trigger
+    /// asking for point defence alone, and B at (`x`, `y`) attacking it.
+    fn fighter_attack(defence: WeaponRecord, x: f32, y: f32) -> [Ship; 2] {
+        let mut defender = Ship::at(1, 0.0, 0.0).armed(defence).facing(0.0);
+        defender.trigger = QUIET;
+        [defender, Ship::at(2, x, y).attacking(A)]
+    }
+
+    /// The point-defence shots in flight.
+    fn pd_shots(combat: &Combat) -> Vec<Shot> {
+        combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.guidance == Guidance::PointDefence)
+            .copied()
+            .collect()
+    }
+
+    /// A point-defence beam 300 pixels long, held 5 ticks, firing every
+    /// 30, doing 1 mass and 4 energy damage.
+    fn pd_beam() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 10,
+            reload: 30,
+            count: 5,
+            beam_length: 300,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..weapon(150)
+        }
+    }
+
+    /// `ship` as point defence leads it.
+    fn led_target(ship: &mut Ship) -> Target {
+        ship.fighter().as_target()
+    }
+
+    #[test]
+    fn point_defence_fires_at_a_fighter_attacking_its_ship_leading_it() {
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(quad(), 0.0, -200.0);
+        ships[0] =
+            std::mem::replace(&mut ships[0], Ship::at(9, 0.0, 0.0)).moving(Vec2::new(1.0, 2.0));
+        ships[1] =
+            std::mem::replace(&mut ships[1], Ship::at(9, 0.0, 0.0)).moving(Vec2::new(15.0, 0.0));
+        let target = led_target(&mut ships[1]);
+        let from = ships[0].state;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let fired = pd_shots(&combat);
+        assert_eq!(fired.len(), 1, "{:?}", combat.shots());
+        let shot = fired[0];
+        let lead = aim::lead(&from, &target, 20.0);
+        let bearing = aim::bearing(from.position, target.position);
+        assert!(
+            (shot.heading - lead).abs() < 1e-3,
+            "{} {lead}",
+            shot.heading
+        );
+        assert!((lead - bearing).abs() > 3.0, "the lead matters here");
+        let velocity = Vec2::new(1.0, 2.0) + crate::flight::facing(lead) * 20.0;
+        assert!(close_to(shot.velocity, velocity), "{:?}", shot.velocity);
+        assert_eq!(
+            (shot.target, shot.aimed_at),
+            (None, None),
+            "aimed at nothing"
+        );
+    }
+
+    #[test]
+    fn point_defence_at_a_fighter_goes_through_the_shared_tail() {
+        for defence in [quad(), pd_beam()] {
+            let id = defence.id;
+            let mut combat = Combat::default();
+            let mut ships = fighter_attack(defence, 0.0, -100.0);
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(
+                sounds(&combat.take_events()),
+                [(
+                    id,
+                    Some(FireSound {
+                        priority: Some(PD_FIRE_PRIORITY)
+                    })
+                )],
+                "{id:?}"
+            );
+            let mount = ships[0].armament.mounts()[0];
+            assert_eq!(mount.reload, mount.spec.reload - 1.0, "{id:?}: reloading");
+        }
+    }
+
+    #[test]
+    fn point_defence_fires_at_a_candidate_missile_however_near_a_fighter_is() {
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(quad(), 50.0, 0.0);
+        let missile = put(
+            &mut combat,
+            drawn(missile(), 18),
+            C,
+            Vec2::new(0.0, -300.0),
+            Vec2::ZERO,
+        );
+        combat.shots[0].aimed_at = Some(A);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let fired = pd_shots(&combat);
+        assert_eq!(fired.len(), 1);
+        let to_missile = aim::bearing(Vec2::ZERO, flying(&combat, missile).unwrap().position);
+        assert!(
+            (fired[0].heading - to_missile).abs() < 1.0,
+            "at the missile: {}",
+            fired[0].heading
+        );
+    }
+
+    #[test]
+    fn a_missile_out_of_range_leaves_point_defence_to_a_fighter_in_range() {
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(quad(), 50.0, 0.0);
+        put(
+            &mut combat,
+            drawn(missile(), 18),
+            C,
+            Vec2::new(0.0, -400.0),
+            Vec2::ZERO,
+        );
+        combat.shots[0].aimed_at = Some(A);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let fired = pd_shots(&combat);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].heading, 90.0, "at the fighter");
+    }
+
+    #[test]
+    fn point_defence_tries_its_first_ready_weapon_alone_at_a_ship() {
+        let long = WeaponRecord {
+            beam_length: 500,
+            ..pd_beam()
+        };
+        let fires = |records: &[WeaponRecord]| {
+            let mut combat = Combat::default();
+            let [mut defender, attacker] = fighter_attack(quad(), 0.0, -400.0);
+            defender.armament =
+                Armament::new(records.iter().map(|record| (WeaponSpec::new(record), 1)));
+            let mut ships = [defender, attacker];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            fired(&combat.take_events(), A)
+        };
+        assert_eq!(fires(&[long]), 1, "the beam reaches it");
+        assert_eq!(fires(&[quad(), long]), 0, "the Quad first, and it can't");
+    }
+
+    #[test]
+    fn a_point_defence_shot_at_a_ship_is_turned_by_its_inaccuracy() {
+        let wild = WeaponRecord {
+            inaccuracy: 10,
+            ..quad()
+        };
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(wild, 100.0, 0.0);
+        let mut chance = crate::testkit::Draws::of(&[3]);
+        tick_drawing(&mut combat, &mut ships, &mut chance);
+        assert_eq!(chance.asked.first(), Some(&20), "Rand(2i)");
+        assert_eq!(pd_shots(&combat)[0].heading, 83.0, "90, then 3 - 10");
+    }
+
+    #[test]
+    fn point_defence_leads_a_ship_from_its_exit() {
+        let defence = WeaponRecord {
+            exit_type: 1,
+            ..quad()
+        };
+        let mut combat = Combat::default();
+        let [defender, attacker] = fighter_attack(defence, 0.0, -200.0);
+        let defender = defender.of(exits_at(1, [(10, 0), (20, 0), (30, 0), (40, 0)]));
+        let mut ships = [defender, attacker.moving(Vec2::new(15.0, 0.0))];
+        let target = led_target(&mut ships[1]);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shot = pd_shots(&combat)[0];
+        let at = start(&shot);
+        assert!(
+            close_to(at, Vec2::new(20.0, 0.0)),
+            "the second exit: {at:?}"
+        );
+        let leaving = ShipState {
+            position: at,
+            ..ShipState::default()
+        };
+        let lead = aim::lead(&leaving, &target, 20.0);
+        assert!(
+            (shot.heading - lead).abs() < 1e-3,
+            "{} {lead}",
+            shot.heading
+        );
+        let centre = aim::lead(&ShipState::default(), &target, 20.0);
+        assert!((lead - centre).abs() > 1.0, "the exit matters here");
+    }
+
+    /// The Storm Chaingun: point defence firing every 5 ticks, 12 pixels a
+    /// tick for 20, doing 3 mass and 3 energy damage, with no proximity
+    /// fuse.
+    fn chaingun() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 9,
+            reload: 5,
+            count: 20,
+            speed: 1200,
+            mass_dmg: 3,
+            energy_dmg: 3,
+            ..weapon(161)
+        }
+    }
+
+    /// The strikes until one lands, at most 20 ticks of `ships`.
+    fn strikes_until_a_hit(combat: &mut Combat, ships: &mut [Ship]) -> Vec<Strike> {
+        for _ in 0..20 {
+            tick(combat, ships, &NovaDisable);
+            let strikes = combat.take_strikes();
+            if !strikes.is_empty() {
+                return strikes;
+            }
+        }
+        Vec::new()
+    }
+
+    #[test]
+    fn a_point_defence_shot_at_a_ship_hits_it_by_contact_directly_and_unintended() {
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(chaingun(), 0.0, -100.0);
+        let strikes = strikes_until_a_hit(&mut combat, &mut ships);
+        assert_eq!(strikes.len(), 1, "no proximity fuse: by contact");
+        let strike = strikes[0];
+        assert_eq!((strike.ship, strike.by), (B, A));
+        assert!(strike.direct, "direct");
+        assert!(!strike.intended, "aimed at no ship");
+        assert!(strike.damage > 0.0);
+    }
+
+    #[test]
+    fn a_point_defence_shot_at_a_ship_still_rolls_its_miss() {
+        let mut combat = Combat::default();
+        let [defender, attacker] = fighter_attack(chaingun(), 0.0, -100.0);
+        // The defender's class rolls 100 here; a fighter's is 80.
+        let mut ships = [defender, attacker.of(of_class(80)).attacking(A)];
+        assert_eq!(strikes_until_a_hit(&mut combat, &mut ships), []);
+    }
+
+    #[test]
+    fn a_point_defence_shot_at_a_ship_meets_no_missile() {
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(quad(), 0.0, -100.0);
+        // Still, where the shot ends the tick: aimed at C, so no candidate.
+        let missile = put(
+            &mut combat,
+            still_missile(),
+            B,
+            Vec2::new(0.0, -20.0),
+            Vec2::ZERO,
+        );
+        combat.shots[0].aimed_at = Some(C);
+        combat.shots[0].target = Some(C);
+        let events = met(&mut combat, &mut ships);
+        assert_eq!(pd_shots(&combat).len(), 1, "fired at B, not spent");
+        assert_eq!(shot_down(&events), []);
+        assert!(flying(&combat, missile).is_some());
+    }
+
+    #[test]
+    fn a_point_defence_beam_held_on_a_fighter_attacking_its_ship_hits_it() {
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(pd_beam(), 0.0, -100.0);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let beam = combat.beams()[0];
+        assert_eq!((beam.aiming, beam.aimed_at), (Aiming::Ship(B), Some(B)));
+        let strikes = combat.take_strikes();
+        assert_eq!(strikes.len(), 1, "{strikes:?}");
+        let strike = strikes[0];
+        assert_eq!((strike.ship, strike.by), (B, A));
+        assert!(strike.direct && strike.intended, "{strike:?}");
+        assert!(strike.damage > 0.0, "its damage taken: {strike:?}");
+    }
+
+    #[test]
+    fn a_point_defence_beam_on_a_ship_never_jitters() {
+        let wild = WeaponRecord {
+            inaccuracy: 10,
+            ..pd_beam()
+        };
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(wild, 100.0, -100.0);
+        let mut chance = crate::testkit::Draws::of(&[0, 0, 0]);
+        tick_drawing(&mut combat, &mut ships, &mut chance);
+        let beam = combat.beams()[0];
+        let bearing = crate::trig::intercept_angle(beam.start, Vec2::new(100.0, -100.0));
+        assert_eq!(beam.heading, f32::from(bearing), "the bearing exactly");
+    }
+
+    #[test]
+    fn a_point_defence_beam_on_a_ship_ends_when_the_ship_is_destroyed() {
+        let mut combat = Combat::default();
+        let mut ships = fighter_attack(pd_beam(), 0.0, -100.0);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.beams().len(), 1);
+        ships[1].condition = Condition::Destroyed;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.beams(), []);
+    }
+
+    #[test]
+    fn a_nearest_exit_point_defence_beam_leaves_from_the_exit_nearest_its_ship() {
+        let beam = WeaponRecord {
+            flags3: crate::combat::weapon::NEAREST_EXIT,
+            exit_type: 3,
+            ..pd_beam()
+        };
+        for (x, exit) in [(100.0, 1), (-100.0, 3)] {
+            let mut combat = Combat::default();
+            let [defender, attacker] = fighter_attack(beam, x, 0.0);
+            let mut ships = [defender.of(manticore()), attacker];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.beams()[0].exit, Some(exit), "{x}");
+        }
+    }
+
+    #[test]
+    fn point_defence_weighs_each_fighter_by_its_own_terms() {
+        type Making = (&'static str, fn(&mut [Ship; 2]), usize);
+        let variants: [Making; 9] = [
+            ("as it is", |_| {}, 1),
+            ("held disabled", |ships| ships[1].held_disabled = true, 0),
+            ("cloaked", |ships| ships[1].cloaked = true, 0),
+            (
+                "cloaked, seen by a scanner",
+                |ships| {
+                    ships[1].cloaked = true;
+                    ships[0].cloak_scanner = true;
+                },
+                1,
+            ),
+            ("waiting in its gate", |ships| ships[1].emerging = true, 0),
+            (
+                "of no Flags2 0x0008",
+                |ships| ships[1].hull.pd_target = false,
+                0,
+            ),
+            ("attacking no one", |ships| ships[1].attacking = None, 0),
+            (
+                "the defender's leader",
+                |ships| ships[0].leader = Some(B),
+                0,
+            ),
+            (
+                "attacking the defender's leader",
+                |ships| {
+                    ships[0].leader = Some(C);
+                    ships[1].attacking = Some(C);
+                },
+                1,
+            ),
+        ];
+        for (name, make, shots) in variants {
+            let mut combat = Combat::default();
+            let mut ships = fighter_attack(quad(), 0.0, -100.0);
+            make(&mut ships);
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(fired(&combat.take_events(), A), shots, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_npcs_point_defence_fires_at_the_player_only_while_it_threatens_the_player() {
+        for threatens_player in [false, true] {
+            let mut combat = Combat::default();
+            let [mut defender, _] = fighter_attack(quad(), 0.0, -100.0);
+            defender.threatens_player = threatens_player;
+            let mut player = Ship::at(9, 0.0, -100.0).attacking(A);
+            player.id = ShipRef::Player;
+            player.fleet = ShipRef::Player;
+            let mut ships = [player, defender];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(
+                fired(&combat.take_events(), A),
+                usize::from(threatens_player),
+                "{threatens_player}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_either_reading_point_defence_asks_no_rule_of_a_ship() {
+        let rule = Hostility::default();
+        let rules = Rules {
+            defence: &rule,
+            ..Rules::default()
+        };
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut combat = Combat::default();
+            combat.set_pd_hostility(source);
+            let mut ships = fighter_attack(quad(), 0.0, -100.0);
+            tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
+            assert_eq!(fired(&combat.take_events(), A), 1, "{source:?}");
+        }
+        assert_eq!(*rule.asked.borrow(), [], "never asked");
     }
 }

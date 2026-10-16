@@ -203,6 +203,24 @@ pub enum Source {
     Other,
 }
 
+/// The sprite layer a shot's sprite is in, which decides what its
+/// collision passes test it against (`_PutSpriteInLayer`; see
+/// [`Shot::hit`] and [`Combat`](super::Combat)'s step 5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShotLayer {
+    /// The shot layer 0x3b52f0, where every ship's contact pass tests a
+    /// shot: every shot but point defence fired at a missile.
+    #[default]
+    Shots,
+    /// Point defence's own layer 0x3b53bc, which only the missile pass
+    /// walks (`_DoPlayGameWork` @0x43fff-0x44010) and no ship's contact
+    /// pass acts on (@0x43fdd-0x43ffa, @0x36fbd-0x36fd6): a point-defence
+    /// shot (9), until `_HandleShipPointDefense` moves one fired at a ship
+    /// to [`ShotLayer::Shots`] (@0x398a7-0x398c2), where nothing moves it
+    /// back.
+    PointDefence,
+}
+
 /// A shot in flight.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shot {
@@ -256,6 +274,10 @@ pub struct Shot {
     /// and never misses. A sub-munition carries none too: see
     /// [`submunition`](super::submunition).
     pub miss_roll: Option<u32>,
+    /// The sprite layer it is in: [`ShotLayer::PointDefence`] for a
+    /// point-defence shot as it is launched, and [`ShotLayer::Shots`] for
+    /// any other, or one fired at a ship.
+    pub layer: ShotLayer,
 }
 
 /// How a freefall bomb (5) or a rocket (6) leaves its ship. `_SpawnShot`
@@ -343,6 +365,11 @@ impl Shot {
             generation: 0,
             disable_only: weapon.disable_only(),
             miss_roll: None,
+            layer: if weapon.guidance == Guidance::PointDefence {
+                ShotLayer::PointDefence
+            } else {
+                ShotLayer::Shots
+            },
         }
     }
 
@@ -517,13 +544,14 @@ impl Shot {
     /// (`_CheckShotProximities` @0x37553-0x3768a), which runs after them,
     /// so a contact anywhere on the move is the hit. `ProxSafety` arms
     /// each: contact once its age has reached it (@0x37066-0x37086),
-    /// proximity once its age is past it (@0x3720e-0x3721e). A
-    /// point-defence shot (9) never meets a ship by contact: its sprite's
-    /// layer (0x3b53bc) is collided with the ships' only by
-    /// `_ShipCollisionHandler`, which acts on a shot in the other shot
-    /// layers alone (`_DoPlayGameWork` @0x43fdd-0x43ffa,
+    /// proximity once its age is past it (@0x3720e-0x3721e). A shot in
+    /// point defence's layer ([`ShotLayer::PointDefence`]) never meets a
+    /// ship by contact: that layer (0x3b53bc) is collided with the ships'
+    /// only by `_ShipCollisionHandler`, which acts on a shot in the other
+    /// shot layers alone (`_DoPlayGameWork` @0x43fdd-0x43ffa,
     /// @0x36fbd-0x36fd6), and `_CheckShotProximities` has no guidance test,
-    /// so it meets one only by its proximity fuse.
+    /// so it meets one only by its proximity fuse. A point-defence shot
+    /// fired at a ship is in the shot layer, and meets one either way.
     ///
     /// Each pass here takes the ship met first along the move; the
     /// original's contact pass goes in sprite-collision order and its
@@ -553,9 +581,9 @@ impl Shot {
         };
         let safety = self.weapon.prox_safety;
         let prox = self.weapon.prox_radius;
-        // A point-defence shot's sprite is in a layer no ship's collision
-        // proc acts on (see the doc comment).
-        let by_contact = self.weapon.guidance != Guidance::PointDefence;
+        // Point defence's layer is one no ship's collision proc acts on
+        // (see the doc comment).
+        let by_contact = self.layer != ShotLayer::PointDefence;
         let touched = (by_contact && self.age >= safety)
             .then(|| first(Fuse::Contact, 0.0))
             .flatten();
@@ -1005,10 +1033,11 @@ mod tests {
     }
 
     #[test]
-    fn a_point_defence_shot_meets_a_ship_only_by_its_proximity_fuse() {
+    fn a_shot_in_point_defences_layer_meets_a_ship_only_by_its_proximity_fuse() {
         let defence = |prox| {
             let mut shot = passing(prox);
             shot.weapon.guidance = Guidance::PointDefence;
+            shot.layer = ShotLayer::PointDefence;
             shot
         };
         let through = [target(2, 50.0, 0.0, Condition::Intact)];
@@ -1027,6 +1056,34 @@ mod tests {
             Some((ShipRef::Npc(NpcId(2)), Fuse::Contact)),
             "an unguided shot touches it"
         );
+        let moved = Shot {
+            layer: ShotLayer::Shots,
+            ..defence(0)
+        };
+        assert_eq!(
+            met(moved),
+            Some((ShipRef::Npc(NpcId(2)), Fuse::Contact)),
+            "moved to the shot layer, as point defence fired at a ship is"
+        );
+    }
+
+    #[test]
+    fn a_point_defence_shot_is_launched_in_point_defences_layer_and_any_other_in_the_shot_layer() {
+        let layer = |guidance| {
+            Shot::launch(
+                spec(guidance, 1000, 10),
+                FIRER,
+                FIRER,
+                &state(0.0, 0.0, 0.0, 0.0, 0.0),
+                0.0,
+            )
+            .layer
+        };
+        assert_eq!(layer(9), ShotLayer::PointDefence);
+        for guidance in [-1, 0, 1, 3, 4, 5, 6, 7, 8, 10] {
+            assert_eq!(layer(guidance), ShotLayer::Shots, "{guidance}");
+        }
+        assert_eq!(ShotLayer::default(), ShotLayer::Shots);
     }
 
     #[test]

@@ -416,10 +416,20 @@ pub struct Observer {
 /// not, is seen by `observer` (see the module docs).
 #[must_use]
 pub fn visible(cloak: Cloak, at: Vec2, emerging: bool, observer: Observer) -> bool {
+    seen(cloak.is_cloaked(), at, emerging, observer)
+}
+
+/// Whether a ship at `at`, `cloaked` or not and `emerging` from a
+/// hypergate or not, is seen by `observer`: [`visible`]'s rule
+/// (`_ShipVisibleToShip` @0x971c-0x9809), for a ship known only by
+/// whether it is cloaked, as point defence knows its quarry (see
+/// [`defence::choose_ship`](crate::combat::defence::choose_ship)).
+#[must_use]
+pub fn seen(cloaked: bool, at: Vec2, emerging: bool, observer: Observer) -> bool {
     if emerging {
         return false;
     }
-    if !cloak.is_cloaked() || observer.cloaked_escort {
+    if !cloaked || observer.cloaked_escort {
         return true;
     }
     observer.scanner

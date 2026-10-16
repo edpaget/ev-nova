@@ -112,6 +112,10 @@ pub const TOUGH_DISABLE_PERCENT: f64 = 10.0;
 pub const BLIND_SPOTS: u16 = 0x7000;
 /// The `shïp` `Flags` bit of a planet-type ship.
 pub const PLANET_TYPE: u16 = 0x0400;
+/// The `shïp` `Flags2` bit of a ship point defence fires on: "can be
+/// fired on by point defense" (class +0x9ea, `_HandleShipPointDefense`
+/// @0x3951d; see [`defence`](super::defence)).
+pub const PD_TARGET: u16 = 0x0008;
 /// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
 pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
@@ -188,6 +192,10 @@ pub struct HullSpec {
     /// dies with no shockwave, and no hit, shockwave or tractor beam
     /// pushes or holds it.
     pub planet_type: bool,
+    /// Whether point defence fires on it, its `Flags2` [`PD_TARGET`],
+    /// when it fights the defender or its leader (see
+    /// [`defence::choose_ship`](super::defence::choose_ship)).
+    pub pd_target: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
@@ -241,6 +249,7 @@ impl Default for HullSpec {
             sprite_size: None,
             sprite_height: None,
             planet_type: false,
+            pd_target: false,
             key_carried: None,
             class_speed: 0.0,
             stock_reach: None,
@@ -273,6 +282,7 @@ impl HullSpec {
             sprite_size: size,
             sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
             planet_type: record.flags & PLANET_TYPE != 0,
+            pd_target: record.flags2 & PD_TARGET != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
@@ -633,6 +643,28 @@ mod tests {
         assert!(!ordinary.planet_type);
         assert!(!HullSpec::default().planet_type);
         assert_eq!(PLANET_TYPE, 0x0400);
+    }
+
+    #[test]
+    fn a_hull_point_defence_fires_on_has_its_flags2_0x0008() {
+        let target = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .pd_target
+        };
+        assert!(target(0x0008));
+        assert!(target(0x0089), "with other bits");
+        assert!(!target(0xfff7), "every other bit");
+        assert!(!target(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0008,
+            ..hull(167)
+        });
+        assert!(!flags.pd_target, "its Flags never");
+        assert!(!HullSpec::default().pd_target);
+        assert_eq!(PD_TARGET, 0x0008);
     }
 
     #[test]

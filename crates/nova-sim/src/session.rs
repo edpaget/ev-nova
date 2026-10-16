@@ -515,6 +515,8 @@ pub use crate::combat::hull::ESCAPE_POD_SHIP;
 struct FightTerms {
     /// Whether it is held disabled.
     held_disabled: bool,
+    /// Whether it threatens the player ([`Fighter::threatens_player`]).
+    threatens_player: bool,
     /// Its class's top speed, its `Speed` alone.
     class_speed: f32,
     /// Its top speed.
@@ -530,6 +532,9 @@ impl FightTerms {
     fn fighter(self, npc: &mut Npc) -> Fighter<'_> {
         let fleet = npc.fleet();
         let leader = npc.leader_ref();
+        let attacking = npc.goal.attacking();
+        let emerging = npc.emerging();
+        let cloak_scanner = npc.cloak_gear.scanner.on_screen;
         let Npc {
             id,
             ship,
@@ -566,6 +571,10 @@ impl FightTerms {
             condition,
             held_disabled: self.held_disabled,
             cloaked: cloak.is_cloaked(),
+            attacking,
+            threatens_player: self.threatens_player,
+            emerging,
+            cloak_scanner,
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
@@ -2141,6 +2150,7 @@ impl Session {
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let (player_terms, terms) = self.fight_terms();
         let mut stellars = self.stellar_targets();
+        let scanner = self.scanner();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -2167,6 +2177,10 @@ impl Session {
             condition: &mut self.condition,
             held_disabled: false,
             cloaked: false,
+            attacking: None,
+            threatens_player: false,
+            emerging: false,
+            cloak_scanner: scanner.on_screen,
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
             jumping: self.jump.is_some(),
@@ -2265,6 +2279,7 @@ impl Session {
         let drawn = |ship: ShipRef, heading: f32| self.drawn.get(&ship).copied().unwrap_or(heading);
         let player = FightTerms {
             held_disabled: false,
+            threatens_player: false,
             class_speed: self.class_speed(self.pilot.ship),
             top_speed: self.top_speed(),
             drawn_heading: drawn(ShipRef::Player, self.player.heading),
@@ -2276,6 +2291,7 @@ impl Session {
             .iter()
             .map(|npc| FightTerms {
                 held_disabled: self.mission_ship_held(npc),
+                threatens_player: npc.threatens_player_among(self.traffic.npcs()),
                 class_speed: self.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
@@ -19114,6 +19130,164 @@ pub(super) mod tests {
         );
         session.jump = None;
         assert!(defended(&mut session), "firing once the jump is off");
+    }
+
+    // Point defence against ships (`_HandleShipPointDefense`
+    // @0x394ce-0x3969d).
+
+    /// The Quad Light Blaster Turret, weapon 133: point defence firing
+    /// every 5 ticks at missiles and ships within 360 pixels.
+    fn quad_133() -> WeaponRecord {
+        WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            frame: Some(QUAD_SPRITE),
+            ..blaster()
+        }
+    }
+
+    /// Whether `ship` fired weapon 133 among `events`.
+    fn quad_fired(events: &[CombatEvent], ship: ShipRef) -> bool {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                CombatEvent::Fired { ship: s, weapon: WeaponId(133), .. } if *s == ship
+            )
+        })
+    }
+
+    #[test]
+    fn the_players_point_defence_fires_at_an_npc_of_flags2_0x0008_attacking_or_sniping_at_it() {
+        let fires = |flags2: u16, goal: Goal| {
+            let mut catalog = arming(quad_133(), blaster(), 0);
+            catalog.hulls[1].flags2 = flags2;
+            let mut session = with_an_npc_at(&catalog, 750, 650, 180);
+            session.tick_traffic(&catalog, &Minding { goal }, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            quad_fired(&session.take_combat_events(), ShipRef::Player)
+        };
+        let player = ShipRef::Player;
+        assert!(fires(0x0008, Goal::Attack(player)), "attacking");
+        assert!(fires(0x0089, Goal::Snipe(player)), "sniping");
+        assert!(!fires(0x0008, Goal::Flee(player)), "fleeing");
+        assert!(!fires(0x0008, Goal::Inspect(player)), "inspecting");
+        assert!(!fires(0x0080, Goal::Attack(player)), "no 0x0008");
+    }
+
+    /// Every NPC takes `goal`, asking for point defence alone.
+    #[derive(Debug)]
+    struct Defending {
+        goal: Goal,
+    }
+
+    impl Behaviour for Defending {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.goal
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                point_defence: true,
+                ..Trigger::default()
+            }
+        }
+    }
+
+    #[test]
+    fn an_npcs_point_defence_fires_at_a_player_of_flags2_0x0008_only_while_it_threatens_the_player()
+    {
+        let fires = |flags2: u16, goal: Goal| {
+            let mut catalog = arming(blaster(), quad_133(), 0);
+            catalog.hulls[0].flags2 = flags2;
+            let mut session = with_an_npc_at(&catalog, 750, 650, 180);
+            session.tick_traffic(&catalog, &Defending { goal }, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            quad_fired(&session.take_combat_events(), ShipRef::Npc(NpcId(0)))
+        };
+        let player = ShipRef::Player;
+        assert!(fires(0x0088, Goal::Attack(player)), "a threat");
+        assert!(!fires(0x0088, Goal::Idle), "no threat");
+        assert!(
+            !fires(0x0080, Goal::Attack(player)),
+            "a player of no 0x0008"
+        );
+    }
+
+    #[test]
+    fn the_players_point_defence_sees_a_cloaked_attacker_only_by_its_scanner_and_none_in_its_gate()
+    {
+        let fires = |(x, y): (u32, u32), cloaked: bool, scanner: bool, emerging: bool| {
+            let mut catalog = arming(quad_133(), blaster(), 0);
+            catalog.hulls[1].flags2 = 0x0008;
+            catalog.outfits.push(outfit(
+                260,
+                &[(crate::cloak::MOD_SCANNER, crate::cloak::SCAN_SCREEN)],
+            ));
+            let mut session = with_an_npc_at(&catalog, x, y, 180);
+            if scanner {
+                session.pilot.outfits.insert(OutfitId(260), 1);
+            }
+            let goal = Goal::Attack(ShipRef::Player);
+            session.tick_traffic(&catalog, &Minding { goal }, &mut NeverFires);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            if cloaked {
+                npc.cloak = CLOAKED;
+            }
+            if emerging {
+                npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 50 };
+            }
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            quad_fired(&session.take_combat_events(), ShipRef::Player)
+        };
+        let near = (750, 650);
+        assert!(fires(near, false, false, false), "seen");
+        assert!(!fires(near, true, false, false), "cloaked");
+        assert!(fires(near, true, true, false), "seen by its scanner");
+        assert!(
+            !fires((750, 450), true, true, false),
+            "cloaked, 300 off: past its scanner"
+        );
+        assert!(!fires(near, false, false, true), "waiting in its gate");
+    }
+
+    #[test]
+    fn an_npc_fights_with_its_attack_its_gate_wait_its_cloak_scanner_and_its_threat() {
+        let terms = |threatens_player| FightTerms {
+            held_disabled: false,
+            threatens_player,
+            class_speed: 0.0,
+            top_speed: 0.0,
+            drawn_heading: 0.0,
+        };
+        let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
+        let player = ShipRef::Player;
+        for (goal, attacking) in [
+            (Goal::Attack(player), Some(player)),
+            (Goal::Snipe(player), Some(player)),
+            (Goal::Flee(player), None),
+            (Goal::Inspect(player), None),
+            (Goal::Idle, None),
+        ] {
+            npc.goal = goal;
+            assert_eq!(
+                terms(false).fighter(&mut npc).attacking,
+                attacking,
+                "{goal:?}"
+            );
+        }
+        assert!(terms(true).fighter(&mut npc).threatens_player);
+        assert!(!terms(false).fighter(&mut npc).threatens_player);
+        let fighter = terms(false).fighter(&mut npc);
+        assert!(!fighter.emerging && !fighter.cloak_scanner);
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        npc.cloak_gear.scanner.on_screen = true;
+        let fighter = terms(false).fighter(&mut npc);
+        assert!(fighter.emerging && fighter.cloak_scanner);
     }
 
     /// Every NPC takes `goal`, fires as Nova's AI picks

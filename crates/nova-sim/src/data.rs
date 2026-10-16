@@ -888,6 +888,7 @@ impl CombatCatalog for GameData {
                 Some(HullRecord {
                     id: ShipId(id),
                     flags: record.flags.bits(),
+                    flags2: record.flags2.bits(),
                     death_delay: record.death_delay,
                     explode1: record.explode1,
                     explode2: record.explode2,
@@ -3148,6 +3149,7 @@ mod tests {
         let record = |id, size, height, exits| HullRecord {
             id: ShipId(id),
             flags: 0x0130,
+            flags2: 0,
             death_delay: 60,
             explode1: 4,
             explode2: 1005,
@@ -3217,6 +3219,18 @@ mod tests {
                 frames: 64,
             })
         );
+    }
+
+    #[test]
+    fn a_hull_carries_its_shïps_flags2() {
+        let flagged = |flags2: u16| {
+            let mut bytes = ship(1, 2, 3);
+            bytes[0x62..0x64].copy_from_slice(&flags2.to_be_bytes());
+            store(&[(Ship::TYPE, 128, bytes)]).hulls()[0].flags2
+        };
+        assert_eq!(flagged(0x0008), 0x0008);
+        assert_eq!(flagged(0x0080), 0x0080);
+        assert_eq!(flagged(0x8801), 0x8801);
     }
 
     /// The hull of a `shïp` of `EscortType` `escort_type`, `InherentAI`

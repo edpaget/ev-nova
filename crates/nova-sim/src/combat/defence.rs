@@ -1,5 +1,6 @@
 //! Point defence: a ship's point-defence weapons (guidance 9 and 10)
-//! shooting down the missiles fired at it, with no target needed.
+//! shooting down the missiles fired at it, and else firing at the ships
+//! fighting it, with no target needed.
 //!
 //! The values are the original's (`_HandleShipPointDefense`,
 //! `_PointDefenseCollisionHandler` and `_HandleBeams` in the `EV Nova`
@@ -10,8 +11,9 @@
 //!   the player's every tick while intact, an NPC's when its AI asks for a
 //!   turret (`_AIFireTurret` @0x80b0d), each intact ship whose jump is not
 //!   under way fires its first ready point-defence weapon it can pay for,
-//!   by weapon ID, at the nearest candidate missile ([`choose`]), and
-//!   nothing when there is none: a later weapon is never tried. Its timer
+//!   by weapon ID, at the nearest candidate missile ([`choose`]), else at
+//!   the nearest candidate ship ([`choose_ship`]), and nothing when there
+//!   is neither: a later weapon is never tried. Its timer
 //!   takes `Reload / count` on top of what is left of it, so two Quads
 //!   fire every two and a half ticks
 //!   ([`Armament::fire_point_defence`](super::armament::Armament::fire_point_defence)).
@@ -28,9 +30,30 @@
 //!   [`PointDefenceRule`] must also call the firer hostile: Nova's
 //!   [`Allegiance`] calls a missile hostile unless its firer is in the
 //!   defender's fleet, or both have governments that are allies.
+//! - Only with no candidate missile, however near a ship is, does it
+//!   fire at a ship (@0x394c3): one of a class of `Flags2` 0x0008
+//!   ([`HullSpec::pd_target`]), neither the defender nor its leader,
+//!   intact and not held disabled (`_IsDisabled`), seen by the defender
+//!   (`_ShipVisibleToShip`: not in its gate, and uncloaked or within 200
+//!   pixels on each axis of a cloak scanner on screen), within the same
+//!   range, by truncated squared distance, and not in a blind spot; and
+//!   fighting the defender: the player while the defender threatens it
+//!   (`_ExtendedIsThreatToPlayer`), any other ship while it attacks or
+//!   snipes at the defender or the defender's leader (`_IsShipFightingMe`,
+//!   never fleeing). The nearest wins; of two as near, the first in the
+//!   fight's order. These are the whole rule, with no hostility test
+//!   under either reading of
+//!   [`RuleKey::PdHostility`](crate::RuleKey::PdHostility). So a player
+//!   escort's point defence never fires at the player, and a hostile
+//!   carrier's fires at a player flying a `Flags2` 0x0008 ship, the stock
+//!   Shuttle among them.
 //! - A point-defence turret (9) fires a shot at the missile's bearing, no
 //!   lead, plus its inaccuracy; a point-defence beam (10) is held on the
-//!   missile, with no inaccuracy.
+//!   missile, with no inaccuracy. At a ship, the shot leads it from its
+//!   exit, plus its inaccuracy, with no target and aimed at none, and
+//!   moves to the shot layer ([`ShotLayer`](super::projectile::ShotLayer));
+//!   the beam is held on the ship and aimed at it, with no inaccuracy, and
+//!   hits ships as a turreted beam does.
 //! - A point-defence shot meets missiles by their sprites, as the
 //!   original's collision pass does (`_SWCollideSpriteLayer`
 //!   @0xacb4b-0xace4e): each sprite is a box of its frame's size
@@ -52,18 +75,21 @@
 //!   where the point-defence shot is, with no detonation. A
 //!   point-defence shot is spent on the missiles it meets; a beam hits the
 //!   missile it is held on every tick.
-//! - A point-defence shot meets a ship only by its proximity fuse
-//!   ([`Shot::hit`]): the Quad Light Blaster Turret's (`ProxRadius` 5)
-//!   does, the Storm Chaingun's (0) never.
+//! - A point-defence shot fired at a missile meets a ship only by its
+//!   proximity fuse ([`Shot::hit`]): the Quad Light Blaster Turret's
+//!   (`ProxRadius` 5) does, the Storm Chaingun's (0) never. One fired at
+//!   a ship, in the shot layer, meets ships by contact too, and meets no
+//!   missile.
 
 use std::fmt::Debug;
 
 use super::ShipRef;
 use super::aim::{angle_off, bearing, blind};
-use super::hull::HullSpec;
-use super::projectile::{Jam, Shot};
+use super::hull::{Condition, HullSpec};
+use super::projectile::{Jam, Shot, ShotId, Target};
 use super::weapon::{Guidance, WeaponSpec};
 use crate::catalog::{FrameSize, GovtId};
+use crate::cloak::{self, Observer};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
@@ -183,6 +209,127 @@ pub fn choose<'a>(
     best.map(|(shot, _)| shot)
 }
 
+/// What point defence fires at: a missile, or a ship ([`choose_ship`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Quarry {
+    /// The missile numbered so.
+    Missile(ShotId),
+    /// This ship, as it was when point defence picked it.
+    Ship(Target),
+}
+
+/// A ship as point defence weighs it ([`choose_ship`]), as it was when
+/// the tick's point defence began.
+// Each is one of the original's tests, read on its own.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Candidate {
+    /// The ship as shots see it: which, where, how it moves and how it
+    /// holds up. A shot fired at it leads it from this.
+    pub target: Target,
+    /// Whether point defence fires on its class, its `Flags2` 0x0008
+    /// ([`HullSpec::pd_target`]).
+    pub pd_target: bool,
+    /// Whether it is held disabled whatever its armour.
+    pub held_disabled: bool,
+    /// Whether it is cloaked.
+    pub cloaked: bool,
+    /// Whether it waits in the gate it comes out of, unseen.
+    pub emerging: bool,
+    /// The ship it attacks or snipes at, the original's +0x70 in AI state
+    /// 4 (`_IsShipFightingMe` @0x827fa); none for the player, whose own
+    /// quarry is never read.
+    pub attacking: Option<ShipRef>,
+}
+
+/// The defender as point defence's ship branch reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Guard {
+    /// Its ship.
+    pub ship: ShipRef,
+    /// The ship it follows (the original's +0x9a): the player for a ship
+    /// that escorts the player; none for the player.
+    pub leader: Option<ShipRef>,
+    /// Whether it threatens the player (`_ExtendedIsThreatToPlayer`);
+    /// never the player's own.
+    pub threatens_player: bool,
+    /// Whether it has a cloak scanner on screen
+    /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)).
+    pub scanner: bool,
+}
+
+/// The ship among `candidates` that point defence `spec` on the defender
+/// `guard`, at `at` with `hull`, fires at when it finds no missile
+/// (`_HandleShipPointDefense` @0x394ce-0x3969d, see the module docs): of
+/// a class it fires on, neither the defender nor its leader, intact and
+/// not held disabled, seen by it ([`cloak::seen`], with no cloaked-escort
+/// clause, which the leader test makes unreachable), within
+/// [`engagement_range`], the nearer by a strict `<` of truncated squared
+/// distances, not in a blind spot, and fighting it: the player while the
+/// defender threatens the player, and any other ship attacking the
+/// defender or its leader. Every test is the original's; none asks the
+/// [`PointDefenceRule`], under either reading of
+/// [`RuleKey::PdHostility`](crate::RuleKey::PdHostility).
+///
+/// The candidates go in the fight's order, the player and then the NPCs
+/// in traffic order, where the original walks its ship slots: the two
+/// differ only for ships whose truncated squared distances tie, which
+/// crosses no boundary the player sees. A slot the original holds
+/// inactive is a destroyed ship here, which the intact test drops too.
+/// The squared distance is not wrapped past 2³¹, as for [`choose`].
+#[must_use]
+pub fn choose_ship<'a>(
+    guard: Guard,
+    at: &ShipState,
+    hull: &HullSpec,
+    spec: &WeaponSpec,
+    candidates: &'a [Candidate],
+) -> Option<&'a Candidate> {
+    let range = engagement_range(spec);
+    let in_range = range * range;
+    let blind_spots = spec.flags | hull.blind_spots;
+    let observer = Observer {
+        at: at.position,
+        scanner: guard.scanner,
+        cloaked_escort: false,
+    };
+    let mut best: Option<(&Candidate, f32)> = None;
+    for candidate in candidates {
+        let target = &candidate.target;
+        let off = target.position - at.position;
+        let distance = (off.x * off.x + off.y * off.y).trunc();
+        let fighting = if target.ship == ShipRef::Player {
+            guard.threatens_player
+        } else {
+            candidate
+                .attacking
+                .is_some_and(|ship| ship == guard.ship || Some(ship) == guard.leader)
+        };
+        let chosen = target.ship != guard.ship
+            && candidate.pd_target
+            && Some(target.ship) != guard.leader
+            && target.condition == Condition::Intact
+            && !candidate.held_disabled
+            && cloak::seen(
+                candidate.cloaked,
+                target.position,
+                candidate.emerging,
+                observer,
+            )
+            && distance <= in_range
+            && best.is_none_or(|(_, nearest)| distance < nearest)
+            && !blind(
+                blind_spots,
+                angle_off(at.heading, bearing(at.position, target.position)),
+            )
+            && fighting;
+        if chosen {
+            best = Some((candidate, distance));
+        }
+    }
+    best.map(|(candidate, _)| candidate)
+}
+
 /// What a hit of point defence `spec` takes off a missile's durability:
 /// its mass damage and half its energy damage, truncated.
 #[must_use]
@@ -275,7 +422,8 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtId, WeaponRecord};
     use crate::combat::aim::BLIND_REAR;
-    use crate::combat::projectile::{ShotId, Source};
+    use crate::combat::hull::Condition;
+    use crate::combat::projectile::{ShotId, Source, Target};
     use crate::combat::sides::Ties;
     use crate::testkit::weapon;
     use crate::traffic::npc::NpcId;
@@ -836,5 +984,245 @@ mod tests {
         };
         assert!(!shot.take_pd_hit(3.0));
         assert_eq!(shot.durability, 1.0);
+    }
+
+    const FELLOW: ShipRef = ShipRef::Npc(NpcId(6));
+
+    /// A ship at (`x`, `y`), at rest, of a class point defence fires on,
+    /// intact, seen and attacking `attacking`.
+    fn fighter(ship: ShipRef, x: f32, y: f32, attacking: Option<ShipRef>) -> Candidate {
+        Candidate {
+            target: Target {
+                ship,
+                ship_type: crate::catalog::ShipId(167),
+                fleet: ship,
+                ties: Ties::default(),
+                position: Vec2::new(x, y),
+                velocity: Vec2::ZERO,
+                radius: 10.0,
+                sprite_x: 30.0,
+                condition: Condition::Intact,
+                miss_class: 80,
+            },
+            pd_target: true,
+            held_disabled: false,
+            cloaked: false,
+            emerging: false,
+            attacking,
+        }
+    }
+
+    /// A ship at (`x`, `y`) attacking the defender.
+    fn attacker(ship: ShipRef, x: f32, y: f32) -> Candidate {
+        fighter(ship, x, y, Some(DEFENDER))
+    }
+
+    /// The defender, led by no one, no threat to the player, with no
+    /// cloak scanner.
+    const GUARD: Guard = Guard {
+        ship: DEFENDER,
+        leader: None,
+        threatens_player: false,
+        scanner: false,
+    };
+
+    /// The ship `guard`, at the centre facing up, picks among
+    /// `candidates` with `spec` and a hull with `blind_spots`.
+    fn ship_picked_by(
+        guard: Guard,
+        spec: &WeaponSpec,
+        blind_spots: u16,
+        candidates: &[Candidate],
+    ) -> Option<ShipRef> {
+        let hull = HullSpec {
+            blind_spots,
+            ..HullSpec::default()
+        };
+        choose_ship(guard, &ShipState::default(), &hull, spec, candidates)
+            .map(|candidate| candidate.target.ship)
+    }
+
+    /// The ship `guard` picks among `candidates` with a Quad.
+    fn ship_picked(guard: Guard, candidates: &[Candidate]) -> Option<ShipRef> {
+        ship_picked_by(guard, &quad(0), 0, candidates)
+    }
+
+    #[test]
+    fn point_defence_picks_a_ship_of_its_class_attacking_the_defender_in_range() {
+        assert_eq!(
+            ship_picked(GUARD, &[attacker(ENEMY, 0.0, -100.0)]),
+            Some(ENEMY)
+        );
+        assert_eq!(ship_picked(GUARD, &[]), None);
+    }
+
+    #[test]
+    fn point_defence_never_picks_its_own_ship() {
+        assert_eq!(ship_picked(GUARD, &[attacker(DEFENDER, 0.0, 0.0)]), None);
+    }
+
+    #[test]
+    fn point_defence_picks_no_ship_of_a_class_without_flags2_0x0008() {
+        let unmarked = Candidate {
+            pd_target: false,
+            ..attacker(ENEMY, 0.0, -100.0)
+        };
+        assert_eq!(ship_picked(GUARD, &[unmarked]), None);
+    }
+
+    #[test]
+    fn point_defence_never_picks_the_defenders_leader() {
+        let escort = Guard {
+            leader: Some(LEAD),
+            ..GUARD
+        };
+        assert_eq!(ship_picked(escort, &[attacker(LEAD, 0.0, -100.0)]), None);
+    }
+
+    #[test]
+    fn point_defence_picks_no_ship_disabled_held_disabled_breaking_up_or_destroyed() {
+        let dying = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        for condition in [Condition::Disabled, dying, Condition::Destroyed] {
+            let mut down = attacker(ENEMY, 0.0, -100.0);
+            down.target.condition = condition;
+            assert_eq!(ship_picked(GUARD, &[down]), None, "{condition:?}");
+        }
+        let held = Candidate {
+            held_disabled: true,
+            ..attacker(ENEMY, 0.0, -100.0)
+        };
+        assert_eq!(ship_picked(GUARD, &[held]), None, "held disabled");
+    }
+
+    #[test]
+    fn point_defence_picks_a_cloaked_ship_only_with_a_scanner_within_200_on_each_axis() {
+        let cloaked = |x, y| Candidate {
+            cloaked: true,
+            ..attacker(ENEMY, x, y)
+        };
+        let scanning = Guard {
+            scanner: true,
+            ..GUARD
+        };
+        assert_eq!(ship_picked(GUARD, &[cloaked(0.0, -100.0)]), None);
+        assert_eq!(ship_picked(scanning, &[cloaked(200.0, 200.0)]), Some(ENEMY));
+        assert_eq!(ship_picked(scanning, &[cloaked(201.0, 0.0)]), None);
+        assert_eq!(ship_picked(scanning, &[cloaked(0.0, -201.0)]), None);
+        let waiting = Candidate {
+            emerging: true,
+            ..attacker(ENEMY, 0.0, -100.0)
+        };
+        assert_eq!(ship_picked(scanning, &[waiting]), None, "in its gate");
+    }
+
+    #[test]
+    fn a_ship_past_the_range_by_under_a_square_pixel_is_picked_and_one_a_pixel_past_is_not() {
+        // 360 pixels: 129,600 squared.
+        let y = -129_600.5_f32.sqrt();
+        assert!(y * y > 129_600.0);
+        assert_eq!(ship_picked(GUARD, &[attacker(ENEMY, 0.0, y)]), Some(ENEMY));
+        assert_eq!(ship_picked(GUARD, &[attacker(ENEMY, 0.0, -361.0)]), None);
+        let beam = WeaponSpec::new(&WeaponRecord {
+            guidance: 10,
+            beam_length: 150,
+            ..weapon(150)
+        });
+        let by_beam = |y| ship_picked_by(GUARD, &beam, 0, &[attacker(ENEMY, 0.0, y)]);
+        assert_eq!(by_beam(-150.0), Some(ENEMY), "a beam's length");
+        assert_eq!(by_beam(-151.0), None);
+    }
+
+    #[test]
+    fn the_nearest_ship_wins_and_of_two_alike_once_truncated_the_first() {
+        let near = attacker(ENEMY, 0.0, -100.0);
+        let far = attacker(FELLOW, 100.0, -100.0);
+        assert_eq!(ship_picked(GUARD, &[far, near]), Some(ENEMY));
+        assert_eq!(ship_picked(GUARD, &[near, far]), Some(ENEMY));
+        // 10,000.2 and 10,000.7 squared both truncate to 10,000.
+        let first = attacker(FELLOW, 0.0, -10_000.2_f32.sqrt());
+        let second = attacker(ENEMY, 0.0, 10_000.7_f32.sqrt());
+        assert_eq!(ship_picked(GUARD, &[first, second]), Some(FELLOW));
+        assert_eq!(ship_picked(GUARD, &[second, first]), Some(ENEMY));
+    }
+
+    #[test]
+    fn point_defence_picks_no_ship_in_its_weapons_or_its_hulls_blind_spot() {
+        let behind = [attacker(ENEMY, 0.0, 100.0)];
+        assert_eq!(ship_picked_by(GUARD, &quad(0), 0, &behind), Some(ENEMY));
+        assert_eq!(ship_picked_by(GUARD, &quad(BLIND_REAR), 0, &behind), None);
+        assert_eq!(ship_picked_by(GUARD, &quad(0), BLIND_REAR, &behind), None);
+        let ahead = [attacker(ENEMY, 0.0, -100.0)];
+        assert_eq!(
+            ship_picked_by(GUARD, &quad(BLIND_REAR), BLIND_REAR, &ahead),
+            Some(ENEMY)
+        );
+    }
+
+    #[test]
+    fn point_defence_picks_a_ship_only_while_it_attacks_the_defender_or_its_leader() {
+        let threat = Guard {
+            threatens_player: true,
+            ..GUARD
+        };
+        for attacking in [None, Some(FELLOW), Some(ShipRef::Player)] {
+            let elsewhere = fighter(ENEMY, 0.0, -100.0, attacking);
+            assert_eq!(ship_picked(threat, &[elsewhere]), None, "{attacking:?}");
+        }
+    }
+
+    #[test]
+    fn an_escort_picks_a_ship_attacking_its_leader_but_not_one_attacking_a_fellow_escort() {
+        let escort = Guard {
+            leader: Some(LEAD),
+            ..GUARD
+        };
+        let at = |attacking| [fighter(ENEMY, 0.0, -100.0, Some(attacking))];
+        assert_eq!(ship_picked(escort, &at(LEAD)), Some(ENEMY));
+        assert_eq!(ship_picked(escort, &at(DEFENDER)), Some(ENEMY));
+        assert_eq!(ship_picked(escort, &at(FELLOW)), None, "a fellow escort");
+        let players = Guard {
+            leader: Some(ShipRef::Player),
+            ..GUARD
+        };
+        assert_eq!(
+            ship_picked(players, &at(ShipRef::Player)),
+            Some(ENEMY),
+            "a player's escort"
+        );
+    }
+
+    #[test]
+    fn an_npc_picks_the_player_only_while_it_threatens_the_player() {
+        let threat = Guard {
+            threatens_player: true,
+            ..GUARD
+        };
+        let player = |attacking| [fighter(ShipRef::Player, 0.0, -100.0, attacking)];
+        assert_eq!(ship_picked(threat, &player(None)), Some(ShipRef::Player));
+        assert_eq!(ship_picked(GUARD, &player(None)), None);
+        assert_eq!(
+            ship_picked(GUARD, &player(Some(DEFENDER))),
+            None,
+            "whatever the player's own quarry"
+        );
+        let unmarked = Candidate {
+            pd_target: false,
+            ..player(None)[0]
+        };
+        assert_eq!(ship_picked(threat, &[unmarked]), None, "its class too");
+    }
+
+    #[test]
+    fn the_players_point_defence_picks_a_ship_attacking_the_player_but_not_its_escort() {
+        let player = Guard {
+            ship: ShipRef::Player,
+            ..GUARD
+        };
+        let at = |attacking| [fighter(ENEMY, 0.0, -100.0, Some(attacking))];
+        assert_eq!(ship_picked(player, &at(ShipRef::Player)), Some(ENEMY));
+        assert_eq!(ship_picked(player, &at(DEFENDER)), None, "its escort");
     }
 }

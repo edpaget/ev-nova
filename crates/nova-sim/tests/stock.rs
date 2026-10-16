@@ -1377,6 +1377,11 @@ struct Combatant {
     condition: Condition,
     armament: Armament,
     rounds: LauncherRounds,
+    /// The ship it attacks, which point defence reads; none by default.
+    attacking: Option<ShipRef>,
+    /// Whether it threatens the player, which its point defence reads;
+    /// not by default.
+    threatens_player: bool,
 }
 
 impl Combatant {
@@ -1398,6 +1403,10 @@ impl Combatant {
             condition: &mut self.condition,
             held_disabled: false,
             cloaked: false,
+            attacking: self.attacking,
+            threatens_player: self.threatens_player,
+            emerging: false,
+            cloak_scanner: false,
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
@@ -1460,6 +1469,8 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
         condition: Condition::Intact,
         armament: Armament::new([(*weapon, 1)]),
         rounds,
+        attacking: None,
+        threatens_player: false,
     }
 }
 
@@ -1533,6 +1544,8 @@ fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant
         condition: Condition::Intact,
         armament: Armament::default(),
         rounds: LauncherRounds::default(),
+        attacking: None,
+        threatens_player: false,
     }
 }
 
@@ -1834,6 +1847,8 @@ fn sponge(x: f32, y: f32) -> Combatant {
         condition: Condition::Intact,
         armament: Armament::default(),
         rounds: LauncherRounds::default(),
+        attacking: None,
+        threatens_player: false,
     }
 }
 
@@ -3472,6 +3487,24 @@ fn destroyer_in_fomalhaut(data: &GameData) -> Session {
     session
 }
 
+/// [`destroyer_in_fomalhaut`] with its two Quad Light Blaster Turrets
+/// (`oütf` 133) taken off. Its point defence would fire at the Federation
+/// fighters that answer the player (`_HandleShipPointDefense`
+/// @0x394ce-0x3969d: every Lone Federation Ship the seeds bring is of
+/// `Flags2` 0x0008), each hit a crime of its own, where the scenario
+/// measures the disabling's.
+fn destroyer_in_fomalhaut_without_point_defence(data: &GameData) -> Session {
+    let flown = destroyer_in_fomalhaut(data);
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(flown.pilot())).expect("JSON");
+    let outfits = save["outfits"].as_array_mut().expect("a list");
+    let before = outfits.len();
+    outfits.retain(|outfit| outfit["outfit"] != 133);
+    assert_eq!(outfits.len(), before - 1, "the Quads were fitted");
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    Session::fly(data, pilot).expect("flies")
+}
+
 /// The NPC numbered `id`, if it is still in the system.
 fn npc_of(session: &Session, id: nova_sim::NpcId) -> Option<&nova_sim::Npc> {
     session.npcs().iter().find(|npc| npc.id == id)
@@ -3541,13 +3574,15 @@ struct Fomalhaut {
 /// 4) fly, the player picks a seed that brings a trader of 1 to 6 crew
 /// (so it can be boarded, and the Destroyer's 50 crew cap the odds) and
 /// the Federation, attacks the trader until it is disabled and the
-/// Federation answers, then holds its fire for 30 ticks.
+/// Federation answers, then holds its fire for 30 ticks. The player's
+/// Destroyer flies without its point defence
+/// ([`destroyer_in_fomalhaut_without_point_defence`]).
 fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
     let crews: BTreeMap<ShipId, i16> = PilotCatalog::ships(data)
         .into_iter()
         .map(|record| (record.id, record.crew))
         .collect();
-    let mut session = destroyer_in_fomalhaut(data);
+    let mut session = destroyer_in_fomalhaut_without_point_defence(data);
     let mut chance = Seeded(0x5EED_F00D);
     let (trader, police) = (1..=200)
         .find_map(|seed| {
@@ -5902,6 +5937,223 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
             .expect("the missile");
         assert_eq!(missile.miss_roll, None, "{id}: a missile never rolls");
     }
+}
+
+// Point defence against ships (`_HandleShipPointDefense` @0x394ce-0x3969d).
+// No stock weapon is a point-defence beam (10): only 133 and 161 are point
+// defence at all (`every_stock_point_defence_turret_engages_an_ir_missile_in_range`
+// pins them), so a point-defence beam on a ship has unit tests alone.
+
+/// The stock ships point defence fires on (`Flags2` 0x0008) and the stock
+/// ships carrying point defence (133 or 161 in a stock slot).
+#[test]
+fn stock_point_defence_targets_and_carriers() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let hulls = data.hulls();
+    let targets: Vec<i16> = hulls
+        .iter()
+        .filter(|hull| hull.flags2 & 0x0008 != 0)
+        .map(|hull| hull.id.0)
+        .collect();
+    let carriers: Vec<i16> = hulls
+        .iter()
+        .filter(|hull| {
+            hull.weapons
+                .iter()
+                .any(|slot| matches!(slot.weapon.0, 133 | 161))
+        })
+        .map(|hull| hull.id.0)
+        .collect();
+    assert_eq!((targets.len(), carriers.len()), (TARGETS, CARRIERS));
+    for id in [128, 144, 157, 167, 279] {
+        assert!(targets.contains(&id), "{id} a target");
+        assert!(arsenal.hull(ShipId(id)).pd_target, "{id}");
+    }
+    for id in [141, 143, 153, 181] {
+        assert!(carriers.contains(&id), "{id} a carrier");
+    }
+    assert!(!targets.contains(&141), "the Fed Destroyer is no target");
+    assert!(!arsenal.hull(ShipId(141)).pd_target);
+}
+
+/// How many stock ships point defence fires on.
+const TARGETS: usize = 129;
+/// How many stock ships carry point defence.
+const CARRIERS: usize = 71;
+
+/// The stock `count` of `weapon` in ship `ship`'s stock slots.
+fn stock_count(data: &GameData, ship: i16, weapon: i16) -> u32 {
+    data.hulls()
+        .iter()
+        .find(|hull| hull.id == ShipId(ship))
+        .expect("a stock ship")
+        .weapons
+        .iter()
+        .filter(|slot| slot.weapon == WeaponId(weapon))
+        .map(|slot| u32::try_from(slot.count).expect("a count"))
+        .sum()
+}
+
+/// A stock carrier of `ship` (NPC 1) at the centre facing up, running its
+/// stock `defence` as point defence alone, and a stock `attacker` (NPC 0)
+/// at `at`, moving `velocity` a tick, attacking it.
+fn defending(
+    data: &GameData,
+    arsenal: &Arsenal,
+    (ship, defence): (i16, i16),
+    attacker: i16,
+    (at, velocity): (Vec2, Vec2),
+) -> [Combatant; 2] {
+    let spec = stock_weapon(data, defence);
+    let mut carrier = npc_shooter(data, arsenal, ShipId(ship), &spec);
+    carrier.armament = Armament::new([(spec, stock_count(data, ship, defence))]);
+    carrier.target = None;
+    carrier.state.heading = 0.0;
+    carrier.trigger = Trigger {
+        point_defence: true,
+        ..Trigger::default()
+    };
+    let mut fighter = target(data, arsenal, ShipId(attacker), 0.0);
+    fighter.state.position = at;
+    fighter.state.velocity = velocity;
+    fighter.attacking = Some(carrier.id);
+    [carrier, fighter]
+}
+
+/// Each tick of `ships` over `ticks`, the attacker moving on: the
+/// point-defence shots of `weapon` fired, each with where it left from,
+/// its heading and the attacker as it was, and the strikes.
+fn defended_against(
+    arsenal: &Arsenal,
+    ships: &mut [Combatant; 2],
+    weapon: i16,
+    ticks: u32,
+) -> (Vec<(Vec2, f32, ShipState)>, Vec<Strike>) {
+    let mut combat = Combat::default();
+    let (mut fired, mut strikes) = (Vec::new(), Vec::new());
+    for _ in 0..ticks {
+        let seen: Vec<_> = combat.shots().iter().map(|shot| shot.id).collect();
+        let attacker = ships[1].state;
+        fight_with(&mut combat, ships, arsenal);
+        fired.extend(
+            combat
+                .shots()
+                .iter()
+                .filter(|shot| shot.weapon.id == WeaponId(weapon) && !seen.contains(&shot.id))
+                .map(|shot| (shot.position - shot.velocity, shot.heading, attacker)),
+        );
+        strikes.extend(combat.take_strikes());
+        let state = &mut ships[1].state;
+        state.position = state.position + state.velocity;
+    }
+    (fired, strikes)
+}
+
+/// A stock Fed Destroyer (141) runs its two Quads (133) as point defence;
+/// a stock Viper (167, `Flags2` 0x0089) attacks it, crossing at its top
+/// speed 150 pixels off, within the Quad's 240-pixel flight. The Quad
+/// leads it from its exit, which matters at that speed, and a Quad shot
+/// strikes it.
+#[test]
+fn a_stock_fed_destroyers_quad_leads_and_hits_a_viper_attacking_it() {
+    use nova_sim::combat::aim::{bearing, lead};
+    use nova_sim::combat::projectile::Target;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let speed = target(&data, &arsenal, ShipId(167), 0.0).top_speed;
+    let mut ships = defending(
+        &data,
+        &arsenal,
+        (141, 133),
+        167,
+        (Vec2::new(-100.0, -150.0), Vec2::new(speed, 0.0)),
+    );
+    let quad = stock_weapon(&data, 133);
+    let (fired, strikes) = defended_against(&arsenal, &mut ships, 133, 40);
+    let &(start, heading, viper) = fired.first().expect("the Quad fires");
+    let quarry = Target {
+        ship: QUARRY,
+        ship_type: ShipId(167),
+        fleet: QUARRY,
+        ties: nova_sim::combat::sides::Ties::default(),
+        position: viper.position,
+        velocity: viper.velocity,
+        radius: 0.0,
+        sprite_x: 0.0,
+        condition: Condition::Intact,
+        miss_class: 0,
+    };
+    let from = ShipState {
+        position: start,
+        ..ShipState::default()
+    };
+    let led = lead(&from, &quarry, quad.speed);
+    assert!((heading - led).abs() < 1e-3, "{heading} led {led}");
+    let aimed = bearing(start, viper.position);
+    assert!((led - aimed).abs() > 5.0, "the lead matters: {led} {aimed}");
+    assert_ne!(start, Vec2::ZERO, "from its exit");
+    assert!(
+        strikes
+            .iter()
+            .any(|strike| strike.ship == QUARRY && strike.by == ships[0].id && strike.direct),
+        "{strikes:?}"
+    );
+}
+
+/// A stock Aurora Carrier (153) runs its Storm Chaingun (161, `ProxRadius`
+/// 0) as point defence; a stock Thunderhead (157, `Flags2` 0x0089)
+/// attacks it. A Storm Chaingun shot strikes it, which it can only by
+/// contact: one fired at a ship is in the shot layer.
+#[test]
+fn a_stock_aurora_carriers_storm_chaingun_hits_a_thunderhead_attacking_it_by_contact() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    assert!(stock_weapon(&data, 161).prox_radius <= 0.0, "no fuse");
+    let mut ships = defending(
+        &data,
+        &arsenal,
+        (153, 161),
+        157,
+        (Vec2::new(0.0, -150.0), Vec2::ZERO),
+    );
+    let (fired, strikes) = defended_against(&arsenal, &mut ships, 161, 40);
+    assert!(!fired.is_empty(), "the Storm Chaingun fires");
+    assert!(
+        strikes
+            .iter()
+            .any(|strike| strike.ship == QUARRY && strike.by == ships[0].id),
+        "{strikes:?}"
+    );
+}
+
+/// A stock Rebel Destroyer (181) runs its Quads as point defence; a stock
+/// Fed Destroyer (141, no `Flags2` 0x0008) attacking it draws no fire.
+#[test]
+fn a_stock_point_defence_holds_fire_at_a_destroyer_attacking_it() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let mut ships = defending(
+        &data,
+        &arsenal,
+        (181, 133),
+        141,
+        (Vec2::new(0.0, -150.0), Vec2::ZERO),
+    );
+    let (fired, _) = defended_against(&arsenal, &mut ships, 133, 20);
+    assert_eq!(fired, []);
 }
 
 /// The Raven Rocket (138) is in the stock slots of 31 ships. Fired by one

@@ -429,6 +429,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
     HullRecord {
         id: ShipId(id),
         flags: 0,
+        flags2: 0,
         death_delay: 0,
         explode1: -1,
         explode2: -1,

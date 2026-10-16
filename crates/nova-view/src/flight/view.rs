@@ -10451,6 +10451,7 @@ mod tests {
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
             flags: 0,
+            flags2: 0,
             death_delay: 0,
             explode1: -1,
             explode2: -1,
@@ -10596,6 +10597,7 @@ mod tests {
         nova_sim::HullRecord {
             id: ShipId(id),
             flags: 0,
+            flags2: 0,
             death_delay: 0,
             explode1: -1,
             explode2: 0,

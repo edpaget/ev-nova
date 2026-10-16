@@ -165,7 +165,7 @@
 //! | [`BeamHitTest`](RuleKey::BeamHitTest) | `beam_hit_test` | a beam hits the nearest ship whose centre lies in its cone: within its `BeamLength` plus half the ship's radius trunc(0.66 × its sprite's width), and trunc(10r / 32) degrees of its heading, the hit ending trunc(dist − 0.2 × width) along it (`_HandleBeams` @0x30dde-0x31051; see [`beam`](crate::combat::beam)) | the first ship whose hit circle its segment meets, ending where it meets it\* |
 //! | [`BeamConeQuirks`](RuleKey::BeamConeQuirks) | `beam_cone_quirks` | the cone's angle test is the plain difference of the whole-degree bearing and the jittered heading, with no 0/360 wrap, so a beam at 2° misses a ship at 358° (`_HandleBeams` @0x30ec4-0x30edd); the asteroid pass takes its "nearest" asteroid by the ship of the same index's distance (@0x317f2-0x3180c; asteroids phase 6) | the angle wraps, and the nearest asteroid is by its own distance: **the default — a deliberate departure from the original**†††††††††††† |
 //! | [`BombRocketLaunch`](RuleKey::BombRocketLaunch) | `bomb_rocket_launch` | an NPC's freefall bomb (5) and rocket (6), an escort's too, leave at its ship's velocity and its `Speed` along its heading, broadside with a negative `Inaccuracy`; only the player's bomb takes 0.8 of its ship's velocity, and its rocket its ship's (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a; see [`BombLaunch`](crate::combat::projectile::BombLaunch)) | every ship's bomb at 0.8 of its ship's velocity, and its rocket at its ship's |
-//! | [`PdHostility`](RuleKey::PdHostility) | `pd_hostility` | point defence fires at a missile aimed at its ship or its leader whoever fired it, with no hostility test; the collision side meets any missile it touches under both readings (`_HandleShipPointDefense` @0x393b1-0x394bd; see [`defence`](crate::combat::defence)) | only at a missile whose firer the fight's point-defence rule calls hostile, Nova's by fleets and alliances\* |
+//! | [`PdHostility`](RuleKey::PdHostility) | `pd_hostility` | point defence fires at a missile aimed at its ship or its leader whoever fired it, with no hostility test; the collision side meets any missile it touches, and with no missile the ship branch fires at a ship by its own threat tests, under both readings (`_HandleShipPointDefense` @0x393b1-0x3969d; see [`defence`](crate::combat::defence)) | only at a missile whose firer the fight's point-defence rule calls hostile, Nova's by fleets and alliances\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -2093,9 +2093,15 @@ rule_keys! {
     /// [`PointDefenceRule`](crate::combat::defence::PointDefenceRule) also
     /// calls hostile, as Nova's
     /// [`Allegiance`](crate::combat::defence::Allegiance) does by fleets
-    /// and governments' alliances. It covers the choice alone: a
-    /// point-defence shot meets any missile its sprite touches under
-    /// both readings (`_PointDefenseCollisionHandler` @0x37776-0x3785d).
+    /// and governments' alliances. It covers the choice of a missile
+    /// alone: a point-defence shot meets any missile its sprite touches
+    /// under both readings (`_PointDefenseCollisionHandler`
+    /// @0x37776-0x3785d), and with no missile to fire at, point defence
+    /// fires at a ship by the original's own threat tests under both
+    /// readings, as the ship branch has no government test
+    /// ([`defence::choose_ship`](crate::combat::defence::choose_ship),
+    /// @0x394ce-0x3969d), and no reading anyone would choose fires at
+    /// friends.
     /// The Bible says nothing of it, so the other reading is the engine's
     /// earlier choice, not anything the Bible says.
     PdHostility => "pd_hostility",
