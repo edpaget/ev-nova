@@ -1944,6 +1944,58 @@ mod tests {
     }
 
     #[test]
+    fn an_offers_after_movie_plays_after_an_accept_refused() {
+        let heavy = MissionRecord {
+            cargo_type: 0,
+            cargo_qty: 10_000,
+            ..at_the_bar(142)
+        };
+        let filmed = |id| MissionTexts {
+            brief: Some(format!("Brief {id}.")),
+            movies: TextMovies {
+                offer: film("After.mov", 0x0001),
+                ..TextMovies::default()
+            },
+            ..offering(id, "Ferry.", "", "")
+        };
+        let catalog = screens(vec![heavy], vec![filmed(142)]);
+        let after = || MissionShown::Movie(film("After.mov", 0x0001).expect("named"));
+        let mut session = docked(&catalog);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        assert_eq!(
+            session.accept_mission(MissionId(142), &mut NeverFires),
+            Err(AcceptError::Refused(AcceptRefusal::NoHolds))
+        );
+        assert_eq!(
+            queued(&mut session),
+            [
+                MissionShown::Text(text(
+                    MissionTextKind::NoRoom,
+                    142,
+                    &AcceptRefusal::NoHolds.message()
+                )),
+                after(),
+            ],
+            "the no-room text (`_DoMissionAccept` @0xa1bb2), then the after-movie \
+             (`_OfferOneMission` sets -0x139 whatever the accept returns @0xa2e5e, @0xa2ff7, \
+             and @0xa3580 plays it)"
+        );
+        let catalog = screens(vec![at_the_bar(142)], vec![filmed(142)]);
+        let mut session = docked(&catalog);
+        fill_slots(&mut session);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        assert_eq!(
+            session.accept_mission(MissionId(142), &mut NeverFires),
+            Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
+        );
+        assert_eq!(
+            queued(&mut session),
+            [after()],
+            "every slot taken shows nothing (@0xa1b32-0xa1b42), then the after-movie (@0xa3580)"
+        );
+    }
+
+    #[test]
     fn a_prompts_before_movie_is_left_to_the_dialog() {
         let catalog = screens(
             vec![at_the_bar(142)],
