@@ -8844,6 +8844,15 @@ pub(super) mod tests {
         pictured_desc_of(text, -1)
     }
 
+    /// A `dësc` of `text` naming the movie `file`, of `Flags` `flags`.
+    fn filmed_desc_of(text: &str, file: &str, flags: u16) -> Vec<u8> {
+        let mut desc = desc_of(text);
+        let at = text.len() + 3;
+        desc[at..at + file.len()].copy_from_slice(file.as_bytes());
+        desc[at + 32..at + 34].copy_from_slice(&flags.to_be_bytes());
+        desc
+    }
+
     /// A `dësc` of `text` whose `Graphic` is `graphic`.
     fn pictured_desc_of(text: &str, graphic: i16) -> Vec<u8> {
         let mut bytes = text.as_bytes().to_vec();
@@ -9042,10 +9051,7 @@ pub(super) mod tests {
     fn landed_filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<Reel>) {
         let mut mission = venue_mission(SPACEPORT);
         mission[0x50..0x52].copy_from_slice(&flags.to_be_bytes());
-        let mut offer = desc_of(text);
-        let at = text.len() + 3;
-        offer[at..at + 9].copy_from_slice(b"Offer.mov");
-        offer[at + 32..at + 34].copy_from_slice(&movie.to_be_bytes());
+        let offer = filmed_desc_of(text, "Offer.mov", movie);
         let fork = game_data_fork(true, true, true, 100, b"", b"", None)
             .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
             .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &offer);
@@ -9455,6 +9461,20 @@ pub(super) mod tests {
     /// the pod's class (`shïp` 895) and, when `desc` gives its text, the
     /// rescue's `dësc` 13999.
     fn escape_pod_data(desc: Option<&str>) -> Rc<GameData> {
+        let fork = escape_pod_fork();
+        match desc {
+            Some(text) => loaded(&fork.resource(
+                Desc::TYPE,
+                13999,
+                None,
+                &pictured_desc_of(text, RESCUE_GRAPHIC),
+            )),
+            None => loaded(&fork),
+        }
+    }
+
+    /// [`escape_pod_data`]'s fork, with no rescue `dësc`.
+    fn escape_pod_fork() -> ForkBuilder {
         let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
             for (i, value) in values.iter().enumerate() {
                 bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -9466,21 +9486,12 @@ pub(super) mod tests {
         put(&mut pod, 0x4E, &[-1; 4]);
         put(&mut pod, 0x370, &[-1; 4]);
         put(&mut pod, 0x6CE, &[-1; 4]);
-        let fork = deadly_fork(&[(200, [11, 0, 1]), (201, [20, 0, 1])]).resource(
+        deadly_fork(&[(200, [11, 0, 1]), (201, [20, 0, 1])]).resource(
             Ship::TYPE,
             895,
             Some(b"Escape Pod"),
             &pod,
-        );
-        match desc {
-            Some(text) => loaded(&fork.resource(
-                Desc::TYPE,
-                13999,
-                None,
-                &pictured_desc_of(text, RESCUE_GRAPHIC),
-            )),
-            None => loaded(&fork),
-        }
+        )
     }
 
     /// The router over [`escape_pod_data`] (with its `dësc` of the text
@@ -9496,7 +9507,18 @@ pub(super) mod tests {
         desc: Option<&str>,
         create: fn(&mut AppScreen, &str),
     ) -> AppScreen {
-        let mut screen = with_dialogs(escape_pod_data(desc))
+        ejected_from(store, with_dialogs(escape_pod_data(desc)), create)
+    }
+
+    /// `screen`, over [`escape_pod_data`] or its like, flying with the
+    /// killer above the player, the pilot made by `create`, until the
+    /// player is in the escape pod.
+    fn ejected_from(
+        store: &MemoryPilots,
+        screen: AppScreen,
+        create: fn(&mut AppScreen, &str),
+    ) -> AppScreen {
+        let mut screen = screen
             .with_chance(above_the_player())
             .with_behaviour(Rc::new(Firing))
             .with_disable_rule(Rc::new(Never))
@@ -9545,6 +9567,34 @@ pub(super) mod tests {
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::Flight, "flying on");
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_rescues_desc_plays_its_movie_over_flight() {
+        let store = MemoryPilots::new();
+        let data = loaded(&escape_pod_fork().resource(
+            Desc::TYPE,
+            13999,
+            None,
+            &filmed_desc_of(RESCUE_TEXT, "Rescue.mov", 0),
+        ));
+        let reel = Rc::new(Reel::default());
+        let screen = with_dialogs(data).with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+        let mut screen = ejected_from(&store, screen, create);
+        assert!(reeled(&reel).is_empty());
+        tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
+            screen.showing() != Showing::Flight
+        });
+        assert_eq!(screen.showing(), Showing::Movie, "before its text");
+        assert_eq!(reeled(&reel), ["start Rescue.mov"]);
+        assert_eq!(fate(&screen), nova_sim::PlayerFate::Flying);
+        tick_until(&mut screen, 10, |screen| {
+            screen.showing() == Showing::MissionText
+        });
+        assert_eq!(reeled(&reel), ["start Rescue.mov", "stop"]);
+        assert_eq!(shown_text(&screen).as_deref(), Some(RESCUE_TEXT));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight, "flying on");
     }
 
     #[test]
@@ -9989,7 +10039,13 @@ pub(super) mod tests {
 
     /// [`landed_and_took_off`] over [`deadly_data_with`] `saboteurs`.
     fn sabotaged_and_took_off(store: &MemoryPilots, saboteurs: &[Saboteur]) -> AppScreen {
-        let mut screen = with_dialogs(deadly_data_with(saboteurs))
+        took_off_over(store, with_dialogs(deadly_data_with(saboteurs)))
+    }
+
+    /// `screen`, over [`deadly_data`] or its like, landed and taken off
+    /// with the killer above the player.
+    fn took_off_over(store: &MemoryPilots, screen: AppScreen) -> AppScreen {
+        let mut screen = screen
             .with_chance(above_the_player())
             .with_behaviour(Rc::new(Firing))
             .with_disable_rule(Rc::new(Never))
@@ -10116,6 +10172,87 @@ pub(super) mod tests {
         assert_eq!(screen.showing(), Showing::Flight, "no dialog");
         assert_eq!(fate(&screen), nova_sim::PlayerFate::Fading);
         assert_eq!(screen.take_warnings().len(), 1);
+    }
+
+    /// The router sabotaged by one outfit, 128, whose `dësc` 5000,
+    /// "Sabotaged.", names the movie "Sabotage.mov" of `Flags` `flags`,
+    /// its movies played through a new [`Reel`], taken off and ticked
+    /// until the player's ship has exploded.
+    fn filmed_sabotage(store: &MemoryPilots, flags: u16) -> (AppScreen, Rc<Reel>) {
+        let data = loaded(
+            &deadly_fork(&[(128, [nova_sim::SABOTAGE_KILL, 5000, 1])]).resource(
+                Desc::TYPE,
+                5000,
+                None,
+                &filmed_desc_of("Sabotaged.", "Sabotage.mov", flags),
+            ),
+        );
+        let reel = Rc::new(Reel::default());
+        let screen = with_dialogs(data).with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+        let mut screen = took_off_over(store, screen);
+        until_exploded(&mut screen);
+        (screen, reel)
+    }
+
+    #[test]
+    fn a_sabotage_descs_movie_starts_as_the_hold_expires_and_the_fade_waits_for_it_and_its_text() {
+        let store = MemoryPilots::new();
+        let (mut screen, reel) = filmed_sabotage(&store, 0);
+        for _ in 1..=nova_sim::HOLD_TICKS {
+            screen.tick(TICK);
+        }
+        assert!(reeled(&reel).is_empty(), "not before the expiry");
+        screen.tick(TICK);
+        assert_eq!(
+            reeled(&reel),
+            ["start Sabotage.mov"],
+            "on the expiry's tick"
+        );
+        assert_eq!(screen.showing(), Showing::Movie, "before its text");
+        let held = nova_sim::PlayerFate::Holding { ticks_left: 0 };
+        assert_eq!(fate(&screen), held, "not fading under the movie");
+        tick_until(&mut screen, 10, |screen| {
+            screen.showing() == Showing::MissionText
+        });
+        assert_eq!(reeled(&reel), ["start Sabotage.mov", "stop"]);
+        assert_eq!(shown_text(&screen).as_deref(), Some("Sabotaged."));
+        assert_eq!(fate(&screen), held, "nor under the text");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(
+            fate(&screen),
+            nova_sim::PlayerFate::Fading,
+            "once both close"
+        );
+    }
+
+    #[test]
+    fn a_sabotage_descs_after_movie_holds_the_fade_until_the_tick_it_ends() {
+        let store = MemoryPilots::new();
+        let (mut screen, reel) = filmed_sabotage(&store, 0x0001);
+        tick_until(&mut screen, nova_sim::HOLD_TICKS + 2, |screen| {
+            screen.showing() != Showing::Flight
+        });
+        assert_eq!(shown_text(&screen).as_deref(), Some("Sabotaged."));
+        assert!(reeled(&reel).is_empty(), "after its text");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(reeled(&reel), ["start Sabotage.mov"]);
+        assert_eq!(screen.showing(), Showing::Movie);
+        let held = nova_sim::PlayerFate::Holding { ticks_left: 0 };
+        for _ in 0..10 {
+            if reeled(&reel).len() > 1 {
+                break;
+            }
+            assert_eq!(fate(&screen), held, "not while it plays");
+            screen.tick(TICK);
+        }
+        assert_eq!(reeled(&reel), ["start Sabotage.mov", "stop"]);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(
+            fate(&screen),
+            nova_sim::PlayerFate::Fading,
+            "on the tick the movie ended"
+        );
     }
 
     // The picture variants, as the router lays them out.
