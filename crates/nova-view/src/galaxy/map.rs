@@ -4,9 +4,9 @@
 //! The screen reads the galaxy once, through the [`GalaxyCatalog`] port,
 //! when it is built; drawing and input never read anything. The course
 //! map is shown a flight's galaxy ([`GalaxyMap::show_galaxy`]): the
-//! session's galaxy overlay overrides which systems, links and nebulae
-//! the catalog's galaxy draws, and its governments, as each change to it
-//! is told; the geometry stays the catalog's.
+//! session's galaxy overlay overrides which systems are clicked and which
+//! nebulae are drawn, as each change to it is told; the geometry stays the
+//! catalog's.
 //!
 //! Input (presses only, except the left button's release):
 //!
@@ -35,73 +35,179 @@
 //! ([`GalaxyMap::take_cycle`], Shift held stepping the hypergate map's
 //! back), and Return asks it to close the map
 //! ([`GalaxyMap::take_close`]), as the original's `_MapFilter` does
-//! (@0x13cdd-0x13f0f). Either map draws the course it is
-//! shown ([`GalaxyMap::show_course`]): the current system marked, and the
-//! route from it through each hop. Over the course, every map draws the
-//! link from the current system to the system selected in nav mode 3
-//! ([`GalaxyMap::show_hyper_selection`]) in [`HYPER_SELECTED`], as
-//! `_DrawMap` draws it again after every link (@0xebd8-0xed31), over the
-//! dim-green slot it gave in its pass over the links (@0xea65-0xea86).
-//! As the course map opens from flight, its owner selects the system the
-//! original's `_DoSystemMap` does ([`GalaxyMap::preselect`],
-//! @0x124ac-0x124ff), which the panel then shows; a click at its place
-//! is a first click.
+//! (@0x13cdd-0x13f0f). As the course map opens from flight, its owner
+//! selects the system the original's `_DoSystemMap` does
+//! ([`GalaxyMap::preselect`], @0x124ac-0x124ff), which the panel then
+//! shows; a click at its place is a first click.
 //!
 //! While a hypergate is entered from flight, the course map becomes the
 //! hypergate map ([`MapMode::Hypergate`], [`GalaxyMap::offer_gates`]), as
-//! the original's `_DoSystemMap` in hypergate mode: an arrow points from
-//! the current system to each system the gate offers (`_DrawMap`
-//! @0xf195-0xf467), and a click selects one of them and nothing else
-//! (@0x12f8f-0x13040). The owner takes the pick with
-//! [`GalaxyMap::take_gate_choice`], which returns the map to the course
-//! map.
+//! the original's `_DoSystemMap` in hypergate mode: a click selects one of
+//! the systems the gate offers and nothing else (@0x12f8f-0x13040). The
+//! owner takes the pick with [`GalaxyMap::take_gate_choice`], which
+//! returns the map to the course map.
+//!
+//! # What the map draws
+//!
+//! Over its nebulae, the map draws a [`MapPicture`]: in flight the
+//! session's drawing ([`GalaxyMap::show_drawing`], `nova_sim`'s
+//! [`galaxy_map`](nova_sim::galaxy_map) decides what `_DrawMap` draws),
+//! and on the viewer every system and link in the data
+//! ([`MapPicture::viewer`]). [`GalaxyMap::draw_marks`] draws it in
+//! `_DrawMap`'s order (@0xe568-0xf5d0), and the floating map draws it
+//! through the same method. Then the course and hypergate maps, and the
+//! viewer, bracket the selection and name the systems again, as
+//! `_MapDialogUpdate` does after `_DrawMap` (@0xfc9c-0x1001f).
+//!
+//! Points are whole pixels: each is the transformed point truncated toward
+//! zero, as `_DrawMap` works trunc(centre + pos/zoom − scroll/zoom)
+//! (@0xe5e9-0xe662; [`Transform::pixel`]). The zoom tests take the
+//! original's zoom, the inverse of the scale ([`Transform::zoom`]):
+//! against 0.5 (0xdd128) only the largest scale, 64/27, is at or below
+//! it, and against 1.1 (0xdd1b0) the scales from 1 up are.
+//!
+//! 1. **The course** in [`BRIGHT_GREEN`] at pen 2 (@0xe661-0xe7a2).
+//! 2. **The current system's links** in [`LESS_DARK_GREY`], or
+//!    [`REAL_DARK_GREY`] on the hypergate map, at pen 1 (@0xe7a8-0xe986).
+//! 3. **Every other link** in the same greys, the mode-3 slot's in
+//!    [`DIM_GREEN`] (@0xe9da-0xebd2).
+//! 4. **The mode-3 link** in [`DIM_GREEN`] (@0xebd8-0xed31).
+//! 5. **Each system**: its point's rect inset by −[`SYSTEM_INSET_ZOOMED`]
+//!    at pen 2 when the zoom ≤ 0.5, otherwise −[`SYSTEM_INSET`] at pen 1
+//!    (@0xeeec-0xef68), an oval painted black (@0xef70-0xef85) and framed
+//!    in its colour code's colour ([`code_color`], @0xef8a-0xefad); then
+//!    its red arrow, `cicn` [`RED_ARROW`], in the 16 × 16 rect up and
+//!    left of that rect (@0xefbe-0xf00b), and its green one, `cicn`
+//!    [`GREEN_ARROW`], up and right (@0xf010-0xf058), so a system's
+//!    arrows are under later systems' ovals.
+//! 6. **The current system's dot**: its rect inset −3 when the zoom ≤
+//!    0.5, otherwise −2, an oval painted [`CYAN`] (`ForeColor` 273), at
+//!    pen 1 (@0xf07d-0xf190).
+//! 7. **The hypergate arrows**: a shaft from each system offered to the
+//!    current one, then two strokes from its tip back
+//!    ([`arrow_head`]), in white
+//!    (`ForeColor` 30) at pen 3 for the system selected, otherwise
+//!    [`CYAN`] at pen 2 (@0xf195-0xf499).
+//! 8. **The names**, white, in Geneva ([`NAME_FONT`], `_smallTextFont` 3)
+//!    at [`NAME_SIZE`] (`_smallTextSize` 9), the baseline at trunc(x +
+//!    7.0), trunc(y + 4.0) (0xdd1c0, 0xdd1b8): every one at a zoom ≤ 1.1,
+//!    only the selection's above (@0xf49a-0xf5c0).
+//!
+//! After `_DrawMap`, the brackets: the selection's rect inset −8 when the
+//! zoom ≤ 0.5, otherwise −6, and eight ticks in [`BRIGHT_GREEN`] at pen 1,
+//! each a `LineTo` 3 units long starting a pixel in from a corner, so 4
+//! pixels from (left + 1, top) to (left + 4, top) and likewise at each
+//! corner along both edges (@0xfd30-0xff03). Then the names again, at the
+//! same size, as `_DrawMap` set it last (@0xff14-0x1001f).
+//!
+//! **Pens and rasters.** QuickDraw hangs a pen below and to the right of
+//! the path, and rasterises its own `LineTo`, `PaintOval` and `FrameOval`
+//! in the Toolbox, not in the original's binary. A horizontal or vertical
+//! line is drawn exactly, as the pixels its pen covers; any other line is
+//! a line its pen wide along the path offset by half the pen, its ends
+//! not squared off; and an oval is [`oval`](crate::oval)'s approximation,
+//! drawn one run a row.
 //!
 //! A map shown the systems the pilot has explored
-//! ([`GalaxyMap::show_explored`], the course map in flight) draws every
-//! other system's dot [`UNEXPLORED`] grey instead of its government's
-//! colour, and its panel says [`UNEXPLORED_TEXT`] instead of listing its
-//! stellars. A map never shown them, the viewer, shows everything.
+//! ([`GalaxyMap::show_explored`], the course map in flight) says
+//! [`UNEXPLORED_TEXT`] in its panel instead of listing an unexplored
+//! system's stellars. A map never shown them, the viewer, shows
+//! everything.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use nova_sim::Vec2;
+use nova_sim::galaxy_map::{MapDrawing, MapLink, arrow_head};
+use nova_sim::iff::SystemColorCode;
 use nova_sim::story::OverlaidGalaxy;
 
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
 use super::model::{GalaxyModel, placement};
 use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
 use crate::draw::fill_rect;
-use crate::{Color, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction};
+use crate::flight::radar::IRect;
+use crate::oval::{fill_pixels, oval_fill_pixels, oval_frame_pixels};
+use crate::{
+    Color, DrawList, Font, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
+};
 
 /// How far the pointer may travel between pressing and releasing the left
 /// button for the press to count as a click rather than a drag.
 pub const CLICK_SLOP: f32 = 4.0;
 
-/// Hyperlinks' colour.
-pub const LINK: Color = Color::rgba(90, 90, 110, 255);
-/// Hyperlinks' width.
-const LINK_WIDTH: f32 = 1.0;
-/// The outline drawn under every dot, so black and dark governments'
-/// systems show on the black map.
-pub const OUTLINE: Color = Color::rgba(128, 128, 128, 255);
-/// The outline's size.
-pub const OUTLINE_SIZE: f32 = 8.0;
-/// A system dot's size.
-pub const DOT_SIZE: f32 = 6.0;
-/// An unexplored system's dot, on a map shown the explored systems.
-pub const UNEXPLORED: Color = Color::rgba(96, 96, 96, 255);
+/// `_brightGreen`, (0, 0xffff, 0) (`_InitColors` @0x1beb8): the course
+/// and the brackets. Each colour takes its 16-bit channels' high bytes, as
+/// the radar's fixed colours do.
+pub const BRIGHT_GREEN: Color = Color::rgba(0, 255, 0, 255);
+/// `_dimGreen`, (0, 0x9900, 0) (@0x1be8c): the link to the system
+/// selected in nav mode 3.
+pub const DIM_GREEN: Color = Color::rgba(0, 0x99, 0, 255);
+/// `_rgbDarkGrey`, 0x4000 (@0x1bee4): an unexplored system's frame.
+pub const DARK_GREY: Color = Color::rgba(0x40, 0x40, 0x40, 255);
+/// `_rgbRealDarkGrey`, 0x0fa0 (@0x1befa): the hypergate map's links.
+pub const REAL_DARK_GREY: Color = Color::rgba(0x0f, 0x0f, 0x0f, 255);
+/// `_rgbLessDarkGrey`, 0x4e20 (@0x1bf26): the links.
+pub const LESS_DARK_GREY: Color = Color::rgba(0x4e, 0x4e, 0x4e, 255);
+/// `_rgbLightGrey`, 0xc000 (@0x1bf3c): an uninhabited system's frame.
+pub const LIGHT_GREY: Color = Color::rgba(0xc0, 0xc0, 0xc0, 255);
+/// `ForeColor` 273: the current system's dot and the hypergate arrows.
+pub const CYAN: Color = Color::rgba(0, 255, 255, 255);
+/// `_ColorCodeSystem`'s blue, (0, 0, 0xffff) (@0xd8c5-0xd8d3).
+pub const CLEARED: Color = Color::rgba(0, 0, 255, 255);
+/// `_ColorCodeSystem`'s orange, (0xffff, 0x6666, 0) (@0xd8e2-0xd8f0).
+pub const DENIED: Color = Color::rgba(255, 0x66, 0, 255);
+/// `_ColorCodeSystem`'s red, (0xffff, 0, 0) (@0xd8ff-0xd90d).
+pub const HOSTILE: Color = Color::rgba(255, 0, 0, 255);
+
+/// The red mission arrow, `cicn` 15000 (`_LoadSprites` @0x21b0a).
+pub const RED_ARROW: i16 = 15000;
+/// The green mission arrow, `cicn` 15001 (@0x21b1e).
+pub const GREEN_ARROW: i16 = 15001;
+/// A mission arrow's rect's side.
+pub const ARROW_SIZE: i32 = 16;
+
+/// How far a system's point rect is inset (outward) for its oval, and
+/// its pen, at a zoom above 0.5.
+pub const SYSTEM_INSET: i32 = 4;
+/// The same at a zoom of 0.5 or below, with a pen of 2.
+pub const SYSTEM_INSET_ZOOMED: i32 = 6;
+/// How far the current system's point rect is inset for its dot, at a
+/// zoom above 0.5, and at 0.5 or below.
+pub const CURRENT_INSET: i32 = 2;
+pub const CURRENT_INSET_ZOOMED: i32 = 3;
+/// How far the selection's point rect is inset for its brackets, at a
+/// zoom above 0.5, and at 0.5 or below.
+pub const BRACKET_INSET: i32 = 6;
+pub const BRACKET_INSET_ZOOMED: i32 = 8;
+/// How long a bracket tick's `LineTo` runs, in units: 4 pixels at a pen
+/// of 1.
+pub const TICK: i32 = 3;
+
+/// The names' font: `_smallTextFont`, Geneva (@0x1d3d1, 3 @0x467a5).
+pub const NAME_FONT: Font = Font::Geneva;
+/// The names' size: `_smallTextSize`, 9 (@0x1d3e6, @0x467b4).
+pub const NAME_SIZE: f32 = 9.0;
+/// Where a name's baseline starts from its system's point (0xdd1c0,
+/// 0xdd1b8).
+pub const NAME_OFFSET: (f32, f32) = (7.0, 4.0);
+
+/// The zoom at or below which the ovals, the current dot and the brackets
+/// are the larger ones (0.5, 0xdd128).
+pub const ZOOMED: f64 = 0.5;
+/// The zoom at or below which every name is drawn, and above which only
+/// the selection's (1.1, 0xdd1b0).
+pub const NAMED: f64 = 1.1;
+
 /// What the panel says of an unexplored system, in place of its stellars.
 pub const UNEXPLORED_TEXT: &str = "Unexplored";
-/// The side of the square drawn round the selected system, and its width.
-pub const HIGHLIGHT_SIZE: f32 = 16.0;
-const HIGHLIGHT_WIDTH: f32 = 1.0;
 
 /// The bottom of the screen, where the info panel ends.
 const SCREEN_HEIGHT: f32 = 768.0;
 /// The info panel's background.
 pub const PANEL: Color = Color::rgba(16, 16, 28, 255);
 /// The line between the map and the panel: its colour and width.
-const SEPARATOR: Color = OUTLINE;
+const SEPARATOR: Color = Color::rgba(128, 128, 128, 255);
 const SEPARATOR_WIDTH: f32 = 1.0;
 
 /// The panel's left column: the selected system's name, then its stellars.
@@ -137,35 +243,13 @@ const ENTER_LABEL_SIZE: f32 = 14.0;
 
 /// The hypergate map's help line.
 pub const HYPERGATE_HELP: &str = "Arrows or drag: pan   +/-: zoom   Click an arrowed system: hypergate destination   M or Esc: go";
-/// The arrows to the systems a hypergate offers: their colour and width,
-/// and how long each head's strokes are.
-pub const GATE: Color = Color::rgba(64, 192, 255, 255);
-pub const GATE_WIDTH: f32 = 2.0;
-pub const ARROW_SIZE: f32 = 10.0;
-/// How far either side of the shaft an arrowhead's strokes splay, in
-/// degrees.
-const ARROW_SPLAY: f32 = 30.0;
 /// The course map's help line.
 pub const COURSE_HELP: &str =
     "Arrows or drag: pan   +/-: zoom   Click: set destination   M or Esc: back";
-/// The plotted route's colour and width.
-pub const ROUTE: Color = Color::rgba(64, 224, 64, 255);
-pub const ROUTE_WIDTH: f32 = 3.0;
-/// The link from the current system to the system selected in nav mode
-/// 3 ([`GalaxyMap::show_hyper_selection`]): `_dimGreen`, RGB (0, 0x99, 0)
-/// (`_InitColors` @0x1be8c-0x1be9c), at pen 1 (`_DrawMap`
-/// @0xebd8-0xed31).
-pub const HYPER_SELECTED: Color = Color::rgba(0, 153, 0, 255);
-pub const HYPER_SELECTED_WIDTH: f32 = 1.0;
-/// The mark under the current system's dot: its colour and size.
-pub const CURRENT: Color = Color::rgba(255, 224, 64, 255);
-pub const CURRENT_SIZE: f32 = 14.0;
 /// The panel's course line, in the right column where the viewer's
 /// "Enter system" button goes.
 const COURSE_TOP: f32 = 712.0;
 
-// The current system's mark shows round its dot's outline.
-const _: () = assert!(CURRENT_SIZE > OUTLINE_SIZE);
 // The two columns stay on screen and apart.
 const _: () = assert!(LEFT + LEFT_WRAP <= RIGHT);
 const _: () = assert!(RIGHT + RIGHT_WRAP <= MAP_WIDTH);
@@ -180,22 +264,132 @@ struct Press {
     travelled: f32,
 }
 
-/// What [`GalaxyMap::draw_marks`] draws over the galaxy, besides its
-/// systems and links.
+/// A system the map draws an oval for, with what it is framed in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PicturedSystem {
+    /// The system.
+    pub id: SystemId,
+    /// Its oval's frame colour.
+    pub frame: Color,
+    /// Whether its red mission arrow is drawn.
+    pub red_arrow: bool,
+    /// Whether its green mission arrow is drawn.
+    pub green_arrow: bool,
+}
+
+/// What [`GalaxyMap::draw_marks`] draws, in `_DrawMap`'s order: a
+/// session's [`MapDrawing`] with each frame's colour ([`MapPicture::of`]),
+/// or the viewer's ([`MapPicture::viewer`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapPicture {
+    /// Whether it is the hypergate map's: its links in
+    /// [`REAL_DARK_GREY`].
+    pub hypergate: bool,
+    /// The course's segments, raw.
+    pub course: Vec<(SystemId, SystemId)>,
+    /// The current system's links.
+    pub current_links: Vec<(SystemId, SystemId)>,
+    /// Every other link.
+    pub links: Vec<MapLink>,
+    /// The link to the system selected in mode 3.
+    pub mode3_link: Option<(SystemId, SystemId)>,
+    /// The systems drawn, by ascending ID.
+    pub systems: Vec<PicturedSystem>,
+    /// The current system, whose dot is drawn; none on the viewer.
+    pub current: Option<SystemId>,
+    /// The systems the hypergate arrows point to.
+    pub gate_arrows: Vec<SystemId>,
+    /// The systems that may be named, by ascending ID.
+    pub named: Vec<SystemId>,
+}
+
+/// The colour `_ColorCodeSystem` gives `code` (@0xd672-0xd941).
+#[must_use]
+pub fn code_color(code: SystemColorCode) -> Color {
+    match code {
+        SystemColorCode::Unexplored => DARK_GREY,
+        SystemColorCode::Uninhabited => LIGHT_GREY,
+        SystemColorCode::Dominated => BRIGHT_GREEN,
+        SystemColorCode::Cleared => CLEARED,
+        SystemColorCode::Denied => DENIED,
+        SystemColorCode::Hostile => HOSTILE,
+    }
+}
+
+impl MapPicture {
+    /// The session's `drawing`, each system framed in its code's colour
+    /// ([`code_color`]).
+    #[must_use]
+    pub fn of(drawing: &MapDrawing) -> Self {
+        Self {
+            hypergate: drawing.hypergate,
+            course: drawing.course.clone(),
+            current_links: drawing.current_links.clone(),
+            links: drawing.links.clone(),
+            mode3_link: drawing.mode3_link,
+            systems: drawing
+                .systems
+                .iter()
+                .map(|system| PicturedSystem {
+                    id: system.id,
+                    frame: code_color(system.code),
+                    red_arrow: system.red_arrow,
+                    green_arrow: system.green_arrow,
+                })
+                .collect(),
+            current: Some(drawing.current),
+            gate_arrows: drawing.gate_arrows.clone(),
+            named: drawing.named.clone(),
+        }
+    }
+
+    /// The viewer's picture of `model`, which has no session and so no
+    /// filters: every system the catalog has, hidden by its `Visibility`
+    /// or not, framed in its government's colour, as there is no
+    /// `_ColorCodeSystem` without a session; every link in the data once,
+    /// in [`LESS_DARK_GREY`]; every system named, by the zoom's rule; and
+    /// no course, arrows or current dot.
+    #[must_use]
+    pub fn viewer(model: &GalaxyModel) -> Self {
+        let systems = model.catalog_systems();
+        Self {
+            hypergate: false,
+            course: Vec::new(),
+            current_links: Vec::new(),
+            links: model
+                .links()
+                .iter()
+                .map(|&(from, to)| MapLink {
+                    from,
+                    to,
+                    selected: false,
+                })
+                .collect(),
+            mode3_link: None,
+            systems: systems
+                .iter()
+                .map(|system| PicturedSystem {
+                    id: system.entry.id,
+                    frame: system.color,
+                    red_arrow: false,
+                    green_arrow: false,
+                })
+                .collect(),
+            current: None,
+            gate_arrows: Vec::new(),
+            named: systems.iter().map(|system| system.entry.id).collect(),
+        }
+    }
+}
+
+/// What [`GalaxyMap::draw_marks`] draws over the nebulae: a picture, and
+/// the system selected (`_selSystem`), whose name alone is drawn above a
+/// zoom of 1.1 and whose hypergate arrow is drawn white.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapMarks<'a> {
-    /// The system the player is in, marked; `None` draws no course, no
-    /// selected link and no arrows.
-    pub current: Option<SystemId>,
-    /// The course from it: the systems still to jump to, in order.
-    pub route: &'a [SystemId],
-    /// The system selected in nav mode 3, drawn as a link from the current
-    /// system.
-    pub hyper_selection: Option<SystemId>,
-    /// The systems a hypergate offers, each with an arrow from the current
-    /// system.
-    pub offered: &'a [SystemId],
-    /// The system drawn with a square round it.
+    /// What is drawn.
+    pub picture: &'a MapPicture,
+    /// The system selected.
     pub selected: Option<SystemId>,
 }
 
@@ -249,8 +443,9 @@ pub struct GalaxyMap {
     explored: Option<BTreeSet<SystemId>>,
     /// The systems a hypergate offers, on the hypergate map.
     offered: Vec<SystemId>,
-    /// The system selected in nav mode 3, as last shown.
-    hyper_selection: Option<SystemId>,
+    /// What the map draws: the viewer's from the start, an in-flight
+    /// map's once shown ([`GalaxyMap::show_drawing`]).
+    picture: Option<MapPicture>,
     /// Whether Shift is held.
     shift: bool,
     /// A Tab, `\` or Return on an in-flight map, not yet taken.
@@ -282,6 +477,7 @@ impl GalaxyMap {
     fn with_mode(catalog: &impl GalaxyCatalog, mode: MapMode) -> Self {
         let model = GalaxyModel::new(catalog.galaxy());
         let view = MapView::fit(model.bounds());
+        let picture = (mode == MapMode::Viewer).then(|| MapPicture::viewer(&model));
         Self {
             mode,
             model,
@@ -296,7 +492,7 @@ impl GalaxyMap {
             route: Vec::new(),
             explored: None,
             offered: Vec::new(),
-            hyper_selection: None,
+            picture,
             shift: false,
             request: None,
         }
@@ -323,6 +519,13 @@ impl GalaxyMap {
         self.offered = offered;
         self.selected = None;
         self.destination = None;
+    }
+
+    /// The systems the hypergate offers, on the hypergate map; none on
+    /// the others.
+    #[must_use]
+    pub fn offered(&self) -> &[SystemId] {
+        &self.offered
     }
 
     /// The system picked on the hypergate map, if one is selected, and the
@@ -383,18 +586,29 @@ impl GalaxyMap {
         self.route = route.to_vec();
     }
 
-    /// Shows `selected` as the system selected in nav mode 3: the map draws
-    /// a [`HYPER_SELECTED`] link to it from the current system, over every
-    /// link and the course and under the systems, as `_DrawMap` does
-    /// (@0xebd8-0xed31) on every map mode. `None` draws none.
-    pub fn show_hyper_selection(&mut self, selected: Option<SystemId>) {
-        self.hyper_selection = selected;
+    /// Shows `drawing`, the session's ([`Session::map_drawing`]), as what
+    /// the map draws, each system framed in its code's colour
+    /// ([`MapPicture::of`]), in place of any shown before.
+    ///
+    /// [`Session::map_drawing`]: nova_sim::Session::map_drawing
+    pub fn show_drawing(&mut self, drawing: &MapDrawing) {
+        self.picture = Some(MapPicture::of(drawing));
     }
 
-    /// The system shown as selected in nav mode 3.
+    /// What the map draws, once there is anything: the viewer's from the
+    /// start, an in-flight map's once shown.
+    #[must_use]
+    pub fn picture(&self) -> Option<&MapPicture> {
+        self.picture.as_ref()
+    }
+
+    /// The system the map draws the mode-3 link to, if any.
     #[must_use]
     pub fn hyper_selection(&self) -> Option<SystemId> {
-        self.hyper_selection
+        self.picture
+            .as_ref()
+            .and_then(|picture| picture.mode3_link)
+            .map(|(_, to)| to)
     }
 
     /// Selects `system`, as the map selects as it opens (`_DoSystemMap`
@@ -407,17 +621,18 @@ impl GalaxyMap {
         self.clicked = false;
     }
 
-    /// Draws the session's `galaxy` over the catalog's geometry
-    /// ([`GalaxyModel::apply`]): its visible systems, governments, links
-    /// and the nebulae it shows, active and explored. A selected system it
-    /// hides is let go of.
+    /// Takes the session's `galaxy` over the catalog's geometry
+    /// ([`GalaxyModel::apply`]): its visible systems are the ones a click
+    /// selects, and the nebulae it shows, active and explored, are drawn.
+    /// A selected system it hides is let go of. What the map draws over
+    /// the nebulae is its picture ([`GalaxyMap::show_drawing`]).
     pub fn show_galaxy(&mut self, galaxy: &OverlaidGalaxy) {
         self.model.apply(galaxy);
         self.selected = self.selected.filter(|&id| self.model.system(id).is_some());
     }
 
     /// Shows `explored` as the systems the pilot has explored, in place of
-    /// any shown before: every other system is drawn unexplored.
+    /// any shown before: the panel says any other is unexplored.
     pub fn show_explored(&mut self, explored: impl IntoIterator<Item = SystemId>) {
         self.explored = Some(explored.into_iter().collect());
     }
@@ -428,7 +643,7 @@ impl GalaxyMap {
         self.explored.as_ref()
     }
 
-    /// Whether system `id` is drawn as explored.
+    /// Whether the panel shows system `id` as explored.
     fn is_explored(&self, id: SystemId) -> bool {
         self.explored
             .as_ref()
@@ -558,89 +773,175 @@ impl GalaxyMap {
                 );
             }
         }
-        let marks = MapMarks {
-            current: self.current,
-            route: &self.route,
-            hyper_selection: self.hyper_selection,
-            offered: &self.offered,
-            selected: self.selected,
-        };
-        self.draw_marks(list, &self.view.transform(), &marks);
+        let transform = self.view.transform();
+        if let Some(picture) = &self.picture {
+            let marks = MapMarks {
+                picture,
+                selected: self.selected,
+            };
+            self.draw_marks(list, &transform, &marks);
+            self.draw_brackets(list, &transform);
+            self.draw_names(list, &transform, &marks);
+        } else {
+            self.draw_brackets(list, &transform);
+        }
     }
 
-    /// Draws everything the map draws over its nebulae, through
-    /// `transform`, with `marks`: every hyperlink, the course from the
-    /// current system, the link to the system selected in nav mode 3, the
-    /// current system's mark and the arrows to the gates offered, every
-    /// system's outline and dot (coloured as the map's galaxy and explored
-    /// systems say), and the square round the system selected. Only lines
-    /// and dots. The course map draws its own view and state through it;
-    /// the floating map (the flight's) its own centre, zoom and marks.
+    /// Draws what `_DrawMap` draws over the nebulae, through `transform`,
+    /// with `marks` (see the module docs' "What the map draws"): the
+    /// course, the links, the mode-3 link, each system's oval and arrows,
+    /// the current system's dot, the hypergate arrows and the names. The
+    /// course, hypergate and viewer maps draw their own picture and
+    /// selection through it, then their brackets and names again; the
+    /// floating map (the flight's) its own centre, zoom, picture and
+    /// selection, and nothing after.
     pub fn draw_marks(&self, list: &mut DrawList, transform: &Transform, marks: &MapMarks<'_>) {
-        let screen = |id| {
+        let picture = marks.picture;
+        let zoomed = transform.zoom() <= ZOOMED;
+        let point = |id: SystemId| {
             self.model
-                .system(id)
-                .map(|system| transform.world_to_screen(system.position()))
+                .position(id)
+                .map(|at| transform.world_to_screen(at))
         };
-        for &(from, to) in self.model.links() {
-            if let (Some(from), Some(to)) = (screen(from), screen(to)) {
-                list.line(from, to, LINK_WIDTH, LINK);
+        let pixel = |id: SystemId| self.model.position(id).map(|at| transform.pixel(at));
+        let segment = |list: &mut DrawList, (from, to): (SystemId, SystemId), pen, color| {
+            if let (Some(from), Some(to)) = (pixel(from), pixel(to)) {
+                pen_line(list, from, to, pen, color);
             }
+        };
+        let grey = if picture.hypergate {
+            REAL_DARK_GREY
+        } else {
+            LESS_DARK_GREY
+        };
+        for &hop in &picture.course {
+            segment(list, hop, 2, BRIGHT_GREEN);
         }
-        if let Some(current) = marks.current {
-            let stops: Vec<Option<Point>> = std::iter::once(current)
-                .chain(marks.route.iter().copied())
-                .map(screen)
-                .collect();
-            for hop in stops.windows(2) {
-                if let [Some(from), Some(to)] = *hop {
-                    list.line(from, to, ROUTE_WIDTH, ROUTE);
-                }
-            }
-            if let (Some(from), Some(to)) =
-                (screen(current), marks.hyper_selection.and_then(screen))
-            {
-                list.line(from, to, HYPER_SELECTED_WIDTH, HYPER_SELECTED);
-            }
-            if let Some(at) = screen(current) {
-                list.dot(at, CURRENT_SIZE, CURRENT);
-                for to in marks.offered.iter().filter_map(|&id| screen(id)) {
-                    arrow(list, at, to);
-                }
-            }
+        for &link in &picture.current_links {
+            segment(list, link, 1, grey);
         }
-        // Highest ID first, so where systems share a position the lowest
-        // ID, the one a first click selects, is on top.
-        let systems = self.model.systems().iter().rev();
-        for system in systems.clone() {
-            let at = transform.world_to_screen(system.position());
-            list.dot(at, OUTLINE_SIZE, OUTLINE);
+        for link in &picture.links {
+            let color = if link.selected { DIM_GREEN } else { grey };
+            segment(list, (link.from, link.to), 1, color);
         }
-        for system in systems {
-            let at = transform.world_to_screen(system.position());
-            let color = if self.is_explored(system.entry.id) {
-                system.color
-            } else {
-                UNEXPLORED
+        if let Some(link) = picture.mode3_link {
+            segment(list, link, 1, DIM_GREEN);
+        }
+        let (inset, pen) = if zoomed {
+            (SYSTEM_INSET_ZOOMED, 2)
+        } else {
+            (SYSTEM_INSET, 1)
+        };
+        for system in &picture.systems {
+            let Some(at) = pixel(system.id) else {
+                continue;
             };
-            list.dot(at, DOT_SIZE, color);
-        }
-        if let Some(at) = marks.selected.and_then(screen) {
-            let half = HIGHLIGHT_SIZE / 2.0;
-            let corners = [
-                Point::new(at.x - half, at.y - half),
-                Point::new(at.x + half, at.y - half),
-                Point::new(at.x + half, at.y + half),
-                Point::new(at.x - half, at.y + half),
-            ];
-            for (index, &from) in corners.iter().enumerate() {
-                list.line(
-                    from,
-                    corners[(index + 1) % 4],
-                    HIGHLIGHT_WIDTH,
-                    Color::WHITE,
+            let rect = around(at, inset);
+            fill_pixels(list, &oval_fill_pixels(rect), Color::BLACK);
+            fill_pixels(list, &oval_frame_pixels(rect, pen), system.frame);
+            if system.red_arrow {
+                icon(
+                    list,
+                    RED_ARROW,
+                    (rect.left - ARROW_SIZE, rect.top - ARROW_SIZE),
                 );
             }
+            if system.green_arrow {
+                icon(list, GREEN_ARROW, (rect.right, rect.top - ARROW_SIZE));
+            }
+        }
+        if let Some(at) = picture.current.and_then(pixel) {
+            let inset = if zoomed {
+                CURRENT_INSET_ZOOMED
+            } else {
+                CURRENT_INSET
+            };
+            fill_pixels(list, &oval_fill_pixels(around(at, inset)), CYAN);
+        }
+        if let Some(tail) = picture.current.and_then(point) {
+            for &target in &picture.gate_arrows {
+                let Some(tip) = point(target) else {
+                    continue;
+                };
+                let (color, pen) = if marks.selected == Some(target) {
+                    (Color::WHITE, 3)
+                } else {
+                    (CYAN, 2)
+                };
+                pen_line(list, truncated(tip), truncated(tail), pen, color);
+                let head = arrow_head(Vec2::new(tip.x, tip.y), Vec2::new(tail.x, tail.y));
+                for end in head {
+                    let end = truncated(Point::new(end.x, end.y));
+                    pen_line(list, truncated(tip), end, pen, color);
+                }
+            }
+        }
+        self.draw_names(list, transform, marks);
+    }
+
+    /// Draws the names `marks` may name, through `transform`: every one at
+    /// a zoom ≤ 1.1, only the selection's above, each white in
+    /// [`NAME_FONT`] at [`NAME_SIZE`], its baseline at
+    /// trunc(x + 7.0), trunc(y + 4.0) (`_DrawMap` @0xf49a-0xf5c0, again
+    /// `_MapDialogUpdate` @0xff14-0x1001f). The baseline is a size above
+    /// the run's top, as the spaceport's text sets it.
+    fn draw_names(&self, list: &mut DrawList, transform: &Transform, marks: &MapMarks<'_>) {
+        let every = transform.zoom() <= NAMED;
+        for &id in &marks.picture.named {
+            if !every && marks.selected != Some(id) {
+                continue;
+            }
+            let Some(system) = self.model.catalog_system(id) else {
+                continue;
+            };
+            let at = transform.world_to_screen(system.position());
+            let (x, y) = (at.x + NAME_OFFSET.0, at.y + NAME_OFFSET.1);
+            let origin = Point::new(x.trunc(), y.trunc() - NAME_SIZE);
+            list.text_in(
+                NAME_FONT,
+                system.entry.name.clone(),
+                origin,
+                NAME_SIZE,
+                None,
+                Color::WHITE,
+            );
+        }
+    }
+
+    /// Draws the brackets round the selection, through `transform`, as
+    /// `_MapDialogUpdate` does after `_DrawMap` (@0xfc9c-0xff03; see the
+    /// module docs): nothing with none selected.
+    fn draw_brackets(&self, list: &mut DrawList, transform: &Transform) {
+        let Some(at) = self
+            .selected
+            .and_then(|id| self.model.position(id))
+            .map(|at| transform.pixel(at))
+        else {
+            return;
+        };
+        let inset = if transform.zoom() <= ZOOMED {
+            BRACKET_INSET_ZOOMED
+        } else {
+            BRACKET_INSET
+        };
+        let IRect {
+            left,
+            top,
+            right,
+            bottom,
+        } = around(at, inset);
+        let ticks = [
+            ((left + 1, top), (left + 1 + TICK, top)),
+            ((left + 1, bottom), (left + 1 + TICK, bottom)),
+            ((right - 1, top), (right - 1 - TICK, top)),
+            ((right - 1, bottom), (right - 1 - TICK, bottom)),
+            ((left, top + 1), (left, top + 1 + TICK)),
+            ((left, bottom - 1), (left, bottom - 1 - TICK)),
+            ((right, top + 1), (right, top + 1 + TICK)),
+            ((right, bottom - 1), (right, bottom - 1 - TICK)),
+        ];
+        for (from, to) in ticks {
+            pen_line(list, from, to, 1, BRIGHT_GREEN);
         }
     }
 
@@ -781,22 +1082,49 @@ fn draw_system(system: &SystemEntry, explored: bool, list: &mut DrawList) {
     }
 }
 
-/// An arrow in [`GATE`] from `from` to `to`: the shaft, then the head's
-/// two strokes, [`ARROW_SIZE`] back from the tip and [`ARROW_SPLAY`]
-/// either side of the shaft.
-fn arrow(list: &mut DrawList, from: Point, to: Point) {
-    list.line(from, to, GATE_WIDTH, GATE);
-    let (dx, dy) = (from.x - to.x, from.y - to.y);
-    let length = dx.hypot(dy);
-    if length == 0.0 {
+/// The point rect at `at` inset by −`inset`: `inset` out on every side.
+fn around((x, y): (i32, i32), inset: i32) -> IRect {
+    IRect::new(x - inset, y - inset, x + inset, y + inset)
+}
+
+/// `at` truncated toward zero, as the original's `cvttss2si` takes a
+/// float point to `MoveTo` / `LineTo`.
+#[allow(clippy::cast_possible_truncation)] // Screen pixels.
+fn truncated(at: Point) -> (i32, i32) {
+    (at.x.trunc() as i32, at.y.trunc() as i32)
+}
+
+/// A QuickDraw `MoveTo(from)`, `LineTo(to)` with a `pen` × `pen` pen in
+/// `color` (see the module docs' "Pens and rasters"): a horizontal or
+/// vertical line is the rect its pen covers, both ends included; any other
+/// is a line `pen` wide from `from` to `to`, each offset by half the pen.
+#[allow(clippy::cast_precision_loss)] // Screen pixels.
+fn pen_line(list: &mut DrawList, from: (i32, i32), to: (i32, i32), pen: i32, color: Color) {
+    if from.0 == to.0 || from.1 == to.1 {
+        let (left, right) = (from.0.min(to.0), from.0.max(to.0) + pen);
+        let (top, bottom) = (from.1.min(to.1), from.1.max(to.1) + pen);
+        let area = Bounds {
+            min: Point::new(left as f32, top as f32),
+            max: Point::new(right as f32, bottom as f32),
+        };
+        fill_rect(list, area, color);
         return;
     }
-    let back = dy.atan2(dx);
-    for side in [-ARROW_SPLAY, ARROW_SPLAY] {
-        let (sin, cos) = (back + side.to_radians()).sin_cos();
-        let tail = Point::new(to.x + ARROW_SIZE * cos, to.y + ARROW_SIZE * sin);
-        list.line(tail, to, GATE_WIDTH, GATE);
-    }
+    let half = pen as f32 / 2.0;
+    let shifted = |(x, y): (i32, i32)| Point::new(x as f32 + half, y as f32 + half);
+    list.line(shifted(from), shifted(to), pen as f32, color);
+}
+
+/// `cicn` `id` in the [`ARROW_SIZE`]-square rect whose top-left corner is
+/// `top_left`, as `PlotCIcon` plots it (`_DrawMap` @0xefbe-0xf058): a
+/// sprite centred on the rect, so the floating map can fade it. A stock
+/// map arrow is 16 × 16; one of another size would be drawn at its own
+/// size where `PlotCIcon` scales it to the rect.
+#[allow(clippy::cast_precision_loss)] // Screen pixels.
+fn icon(list: &mut DrawList, id: i16, top_left: (i32, i32)) {
+    let half = ARROW_SIZE as f32 / 2.0;
+    let center = Point::new(top_left.0 as f32 + half, top_left.1 as f32 + half);
+    list.sprite(ImageKey::icon(id), center, Color::WHITE);
 }
 
 /// Whether `at` is in the map area rather than the panel.
@@ -1061,8 +1389,15 @@ mod tests {
         list
     }
 
+    /// Whether `command` is a system's name on the map, not the panel's.
+    fn is_name(command: &DrawCommand) -> bool {
+        matches!(command, DrawCommand::Text { size, .. } if *size == NAME_SIZE)
+    }
+
+    /// The panel's texts: every text but the systems' names.
     fn texts(list: &DrawList) -> Vec<String> {
         list.iter()
+            .filter(|command| !is_name(command))
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.clone()),
                 _ => None,
@@ -1072,6 +1407,7 @@ mod tests {
 
     fn text(list: &DrawList, starting: &str) -> DrawCommand {
         list.iter()
+            .filter(|command| !is_name(command))
             .find(|command| matches!(command, DrawCommand::Text { text, .. } if text.starts_with(starting)))
             .cloned()
             .unwrap_or_else(|| panic!("no text starting {starting:?} in {:?}", texts(list)))
@@ -1084,18 +1420,32 @@ mod tests {
         }
     }
 
-    /// The dots of `size`, as (centre, colour), in draw order.
-    fn dots(list: &DrawList, of_size: f32) -> Vec<(Point, Color)> {
+    /// The rects of `color` (the horizontal lines [`fill_rect`] draws), as
+    /// (left, top, right, bottom), in draw order.
+    fn rects(list: &DrawList, of_color: Color) -> Vec<(f32, f32, f32, f32)> {
         list.iter()
-            .filter_map(|command| match command {
-                DrawCommand::Dot {
-                    center,
-                    size,
+            .filter_map(|command| match *command {
+                DrawCommand::Line {
+                    from,
+                    to,
+                    width,
                     color,
-                } if *size == of_size => Some((*center, *color)),
+                } if color == of_color && from.y == to.y => Some((
+                    from.x.min(to.x),
+                    from.y - width / 2.0,
+                    from.x.max(to.x),
+                    from.y + width / 2.0,
+                )),
                 _ => None,
             })
             .collect()
+    }
+
+    /// The rects [`fill_pixels`] fills `pixels` with.
+    fn filled(pixels: &[(i32, i32)]) -> Vec<(f32, f32, f32, f32)> {
+        let mut list = DrawList::new();
+        fill_pixels(&mut list, pixels, Color::WHITE);
+        rects(&list, Color::WHITE)
     }
 
     /// The lines of `color`, as (from, to, width), in draw order.
@@ -1427,6 +1777,7 @@ mod tests {
             DrawCommand::Text { .. } => "text",
             DrawCommand::Line { .. } => "line",
             DrawCommand::Dot { .. } => "dot",
+            DrawCommand::Clipped { .. } => "clipped",
         }
     }
 
@@ -1461,108 +1812,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_hyperlink_is_one_line_between_its_systems() {
-        let map = map();
-        let list = drawn(&map);
-        assert_eq!(
-            lines(&list, LINK),
-            [
-                (dot(&map, 128), dot(&map, 129), 1.0),
-                (dot(&map, 128), dot(&map, 130), 1.0),
-            ]
-        );
-    }
-
     /// As the original's `_DrawMap` (@0xe7a8) draws it: a plain line
     /// between the pair, whichever end lists the link, though by the
     /// engine's `HyperlinkRule` the ship jumps along it one way only.
-    #[test]
-    fn a_link_listed_by_one_system_alone_is_drawn_once() {
-        for (lister, listed) in [(128, 129), (129, 128)] {
-            let mut systems = vec![system(128, 0, 0), system(129, 600, 0)];
-            let at = usize::try_from(lister - 128).expect("128 or 129");
-            systems[at].links = vec![SystemId(listed)];
-            let map = GalaxyMap::new(&FakeCatalog::new(Galaxy {
-                systems,
-                ..Galaxy::default()
-            }));
-            assert_eq!(
-                lines(&drawn(&map), LINK),
-                [(dot(&map, 128), dot(&map, 129), 1.0)],
-                "listed by {lister}"
-            );
-        }
-    }
-
-    #[test]
-    fn every_system_has_an_outline_then_a_dot_in_its_colour_highest_id_first() {
-        let map = map();
-        let list = drawn(&map);
-        let blue = Color::from_rgb24(BLUE);
-        let outlines: Vec<(Point, Color)> = [131, 130, 129, 128]
-            .into_iter()
-            .map(|id| (dot(&map, id), OUTLINE))
-            .collect();
-        assert_eq!(dots(&list, OUTLINE_SIZE), outlines);
-        assert_eq!(
-            dots(&list, DOT_SIZE),
-            [
-                (dot(&map, 131), NEUTRAL),
-                (dot(&map, 130), blue),
-                (dot(&map, 129), NEUTRAL),
-                (dot(&map, 128), blue),
-            ]
-        );
-        let kinds: Vec<&str> = list.iter().map(kind).collect();
-        let last_outline = list
-            .iter()
-            .rposition(|c| matches!(c, DrawCommand::Dot { size, .. } if *size == OUTLINE_SIZE));
-        let first_fill = list
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Dot { size, .. } if *size == DOT_SIZE));
-        assert!(last_outline < first_fill, "{kinds:?}");
-        let last_link = list
-            .iter()
-            .rposition(|c| matches!(c, DrawCommand::Line { color, .. } if *color == LINK));
-        assert!(
-            last_link
-                < list
-                    .iter()
-                    .position(|c| matches!(c, DrawCommand::Dot { .. }))
-        );
-    }
-
-    #[test]
-    fn with_an_explored_set_unexplored_systems_are_grey() {
-        let mut map = map();
-        assert_eq!(map.explored(), None, "everything shows by default");
-        map.show_explored([SystemId(128), SystemId(129)]);
-        assert_eq!(
-            map.explored()
-                .map(|set| set.iter().copied().collect::<Vec<_>>()),
-            Some(vec![SystemId(128), SystemId(129)])
-        );
-        let list = drawn(&map);
-        assert_eq!(
-            dots(&list, DOT_SIZE),
-            [
-                (dot(&map, 131), UNEXPLORED),
-                (dot(&map, 130), UNEXPLORED),
-                (dot(&map, 129), NEUTRAL),
-                (dot(&map, 128), Color::from_rgb24(BLUE)),
-            ]
-        );
-        assert_eq!(UNEXPLORED, Color::rgba(96, 96, 96, 255));
-        map.show_explored([SystemId(130)]);
-        let list = drawn(&map);
-        assert_eq!(
-            dots(&list, DOT_SIZE)[1],
-            (dot(&map, 130), Color::from_rgb24(BLUE)),
-            "replaced"
-        );
-        assert_eq!(dots(&list, DOT_SIZE)[3], (dot(&map, 128), UNEXPLORED));
-    }
 
     #[test]
     fn an_unexplored_system_shows_its_name_but_not_its_stellars() {
@@ -1580,60 +1832,6 @@ mod tests {
         assert_eq!(UNEXPLORED_TEXT, "Unexplored");
         click_on(&mut map, 129);
         assert_eq!(origin(&drawn(&map), "No stellars"), at(LEFT, STELLARS_TOP));
-    }
-
-    #[test]
-    fn dots_follow_the_view() {
-        let mut map = map();
-        let before = dot(&map, 129);
-        map.input(&press(Key::Right));
-        let list = drawn(&map);
-        let beta = dots(&list, DOT_SIZE)[2].0;
-        assert!(
-            (beta.x - (before.x - PAN_STEP)).abs() < 1e-3,
-            "{beta:?} from {before:?}"
-        );
-        assert_eq!(beta.y, before.y);
-    }
-
-    /// The white lines: the highlight round the selected system.
-    fn highlight(list: &DrawList) -> Vec<(Point, Point, f32)> {
-        lines(list, Color::WHITE)
-    }
-
-    #[test]
-    fn only_the_selected_system_is_highlighted() {
-        let mut map = map();
-        assert_eq!(highlight(&drawn(&map)), []);
-        click_on(&mut map, 129);
-        let c = dot(&map, 129);
-        let h = HIGHLIGHT_SIZE / 2.0;
-        let corners = [
-            at(c.x - h, c.y - h),
-            at(c.x + h, c.y - h),
-            at(c.x + h, c.y + h),
-            at(c.x - h, c.y + h),
-        ];
-        assert_eq!(
-            highlight(&drawn(&map)),
-            [
-                (corners[0], corners[1], 1.0),
-                (corners[1], corners[2], 1.0),
-                (corners[2], corners[3], 1.0),
-                (corners[3], corners[0], 1.0),
-            ]
-        );
-        let list = drawn(&map);
-        let last_dot = list
-            .iter()
-            .rposition(|c| matches!(c, DrawCommand::Dot { .. }));
-        let first_white = list
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == Color::WHITE));
-        assert!(
-            last_dot < first_white,
-            "the highlight is on top of the dots"
-        );
     }
 
     #[test]
@@ -1656,7 +1854,12 @@ mod tests {
             .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == PANEL))
             .expect("the panel");
         assert_eq!(kinds[panel + 1], "line", "the separator is next");
-        assert!(kinds[..panel].iter().all(|&k| k != "text"));
+        assert!(
+            list.iter()
+                .take(panel)
+                .all(|c| kind(c) != "text" || is_name(c)),
+            "only the names before the panel"
+        );
         assert!(kinds[panel + 2..].iter().all(|&k| k == "text"), "{kinds:?}");
         assert!(list.iter().last().is_some_and(|c| kind(c) == "text"));
     }
@@ -1909,7 +2112,7 @@ mod tests {
             .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == PANEL));
         let first_text = list
             .iter()
-            .position(|c| matches!(c, DrawCommand::Text { .. }));
+            .position(|c| matches!(c, DrawCommand::Text { .. }) && !is_name(c));
         assert!(panel < quad && quad < first_text, "{quad:?}");
     }
 
@@ -2031,71 +2234,8 @@ mod tests {
         assert_eq!(map.mode(), MapMode::Course);
         assert_eq!(map.current(), None);
         assert_eq!(map.route(), []);
-        assert_eq!(lines(&drawn(&map), ROUTE), []);
+        assert_eq!(map.picture(), None, "nothing drawn until shown");
         assert_eq!(self::map().mode(), MapMode::Viewer);
-    }
-
-    #[test]
-    fn the_route_is_drawn_from_the_current_system_through_each_hop() {
-        let mut map = course_map();
-        map.show_course(SystemId(130), &ids(&[128, 129]));
-        assert_eq!(map.current(), Some(SystemId(130)));
-        assert_eq!(map.route(), ids(&[128, 129]));
-        let list = drawn(&map);
-        assert_eq!(
-            lines(&list, ROUTE),
-            [
-                (dot(&map, 130), dot(&map, 128), ROUTE_WIDTH),
-                (dot(&map, 128), dot(&map, 129), ROUTE_WIDTH),
-            ]
-        );
-        // Over the hyperlinks, under the dots.
-        let last_link = list
-            .iter()
-            .rposition(|c| matches!(c, DrawCommand::Line { color, .. } if *color == LINK));
-        let first_route = list
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == ROUTE));
-        let first_dot = list
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Dot { .. }));
-        assert!(
-            last_link < first_route && first_route < first_dot,
-            "{list:?}"
-        );
-        assert_eq!(ROUTE_WIDTH, 3.0);
-    }
-
-    #[test]
-    fn the_current_system_is_marked_under_its_dot() {
-        let mut map = course_map();
-        map.show_course(SystemId(129), &[]);
-        let list = drawn(&map);
-        assert_eq!(dots(&list, CURRENT_SIZE), [(dot(&map, 129), CURRENT)]);
-        assert_eq!(lines(&list, ROUTE), []);
-        let marker = list
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Dot { color, .. } if *color == CURRENT));
-        let first_outline = list
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Dot { size, .. } if *size == OUTLINE_SIZE));
-        assert!(marker < first_outline, "{list:?}");
-        assert_eq!(CURRENT_SIZE, 14.0);
-        assert_ne!(CURRENT, ROUTE);
-    }
-
-    #[test]
-    fn a_course_through_a_system_not_on_the_map_skips_its_lines() {
-        let mut map = course_map();
-        map.show_course(SystemId(130), &ids(&[128, 999, 129]));
-        assert_eq!(
-            lines(&drawn(&map), ROUTE),
-            [(dot(&map, 130), dot(&map, 128), ROUTE_WIDTH)]
-        );
-        map.show_course(SystemId(999), &ids(&[128]));
-        let list = drawn(&map);
-        assert_eq!(lines(&list, ROUTE), []);
-        assert_eq!(dots(&list, CURRENT_SIZE), []);
     }
 
     #[test]
@@ -2224,75 +2364,6 @@ mod tests {
 
     // The hyperspace selection.
 
-    #[test]
-    fn the_selected_link_is_drawn_dim_green_from_the_current_system() {
-        let mut map = course_map();
-        map.show_course(SystemId(130), &ids(&[128]));
-        map.show_hyper_selection(Some(SystemId(129)));
-        assert_eq!(map.hyper_selection(), Some(SystemId(129)));
-        let list = drawn(&map);
-        assert_eq!(
-            lines(&list, HYPER_SELECTED),
-            [(dot(&map, 130), dot(&map, 129), 1.0)]
-        );
-        // Over every link and the course, under every system.
-        let selected = list
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == HYPER_SELECTED))
-            .expect("drawn");
-        let last_line = |of: Color| {
-            list.iter()
-                .rposition(|c| matches!(c, DrawCommand::Line { color, .. } if *color == of))
-                .expect("drawn")
-        };
-        let first_dot = list
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Dot { .. }))
-            .expect("drawn");
-        assert!(
-            last_line(LINK) < selected && last_line(ROUTE) < selected && selected < first_dot,
-            "{list:?}"
-        );
-        // `_dimGreen` (`_InitColors` @0x1be8c-0x1be9c), at pen 1.
-        assert_eq!(HYPER_SELECTED, Color::rgba(0, 153, 0, 255));
-        assert_eq!(HYPER_SELECTED_WIDTH, 1.0);
-    }
-
-    #[test]
-    fn no_selected_link_without_a_selection_a_current_system_or_both_ends_on_the_map() {
-        let mut map = course_map();
-        map.show_hyper_selection(Some(SystemId(129)));
-        assert_eq!(lines(&drawn(&map), HYPER_SELECTED), [], "no current system");
-        map.show_course(SystemId(130), &[]);
-        map.show_hyper_selection(None);
-        assert_eq!(map.hyper_selection(), None);
-        assert_eq!(lines(&drawn(&map), HYPER_SELECTED), [], "no selection");
-        map.show_hyper_selection(Some(SystemId(999)));
-        assert_eq!(lines(&drawn(&map), HYPER_SELECTED), [], "not on the map");
-        map.show_course(SystemId(999), &[]);
-        map.show_hyper_selection(Some(SystemId(129)));
-        assert_eq!(
-            lines(&drawn(&map), HYPER_SELECTED),
-            [],
-            "here not on the map"
-        );
-    }
-
-    #[test]
-    fn the_viewer_and_the_hypergate_map_draw_the_selected_link_too() {
-        let mut map = self::map();
-        map.show_course(SystemId(130), &[]);
-        map.show_hyper_selection(Some(SystemId(129)));
-        assert_eq!(lines(&drawn(&map), HYPER_SELECTED).len(), 1, "viewer");
-        let mut map = gate_map();
-        map.show_hyper_selection(Some(SystemId(129)));
-        assert_eq!(
-            lines(&drawn(&map), HYPER_SELECTED),
-            [(dot(&map, 128), dot(&map, 129), 1.0)],
-            "hypergate"
-        );
-    }
-
     /// The panel's title: the selected system's name, or the prompt.
     fn title(list: &DrawList) -> String {
         list.iter()
@@ -2311,16 +2382,7 @@ mod tests {
         map.preselect(Some(SystemId(129)));
         assert_eq!(map.selected(), Some(SystemId(129)));
         let list = drawn(&map);
-        let half = HIGHLIGHT_SIZE / 2.0;
-        let beta = dot(&map, 129);
-        assert!(
-            lines(&list, Color::WHITE).contains(&(
-                at(beta.x - half, beta.y - half),
-                at(beta.x + half, beta.y - half),
-                HIGHLIGHT_WIDTH
-            )),
-            "highlighted"
-        );
+        assert_eq!(rects(&list, BRIGHT_GREEN).len(), 8, "bracketed");
         assert_eq!(title(&list), "Beta (sÿst 129)");
         assert_eq!(map.take_destination(), None, "no destination");
         map.preselect(None);
@@ -2494,56 +2556,6 @@ mod tests {
         assert_eq!(course.selected(), Some(SystemId(129)));
     }
 
-    #[test]
-    fn an_arrow_points_from_the_current_system_to_each_offered_one() {
-        let map = gate_map();
-        let list = drawn(&map);
-        let arrows = lines(&list, GATE);
-        assert_eq!(arrows.len(), 6, "{arrows:?}");
-        let (from, to) = (dot(&map, 128), dot(&map, 129));
-        assert_eq!(arrows[0], (from, to, GATE_WIDTH));
-        // The head: two strokes back from the tip, either side of the shaft.
-        for (tail, tip, width) in &arrows[1..3] {
-            assert_eq!((*tip, *width), (to, GATE_WIDTH));
-            assert!(tail.x < to.x, "{tail:?}");
-            let back = ((to.x - tail.x).powi(2) + (to.y - tail.y).powi(2)).sqrt();
-            assert!((back - ARROW_SIZE).abs() < 1e-3, "{back}");
-        }
-        // The shaft points right, so the head's strokes splay 30° back
-        // from it: below, then above.
-        let near = |a: Point, b: Point| (a.x - b.x).abs() < 1e-3 && (a.y - b.y).abs() < 1e-3;
-        let back = ARROW_SIZE * 30_f32.to_radians().cos();
-        let aside = ARROW_SIZE * 30_f32.to_radians().sin();
-        let below = Point::new(to.x - back, to.y + aside);
-        let above = Point::new(to.x - back, to.y - aside);
-        assert!(near(arrows[1].0, below), "{arrows:?}");
-        assert!(near(arrows[2].0, above), "{arrows:?}");
-        assert_eq!(arrows[3], (from, dot(&map, 130), GATE_WIDTH));
-        assert_eq!(ARROW_SIZE, 10.0);
-        let texts = texts(&list);
-        assert!(texts.contains(&HYPERGATE_HELP.to_owned()), "{texts:?}");
-        assert!(!texts.contains(&COURSE_HELP.to_owned()));
-    }
-
-    #[test]
-    fn without_a_current_system_no_arrows_are_drawn() {
-        let mut map = course_map();
-        map.offer_gates(ids(&[129]));
-        assert_eq!(lines(&drawn(&map), GATE), []);
-        let mut map = gate_map();
-        map.take_gate_choice();
-        assert_eq!(lines(&drawn(&map), GATE), [], "none once taken");
-    }
-
-    #[test]
-    fn an_offered_system_at_the_current_ones_position_has_no_head() {
-        let mut map = course_map();
-        map.show_course(SystemId(128), &[]);
-        map.offer_gates(ids(&[131]));
-        let here = dot(&map, 128);
-        assert_eq!(lines(&drawn(&map), GATE), [(here, here, GATE_WIDTH)]);
-    }
-
     // Tab, `\` and Return on the in-flight maps.
 
     #[test]
@@ -2647,93 +2659,479 @@ mod tests {
         assert_eq!(map.selected(), None);
     }
 
+    // Drawing as `_DrawMap` does.
+
+    use nova_sim::galaxy_map::DrawnSystem;
+
+    fn link(from: i16, to: i16, selected: bool) -> MapLink {
+        MapLink {
+            from: SystemId(from),
+            to: SystemId(to),
+            selected,
+        }
+    }
+
+    fn pair(from: i16, to: i16) -> (SystemId, SystemId) {
+        (SystemId(from), SystemId(to))
+    }
+
+    fn drawn_system(id: i16, code: SystemColorCode, red: bool, green: bool) -> DrawnSystem {
+        DrawnSystem {
+            id: SystemId(id),
+            code,
+            red_arrow: red,
+            green_arrow: green,
+        }
+    }
+
+    /// In Alpha (128), with the course to Beta (129), Alpha's link to
+    /// Beta (its mode-3 slot), Gamma's (130) to Alpha, Alpha cleared with
+    /// a red arrow and Gamma hostile with a green one, Alpha and Beta
+    /// named.
+    fn drawing() -> MapDrawing {
+        MapDrawing {
+            hypergate: false,
+            course: vec![pair(128, 129)],
+            current_links: vec![pair(128, 129)],
+            links: vec![link(130, 128, false), link(128, 129, true)],
+            mode3_link: Some(pair(128, 129)),
+            systems: vec![
+                drawn_system(128, SystemColorCode::Cleared, true, false),
+                drawn_system(130, SystemColorCode::Hostile, false, true),
+            ],
+            current: SystemId(128),
+            gate_arrows: Vec::new(),
+            named: vec![SystemId(128), SystemId(129)],
+        }
+    }
+
+    /// A course map showing `drawing` at scale 1, where Alpha is at
+    /// (212, 154), Beta at (812, 154) and Gamma at (212, 454).
+    fn showing(drawing: &MapDrawing) -> GalaxyMap {
+        let mut map = course_map();
+        map.input(&press(Key::Char('-')));
+        assert_eq!(map.view().scale(), 1.0);
+        map.show_drawing(drawing);
+        map
+    }
+
+    /// Each command of `list` after its nebulae and before its panel's
+    /// fill, by kind and colour, each run of the same one once.
+    fn order(list: &DrawList) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for command in list {
+            let name = match command {
+                DrawCommand::Line { color, .. } => match *color {
+                    BRIGHT_GREEN => "bright green".to_owned(),
+                    LESS_DARK_GREY => "grey".to_owned(),
+                    DIM_GREEN => "dim green".to_owned(),
+                    Color::BLACK => "black".to_owned(),
+                    CLEARED => "blue".to_owned(),
+                    HOSTILE => "red".to_owned(),
+                    CYAN => "cyan".to_owned(),
+                    PANEL => break,
+                    other => format!("{other:?}"),
+                },
+                DrawCommand::Sprite { image, .. } => format!("cicn {}", image.id),
+                DrawCommand::Text { text, .. } => text.clone(),
+                DrawCommand::StretchedPicture { .. } => continue,
+                other => format!("{other:?}"),
+            };
+            if names.last() != Some(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
+
     #[test]
-    fn the_map_draws_the_sessions_galaxy() {
-        let mut map = map();
-        let list = drawn(&map);
-        assert_eq!(dots(&list, DOT_SIZE).len(), 4);
-        assert_eq!(lines(&list, LINK).len(), 2);
-        assert!(matches!(
-            list.iter().next(),
-            Some(DrawCommand::StretchedPicture { .. })
-        ));
-        map.show_galaxy(&session_galaxy(|overlay| {
-            overlay.set_visible(SystemId(129), Some(false));
-            overlay.set_govt(SystemId(130), Some(None));
-            overlay.set_nebula_explored(NebulaId(128), true);
-            overlay.set_nebula_active(NebulaId(128), Some(false));
-        }));
-        let list = drawn(&map);
-        let colors: Vec<Color> = dots(&list, DOT_SIZE).into_iter().map(|(_, c)| c).collect();
+    fn the_map_draws_in_draw_maps_order_then_names_again() {
+        let map = showing(&drawing());
         assert_eq!(
-            colors,
-            [NEUTRAL, NEUTRAL, Color::from_rgb24(BLUE)],
-            "131, 130 made independent, then 128"
+            order(&drawn(&map)),
+            [
+                "bright green",
+                "grey",
+                "dim green",
+                "black",
+                "blue",
+                "cicn 15000",
+                "black",
+                "red",
+                "cicn 15001",
+                "cyan",
+                "Alpha",
+                "Beta",
+                "Alpha",
+                "Beta",
+            ],
+            "course, links, mode-3 link, each system's oval and arrows, the \
+             current dot, the names; then (no selection, no brackets) the \
+             names again"
         );
-        assert_eq!(lines(&list, LINK), [(dot(&map, 128), dot(&map, 130), 1.0)]);
+    }
+
+    #[test]
+    fn the_course_and_links_are_drawn_in_their_colours_and_pens() {
+        let map = showing(&drawing());
+        let list = drawn(&map);
+        assert_eq!(
+            rects(&list, BRIGHT_GREEN),
+            [(212.0, 154.0, 814.0, 156.0)],
+            "the course at pen 2, both ends included"
+        );
+        assert_eq!(
+            rects(&list, LESS_DARK_GREY),
+            [(212.0, 154.0, 813.0, 155.0), (212.0, 154.0, 213.0, 455.0)],
+            "the current system's link, then Gamma's, at pen 1"
+        );
+        assert_eq!(
+            rects(&list, DIM_GREEN),
+            [(212.0, 154.0, 813.0, 155.0), (212.0, 154.0, 813.0, 155.0)],
+            "the selected slot, then the mode-3 link again"
+        );
+        let hypergate = showing(&MapDrawing {
+            hypergate: true,
+            ..drawing()
+        });
+        let list = drawn(&hypergate);
+        assert_eq!(rects(&list, LESS_DARK_GREY), []);
+        assert_eq!(
+            rects(&list, REAL_DARK_GREY).len(),
+            2,
+            "the hypergate map's grey"
+        );
+    }
+
+    #[test]
+    fn a_diagonal_link_is_its_pen_wide_along_the_path_offset_by_half_the_pen() {
+        let map = showing(&MapDrawing {
+            course: Vec::new(),
+            current_links: vec![pair(129, 130)],
+            ..drawing()
+        });
+        let list = drawn(&map);
+        assert_eq!(
+            lines(&list, LESS_DARK_GREY)[0],
+            (at(812.5, 154.5), at(212.5, 454.5), 1.0)
+        );
+    }
+
+    /// Where `map` draws system `id`, in whole pixels.
+    fn pixel_of(map: &GalaxyMap, id: i16) -> (i32, i32) {
+        let system = map.model().catalog_system(SystemId(id)).expect("a system");
+        map.view().transform().pixel(system.position())
+    }
+
+    fn oval_rect((x, y): (i32, i32), inset: i32) -> IRect {
+        IRect::new(x - inset, y - inset, x + inset, y + inset)
+    }
+
+    #[test]
+    fn each_oval_is_filled_black_then_framed_by_its_pen_at_each_zoom() {
+        let mut map = showing(&drawing());
+        let list = drawn(&map);
+        let alpha = oval_rect((212, 154), SYSTEM_INSET);
+        let gamma = oval_rect((212, 454), SYSTEM_INSET);
+        let mut black = filled(&oval_fill_pixels(alpha));
+        black.extend(filled(&oval_fill_pixels(gamma)));
+        assert_eq!(rects(&list, Color::BLACK), black);
+        assert_eq!(rects(&list, CLEARED), filled(&oval_frame_pixels(alpha, 1)));
+        assert_eq!(rects(&list, HOSTILE), filled(&oval_frame_pixels(gamma, 1)));
+        assert_eq!(
+            rects(&list, CYAN),
+            filled(&oval_fill_pixels(oval_rect((212, 154), CURRENT_INSET)))
+        );
+        for _ in 0..3 {
+            map.input(&press(Key::Char('=')));
+        }
+        assert_eq!(map.view().scale(), 64.0 / 27.0, "the zoom ≤ 0.5");
+        let list = drawn(&map);
+        let alpha = oval_rect(pixel_of(&map, 128), SYSTEM_INSET_ZOOMED);
+        assert_eq!(rects(&list, CLEARED), filled(&oval_frame_pixels(alpha, 2)));
+        assert_eq!(
+            rects(&list, CYAN),
+            filled(&oval_fill_pixels(oval_rect(
+                pixel_of(&map, 128),
+                CURRENT_INSET_ZOOMED
+            )))
+        );
+        map.input(&press(Key::Char('-')));
+        let list = drawn(&map);
+        let alpha = oval_rect(pixel_of(&map, 128), SYSTEM_INSET);
+        assert_eq!(
+            rects(&list, CLEARED),
+            filled(&oval_frame_pixels(alpha, 1)),
+            "16/9 is above 0.5"
+        );
+    }
+
+    #[test]
+    fn each_code_frames_in_color_code_systems_colour() {
+        let rgb = |code| {
+            let color = code_color(code);
+            (color.r, color.g, color.b, color.a)
+        };
+        assert_eq!(rgb(SystemColorCode::Unexplored), (0x40, 0x40, 0x40, 255));
+        assert_eq!(rgb(SystemColorCode::Uninhabited), (0xc0, 0xc0, 0xc0, 255));
+        assert_eq!(rgb(SystemColorCode::Dominated), (0, 255, 0, 255));
+        assert_eq!(rgb(SystemColorCode::Cleared), (0, 0, 255, 255));
+        assert_eq!(rgb(SystemColorCode::Denied), (255, 0x66, 0, 255));
+        assert_eq!(rgb(SystemColorCode::Hostile), (255, 0, 0, 255));
+        assert_eq!(
+            (LESS_DARK_GREY.r, REAL_DARK_GREY.r, DIM_GREEN.g, CYAN.b),
+            (0x4e, 0x0f, 0x99, 255)
+        );
+    }
+
+    /// The `cicn` sprites in `list`, as (ID, centre).
+    fn icons(list: &DrawList) -> Vec<(i16, Point)> {
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Sprite {
+                    image,
+                    center,
+                    tint,
+                    ..
+                } if image.kind == crate::ImageKind::Icon => {
+                    assert_eq!(tint, Color::WHITE);
+                    Some((image.id, center))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_mission_arrows_sit_up_left_and_up_right_of_the_oval() {
+        let map = showing(&drawing());
+        // Alpha's oval is (208, 150)-(216, 158): the red arrow in
+        // (192, 134)-(208, 150); Gamma's (208, 450)-(216, 458): the green
+        // one in (216, 434)-(232, 450).
+        assert_eq!(
+            icons(&drawn(&map)),
+            [
+                (RED_ARROW, at(200.0, 142.0)),
+                (GREEN_ARROW, at(224.0, 442.0))
+            ]
+        );
+        assert_eq!((RED_ARROW, GREEN_ARROW, ARROW_SIZE), (15000, 15001, 16));
+    }
+
+    #[test]
+    fn the_gate_arrows_are_white_at_pen_3_for_the_selection_else_cyan_at_pen_2() {
+        let mut map = showing(&MapDrawing {
+            hypergate: true,
+            course: Vec::new(),
+            current_links: Vec::new(),
+            links: Vec::new(),
+            mode3_link: None,
+            systems: Vec::new(),
+            gate_arrows: vec![SystemId(129), SystemId(130)],
+            ..drawing()
+        });
+        map.preselect(Some(SystemId(129)));
+        let list = drawn(&map);
+        let head = |tip: (f32, f32), tail: (f32, f32)| {
+            arrow_head(Vec2::new(tip.0, tip.1), Vec2::new(tail.0, tail.1))
+                .map(|end| (end.x.trunc(), end.y.trunc()))
+        };
+        let [b1, b2] = head((812.0, 154.0), (212.0, 154.0));
+        assert_eq!(
+            rects(&list, Color::WHITE)[0],
+            (212.0, 154.0, 815.0, 157.0),
+            "Beta's shaft, horizontal, at pen 3"
+        );
+        assert_eq!(
+            lines(&list, Color::WHITE)[1..3],
+            [
+                (at(813.5, 155.5), at(b1.0 + 1.5, b1.1 + 1.5), 3.0),
+                (at(813.5, 155.5), at(b2.0 + 1.5, b2.1 + 1.5), 3.0),
+            ]
+        );
+        let [g1, g2] = head((212.0, 454.0), (212.0, 154.0));
+        assert!(
+            rects(&list, CYAN).contains(&(212.0, 154.0, 214.0, 456.0)),
+            "Gamma's shaft, vertical, at pen 2"
+        );
+        let cyan = lines(&list, CYAN);
+        let wide: Vec<&(Point, Point, f32)> = cyan.iter().filter(|line| line.2 == 2.0).collect();
+        assert_eq!(
+            wide,
+            [
+                &(at(213.0, 455.0), at(g1.0 + 1.0, g1.1 + 1.0), 2.0),
+                &(at(213.0, 455.0), at(g2.0 + 1.0, g2.1 + 1.0), 2.0),
+            ],
+            "its head's strokes"
+        );
+    }
+
+    /// The names drawn in `list`: those at the names' size.
+    fn names(list: &DrawList) -> Vec<(String, Point)> {
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    font,
+                    origin,
+                    size,
+                    color,
+                    wrap_width,
+                } if *size == NAME_SIZE => {
+                    assert_eq!(
+                        (*font, *color, *wrap_width),
+                        (NAME_FONT, Color::WHITE, None)
+                    );
+                    Some((text.clone(), *origin))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn names_sit_on_a_baseline_7_right_and_4_down_and_above_1_1_only_the_selections() {
+        let mut map = showing(&drawing());
+        let list = drawn(&map);
+        let (alpha, beta) = (at(219.0, 149.0), at(819.0, 149.0));
+        assert_eq!(
+            names(&list),
+            [
+                ("Alpha".to_owned(), alpha),
+                ("Beta".to_owned(), beta),
+                ("Alpha".to_owned(), alpha),
+                ("Beta".to_owned(), beta),
+            ],
+            "the baseline 158, Geneva 9 white; Gamma, drawn, unnamed"
+        );
+        map.input(&press(Key::Char('-')));
+        assert_eq!(map.view().scale(), 0.75, "a zoom of 4/3");
+        assert_eq!(names(&drawn(&map)), [], "nothing selected");
+        click_on(&mut map, 129);
+        let beta = names(&drawn(&map));
+        assert_eq!(beta.len(), 2);
+        assert!(beta.iter().all(|(name, _)| name == "Beta"));
+    }
+
+    #[test]
+    fn the_brackets_are_eight_4_pixel_ticks_at_each_zoom() {
+        let mut map = showing(&MapDrawing {
+            course: Vec::new(),
+            ..drawing()
+        });
+        map.preselect(Some(SystemId(130)));
+        let ticks = |(x, y): (i32, i32), inset: i32| {
+            let (l, t, r, b) = (x - inset, y - inset, x + inset, y + inset);
+            [
+                (l + 1, t, l + 5, t + 1),
+                (l + 1, b, l + 5, b + 1),
+                (r - 4, t, r, t + 1),
+                (r - 4, b, r, b + 1),
+                (l, t + 1, l + 1, t + 5),
+                (l, b - 4, l + 1, b),
+                (r, t + 1, r + 1, t + 5),
+                (r, b - 4, r + 1, b),
+            ]
+            .map(|(l, t, r, b)| (l as f32, t as f32, r as f32, b as f32))
+        };
+        let list = drawn(&map);
+        assert_eq!(rects(&list, BRIGHT_GREEN), ticks((212, 454), BRACKET_INSET));
+        let after = list
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Line { color, .. } if *color == BRIGHT_GREEN))
+            .expect("brackets");
+        assert!(
+            list.iter().skip(after).any(
+                |command| matches!(command, DrawCommand::Text { size, .. } if *size == NAME_SIZE)
+            ),
+            "the names again after the brackets"
+        );
+        for _ in 0..3 {
+            map.input(&press(Key::Char('=')));
+        }
+        assert_eq!(
+            rects(&drawn(&map), BRIGHT_GREEN),
+            ticks(pixel_of(&map, 130), BRACKET_INSET_ZOOMED)
+        );
+    }
+
+    #[test]
+    fn draw_marks_alone_draws_no_brackets_and_names_once() {
+        let map = showing(&MapDrawing {
+            course: Vec::new(),
+            ..drawing()
+        });
+        let picture = map.picture().expect("shown").clone();
+        let transform = Transform {
+            screen: at(686.0, 278.0),
+            world: at(0.0, 0.0),
+            scale: 16.0 / 9.0,
+        };
+        let marks = MapMarks {
+            picture: &picture,
+            selected: Some(SystemId(128)),
+        };
+        let mut list = DrawList::new();
+        map.draw_marks(&mut list, &transform, &marks);
+        assert_eq!(rects(&list, BRIGHT_GREEN), [], "no brackets");
+        assert_eq!(names(&list).len(), 2, "each name once");
         assert!(
             !list
                 .iter()
                 .any(|command| matches!(command, DrawCommand::StretchedPicture { .. })),
-            "the nebula is inactive"
+            "no nebula"
+        );
+        assert_eq!(
+            rects(&list, CYAN),
+            filled(&oval_fill_pixels(oval_rect((686, 278), CURRENT_INSET))),
+            "the current system at the transform's centre"
         );
     }
 
-    // The marks, drawn through another transform (the floating map's).
-
     #[test]
-    fn the_marks_follow_the_transform_given_with_no_nebula_text_or_own_state() {
+    fn the_viewer_draws_every_system_link_and_name_in_the_data() {
         let mut map = map();
-        map.show_course(SystemId(129), &[]);
-        map.show_hyper_selection(Some(SystemId(129)));
-        map.preselect(Some(SystemId(129)));
-        map.show_explored([SystemId(128), SystemId(129), SystemId(130)]);
-        let transform = Transform {
-            screen: at(686.0, 278.0),
-            world: at(0.0, 0.0),
-            scale: 0.5,
-        };
-        let marks = MapMarks {
-            current: Some(SystemId(128)),
-            route: &[SystemId(129)],
-            hyper_selection: Some(SystemId(130)),
-            offered: &[],
-            selected: None,
-        };
-        let mut list = DrawList::new();
-        map.draw_marks(&mut list, &transform, &marks);
+        // Nothing the viewer is told filters what it draws.
+        map.show_explored([SystemId(129)]);
+        map.show_galaxy(&session_galaxy(|overlay| {
+            overlay.set_visible(SystemId(130), Some(false));
+        }));
+        let picture = map.picture().expect("the viewer's");
+        let ids: Vec<i16> = picture.systems.iter().map(|system| system.id.0).collect();
+        assert_eq!(ids, [128, 129, 130, 131]);
+        let frames: Vec<Color> = picture.systems.iter().map(|system| system.frame).collect();
+        let blue = Color::from_rgb24(BLUE);
+        assert_eq!(frames, [blue, NEUTRAL, blue, NEUTRAL], "by government");
+        assert_eq!(
+            picture.links,
+            [link(128, 129, false), link(128, 130, false)]
+        );
+        assert_eq!(picture.named, ids_of(&[128, 129, 130, 131]));
+        assert_eq!(
+            (
+                picture.current,
+                picture.course.len(),
+                picture.gate_arrows.len()
+            ),
+            (None, 0, 0)
+        );
+        map.input(&press(Key::Char('-')));
+        assert_eq!(map.view().scale(), 1.0);
+        let list = drawn(&map);
+        let names = names(&list);
         assert!(
-            list.iter().all(|command| matches!(
-                command,
-                DrawCommand::Line { .. } | DrawCommand::Dot { .. }
-            )),
-            "no nebula and no panel: {list:?}"
+            names.iter().any(|(name, _)| name == "Gamma"),
+            "hidden, unexplored: {names:?}"
         );
-        let (alpha, beta, gamma) = (at(686.0, 278.0), at(986.0, 278.0), at(686.0, 428.0));
+        assert_eq!(lines(&list, LESS_DARK_GREY).len(), 2);
         assert_eq!(
-            lines(&list, LINK),
-            [(alpha, beta, 1.0), (alpha, gamma, 1.0)]
+            rects(&list, Color::BLACK).len(),
+            4 * filled(&oval_fill_pixels(oval_rect((0, 0), SYSTEM_INSET))).len(),
+            "every system's oval"
         );
-        assert_eq!(lines(&list, ROUTE), [(alpha, beta, ROUTE_WIDTH)]);
-        assert_eq!(lines(&list, HYPER_SELECTED), [(alpha, gamma, 1.0)]);
-        assert_eq!(dots(&list, CURRENT_SIZE), [(alpha, CURRENT)]);
-        assert_eq!(
-            dots(&list, DOT_SIZE),
-            [
-                (alpha, UNEXPLORED),
-                (gamma, Color::from_rgb24(BLUE)),
-                (beta, NEUTRAL),
-                (alpha, Color::from_rgb24(BLUE)),
-            ],
-            "the map's own explored systems, highest ID first"
-        );
-        assert_eq!(lines(&list, Color::WHITE), [], "no selection square");
-        let mut selected = DrawList::new();
-        let marks = MapMarks {
-            selected: Some(SystemId(130)),
-            ..marks
-        };
-        map.draw_marks(&mut selected, &transform, &marks);
-        assert_eq!(lines(&selected, Color::WHITE).len(), 4, "one when asked");
+    }
+
+    fn ids_of(list: &[i16]) -> Vec<SystemId> {
+        list.iter().copied().map(SystemId).collect()
     }
 }

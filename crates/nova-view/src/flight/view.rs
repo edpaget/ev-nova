@@ -236,15 +236,19 @@
 //!   As it opens it selects the system the original's
 //!   `_DoSystemMap` does ([`Session::map_preselection`]): the one
 //!   selected in nav mode 3, or the current system in any other mode,
-//!   and its panel shows that system. It draws the system selected in
-//!   mode 3 as a link from the current system
-//!   ([`GalaxyMap::show_hyper_selection`]). A system clicked on the map
-//!   becomes the destination: the session plots the course there and the
-//!   map shows it, and the hop it cues as the selected link. The map shows the systems the pilot has explored, and the rest
-//!   unexplored. It draws the session's galaxy ([`Session::galaxy`]):
-//!   the catalog's geometry with only the visible systems, links and
-//!   nebulae active and explored, each system coloured by its government there, rebuilt
-//!   on the frame after each change to it; and the course as it is flown
+//!   and its panel shows that system. It draws the session's drawing
+//!   ([`Session::map_drawing`], [`GalaxyMap::show_drawing`]): what
+//!   `_DrawMap` draws of the known and explored systems, coloured by
+//!   `_ColorCodeSystem`, with the mission systems taken as it opens
+//!   ([`Session::map_mission_systems`]), taken again on the frame after
+//!   the galaxy, the explored or known systems, the course or the nav
+//!   change, and after a plot, a Tab or a hypergate map click. A system
+//!   clicked on the map becomes the destination: the session plots the
+//!   course there and the map shows it, and the hop it cues as the
+//!   selected link. The panel says which systems are unexplored. The
+//!   map's nebulae are the session's galaxy's ([`Session::galaxy`]),
+//!   active and explored, rebuilt on the frame after each change to it;
+//!   its panel's course line is the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
 //!   for it.
 //! - The HUD's nav area shows the session's nav mode and its selection
@@ -570,6 +574,7 @@ use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
+use crate::galaxy::map::MapPicture;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapCycle, MapMarks, MapMode};
 use crate::spaceport::PortDialog;
 use crate::spaceport::bar::MISSION_INFO_KEY;
@@ -1975,6 +1980,31 @@ impl NavFlash {
     }
 }
 
+/// What the course map's drawing is taken from
+/// ([`Session::map_drawing`]): while the map is open, a change to any of
+/// it takes the drawing again (see `FlightView::catch_up`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MapSeen {
+    system: SystemId,
+    explored: Vec<SystemId>,
+    known: BTreeSet<SystemId>,
+    course: Vec<SystemId>,
+    nav: NavMode,
+}
+
+impl MapSeen {
+    /// What `session` would draw the map from now.
+    fn of(session: &Session) -> Self {
+        Self {
+            system: session.system(),
+            explored: session.pilot().explored().collect(),
+            known: session.known().clone(),
+            course: session.course().to_vec(),
+            nav: session.nav_mode(),
+        }
+    }
+}
+
 /// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
@@ -2062,6 +2092,17 @@ pub struct FlightView<C> {
     /// whose close puts back the nav the bar opened with; cleared as the
     /// map closes ([`FlightView::close_map`]).
     bar_map: bool,
+    /// The mission systems the course map's red arrows mark, taken as it
+    /// opens, as `_DoSystemMap` runs `_RecalcMissionSystsForMap` then
+    /// (@0x124a0; [`Session::map_mission_systems`]).
+    map_missions: Vec<SystemId>,
+    /// What the course map's drawing was last taken from
+    /// ([`FlightView::redraw_map`]): while the map is open, a change to
+    /// any of it takes the drawing again.
+    map_seen: Option<MapSeen>,
+    /// What the floating map draws, taken at its last show
+    /// ([`FlightView::show_floating_map`]).
+    floating_picture: Option<MapPicture>,
     /// The jump's effect, while it holds flight: the streak and the
     /// fade-out, until the ship arrives.
     jump: Option<JumpEffect>,
@@ -2360,6 +2401,9 @@ impl<
             map_open: false,
             map_key_held: false,
             bar_map: false,
+            map_missions: Vec::new(),
+            map_seen: None,
+            floating_picture: None,
             jump: None,
             fade_in: None,
             death_fade: None,
@@ -2972,9 +3016,32 @@ impl<
         self.map_open = true;
         if let Ok(session) = &self.session {
             self.map.preselect(session.map_preselection());
-            self.map
-                .show_hyper_selection(session.nav_mode().hyperspace());
+            self.map_missions = session.map_mission_systems();
         }
+        self.redraw_map();
+    }
+
+    /// Takes the session's drawing onto the course map
+    /// ([`Session::map_drawing`]), as `_MapDialogUpdate` runs `_DrawMap`:
+    /// on the hypergate map with the gate's offers arrowed, each of which
+    /// that draw marks known ([`Session::mark_known`], `_DrawMap`
+    /// @0xf457-0xf45f). So the first draw of the hypergate map shows an
+    /// offer the player knew nothing of without its oval, and the next one,
+    /// at a Tab, a click or the course map opened again before the next
+    /// rebuild point, shows it, as the original's next `_MapDialogUpdate`
+    /// does. What the drawing was taken from is noted after the mark
+    /// ([`MapSeen`]), so the mark itself doesn't take it again.
+    fn redraw_map(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
+        let drawing = session.map_drawing(offered.as_deref(), &self.map_missions);
+        self.map.show_drawing(&drawing);
+        if offered.is_some() {
+            session.mark_known(drawing.gate_arrows.iter().copied());
+        }
+        self.map_seen = Some(MapSeen::of(session));
     }
 
     /// Opens the course map on a press of [`MAP_KEY`] in flight, held from
@@ -3058,8 +3125,20 @@ impl<
             let _ = session.plot_course(destination);
             self.map
                 .show_course(session.system(), &session.course_shown());
-            self.map
-                .show_hyper_selection(session.nav_mode().hyperspace());
+            self.redraw_map();
+        }
+        // A click on the hypergate map draws it again, its offers known.
+        if self.map.mode() == MapMode::Hypergate
+            && matches!(
+                *input,
+                Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                }
+            )
+        {
+            self.redraw_map();
         }
         if let Some(cycle) = self.map.take_cycle() {
             self.cycle_map(cycle);
@@ -3128,12 +3207,12 @@ impl<
             if let Some(pick) = next_gate_pick(&destinations, self.map.selected(), cycle.back) {
                 self.map.select_gate(pick);
             }
+            self.redraw_map();
             return;
         }
         if session.cycle_map_selection() {
-            self.map
-                .show_hyper_selection(session.nav_mode().hyperspace());
             self.map.preselect(session.map_preselection());
+            self.redraw_map();
             self.retake_nav();
         }
     }
@@ -3509,6 +3588,15 @@ impl<
         }
         if redrawn.system {
             self.redraw_status();
+        }
+        // The open map's drawing follows the galaxy, the explored and known
+        // sets, the course and the nav. The flight is paused while it is
+        // open, so this is rare: a set expression or the developer tools.
+        if self.map_open
+            && let Ok(session) = &self.session
+            && (redrawn.galaxy || self.map_seen.as_ref() != Some(&MapSeen::of(session)))
+        {
+            self.redraw_map();
         }
         redrawn
     }
@@ -5635,8 +5723,25 @@ impl<C> FlightView<C> {
 
     /// Shows the floating map, restarting its clock, as
     /// `_ShowFloatingMap` does.
+    ///
+    /// Each show takes the map's drawing afresh, as `_ShowFloatingMap`
+    /// draws it into the frame then (`_DrawMapInFloatingFrame`): the
+    /// session's drawing off the hypergate map (`_hypergateMapMode` = 0,
+    /// @0x114cb) with the mission systems taken now (@0x114ea), and the
+    /// system selected now ([`Session::floating_preselection`],
+    /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
+    /// The frame shows that drawing until the next show: its course and
+    /// mode-3 link are those of the last show, not live, as the
+    /// original's frame image is drawn only then (at a show, Hyper Select,
+    /// a click and a zoom, each of which shows it again here).
     fn show_floating_map(&mut self) {
         self.floating.show(self.mac_now());
+        if let Ok(session) = &self.session {
+            self.floating.preselect(session.floating_preselection());
+            let missions = session.map_mission_systems();
+            let drawing = session.map_drawing(None, &missions);
+            self.floating_picture = Some(MapPicture::of(&drawing));
+        }
     }
 
     /// The floating map's work each frame, as `_HandlePlayer` does it
@@ -5729,11 +5834,12 @@ impl<C> FlightView<C> {
     }
 
     /// Draws the floating map while it is up: centred on the current
-    /// system at its zoom, the course map's drawing ([`GalaxyMap::draw_marks`])
-    /// with the session's course and mode-3 selection as they are now,
-    /// no gate offers (`_hypergateMapMode` = 0, @0x114cb) and no selection
-    /// square, in its frame bordered in `cölr` `FloatingMap`, clipped and
-    /// faded to its level ([`floating::draw`]).
+    /// system at its zoom, the drawing its last show took
+    /// ([`FlightView::show_floating_map`]) through the course map's
+    /// [`GalaxyMap::draw_marks`], with no brackets or second names, as
+    /// `_DrawMapInFloatingFrame` runs `_DrawMap` alone, in its frame
+    /// bordered in `cölr` `FloatingMap`, clipped and faded to its level
+    /// ([`floating::draw`]).
     fn draw_floating_map(&self, list: &mut DrawList) {
         let Some(level) = self.floating.level(self.mac_now()) else {
             return;
@@ -5748,13 +5854,12 @@ impl<C> FlightView<C> {
             .map_or_else(Point::default, |at| Point::new(at.x, at.y));
         let frame = floating::frame(VIEW_SIZE);
         let transform = floating::transform(frame, at, self.floating.zoom());
-        let route = session.course_shown();
+        let Some(picture) = &self.floating_picture else {
+            return;
+        };
         let marks = MapMarks {
-            current: Some(current),
-            route: &route,
-            hyper_selection: session.nav_mode().hyperspace(),
-            offered: &[],
-            selected: None,
+            picture,
+            selected: self.floating.preselection(),
         };
         floating::draw(list, frame, level, self.escort_colors.border, |raw| {
             self.map.draw_marks(raw, &transform, &marks);
@@ -10432,16 +10537,17 @@ mod tests {
         assert_eq!(view.session().expect("flying").course(), []);
     }
 
-    /// The course map's [`HYPER_SELECTED`] lines drawn, as (from, to).
+    /// The mode-3 link the open course map draws, as (from, to) on the
+    /// map; none while it is shut.
     fn hyper_selected_links(view: &View) -> Vec<(Point, Point)> {
-        drawn(view)
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Line {
-                    from, to, color, ..
-                } if color == crate::galaxy::map::HYPER_SELECTED => Some((from, to)),
-                _ => None,
-            })
+        if !view.map_open() {
+            return Vec::new();
+        }
+        view.course_map()
+            .picture()
+            .and_then(|picture| picture.mode3_link)
+            .map(|(from, to)| (on_map(view, from.0), on_map(view, to.0)))
+            .into_iter()
             .collect()
     }
 
@@ -25302,7 +25408,11 @@ mod tests {
     // The floating map.
 
     use crate::flight::floating;
-    use crate::galaxy::map::{CURRENT, DOT_SIZE, HYPER_SELECTED, LINK, ROUTE, ROUTE_WIDTH};
+    use crate::galaxy::map::{
+        BRIGHT_GREEN, CLEARED, CYAN, DARK_GREY, DENIED, DIM_GREEN, HOSTILE, LESS_DARK_GREY,
+        LIGHT_GREY,
+    };
+    use crate::geometry::Bounds;
     use nova_sim::mission::screens::mac_ticks;
 
     /// The floating map's frame's centre, where Sol is drawn.
@@ -25361,26 +25471,67 @@ mod tests {
             })
     }
 
-    /// Where the floating map draws system dots, in draw order.
+    /// Where the floating map draws systems' ovals, in draw order: the
+    /// centre of each run of 1-pixel rows in a colour code's colour, each
+    /// row the one after the last, inside the frame. Its black fills cover
+    /// but draw nothing.
     fn floating_dots(view: &View) -> Vec<Point> {
-        drawn(view)
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Dot { center, size, .. }
-                    if size == DOT_SIZE
-                        && floating::contains(floating::frame(VIEW_SIZE), center) =>
+        let codes = [
+            DARK_GREY,
+            LIGHT_GREY,
+            BRIGHT_GREEN,
+            CLEARED,
+            DENIED,
+            HOSTILE,
+        ];
+        let frame = floating::frame(VIEW_SIZE);
+        let mut ovals: Vec<(Color, f32, Bounds)> = Vec::new();
+        for command in &drawn(view) {
+            let DrawCommand::Line {
+                from,
+                to,
+                width,
+                color,
+            } = *command
+            else {
+                continue;
+            };
+            let opaque = Color { a: 255, ..color };
+            if width != 1.0 || from.y != to.y || !codes.contains(&opaque) {
+                continue;
+            }
+            if !floating::contains(frame, from) {
+                continue;
+            }
+            let row = Bounds {
+                min: Point::new(from.x.min(to.x), from.y - 0.5),
+                max: Point::new(from.x.max(to.x), from.y + 0.5),
+            };
+            match ovals.last_mut() {
+                Some((last, top, area))
+                    if *last == opaque && (row.min.y == *top || row.min.y == *top + 1.0) =>
                 {
-                    Some(center)
+                    *top = row.min.y;
+                    area.min.x = area.min.x.min(row.min.x);
+                    area.max.x = area.max.x.max(row.max.x);
+                    area.max.y = row.max.y;
                 }
-                _ => None,
-            })
+                _ => ovals.push((opaque, row.min.y, row)),
+            }
+        }
+        ovals
+            .into_iter()
+            .map(|(_, _, area)| area.center())
             .collect()
     }
 
     /// Where the floating map draws Proxima Near (134) at the zoom whose
-    /// scale is `scale`.
+    /// scale is `scale`: the pixel its point truncates to.
     fn near_at(scale: f32) -> Point {
-        Point::new(686.0 + 40.0 * scale, 278.0 + 30.0 * scale)
+        Point::new(
+            (686.0 + 40.0 * scale).trunc(),
+            (278.0 + 30.0 * scale).trunc(),
+        )
     }
 
     fn sims(view: &mut View) -> Vec<SimSound> {
@@ -25418,8 +25569,8 @@ mod tests {
         assert_eq!(floating_dots(&view), [FRAME_CENTRE], "Sol, at the centre");
         assert!(
             list.iter().any(|command| matches!(command,
-                DrawCommand::Line { color, .. } if *color == CURRENT)),
-            "the current system's mark round it"
+                DrawCommand::Line { color, .. } if *color == CYAN)),
+            "the current system's dot in it"
         );
     }
 
@@ -25600,11 +25751,14 @@ mod tests {
         assert_eq!(system_of(&view), SystemId(134), "Proxima Near, at (40, 30)");
         tap(&mut view, HYPERSPACE_MODE_KEY);
         // Sol, 40 left and 30 up at 16/9: (614.9, 224.7).
-        let sol = Point::new(686.0 - 40.0 * (16.0 / 9.0), 278.0 - 30.0 * (16.0 / 9.0));
+        let sol = Point::new(
+            (686.0 - 40.0 * (16.0_f32 / 9.0)).trunc(),
+            (278.0 - 30.0 * (16.0_f32 / 9.0)).trunc(),
+        );
         assert_eq!(
             floating_dots(&view),
-            [FRAME_CENTRE, sol],
-            "Proxima Near at the centre, then Sol"
+            [sol, FRAME_CENTRE],
+            "Sol, then Proxima Near at the centre, by ascending ID"
         );
         view.take_sounds();
         click(&mut view, at(614.0, 224.0));
@@ -25679,9 +25833,9 @@ mod tests {
         let mut view = near();
         tap(&mut view, HYPERSPACE_MODE_KEY);
         view.take_sounds();
-        assert_eq!(floating_dots(&view), [near_at(16.0 / 9.0), FRAME_CENTRE]);
+        assert_eq!(floating_dots(&view), [FRAME_CENTRE, near_at(16.0 / 9.0)]);
         tap(&mut view, ZOOM_OUT_KEY);
-        assert_eq!(floating_dots(&view), [near_at(4.0 / 3.0), FRAME_CENTRE]);
+        assert_eq!(floating_dots(&view), [FRAME_CENTRE, near_at(4.0 / 3.0)]);
         assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::FloatingMapZoomed)]);
         assert_eq!(ZOOM_OUT_KEY, Key::Char('-'));
     }
@@ -25693,7 +25847,7 @@ mod tests {
             tap(&mut view, HYPERSPACE_MODE_KEY);
             view.take_sounds();
             tap(&mut view, k);
-            assert_eq!(floating_dots(&view)[0], near_at(64.0 / 27.0), "{k:?}");
+            assert_eq!(floating_dots(&view)[1], near_at(64.0 / 27.0), "{k:?}");
             assert_eq!(
                 view.take_sounds(),
                 [Sound::Ui(UiSound::FloatingMapZoomed)],
@@ -25711,15 +25865,15 @@ mod tests {
         tap(&mut view, ZOOM_IN_KEY);
         view.take_sounds();
         tap(&mut view, ZOOM_IN_KEY);
-        assert_eq!(floating_dots(&view)[0], near_at(64.0 / 27.0));
+        assert_eq!(floating_dots(&view)[1], near_at(64.0 / 27.0));
         assert_eq!(view.take_sounds(), []);
         for _ in 0..6 {
             tap(&mut view, ZOOM_OUT_KEY);
         }
-        assert_eq!(floating_dots(&view)[0], near_at(27.0 / 64.0));
+        assert_eq!(floating_dots(&view)[1], near_at(27.0 / 64.0));
         view.take_sounds();
         tap(&mut view, ZOOM_OUT_KEY);
-        assert_eq!(floating_dots(&view)[0], near_at(27.0 / 64.0));
+        assert_eq!(floating_dots(&view)[1], near_at(27.0 / 64.0));
         assert_eq!(view.take_sounds(), []);
     }
 
@@ -25741,11 +25895,11 @@ mod tests {
             view.input(&key(k, true));
             view.take_sounds();
             tap(&mut view, ZOOM_OUT_KEY);
-            assert_eq!(floating_dots(&view)[0], near_at(16.0 / 9.0), "{k:?}");
+            assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0), "{k:?}");
             assert_eq!(view.take_sounds(), [], "{k:?}");
             view.input(&key(k, false));
             tap(&mut view, ZOOM_OUT_KEY);
-            assert_eq!(floating_dots(&view)[0], near_at(4.0 / 3.0), "{k:?} let go");
+            assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0), "{k:?} let go");
         }
     }
 
@@ -25756,7 +25910,7 @@ mod tests {
         tap(&mut view, ZOOM_IN_KEY);
         assert_eq!(view.take_sounds(), []);
         tap(&mut view, HYPERSPACE_MODE_KEY);
-        assert_eq!(floating_dots(&view)[0], near_at(16.0 / 9.0));
+        assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
     }
 
     #[test]
@@ -25823,6 +25977,27 @@ mod tests {
         assert!(icon < map && map < menu, "{icon} < {map} < {menu}");
     }
 
+    /// The rects of `color`, whatever their alpha, in `list`, as (left,
+    /// top, right, bottom).
+    fn rects_of(list: &DrawList, of: Color) -> Vec<(f32, f32, f32, f32)> {
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Line {
+                    from,
+                    to,
+                    width,
+                    color,
+                } if Color { a: 255, ..color } == of && from.y == to.y => Some((
+                    from.x.min(to.x),
+                    from.y - width / 2.0,
+                    from.x.max(to.x),
+                    from.y + width / 2.0,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn the_floating_map_draws_the_sessions_selection_clipped_to_the_frame() {
         let mut view = flight();
@@ -25830,29 +26005,20 @@ mod tests {
         assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
         assert_eq!(view.course_map().hyper_selection(), None, "never opened");
         let list = drawn(&view);
-        let selected: Vec<(Point, Point)> = list
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Line {
-                    from, to, color, ..
-                } if color == HYPER_SELECTED => Some((from, to)),
-                _ => None,
-            })
-            .collect();
         assert_eq!(
-            selected,
-            [(at(693.0, 278.0), at(814.0, 278.0))],
-            "from the edge of Sol's mark to the frame's"
+            rects_of(&list, DIM_GREEN),
+            [(690.0, 278.0, 814.0, 279.0)],
+            "from the edge of Sol's oval to the frame's, drawn once"
         );
-        assert!(
-            !list.iter().any(|command| matches!(command,
-                DrawCommand::Line { color, .. } if *color == LINK)),
-            "the link under it is left out"
+        assert_eq!(
+            rects_of(&list, LESS_DARK_GREY),
+            [],
+            "the link under it is cut away"
         );
     }
 
     #[test]
-    fn the_floating_map_draws_the_sessions_course_as_it_is_now() {
+    fn the_floating_map_draws_the_course_as_its_show_took_it() {
         let mut view = flight();
         view.session
             .as_mut()
@@ -25865,29 +26031,162 @@ mod tests {
             "the course map never shown it"
         );
         tap(&mut view, HYPERSPACE_MODE_KEY);
-        let list = drawn(&view);
-        let route: Vec<(Point, Point, f32)> = list
+        let course = rects_of(&drawn(&view), BRIGHT_GREEN);
+        assert_eq!(
+            course,
+            [(690.0, 279.0, 814.0, 280.0)],
+            "from the edge of Sol's oval to the frame's, at pen 2, its top \
+             row under Sol's link"
+        );
+        assert_eq!(
+            rects_of(&drawn(&view), DIM_GREEN),
+            [(690.0, 278.0, 814.0, 279.0)],
+            "the link to 131, the hop the plot cued, drawn after the course \
+             over it, and over its own grey"
+        );
+        assert_eq!(rects_of(&drawn(&view), LESS_DARK_GREY), []);
+        let session = view.session.as_mut().expect("flying");
+        let _ = session.plot_course(SystemId(130));
+        assert_ne!(session.course(), [SystemId(131)], "the course changed");
+        assert_eq!(
+            rects_of(&drawn(&view), BRIGHT_GREEN),
+            course,
+            "until the next show"
+        );
+    }
+
+    /// The names the floating map draws, clipped to its frame.
+    fn floating_names(view: &View) -> Vec<String> {
+        drawn(view)
             .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Line {
-                    from,
-                    to,
-                    width,
-                    color,
-                } if color == ROUTE => Some((from, to, width)),
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match command.as_ref() {
+                    DrawCommand::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                },
                 _ => None,
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn above_a_zoom_of_1_1_the_floating_map_names_only_the_system_its_show_selected() {
+        let mut view = near();
+        run_set(&mut view, "X134");
+        tap(&mut view, HYPER_SELECT_KEY);
+        tap(&mut view, HYPER_SELECT_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(134))));
         assert_eq!(
-            route,
-            [(at(693.0, 278.0), at(814.0, 278.0), ROUTE_WIDTH)],
-            "from the edge of Sol's mark to the frame's"
+            floating_names(&view),
+            ["Sol", "Proxima Near"],
+            "every explored system in the frame at 16/9"
         );
+        for _ in 0..3 {
+            tap(&mut view, ZOOM_OUT_KEY);
+        }
+        assert_eq!(floating_names(&view), ["Proxima Near"], "at 3/4");
+        tap(&mut view, NAV_OFF_KEY);
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert_eq!(floating_names(&view), [] as [&str; 0], "shown with none");
+    }
+
+    #[test]
+    fn the_floating_map_takes_its_mission_arrows_as_it_shows() {
+        let mut catalog = catalog();
+        catalog.missions = vec![MissionRecord {
+            travel_stel: 140,
+            ..errand(130)
+        }];
+        let mut view = FlightView::new(catalog);
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        let red = |view: &View| {
+            view.floating_picture
+                .as_ref()
+                .expect("shown")
+                .systems
+                .iter()
+                .any(|system| system.id == SystemId(131) && system.red_arrow)
+        };
+        assert!(!red(&view), "no mission");
+        run_set(&mut view, "S130");
+        view.settle_script();
+        assert!(!red(&view), "not until the next show");
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert!(red(&view), "Alpha Centauri, 140's system, arrowed");
+    }
+
+    #[test]
+    fn the_hypergate_maps_offers_get_their_ovals_from_its_second_draw() {
+        // The gate leads to Barnard (132), which nothing has made known.
+        let mut view = FlightView::new(FakeCatalog {
+            gate_listers: vec![(SystemId(132), StellarId(310))],
+            ..gated()
+        });
+        land_now(&mut view);
+        let drawn_systems = |view: &View| -> Vec<SystemId> {
+            view.course_map()
+                .picture()
+                .expect("drawn")
+                .systems
+                .iter()
+                .map(|system| system.id)
+                .collect()
+        };
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_eq!(
+            view.course_map().picture().expect("drawn").gate_arrows,
+            [SystemId(132)]
+        );
+        assert!(!drawn_systems(&view).contains(&SystemId(132)), "first draw");
         assert!(
-            !list.iter().any(|command| matches!(command,
-                DrawCommand::Line { color, .. } if *color == LINK)),
-            "the link under it is left out"
+            view.session().expect("flying").is_known(SystemId(132)),
+            "marked known as its arrow was drawn"
         );
+        view.tick(TICK);
+        assert!(!drawn_systems(&view).contains(&SystemId(132)), "a frame on");
+        tap(&mut view, Key::Tab);
+        assert!(drawn_systems(&view).contains(&SystemId(132)), "after Tab");
+    }
+
+    #[test]
+    fn a_click_on_the_hypergate_map_draws_it_again() {
+        let mut view = FlightView::new(FakeCatalog {
+            gate_listers: vec![(SystemId(132), StellarId(310))],
+            ..gated()
+        });
+        land_now(&mut view);
+        click(&mut view, at(5.0, 5.0));
+        let drawn: Vec<SystemId> = view
+            .course_map()
+            .picture()
+            .expect("drawn")
+            .systems
+            .iter()
+            .map(|system| system.id)
+            .collect();
+        assert!(drawn.contains(&SystemId(132)));
+    }
+
+    #[test]
+    fn the_course_map_draws_the_sessions_known_and_explored_systems() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        let picture = view.course_map().picture().expect("drawn").clone();
+        let ids: Vec<i16> = picture.systems.iter().map(|system| system.id.0).collect();
+        assert_eq!(ids, [130, 131], "Sol and its known link, not Barnard");
+        assert_eq!(picture.named, [SystemId(130)]);
+        assert_eq!(picture.current, Some(SystemId(130)));
+        run_set(&mut view, "X132");
+        view.tick(TICK);
+        let ids: Vec<i16> = view
+            .course_map()
+            .picture()
+            .expect("drawn")
+            .systems
+            .iter()
+            .map(|system| system.id.0)
+            .collect();
+        assert_eq!(ids, [130, 131, 132], "explored while the map is open");
     }
 
     // Keys held across a jump's end, an Option release or a repair

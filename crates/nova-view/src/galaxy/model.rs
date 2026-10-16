@@ -228,10 +228,35 @@ impl GalaxyModel {
             .collect();
     }
 
-    /// Every system drawn, by ascending ID: every visible one.
+    /// Every system clicked, by ascending ID: every visible one.
     #[must_use]
     pub fn systems(&self) -> &[MapSystem] {
         &self.systems
+    }
+
+    /// Every system the catalog has, by ascending ID, visible or not,
+    /// coloured by its government in the catalog.
+    #[must_use]
+    pub fn catalog_systems(&self) -> &[MapSystem] {
+        &self.catalog
+    }
+
+    /// System `id` as the catalog has it, visible or not.
+    #[must_use]
+    pub fn catalog_system(&self, id: SystemId) -> Option<&MapSystem> {
+        let at = self
+            .catalog
+            .binary_search_by_key(&id, |system| system.entry.id)
+            .ok()?;
+        Some(&self.catalog[at])
+    }
+
+    /// System `id`'s map position, visible or not, if the catalog has it:
+    /// where the galaxy map draws it, as `_DrawMap` reads any system's
+    /// position, hidden or not.
+    #[must_use]
+    pub fn position(&self, id: SystemId) -> Option<Point> {
+        self.catalog_system(id).map(MapSystem::position)
     }
 
     /// System `id`, if it is drawn.

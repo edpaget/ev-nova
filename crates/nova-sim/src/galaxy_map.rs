@@ -87,9 +87,12 @@
 use std::collections::BTreeSet;
 
 use crate::catalog::SystemId;
+use crate::flight::facing;
+use crate::geometry::Vec2;
 use crate::iff::SystemColorCode;
 use crate::rulebook::RuleSource;
 use crate::story::OverlaidGalaxy;
+use crate::trig::intercept_angle;
 
 /// How many Con slots a system has, `Con1-Con16`.
 const CON_SLOTS: usize = 16;
@@ -102,6 +105,27 @@ pub const HIDES_ARROW: u16 = 0x0002;
 /// The mission `Flags` bit that marks the special ships' system with an
 /// arrow too (@0xe278).
 pub const MARKS_SHIPS: u16 = 0x0200;
+
+/// How long the hypergate arrows' head strokes are (8.0, @0xf339).
+pub const ARROW_HEAD: f32 = 8.0;
+
+/// The ends of a hypergate arrow's two head strokes, drawn from its `tip`
+/// (the system it points to) back toward its `tail` (the current system),
+/// as `_DrawMap` works them out (@0xf371-0xf452): the heading from the
+/// tip toward the tail ([`intercept_angle`], `_CalcInterceptAngle`), then
+/// [`ARROW_HEAD`] from the tip along that heading plus 45 and along it
+/// plus 315, mod 360 (`_Accel`). The points are the map's, unrounded; the
+/// view truncates them as the original's `MoveTo` / `LineTo` do.
+#[must_use]
+pub fn arrow_head(tip: Vec2, tail: Vec2) -> [Vec2; 2] {
+    let back = i32::from(intercept_angle(tip, tail));
+    [back + 45, (back + 315) % 360].map(|angle| {
+        // In 0..405.
+        #[allow(clippy::cast_precision_loss)]
+        let angle = angle as f32;
+        tip + facing(angle) * ARROW_HEAD
+    })
+}
 
 /// A link `_DrawMap` draws between two systems of the galaxy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +386,37 @@ mod tests {
             .iter()
             .map(|link| (link.from.0, link.to.0))
             .collect()
+    }
+
+    // The hypergate arrows' heads.
+
+    fn close(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    #[test]
+    fn an_arrows_head_strokes_go_back_from_its_tip_45_degrees_either_side() {
+        let half = 8.0 * std::f32::consts::FRAC_1_SQRT_2;
+        // Pointing up: the tail straight below the tip.
+        let [left, right] = arrow_head(Vec2::new(10.0, 10.0), Vec2::new(10.0, 50.0));
+        assert!(close(left, Vec2::new(10.0 - half, 10.0 + half)), "{left:?}");
+        assert!(
+            close(right, Vec2::new(10.0 + half, 10.0 + half)),
+            "{right:?}"
+        );
+        // Pointing right: the tail to the left.
+        let [up, down] = arrow_head(Vec2::new(10.0, 10.0), Vec2::new(-30.0, 10.0));
+        assert!(close(up, Vec2::new(10.0 - half, 10.0 - half)), "{up:?}");
+        assert!(close(down, Vec2::new(10.0 - half, 10.0 + half)), "{down:?}");
+    }
+
+    #[test]
+    fn an_arrows_heading_is_the_tables_whole_degree() {
+        // From (0, 0) toward (1, 1) the table gives 134, not 135, so the
+        // strokes are at 179 and 89.
+        let [first, second] = arrow_head(Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0));
+        assert!(close(first, facing(179.0) * ARROW_HEAD), "{first:?}");
+        assert!(close(second, facing(89.0) * ARROW_HEAD), "{second:?}");
     }
 
     // The systems.

@@ -26,8 +26,10 @@ use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, Rect, SolidQuad};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
+use nova_view::flight::radar::IRect;
 use nova_view::galaxy::NEUTRAL;
-use nova_view::galaxy::map::{BUTTON, DOT_SIZE, ENTER_BUTTON};
+use nova_view::galaxy::map::{BUTTON, ENTER_BUTTON, SYSTEM_INSET};
+use nova_view::oval::{oval_fill_pixels, oval_frame_pixels, runs};
 use nova_view::{Key, MouseButton, Point};
 
 const BLUE: u32 = 0x002C_2CAF;
@@ -248,23 +250,43 @@ fn solid(frame: &Frame) -> Vec<SolidQuad> {
         .collect()
 }
 
-/// The system dots' fill quads (the 6-unit squares), as their centres
-/// and colours, in draw order.
+/// The systems' ovals, in draw order: each run of black fill rows, as its
+/// centre, with the colour of the frame drawn next.
 fn fills(frame: &Frame) -> Vec<(Point, [f32; 4])> {
-    solid(frame)
-        .into_iter()
-        .filter(|quad| {
-            let [a, b, c, _] = quad.corners;
-            (b.x - a.x, c.y - b.y) == (DOT_SIZE, DOT_SIZE)
-        })
-        .map(|quad| {
-            let [a, _, c, _] = quad.corners;
-            (
-                Point::new(f32::midpoint(a.x, c.x), f32::midpoint(a.y, c.y)),
-                quad.color,
-            )
-        })
-        .collect()
+    let black = rgba(nova_view::Color::BLACK);
+    let quads = solid(frame);
+    let mut ovals = Vec::new();
+    let mut at = 0;
+    while at < quads.len() {
+        if quads[at].color != black {
+            at += 1;
+            continue;
+        }
+        let (mut min, mut max) = (
+            Point::new(f32::MAX, f32::MAX),
+            Point::new(f32::MIN, f32::MIN),
+        );
+        while at < quads.len() && quads[at].color == black {
+            for corner in quads[at].corners {
+                min = Point::new(min.x.min(corner.x), min.y.min(corner.y));
+                max = Point::new(max.x.max(corner.x), max.y.max(corner.y));
+            }
+            at += 1;
+        }
+        let frame = quads.get(at).map_or([0.0; 4], |quad| quad.color);
+        ovals.push((
+            Point::new(f32::midpoint(min.x, max.x), f32::midpoint(min.y, max.y)),
+            frame,
+        ));
+    }
+    ovals
+}
+
+/// Where the map draws system `id`'s oval: the pixel its point truncates
+/// to.
+fn pixel_at(harness: &Harness, id: i16) -> Point {
+    let at = harness.system_at(id);
+    Point::new(at.x.trunc(), at.y.trunc())
 }
 
 fn rgba(color: nova_view::Color) -> [f32; 4] {
@@ -283,9 +305,21 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
             Batch::Text(runs) => ("text", runs.len()),
         })
         .collect();
-    // The nebula; 2 links, 3 outlines, 3 dots and the panel's background
+    // The nebula; 2 links and each system's oval, a row at a time, its
+    // black fill then its frame; the 3 names, twice; the panel's background
     // and separator; the panel's 3 lines and the router's hint.
-    assert_eq!(shape, [("sprites", 1), ("solid", 10), ("text", 4)]);
+    let oval = IRect::new(0, 0, 2 * SYSTEM_INSET, 2 * SYSTEM_INSET);
+    let rows = runs(&oval_fill_pixels(oval)).len() + runs(&oval_frame_pixels(oval, 1)).len();
+    assert_eq!(
+        shape,
+        [
+            ("sprites", 1),
+            ("solid", 2 + 3 * rows),
+            ("text", 6),
+            ("solid", 2),
+            ("text", 4)
+        ]
+    );
 
     // 600 x 300 fits at 133%; the nebula fills its scaled rectangle.
     let view = *harness.app.screen().galaxy_map().view();
@@ -309,9 +343,9 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
     assert_eq!(
         fills(&frame),
         [
-            (harness.system_at(130), blue),
-            (harness.system_at(129), neutral),
-            (harness.system_at(128), blue),
+            (pixel_at(&harness, 128), blue),
+            (pixel_at(&harness, 129), neutral),
+            (pixel_at(&harness, 130), blue),
         ]
     );
     assert!(shows(&frame, "Click a system to see its stellars"));
@@ -338,13 +372,14 @@ fn keys_reach_the_map() {
 
     let apart = |frame: &Frame| {
         let dots = fills(frame);
-        dots[1].0.x - dots[2].0.x
+        dots[1].0.x - dots[0].0.x
     };
     let at_133 = apart(&after);
     harness.press(Key::Char('='));
     let zoomed = harness.frame();
     assert_eq!(harness.app.screen().galaxy_map().view().zoom(), 5);
-    assert!((apart(&zoomed) - at_133 * 4.0 / 3.0).abs() < 1e-2);
+    // Whole pixels, each point truncated.
+    assert!((apart(&zoomed) - at_133 * 4.0 / 3.0).abs() <= 1.0);
     assert!(shows(&zoomed, "Zoom 178%"), "{:?}", texts(&zoomed));
 }
 

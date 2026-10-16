@@ -10,7 +10,7 @@ use nova_data::records::govt::Govt;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record};
-use nova_view::galaxy::map::{DOT_SIZE, LINK};
+use nova_view::galaxy::map::{LESS_DARK_GREY, NAME_SIZE};
 use nova_view::galaxy::view::Bounds;
 use nova_view::galaxy::{GalaxyCatalog, GalaxyMap, NEUTRAL, SystemId};
 use nova_view::{Color, DrawCommand, DrawList, Input, MouseButton, Point, Screen};
@@ -72,12 +72,6 @@ fn the_stock_galaxy_reads_without_problems() {
     assert_eq!(unnamed, Vec::<&str>::new(), "every stellar has a name");
 }
 
-/// Where `system`'s dot is drawn on `map`.
-fn dot_at(map: &GalaxyMap, system: &System) -> Point {
-    map.view()
-        .world_to_screen(Point::new(f32::from(system.x_pos), f32::from(system.y_pos)))
-}
-
 #[test]
 fn the_stock_map_fits_at_75_percent_with_every_nebula_behind_the_systems() {
     let Some(data) = open() else {
@@ -95,7 +89,7 @@ fn the_stock_map_fits_at_75_percent_with_every_nebula_behind_the_systems() {
         .collect();
     let first_shape = list
         .iter()
-        .position(|c| matches!(c, DrawCommand::Line { .. } | DrawCommand::Dot { .. }));
+        .position(|c| matches!(c, DrawCommand::Line { .. }));
     assert_eq!(pictures, [0, 1, 2, 3]);
     assert_eq!(first_shape, Some(4));
 }
@@ -156,33 +150,22 @@ fn the_stock_map_draws_every_hyperlink_once() {
         .collect();
     assert_eq!(model_pairs, pairs);
 
-    let screen = |id: i16| dot_at(&map, &raw[&id]);
-    let key = |p: Point| (p.x.to_bits(), p.y.to_bits());
-    let unordered = |a: Point, b: Point| {
-        let (a, b) = (key(a), key(b));
-        (a.min(b), a.max(b))
-    };
-    let mut expected_lines: Vec<_> = pairs
+    let picture = map.picture().expect("the viewer's picture");
+    let picture_pairs: BTreeSet<(i16, i16)> = picture
+        .links
         .iter()
-        .map(|&(a, b)| unordered(screen(a), screen(b)))
+        .map(|link| (link.from.0, link.to.0))
         .collect();
-    let mut drawn_lines: Vec<_> = list
+    assert_eq!(picture_pairs, pairs);
+    let drawn_links = list
         .iter()
-        .filter_map(|c| match c {
-            DrawCommand::Line {
-                from, to, color, ..
-            } if *color == LINK => Some(unordered(*from, *to)),
-            _ => None,
-        })
-        .collect();
-    expected_lines.sort_unstable();
-    drawn_lines.sort_unstable();
-    assert_eq!(drawn_lines.len(), RESOLVED_PAIRS);
-    assert_eq!(drawn_lines, expected_lines);
+        .filter(|c| matches!(c, DrawCommand::Line { color, .. } if *color == LESS_DARK_GREY))
+        .count();
+    assert_eq!(drawn_links, RESOLVED_PAIRS, "each once, at pen 1");
 }
 
-/// Every system's dot, in its own government's colour worked out here
-/// from the raw records, highest ID first.
+/// Every system's oval, framed in its own government's colour worked out
+/// here from the raw records, by ascending ID.
 #[test]
 fn the_stock_map_draws_every_system_in_its_governments_colour() {
     let Some(data) = open() else {
@@ -190,35 +173,43 @@ fn the_stock_map_draws_every_system_in_its_governments_colour() {
     };
     let raw = systems(&data);
     let map = GalaxyMap::new(&data);
-    let list = drawn(&map);
     let colors: BTreeMap<i16, u32> = data
         .records::<Govt>()
         .map(|(id, govt)| (id, govt.expect("every gövt decodes").record.color))
         .collect();
-    let expected_dots: Vec<(Point, Color)> = raw
+    let expected: Vec<(i16, Color)> = raw
         .iter()
-        .rev()
-        .map(|(_, system)| {
+        .map(|(&id, system)| {
             let color = system.govt.map_or(NEUTRAL, |govt| {
                 let [_, r, g, b] = colors[&govt.0].to_be_bytes();
                 Color::rgba(r, g, b, 255)
             });
-            (dot_at(&map, system), color)
+            (id, color)
         })
         .collect();
-    let fills: Vec<(Point, Color)> = list
+    let frames: Vec<(i16, Color)> = map
+        .picture()
+        .expect("the viewer's picture")
+        .systems
         .iter()
-        .filter_map(|c| match c {
-            DrawCommand::Dot {
-                center,
-                size,
-                color,
-            } if *size == DOT_SIZE => Some((*center, *color)),
-            _ => None,
-        })
+        .map(|system| (system.id.0, system.frame))
         .collect();
-    assert_eq!(fills.len(), 545);
-    assert_eq!(fills, expected_dots);
+    assert_eq!(frames.len(), 545);
+    assert_eq!(frames, expected);
+    let names = |map: &GalaxyMap| {
+        drawn(map)
+            .iter()
+            .filter(|c| matches!(c, DrawCommand::Text { size, .. } if *size == NAME_SIZE))
+            .count()
+    };
+    assert_eq!(names(&map), 0, "at 75%, above a zoom of 1.1, none selected");
+    let mut map = map;
+    map.input(&Input::Key {
+        key: nova_view::Key::Char('='),
+        pressed: true,
+        repeat: false,
+    });
+    assert_eq!(names(&map), 2 * 545, "every name, twice, at 100%");
     let independent = raw.values().filter(|s| s.govt.is_none()).count();
     assert_eq!(independent, 91);
     let governments: BTreeSet<i16> = raw.values().filter_map(|s| s.govt).map(|g| g.0).collect();

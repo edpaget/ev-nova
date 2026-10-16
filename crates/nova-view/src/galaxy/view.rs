@@ -58,6 +58,23 @@ impl Transform {
             self.screen.y + (p.y - self.world.y) * self.scale,
         )
     }
+
+    /// Where `p` is drawn in whole pixels: its screen point truncated
+    /// toward zero, as `_DrawMap` takes trunc(centre + pos/zoom −
+    /// scroll/zoom) for each point (@0xe5e9-0xe662).
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // Screen pixels.
+    pub fn pixel(&self, p: Point) -> (i32, i32) {
+        let at = self.world_to_screen(p);
+        (at.x.trunc() as i32, at.y.trunc() as i32)
+    }
+
+    /// The original's zoom at this scale, its inverse, as `_mapZoom`
+    /// divides each position by it: 1 / scale.
+    #[must_use]
+    pub fn zoom(&self) -> f64 {
+        1.0 / f64::from(self.scale)
+    }
 }
 
 /// What the map area shows.

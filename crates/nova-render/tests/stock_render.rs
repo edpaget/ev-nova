@@ -167,3 +167,21 @@ fn the_target_bracket_icons_decode_as_16_pixel_squares() {
         assert_eq!(sizes, [(16, 16)], "cicn {id}");
     }
 }
+
+#[test]
+fn the_map_arrow_icons_decode_as_16_pixel_squares() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    for id in [
+        nova_view::galaxy::map::RED_ARROW,
+        nova_view::galaxy::map::GREEN_ARROW,
+    ] {
+        let frames = data
+            .frames(ImageKind::Icon, id)
+            .unwrap_or_else(|error| panic!("cicn {id}: {error:?}"));
+        let sizes: Vec<(u32, u32)> = frames.iter().map(|f| (f.width(), f.height())).collect();
+        assert_eq!(sizes, [(16, 16)], "cicn {id}");
+    }
+}

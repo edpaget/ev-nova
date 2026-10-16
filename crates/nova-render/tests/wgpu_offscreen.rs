@@ -13,7 +13,8 @@ use nova_render::{
     Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport,
 };
 use nova_view::draw::lights_tint;
-use nova_view::{Color, DrawList, Font, ImageKey, ImageKind, Point};
+use nova_view::geometry::Bounds;
+use nova_view::{Color, DrawCommand, DrawList, Font, ImageKey, ImageKind, Point};
 
 /// Logical 32x24 in a 64x64 target: scale 2, content (0, 8, 64, 48).
 const LOGICAL: LogicalSize = LogicalSize { w: 32, h: 24 };
@@ -555,6 +556,65 @@ fn text_draws_inside_its_clip_box() {
     for x in 0..SIZE {
         for y in (0..8).chain(56..SIZE) {
             assert_near(&pixels, (x, y), BLACK, 0);
+        }
+    }
+}
+
+#[test]
+fn a_clipped_run_and_picture_draw_only_inside_their_clip() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // A run over the content's whole width, clipped to logical x 4..12;
+    // the 4x2 picture at (20, 18), clipped to its right half.
+    let clip = |left: f32, top: f32, right: f32, bottom: f32| Bounds {
+        min: Point::new(left, top),
+        max: Point::new(right, bottom),
+    };
+    let mut list = DrawList::new();
+    list.clipped(
+        clip(4.0, 0.0, 12.0, 24.0),
+        DrawCommand::Text {
+            text: "MMMMMMMMMMMMMMMM".to_owned(),
+            font: Font::Geneva,
+            origin: Point::new(0.0, 2.0),
+            size: 8.0,
+            wrap_width: None,
+            color: Color::WHITE,
+        },
+    )
+    .clipped(
+        clip(22.0, 0.0, 32.0, 24.0),
+        DrawCommand::Picture {
+            image: ImageKey::picture(1),
+            top_left: Point::new(20.0, 18.0),
+        },
+    );
+    let mut renderer = Renderer::new(Images);
+
+    renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    // The run's rows, logical y 2..10, are pixels 12..28: only x 8..24 lit.
+    let columns: Vec<u32> = (0..SIZE)
+        .filter(|&x| (12..28).any(|y| pixel(&pixels, x, y) != BLACK))
+        .collect();
+    assert!(!columns.is_empty(), "the run is drawn");
+    assert!(
+        columns.iter().all(|x| (8..24).contains(x)),
+        "lit columns {columns:?}"
+    );
+    // The picture's left half, logical x 20..22 (pixels 40..44), is cut;
+    // its right half, texels 2 and 3, is drawn at pixels 44..48.
+    for x in 40..44 {
+        for y in 44..48 {
+            assert_near(&pixels, (x, y), BLACK, 0);
+        }
+    }
+    for (texel_x, x) in [(2, 44), (3, 46)] {
+        for texel_y in 0..2 {
+            let at = (x, 44 + 2 * texel_y);
+            assert_near(&pixels, at, texel(4, texel_x, texel_y), 0);
         }
     }
 }

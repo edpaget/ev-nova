@@ -497,7 +497,7 @@ impl StarMap {
     /// overlay hides them (see the [`story`](crate::story) module's
     /// "Galaxy overlay"), a place two visible systems share resolved as
     /// `colocated` says: only the visible systems are on it, every one of
-    /// them, as `_DrawMap` draws every visible system. A link names a
+    /// them. A link names a
     /// place, as the original's `_FindActiveCoLocatedSystem` (@0x4be0)
     /// resolves every Con slot: its own [`StarMap::listed_links`], and
     /// the links drawn, name the system standing for its target
