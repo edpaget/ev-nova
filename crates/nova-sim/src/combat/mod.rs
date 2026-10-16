@@ -1602,26 +1602,8 @@ impl Combat {
                 &mut self.reports,
                 &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
             );
-            let sides = (fighter.side(), fighter.ties());
-            let drawn = fighter.drawn_heading;
-            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
-            let mut destructs = false;
-            for launch in launches {
-                let aimed_at = aimed_at(&launch, fighter.target);
-                let shot = self.launch(
-                    sides,
-                    &mut muzzle,
-                    &launch,
-                    (None, aimed_at),
-                    Some(FireSound::UNPORTED),
-                    targets,
-                    chance,
-                );
-                destructs |= shot && launch.weapon.ammo_type == SELF_DESTRUCT;
-            }
-            if destructs {
-                self_destruct(fighter);
-            }
+            let unported = |_| Some(FireSound::UNPORTED);
+            self.launch_volley(fighter, &launches, unported, targets, chance);
             let Some(pick) = fighter.trigger.only else {
                 continue;
             };
@@ -1640,27 +1622,8 @@ impl Combat {
             let Some(volley) = volley else {
                 continue;
             };
-            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
-            let mut destructs = false;
-            for (copy, launch) in volley.launches.into_iter().enumerate() {
-                let aimed_at = aimed_at(&launch, fighter.target);
-                let sound = (copy == 0).then_some(FireSound {
-                    priority: Some(AI_FIRE_PRIORITY),
-                });
-                let shot = self.launch(
-                    sides,
-                    &mut muzzle,
-                    &launch,
-                    (None, aimed_at),
-                    sound,
-                    targets,
-                    chance,
-                );
-                destructs |= shot && launch.weapon.ammo_type == SELF_DESTRUCT;
-            }
-            if destructs {
-                self_destruct(fighter);
-            }
+            let sound = first_copy_sounds_at(AI_FIRE_PRIORITY);
+            self.launch_volley(fighter, &volley.launches, sound, targets, chance);
             let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
             if let Some(velocity) = pushed {
                 self.shove(fighter, velocity);
@@ -1717,30 +1680,8 @@ impl Combat {
             let Some(volley) = volley else {
                 continue;
             };
-            let sides = (fighter.side(), fighter.ties());
-            let drawn = fighter.drawn_heading;
-            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
-            let priority = player_fire_priority(&volley.weapon);
-            let mut destructs = false;
-            for (copy, launch) in volley.launches.iter().enumerate() {
-                let aimed_at = aimed_at(launch, fighter.target);
-                let sound = (copy == 0).then_some(FireSound {
-                    priority: Some(priority),
-                });
-                let shot = self.launch(
-                    sides,
-                    &mut muzzle,
-                    launch,
-                    (None, aimed_at),
-                    sound,
-                    targets,
-                    chance,
-                );
-                destructs |= shot && launch.weapon.ammo_type == SELF_DESTRUCT;
-            }
-            if destructs {
-                self_destruct(fighter);
-            }
+            let sound = first_copy_sounds_at(player_fire_priority(&volley.weapon));
+            self.launch_volley(fighter, &volley.launches, sound, targets, chance);
             let recoils = match self.forward_recoil {
                 RuleSource::Engine => volley.weapon.recoil > 0.0,
                 RuleSource::Bible => volley.weapon.recoils(),
@@ -1749,6 +1690,42 @@ impl Combat {
             if let Some(velocity) = pushed.filter(|_| recoils) {
                 self.shove(fighter, velocity);
             }
+        }
+    }
+
+    /// Launches `launches`, one volley of `fighter`'s, in turn from its
+    /// muzzle as it stands ([`Combat::launch`]), each aimed at its target
+    /// ([`aimed_at`]), its copy `n` sounding as `sound(n)` says. A shot of
+    /// `AmmoType` [`SELF_DESTRUCT`] among them that spawns then destroys
+    /// `fighter`, once ([`self_destructs`]).
+    fn launch_volley(
+        &mut self,
+        fighter: &mut Fighter,
+        launches: &[Launch],
+        sound: impl Fn(usize) -> Option<FireSound>,
+        targets: &[Target],
+        chance: &mut dyn Chance,
+    ) {
+        let (state, hull) = (fighter.state, fighter.hull);
+        let sides = (fighter.side(), fighter.ties());
+        let drawn = fighter.drawn_heading;
+        let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
+        let mut destructs = false;
+        for (copy, launch) in launches.iter().enumerate() {
+            let aimed_at = aimed_at(launch, fighter.target);
+            let shot = self.launch(
+                sides,
+                &mut muzzle,
+                launch,
+                (None, aimed_at),
+                sound(copy),
+                targets,
+                chance,
+            );
+            destructs |= self_destructs(launch, shot);
+        }
+        if destructs {
+            self_destruct(fighter);
         }
     }
 
@@ -1838,7 +1815,7 @@ impl Combat {
                     targets,
                     chance,
                 );
-                if shot && launch.weapon.ammo_type == SELF_DESTRUCT {
+                if self_destructs(&launch, shot) {
                     self_destruct(fighter);
                 }
             }
@@ -2789,6 +2766,23 @@ fn player_fire_priority(spec: &weapon::WeaponSpec) -> u8 {
 fn self_destruct(fighter: &mut Fighter) {
     fighter.reserves.shield.now = 0.0;
     fighter.reserves.armor.now = 0.0;
+}
+
+/// Whether `launch`, put in flight as a shot when `shot`
+/// ([`Combat::launch`]), destroys its firer: a shot of `AmmoType`
+/// [`SELF_DESTRUCT`] that spawned ([`self_destruct`]).
+fn self_destructs(launch: &Launch, shot: bool) -> bool {
+    shot && launch.weapon.ammo_type == SELF_DESTRUCT
+}
+
+/// A volley's sounds: its first copy's at `priority`, its later copies
+/// none.
+fn first_copy_sounds_at(priority: u8) -> impl Fn(usize) -> Option<FireSound> {
+    move |copy| {
+        (copy == 0).then_some(FireSound {
+            priority: Some(priority),
+        })
+    }
 }
 
 /// The ship `launch`'s damage is aimed at, its firer's `target`: none for
