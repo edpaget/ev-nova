@@ -152,6 +152,8 @@ mod tests {
         flash.hit(false);
         assert_eq!(flash.step(50.0, -10.0, true), Some(4), "negative");
         assert_eq!(share(1.0e9, 1.0), 4.0, "out of an i32's range");
+        // 2^26 × 32 is 2^31, just past `i32::MAX`.
+        assert_eq!(share(67_108_864.0, 1.0), 4.0, "2^31 is out of range");
         assert_eq!(share(100.0, 100.0), 32.0);
         assert_eq!(share(33.0, 32.0), 32.0, "33 held to 32");
         assert_eq!(share(15.0, 120.0), 4.0, "exactly 4");
@@ -223,6 +225,7 @@ mod tests {
         assert_eq!(flash.step(100.0, 100.0, true), None);
         assert!(flash.spent());
         flash.hit(false);
+        assert!(!flash.spent(), "set");
         flash.step(100.0, 100.0, true);
         flash.step(100.0, 100.0, true);
         flash.hit(true);

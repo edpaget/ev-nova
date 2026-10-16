@@ -209,4 +209,12 @@ exclude_re = [
     # answer false for every NPC already. Phase 5 removes these two.
     "ai/mod.rs:.*replace Goal::scooping -> bool with false",
     "traffic/npc.rs:.*replace Npc::is_scooping -> bool with false",
+    # A shockwave's flash is late on a ship before its wreck in the table:
+    # the wreck is destroyed, so its own shockwave never reaches it, and a
+    # victim's index never equals the wreck's.
+    "combat/mod.rs:.*replace < with <= in Combat::shock",
+    # A run-out shield flash is dropped from the view's map: with `>=` it
+    # is kept at none, which `FlightView::shield_flash` reads as no flash
+    # all the same, and the next hit sets it afresh either way.
+    "view.rs:.*replace > with >= in step_flashes",
 ]

@@ -332,7 +332,8 @@ pub enum CombatEvent {
         /// there are. A weapon's hit, beam tick or detonation passes its
         /// `BlastRadius` ([`WeaponSpec::blast_radius`](weapon::WeaponSpec::blast_radius),
         /// wëap +0x18); every other explosion passes 0
-        /// ([`Combat::explode`]). The original's is signed, while the
+        /// (`Combat::explode`: an asteroid or a stellar destroyed, a
+        /// sabotage bomb). The original's is signed, while the
         /// loaded `BlastRadius` is floored at none: a negative size
         /// scatters none either way.
         size: f32,
