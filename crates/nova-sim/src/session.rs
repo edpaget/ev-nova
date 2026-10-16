@@ -502,7 +502,7 @@ use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::npc::{AiType, Npc, NpcId};
+use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::{SpawnDude, SpawnTable};
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
@@ -2328,7 +2328,7 @@ impl Session {
         let Some(record) = self.ship_record(npc.ship) else {
             return Jamming::NONE;
         };
-        let freighter = matches!(npc.ai_type, AiType::WimpyTrader | AiType::BraveTrader);
+        let freighter = npc.ai_type.trades();
         let halving = Halving::of(
             self.govts.flag(npc.govt, HALF_JAMMING),
             freighter,
