@@ -10873,6 +10873,80 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn closing_the_mission_info_over_the_spaceport_offer_reloads_the_offers_after_movie() {
+        // 129, accepted on the first landing, is held with a QuickBrief
+        // naming "Quick.mov"; its accept shifts 130 out of the list
+        // (`RuleKey::OfferShift`), so the second landing offers 131.
+        let mut held = venue_mission(SPACEPORT);
+        held[0x36..0x38].copy_from_slice(&6001_i16.to_be_bytes());
+        let fork = game_data_fork(true, true, true, 100, b"", b"", None)
+            .resource(Mission::TYPE, 129, Some(b"Held job"), &held)
+            .resource(Desc::TYPE, 129 + 3872, Some(b"Held"), &desc_of("Held."))
+            .resource(
+                Desc::TYPE,
+                6001,
+                Some(b"Quick"),
+                &filmed_desc_of("Quick.", "Quick.mov", 0x0001),
+            )
+            .resource(
+                Mission::TYPE,
+                130,
+                Some(b"Shifted job"),
+                &venue_mission(SPACEPORT),
+            )
+            .resource(
+                Mission::TYPE,
+                131,
+                Some(b"Venue job"),
+                &venue_mission(SPACEPORT),
+            )
+            .resource(
+                Desc::TYPE,
+                131 + 3872,
+                Some(b"Offer"),
+                &filmed_desc_of("Job.", "Offer.mov", 0x0001),
+            );
+        let reel = Rc::new(Reel::default());
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(loaded(&fork))
+            .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
+            .with_dialogs(Rc::new(InfoOverEveryOpener), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(
+            offered_mission(spaceport(&screen).offer_dialog()),
+            Some(MissionId(129))
+        );
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(129)], "held");
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "took off");
+        land_twice(&mut screen);
+        assert_eq!(
+            offered_mission(spaceport(&screen).offer_dialog()),
+            Some(MissionId(131)),
+            "offered on landing again, 129's accept having shifted 130 out"
+        );
+        screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
+        screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, false));
+        assert!(spaceport(&screen).mission_info().is_some(), "info open");
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).mission_info().is_none(), "info closed");
+        assert!(spaceport(&screen).offer_dialog().is_some(), "still offered");
+        screen.input(&key(Key::Char('n'), true));
+        assert_eq!(active(&screen), [MissionId(129)], "refused");
+        assert!(spaceport(&screen).mission_text().is_none(), "no RefuseText");
+        ticked(&mut screen, 3);
+        assert_eq!(
+            reeled(&reel),
+            ["start Offer.mov", "stop"],
+            "the info screen loaded the QuickBrief's, and its close loaded the offer's \
+             again (@0xa335c)"
+        );
+    }
+
+    #[test]
     fn the_mission_computers_refusal_plays_the_last_descs_after_movie() {
         let fork = game_data_fork(true, true, true, 100, b"", b"", None).resource(
             Desc::TYPE,
