@@ -1087,6 +1087,12 @@ pub struct Session {
     /// Every stellar some system lists, read when the session starts:
     /// what a mission's stellars are chosen from, with the galaxy overlay.
     listed_stellars: Vec<ListedStellar>,
+    /// The systems known (+0x1ec): what the galaxy map draws besides the
+    /// explored ones, and what the escape search needs (see the
+    /// [`exploration`](crate::exploration) module's "Known" and the
+    /// `explored` module). Never saved, as the original saves no flag:
+    /// each rebuild point works it out afresh.
+    known: BTreeSet<SystemId>,
     /// Every system's `Visibility`, read when the session starts: what the
     /// galaxy refresh evaluates (see the `story` module).
     visibility: Rc<[SystemVisibility]>,
@@ -1506,6 +1512,7 @@ impl Session {
                 .map(|texts| (texts.id, texts))
                 .collect(),
             listed_stellars: listed,
+            known: BTreeSet::new(),
             visibility: catalog.system_visibility().into(),
             nebulae: catalog.nebulae().into(),
             galaxy_stale: false,

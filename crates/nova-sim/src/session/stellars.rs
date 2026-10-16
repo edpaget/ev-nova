@@ -152,15 +152,17 @@ impl Session {
 
     /// A rebuild point that tells nothing: first, docked or not, the
     /// course rewritten (`Session::rewrite_course`, as
-    /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d)
-    /// and the exploration shared by place (`Session::share_explored`, as
-    /// it then raises each system to its head's level @0x32b13-0x32b8f
-    /// before its stellars); then, in flight, the
+    /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d),
+    /// the exploration shared by place (`Session::share_explored`, as
+    /// it then raises each system to its head's level @0x32b13-0x32b8f)
+    /// and the known set worked out afresh (`Session::rework_known`,
+    /// @0x32b7b, @0x32b91-0x32c10), before its stellars; then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it. Whether it changed the stellars.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         self.rewrite_course();
         self.share_explored();
+        self.rework_known();
         let reshown = self.reshow();
         let galaxy = &self.galaxy;
         let rebuilt = self.rebuilt.rebuild(

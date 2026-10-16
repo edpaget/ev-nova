@@ -58,9 +58,9 @@
 //! - the explored level shared to the chain head (@0x32b0f-0x32b8f):
 //!   crons-news-ranks phase 14 models it, as one explored set, in the
 //!   session's rebuild points (the session's `explored` module);
-//! - the known flag +0x1ec (@0x32b91-0x32c10): deferred to
-//!   crons-news-ranks-fidelity phase 20, as no reader in the engine uses
-//!   it yet (the galaxy map draws every visible system);
+//! - the known flag +0x1ec (@0x32b7b, @0x32b91-0x32c10): the session's
+//!   `explored` module, at the rebuild points
+//!   ([`known_from`](crate::exploration::known_from));
 //! - the dominated byte +0x46, set for an active stellar with `Flags2`
 //!   0x0020 (@0x32ce5-0x32ceb): the engine reads the bit directly
 //!   (`landing::cleared`, `mission::dominated`, `Session::markup`), and

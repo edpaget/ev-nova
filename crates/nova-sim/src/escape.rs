@@ -121,8 +121,8 @@ pub trait EscapeMap {
     /// and all; none for a system not in the galaxy.
     fn raw_links(&self, system: SystemId) -> Vec<SystemId>;
     /// Whether `system` is open to the search: in the galaxy, visible
-    /// (+0x1eb, @0xd159), known (+0x1ec, @0xd166) and explored (+0x90 > 0,
-    /// @0xd173).
+    /// (+0x1eb, @0xd159), known (+0x1ec, @0xd166, and again @0xd250 for
+    /// the recursion) and explored (+0x90 > 0, @0xd173).
     fn open(&self, system: SystemId) -> bool;
     /// `system`'s stellars in its nav slots (+0x2a), in order, each with
     /// whether it qualifies: active (+0x44, @0xd1b2), landable

@@ -60,10 +60,25 @@
 //! (`_ExploreNebulaeFromSystem`, not its head's): the session raises
 //! `Explored` for each system reached, and its `nebulae` module explores
 //! them (see the [`nebula`](crate::nebula) module).
-//! The known flag (+0x1ec) and the explored levels 1 and 2 kept apart are
-//! deferred to the fidelity roadmap (crons-news-ranks-fidelity phases 20
-//! and 21): the pilot's one set of explored systems does not tell `X`'s
-//! level 1 from a map's level 2.
+//!
+//! **Known** ([`known_from`]). A system's known flag (+0x1ec) is what the
+//! galaxy map draws besides the explored systems (`_DrawMap` @0xea0b,
+//! @0xedd8) and what the escape search needs (@0xd166, @0xd250). A known
+//! pass marks each visible (+0x1eb), existing (+0x1ed) and explored
+//! system, and the system standing at the place of each of its 16 Con
+//! slots. Each rebuild point clears every flag in its explored-share loop
+//! (`_HandleStellarSystemVisibility` @0x32b7b) and then runs the pass
+//! (@0x32b91-0x32c10); a map grant runs it after its walk, with no clear
+//! (`_AutoSetExploration` @0xdb06-0xdbd4, which skips a slot above 0x7ff
+//! and resolves by place inline); and the hypergate map marks each system
+//! it arrows (`_DrawMap` @0xf457-0xf45f). `_InitObjects` clears them all
+//! (@0x1ca83). The flag isn't saved: no save or load routine touches
+//! +0x1ec, so a load's rebuild works it out again. The session keeps it
+//! (its `explored` module).
+//!
+//! The explored levels 1 and 2 kept apart are deferred to the fidelity
+//! roadmap (crons-news-ranks-fidelity phase 21): the pilot's one set of
+//! explored systems does not tell `X`'s level 1 from a map's level 2.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -72,6 +87,7 @@ use crate::govt::Governments;
 use crate::hyperspace::{HyperlinkRule, Places, StarMap};
 use crate::outfit_effects::MapReach;
 use crate::rulebook::RuleSource;
+use crate::story::OverlaidGalaxy;
 
 /// How many of a system's first `NavDefs` slots the engine reads for
 /// whether it is inhabited (@0x4c4f).
@@ -211,6 +227,36 @@ pub fn start_neighbours(
         .collect()
 }
 
+/// How many Con slots a system has, `Con1-Con16`: those the known pass
+/// reads.
+const CON_SLOTS: usize = 16;
+
+/// The systems a known pass marks, with `explored` the systems explored
+/// (see the module docs): each system of `galaxy`'s catalog that is
+/// visible (+0x1eb) and explored (+0x90 > 0), and the system standing for
+/// each of its first 16 Con slots by place, a slot naming a system the
+/// catalog does not hold, or with none visible at its place, marking
+/// nothing (`_HandleStellarSystemVisibility` @0x32b91-0x32c10,
+/// `_AutoSetExploration` @0xdb06-0xdbd4).
+#[must_use]
+pub fn known_from(galaxy: &OverlaidGalaxy, explored: &BTreeSet<SystemId>) -> BTreeSet<SystemId> {
+    let mut known = BTreeSet::new();
+    for system in galaxy.catalog_systems() {
+        if !galaxy.visible(system) || !explored.contains(&system) {
+            continue;
+        }
+        known.insert(system);
+        for &slot in galaxy.con_slots(system).iter().take(CON_SLOTS) {
+            if galaxy.exists(slot)
+                && let Some(link) = galaxy.same_place(slot)
+            {
+                known.insert(link);
+            }
+        }
+    }
+    known
+}
+
 /// Every system within `most` jumps of `from`, `from` among them.
 fn within(
     map: &StarMap,
@@ -237,6 +283,7 @@ fn within(
 mod tests {
     use super::*;
     use crate::catalog::{GovtId, GovtRecord, StarSystem};
+    use crate::story::OverlaidGalaxy;
     use crate::testkit::{govt, star};
 
     fn ids(list: &[i16]) -> BTreeSet<SystemId> {
@@ -570,6 +617,52 @@ mod tests {
                 list(&[])
             );
         }
+    }
+
+    /// 130 lists 131, 140 (not in the catalog), 132 and itself; 131 lists
+    /// 133; 132 is hidden, with 134 at its place; 135 is hidden and lists
+    /// 136; 137 lists 138.
+    fn known_galaxy() -> OverlaidGalaxy {
+        let mut overlay = crate::story::GalaxyOverlay::default();
+        overlay.set_hidden(&ids(&[132, 135]));
+        OverlaidGalaxy::new(
+            vec![
+                star(130, (0.0, 0.0), &[131, 140, 132, 130]),
+                star(131, (1.0, 0.0), &[133]),
+                star(132, (2.0, 0.0), &[]),
+                star(133, (3.0, 0.0), &[]),
+                star(134, (2.0, 0.0), &[]),
+                star(135, (5.0, 0.0), &[136]),
+                star(136, (6.0, 0.0), &[]),
+                star(137, (7.0, 0.0), &[138]),
+                star(138, (8.0, 0.0), &[]),
+            ],
+            overlay,
+        )
+    }
+
+    #[test]
+    fn the_known_pass_marks_each_visible_explored_system_and_its_links_by_place() {
+        let galaxy = known_galaxy();
+        assert_eq!(
+            known_from(&galaxy, &ids(&[130, 135, 136, 138, 140])),
+            ids(&[130, 131, 134, 136, 138]),
+            "130 and its links, 132 by its stand-in 134 and 140 not at all; \
+             135 hidden and 140 not in the catalog mark nothing; 136 and 138 \
+             explored mark themselves, and 137, unexplored, not its link"
+        );
+        assert_eq!(known_from(&galaxy, &ids(&[])), ids(&[]));
+    }
+
+    #[test]
+    fn the_known_pass_reads_only_the_first_sixteen_slots() {
+        let mut links: Vec<i16> = vec![-1; 16];
+        links.push(131);
+        let galaxy = OverlaidGalaxy::new(
+            vec![star(130, (0.0, 0.0), &links), star(131, (1.0, 0.0), &[])],
+            crate::story::GalaxyOverlay::default(),
+        );
+        assert_eq!(known_from(&galaxy, &ids(&[130])), ids(&[130]));
     }
 
     #[test]
