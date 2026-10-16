@@ -11065,6 +11065,34 @@ mod tests {
     }
 
     #[test]
+    fn a_players_blast_at_an_asteroid_raises_a_hit_of_its_weapon_at_the_blasts_centre() {
+        let piercing = crate::combat::weapon::PASSES_SHIELDS;
+        for (flags, passes) in [(0, false), (piercing, true)] {
+            let mut combat = Combat::default();
+            let mut rocks = [rock(0, 107.0, 0.0)];
+            let (_, events) = shoot_rocks(
+                &mut combat,
+                ShipRef::Player,
+                blasting(flags, 0),
+                vec![Ship::at(2, 110.0, 20.0)],
+                &mut rocks,
+                8,
+            );
+            let hits = raised(&events);
+            assert_eq!(hits.len(), 1, "{flags:#x}: {hits:?}");
+            let (ship, weapon, at, passes_shields) = hits[0];
+            assert_eq!(
+                (ship, weapon, passes_shields),
+                (B, Some(WeaponId(128)), passes),
+                "{flags:#x}"
+            );
+            // Where the shot met the asteroid's edge, not where it flew
+            // to by its 15-pixel steps.
+            assert!(within(at, Vec2::new(97.0, 0.0)), "{flags:#x}: {at:?}");
+        }
+    }
+
+    #[test]
     fn a_shockwave_raises_a_hit_of_no_weapon_at_the_wreck_on_each_ship_it_hurts() {
         let mut combat = Combat::default();
         let mut ships = [
