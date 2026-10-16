@@ -682,6 +682,9 @@ pub struct Session {
     /// The player's nav mode and its selection (see the `nav` module): a
     /// stellar selected is one of `sites`.
     nav: NavMode,
+    /// The Con slot the mode-3 selection was written from, while it still
+    /// stands (see the `nav` module's `NavSlot`).
+    nav_slot: Option<nav::NavSlot>,
     /// The nav saved as a port dialog opened, until its close restores it
     /// ([`Session::save_port_nav`], [`Session::restore_port_nav`]).
     port_nav: Option<NavMode>,
@@ -1366,6 +1369,7 @@ impl Session {
             shown: system,
             landed: None,
             nav: NavMode::Off,
+            nav_slot: None,
             port_nav: None,
             bar_nav: None,
             gate_sprites: BTreeMap::new(),
@@ -3692,6 +3696,26 @@ impl Session {
             self.nav = NavMode::Off;
             Err(GateRefusal::NoLinks)
         }
+    }
+
+    /// The destinations the hypergate map's Tab / `\` cycles through
+    /// ([`gate::hypergate_cycle`]) for the hypergate whose entry is
+    /// pending, read from `catalog`'s gate sites: each counted link's
+    /// system as `_FindSystemFromStellar` finds it among the systems
+    /// listing it, unresolved by place, or `None` when none lists it.
+    /// Empty with no hypergate entry pending.
+    #[must_use]
+    pub fn hypergate_cycle(&self, catalog: &impl PilotCatalog) -> Vec<Option<SystemId>> {
+        let Some(here) = self
+            .gate
+            .filter(|&stellar| self.gate_kind(stellar) == Some(GateKind::Hypergate))
+        else {
+            return Vec::new();
+        };
+        let links = Self::links_of(&catalog.gate_sites(), here);
+        gate::hypergate_cycle(&links, |link| {
+            self.galaxy.find_system_from_stellar(self.listers(link))
+        })
     }
 
     /// Enters the hypergate whose entry is pending, for the system `to`
@@ -25385,6 +25409,43 @@ pub(super) mod tests {
             Ok(SystemId(131))
         );
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0), "at 310");
+    }
+
+    #[test]
+    fn the_hypergate_cycle_lists_each_counted_link_unresolved_by_place() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        catalog.gates[0] = gate_site(300, (0.0, 0.0), 0x1200, &[310, 5, 320, 999], 120);
+        catalog.gate_listers = vec![
+            (SystemId(134), StellarId(310)),
+            (SystemId(132), StellarId(320)),
+        ];
+        let session = at_gate(&catalog);
+        assert_eq!(
+            session.hypergate_cycle(&catalog),
+            [Some(SystemId(134)), Some(SystemId(132)), None],
+            "134, shadowed by 131, as it is; 5 doesn't count; no system lists 999"
+        );
+    }
+
+    #[test]
+    fn the_hypergate_cycle_falls_back_on_a_hidden_first_lister() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        let mut session = at_gate(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.hypergate_cycle(&catalog),
+            [Some(SystemId(131)), Some(SystemId(132)), None],
+            "`_FindSystemFromStellar` falls back on 131, hidden"
+        );
+        assert_eq!(
+            Session::start(&catalog)
+                .expect("starts")
+                .hypergate_cycle(&catalog),
+            [],
+            "no hypergate entry pending"
+        );
     }
 
     #[test]

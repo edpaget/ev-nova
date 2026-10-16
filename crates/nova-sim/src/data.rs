@@ -281,7 +281,7 @@ impl PilotCatalog for GameData {
                 Some(StarSystem {
                     id: SystemId(id),
                     position: Vec2::new(f32::from(system.x_pos), f32::from(system.y_pos)),
-                    links: system.con.into_iter().flatten().collect(),
+                    links: con_slots(system.con),
                     govt: system.govt,
                     interference: system.interference,
                     message: system.message,
@@ -1089,6 +1089,21 @@ const ATTRIBUTES_ONLY: i16 = 1000;
 /// What a `shïp`'s `InherentGovt` adds to a `gövt` ID to say it fights as
 /// that government only.
 const COMBAT_ONLY: i16 = 2000;
+
+/// A `sÿst`'s `Con1-Con16` as [`StarSystem::links`] keeps them: each in
+/// its slot, an empty one (-1) as -1, as `_LoadObjectData` keeps all 16
+/// in place (@0x7806d-0x780b8), so a link's index is its slot number. The
+/// empty slots after the last link are dropped, as they number nothing.
+fn con_slots(con: [Option<SystemId>; 16]) -> Vec<SystemId> {
+    let used = con
+        .iter()
+        .rposition(Option::is_some)
+        .map_or(0, |last| last + 1);
+    con[..used]
+        .iter()
+        .map(|slot| slot.unwrap_or(SystemId(-1)))
+        .collect()
+}
 
 /// A `shïp`'s `InherentGovt` as the government whose attributes it takes
 /// on: a `gövt` ID as it is, or less [`ATTRIBUTES_ONLY`] when it is in
@@ -2812,6 +2827,18 @@ mod tests {
             ]
         );
         assert_eq!(store(&[]).star_map(), []);
+    }
+
+    #[test]
+    fn an_empty_con_slot_keeps_its_place_on_the_star_map_as_minus_1() {
+        // `_LoadObjectData` writes all 16 Con slots in place, an empty one
+        // as -1 (@0x7806d-0x780b8), so a link's index is its slot number.
+        let data = store(&[(System::TYPE, 130, linked(0, 0, &[-1, 131, -1, -1, 132]))]);
+        assert_eq!(
+            data.star_map()[0].links,
+            [-1, 131, -1, -1, 132].map(SystemId),
+            "the empty slots after the last link are dropped"
+        );
     }
 
     /// `bytes`, a `sÿst`, with this `Message` (offset 0x68).

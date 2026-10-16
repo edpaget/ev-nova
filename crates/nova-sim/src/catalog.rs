@@ -73,7 +73,10 @@ pub struct StarSystem {
     /// Its map position, `xPos` and `yPos`.
     pub position: Vec2,
     /// Its hyperlinks, `Con1-Con16`, in record order: they may repeat,
-    /// point at itself or at a system that does not exist.
+    /// point at itself or at a system that does not exist. An empty slot
+    /// before the last link is -1, in its place, so a link's index is its
+    /// slot number, as the original's loader keeps them
+    /// (`_LoadObjectData` @0x7806d-0x780b8).
     pub links: Vec<SystemId>,
     /// Its controlling government, `Govt`, or `None` when it is
     /// independent (-1).

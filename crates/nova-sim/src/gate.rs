@@ -56,8 +56,9 @@
 //!   each resolve so: a link with no system visible at its place is
 //!   neither drawn nor taken, and the exit is the first link resolving to
 //!   the system picked (+0x6c). Only `_MapFilter` (@0x13d87-0x13d98), the
-//!   keypad's cycling of the hypergate's destinations, which the engine
-//!   lacks, calls `_FindSystemFromStellar` directly.
+//!   map's Tab / `\` cycle through the hypergate's destinations
+//!   ([`hypergate_cycle`], [`next_gate_pick`]), calls
+//!   `_FindSystemFromStellar` directly, unresolved by place.
 //! - A wormhole reads the owner alone, never `_FindSystemFromStellar`
 //!   ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)),
 //!   and the ship comes out in the exit's owner (@0x642a7).
@@ -250,6 +251,49 @@ pub fn hypergate_exit<'a>(
     })
 }
 
+/// The destinations the hypergate map's Tab / `\` cycles through for a
+/// hypergate with `links`, as `_MapFilter` lists them (@0x13d58-0x13daa):
+/// each link that counts, in slot order, as `find` gives its system,
+/// `_FindSystemFromStellar` unresolved by place
+/// ([`OverlaidGalaxy::find_system_from_stellar`](crate::story::OverlaidGalaxy::find_system_from_stellar));
+/// a link no system lists gives `None`, and stays in the list.
+#[must_use]
+pub fn hypergate_cycle(
+    links: &[Option<StellarId>; 8],
+    find: impl Fn(StellarId) -> Option<SystemId>,
+) -> Vec<Option<SystemId>> {
+    links
+        .iter()
+        .flatten()
+        .filter(|&&link| counts(link))
+        .map(|&link| find(link))
+        .collect()
+}
+
+/// The hypergate map's next pick from `selected`, the map's selection, on
+/// Tab or `\`, as `_MapFilter` steps through the `cycle`
+/// ([`hypergate_cycle`], @0x13db5-0x13f0a): from the first entry equal
+/// to `selected` (`None` matching a `None` entry, as −1 matches −1), the
+/// one before it with Shift (`back`), the first wrapping to the last, and
+/// otherwise the one after it, the last wrapping to the first; from a
+/// selection not in the cycle, the first entry either way. So a
+/// destination listed twice keeps a plain press on its second copy. With
+/// an empty cycle, `None`: nothing changes (@0x13dac).
+#[must_use]
+pub fn next_gate_pick(
+    cycle: &[Option<SystemId>],
+    selected: Option<SystemId>,
+    back: bool,
+) -> Option<Option<SystemId>> {
+    let last = cycle.len().checked_sub(1)?;
+    let next = match cycle.iter().position(|&entry| entry == selected) {
+        None => 0,
+        Some(at) if back => at.checked_sub(1).unwrap_or(last),
+        Some(at) => (at + 1) % cycle.len(),
+    };
+    Some(cycle[next])
+}
+
 /// Where a ship comes out of a wormhole ([`wormhole_exit`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WormholeExit<'a> {
@@ -367,6 +411,56 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::hyperspace::CoLocated;
     use crate::testkit::{Scripted, star};
+
+    #[test]
+    fn the_next_gate_pick_steps_on_and_shift_steps_back_each_wrapping() {
+        let (a, b) = (Some(SystemId(131)), Some(SystemId(132)));
+        let cycle = [a, None, b];
+        assert_eq!(next_gate_pick(&cycle, a, false), Some(None));
+        assert_eq!(
+            next_gate_pick(&cycle, None, false),
+            Some(b),
+            "-1 is found too"
+        );
+        assert_eq!(next_gate_pick(&cycle, b, false), Some(a), "wraps");
+        assert_eq!(next_gate_pick(&cycle, b, true), Some(None));
+        assert_eq!(next_gate_pick(&cycle, a, true), Some(b), "wraps back");
+    }
+
+    #[test]
+    fn the_next_gate_pick_from_a_selection_not_listed_is_the_first_either_way() {
+        let cycle = [Some(SystemId(131)), Some(SystemId(132))];
+        for back in [false, true] {
+            assert_eq!(
+                next_gate_pick(&cycle, Some(SystemId(130)), back),
+                Some(Some(SystemId(131))),
+                "{back}"
+            );
+            assert_eq!(
+                next_gate_pick(&cycle, None, back),
+                Some(Some(SystemId(131))),
+                "{back}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_next_gate_pick_steps_on_from_the_first_copy_of_a_repeat() {
+        let (a, b) = (Some(SystemId(131)), Some(SystemId(132)));
+        assert_eq!(
+            next_gate_pick(&[a, a, b], a, false),
+            Some(a),
+            "stuck on 131"
+        );
+        assert_eq!(next_gate_pick(&[b, a, a], a, true), Some(b));
+    }
+
+    #[test]
+    fn no_next_gate_pick_from_an_empty_cycle() {
+        for back in [false, true] {
+            assert_eq!(next_gate_pick(&[], Some(SystemId(131)), back), None);
+        }
+    }
 
     /// The links in `ids`, in slots from the first, the rest unused.
     fn links(ids: &[i16]) -> [Option<StellarId>; 8] {
