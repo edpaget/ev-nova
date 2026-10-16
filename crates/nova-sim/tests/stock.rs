@@ -3061,14 +3061,16 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
     // destroys, which `damage::take` does, so it reports nothing. The Ion
     // Cannons' `Flags3` 0x0010 (142, 201) fires from the exit point
     // nearest the target, which `exits` does, so they report nothing.
+    // The sensor-interference `Seeker` 0x0008 (135, 137, 160, 230, 234) is
+    // ported (see `projectile`), so it reports nothing either.
     let rows: [Row; 7] = [
         (&[134, 136], &[(Seeker, 0x2)]),
-        (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
-        (&[137], &[(Seeker, 0x1), (Seeker, 0x8)]),
+        (&[135, 160], &[(Seeker, 0x2)]),
+        (&[137], &[(Seeker, 0x1)]),
         (&[148, 182, 184, 185, 199, 229], &[(Seeker, 0x1)]),
-        (&[234], &[(Seeker, 0x2), (Seeker, 0x8)]),
+        (&[234], &[(Seeker, 0x2)]),
         (&[196, 197, 198], &[(Flags2, 0x8000)]),
-        (&[230], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x8000)]),
+        (&[230], &[(Seeker, 0x2), (Flags2, 0x8000)]),
     ];
     let expected: BTreeSet<SimDiagnostic> = rows
         .iter()
@@ -3084,8 +3086,8 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
             })
         })
         .collect();
-    assert_eq!(expected.len(), 22);
-    assert_eq!(diagnostics.len(), 22, "each once: {diagnostics:?}");
+    assert_eq!(expected.len(), 17);
+    assert_eq!(diagnostics.len(), 17, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
 }
 

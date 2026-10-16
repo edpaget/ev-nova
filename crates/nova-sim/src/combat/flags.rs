@@ -131,11 +131,13 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     // Guided weapons' behaviour.
     (Seeker, 0x0001, Guided, Unimplemented),
     (Seeker, 0x0002, Guided, Unimplemented),
-    (Seeker, 0x0008, Guided, Unimplemented),
-    (Seeker, 0x0010, Guided, Unimplemented),
+    // Confused by sensor interference; turns away when jammed.
+    (Seeker, 0x0008, Guided, Implemented),
+    (Seeker, 0x0010, Guided, Implemented),
     (Seeker, 0x0020, Guided, Unimplemented),
-    (Seeker, 0x4000, Guided, Unimplemented),
-    (Seeker, 0x8000, Guided, Unimplemented),
+    // Loses its lock off ahead; may turn on its firer.
+    (Seeker, 0x4000, Guided, Implemented),
+    (Seeker, 0x8000, Guided, Implemented),
     // Cycling graphic: held on the first frame, stopped on the last.
     (Flags2, 0x0001, Any, Presentation),
     (Flags2, 0x0002, Any, Presentation),
@@ -252,11 +254,11 @@ mod tests {
         (Flags, 0x8000, [Implemented; 4]),
         (Seeker, 0x0001, [NA, NA, Unimplemented, NA]),
         (Seeker, 0x0002, [NA, NA, Unimplemented, NA]),
-        (Seeker, 0x0008, [NA, NA, Unimplemented, NA]),
-        (Seeker, 0x0010, [NA, NA, Unimplemented, NA]),
+        (Seeker, 0x0008, [NA, NA, Implemented, NA]),
+        (Seeker, 0x0010, [NA, NA, Implemented, NA]),
         (Seeker, 0x0020, [NA, NA, Unimplemented, NA]),
-        (Seeker, 0x4000, [NA, NA, Unimplemented, NA]),
-        (Seeker, 0x8000, [NA, NA, Unimplemented, NA]),
+        (Seeker, 0x4000, [NA, NA, Implemented, NA]),
+        (Seeker, 0x8000, [NA, NA, Implemented, NA]),
         (Flags2, 0x0001, [Presentation; 4]),
         (Flags2, 0x0002, [Presentation; 4]),
         (Flags2, 0x0004, [Unimplemented; 4]),
@@ -405,12 +407,13 @@ mod tests {
         assert_eq!(unimplemented(&spec(-1, 0, 0, 0)), []);
         let seeking = WeaponSpec::new(&WeaponRecord {
             guidance: 1,
-            seeker: 0x8001,
+            seeker: 0xc03b,
             ..weapon(131)
         });
         assert_eq!(
             unimplemented(&seeking),
-            [(Seeker, 0x0001), (Seeker, 0x8000)]
+            [(Seeker, 0x0001), (Seeker, 0x0002), (Seeker, 0x0020)],
+            "jamming, interference and the 0x4000 lock are done"
         );
     }
 
