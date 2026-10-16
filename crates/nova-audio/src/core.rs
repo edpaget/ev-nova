@@ -95,6 +95,7 @@ impl<A: Audio> AudioCore<A> {
                     | Showing::MissionText
                     | Showing::MissionInfo
                     | Showing::PlayerInfo
+                    | Showing::Movie
             )
         );
         if self.scene != Some(Showing::Flight) || pauses {
@@ -356,6 +357,7 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::MissionText
             | Showing::MissionInfo
             | Showing::PlayerInfo
+            | Showing::Movie
     )
 }
 
@@ -383,7 +385,8 @@ fn has_music(scene: Showing) -> bool {
         | Showing::Offer
         | Showing::MissionText
         | Showing::MissionInfo
-        | Showing::PlayerInfo => false,
+        | Showing::PlayerInfo
+        | Showing::Movie => false,
     }
 }
 
@@ -1264,6 +1267,7 @@ mod tests {
             Showing::MissionText,
             Showing::MissionInfo,
             Showing::PlayerInfo,
+            Showing::Movie,
         ] {
             let (mut core, log) = engine();
             core.update(Some(Showing::Flight), &[THRUST]);

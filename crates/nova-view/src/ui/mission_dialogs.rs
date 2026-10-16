@@ -299,6 +299,12 @@ impl MissionDialogs {
         }
     }
 
+    /// Whether a movie is in front, playing or about to.
+    #[must_use]
+    pub fn playing(&self) -> bool {
+        matches!(self.texts.front(), Some(Stage::Movie(_)))
+    }
+
     /// The mission info screen, while it is open.
     #[must_use]
     pub fn info(&self) -> Option<&MissionInfoScreen> {
@@ -870,6 +876,19 @@ mod tests {
                 Call::Stop
             ]
         );
+    }
+
+    #[test]
+    fn it_says_whether_a_movie_is_in_front() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        assert!(!dialogs.playing());
+        dialogs.show_texts(vec![filmed("After.", 0x0001)]);
+        assert!(!dialogs.playing(), "the text first");
+        dialogs.input(&key(Key::Enter));
+        assert!(dialogs.playing());
+        dialogs.tick(TICK);
+        assert!(!dialogs.playing());
     }
 
     #[test]

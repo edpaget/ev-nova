@@ -278,6 +278,12 @@ impl OfferDialog {
         dialog
     }
 
+    /// Whether its movie plays before the dialog shows.
+    #[must_use]
+    pub fn playing(&self) -> bool {
+        self.before.is_some()
+    }
+
     /// The movie to play after the answer has been acted on and its texts
     /// shown, if any.
     #[must_use]
@@ -509,6 +515,8 @@ pub(crate) struct VenueOffers {
     after: Option<DescMovie>,
     /// The movies the offers play, and whether they play.
     movies: Movies,
+    /// The offer dialog's sounds not yet handed on.
+    sounds: Vec<Sound>,
     /// How the timer runs ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)).
     clock: RuleSource,
     /// The time since the venue last asked (or, before it first asks,
@@ -531,6 +539,7 @@ impl VenueOffers {
             choice: None,
             after: None,
             movies: Movies::none(),
+            sounds: Vec::new(),
             clock: RuleSource::Engine,
             since_ask: Duration::ZERO,
             restarted: false,
@@ -646,20 +655,32 @@ impl VenueOffers {
         std::mem::take(&mut self.restarted)
     }
 
-    /// Gives `input` to the offer dialog, if it is open, adding its sounds
-    /// to `sounds`; answered, it closes. Whether it took the input.
+    /// Gives `input` to the offer dialog, if it is open, adding its sounds,
+    /// and any it made as it ticked, to `sounds`; answered, it closes.
+    /// Whether it took the input.
     pub(crate) fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> bool {
+        sounds.append(&mut self.sounds);
         let Some(dialog) = &mut self.dialog else {
             return false;
         };
         dialog.input(input);
-        sounds.extend(dialog.take_sounds());
+        self.settle_dialog();
+        sounds.append(&mut self.sounds);
+        true
+    }
+
+    /// Keeps the offer dialog's sounds; answered, it closes, its choice
+    /// and after-movie kept until taken.
+    fn settle_dialog(&mut self) {
+        let Some(dialog) = &mut self.dialog else {
+            return;
+        };
+        self.sounds.extend(dialog.take_sounds());
         if let Some(choice) = dialog.take_choice() {
             self.choice = Some((dialog.prompt().mission, choice));
             self.after = dialog.after_movie().cloned();
             self.dialog = None;
         }
-        true
     }
 
     /// The wait for the next offer runs down by `dt`; once it is out, and
@@ -685,10 +706,12 @@ impl VenueOffers {
         }
     }
 
-    /// Ticks the offer dialog, if it is open: its movie moves on.
+    /// Ticks the offer dialog, if it is open: its movie moves on, and the
+    /// keys pressed under a movie that ends can answer it, on that tick.
     pub(crate) fn tick_dialog(&mut self, dt: Duration) {
         if let Some(dialog) = &mut self.dialog {
             dialog.tick(dt);
+            self.settle_dialog();
         }
     }
 
@@ -1595,6 +1618,8 @@ mod tests {
     fn an_offer_movie_with_flag_clear_plays_before_the_dialog() {
         let player = MockMoviePlayer::playing((160, 120), 2);
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
+        assert!(dialog.playing());
+        assert!(!offer().playing());
         assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
         assert!(
             texts(&dialog).is_empty(),
@@ -1606,6 +1631,7 @@ mod tests {
         assert!(!dialog.answered(), "the dialog takes no input yet");
         dialog.tick(TICK);
         dialog.tick(TICK);
+        assert!(!dialog.playing());
         assert!(texts(&dialog).contains(&"Ferry this to Mars.".to_owned()));
         assert_eq!(
             dialog.take_choice(),
@@ -1701,5 +1727,23 @@ mod tests {
         assert!(offers.take_choice().is_some());
         assert_eq!(offers.take_after_movie(), film(0x0001));
         assert_eq!(offers.take_after_movie(), None, "once");
+    }
+
+    #[test]
+    fn a_choice_pressed_under_the_venues_movie_settles_on_the_tick_it_ends() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        offers.set_movies(movies(&player));
+        offers.open(filmed(0x0000), Rc::new(MonoMetrics), ButtonStyle::STOCK);
+        let mut sounds = Vec::new();
+        offers.input(&key(Key::Char('n')), &mut sounds);
+        assert_eq!(offers.take_choice(), None, "not while the movie plays");
+        offers.tick(TICK, false);
+        assert_eq!(
+            offers.take_choice(),
+            Some((MissionId(141), OfferChoice::Refuse)),
+            "on the tick the movie ends"
+        );
+        assert!(offers.dialog().is_none(), "and the dialog closes");
     }
 }

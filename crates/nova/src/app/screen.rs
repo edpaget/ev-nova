@@ -240,10 +240,10 @@ use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
-    HailView, HireTerms, LegalCode, MissionInfo, NovaAi, NovaBits, NovaBoarding, NovaDisable,
-    NovaHire, NovaLaw, NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore,
-    PointDefenceRule, RuleKey, Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
+    Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DescMovie, DisableRule,
+    HailOptions, HailView, HireTerms, LegalCode, MissionInfo, NovaAi, NovaBits, NovaBoarding,
+    NovaDisable, NovaHire, NovaLaw, NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper,
+    PilotStore, PointDefenceRule, RuleKey, Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -251,6 +251,7 @@ use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
+use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::{BAR_DIALOG, BarTemplates, PICTURE_BAR_DIALOG};
@@ -415,6 +416,11 @@ pub struct AppScreen {
     /// The mission texts and the mission info screen over flight, while
     /// one is open.
     missions: Option<MissionDialogs>,
+    /// The movies the mission texts and offers play, and whether they
+    /// play: [`NoMoviePlayer`](crate::movie::NoMoviePlayer)'s unless
+    /// another is given ([`AppScreen::with_movie_player`]), on as the
+    /// preferences say.
+    movies: Movies,
     /// The fade back from black over the side shown after a death, while
     /// it plays.
     fade_in: Option<ScreenFade>,
@@ -501,6 +507,10 @@ impl AppScreen {
             haggle: None,
             offer: None,
             missions: None,
+            movies: Movies::new(
+                Rc::new(crate::movie::NoMoviePlayer),
+                Prefs::default().quicktime_movies,
+            ),
             fade_in: None,
             player_info: None,
             command_held: false,
@@ -850,7 +860,16 @@ impl AppScreen {
     /// Preferences dialog opens on.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
+        self.movies.set_on(prefs.quicktime_movies);
         Self { prefs, ..self }
+    }
+
+    /// The router playing the mission texts' and offers' movies through
+    /// `player`, while the preferences have them on.
+    #[must_use]
+    pub fn with_movie_player(self, player: Rc<dyn MoviePlayer>) -> Self {
+        let movies = Movies::new(player, self.prefs.quicktime_movies);
+        Self { movies, ..self }
     }
 
     /// The player's preferences, as last chosen.
@@ -889,10 +908,17 @@ impl AppScreen {
         if self.comm.is_some() {
             return Showing::Comm;
         }
-        if self.offer.is_some() {
-            return Showing::Offer;
+        if let Some(offer) = &self.offer {
+            return if offer.playing() {
+                Showing::Movie
+            } else {
+                Showing::Offer
+            };
         }
         if let Some(missions) = &self.missions {
+            if missions.playing() {
+                return Showing::Movie;
+            }
             return if missions.text().is_some() {
                 Showing::MissionText
             } else {
@@ -1061,6 +1087,7 @@ impl AppScreen {
             if let Some(prefs) = dialog.take_change() {
                 self.prefs = prefs;
                 self.prefs_change = Some(prefs);
+                self.movies.set_on(prefs.quicktime_movies);
                 if let Some(flight) = &mut self.flight {
                     flight.set_hyperspace_effects(prefs.hyperspace_effects);
                     flight.set_sound_prefs(prefs.sound);
@@ -1166,6 +1193,9 @@ impl AppScreen {
         if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
             self.open_offer(prompt);
         }
+        if let Some(movie) = self.flight.as_mut().and_then(FlightView::take_offer_movie) {
+            self.play_over_flight(&movie);
+        }
         if self
             .flight
             .as_mut()
@@ -1192,15 +1222,18 @@ impl AppScreen {
     fn flight_missions(&mut self) -> Option<&mut MissionDialogs> {
         if self.missions.is_none() {
             let dialogs = self.dialogs.as_ref()?;
-            self.missions = Some(MissionDialogs::new(
-                DescTemplates {
-                    plain: dialogs.resources.dialog_template(DESC_DIALOG),
-                    picture: dialogs.resources.dialog_template(PICTURE_DESC_DIALOG),
-                },
-                dialogs.resources.dialog_template(INFO_DIALOG),
-                Rc::clone(&dialogs.metrics),
-                self.data.button_style(),
-            ));
+            self.missions = Some(
+                MissionDialogs::new(
+                    DescTemplates {
+                        plain: dialogs.resources.dialog_template(DESC_DIALOG),
+                        picture: dialogs.resources.dialog_template(PICTURE_DESC_DIALOG),
+                    },
+                    dialogs.resources.dialog_template(INFO_DIALOG),
+                    Rc::clone(&dialogs.metrics),
+                    self.data.button_style(),
+                )
+                .with_movies(self.movies.clone()),
+            );
         }
         self.missions.as_mut()
     }
@@ -1208,10 +1241,14 @@ impl AppScreen {
     /// Drops the mission dialogs over flight once nothing is open,
     /// keeping their sounds, and begins the death's fade if the hold
     /// has expired ([`AppScreen::fade_once_dialogs_close`]).
+    ///
+    /// What was pressed under the last movie is dropped: flight reads its
+    /// keys as held, and the router lets go of them as the dialogs open.
     fn drop_closed_missions(&mut self) {
         if let Some(missions) = &mut self.missions
             && !missions.is_open()
         {
+            missions.take_unclaimed();
             self.sounds.extend(missions.take_sounds());
             self.missions = None;
             self.fade_once_dialogs_close();
@@ -1292,23 +1329,42 @@ impl AppScreen {
             .map(|template| (template, metrics)),
             _ => Err(NO_INTERFACE.to_owned()),
         };
-        self.offer = Some(OfferDialog::new(layout, prompt, self.data.button_style()));
+        self.offer = Some(
+            OfferDialog::new(layout, prompt, self.data.button_style()).with_movies(&self.movies),
+        );
     }
 
-    /// The offer dialog's input: the choice goes through flight, and the
-    /// dialog closes, keeping its sounds, and flight resumes. The texts
-    /// the answer queued then show over flight as the input settles.
+    /// The offer dialog's input, then what it asked for
+    /// ([`AppScreen::settle_offer`]).
     fn offer_input(&mut self, input: &Input) -> ScreenAction {
-        let dialog = self.offer.as_mut().expect("open");
-        dialog.input(input);
+        if let Some(dialog) = &mut self.offer {
+            dialog.input(input);
+        }
+        self.settle_offer();
+        ScreenAction::None
+    }
+
+    /// Acts on what the offer dialog over flight asked for, after an input
+    /// or a tick (the keys pressed under its movie reach it as the movie
+    /// ends, on a tick): the player info screen opens over it; or the
+    /// choice goes through flight, and the dialog closes, keeping its
+    /// sounds, and flight resumes. The texts the answer queued show over
+    /// flight at once, and then the offer's after-movie plays, as
+    /// `_OfferOneMission` plays it once the accept or the refuse text is
+    /// over (@0xa3580-0xa35b8).
+    fn settle_offer(&mut self) {
+        let Some(dialog) = &mut self.offer else {
+            return;
+        };
         if dialog.take_player_info_request() {
             self.open_flight_player_info();
-            return ScreenAction::None;
+            return;
         }
         let Some(choice) = dialog.take_choice() else {
-            return ScreenAction::None;
+            return;
         };
         let mission = dialog.prompt().mission;
+        let after = dialog.after_movie().cloned();
         self.sounds.extend(dialog.take_sounds());
         self.offer = None;
         let flight = self.flight.as_mut().expect(ENTERED);
@@ -1320,7 +1376,10 @@ impl AppScreen {
                 let _ = flight.refuse_mission(mission);
             }
         }
-        ScreenAction::None
+        self.show_mission_texts();
+        if let Some(movie) = after {
+            self.play_over_flight(&movie);
+        }
     }
 
     /// Opens the comm dialog on `view` over flight, which pauses: the
@@ -1624,7 +1683,8 @@ impl AppScreen {
         }
         spaceport = spaceport
             .with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG))
-            .with_offer_clock(self.rules.source_for(RuleKey::OfferClock));
+            .with_offer_clock(self.rules.source_for(RuleKey::OfferClock))
+            .with_movies(self.movies.clone());
         self.spaceport = Some(spaceport);
         self.serve_descriptions();
         self.switch_to(Side::Spaceport);
@@ -1715,7 +1775,7 @@ impl AppScreen {
                 Ok(text) => texts.push(DescShown {
                     text,
                     graphic: self.data.description_graphic(id),
-                    movie: None,
+                    movie: self.data.description_movie(id),
                 }),
                 Err(reason) => self.warnings.push(format!(
                     "nova: cannot show the sabotage dësc {id}: {reason}"
@@ -1746,7 +1806,7 @@ impl AppScreen {
                 self.show_over_flight(vec![DescShown {
                     text,
                     graphic,
-                    movie: None,
+                    movie: self.data.description_movie(id),
                 }]);
             }
             Err(reason) => self
@@ -1981,6 +2041,23 @@ impl AppScreen {
     /// first cancelling flight's pointer gesture and letting go of its
     /// keys (their releases will go to the texts), as any dialog over
     /// flight does. Without dialogs they are dropped.
+    /// Plays `movie` over flight after whatever the mission dialogs show,
+    /// as [`AppScreen::show_over_flight`] shows texts: an offer's after-movie
+    /// once the texts its answer queued are queued, or a before-movie of a
+    /// person's offer accepted at once, before them.
+    fn play_over_flight(&mut self, movie: &DescMovie) {
+        if self.flight_missions().is_none() {
+            return;
+        }
+        let below = self.shown_mut();
+        below.cancel_pointer();
+        below.release_keys();
+        if let Some(missions) = &mut self.missions {
+            missions.play_movie(movie);
+        }
+        self.drop_closed_missions();
+    }
+
     fn show_over_flight(&mut self, texts: Vec<DescShown>) {
         if self.flight_missions().is_none() {
             return;
@@ -2469,7 +2546,10 @@ impl AppScreen {
         if let Some(venue) = spaceport.take_offer_request() {
             match flight.next_offer(venue) {
                 Some(VenueOffer::Prompt(prompt)) => spaceport.open_offer(prompt),
-                Some(VenueOffer::Accepted { .. }) => {
+                Some(VenueOffer::Accepted { movie, .. }) => {
+                    if let Some(movie) = movie {
+                        spaceport.play_movie(&movie);
+                    }
                     spaceport.show_mission_texts(flight.take_mission_texts());
                     spaceport.rearm_offers(flight.offer_gap());
                     refresh_spaceport(spaceport, flight);
@@ -2487,6 +2567,7 @@ impl AppScreen {
                 }
             }
             spaceport.show_mission_texts(flight.take_mission_texts());
+            spaceport.play_offer_after_movie();
             spaceport.rearm_offers(flight.offer_gap());
             refresh_spaceport(spaceport, flight);
         }
@@ -2822,7 +2903,9 @@ impl Screen for AppScreen {
     /// Only the side shown ticks; a hidden one is paused. While an overlay
     /// (the About dialog, the Preferences dialog, the New Pilot dialog or
     /// the saved pilots' list) is open, only it ticks: flight pauses under
-    /// the preferences, as in the original. A fade back from black after a
+    /// the preferences, as in the original. What the offer dialog over
+    /// flight asked for is acted on, and the mission dialogs over flight
+    /// dropped once closed, on the tick a movie of theirs ends. A fade back from black after a
     /// death moves on. Then what flight's tick ended is taken: the seam at
     /// the hold's expiry, and the return to the main menu once the death's
     /// fade is over. What the set expressions queued is settled, and a
@@ -2832,6 +2915,8 @@ impl Screen for AppScreen {
             Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
         }
+        self.settle_offer();
+        self.drop_closed_missions();
         self.advance_fade_in(dt);
         self.after_flight_tick();
         self.settle_script();
@@ -2961,9 +3046,13 @@ impl Screen for AppScreen {
     }
 
     /// Flight's ([`FlightView`]'s cursor), while it shows with nothing
-    /// over it.
+    /// over it; and while a cinematic movie plays, over flight or the
+    /// spaceport (`_HideTheCursor` @0x55a73).
     fn hides_pointer(&self) -> bool {
-        self.showing() == Showing::Flight && self.shown().hides_pointer()
+        let movie = self.missions.as_ref().is_some_and(Screen::hides_pointer)
+            || self.offer.as_ref().is_some_and(Screen::hides_pointer)
+            || self.spaceport.as_ref().is_some_and(Screen::hides_pointer);
+        movie || (self.showing() == Showing::Flight && self.shown().hides_pointer())
     }
 
     /// Puts the pilot flying away, in flight or in the spaceport, when it
@@ -8947,6 +9036,114 @@ pub(super) mod tests {
         );
         screen.input(&key(Key::Enter, true));
         assert_eq!(active(&screen), [MissionId(131)]);
+    }
+
+    /// A movie player logging each start and stop, whose movies end on
+    /// their second advance.
+    #[derive(Default)]
+    struct Reel {
+        log: std::cell::RefCell<Vec<String>>,
+        advanced: std::cell::Cell<u32>,
+    }
+
+    impl MoviePlayer for Reel {
+        fn start(&self, file: &str) -> Option<(u32, u32)> {
+            self.log.borrow_mut().push(format!("start {file}"));
+            self.advanced.set(0);
+            Some((160, 120))
+        }
+
+        fn advance(&self, _dt: Duration) -> bool {
+            self.advanced.set(self.advanced.get() + 1);
+            self.advanced.get() < 2
+        }
+
+        fn stop(&self) {
+            self.log.borrow_mut().push("stop".to_owned());
+        }
+
+        fn draw_frame(&self, _rect: Bounds, _list: &mut DrawList) {}
+    }
+
+    /// The router landed at Alpha Prime, whose spaceport offers mission
+    /// 130 of `Flags` `flags`, its offer `dësc` of `text` naming the movie
+    /// "Offer.mov" played as `movie` says, with movies played through a
+    /// new [`Reel`] and `prefs`.
+    fn landed_filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<Reel>) {
+        let mut mission = venue_mission(SPACEPORT);
+        mission[0x50..0x52].copy_from_slice(&flags.to_be_bytes());
+        let mut offer = desc_of(text);
+        let at = text.len() + 3;
+        offer[at..at + 9].copy_from_slice(b"Offer.mov");
+        offer[at + 32..at + 34].copy_from_slice(&movie.to_be_bytes());
+        let fork = game_data_fork(true, true, true, 100, b"", b"", None)
+            .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
+            .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &offer);
+        let reel = Rc::new(Reel::default());
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(loaded(&fork))
+            .with_prefs(prefs)
+            .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
+            .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        (screen, reel)
+    }
+
+    fn reeled(reel: &Reel) -> Vec<String> {
+        reel.log.borrow().clone()
+    }
+
+    #[test]
+    fn the_spaceports_offer_plays_its_after_movie_once_answered() {
+        let (mut screen, reel) = landed_filmed(0, "Job.", 0x0001, Prefs::default());
+        assert!(spaceport(&screen).offer_dialog().is_some());
+        assert!(reeled(&reel).is_empty(), "not before the dialog");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(130)]);
+        assert_eq!(reeled(&reel), ["start Offer.mov"], "after the answer");
+        screen.tick(Duration::from_millis(16));
+        screen.tick(Duration::from_millis(16));
+        assert_eq!(reeled(&reel), ["start Offer.mov", "stop"]);
+    }
+
+    #[test]
+    fn the_spaceports_offer_plays_its_before_movie_and_a_refusal_after_it_plays_none() {
+        let (mut screen, reel) = landed_filmed(0, "Job.", 0, Prefs::default());
+        assert_eq!(reeled(&reel), ["start Offer.mov"]);
+        screen.tick(Duration::from_millis(16));
+        screen.tick(Duration::from_millis(16));
+        screen.input(&key(Key::Char('n'), true));
+        assert_eq!(active(&screen), []);
+        assert_eq!(reeled(&reel), ["start Offer.mov", "stop"], "none after");
+    }
+
+    #[test]
+    fn a_spaceport_offer_accepted_at_once_plays_its_movie() {
+        let (screen, reel) = landed_filmed(0x0004, "", 0x0004, Prefs::default());
+        assert_eq!(active(&screen), [MissionId(130)]);
+        assert_eq!(reeled(&reel), ["start Offer.mov"]);
+        assert!(!screen.hides_pointer(), "during the fade out");
+    }
+
+    #[test]
+    fn a_cinematic_movie_over_the_spaceport_hides_the_pointer() {
+        let (mut screen, _) = landed_filmed(0x0004, "", 0x0004, Prefs::default());
+        screen.tick(Duration::from_secs(1));
+        assert!(screen.hides_pointer());
+    }
+
+    #[test]
+    fn with_movies_off_in_the_preferences_none_plays() {
+        let off = Prefs {
+            quicktime_movies: false,
+            ..Prefs::default()
+        };
+        let (mut screen, reel) = landed_filmed(0, "Job.", 0x0001, off);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(130)]);
+        assert!(reeled(&reel).is_empty());
     }
 
     /// Opens shop `item` at a stellar offering mission 130 at `loc`, and

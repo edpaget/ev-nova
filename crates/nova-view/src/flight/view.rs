@@ -1497,6 +1497,9 @@ pub struct FlightView<C> {
     /// The mission a person hailed or boarded just offered, for the
     /// router.
     pending_offer: Option<OfferPrompt>,
+    /// The before-movie of a person's offer accepted at once, until the
+    /// router takes it.
+    pending_offer_movie: Option<nova_sim::DescMovie>,
     /// The session's arrival messages taken before their arrival is
     /// caught up with, which leads them.
     pending_leads: Vec<SimMessage>,
@@ -1781,6 +1784,7 @@ impl<
             pending_mission_info: None,
             pending_player_info: false,
             pending_offer: None,
+            pending_offer_movie: None,
             pending_leads: Vec::new(),
             hail_options: HailOptions::default(),
             boarding_rule: Rc::new(NovaBoarding::default()),
@@ -2112,6 +2116,14 @@ impl<
     /// [`FlightView::refuse_mission`].
     pub fn take_offer(&mut self) -> Option<OfferPrompt> {
         self.pending_offer.take()
+    }
+
+    /// The before-movie of a person's offer accepted at once since this
+    /// was last taken, once: the router plays it before the texts the
+    /// accept queued, as `_OfferOneMission` plays it before the empty-text
+    /// check (@0xa2273-0xa22ec).
+    pub fn take_offer_movie(&mut self) -> Option<nova_sim::DescMovie> {
+        self.pending_offer_movie.take()
     }
 
     /// The comm dialog's contents while a hail is under way
@@ -3327,11 +3339,16 @@ impl<C> FlightView<C> {
 
     /// Holds `offer`'s prompt for the router, letting go of the flight
     /// keys; a mission accepted at once shows nothing here, its texts
-    /// queued in the session for the router to show over flight.
+    /// queued in the session for the router to show over flight, and its
+    /// before-movie held for the router to play first
+    /// ([`FlightView::take_offer_movie`]).
     fn hold_offer(&mut self, offer: VenueOffer) {
-        if let VenueOffer::Prompt(prompt) = offer {
-            self.pending_offer = Some(prompt);
-            self.held.clear();
+        match offer {
+            VenueOffer::Prompt(prompt) => {
+                self.pending_offer = Some(prompt);
+                self.held.clear();
+            }
+            VenueOffer::Accepted { movie, .. } => self.pending_offer_movie = movie,
         }
     }
 
@@ -17394,6 +17411,21 @@ mod tests {
             Some("Aboard.".to_owned())
         );
         assert_eq!(view.message(), None, "nothing granted");
+    }
+
+    #[test]
+    fn an_offer_accepted_at_once_holds_its_before_movie_once() {
+        let mut catalog = offering(0, None, true);
+        catalog.mission_texts[0].movies.offer = nova_sim::DescMovie::from_desc("Ace.mov", 0x0004);
+        let mut view = targeting_ace(catalog);
+        assert_eq!(view.take_offer_movie(), None);
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_offer(), None);
+        assert_eq!(
+            view.take_offer_movie(),
+            nova_sim::DescMovie::from_desc("Ace.mov", 0x0004)
+        );
+        assert_eq!(view.take_offer_movie(), None, "once");
     }
 
     #[test]
