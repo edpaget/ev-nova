@@ -1882,7 +1882,9 @@ impl AppScreen {
     /// Leaves the spaceport for a `Q` run while landed
     /// ([`FlightView::leave_due`]), as its Leave does
     /// ([`AppScreen::leave_port`]), unless a text or dialog shown over it
-    /// holds the leave ([`SpaceportView::holds_leave`]). The original's
+    /// holds the leave ([`SpaceportView::holds_leave`]): the router keeps
+    /// only that gate, and the session carries the leave out
+    /// ([`FlightView::leave_if_due`]). The original's
     /// port filters leave on their next call while `_absquatulateStr` is
     /// set (`_PortFilter` @0x4f047-0x4f063, which chooses Leave,
     /// @0x4f1ff), and the texts and dialogs over them never read it. As
@@ -1900,22 +1902,29 @@ impl AppScreen {
         {
             return;
         }
-        self.leave_port();
+        self.leave_port_by(FlightView::leave_if_due);
     }
 
-    /// Leaves the spaceport: it closes and the ship takes off
-    /// ([`FlightView::take_off`]), the one path for the port's Leave and
-    /// a `Q`'s, as `_DoPortDialog` has one (@0x5fcd3, @0x601a0-0x6025e).
-    /// The take-off's events (the stay's `DayPassed`, `Explored`,
-    /// `TookOff`) settle at once ([`FlightView::settle_script`]), and the
-    /// mission texts they queue show over flight, so on either path they
-    /// are settled before the take-off's save and its first frame, as
-    /// `_PlayerLandOnStellar` runs them inside the take-off.
+    /// Leaves the spaceport by its Leave ([`FlightView::take_off`]).
     fn leave_port(&mut self) {
+        self.leave_port_by(FlightView::take_off);
+    }
+
+    /// Leaves the spaceport: it closes and the ship takes off by `leave`,
+    /// the one path for the port's Leave and a `Q`'s, as `_DoPortDialog`
+    /// has one (@0x5fcd3, @0x601a0-0x6025e). The session settles the
+    /// take-off's events (the stay's `DayPassed`, `Explored`, `TookOff`)
+    /// at once itself ([`Session::leave_port`](nova_sim::Session::leave_port)),
+    /// and the mission texts they queue show over flight, so on either
+    /// path they are settled before the take-off's save and its first
+    /// frame, as `_PlayerLandOnStellar` runs them inside the take-off.
+    fn leave_port_by(
+        &mut self,
+        leave: impl FnOnce(&mut FlightView<Rc<GameData>>) -> Option<nova_sim::StellarId>,
+    ) {
         self.close_spaceport();
         if let Some(flight) = self.flight.as_mut() {
-            flight.take_off();
-            flight.settle_script();
+            let _ = leave(flight);
         }
         self.show_mission_texts();
     }

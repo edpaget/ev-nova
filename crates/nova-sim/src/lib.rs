@@ -446,8 +446,8 @@ pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
-    AbortError, AcceptError, ComputerRefusal, ComputerRow, ESCAPE_POD_SHIP, Hailed, HookRules,
-    InfoRow, LandPress, MissionComputer, MissionInfo, MissionInfoPress, MissionText,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
+    HookRules, InfoRow, LandPress, MissionComputer, MissionInfo, MissionInfoPress, MissionText,
     MissionTextKind, NotOffered, OfferPrompt, PersonQuote, RelocateRefusal, ScriptEffectRules,
     Session, SessionEvent, Settled, ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, VenueOffer,
 };

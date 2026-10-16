@@ -134,13 +134,17 @@
 //!   (`_DisplayComm` @0x635cf) in place of its usual greeting, with no
 //!   beep, and clears it (@0x635e0). The landing clears it too, before
 //!   the port opens (@0x6332a-0x63335). Here [`Session::settle_script`]
-//!   holds a landed `Q` ([`Session::leave_due`]) for whoever shows the
-//!   spaceport to leave it once nothing shown over it holds the leave;
-//!   [`Session::take_off`] consumes it, giving its message once
-//!   ([`Session::take_leave_message`]); whoever takes off settles again
-//!   at once, so the take-off's `DayPassed`, `Explored` and `TookOff`
-//!   dispatch before its save and its first frame, as the original runs
-//!   them inside the take-off. The landing drops a leave still
+//!   holds a landed `Q` ([`Session::leave_due`]), and
+//!   [`Session::leave_if_due`] carries it out: whoever shows the
+//!   spaceport calls it once nothing shown over it holds the leave, and
+//!   a driver with nothing shown (the storyline walker) after each
+//!   settling. It leaves as the port's Leave does
+//!   ([`Session::leave_port`]): [`Session::take_off`] consumes the leave,
+//!   giving its message once ([`Session::take_leave_message`]), and the
+//!   session settles again at once itself, so the take-off's
+//!   `DayPassed`, `Explored` and `TookOff` dispatch before its save and
+//!   its first frame, as the original runs them inside the take-off. The
+//!   landing drops a leave still
 //!   pending. A held leave is not saved, as the original's pilot file
 //!   holds no such string, so a pilot saved at the landing reloads docked
 //!   with no `Q`.
@@ -200,7 +204,7 @@
 
 use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
-use crate::catalog::{PilotCatalog, SoundId, SystemId, TrafficCatalog};
+use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
 use crate::landing::is_dockable_destroyed_or_not;
@@ -285,6 +289,17 @@ pub struct Settled {
     pub message: Option<String>,
 }
 
+/// What [`Session::leave_port`] did: the stellar taken off from, and what
+/// settling the take-off did.
+#[must_use]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Departure {
+    /// The stellar the ship took off from.
+    pub stellar: StellarId,
+    /// What settling the take-off's events did.
+    pub settled: Settled,
+}
+
 impl Session {
     /// The rules the moving set operators follow, projected from the
     /// session's rule set ([`Session::with_rules`]).
@@ -366,9 +381,8 @@ impl Session {
 
     /// Applies a `Q`'s leave in flight, if one is pending, noting its
     /// message on `settled`: whether one was. Landed, the leave is held,
-    /// as `_absquatulateStr` is, for whoever shows the spaceport to take
-    /// off once nothing it shows holds the leave ([`Session::leave_due`]),
-    /// and nothing is applied.
+    /// as `_absquatulateStr` is ([`Session::leave_due`]), for
+    /// [`Session::leave_if_due`] to carry out, and nothing is applied.
     pub(super) fn settle_leave(&mut self, settled: &mut Settled) -> bool {
         if self.landed.is_some() {
             return false;
@@ -391,6 +405,40 @@ impl Session {
     #[must_use]
     pub fn leave_due(&self) -> bool {
         self.landed.is_some() && self.queued.leave.is_some()
+    }
+
+    /// Carries out a held `Q`'s leave ([`Session::leave_due`]) as the
+    /// port's Leave does ([`Session::leave_port`]), and what it did; `None`,
+    /// and nothing changes, when no leave is due. Whoever shows the
+    /// spaceport calls it once nothing shown over the port holds the
+    /// leave; a driver with nothing shown, after each settling.
+    pub fn leave_if_due(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<Departure> {
+        if !self.leave_due() {
+            return None;
+        }
+        self.leave_port(catalog, chance)
+    }
+
+    /// Leaves the spaceport, the one path for the port's Leave and a
+    /// `Q`'s, as `_DoPortDialog` has one (@0x5fcd3, @0x601a0-0x6025e):
+    /// takes off ([`Session::take_off`]), consuming a held leave, then
+    /// settles the take-off's `DayPassed`, `Explored` and `TookOff`
+    /// ([`Session::settle_script`]) at once, so they dispatch before the
+    /// take-off's save and its first frame, as `_PlayerLandOnStellar` runs
+    /// them inside the take-off. `None`, and nothing changes, when the
+    /// ship has not landed.
+    pub fn leave_port(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<Departure> {
+        let stellar = self.take_off(catalog, chance)?;
+        let settled = self.settle_script(catalog, chance);
+        Some(Departure { stellar, settled })
     }
 
     /// The take-off's part of a held `Q`: it consumes the leave, keeping
@@ -1502,6 +1550,65 @@ mod tests {
             "consumed"
         );
         assert_eq!(session.take_sounds(), [], "nothing left for flight");
+    }
+
+    #[test]
+    fn a_due_leave_takes_off_and_settles_the_take_offs_events_at_once() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        let landed_on = session.date();
+        run_rolling(&mut session, "Q25048", &[2]);
+        let _ = settle(&mut session, &catalog);
+        session.drop_raised();
+        assert_eq!(
+            session.leave_if_due(&catalog, &mut NeverFires),
+            Some(Departure {
+                stellar: StellarId(128),
+                settled: Settled::default(),
+            })
+        );
+        assert_eq!(session.landed(), None, "in flight");
+        assert_eq!(session.date(), landed_on.next_day(), "its day passed");
+        assert_eq!(session.story_raised(), [], "DayPassed, TookOff dispatched");
+        assert!(!session.leave_due());
+        assert_eq!(
+            session.take_leave_message().as_deref(),
+            Some("Off you go, <PSN>.")
+        );
+        assert_eq!(
+            session.leave_if_due(&catalog, &mut NeverFires),
+            None,
+            "once"
+        );
+    }
+
+    #[test]
+    fn with_no_leave_due_nothing_leaves() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        assert_eq!(session.leave_if_due(&catalog, &mut NeverFires), None);
+        assert_eq!(session.landed(), Some(StellarId(128)), "docked");
+        let mut session = told(flying(&catalog));
+        run_rolling(&mut session, "Q25048", &[0]);
+        assert_eq!(session.leave_if_due(&catalog, &mut NeverFires), None);
+    }
+
+    #[test]
+    fn the_ports_leave_takes_off_and_settles_as_a_qs_does() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        session.drop_raised();
+        let departure = session
+            .leave_port(&catalog, &mut NeverFires)
+            .expect("leaves");
+        assert_eq!(departure.stellar, StellarId(128));
+        assert_eq!(session.landed(), None);
+        assert_eq!(session.story_raised(), [], "settled");
+        assert_eq!(
+            session.leave_port(&catalog, &mut NeverFires),
+            None,
+            "in flight"
+        );
     }
 
     #[test]

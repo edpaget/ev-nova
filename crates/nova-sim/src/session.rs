@@ -406,7 +406,7 @@ pub(crate) use missions::StopRefusal;
 pub use missions::{AbortError, NotOffered};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
-pub use script_effects::{ScriptEffectRules, Settled};
+pub use script_effects::{Departure, ScriptEffectRules, Settled};
 pub use takeoff_grace::TAKEOFF_GRACE_TICKS;
 
 use std::collections::{BTreeMap, BTreeSet};

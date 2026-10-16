@@ -398,15 +398,15 @@ use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     ALERT_CICN, Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule,
     Chance, ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls,
-    DisableRule, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId,
-    Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome,
-    LandPress, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable,
-    NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot,
-    PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey,
-    RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal,
-    ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take,
-    Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
-    flight::shortest_turn, glow_level, lights_level,
+    Departure, DisableRule, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good,
+    GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal,
+    LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding,
+    NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun,
+    Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection,
+    Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, Settled, ShipId, ShipNaming,
+    ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId,
+    StellarPick, Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog,
+    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, ControlBits, Hailed, HireList,
@@ -2663,7 +2663,9 @@ impl<
     }
 
     /// Takes off from the stellar landed on, and gives it; `None` when the
-    /// ship has not landed. The next frame draws the ship where it is, at
+    /// ship has not landed. The session leaves the port as its Leave does
+    /// ([`Session::leave_port`]), settling the take-off's events at once.
+    /// The next frame draws the ship where it is, at
     /// the stellar, not on its way from where it was, in the system a move
     /// made while landed went to, laid out afresh as the session tells
     /// ([`SessionEvent`]); it shows no message
@@ -2675,23 +2677,48 @@ impl<
     /// session has populated the system's traffic afresh
     /// ([`Session::take_off`]), so no frame draws the ships from before
     /// the landing. Leaving passes the stay's days, their
-    /// events rolled on the flight's chance.
+    /// events rolled on the flight's chance, and what settling them did
+    /// shows as [`FlightView::settle_script`] shows it.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
-        let stellar = session.take_off(&self.catalog, &mut self.chance)?;
-        let mut said: Vec<(String, u16)> = session
-            .take_leave_message()
+        let departure = session.leave_port(&self.catalog, &mut self.chance)?;
+        Some(self.departed(departure))
+    }
+
+    /// Takes off for a `Q` run while landed, if its leave is due
+    /// ([`Session::leave_if_due`]), as [`FlightView::take_off`] does for
+    /// the port's Leave, and gives the stellar left; `None`, and nothing
+    /// changes, when no leave is due. The router calls it once nothing
+    /// shown over the spaceport holds the leave.
+    pub fn leave_if_due(&mut self) -> Option<StellarId> {
+        let session = self.session.as_mut().ok()?;
+        let departure = session.leave_if_due(&self.catalog, &mut self.chance)?;
+        Some(self.departed(departure))
+    }
+
+    /// Catches the screen up with `departure`: the take-off's line, then
+    /// what settling it did; gives the stellar left.
+    fn departed(&mut self, departure: Departure) -> StellarId {
+        let Departure { stellar, settled } = departure;
+        let mut said: Vec<(String, u16)> = self
+            .session
+            .as_mut()
+            .ok()
+            .and_then(Session::take_leave_message)
             .into_iter()
             .map(|text| (text, SCRIPT_MESSAGE_TICKS))
             .collect();
-        said.extend(self.took_off());
+        let (pay, system) = self.took_off();
+        said.extend(pay);
         self.say_all(&said);
-        Some(stellar)
+        self.show_settled(settled, system);
+        stellar
     }
 
     /// Whether a `Q` run while landed waits for the take-off
-    /// ([`Session::leave_due`]): whoever shows the spaceport leaves it,
-    /// as its Leave does, once nothing shown over it holds the leave.
+    /// ([`Session::leave_due`]): whoever shows the spaceport leaves it
+    /// ([`FlightView::leave_if_due`]), as its Leave does, once nothing
+    /// shown over it holds the leave.
     #[must_use]
     pub fn leave_due(&self) -> bool {
         self.session.as_ref().is_ok_and(Session::leave_due)
@@ -2702,7 +2729,8 @@ impl<
     /// tells a move while landed changed it, the traffic populated afresh
     /// drawn where it is with its ship types' sheets read, no message from
     /// before kept; gives what paying the escorts for the take-off has to
-    /// say, each with its ticks.
+    /// say, each with its ticks, and whether the system was laid out
+    /// afresh.
     ///
     /// The original keeps the slot and replaces it with its take-off
     /// greeting (`_PlayerLandOnStellar` @0x63732), which the engine does
@@ -2710,18 +2738,18 @@ impl<
     /// hud-fidelity/phase-12-flight-messages-the-original-raises); a
     /// message from before the landing would be further from what the
     /// player sees than none.
-    fn took_off(&mut self) -> Vec<(String, u16)> {
+    fn took_off(&mut self) -> (Vec<(String, u16)>, bool) {
         let pay = self
             .session
             .as_mut()
             .map(Session::take_pay_notes)
             .unwrap_or_default();
-        self.catch_up();
+        let system = self.catch_up().system;
         self.place_ship();
         self.read_npc_sheets();
         self.message = None;
         self.redraw_status();
-        pay_said(&pay)
+        (pay_said(&pay), system)
     }
 
     /// Shows the texts of `said`, joined by two spaces, when there is
@@ -2740,8 +2768,8 @@ impl<
     /// [`Session::settle_script`] does, reading the catalog and drawing on
     /// the flight's chance. A `Q` run while landed never takes off here:
     /// it is held ([`FlightView::leave_due`]) for the router to leave the
-    /// spaceport once nothing shown over it holds the leave, and
-    /// [`FlightView::take_off`] then shows its message. The screen
+    /// spaceport once nothing shown over it holds the leave
+    /// ([`FlightView::leave_if_due`]), which shows its message. The screen
     /// catches up with what the session told ([`SessionEvent`]): a
     /// move in flight lays out the system the ship is in afresh, even the
     /// same one, as the original kills its explosions and smoke, and how
@@ -2756,13 +2784,23 @@ impl<
             return;
         };
         let settled = session.settle_script(&self.catalog, &mut self.chance);
-        let flying = session.landed().is_none();
+        self.show_settled(settled, false);
+    }
+
+    /// Shows what a settling did ([`FlightView::settle_script`]), the
+    /// screen caught up first; `laid_out` says the system was laid out
+    /// afresh since the settling, before this catches up.
+    fn show_settled(&mut self, settled: Settled, laid_out: bool) {
+        let flying = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_none());
         let mut said: Vec<(String, u16)> = settled
             .message
             .into_iter()
             .map(|text| (text, SCRIPT_MESSAGE_TICKS))
             .collect();
-        if self.catch_up().system && flying {
+        if (self.catch_up().system || laid_out) && flying {
             let notes = self
                 .session
                 .as_mut()
@@ -16000,6 +16038,20 @@ mod tests {
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
         assert_lasts(&mut view, "Off you go, <PSN>.", 500);
+    }
+
+    #[test]
+    fn a_due_leave_takes_off_as_the_ports_leave_does() {
+        let mut view = told(landed_view());
+        assert_eq!(view.leave_if_due(), None, "nothing due");
+        assert_eq!(view.session().expect("ok").landed(), Some(StellarId(128)));
+        run_set(&mut view, "M131 Q25048");
+        view.settle_script();
+        assert_eq!(view.leave_if_due(), Some(StellarId(128)));
+        assert_eq!(view.session().expect("ok").landed(), None, "in flight");
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_lasts(&mut view, "Off you go, <PSN>.", 500);
+        assert_eq!(view.leave_if_due(), None, "once");
     }
 
     #[test]

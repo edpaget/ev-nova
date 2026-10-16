@@ -575,10 +575,12 @@
 //! and once none is left a `Q`'s leave in flight, whose events dispatch
 //! in the same settling. A `Q` run while landed is held instead, as the
 //! original holds `_absquatulateStr`
-//! ([`Session::leave_due`](crate::Session::leave_due)): the take-off
-//! carries it out once the spaceport is left, and whoever takes off
-//! settles again at once, so its events dispatch before the take-off's
-//! save and its first frame, as they do for the port's Leave. The
+//! ([`Session::leave_due`](crate::Session::leave_due)), and
+//! [`Session::leave_if_due`](crate::Session::leave_if_due) carries it
+//! out as the port's Leave
+//! ([`Session::leave_port`](crate::Session::leave_port)) does: it takes
+//! off and settles again at once itself, so the take-off's events
+//! dispatch before its save and its first frame. The
 //! subscriptions' scripts run through the dispatcher's
 //! runner, which, after each operator handed to `apply_op`, settles the
 //! moves it queued, dispatches the events raised, depth first, and only
