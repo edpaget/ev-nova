@@ -64,6 +64,9 @@ pub enum Showing {
     MissionInfo,
     /// The player info screen, over flight, which it pauses.
     PlayerInfo,
+    /// A `dësc`'s movie, over flight, which it pauses: a mission text's,
+    /// or an offer's.
+    Movie,
 }
 
 /// Something in the game data a screen cannot use, for the app to write

@@ -31,10 +31,22 @@
 //! them again the same way, from each government's `InitialRec` alone,
 //! hidden systems included, and sets the record with each government to
 //! it too (`_HandlePlayer` @0x69257-0x69290; the session's `rescue`
-//! module). The `chär`'s statuses spread to allied and enemy systems
-//! (`_ActivateCharResource` @0x76dc0) and the readers the engine lacks
-//! belong to
-//! rdm:phase/missions-fidelity/phase-23-legal-record-other-readers-and-writers.
+//! module).
+//!
+//! A new pilot's `chär` statuses spread, by the engine's reading of the
+//! [`Rulebook`]'s [`RuleKey::CharacterStatusSpread`] entry, as
+//! `_DoNewPilot`'s `_ActivateCharResource` spreads them (@0x76dc0-0x76e6e)
+//! after `_ResetPlayerRecord`: each to the systems of its government's
+//! allies, and negated to its enemies' (a xenophobe's to the independent
+//! systems too), and to the records with those governments
+//! ([`spread_statuses`]). The session's `begin` spreads them, once, for
+//! a pilot just created: the flight that derives the records in each
+//! system is built before the rules are given. By the Bible's reading,
+//! each status stays with its own government and its systems. A loaded
+//! pilot is never spread, and `_ResetPlayerRecord`'s floor at each
+//! `InitialRec` (@0x1db70) changes nothing the player sees: its new-pilot
+//! call follows a seed already at the floor, and each open-pilot call
+//! comes before the load overwrites every record (@0x7650e, @0x7674a).
 //!
 //! The mission writers (success, failure, abort and the cleaning pay,
 //! see [`mission`](crate::mission)) change the record in every system of
@@ -46,12 +58,17 @@
 //!
 //! The original (`_SlapWithPenalty` @0x9bbc and `_RecursivePenaltySlap`
 //! @0x980a in the `EV Nova` executable) changes, for a crime against a
-//! ship of government V, the record of every system reached from the
-//! crime's, along the hyperlinks, by a factor of 0.65 a jump. Here a
-//! crime against V, with P the crime's penalty field (`SmugPenalty`,
+//! ship of government V, the record in every system reached from the
+//! crime's, along the hyperlinks, by a factor of 0.65 a jump: the record
+//! in each system ([`LegalCode::system_penalties`], **The walk** below).
+//! The record with each government ([`LegalCode::penalties`]) takes the
+//! same rules, whole, undecayed and for every government in the
+//! catalog: one function gives both stores the change for a government
+//! S, and only the independent system's rules are the walk's own. With P the crime's penalty field (`SmugPenalty`,
 //! `DisabPenalty`, `BoardPenalty`, `KillPenalty`: types 0 to 3,
-//! `_RecursivePenaltySlap` reading gövt +0x48 + 2×type @0x9954),
-//! changes the record with each government S in the catalog by:
+//! `_RecursivePenaltySlap` reading gövt +0x48 + 2×type @0x9954), a
+//! crime against V changes the record with government S, or in a system
+//! of government S, by:
 //!
 //! - **-V.P** when S is V, or allied with V and not its enemy (@0x998d,
 //!   @0x9a23);
@@ -63,21 +80,53 @@
 //!   an enemy of V, and leaves a neutral alone. Which applies is the
 //!   [`Rulebook`]'s [`RuleKey::CrimeGains`] entry;
 //! - for an independent victim, **+0.5 S.P** when S is xenophobic, else
-//!   **-0.5 S.P** when S is nosy (`Flags` 0x0002);
+//!   **-0.5 S.P** when S is nosy (`Flags` 0x0002) (@0x999a-0x99c8);
 //! - and nothing otherwise.
 //!
-//! Each change is truncated and skipped when below 1 either way, and the
-//! record is held within [`RECORD_LIMIT`] either way (@0x9ad1-0x9b1e).
-//! A derelict victim's government (`Flags` 0x0800) changes nothing, and
-//! neither does [`Crime::Shoot`]: the original never passes
-//! `ShootPenalty`, as the Bible says ("currently ignored"). The record in
-//! each system of S takes S's change whole.
+//! In an independent system (the walk alone), the change is **+0.5 V.P**
+//! for a xenophobic V, **-0.25 V.P** for any other ([`INDEPENDENT_SHARE`],
+//! 0.25 @0xdd130), and **-0.5 P** of the first government, ID 128, for an
+//! independent victim (@0x9945-0x9988; Bible Appendix II, "if the system
+//! is independent, it is based on the first government's"), none when
+//! there is no 128.
 //!
-//! Stated divergence: there is no 0.65 decay along the hyperlinks. So by
-//! the engine's rule a crime improves the record in every system of
-//! every government not allied with the victim's, where the original
-//! improves it only in the nearby systems those governments hold. The
-//! walk is rdm:phase/missions-fidelity/phase-22-crime-walk-per-system.
+//! A change to the record with a government is truncated and skipped when
+//! below 1 either way. A derelict victim's government (`Flags` 0x0800)
+//! changes nothing (@0x9bf2), and neither does [`Crime::Shoot`]: the
+//! original never passes `ShootPenalty`, as the Bible says ("currently
+//! ignored"). Every record is held within [`RECORD_LIMIT`] either way
+//! (@0x9ad1-0x9b1e).
+//!
+//! # The walk
+//!
+//! `_RecursivePenaltySlap` walks depth-first from the player's system,
+//! where every caller of `_SlapWithPenalty` says the crime is (player
+//! +0x74), keeping the systems walked (a 0x800-byte array cleared for
+//! each crime, @0x9bfd-0x9c0e) and stopping at one walked already
+//! (@0x9829-0x9857). At each system it changes its place's chain: every
+//! catalog system at the same map position, hidden or not, by ascending
+//! ID, the head first ([`CrimeMap::chain`]; `+0xba`/`+0xb8`, built by
+//! `_LoadObjectData` before any system is hidden, @0x783d9-0x78517). Each
+//! member counts as walked, but only a visible one takes a change
+//! (@0x98f3).
+//!
+//! A member's change, the rules above times the factor (1 from the
+//! crime's system), is taken in single precision (@0x9a86-0x9a93) and
+//! skipped when strictly between -1 and 1, so a change of 1 either way
+//! applies (@0x9a97-0x9aa9). The new record is the record plus the change,
+//! truncated ([`convict`]). A member counts as changed whenever its
+//! change applied, the limit holding the record or not (@0x9b18).
+//!
+//! Only when a member of the chain changed does the walk go on: along the
+//! Con slots of the system it was passed (not the chain's other
+//! members'), in order, each to the head of that link's place, at the
+//! factor times [`DECAY`] (0.65 @0xdd138, @0x9b41-0x9bb2). A link to a
+//! system not in the catalog changes nothing. So a place of hidden
+//! systems, or one whose change is under 1, ends the walk there.
+//!
+//! The walk never reads the records, so the ten slaps of a stellar's kill
+//! walk the same systems ten times, each conviction truncating in turn.
+//! Neither function plays a sound.
 //!
 //! A crime against a mission's special ship changes no record. The
 //! original's callers pass the slot of the ship's mission mark, and
@@ -90,7 +139,7 @@
 //! ranks the crime would take (`_DeactivateRank` @0x9c9e; see
 //! [`rank`](crate::rank)'s **Crimes**).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use crate::catalog::{GovtId, SystemId};
@@ -102,6 +151,14 @@ use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 pub const RECORD_LIMIT: i32 = 32_000;
 /// What a pleased government's (or a nosy one's) own penalty counts for.
 pub const ENEMY_SHARE: f32 = 0.5;
+/// What the victim's penalty counts for in an independent system, unless
+/// the victim is xenophobic or independent (0xdd130).
+pub const INDEPENDENT_SHARE: f32 = 0.25;
+/// What a crime's change is multiplied by a jump along the walk (0xdd138).
+pub const DECAY: f64 = 0.65;
+/// The government whose penalty an independent victim's crime in an
+/// independent system reads: the first, gövt slot 0 (@0x994c-0x9959).
+const FIRST_GOVT: GovtId = GovtId(128);
 
 /// A crime against a ship.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +177,23 @@ pub enum Crime {
     Shoot,
 }
 
+/// What a crime's walk reads of the galaxy (see the module docs' **The
+/// walk**).
+pub trait CrimeMap {
+    /// Every system at `system`'s place, `system` included, by ascending
+    /// ID, hidden or not: the original's chain, its head first. Empty for
+    /// a system not in the catalog.
+    fn chain(&self, system: SystemId) -> Vec<SystemId>;
+    /// `system`'s Con slots as the catalog reads them, in order,
+    /// unresolved, hidden links and repeats kept. Empty for a system not
+    /// in the catalog.
+    fn links(&self, system: SystemId) -> &[SystemId];
+    /// Whether `system`, one of a chain, is visible.
+    fn visible(&self, system: SystemId) -> bool;
+    /// `system`'s government, `None` when it is independent.
+    fn govt(&self, system: SystemId) -> Option<GovtId>;
+}
+
 /// How the player's crimes change the legal records.
 pub trait LegalCode: Debug {
     /// The change to the record with each government that `crime`
@@ -132,6 +206,20 @@ pub trait LegalCode: Debug {
         victim: Option<GovtId>,
         govts: &Governments,
     ) -> Vec<(GovtId, i32)>;
+
+    /// The change to the record in each system that `crime` against a
+    /// ship of `victim` (or an independent one), committed in `from`,
+    /// makes along the walk through `map`, with the governments in
+    /// `govts`: in the order the walk reaches them, each a record delta
+    /// (below none is worse), already decayed and at least 1 either way.
+    fn system_penalties(
+        &self,
+        crime: Crime,
+        victim: Option<GovtId>,
+        from: SystemId,
+        map: &dyn CrimeMap,
+        govts: &Governments,
+    ) -> Vec<(SystemId, f32)>;
 }
 
 /// Nova's law (see the module docs): the engine's by default.
@@ -151,6 +239,33 @@ impl NovaLaw {
             crime_gains: rulebook.source_for(RuleKey::CrimeGains),
         }
     }
+
+    /// The change, untruncated and undecayed, that `crime` against a ship
+    /// of `victim` (or an independent one) makes to the record with
+    /// government `s`, or in a system of `s` (see the module docs'
+    /// **Crimes**). Both stores read it: [`LegalCode::penalties`]
+    /// truncates it, and the walk decays it.
+    fn govt_change(
+        self,
+        crime: Crime,
+        victim: Option<GovtId>,
+        s: GovtId,
+        govts: &Governments,
+    ) -> f32 {
+        let s = Some(s);
+        let penalty = |govt: Option<GovtId>| f32::from(govts.penalty(govt, crime));
+        match victim {
+            Some(_) if govts.enemies(victim, s) => ENEMY_SHARE * penalty(s),
+            // V itself too (@0x992e): a government is its own ally, and
+            // never its own enemy.
+            Some(_) if govts.allies(victim, s) => -penalty(victim),
+            Some(_) if self.crime_gains == RuleSource::Engine => ENEMY_SHARE * penalty(s),
+            None if govts.xenophobic(s) => ENEMY_SHARE * penalty(s),
+            None if govts.flag(s, NOSY) => -ENEMY_SHARE * penalty(s),
+            // By the Bible, a neutral is left alone.
+            Some(_) | None => 0.0,
+        }
+    }
 }
 
 impl LegalCode for NovaLaw {
@@ -163,26 +278,102 @@ impl LegalCode for NovaLaw {
         if crime == Crime::Shoot || govts.derelict(victim) {
             return Vec::new();
         }
-        let theirs = |govt: GovtId| f32::from(govts.penalty(Some(govt), crime));
-        let own = f32::from(govts.penalty(victim, crime));
         govts
             .ids()
             .filter_map(|id| {
-                let other = Some(id);
-                let change = match victim {
-                    Some(_) if govts.enemies(victim, other) => ENEMY_SHARE * theirs(id),
-                    Some(_) if govts.allies(victim, other) => -own,
-                    Some(_) if self.crime_gains == RuleSource::Engine => ENEMY_SHARE * theirs(id),
-                    None if govts.xenophobic(other) => ENEMY_SHARE * theirs(id),
-                    None if govts.flag(other, NOSY) => -ENEMY_SHARE * theirs(id),
-                    // By the Bible, a neutral is left alone.
-                    Some(_) | None => 0.0,
-                };
                 // Truncated: a change of less than 1 either way is none.
-                let change = change.trunc() as i32;
+                let change = self.govt_change(crime, victim, id, govts).trunc() as i32;
                 (change != 0).then_some((id, change))
             })
             .collect()
+    }
+
+    fn system_penalties(
+        &self,
+        crime: Crime,
+        victim: Option<GovtId>,
+        from: SystemId,
+        map: &dyn CrimeMap,
+        govts: &Governments,
+    ) -> Vec<(SystemId, f32)> {
+        if crime == Crime::Shoot || govts.derelict(victim) {
+            return Vec::new();
+        }
+        let mut walk = Walk {
+            law: *self,
+            crime,
+            victim,
+            map,
+            govts,
+            visited: BTreeSet::new(),
+            changes: Vec::new(),
+        };
+        walk.visit(from, 1.0);
+        walk.changes
+    }
+}
+
+/// One crime's walk through the galaxy, `_RecursivePenaltySlap`
+/// (@0x980a; see the module docs' **The walk**).
+struct Walk<'a> {
+    law: NovaLaw,
+    crime: Crime,
+    victim: Option<GovtId>,
+    map: &'a dyn CrimeMap,
+    govts: &'a Governments,
+    /// The systems walked, the original's array at 0xde93c.
+    visited: BTreeSet<SystemId>,
+    /// Each change made, in order.
+    changes: Vec<(SystemId, f32)>,
+}
+
+impl Walk<'_> {
+    /// Walks `system`'s place at `factor`, and on from `system`'s own
+    /// links when the place changed.
+    fn visit(&mut self, system: SystemId, factor: f64) {
+        if !self.visited.insert(system) {
+            return;
+        }
+        let mut changed = false;
+        for member in self.map.chain(system) {
+            self.visited.insert(member);
+            if !self.map.visible(member) {
+                continue;
+            }
+            // The base (exact in single precision) widened, decayed and
+            // narrowed again, as @0x9a8a-0x9a93 does.
+            let change = (f64::from(self.base(member)) * factor) as f32;
+            if change > -1.0 && change < 1.0 {
+                continue;
+            }
+            self.changes.push((member, change));
+            changed = true;
+        }
+        if !changed {
+            return;
+        }
+        for &link in self.map.links(system) {
+            let head = self.map.chain(link).first().copied().unwrap_or(link);
+            self.visit(head, factor * DECAY);
+        }
+    }
+
+    /// The undecayed change to the record in `system` (@0x9900-0x9a86):
+    /// in a governed system, its government's change, as the record with
+    /// it takes ([`NovaLaw::govt_change`]); the independent system's rules
+    /// are the walk's alone.
+    fn base(&self, system: SystemId) -> f32 {
+        let govts = self.govts;
+        let victim = self.victim;
+        if let Some(owner) = self.map.govt(system) {
+            return self.law.govt_change(self.crime, victim, owner, govts);
+        }
+        let penalty = |govt: Option<GovtId>| f32::from(govts.penalty(govt, self.crime));
+        match victim {
+            None => -ENEMY_SHARE * penalty(Some(FIRST_GOVT)),
+            Some(_) if govts.xenophobic(victim) => ENEMY_SHARE * penalty(victim),
+            Some(_) => -INDEPENDENT_SHARE * penalty(victim),
+        }
     }
 }
 
@@ -211,29 +402,76 @@ pub fn systems_from_govts(
         .collect()
 }
 
-/// Applies `changes` to `pilot`'s records with each government, and to
-/// its record in each of `systems` (each with its government) whose
-/// government a change names, each held within [`RECORD_LIMIT`]. Until
-/// rdm:phase/missions-fidelity/phase-22-crime-walk-per-system walks a
-/// crime as `_RecursivePenaltySlap` does, each system of a government
-/// takes that government's change whole (see the module docs).
+/// Spreads a new pilot's `chär` statuses (`Govt1-4` with `Status1-4`,
+/// `slots`) as `_ActivateCharResource` does (@0x76dc0-0x76e6e): for each
+/// slot in order, every one of `systems` (all of them, hidden or not,
+/// with each one's government) whose government is allied with the
+/// slot's G, G itself included (`_GovtAllies` @0x4e4e), takes the status
+/// as its record, and every one whose government is G's enemy takes the
+/// status negated, so a xenophobic G's reaches the independent systems
+/// too (`_GovtEnemies(-1, G)` @0x505d-0x507c); any other is left as it
+/// is. A later slot overwrites an earlier one, and a status of 0 still
+/// writes 0. The record with each government in `govts` takes the same
+/// rule, so the two stores agree (see the module docs). Each record is
+/// held within [`RECORD_LIMIT`]; the original's word wrap of a negated
+/// -32768 isn't kept. The spread plays no sound.
+pub fn spread_statuses(
+    pilot: &mut Pilot,
+    systems: impl IntoIterator<Item = (SystemId, Option<GovtId>)>,
+    slots: &[Option<(GovtId, i16)>],
+    govts: &Governments,
+) {
+    let spread = |owner: Option<GovtId>| {
+        slots
+            .iter()
+            .flatten()
+            .fold(None, |record, &(govt, status)| {
+                let status = i32::from(status);
+                if govts.allies(owner, Some(govt)) {
+                    Some(status)
+                } else if govts.enemies(owner, Some(govt)) {
+                    Some(-status)
+                } else {
+                    record
+                }
+            })
+    };
+    for (system, owner) in systems {
+        if let Some(record) = spread(owner) {
+            pilot.set_system_record(system, held(record));
+        }
+    }
+    let owners: Vec<GovtId> = govts.ids().collect();
+    for govt in owners {
+        if let Some(record) = spread(Some(govt)) {
+            pilot.set_legal_record(govt, held(record));
+        }
+    }
+}
+
+/// `record` held within [`RECORD_LIMIT`], as the pilot's records store it.
+fn held(record: i32) -> i16 {
+    i16::try_from(record.clamp(-RECORD_LIMIT, RECORD_LIMIT)).unwrap_or_default()
+}
+
+/// Applies one conviction to `pilot`: `govt_changes` to its records with
+/// each government, and `system_changes` (a [`LegalCode`]'s walk) to its
+/// record in each system. A system's new record is its record plus the
+/// change in single precision, truncated (`cvttss2si` of the float sum,
+/// @0x9aab-0x9b1e), so a change's fraction counts. Every record is held
+/// within [`RECORD_LIMIT`].
 pub fn convict(
     pilot: &mut Pilot,
-    changes: &[(GovtId, i32)],
-    systems: impl IntoIterator<Item = (SystemId, Option<GovtId>)>,
+    govt_changes: &[(GovtId, i32)],
+    system_changes: &[(SystemId, f32)],
 ) {
-    let held = |record: i16, change: i32| {
-        let record = (i32::from(record) + change).clamp(-RECORD_LIMIT, RECORD_LIMIT);
-        i16::try_from(record).unwrap_or_default()
-    };
-    for &(govt, change) in changes {
-        pilot.set_legal_record(govt, held(pilot.legal_record(govt), change));
+    for &(govt, change) in govt_changes {
+        let record = i32::from(pilot.legal_record(govt)) + change;
+        pilot.set_legal_record(govt, held(record));
     }
-    for (system, govt) in systems {
-        let change = changes.iter().find(|&&(changed, _)| Some(changed) == govt);
-        if let Some(&(_, change)) = change {
-            pilot.set_system_record(system, held(pilot.system_record(system), change));
-        }
+    for &(system, change) in system_changes {
+        let record = (f32::from(pilot.system_record(system)) + change) as i32;
+        pilot.set_system_record(system, held(record));
     }
 }
 
@@ -293,6 +531,421 @@ mod tests {
     const BIBLE: NovaLaw = NovaLaw {
         crime_gains: RuleSource::Bible,
     };
+
+    /// A hand-built galaxy for the walk: each system's place, links,
+    /// government and visibility.
+    #[derive(Debug, Default)]
+    struct FakeMap {
+        systems: BTreeMap<SystemId, Row>,
+    }
+
+    #[derive(Debug)]
+    struct Row {
+        place: u8,
+        links: Vec<SystemId>,
+        govt: Option<GovtId>,
+        visible: bool,
+    }
+
+    impl FakeMap {
+        /// Adds visible system `id` at `place`, linked to `links`, of
+        /// `govt`.
+        fn with(mut self, id: i16, place: u8, links: &[i16], govt: Option<GovtId>) -> Self {
+            self.systems.insert(
+                SystemId(id),
+                Row {
+                    place,
+                    links: links.iter().copied().map(SystemId).collect(),
+                    govt,
+                    visible: true,
+                },
+            );
+            self
+        }
+
+        /// Hides system `id`.
+        fn hiding(mut self, id: i16) -> Self {
+            if let Some(row) = self.systems.get_mut(&SystemId(id)) {
+                row.visible = false;
+            }
+            self
+        }
+    }
+
+    impl CrimeMap for FakeMap {
+        fn chain(&self, system: SystemId) -> Vec<SystemId> {
+            let Some(place) = self.systems.get(&system).map(|row| row.place) else {
+                return Vec::new();
+            };
+            self.systems
+                .iter()
+                .filter(|(_, row)| row.place == place)
+                .map(|(&id, _)| id)
+                .collect()
+        }
+
+        fn links(&self, system: SystemId) -> &[SystemId] {
+            self.systems
+                .get(&system)
+                .map_or(&[], |row| row.links.as_slice())
+        }
+
+        fn visible(&self, system: SystemId) -> bool {
+            self.systems.get(&system).is_some_and(|row| row.visible)
+        }
+
+        fn govt(&self, system: SystemId) -> Option<GovtId> {
+            self.systems.get(&system).and_then(|row| row.govt)
+        }
+    }
+
+    /// `law`'s walk of disabling a ship of `victim` in `from`.
+    fn walk(
+        law: NovaLaw,
+        victim: Option<GovtId>,
+        from: i16,
+        map: &FakeMap,
+        govts: &Governments,
+    ) -> Vec<(i16, f32)> {
+        law.system_penalties(Crime::Disable, victim, SystemId(from), map, govts)
+            .into_iter()
+            .map(|(system, change)| (system.0, change))
+            .collect()
+    }
+
+    /// The victim's government alone, with a disabling penalty of
+    /// `penalty`.
+    fn alone(penalty: i16) -> Governments {
+        Governments::new([penalised(130, [penalty, 0, 0, 0])])
+    }
+
+    /// Whether `walked` changes the same systems as `expected`, in the
+    /// same order, each by the same delta within a float's rounding.
+    fn assert_walk(walked: &[(i16, f32)], expected: &[(i16, f32)], why: &str) {
+        let systems =
+            |changes: &[(i16, f32)]| changes.iter().map(|&(id, _)| id).collect::<Vec<_>>();
+        assert_eq!(systems(walked), systems(expected), "{why}: {walked:?}");
+        for (&(id, got), &(_, want)) in walked.iter().zip(expected) {
+            assert!(
+                (got - want).abs() < 1e-4,
+                "{why}: system {id} took {got}, not {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_crime_lowers_the_record_in_the_victims_systems_decaying_by_065_a_jump() {
+        let map = (1..=8).fold(FakeMap::default(), |map, id| {
+            map.with(id, id as u8, &[id - 1, id + 1], Some(VICTIM))
+        });
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &alone(10)),
+            &[
+                (1, -10.0),
+                (2, -6.5),
+                (3, -4.225),
+                (4, -2.746_25),
+                (5, -1.785_062_5),
+                (6, -1.160_290_6),
+            ],
+            "0.754 in 7 skipped, and the walk ends there",
+        );
+    }
+
+    #[test]
+    fn the_walk_is_depth_first() {
+        let map = FakeMap::default()
+            .with(1, 1, &[2, 3], Some(VICTIM))
+            .with(2, 2, &[3], Some(VICTIM))
+            .with(3, 3, &[], Some(VICTIM));
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &alone(10)),
+            &[(1, -10.0), (2, -6.5), (3, -4.225)],
+            "3 reached through 2 first, at 0.65 squared, and changed once",
+        );
+    }
+
+    #[test]
+    fn hidden_systems_take_no_change() {
+        let map = FakeMap::default()
+            .with(1, 1, &[3], Some(VICTIM))
+            .with(2, 1, &[], Some(VICTIM))
+            .with(3, 3, &[4], Some(VICTIM))
+            .with(4, 4, &[], Some(VICTIM))
+            .hiding(2);
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &alone(10)),
+            &[(1, -10.0), (3, -6.5), (4, -4.225)],
+            "a hidden member of a changed place is passed over",
+        );
+        let map = map.hiding(3);
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &alone(10)),
+            &[(1, -10.0)],
+            "a hidden system alone at its place stops the walk there",
+        );
+    }
+
+    #[test]
+    fn a_place_changes_as_one_chain_following_only_the_passed_systems_links() {
+        let map = FakeMap::default()
+            .with(1, 1, &[3], Some(VICTIM))
+            .with(2, 1, &[4], Some(VICTIM))
+            .with(3, 3, &[], Some(VICTIM))
+            .with(4, 4, &[1], Some(VICTIM));
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 2, &map, &alone(10)),
+            &[(1, -10.0), (2, -10.0), (4, -6.5)],
+            "a crime in 2 changes its place, head first, and follows 2's links, not 1's; \
+             4's link back to the head finds the place walked",
+        );
+        let map = FakeMap::default()
+            .with(1, 1, &[6], Some(VICTIM))
+            .with(5, 5, &[7], Some(VICTIM))
+            .with(6, 5, &[8], Some(VICTIM))
+            .with(7, 7, &[], Some(VICTIM))
+            .with(8, 8, &[], Some(VICTIM))
+            .hiding(6);
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &alone(10)),
+            &[(1, -10.0), (5, -6.5), (7, -4.225)],
+            "a link to hidden 6 walks its place from the head, 5, and follows 5's links",
+        );
+    }
+
+    #[test]
+    fn the_walk_stops_past_a_place_that_did_not_change() {
+        let govts = four();
+        let map = FakeMap::default()
+            .with(1, 1, &[2], Some(VICTIM))
+            .with(2, 2, &[3], Some(NEUTRAL))
+            .with(3, 3, &[], Some(VICTIM));
+        assert_walk(
+            &walk(BIBLE, Some(VICTIM), 1, &map, &govts),
+            &[(1, -3.0)],
+            "by the Bible the neutral 2 is unchanged, so 3 is never reached",
+        );
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &govts),
+            &[(1, -3.0), (2, 6.5), (3, -1.2675)],
+            "by the engine 2 gains, so the walk goes on to 3",
+        );
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..penalised(130, [1, 0, 0, 0])
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..penalised(132, [100, 0, 0, 0])
+            },
+        ]);
+        let map = FakeMap::default()
+            .with(1, 1, &[2], Some(VICTIM))
+            .with(2, 2, &[3], Some(VICTIM))
+            .with(3, 3, &[], Some(ENEMY));
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &govts),
+            &[(1, -1.0)],
+            "2's 0.65 is skipped, so the enemy's 21 in 3 is never reached",
+        );
+    }
+
+    #[test]
+    fn cycles_repeats_and_missing_links_end_the_walk() {
+        let map = FakeMap::default()
+            .with(1, 1, &[2, 2, 1, 99], Some(VICTIM))
+            .with(2, 2, &[1, 2], Some(VICTIM));
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &alone(10)),
+            &[(1, -10.0), (2, -6.5)],
+            "each changed once; the missing 99 nothing",
+        );
+        assert_eq!(
+            walk(ENGINE, Some(VICTIM), 99, &map, &alone(10)),
+            [],
+            "a crime in a system not in the catalog walks nowhere"
+        );
+    }
+
+    #[test]
+    fn each_system_takes_its_governments_rule() {
+        let map = FakeMap::default()
+            .with(1, 1, &[], Some(VICTIM))
+            .with(2, 1, &[], Some(ALLY))
+            .with(3, 1, &[], Some(ENEMY))
+            .with(4, 1, &[], Some(NEUTRAL));
+        assert_walk(
+            &walk(ENGINE, Some(VICTIM), 1, &map, &four()),
+            &[(1, -3.0), (2, -3.0), (3, 4.0), (4, 10.0)],
+            "the ally loses the victim's penalty; the enemy and the neutral gain half their own",
+        );
+        assert_walk(
+            &walk(BIBLE, Some(VICTIM), 1, &map, &four()),
+            &[(1, -3.0), (2, -3.0), (3, 4.0)],
+            "by the Bible the neutral is left alone",
+        );
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..penalised(130, [3, 0, 0, 0])
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                enemies: [1, -1, -1, -1],
+                ..penalised(131, [6, 0, 0, 0])
+            },
+        ]);
+        for law in [ENGINE, BIBLE] {
+            assert_walk(
+                &walk(law, Some(VICTIM), 1, &map, &govts),
+                &[(1, -3.0), (2, 3.0)],
+                "an ally that is also an enemy gains as an enemy",
+            );
+        }
+    }
+
+    #[test]
+    fn an_independent_victim_pleases_xenophobes_and_angers_the_nosy_in_their_systems() {
+        let govts = Governments::new([
+            GovtRecord {
+                flags: XENOPHOBIC | NOSY,
+                ..penalised(134, [8, 0, 0, 0])
+            },
+            GovtRecord {
+                flags: NOSY,
+                ..penalised(135, [6, 0, 0, 0])
+            },
+            penalised(133, [20, 0, 0, 0]),
+        ]);
+        let map = FakeMap::default()
+            .with(1, 1, &[], Some(XENOPHOBE))
+            .with(2, 1, &[], Some(NOSY_ONE))
+            .with(3, 1, &[], Some(NEUTRAL));
+        for law in [ENGINE, BIBLE] {
+            assert_walk(
+                &walk(law, None, 1, &map, &govts),
+                &[(1, 4.0), (2, -3.0)],
+                "the xenophobe first, though also nosy; the neutral unchanged",
+            );
+        }
+    }
+
+    #[test]
+    fn a_crime_in_an_independent_system() {
+        let map = FakeMap::default().with(1, 1, &[], None);
+        let govts = Governments::new([
+            penalised(128, [6, 0, 0, 0]),
+            penalised(130, [8, 0, 0, 0]),
+            GovtRecord {
+                flags: XENOPHOBIC,
+                ..penalised(134, [10, 0, 0, 0])
+            },
+        ]);
+        let independent = |victim| walk(ENGINE, victim, 1, &map, &govts);
+        assert_walk(
+            &independent(Some(VICTIM)),
+            &[(1, -2.0)],
+            "a quarter of the victim's penalty",
+        );
+        assert_walk(
+            &independent(Some(XENOPHOBE)),
+            &[(1, 5.0)],
+            "a xenophobic victim's half, gained",
+        );
+        assert_walk(
+            &independent(None),
+            &[(1, -3.0)],
+            "an independent victim: half the penalty of government 128",
+        );
+        assert_eq!(
+            walk(ENGINE, None, 1, &map, &alone(10)),
+            [],
+            "and none when there is no 128"
+        );
+    }
+
+    #[test]
+    fn each_crime_reads_its_own_penalty_in_each_system() {
+        let map = FakeMap::default()
+            .with(1, 1, &[], Some(VICTIM))
+            .with(2, 1, &[], Some(ENEMY));
+        let govts = four();
+        let changes = |crime| {
+            ENGINE
+                .system_penalties(crime, Some(VICTIM), SystemId(1), &map, &govts)
+                .into_iter()
+                .map(|(_, change)| change)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(changes(Crime::Smuggle), [-99.0, 49.5]);
+        assert_eq!(changes(Crime::Board), [-5.0, 3.0]);
+        assert_eq!(changes(Crime::Kill), [-7.0, 5.0]);
+    }
+
+    #[test]
+    fn shooting_and_a_derelict_victim_walk_nowhere() {
+        let map = FakeMap::default()
+            .with(1, 1, &[], Some(VICTIM))
+            .with(2, 1, &[], Some(WRECKS));
+        let govts = Governments::new([
+            GovtRecord {
+                flags: DERELICT,
+                ..penalised(136, [3, 3, 3, 3])
+            },
+            penalised(130, [3, 3, 3, 3]),
+        ]);
+        for law in [ENGINE, BIBLE] {
+            assert_eq!(
+                law.system_penalties(Crime::Shoot, Some(VICTIM), SystemId(1), &map, &govts),
+                []
+            );
+            for crime in [Crime::Smuggle, Crime::Disable, Crime::Board, Crime::Kill] {
+                assert_eq!(
+                    law.system_penalties(crime, Some(WRECKS), SystemId(1), &map, &govts),
+                    [],
+                    "{crime:?} {law:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_change_strictly_between_minus_1_and_1_is_skipped_and_1_applies() {
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..penalised(130, [1, 0, 0, 0])
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..penalised(132, [2, 0, 0, 0])
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..penalised(133, [-2, 0, 0, 0])
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..penalised(134, [3, 0, 0, 0])
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..penalised(135, [-3, 0, 0, 0])
+            },
+        ]);
+        let map = FakeMap::default()
+            .with(1, 1, &[5], Some(VICTIM))
+            .with(2, 1, &[], Some(ENEMY))
+            .with(3, 1, &[], Some(NEUTRAL))
+            .with(5, 5, &[], Some(XENOPHOBE))
+            .with(6, 5, &[], Some(NOSY_ONE));
+        assert_eq!(
+            walk(ENGINE, Some(VICTIM), 1, &map, &govts),
+            [(1, -1.0), (2, 1.0), (3, -1.0)],
+            "-1 and +1 apply; one jump on, 0.975 and -0.975 are skipped"
+        );
+    }
 
     #[test]
     fn the_law_takes_its_crime_gains_from_the_rulebook() {
@@ -516,36 +1169,160 @@ mod tests {
         );
     }
 
+    /// [`four`] and a xenophobe, each of whose systems starts at its
+    /// `InitialRec`.
+    fn five() -> Governments {
+        let mut records: Vec<GovtRecord> = [VICTIM, ALLY, ENEMY, NEUTRAL]
+            .into_iter()
+            .map(|id| four().get(id).expect("one of four").clone())
+            .collect();
+        records.push(GovtRecord {
+            flags: XENOPHOBIC,
+            ..govt(134)
+        });
+        for record in &mut records {
+            record.initial_rec = 9;
+        }
+        Governments::new(records)
+    }
+
+    /// A pilot whose systems 130-134 are governed as their IDs say and
+    /// 139 is independent, each seeded from its government's
+    /// `InitialRec` as a new pilot's are.
+    fn seeded(govts: &Governments) -> (Pilot, Vec<(SystemId, Option<GovtId>)>) {
+        let mut pilot = Pilot::new(&crate::testkit::catalog(), "").expect("a pilot");
+        let systems: Vec<(SystemId, Option<GovtId>)> = (130..=134)
+            .map(|id| (SystemId(id), Some(GovtId(id))))
+            .chain([(SystemId(139), None)])
+            .collect();
+        pilot.system_legal = Some(systems_from_govts(
+            systems.iter().copied(),
+            &BTreeMap::new(),
+            govts,
+        ));
+        (pilot, systems)
+    }
+
+    fn system_records(pilot: &Pilot) -> Vec<i16> {
+        [130, 131, 132, 133, 134, 139]
+            .map(|id| pilot.system_record(SystemId(id)))
+            .to_vec()
+    }
+
     #[test]
-    fn convicting_changes_each_system_of_a_changed_government() {
-        use crate::catalog::SystemId;
+    fn a_status_spreads_to_its_allies_systems_and_negated_to_its_enemies() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(&mut pilot, systems, &[Some((VICTIM, 25)), None], &govts);
+        assert_eq!(
+            system_records(&pilot),
+            [25, 25, -25, 9, -25, 0],
+            "its own and its ally's; its enemy's and the xenophobe's negated; \
+             the neutral's InitialRec and the independent untouched"
+        );
+    }
+
+    #[test]
+    fn a_xenophobes_status_reaches_the_independent_systems_negated() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(&mut pilot, systems, &[Some((XENOPHOBE, 4))], &govts);
+        assert_eq!(
+            system_records(&pilot),
+            [-4, -4, -4, -4, 4, -4],
+            "_GovtEnemies(-1, G) holds for a xenophobic G (@0x505d-0x507c)"
+        );
+    }
+
+    #[test]
+    fn a_later_status_overwrites_an_earlier_and_a_status_of_0_still_writes() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(
+            &mut pilot,
+            systems,
+            &[Some((VICTIM, 25)), Some((ENEMY, 0)), Some((NEUTRAL, 3))],
+            &govts,
+        );
+        assert_eq!(
+            system_records(&pilot),
+            [0, 25, 0, 3, -3, 0],
+            "the enemy's 0 clears the victim's systems and its own; the ally \
+             isn't the enemy's enemy, so keeps 25; the neutral's 3 last, \
+             negated for the xenophobe"
+        );
+    }
+
+    #[test]
+    fn a_spread_status_is_held_within_32000() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(&mut pilot, systems, &[Some((VICTIM, i16::MIN))], &govts);
+        assert_eq!(pilot.system_record(SystemId(130)), -32_000);
+        assert_eq!(pilot.system_record(SystemId(132)), 32_000, "no wrap");
+        let (mut pilot, systems) = seeded(&govts);
+        spread_statuses(&mut pilot, systems, &[Some((VICTIM, i16::MAX))], &govts);
+        assert_eq!(pilot.system_record(SystemId(131)), 32_000);
+        assert_eq!(pilot.system_record(SystemId(132)), -32_000);
+    }
+
+    #[test]
+    fn the_record_with_each_government_takes_the_same_spread() {
+        let govts = five();
+        let (mut pilot, systems) = seeded(&govts);
+        pilot.set_legal_record(NEUTRAL, 6);
+        spread_statuses(
+            &mut pilot,
+            systems,
+            &[None, Some((VICTIM, 25)), None, None],
+            &govts,
+        );
+        let records: Vec<i16> = [VICTIM, ALLY, ENEMY, NEUTRAL, XENOPHOBE]
+            .map(|govt| pilot.legal_record(govt))
+            .to_vec();
+        assert_eq!(
+            records,
+            [25, 25, -25, 6, -25],
+            "every government in the catalog, the neutral left alone"
+        );
+    }
+
+    #[test]
+    fn convicting_truncates_each_systems_new_record_not_its_change() {
         let catalog = crate::testkit::catalog();
         let mut pilot = Pilot::new(&catalog, "").expect("a pilot");
-        pilot.set_system_record(SystemId(1), -31_990);
-        pilot.set_system_record(SystemId(2), 5);
-        pilot.set_system_record(SystemId(3), 40);
-        pilot.set_system_record(SystemId(4), 8);
+        for (system, record) in [(1, -31_990), (2, 5), (3, -5), (4, 0), (5, 31_999), (6, 8)] {
+            pilot.set_system_record(SystemId(system), record);
+        }
         convict(
             &mut pilot,
-            &[(VICTIM, -20), (ALLY, -4)],
-            [
-                (SystemId(1), Some(VICTIM)),
-                (SystemId(2), Some(VICTIM)),
-                (SystemId(3), Some(ALLY)),
-                (SystemId(4), None),
-                (SystemId(5), Some(NEUTRAL)),
+            &[(VICTIM, -20)],
+            &[
+                (SystemId(1), -20.5),
+                (SystemId(2), -2.6),
+                (SystemId(3), 2.6),
+                (SystemId(4), -1.5),
+                (SystemId(5), 1.5),
+                (SystemId(7), 3.9),
             ],
         );
-        let records: Vec<i16> = (1..=5)
+        let records: Vec<i16> = (1..=7)
             .map(|system| pilot.system_record(SystemId(system)))
             .collect();
         assert_eq!(
             records,
-            [-32_000, -15, 36, 8, 0],
-            "the victim's two, one held; the ally's; the independent and the \
-             unchanged neutral untouched"
+            [-32_000, 2, -2, -1, 32_000, 8, 3],
+            "held; 2.4 to 2 and -2.4 to -2, not 5 - 2 and -5 + 2; -1.5 to -1; \
+             held; untouched; from none"
         );
         assert_eq!(pilot.legal_record(VICTIM), -20, "and the government's");
+        convict(
+            &mut pilot,
+            &[],
+            &[(SystemId(1), -70_000.0), (SystemId(5), 70_000.0)],
+        );
+        assert_eq!(pilot.system_record(SystemId(1)), -32_000);
+        assert_eq!(pilot.system_record(SystemId(5)), 32_000);
     }
 
     #[test]
@@ -558,13 +1335,13 @@ mod tests {
         convict(
             &mut pilot,
             &[(VICTIM, -20), (ENEMY, 20), (ALLY, -4), (NEUTRAL, 7)],
-            [],
+            &[],
         );
         assert_eq!(pilot.legal_record(VICTIM), -32_000);
         assert_eq!(pilot.legal_record(ENEMY), 32_000);
         assert_eq!(pilot.legal_record(ALLY), 6);
         assert_eq!(pilot.legal_record(NEUTRAL), 7, "from none");
-        convict(&mut pilot, &[(VICTIM, -70_000), (ENEMY, 70_000)], []);
+        convict(&mut pilot, &[(VICTIM, -70_000), (ENEMY, 70_000)], &[]);
         assert_eq!(pilot.legal_record(VICTIM), -32_000);
         assert_eq!(pilot.legal_record(ENEMY), 32_000);
         assert_eq!((RECORD_LIMIT, ENEMY_SHARE), (32_000, 0.5));

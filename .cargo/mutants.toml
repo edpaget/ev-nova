@@ -16,6 +16,13 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `fitted` scales a movie box down only when the window is smaller
+    # (@0x55cb8, @0x55d16); at an equal side the scale is exactly 1, so
+    # `<=` gives the same size.
+    "movie.rs:.*replace < with <= in fitted",
+    # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
+    # which is `StringPatch::default()`: the same value.
+    "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
     # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
     # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
     # `+ 360` in place of `mod 360` lands on the same heading.

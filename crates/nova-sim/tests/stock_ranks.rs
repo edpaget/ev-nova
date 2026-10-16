@@ -24,12 +24,14 @@ mod common;
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_data::records::desc::Desc;
 use nova_sim::news;
 use nova_sim::player_info::Words;
 use nova_sim::rank::{self, Blessed, Held, LOST_TO_CRIME, LOST_TO_VIOLENCE};
+use nova_sim::text_tags::{self, NoNames, RankTagGovts, TagContext, TagRules};
 use nova_sim::{
-    CommCatalog, Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleSource, Session,
-    SetExpr, SetOp, Standing, StellarId, cleared,
+    CommCatalog, Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleKey, RuleSource,
+    Rulebook, Session, SetExpr, SetOp, Standing, StellarId, cleared,
 };
 
 #[test]
@@ -75,6 +77,55 @@ fn a_stock_rank_granted_by_its_mission_shows_in_the_pilot_info_and_pays() {
         control.pilot().cash() + 200,
         "a day's salary"
     );
+}
+
+#[test]
+fn stock_desc_5066_names_the_ambassador_by_short_name_and_by_the_bible_by_conv_name() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let Some(Ok(desc)) = data.get::<Desc>(5066) else {
+        panic!("stock dësc 5066");
+    };
+    let text = desc.record.text.as_str().to_owned();
+    let records = PilotCatalog::ranks(&data);
+    // Rank 129, govt 128: ConvName "Federation Ambassador", ShortName
+    // "Ambassador".
+    let active = std::collections::BTreeSet::from([RankId(129)]);
+    let read = |prk_nnn_name: RuleSource, crossed: RuleSource| {
+        let rules = Rulebook::default()
+            .with_override(RuleKey::PrkNnnName, prk_nnn_name)
+            .with_override(RuleKey::CrossedRankTags, crossed);
+        let context = TagContext {
+            pilot: "Stock",
+            ship_type: "Shuttle",
+            ship_name: "Kestrel",
+            person: None,
+            ranks: rank::RankNames {
+                records: &records,
+                active: &active,
+                recent: None,
+                fallback: "captain".into(),
+            },
+            mission: None,
+            rank_govts: RankTagGovts::NONE.parsed(&text),
+            leet: false,
+            rules: TagRules::from_rulebook(&rules),
+        };
+        text_tags::expand(&text, &context, &NoNames)
+    };
+    for crossed in RuleSource::ALL {
+        let engine = read(RuleSource::Engine, crossed);
+        assert!(engine.contains("rank of 'Ambassador'"), "{engine}");
+        assert!(engine.contains("Good luck 'Ambassador'"), "{engine}");
+        let bible = read(RuleSource::Bible, crossed);
+        assert!(bible.contains("rank of 'Federation Ambassador'"), "{bible}");
+        assert!(
+            bible.contains("Good luck 'Ambassador'"),
+            "<SRKnnn> under both: {bible}"
+        );
+    }
 }
 
 #[test]

@@ -103,7 +103,7 @@ use crate::pilot::Escort;
 use crate::rank::RankNames;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::text_tags::{self, NoNames, TagContext};
+use crate::text_tags::{self, NoNames, RankTagGovts, TagContext, TagRules};
 use crate::traffic::npc::{Npc, NpcPerson};
 use crate::traffic::table::ShipKind;
 
@@ -256,12 +256,20 @@ pub struct QuoteTags<'a> {
     pub ship_name: &'a str,
     /// The player's ranks: the rank tags.
     pub ranks: RankNames<'a>,
+    /// The rank governments the quote's crossed rank tags read: those
+    /// its parse leaves (see [`RankTagGovts`]).
+    pub rank_govts: RankTagGovts,
+    /// Whether the `l33t` mode is on.
+    pub leet: bool,
+    /// The disputed rules the tags follow.
+    pub rules: TagRules,
 }
 
 /// `text` with its tags read as `tags` say, through the one substitution
 /// path ([`text_tags::expand`]) with no mission: `<OSN>`, `<PN>`,
 /// `<PNN>`, `<PST>` and `<PSN>`, the rank tags from the ranks and `<REG>`
-/// as empty; the mission tags, and any other tag, stay as written.
+/// as empty; the mission tags as [`RuleKey::MissionlessTags`] says, and
+/// any other tag as written.
 #[must_use]
 pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
     let context = TagContext {
@@ -271,6 +279,9 @@ pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
         person: Some(tags.person),
         ranks: tags.ranks.clone(),
         mission: None,
+        rank_govts: tags.rank_govts,
+        leet: tags.leet,
+        rules: tags.rules,
     };
     text_tags::expand(text, &context, &NoNames)
 }
@@ -287,8 +298,8 @@ pub struct QuoteView {
     pub player_ai: i16,
     /// Whether the person's `LinkMission` is available from a ship
     /// (`_IsMissionAvailable(m, 0)` with `_offeringFromShip` set,
-    /// @0x33dc7-0x33e31), checked in full: the engine keeps no cached
-    /// `AvailBits` (rdm:phase/missions/phase-13-text-substitution-quirks).
+    /// @0x33dc7-0x33e31), its `AvailBits` read as
+    /// [`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits) says.
     pub mission_available: bool,
 }
 
@@ -1379,6 +1390,9 @@ mod tests {
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames::none(),
+            rank_govts: RankTagGovts::NONE,
+            leet: false,
+            rules: TagRules::default(),
         };
         assert_eq!(
             expand_tags("<OSN>: Prepare to die, <PN>!", &tags),
@@ -1390,14 +1404,38 @@ mod tests {
             expand_tags("Yes, <PRK>. No, <SRK>.", &tags),
             "Yes, captain. No, captain."
         );
-        assert_eq!(expand_tags("Off to <DSY>.", &tags), "Off to <DSY>.", "kept");
         assert_eq!(expand_tags("No tags.", &tags), "No tags.");
+        assert_eq!(NO_RANK, "captain");
+    }
+
+    #[test]
+    fn a_quotes_mission_tags_read_unset_by_the_engine_and_are_left_by_the_other_reading() {
+        let mut tags = QuoteTags {
+            person: "Bounty Hunter",
+            pilot: "Stock",
+            ship_type: "Shuttle",
+            ship_name: "Kestrel",
+            ranks: RankNames::none(),
+            rank_govts: RankTagGovts::NONE,
+            leet: false,
+            rules: TagRules::default(),
+        };
         assert_eq!(
-            expand_tags("<RRK> [<REG>] <PRK130> <PAY> <DL>", &tags),
-            "captain [] captain <PAY> <DL>",
+            expand_tags("Off to <DSY>.", &tags),
+            "Off to [Error].",
+            "_ShowPersonHailQuote munges with index -1 (@0x44605)"
+        );
+        assert_eq!(
+            expand_tags("<RRK> [<REG>] <PAY> <DL>", &tags),
+            "captain [] [Error] [Error]"
+        );
+        tags.rules.missionless = RuleSource::Bible;
+        assert_eq!(expand_tags("Off to <DSY>.", &tags), "Off to <DSY>.", "kept");
+        assert_eq!(
+            expand_tags("<RRK> [<REG>] <PAY> <DL>", &tags),
+            "captain [] <PAY> <DL>",
             "the mission tags kept"
         );
-        assert_eq!(NO_RANK, "captain");
     }
 
     #[test]
@@ -1410,7 +1448,8 @@ mod tests {
             ..crate::testkit::rank(200)
         }];
         let active = BTreeSet::from([RankId(200)]);
-        let tags = QuoteTags {
+        let text = "<PRK>, <SRK>, <RRK>, <PRK128>.";
+        let mut tags = QuoteTags {
             person: "Bounty Hunter",
             pilot: "Stock",
             ship_type: "Shuttle",
@@ -1421,11 +1460,17 @@ mod tests {
                 recent: Some(RankId(200)),
                 fallback: "captain".into(),
             },
+            rank_govts: RankTagGovts::NONE.parsed(text),
+            leet: false,
+            rules: TagRules::default(),
         };
         assert_eq!(
-            expand_tags("<PRK>, <SRK>, <RRK>, <PRK128>.", &tags),
-            "Cmdr, Cdr, Commander, Cdr."
+            expand_tags(text, &tags),
+            "Cmdr, Cdr, Commander, captain.",
+            "by the engine a lone <PRKnnn> reads the <SRKnnn> government's: none"
         );
+        tags.rules.crossed_rank_tags = RuleSource::Bible;
+        assert_eq!(expand_tags(text, &tags), "Cmdr, Cdr, Commander, Cdr.");
     }
 
     fn quoting(flags: u16) -> NpcPerson {

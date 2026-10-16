@@ -5,7 +5,7 @@ use std::cmp::Reverse;
 use std::time::Duration;
 
 use super::{AcceptError, AcceptRefusal, SLOTS};
-use crate::catalog::MissionId;
+use crate::catalog::{DescMovie, MissionId};
 use crate::chance::Chance;
 use crate::rulebook::RuleSource;
 
@@ -137,6 +137,16 @@ pub struct OfferPrompt {
     pub text: String,
     /// Its buttons' labels: no refuse button when it cannot be refused.
     pub labels: OfferLabels,
+    /// Its offer `dësc`'s `Graphic`, raw: none for -1 or a missing
+    /// `dësc`. The view shows the picture variant of the dialog (`DLOG`
+    /// 1020) for one above 127 (@0xa2344).
+    pub graphic: Option<i16>,
+    /// The movie its offer `dësc` names: the dialog plays it before it
+    /// opens (`_OfferOneMission` @0xa2273-0xa22ab); one played
+    /// [`after`](DescMovie::after) the session queues after the texts the
+    /// answer shows (@0xa3580-0xa35b8; see
+    /// [`Session::take_mission_texts`](crate::Session::take_mission_texts)).
+    pub movie: Option<DescMovie>,
 }
 
 impl OfferPrompt {
@@ -155,6 +165,8 @@ pub enum VenueOffer {
     Prompt(OfferPrompt),
     /// A mission that cannot be refused, with no offer text, was accepted
     /// at once, with no dialog (@0xa22ec-0xa231c): how the accept went.
+    /// Its offer's before-movie is queued ahead of the accept's texts
+    /// ([`Session::take_mission_texts`](crate::Session::take_mission_texts)).
     Accepted {
         /// The mission.
         mission: MissionId,

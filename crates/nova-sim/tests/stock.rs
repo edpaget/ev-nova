@@ -3829,7 +3829,9 @@ fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
 /// disabling the trader costs 3 with the Civvies and with the Federation,
 /// and it is left alive. By the engine's law (the default) the record
 /// also changes with the Civvies' other allies (down 3) and rises with
-/// the 20 governments not allied with them that it pleases.
+/// the 20 governments not allied with them that it pleases. The record in
+/// each system changes along the crime's walk from Fomalhaut, by 0.65 a
+/// jump, as `_RecursivePenaltySlap` changes it.
 #[test]
 fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
     let Some(dir) = common::nova_data() else {
@@ -3866,6 +3868,36 @@ fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
     assert_eq!(
         changed,
         NovaLaw::default().penalties(Crime::Disable, Some(CIVVIES), &Governments::read(&data))
+    );
+    let before: std::collections::BTreeMap<_, _> = destroyer_in_fomalhaut(&data)
+        .pilot()
+        .system_records()
+        .collect();
+    let walked: Vec<(i16, i32)> = session
+        .pilot()
+        .system_records()
+        .map(|(system, after)| {
+            let before = before.get(&system).copied().unwrap_or(0);
+            (system.0, i32::from(after) - i32::from(before))
+        })
+        .filter(|&(_, change)| change != 0)
+        .collect();
+    assert_eq!(
+        walked,
+        [
+            (128, -1),
+            (129, -1),
+            (130, -1),
+            (136, -3),
+            (152, -1),
+            (154, -1),
+            (325, -1),
+            (327, -1)
+        ],
+        "Fomalhaut -3; its Federation neighbours 152, 129 and 154 -1.95, \
+         truncated; past 129, 128, 130, 325 and 327 -1.2675, truncated, \
+         and no further at 0.82; independent 153 skips -0.49; hidden 531, \
+         766 and 767, at the places of 130, 325 and 327, untouched"
     );
 }
 
@@ -5129,11 +5161,12 @@ fn the_terrapin_hailed_in_kania_joins_the_player_under_person_join() {
             Ok(nova_sim::Hailed::Offer(nova_sim::VenueOffer::Prompt(
                 nova_sim::OfferPrompt {
                     mission: nova_sim::MissionId(132),
+                    graphic: Some(5008),
                     ..
                 }
             )))
         ),
-        "by the engine, the offer"
+        "by the engine, the offer, with its dësc 4004's PICT 5008"
     );
     let bible = nova_sim::HailOptions::nova(
         &nova_sim::Rulebook::default()
@@ -5259,6 +5292,9 @@ fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
         ship_type: "Shuttle",
         ship_name: "Kestrel",
         ranks: nova_sim::rank::RankNames::none(),
+        rank_govts: nova_sim::text_tags::RankTagGovts::NONE,
+        leet: false,
+        rules: nova_sim::text_tags::TagRules::default(),
     };
     assert_eq!(
         expand_tags(line, &tags),

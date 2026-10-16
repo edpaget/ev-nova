@@ -406,6 +406,14 @@ impl Shown {
         Self::read_text(&text, picture, area, metrics)
     }
 
+    /// The same picture with the description `text`, laid out in `area`
+    /// in place of the one shown: the description loaded
+    /// ([`FlightView::load_description`](crate::flight::FlightView::load_description))
+    /// once the raw read has shown.
+    pub fn retext(&mut self, text: &str, area: Bounds, metrics: &Rc<dyn TextMetrics>) {
+        *self = Self::read_text(text, self.picture, area, metrics);
+    }
+
     /// `picture`, and the description `text` laid out in `area`.
     pub fn read_text(
         text: &str,

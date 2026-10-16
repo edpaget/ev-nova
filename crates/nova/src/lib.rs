@@ -41,6 +41,7 @@ pub mod devtools;
 pub mod exit;
 pub mod fonts;
 pub mod load;
+pub mod movie;
 pub mod platform;
 pub mod rulebook;
 pub mod saves;

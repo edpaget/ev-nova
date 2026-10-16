@@ -130,9 +130,11 @@
 //! ([`OutfitterScreen::rearm`]) with the gap drawn, after which it asks
 //! again (`_OutfitFilter` @0x589ce-0x589ff). The offer takes every input
 //! while it is open, and its choice is taken through the screen
-//! ([`OutfitterScreen::take_offer_choice`]). The wait runs down only
-//! while none of the quantity dialog, a sale's alert and an offer is
-//! open.
+//! ([`OutfitterScreen::take_offer_choice`]). The quantity dialog and a
+//! sale's alert cover the outfitter, as the offer does: nothing is asked
+//! while any is open, and the wait runs on or stops as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`OutfitterScreen::with_offer_clock`]).
 //!
 //! Done, Return and Escape close it. Without the dialog, the screen says
 //! why, and Return or Escape still closes it.
@@ -143,7 +145,7 @@ use std::time::Duration;
 
 use nova_sim::{
     Direction, LcNames, MissionId, OfferPrompt, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow,
-    Outfitter, Reselection, SaleAlert,
+    Outfitter, Reselection, RuleSource, SaleAlert,
 };
 
 use super::catalog::SpaceportCatalog;
@@ -151,7 +153,7 @@ use super::credits::{self, comma_tons_text, credits_text, draw_amount_rows};
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
-use super::offer::{OfferChoice, OfferDialog, VenueOffers};
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
 use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -161,6 +163,7 @@ use crate::flight::escorts::NUMBER_WORDS;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
+use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
@@ -169,6 +172,7 @@ use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
 use crate::ui::desc::DescDialog;
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::quantity::QuantityDialog;
 
 /// The "Outfit" dialog's `DLOG` (and `DITL`) ID.
@@ -404,6 +408,13 @@ pub fn outfit_picture(outfit: OutfitId, exists: impl Fn(i16) -> bool) -> Option<
     exists(picture).then_some(picture)
 }
 
+/// Outfit `outfit`'s `dësc`, 3000 plus its ID less 128
+/// (`_OutfitFilter` @0x58465, @0x588cc).
+#[must_use]
+pub fn outfit_desc_id(outfit: OutfitId) -> i16 {
+    FIRST_DESCRIPTION.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT))
+}
+
 /// What the outfitter reads about an outfit: its description, through
 /// [`DescriptionSource`], and whether its picture exists, through
 /// [`SpaceportCatalog::picture_exists`]. Anything that is both is one.
@@ -483,12 +494,17 @@ pub struct OutfitterScreen {
     offering: Option<VenueOffers>,
     style: ButtonStyle,
     closed: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    info_requested: bool,
     /// Whether a cell is highlighted, and with none, the outfit Buy and
     /// Sell answer for.
     highlight: Highlight,
     /// Whether an order left nothing listed, so the outfitter closes
     /// once its alert is closed.
     leaving: bool,
+    /// The `dësc` shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
     sounds: Vec<Sound>,
 }
 
@@ -551,8 +567,10 @@ impl OutfitterScreen {
             offering: None,
             style,
             closed: false,
+            info_requested: false,
             highlight: Highlight::Cell,
             leaving: false,
+            description_request: None,
             sounds: Vec::new(),
         };
         screen.read_pictures();
@@ -560,14 +578,25 @@ impl OutfitterScreen {
         screen
     }
 
-    /// The outfitter with mission offers, each shown in the offer dialog laid
-    /// out by `template` (or saying why there is none): it asks for the
+    /// The outfitter with mission offers, each shown in the offer dialog of
+    /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`OutfitterScreen::rearm`]), as
     /// the original's does ([`OUTFITTER`](nova_sim::mission::screens::OUTFITTER)).
     #[must_use]
-    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+    pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(template)),
+            offering: Some(VenueOffers::asking(templates)),
+            ..self
+        }
+    }
+
+    /// Its offers' timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// given ([`OutfitterScreen::with_offers`]) before it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offering: self.offering.map(|offering| offering.with_clock(clock)),
             ..self
         }
     }
@@ -579,6 +608,47 @@ impl OutfitterScreen {
         self.offering
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request)
+    }
+
+    /// The `dësc` of the outfit the outfitter has shown since this was
+    /// last taken, once, read raw until whoever flies the ship loads it
+    /// as `_OutfitFilter` does (@0x58476, @0x588dd; `_DoOutfitDialog`
+    /// @0x5d3b4, @0x5d737) and answers with
+    /// [`OutfitterScreen::show_description`], in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request.take()
+    }
+
+    /// Shows `text`, `dësc` `id` loaded, as the description of the outfit
+    /// shown, while it is the outfit whose `dësc` that is.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        let Ok(Laid {
+            dialog,
+            metrics,
+            shown: Some((outfit, shown)),
+        }) = &mut self.laid
+        else {
+            return;
+        };
+        if outfit_desc_id(*outfit) == id {
+            let area = dialog.item_bounds(DESCRIPTION_ITEM).unwrap_or(Bounds::at(
+                Point::new(0.0, 0.0),
+                0.0,
+                0.0,
+            ));
+            shown.retext(text, area, &metrics.0);
+        }
+    }
+
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// has asked for the mission info screen since this was last asked,
+    /// here or in its offer.
+    pub fn take_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.info_requested) || offer
     }
 
     /// Whether the outfitter has asked for an offer since this was last
@@ -611,10 +681,33 @@ impl OutfitterScreen {
         self.offering.as_mut()?.take_choice()
     }
 
+    /// Lets go of its offer dialog answered and left drawn, if any
+    /// ([`SpaceportView::release_answered_offer`](super::SpaceportView::release_answered_offer)).
+    pub fn release_answered_offer(&mut self) {
+        if let Some(offering) = &mut self.offering {
+            offering.release_answered();
+        }
+    }
+
+    /// Its offers play their movies as `movies` says.
+    pub fn set_offer_movies(&mut self, movies: Movies) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_movies(movies);
+        }
+    }
+
     /// Asks for the next offer after `gap`.
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Ticks only its offers' timer, as covered: something is open over
+    /// the outfitter.
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, true);
         }
     }
 
@@ -827,12 +920,13 @@ impl OutfitterScreen {
         {
             return;
         }
-        let description = FIRST_DESCRIPTION.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT));
+        let description = outfit_desc_id(outfit);
         let area = laid
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
         let description = if read {
+            self.description_request = Some(description);
             catalog.description(description).unwrap_or_default()
         } else {
             String::new()
@@ -1086,6 +1180,10 @@ impl Screen for OutfitterScreen {
             }
             return ScreenAction::None;
         }
+        if is_mission_info_press(input) {
+            self.info_requested = true;
+            return ScreenAction::None;
+        }
         let pressed =
             |wanted: Key| matches!(*input, Input::Key { key, pressed: true, .. } if key == wanted);
         let before = self.selected_outfit();
@@ -1117,14 +1215,12 @@ impl Screen for OutfitterScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down while none of the quantity
-    /// dialog, the alert and an offer is open.
+    /// The wait for the next offer runs down, the quantity dialog or the
+    /// alert covering the outfitter while either is open.
     fn tick(&mut self, dt: Duration) {
-        if let Some(offering) = &mut self.offering
-            && !self.quantity.is_open()
-            && !self.alert.is_open()
-        {
-            offering.tick(dt);
+        let covered = self.quantity.is_open() || self.alert.is_open();
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, covered);
         }
     }
 
@@ -3136,6 +3232,36 @@ mod tests {
     }
 
     #[test]
+    fn each_description_read_is_asked_to_load_and_shows_loaded() {
+        let mut screen = screen();
+        assert_eq!(
+            screen.take_description_request(),
+            Some(3000),
+            "the first cell's"
+        );
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(3000, "Loaded blaster.");
+        assert!(words(&screen).contains(&"Loaded blaster.".to_owned()));
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.take_description_request(), Some(3001));
+        screen.show_description(3000, "Too late.");
+        assert!(
+            !words(&screen).contains(&"Too late.".to_owned()),
+            "another outfit's is not shown"
+        );
+        assert!(words(&screen).contains(&"dësc 3001.".to_owned()));
+        assert_eq!(outfit_desc_id(OutfitId(130)), 3002);
+    }
+
+    #[test]
+    fn by_the_engine_an_arrow_onto_the_reset_outfit_asks_no_load() {
+        let mut screen = reset(screen());
+        let _ = screen.take_description_request();
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.take_description_request(), None, "@0x58442-0x5844f");
+    }
+
+    #[test]
     fn by_the_engine_an_arrow_onto_the_reset_outfit_reads_no_description() {
         let art = art();
         let mut screen = reset(screen_with(outfitter(), &art));
@@ -3708,7 +3834,7 @@ mod tests {
     // The outfitter's mission offers.
 
     use crate::spaceport::offer::OfferChoice;
-    use crate::spaceport::offer::fixture::{prompt, template as offer_template};
+    use crate::spaceport::offer::fixture::{prompt, templates as offer_templates};
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -3716,7 +3842,7 @@ mod tests {
 
     /// The outfitter, its offers given.
     fn offering() -> OutfitterScreen {
-        counting_screen().with_offers(Ok(offer_template()))
+        counting_screen().with_offers(offer_templates())
     }
 
     #[test]
@@ -3806,8 +3932,8 @@ mod tests {
     }
 
     #[test]
-    fn the_outfitter_does_not_count_down_while_its_quantity_dialog_is_open() {
-        let mut screen = offering();
+    fn by_the_other_reading_the_outfitter_waits_out_its_quantity_dialog() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
         assert!(screen.take_offer_request());
         screen.rearm(ms(600));
         alt_click(&mut screen, BUY_ITEM);
@@ -3827,6 +3953,74 @@ mod tests {
             screen.take_offer_request(),
             "the wait goes on once it closes"
         );
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_quantity_dialog_is_asked_for_as_it_closes() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        alt_click(&mut screen, BUY_ITEM);
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn an_offer_due_under_the_alert_waits_as_the_offer_clock_reads() {
+        for (clock, wait) in [(RuleSource::Engine, 0), (RuleSource::Bible, 600)] {
+            let mut screen = alerting(OutfitRefusal::NegativeFreeMass)
+                .with_offers(offer_templates())
+                .with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.rearm(ms(600));
+            screen.tick(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: under the alert");
+            press(&mut screen, Key::Escape);
+            assert!(screen.alert_dialog().is_none());
+            if wait > 0 {
+                screen.tick(ms(wait - 1));
+                assert!(!screen.take_offer_request(), "{clock:?}");
+                screen.tick(ms(1));
+            } else {
+                screen.tick(ms(0));
+            }
+            assert!(screen.take_offer_request(), "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn the_outfitters_gap_runs_from_the_ask_by_the_engine_and_the_answer_by_the_other() {
+        for (clock, wait) in [(RuleSource::Engine, 200), (RuleSource::Bible, 600)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.open_offer(prompt());
+            screen.tick(ms(400));
+            press(&mut screen, Key::Enter);
+            assert!(screen.take_offer_choice().is_some());
+            screen.rearm(ms(600));
+            screen.tick(ms(wait - 1));
+            assert!(!screen.take_offer_request(), "{clock:?}");
+            screen.tick(ms(1));
+            assert!(screen.take_offer_request(), "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn covered_the_outfitter_runs_only_its_offer_clock() {
+        for (clock, asked) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.rearm(ms(600));
+            screen.tick_covered(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: covered");
+            screen.tick(ms(0));
+            assert_eq!(screen.take_offer_request(), asked, "{clock:?}");
+        }
     }
 
     // A sale refused in the loop (`RuleKey::SaleRefusal`).
@@ -4232,6 +4426,46 @@ mod tests {
         screen.release_keys();
         screen.input(&button(false));
         assert!(screen.alert_dialog().is_some(), "Done was not clicked");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_for_the_mission_info_screen() {
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let mut screen = counting_screen();
+        assert!(!screen.take_info_request());
+        screen.input(&key(i, true, true));
+        assert!(!screen.take_info_request(), "not a repeat");
+        press(&mut screen, i);
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(!screen.closed());
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the quantity dialog takes it");
+        assert!(screen.quantity().is_some());
+        let mut screen = alerting(RAISED);
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the alert takes it");
+        assert!(screen.alert_dialog().is_some());
+        let mut broken = OutfitterScreen::new(
+            Err("no DLOG 1002".to_owned()),
+            Ok(quantity()),
+            Ok(desc_template()),
+            outfitter(),
+            art() as Rc<dyn OutfitterCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut broken, i);
+        assert!(!broken.take_info_request(), "no dialog");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        assert!(screen.take_info_request());
+        assert!(screen.offer_dialog().is_some());
     }
 
     /// The original's `_OutfitFilter` @0x58039 maps keys to items with no click sound.

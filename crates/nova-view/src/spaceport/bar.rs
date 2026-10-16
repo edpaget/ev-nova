@@ -41,12 +41,20 @@
 //! ([`BarScreen::rearm`]) with the gap drawn. The offer's choice is taken
 //! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
 //! again once rearmed. Nothing is asked while the hire screen, the news
-//! or an offer is open. [`MISSION_INFO_KEY`] asks for the mission info screen
+//! or an offer is open; the wait runs on or stops under them as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`BarScreen::with_offer_clock`]), and by the engine the hire screen
+//! restarts it as it opens ([`BarScreen::take_offer_restart`]).
+//! [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asks for the mission info screen
 //! ([`BarScreen::take_info_request`]), and [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) for the
 //! player info screen, from the bar or its hire screen
 //! ([`BarScreen::take_player_info_request`], `_BarFilter` @0x47aaa,
 //! `_ShipyardFilter` @0x6091a), not from the news.
 //!
+//! A bar text whose `dësc` `Graphic` is above 127 and whose `PICT` is
+//! there shows in the picture variant, `DLOG` 1021 (266 x 306), over
+//! `PICT` 8504, with the picture in item 8 above the text in item 7, as
+//! `_DoBarDialog` picks it (@0x48f96-0x4902e). No stock bar text has one.
 //! The map key ([`MAP_KEY`], a press, never a repeat) asks for the course
 //! map ([`BarScreen::take_map_request`]), as `_BarFilter`'s first key
 //! check answers item 8 (@0x47a6e-0x47a9b). It is no button, and it asks
@@ -64,13 +72,13 @@ use std::time::Duration;
 
 use nova_sim::hire::HIRE_ESCORT;
 use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
-use nova_sim::{HireList, MissionId, News, OfferPrompt, ShipId};
+use nova_sim::{HireList, MissionId, News, OfferPrompt, RuleSource, ShipId};
 
 use super::catalog::StellarId;
 use super::hire::HireScreen;
 use super::layout::LEAVE_LABEL;
 use super::news::{NEWS_DIALOG, NewsScreen, shown_news_picture};
-use super::offer::{OfferChoice, OfferDialog, VenueOffers};
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -79,18 +87,49 @@ use crate::flight::view::MAP_KEY;
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
+use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
 
 /// The bar dialog's `DLOG` (and `DITL`) ID.
 pub const BAR_DIALOG: i16 = 1013;
 /// The picture the bar is drawn over.
 pub const BACKGROUND: ImageKey = ImageKey::picture(8503);
+/// The picture variant's `DLOG` (and `DITL`) ID (`GetNewDialog` 0x3fd
+/// @0x48fdd).
+pub const PICTURE_BAR_DIALOG: i16 = 1021;
+/// The picture the picture variant is drawn over: `PICT` 8504, "Bar +
+/// pict" (0x2138 @0x4901e).
+pub const PICTURE_BACKGROUND: ImageKey = ImageKey::picture(8504);
+/// The picture variant's picture item (`GetDialogItem` 8 @0x47898).
+pub const BAR_PICTURE_ITEM: usize = 8;
+
+/// Both bar dialog templates, or why each is missing: `DLOG` 1013's and
+/// `DLOG` 1021's.
+#[derive(Clone, Debug)]
+pub struct BarTemplates {
+    /// The bar dialog ([`BAR_DIALOG`]).
+    pub plain: Result<DialogTemplate, String>,
+    /// The bar dialog with a picture ([`PICTURE_BAR_DIALOG`]).
+    pub picture: Result<DialogTemplate, String>,
+}
+
+impl VariantTemplates for BarTemplates {
+    fn plain_template(&self) -> &Result<DialogTemplate, String> {
+        &self.plain
+    }
+
+    fn picture_template(&self) -> &Result<DialogTemplate, String> {
+        &self.picture
+    }
+}
 
 /// Leave's item.
 pub const LEAVE_ITEM: usize = 1;
@@ -115,13 +154,6 @@ pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
 /// The keys that press Holovid, the News button (`_BarFilter`: Mac
 /// virtual keys 0x2D and 0x0D, @0x47b33-0x47b48).
 pub const NEWS_KEYS: [Key; 2] = [Key::Char('n'), Key::Char('w')];
-
-/// The key that asks for the mission info screen from the bar, the
-/// spaceport, the mission computer and flight. The original reads it
-/// from the player's key settings (`_keyPrefs` +0x50), whose default is
-/// not in `Nova-DF.rsrc`; I is free on every spaceport screen and in
-/// flight.
-pub const MISSION_INFO_KEY: Key = Key::Char('i');
 
 /// How long after the bar opens it first asks for an offer: 15 of the
 /// Mac's ticks (`_DoBarDialog` @0x48f51-0x48f5f).
@@ -174,6 +206,10 @@ impl std::fmt::Debug for MetricsHandle {
 #[derive(Clone, Debug)]
 struct Laid {
     dialog: Dialog,
+    /// The picture variant's picture, drawn in item 8 over
+    /// [`PICTURE_BACKGROUND`]; none for the plain bar over
+    /// [`BACKGROUND`].
+    picture: Option<i16>,
     metrics: MetricsHandle,
 }
 
@@ -183,7 +219,7 @@ struct Laid {
 struct Asks {
     /// The ships for hire: Hire Escort was pressed.
     hire: bool,
-    /// The mission info screen: [`MISSION_INFO_KEY`] was pressed.
+    /// The mission info screen: [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) was pressed.
     info: bool,
     /// The player info screen: [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) was pressed.
     player_info: bool,
@@ -215,33 +251,45 @@ pub struct BarScreen {
     /// What the bar has asked for since each was last taken.
     asks: Asks,
     closed: bool,
+    /// The bar's `dësc`.
+    desc: i16,
+    /// The bar's `dësc`, shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
     sounds: Vec<Sound>,
 }
 
 impl BarScreen {
-    /// `stellar`'s bar, laid out by `layout`: the bar dialog's template and
-    /// the metrics its text is measured by, or why there are none. Its text
-    /// is read from `hiring`'s catalog now (none when it is missing), its
-    /// buttons are labelled in `style`, and Hire Escort is greyed unless
-    /// the fleet has `room`.
+    /// `stellar`'s bar, laid out by `layout`: the bar dialog's templates
+    /// and the metrics its text is measured by, or why there are none. Its
+    /// text and its `Graphic` are read from `hiring`'s catalog now (none
+    /// when it is missing). A `Graphic` above 127 whose `PICT` is there
+    /// lays it out by the picture variant, `DLOG` 1021, its picture in
+    /// item 8 over [`PICTURE_BACKGROUND`] (`_DoBarDialog` @0x48f96-0x4902e:
+    /// unlike the offer and text dialogs, the bar checks the picture
+    /// loads); otherwise by 1013. Without the template it picks, it says
+    /// why. Its buttons are labelled in `style`, and Hire Escort is
+    /// greyed unless the fleet has `room`.
     #[must_use]
     pub fn new(
-        layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
+        layout: Result<(BarTemplates, Rc<dyn TextMetrics>), String>,
         stellar: StellarId,
         hiring: Hiring,
         style: ButtonStyle,
         room: bool,
     ) -> Self {
-        let laid = layout.map(|(mut template, metrics)| {
+        let desc = bar_desc_id(stellar);
+        let laid = layout.and_then(|(templates, metrics)| {
+            let text = hiring.catalog.description(desc).unwrap_or_default();
+            let (picture, template) = templates
+                .pick_loaded(hiring.catalog.description_graphic(desc), |id| {
+                    hiring.catalog.picture_exists(id)
+                });
+            let mut template = template.clone()?;
             for item in [LEAVE_ITEM, GAMBLE_ITEM, HOLOVID_ITEM, HIRE_ITEM] {
                 if let Some(found) = template.items.get_mut(item - 1) {
                     found.enabled = true;
                 }
             }
-            let text = hiring
-                .catalog
-                .description(bar_desc_id(stellar))
-                .unwrap_or_default();
             let roles = [
                 (LEAVE_ITEM, Role::Button(LEAVE_LABEL.to_owned())),
                 (GAMBLE_ITEM, Role::Button(GAMBLE_LABEL.to_owned())),
@@ -263,16 +311,20 @@ impl BarScreen {
                 .with_cancel(Some(LEAVE_ITEM));
             dialog.set_greyed(GAMBLE_ITEM, true);
             dialog.set_greyed(HIRE_ITEM, !room);
-            Laid {
+            Ok(Laid {
                 dialog,
+                picture,
                 metrics: MetricsHandle(metrics),
-            }
+            })
         });
+        let description_request = laid.is_ok().then_some(desc);
         Self {
             laid,
             hiring,
             style,
             room,
+            desc,
+            description_request,
             hire: None,
             hire_closed: false,
             news_template: Err(format!("the news dialog (DLOG {NEWS_DIALOG}) is not given")),
@@ -324,13 +376,24 @@ impl BarScreen {
         self.news.as_ref()
     }
 
-    /// The bar with mission offers, each shown in the offer dialog laid
-    /// out by `template` (or saying why there is none): it asks for the
+    /// The bar with mission offers, each shown in the offer dialog of
+    /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first [`FIRST_OFFER_DELAY`] after it opens.
     #[must_use]
-    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+    pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::waiting(template, FIRST_OFFER_DELAY)),
+            offering: Some(VenueOffers::waiting(templates, FIRST_OFFER_DELAY)),
+            ..self
+        }
+    }
+
+    /// Its offers' timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// given ([`BarScreen::with_offers`]) before it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offering: self.offering.map(|offering| offering.with_clock(clock)),
             ..self
         }
     }
@@ -365,10 +428,43 @@ impl BarScreen {
         self.offering.as_mut()?.take_choice()
     }
 
+    /// Lets go of its offer dialog answered and left drawn, if any
+    /// ([`SpaceportView::release_answered_offer`](super::SpaceportView::release_answered_offer)).
+    pub fn release_answered_offer(&mut self) {
+        if let Some(offering) = &mut self.offering {
+            offering.release_answered();
+        }
+    }
+
+    /// Its offers play their movies as `movies` says.
+    pub fn set_offer_movies(&mut self, movies: Movies) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_movies(movies);
+        }
+    }
+
     /// Asks for the next offer after `gap`.
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Whether the bar's offer timer restarted since this was last asked,
+    /// as the hire screen opening restarts it by the engine
+    /// ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)): whoever
+    /// holds the session rearms it ([`BarScreen::rearm`]) with a new gap.
+    pub fn take_offer_restart(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_restart)
+    }
+
+    /// Ticks only its offers' timer, as covered: something is open over
+    /// the bar.
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, true);
         }
     }
 
@@ -388,6 +484,29 @@ impl BarScreen {
     #[must_use]
     pub fn closed(&self) -> bool {
         self.closed
+    }
+
+    /// The `dësc` the bar has shown since this was last taken, once: its
+    /// own, read raw as it opened until whoever flies the ship loads it
+    /// as `_DoBarDialog` does (@0x48f91), or the hire screen's ship's
+    /// ([`HireScreen::take_description_request`]). The answer comes
+    /// through [`BarScreen::show_description`], in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request
+            .take()
+            .or_else(|| self.hire.as_mut()?.take_description_request())
+    }
+
+    /// Shows `text`, `dësc` `id` loaded: as the bar's text when `id` is
+    /// the bar's, and otherwise in the hire screen, if it is open.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        if id == self.desc {
+            if let Ok(laid) = &mut self.laid {
+                laid.dialog.set_text(TEXT_ITEM, text);
+            }
+        } else if let Some(hire) = &mut self.hire {
+            hire.show_description(id, text);
+        }
     }
 
     /// The hire screen, while it is open.
@@ -410,10 +529,14 @@ impl BarScreen {
         std::mem::take(&mut self.asks.map)
     }
 
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
-    /// since this was last asked.
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
+    /// since this was last asked, in the bar or its offer.
     pub fn take_info_request(&mut self) -> bool {
-        std::mem::take(&mut self.asks.info)
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.asks.info) || offer
     }
 
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
@@ -444,6 +567,12 @@ impl BarScreen {
             .template
             .clone()
             .map(|template| (template, Rc::clone(&laid.metrics.0)));
+        // The hire screen is `_DoShipyardDialog` in hire mode, which sets
+        // the one offer deadline as it opens (@0x5e74c-0x5e775), once it
+        // has ships to show.
+        if let Some(offering) = &mut self.offering {
+            offering.restart();
+        }
         self.hire = Some(HireScreen::new(
             layout,
             self.hiring.info.clone(),
@@ -517,6 +646,19 @@ impl Screen for BarScreen {
             self.asks.player_info = true;
             return ScreenAction::None;
         }
+        // The hire screen is the shipyard dialog in hire mode, whose
+        // filters read the key too (`_ShipyardFilter` @0x60947,
+        // `_ShipDescFilter` @0x51164). Without its dialog there is no
+        // filter to read it, as in the shipyard.
+        if self
+            .hire
+            .as_ref()
+            .is_some_and(|hire| hire.dialog().is_some())
+            && is_mission_info_press(input)
+        {
+            self.asks.info = true;
+            return ScreenAction::None;
+        }
         if let Some(hire) = &mut self.hire {
             hire.input(input);
             self.sounds.extend(hire.take_sounds());
@@ -567,13 +709,7 @@ impl Screen for BarScreen {
             self.asks.news = true;
             return ScreenAction::None;
         }
-        if *input
-            == (Input::Key {
-                key: MISSION_INFO_KEY,
-                pressed: true,
-                repeat: false,
-            })
-        {
+        if is_mission_info_press(input) {
             self.asks.info = true;
             return ScreenAction::None;
         }
@@ -584,14 +720,12 @@ impl Screen for BarScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down, while neither the hire
-    /// screen, the news nor an offer is open; once it is out the bar asks.
+    /// The wait for the next offer runs down, the hire screen or the news
+    /// covering the bar while either is open; once it is out the bar asks.
     fn tick(&mut self, dt: Duration) {
-        if let Some(offering) = &mut self.offering
-            && self.hire.is_none()
-            && self.news.is_none()
-        {
-            offering.tick(dt);
+        let covered = self.hire.is_some() || self.news.is_some();
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, covered);
         }
     }
 
@@ -604,7 +738,16 @@ impl Screen for BarScreen {
         }
         match &self.laid {
             Ok(laid) => {
-                list.picture(BACKGROUND, laid.dialog.bounds().min);
+                let origin = laid.dialog.bounds().min;
+                match laid.picture {
+                    Some(id) => {
+                        list.picture(PICTURE_BACKGROUND, origin);
+                        laid.dialog.draw_picture_in(list, BAR_PICTURE_ITEM, id);
+                    }
+                    None => {
+                        list.picture(BACKGROUND, origin);
+                    }
+                }
                 laid.dialog.draw(list);
             }
             Err(reason) => {
@@ -651,6 +794,7 @@ impl Screen for BarScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::ui::mission_info::MISSION_INFO_KEY;
     use std::cell::RefCell;
     use std::collections::BTreeSet;
 
@@ -708,11 +852,20 @@ mod tests {
     /// floored.
     const ORIGIN: Point = Point::new(380.0, 291.0);
 
+    /// `plain` as the bar dialog, with no picture variant.
+    fn plain_only(plain: DialogTemplate) -> BarTemplates {
+        BarTemplates {
+            plain: Ok(plain),
+            picture: Err("no DLOG 1021".to_owned()),
+        }
+    }
+
     /// Every description is "dësc n."; records what it is asked. Only
-    /// `pictures` exist.
+    /// `pictures` exist. Every `dësc`'s `Graphic` is `graphic`.
     struct FakeArt {
         asked: RefCell<Vec<String>>,
         pictures: BTreeSet<i16>,
+        graphic: Option<i16>,
     }
 
     impl SpaceportCatalog for FakeArt {
@@ -743,7 +896,13 @@ mod tests {
     }
 
     impl DescriptionGraphics for FakeArt {
-        fn description_graphic(&self, _id: i16) -> Option<i16> {
+        fn description_graphic(&self, id: i16) -> Option<i16> {
+            self.asked.borrow_mut().push(format!("graphic {id}"));
+            self.graphic
+        }
+
+        /// Names no movie: these screens never play one.
+        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
             None
         }
     }
@@ -762,7 +921,7 @@ mod tests {
     /// Viking's bar (`spöb` 157), its fleet with `room` or not.
     fn bar_of(art: &Rc<FakeArt>, room: bool) -> BarScreen {
         BarScreen::new(
-            Ok((template(), Rc::new(MonoMetrics))),
+            Ok((plain_only(template()), Rc::new(MonoMetrics))),
             StellarId(157),
             hiring(art),
             ButtonStyle::STOCK,
@@ -775,6 +934,7 @@ mod tests {
             &Rc::new(FakeArt {
                 asked: RefCell::default(),
                 pictures: BTreeSet::new(),
+                graphic: None,
             }),
             true,
         )
@@ -858,6 +1018,19 @@ mod tests {
     }
 
     #[test]
+    fn the_bars_text_is_asked_to_load_and_shows_loaded() {
+        let mut bar = bar();
+        let desc = bar.take_description_request().expect("asked");
+        assert_eq!(bar.take_description_request(), None, "once");
+        bar.show_description(desc, "Loaded bar.");
+        let words: Vec<String> = texts(&bar).into_iter().map(|(t, _)| t).collect();
+        assert!(words.contains(&"Loaded bar.".to_owned()), "{words:?}");
+        bar.show_description(desc + 1, "Another.");
+        let words: Vec<String> = texts(&bar).into_iter().map(|(t, _)| t).collect();
+        assert!(!words.contains(&"Another.".to_owned()), "not the bar's");
+    }
+
+    #[test]
     fn the_named_values() {
         assert_eq!(BAR_DIALOG, 1013);
         assert_eq!(BACKGROUND, ImageKey::picture(8503));
@@ -874,9 +1047,10 @@ mod tests {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
+            graphic: None,
         });
         let screen = bar_of(&art, true);
-        assert_eq!(*art.asked.borrow(), ["dësc 10029"]);
+        assert_eq!(*art.asked.borrow(), ["dësc 10029", "graphic 10029"]);
         let dialog = screen.dialog().expect("laid out");
         assert_eq!(dialog.bounds().min, ORIGIN);
         let commands = drawn(&screen);
@@ -947,12 +1121,143 @@ mod tests {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
+            graphic: None,
         });
         let mut screen = bar_of(&art, false);
         assert!(!enabled(&screen, HIRE_ESCORT));
         click_item(&mut screen, HIRE_ITEM);
         screen.input(&key(Key::Char('h'), false));
         assert!(!screen.take_hire_request());
+    }
+
+    /// [`hiring`], with stock "Shipyard" (`DLOG` 1004) and plain
+    /// "Shipyard Info" (`DLOG` 1005) laid out.
+    fn laid_hiring(art: &Rc<FakeArt>) -> Hiring {
+        Hiring {
+            template: Ok(DialogTemplate {
+                bounds: rect(100.0, 100.0, 765.0, 323.0),
+                placement: Placement::Center,
+                items: items(&[
+                    (365.0, 289.0, 109.0, 25.0),
+                    (248.0, 440.0, 68.0, 30.0),
+                    (201.0, 380.0, 102.0, 18.0),
+                    (144.0, 438.0, 69.0, 22.0),
+                    (9.0, 8.0, 333.0, 271.0),
+                    (354.0, 10.0, 192.0, 267.0),
+                    (480.0, 289.0, 109.0, 25.0),
+                    (557.0, 8.0, 200.0, 200.0),
+                    (614.0, 214.0, 143.0, 100.0),
+                    (253.0, 289.0, 89.0, 25.0),
+                    (365.0, 431.0, 69.0, 22.0),
+                    (141.0, 288.0, 25.0, 25.0),
+                    (171.0, 288.0, 25.0, 25.0),
+                ]),
+            }),
+            info: InfoTemplates {
+                plain: Ok(DialogTemplate {
+                    bounds: rect(0.0, 0.0, 250.0, 285.0),
+                    placement: Placement::Center,
+                    items: items(&[
+                        (86.0, 253.0, 74.0, 25.0),
+                        (202.0, 368.0, 68.0, 30.0),
+                        (3.0, 3.0, 240.0, 24.0),
+                        (27.0, 334.0, 55.0, 31.0),
+                        (9.0, 32.0, 234.0, 214.0),
+                    ]),
+                }),
+                picture: Err("no DLOG 1019".to_owned()),
+            },
+            ..hiring(art)
+        }
+    }
+
+    /// Viking's bar with [`laid_hiring`].
+    fn laid_hire_bar() -> BarScreen {
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::new(),
+            graphic: None,
+        });
+        BarScreen::new(
+            Ok((plain_only(template()), Rc::new(MonoMetrics))),
+            StellarId(157),
+            laid_hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        )
+    }
+
+    #[test]
+    fn the_hire_screens_description_is_asked_and_shown_through_the_bar() {
+        let mut screen = laid_hire_bar();
+        let bar_desc = screen.take_description_request().expect("the bar's");
+        screen.open_hire(list(2));
+        assert_eq!(screen.take_description_request(), Some(14_000));
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(14_000, "Loaded pilot.");
+        let hire_words = |screen: &BarScreen| -> Vec<String> {
+            let mut list = DrawList::new();
+            screen.hire_screen().expect("open").draw(&mut list);
+            list.iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let words = hire_words(&screen);
+        assert!(words.contains(&"Loaded pilot.".to_owned()), "{words:?}");
+        screen.show_description(bar_desc, "Loaded bar.");
+        assert!(!hire_words(&screen).contains(&"Loaded bar.".to_owned()));
+        assert!(
+            texts(&screen).iter().any(|(text, _)| text == "Loaded bar."),
+            "the bar's text"
+        );
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_the_hire_screen_which_stays_open() {
+        let mut screen = laid_hire_bar();
+        screen.open_hire(list(2));
+        screen.input(&key(MISSION_INFO_KEY, false));
+        assert!(screen.take_info_request());
+        assert!(screen.hire_screen().is_some(), "still open");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_the_hire_info_panel_which_stays_open() {
+        let mut screen = laid_hire_bar();
+        screen.open_hire(list(2));
+        screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
+        assert!(
+            screen
+                .hire_screen()
+                .and_then(HireScreen::info_panel)
+                .is_some(),
+            "the panel opened"
+        );
+        screen.input(&key(MISSION_INFO_KEY, false));
+        assert!(screen.take_info_request());
+        assert!(
+            screen
+                .hire_screen()
+                .and_then(HireScreen::info_panel)
+                .is_some(),
+            "the panel stays open"
+        );
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_nothing_from_a_hire_screen_without_its_dialog() {
+        let mut screen = bar();
+        screen.open_hire(list(2));
+        assert!(
+            screen
+                .hire_screen()
+                .is_some_and(|hire| hire.problem().is_some())
+        );
+        screen.input(&key(MISSION_INFO_KEY, false));
+        assert!(!screen.take_info_request());
     }
 
     #[test]
@@ -978,9 +1283,10 @@ mod tests {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
+            graphic: None,
         });
         let mut screen = BarScreen::new(
-            Ok((template(), Rc::new(MonoMetrics))),
+            Ok((plain_only(template()), Rc::new(MonoMetrics))),
             StellarId(157),
             Hiring {
                 template: Ok(DialogTemplate {
@@ -1032,6 +1338,7 @@ mod tests {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
+            graphic: None,
         });
         let mut screen = BarScreen::new(
             Err("no DLOG 1013".to_owned()),
@@ -1086,9 +1393,10 @@ mod tests {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
+            graphic: None,
         });
         let mut screen = BarScreen::new(
-            Ok((template(), Rc::new(MonoMetrics))),
+            Ok((plain_only(template()), Rc::new(MonoMetrics))),
             StellarId(157),
             Hiring {
                 template: Ok(DialogTemplate {
@@ -1150,7 +1458,7 @@ mod tests {
 
     use crate::spaceport::offer::{OfferChoice, REFUSE_ITEM};
     use nova_sim::mission::OfferLabels;
-    use nova_sim::{MissionId, OfferPrompt};
+    use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
     /// The offer dialog's shape, smaller: 300 x 200, fixed at (0, 0),
     /// with accept (1), refuse (2), the text (3) and the one button (6).
@@ -1167,20 +1475,29 @@ mod tests {
         }
     }
 
+    fn offer_templates() -> OfferTemplates {
+        OfferTemplates {
+            plain: Ok(offer_template()),
+            picture: Err("no DLOG 1020 here".to_owned()),
+        }
+    }
+
     fn prompt() -> OfferPrompt {
         OfferPrompt {
             mission: MissionId(141),
             text: "Ferry this to Mars.".to_owned(),
+            graphic: None,
             labels: OfferLabels {
                 accept: "I'm in".to_owned(),
                 refuse: Some("No".to_owned()),
             },
+            movie: None,
         }
     }
 
     /// Viking's bar, its offers given.
     fn offering() -> BarScreen {
-        bar().with_offers(Ok(offer_template()))
+        bar().with_offers(offer_templates())
     }
 
     fn ms(n: u64) -> Duration {
@@ -1235,8 +1552,8 @@ mod tests {
     }
 
     #[test]
-    fn after_an_offer_the_next_ask_comes_after_the_gap_given() {
-        let mut screen = offering();
+    fn by_the_other_reading_the_next_ask_comes_the_gap_given_after_the_answer() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
         screen.tick(ms(250));
         assert!(screen.take_offer_request());
         screen.open_offer(prompt());
@@ -1255,9 +1572,74 @@ mod tests {
     }
 
     #[test]
-    fn no_offer_is_asked_for_while_the_hire_screen_is_open() {
+    fn by_the_engine_the_next_ask_comes_the_gap_given_after_the_ask() {
+        let mut screen = offering();
+        screen.tick(ms(250));
+        assert!(screen.take_offer_request());
+        screen.open_offer(prompt());
+        screen.tick(ms(400));
+        assert!(!screen.take_offer_request(), "not while the offer is open");
+        screen.input(&key(Key::Enter, false));
+        assert!(screen.take_offer_choice().is_some());
+        screen.rearm(ms(600));
+        screen.tick(ms(199));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_hire_screen_is_asked_for_as_it_closes() {
         let mut screen = offering();
         screen.open_hire(list(1));
+        assert!(screen.take_offer_restart(), "the hire screen restarts it");
+        screen.rearm(ms(600));
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.hire_screen().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn by_the_engine_the_hire_screen_restarts_the_bars_wait_as_it_opens() {
+        let mut screen = offering();
+        screen.tick(ms(250));
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        screen.tick(ms(500));
+        assert!(!screen.take_offer_restart());
+        screen.open_hire(list(1));
+        assert!(screen.take_offer_restart());
+        assert!(!screen.take_offer_restart(), "once");
+        screen.rearm(ms(600));
+        screen.tick(ms(300));
+        screen.input(&key(Key::Escape, false));
+        screen.tick(ms(299));
+        assert!(
+            !screen.take_offer_request(),
+            "a new gap from the hire screen"
+        );
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn with_nothing_for_hire_the_bars_wait_is_not_restarted() {
+        let mut screen = offering();
+        screen.open_hire(list(0));
+        assert!(screen.hire_screen().is_none());
+        assert!(!screen.take_offer_restart());
+        screen.tick(ms(250));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn by_the_other_reading_the_hire_screen_neither_restarts_nor_runs_the_wait() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
+        screen.open_hire(list(1));
+        assert!(!screen.take_offer_restart());
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request());
         screen.input(&key(Key::Escape, false));
@@ -1340,6 +1722,7 @@ mod tests {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::from([9000, 9001]),
+            graphic: None,
         });
         let mut screen = bar_of(&art, true).with_news(Ok(news_template()));
         screen.open_news(&news(), 9001);
@@ -1426,6 +1809,7 @@ mod tests {
             hiring(&Rc::new(FakeArt {
                 asked: RefCell::default(),
                 pictures: BTreeSet::new(),
+                graphic: None,
             })),
             ButtonStyle::STOCK,
             true,
@@ -1436,8 +1820,33 @@ mod tests {
     }
 
     #[test]
-    fn no_offer_is_asked_for_while_the_news_is_open() {
+    fn by_the_engine_an_offer_due_under_the_news_is_asked_for_as_it_closes() {
         let mut screen = offering().with_news(Ok(news_template()));
+        screen.open_news(&news(), 9000);
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.news_screen().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn covered_the_bar_runs_only_its_offer_clock() {
+        for (clock, asked) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut screen = offering().with_offer_clock(clock);
+            screen.tick_covered(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: covered");
+            screen.tick(ms(0));
+            assert_eq!(screen.take_offer_request(), asked, "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_no_offer_is_asked_for_while_the_news_is_open() {
+        let mut screen = offering()
+            .with_offer_clock(RuleSource::Bible)
+            .with_news(Ok(news_template()));
         screen.open_news(&news(), 9000);
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request());
@@ -1461,6 +1870,185 @@ mod tests {
         assert!(!screen.take_hire_request());
         assert_eq!(MISSION_INFO_KEY, Key::Char('i'));
         assert!(!HIRE_KEYS.contains(&MISSION_INFO_KEY));
+    }
+
+    // The picture variant, `DLOG` 1021.
+
+    /// Stock `DLOG` 1021, 266 x 306 and centred, with its eight disabled
+    /// user items as `DITL` 1021 has them, 4 and 6 parked outside it.
+    fn picture_template() -> DialogTemplate {
+        DialogTemplate {
+            bounds: rect(42.0, 0.0, 266.0, 306.0),
+            placement: Placement::Center,
+            items: items(&[
+                (157.0, 276.0, 99.0, 25.0),
+                (157.0, 247.0, 99.0, 25.0),
+                (7.0, 275.0, 146.0, 26.0),
+                (58.0, 366.0, 121.0, 25.0),
+                (7.0, 246.0, 146.0, 26.0),
+                (109.0, 379.0, 121.0, 25.0),
+                (11.0, 128.0, 242.0, 114.0),
+                (3.0, 3.0, 260.0, 120.0),
+            ]),
+        }
+    }
+
+    /// Where 1021 goes: (1024 - 266) / 2 and (768 - 306) / 2, floored.
+    const PICTURE_ORIGIN: Point = Point::new(379.0, 231.0);
+
+    /// Viking's bar, both variants given, its text's `Graphic` `graphic`
+    /// and only `pictures` there.
+    fn pictured(graphic: Option<i16>, pictures: &[i16]) -> (Rc<FakeArt>, BarScreen) {
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: pictures.iter().copied().collect(),
+            graphic,
+        });
+        let screen = BarScreen::new(
+            Ok((
+                BarTemplates {
+                    plain: Ok(template()),
+                    picture: Ok(picture_template()),
+                },
+                Rc::new(MonoMetrics),
+            )),
+            StellarId(157),
+            hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        );
+        (art, screen)
+    }
+
+    #[test]
+    fn the_picture_variants_named_values() {
+        assert_eq!(
+            (PICTURE_BAR_DIALOG, BAR_PICTURE_ITEM, PICTURE_BACKGROUND),
+            (1021, 8, ImageKey::picture(8504))
+        );
+    }
+
+    #[test]
+    fn a_bar_text_whose_picture_is_there_shows_1021_over_8504_its_picture_in_item_8() {
+        let (art, screen) = pictured(Some(5000), &[5000]);
+        assert_eq!(*art.asked.borrow(), ["dësc 10029", "graphic 10029"]);
+        let dialog = screen.dialog().expect("laid out");
+        assert_eq!(dialog.bounds(), Bounds::at(PICTURE_ORIGIN, 266.0, 306.0));
+        let at = |x, y, w, h| rect(PICTURE_ORIGIN.x + x, PICTURE_ORIGIN.y + y, w, h);
+        assert_eq!(
+            dialog.item_bounds(TEXT_ITEM),
+            Some(at(11.0, 128.0, 242.0, 114.0))
+        );
+        assert_eq!(
+            dialog.scroll_text().map(|text| text.lines().to_vec()),
+            Some(vec!["dësc 10029.".to_owned()])
+        );
+        assert_eq!(
+            dialog.item_bounds(LEAVE_ITEM),
+            Some(at(157.0, 276.0, 99.0, 25.0))
+        );
+        assert_eq!(
+            dialog.item_bounds(HIRE_ITEM),
+            Some(at(7.0, 246.0, 146.0, 26.0))
+        );
+        for label in [LEAVE_LABEL, HIRE_ESCORT, HOLOVID_LABEL] {
+            assert!(enabled(&screen, label), "{label}");
+        }
+        let commands = drawn(&screen);
+        assert_eq!(
+            commands[..2],
+            [
+                DrawCommand::Picture {
+                    image: PICTURE_BACKGROUND,
+                    top_left: PICTURE_ORIGIN,
+                },
+                DrawCommand::StretchedPicture {
+                    image: ImageKey::picture(5000),
+                    top_left: at(3.0, 3.0, 260.0, 120.0).min,
+                    width: 260.0,
+                    height: 120.0,
+                },
+            ],
+            "_BarDialogUpdate: the background, then the picture in item 8 (@0x47844-0x478c2)"
+        );
+        let mut alone = DrawList::new();
+        dialog.draw(&mut alone);
+        assert_eq!(commands[2..], alone.iter().cloned().collect::<Vec<_>>()[..]);
+    }
+
+    #[test]
+    fn a_bar_text_with_no_graphic_above_127_or_whose_picture_is_missing_shows_1013() {
+        for (graphic, pictures) in [(None, &[127][..]), (Some(127), &[127]), (Some(5000), &[])] {
+            let (_, screen) = pictured(graphic, pictures);
+            let dialog = screen.dialog().expect("laid out");
+            assert_eq!(dialog.bounds().min, ORIGIN, "{graphic:?}");
+            assert_eq!(
+                drawn(&screen)[0],
+                DrawCommand::Picture {
+                    image: BACKGROUND,
+                    top_left: ORIGIN,
+                }
+            );
+            assert!(
+                !drawn(&screen).iter().any(|command| matches!(
+                    command,
+                    DrawCommand::StretchedPicture { image, .. } if *image == ImageKey::picture(5000)
+                )),
+                "no picture: {graphic:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_the_picture_variants_template_a_pictured_bar_says_why() {
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::from([5000]),
+            graphic: Some(5000),
+        });
+        let screen = BarScreen::new(
+            Ok((plain_only(template()), Rc::new(MonoMetrics))),
+            StellarId(157),
+            hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        );
+        assert_eq!(screen.problem(), Some("no DLOG 1021"));
+    }
+
+    /// The shape production hands over: both templates looked up, 1013
+    /// missing. A bar with no picture to show says why rather than fall
+    /// back to 1021.
+    #[test]
+    fn without_the_plain_template_an_unpictured_bar_says_why_and_never_uses_1021() {
+        for (graphic, pictures) in [(None, &[][..]), (Some(5000), &[])] {
+            let art = Rc::new(FakeArt {
+                asked: RefCell::default(),
+                pictures: pictures.iter().copied().collect(),
+                graphic,
+            });
+            let screen = BarScreen::new(
+                Ok((
+                    BarTemplates {
+                        plain: Err("no DLOG 1013".to_owned()),
+                        picture: Ok(picture_template()),
+                    },
+                    Rc::new(MonoMetrics),
+                )),
+                StellarId(157),
+                hiring(&art),
+                ButtonStyle::STOCK,
+                true,
+            );
+            assert_eq!(screen.problem(), Some("no DLOG 1013"), "{graphic:?}");
+            assert!(screen.dialog().is_none(), "no 1021 layout: {graphic:?}");
+            assert!(
+                texts(&screen)
+                    .iter()
+                    .any(|(text, color)| text.contains("no DLOG 1013") && *color == Color::ERROR),
+                "{graphic:?}"
+            );
+        }
     }
 
     #[test]
@@ -1500,6 +2088,7 @@ mod tests {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
+            graphic: None,
         });
         let mut screen = BarScreen::new(
             Err("no DLOG 1013".to_owned()),

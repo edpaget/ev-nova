@@ -734,7 +734,7 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     ] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
-    game.press(KeyCode::KeyI);
+    game.press(KeyCode::Space);
     assert!(game.shipyard().info_panel().is_some());
     let shown = texts(&game.frame());
     for text in [
@@ -801,7 +801,7 @@ fn info_on_a_class_whose_description_has_a_graphic_opens_the_picture_panel() {
     game.open_shipyard();
     let cell = game.shipyard().cell_bounds(1).expect("a cell").center();
     game.click(cell);
-    game.press(KeyCode::KeyI);
+    game.press(KeyCode::Space);
     let panel = game.shipyard().info_panel().expect("the info panel");
     let bounds = panel.bounds();
     assert_eq!(

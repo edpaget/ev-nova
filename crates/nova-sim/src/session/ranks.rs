@@ -277,6 +277,7 @@ pub(super) mod tests {
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::save;
     use crate::session::Session;
+    use crate::session::missions::TextSource;
     use crate::shipyard::ShipFlags3;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, jump, land_now, outfit, rank, ship};
 
@@ -485,7 +486,8 @@ pub(super) mod tests {
         session.run_set(&set("K128"), &mut Scripted::default());
         assert_eq!(
             session.plain_text("<PRK> <SRK> <RRK> <PRK128>"),
-            "Cmdr Cdr Commander Cdr"
+            "Cmdr Cdr Commander <PRK128>",
+            "no <PRKnnn> government remembered yet"
         );
         let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
         let session = Session::fly(&catalog, pilot).expect("flies");
@@ -519,7 +521,13 @@ pub(super) mod tests {
             session.plain_text("<PRK> <SRK> <RRK>"),
             "skipper skipper skipper"
         );
-        assert_eq!(session.plain_text("<PRK128>"), "skipper");
+        let mut session = session;
+        let loaded = session.take_in(TextSource::Desc, "<PRK128>!", &mut NeverFires);
+        assert_eq!(
+            session.plain_text(&loaded),
+            "skipper!",
+            "the <SRKnnn> government, none, reads the fallback"
+        );
     }
 
     /// `STR#` 2002 with #392 `and`, as stock has it.

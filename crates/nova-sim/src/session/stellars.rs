@@ -117,7 +117,7 @@ use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
 use crate::landing::{LandingReach, StellarShown, TypeWidth, landing_radius, landing_reach};
-use crate::legal::{self, Crime, LegalCode};
+use crate::legal::{Crime, LegalCode};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Countdown;
 use crate::story::wreck::{self, Tick};
@@ -358,9 +358,8 @@ impl Session {
         self.set_stellar_state(stellar, Some(countdown));
         self.strength.remove(&stellar);
         if by == Some(ShipRef::Player) {
-            let changes = law.penalties(Crime::Kill, site.govt, &self.govts);
             for _ in 0..STELLAR_KILLINGS {
-                legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+                self.convict_of(law, Crime::Kill, site.govt);
             }
             // `_CheckShotProximities` slaps ten times (@0x374e9), but
             // after the first pass no rank it takes is still active, so
@@ -1141,7 +1140,7 @@ mod tests {
     use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::geometry::Vec2;
     use crate::govt::{DERELICT, Governments};
-    use crate::legal::{Crime, LegalCode, NovaLaw, RECORD_LIMIT};
+    use crate::legal::{Crime, CrimeMap, LegalCode, NovaLaw, RECORD_LIMIT};
     use crate::testkit::{govt, hull, outfit, weapon};
     use crate::traffic::npc::NpcId;
 
@@ -1316,12 +1315,14 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
     }
 
-    /// Fines each government a `kill` penalty of -3 for a killing, and
+    /// Fines government 140 a `kill` penalty of -3 for a killing, and
+    /// along the walk the system the crime is in -2.6 and 131 +1.5;
     /// records each crime it is asked about with the victim's
-    /// government.
+    /// government, and each system a walk starts from.
     #[derive(Debug, Default)]
     struct Fine {
         seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+        from: std::cell::RefCell<Vec<SystemId>>,
     }
 
     impl LegalCode for Fine {
@@ -1333,6 +1334,18 @@ mod tests {
         ) -> Vec<(GovtId, i32)> {
             self.seen.borrow_mut().push((crime, victim));
             vec![(GovtId(140), -3)]
+        }
+
+        fn system_penalties(
+            &self,
+            _crime: Crime,
+            _victim: Option<GovtId>,
+            from: SystemId,
+            _map: &dyn CrimeMap,
+            _govts: &Governments,
+        ) -> Vec<(SystemId, f32)> {
+            self.from.borrow_mut().push(from);
+            vec![(from, -2.6), (SystemId(131), 1.5)]
         }
     }
 
@@ -1375,17 +1388,24 @@ mod tests {
     }
 
     #[test]
-    fn shooting_a_stellar_down_changes_the_record_in_each_system_of_a_changed_government() {
-        let mut catalog = shooting([life(128, 2)]);
-        catalog.star_map[0].govt = Some(GovtId(140));
+    fn shooting_a_stellar_down_walks_ten_times_from_the_players_system_each_truncating() {
+        let catalog = shooting([life(128, 2)]);
         let mut session = overlaid(&catalog);
-        fire_by(&mut session, 3, &Fine::default());
+        session.pilot.set_system_record(SystemId(130), 5);
+        let fine = Fine::default();
+        fire_by(&mut session, 3, &fine);
+        assert_eq!(fine.from.take(), [SystemId(130); 10], "the player's system");
         assert_eq!(
             session.pilot().system_record(SystemId(130)),
-            -30,
-            "140's system, ten times"
+            -16,
+            "5 - 2.6 to 2, then 0, -2 and on, each truncated in turn: not 5 - 26 \
+             nor 5 - 10 x 2"
         );
-        assert_eq!(session.pilot().system_record(SystemId(131)), 0);
+        assert_eq!(
+            session.pilot().system_record(SystemId(131)),
+            10,
+            "1.5 ten times, each truncated"
+        );
     }
 
     #[test]

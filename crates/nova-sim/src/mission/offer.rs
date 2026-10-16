@@ -36,7 +36,9 @@ impl Default for RollTable {
 
 impl RollTable {
     /// Draws every roll afresh, in index order: `Rand(100) + 1` each
-    /// (`_HandlePlayerDockRequest` @0x66d3f-0x66d60).
+    /// (`_HandlePlayerDockRequest` @0x66d3f-0x66d60), as `_ResetPlayer`
+    /// (@0x1d93a-0x1d956) and `_InitObjects` (@0x1cf45-0x1cf66) draw it
+    /// too.
     pub fn draw(&mut self, chance: &mut dyn Chance) {
         for roll in &mut self.rolls {
             *roll = chance.roll(100).saturating_add(1);
@@ -238,6 +240,7 @@ impl Offers {
                         mission,
                         venue,
                         rolls: &self.table,
+                        cached_avail_bits: None,
                     };
                     checks.first_refusal(&facts, chance).is_ok()
                 })
@@ -284,6 +287,7 @@ impl Offers {
                         mission,
                         venue: offer.venue,
                         rolls: table,
+                        cached_avail_bits: None,
                     };
                     checks.first_refusal(&facts, &mut NeverFires).is_ok()
                 })
@@ -292,9 +296,33 @@ impl Offers {
         self.outside.retain(|offer| available(offer));
     }
 
-    /// Drops the offer of `mission`, at either venue, as an accept or a
-    /// refusal does (`_OfferMissionFromPort` @0xa3765-0xa37a1): whether
-    /// there was one.
+    /// Where `mission`'s offer is listed at `venue`, in the order shown:
+    /// the index `_OfferMissionFromPort` finds it at (-0x2a(%ebp),
+    /// @0xa36f5). `None` when it is not listed there.
+    #[must_use]
+    pub fn position(&self, venue: Venue, mission: MissionId) -> Option<usize> {
+        self.at(venue)
+            .iter()
+            .position(|offer| offer.mission == mission)
+    }
+
+    /// Drops the entry at `index` of `venue`'s offers, whatever mission it
+    /// holds, as `_OfferMissionFromPort` shifts the outside list down from
+    /// the index it found its offer at (@0xa377d-0xa37a1), and returns the
+    /// mission it dropped. Past the end it drops nothing, as the original
+    /// then shifts only free (-1) entries.
+    pub fn drop_at(&mut self, venue: Venue, index: usize) -> Option<MissionId> {
+        let list = match venue {
+            Venue::Computer => &mut self.computer,
+            Venue::Outside => &mut self.outside,
+            Venue::Ship => return None,
+        };
+        (index < list.len()).then(|| list.remove(index).mission)
+    }
+
+    /// Drops the offer of `mission`, at either venue, as an accept with
+    /// the offer dialog open does (`_DoMissionAccept` @0xa2018-0xa2136):
+    /// whether there was one.
     pub fn drop_offer(&mut self, mission: MissionId) -> bool {
         let before = self.computer.len() + self.outside.len();
         self.computer.retain(|offer| offer.mission != mission);

@@ -1037,7 +1037,7 @@ fn info_on_a_pilot_whose_description_has_a_graphic_opens_the_picture_panel() {
     game.open_bar();
     game.tap(Key::Char('h'));
     assert!(game.hiring());
-    game.tap(Key::Char('i'));
+    game.tap(nova_view::spaceport::shipyard::INFO_KEY);
     let bounds = game
         .app
         .screen()

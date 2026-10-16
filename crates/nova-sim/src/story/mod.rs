@@ -123,8 +123,11 @@
 //!   one day's wage (`_DoEscortPayment(1)` @0x4085a), reached also with
 //!   nothing sold (@0x40347, @0x405cf).
 //! - A `Q` sets `_absquatulateStr` (@0x15bee); `_PortFilter` then ends the
-//!   dialog (@0x4f060), and `_DoPortDialog` leaves by the same close
-//!   (@0x5fcc6-0x5fcd0, @0x60196, @0x601a0-0x6020e).
+//!   dialog (@0x4f060) on its next call, once the texts and dialogs shown
+//!   over the port have closed, and `_DoPortDialog` leaves by the same
+//!   close (@0x5fcc6-0x5fcd0, @0x60196, @0x601a0-0x6020e). Here the
+//!   session holds the leave ([`Session::leave_due`](crate::Session::leave_due))
+//!   and the take-off, through the port's Leave, carries it out.
 //!
 //! ## One landing
 //!
@@ -570,8 +573,16 @@
 //! catalog, so the events they raise wait there. It settles in a loop:
 //! the moves queued (and the `EnteredSystem` an `enter_system` they cause
 //! raises), then the next event raised, first in, first out, dispatched,
-//! and once none is left a `Q`'s leave, whose events dispatch in the same
-//! settling. The subscriptions' scripts run through the dispatcher's
+//! and once none is left a `Q`'s leave in flight, whose events dispatch
+//! in the same settling. A `Q` run while landed is held instead, as the
+//! original holds `_absquatulateStr`
+//! ([`Session::leave_due`](crate::Session::leave_due)), and
+//! [`Session::leave_if_due`](crate::Session::leave_if_due) carries it
+//! out as the port's Leave
+//! ([`Session::leave_port`](crate::Session::leave_port)) does: it takes
+//! off and settles again at once itself, so the take-off's events
+//! dispatch before its save and its first frame. The
+//! subscriptions' scripts run through the dispatcher's
 //! runner, which, after each operator handed to `apply_op`, settles the
 //! moves it queued, dispatches the events raised, depth first, and only
 //! then runs the next operator. So for the scripts the dispatcher runs,
@@ -678,7 +689,8 @@
 //!   as `day::Stay`, the stay's tally, counts: half as many days as
 //!   escorts sold or upgraded, rounded down; then a day if an outfit was
 //!   bought or sold, four if a ship was bought, and every take-off's own
-//!   day. A `Q` that ends the stay leaves the same way;
+//!   day. A `Q` that ends the stay is held to that take-off and leaves
+//!   the same way;
 //! - a mission's success or auto-abort: its `DatePostInc` (missions
 //!   phase 2).
 //!
@@ -1737,6 +1749,26 @@
 //!   tags: a text with none comes out unchanged;
 //! - dialogue nodes (plugin-scripting-extensions phase 3).
 //!
+//! **Text sources** (missions-fidelity phase 2). The crossed rank tags
+//! read the governments the session remembers
+//! ([`RankTagGovts`](crate::text_tags::RankTagGovts), the original's
+//! `_descRankGovt`), which a text changes only as it is shown, by where
+//! it comes from: a `dësc` the original loads through `_LoadDescription`
+//! (an offer, the lifecycle texts, the cargo and ship-done texts, the
+//! mission computer's or mission info's selected row) resets them and
+//! parses its own; a hail quote parses its own onto them; anything else
+//! (the screens' lists of names, a `Q` message) reads them as they stand.
+//! The `&self` texts and screens read them and change nothing; the
+//! `&mut` paths that show a text take it in first, so the governments
+//! settle as each text is shown, as the original's do.
+//!
+//! **Conditional text** (missions-fidelity phase 26). A text taken in
+//! has its conditional text resolved first
+//! ([`text_parse`](crate::text_parse), `_ParseTextDescription`): `{G
+//! …}`, `{bnnn …}` and `{Pnnn …}` read the pilot as it is at that moment,
+//! and the rank scan reads only the strings chosen. The `&self` screens
+//! resolve it alike, as if loaded.
+//!
 //! ## Checked for phase 3
 //!
 //! - The firing points stand as "One landing", "One take-off" and "One
@@ -1790,7 +1822,9 @@
 //!   and `M` and `N` in flight (@0x159a3, @0x159a8) are handled inside
 //!   `_EvalSetExp`, before its next operator. `Q` only sets
 //!   `_absquatulateStr` (@0x15bee); nothing between it and @0x15c6c leaves
-//!   the stellar.
+//!   the stellar. Landed, the port's filter leaves on it at its next call
+//!   (@0x4f047-0x4f063), after the landing's texts and dialogs; the
+//!   session holds it to the take-off.
 //!
 //! ## Checked for phase 4
 //!

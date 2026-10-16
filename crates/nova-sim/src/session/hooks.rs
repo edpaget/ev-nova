@@ -134,12 +134,19 @@ impl Session {
     /// `nebulae` module); explores the start system's visible
     /// neighbours, or by the engine their heads (see the `explored`
     /// module), destroys the stellars that start the
-    /// game destroyed (see the `stellars` module), then runs the first
-    /// `chär`'s `OnStart` once, drawing on `chance` (see the module docs),
+    /// game destroyed (see the `stellars` module), then, by the engine's
+    /// reading of
+    /// [`RuleKey::CharacterStatusSpread`](crate::RuleKey::CharacterStatusSpread),
+    /// spreads the first `chär`'s statuses to its governments' allies and
+    /// enemies, in both legal stores ([`legal::spread_statuses`](crate::legal::spread_statuses)),
+    /// then runs its `OnStart` once, drawing on `chance` (see the module docs),
     /// and nothing when the `chär` cannot be read, then refreshes the
     /// galaxy, so the systems its bits show are visible (`_PlayGame`
-    /// @0x457e9; see the `story` module), and last rebuilds the stellars
-    /// shown (see the `stellars` module). For a pilot just created and
+    /// @0x457e9; see the `story` module), rebuilds the stellars shown
+    /// (see the `stellars` module), and last draws the offers' roll table
+    /// on `chance`, as `_DoNewPilot`'s `_ResetPlayer` does (@0x18dd4).
+    /// The original draws it before the `OnStart`; nothing here reads it,
+    /// so it settles before the first frame either way. For a pilot just created and
     /// flown, before its first save; never for one opened from a save.
     ///
     /// It is the engine's `_DoNewPilot` seam, so it first puts the ship in
@@ -176,6 +183,19 @@ impl Session {
         self.explore_start_neighbours();
         self.destroy_from_the_start();
         if let Ok(start) = catalog.first_character() {
+            // `_DoNewPilot`'s first `_ActivateCharResource` (@0x18e5f),
+            // after `_ResetPlayerRecord` (@0x18de0) and before the
+            // `OnStart`: the `chär`'s statuses spread (see the `legal`
+            // module). By the Bible, `Pilot::new` and the flight's
+            // derivation already keep each with its own government.
+            if self.rules.source_for(crate::RuleKey::CharacterStatusSpread) == RuleSource::Engine {
+                crate::legal::spread_statuses(
+                    &mut self.pilot,
+                    self.galaxy.governed(),
+                    &start.legal,
+                    &self.govts,
+                );
+            }
             if self.hook_rules().start_ship_purchase == RuleSource::Bible {
                 self.ship_hook(self.pilot.ship, ShipHook::Purchase, chance);
             }
@@ -194,6 +214,11 @@ impl Session {
         self.reset_precalced();
         // `_DoNewPilot`'s rebuild point, after its `OnStart` (@0x1937f).
         self.rebuild_stellars();
+        // `_DoNewPilot`'s `_ResetPlayer` (@0x18dd4) draws the offers' roll
+        // table before its `OnStart`; nothing above reads the table, so
+        // drawing it last settles the same table before the first frame
+        // and the first save.
+        self.draw_offer_rolls(chance);
     }
 }
 
@@ -1129,6 +1154,76 @@ mod tests {
             assert_eq!(*seen.0.borrow(), [on_start.to_vec()], "{source:?}: OnStart");
             assert_eq!(explored, after, "{source:?}: after begin's rebuild");
         }
+    }
+
+    /// [`starting_with`] whose `chär` gives government 128 a status of
+    /// 20, its systems 130 of 128, 131 of its ally 129 (`InitialRec` 5),
+    /// 132 of its enemy 130 and 133 independent.
+    fn with_a_status() -> FakePilotCatalog {
+        use crate::catalog::{GovtId, GovtRecord, SystemId};
+        let mut catalog = starting_with("");
+        let start = catalog.character.as_mut().expect("a chär");
+        start.legal = [Some((GovtId(128), 20)), None, None, None];
+        for (system, govt) in [(130, Some(128)), (131, Some(129)), (132, Some(130))] {
+            let star = catalog
+                .star_map
+                .iter_mut()
+                .find(|star| star.id == SystemId(system))
+                .expect("a system");
+            star.govt = govt.map(GovtId);
+        }
+        catalog.govts = vec![
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..crate::testkit::govt(128)
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                initial_rec: 5,
+                ..crate::testkit::govt(129)
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..crate::testkit::govt(130)
+            },
+        ];
+        catalog
+    }
+
+    fn records(session: &Session) -> ([i16; 4], [i16; 3]) {
+        use crate::catalog::{GovtId, SystemId};
+        let pilot = session.pilot();
+        (
+            [130, 131, 132, 133].map(|system| pilot.system_record(SystemId(system))),
+            [128, 129, 130].map(|govt| pilot.legal_record(GovtId(govt))),
+        )
+    }
+
+    #[test]
+    fn by_the_engine_beginning_spreads_the_chärs_statuses_to_allies_and_enemies() {
+        let catalog = with_a_status();
+        let mut session = new_pilot(&catalog);
+        assert_eq!(
+            records(&session),
+            ([20, 5, 0, 0], [20, 0, 0]),
+            "flying alone derives each system from its government, as a load does"
+        );
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(
+            records(&session),
+            ([20, 20, -20, 0], [20, 20, -20]),
+            "both stores: the ally's and the enemy's too"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_chärs_status_stays_with_its_own_government() {
+        let catalog = with_a_status();
+        let rules =
+            Rulebook::default().with_override(RuleKey::CharacterStatusSpread, RuleSource::Bible);
+        let mut session = new_pilot(&catalog).with_rules(rules);
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(records(&session), ([20, 5, 0, 0], [20, 0, 0]));
     }
 
     #[test]

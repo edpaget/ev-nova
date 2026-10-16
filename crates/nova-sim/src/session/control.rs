@@ -50,9 +50,10 @@ use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
 use crate::control::{
-    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, execute,
+    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, SetOpKind, execute,
 };
 use crate::pilot::{Gender, Pilot};
+use crate::rulebook::RuleSource;
 use crate::ship_change::OutfitCarry;
 
 /// What a control-bit test reads about the session's pilot (see the module
@@ -190,9 +191,42 @@ impl Session {
             SetOp::StartMission(mission) => self.script_start(*mission, chance),
             SetOp::ActivateRank(rank) => self.activate_rank(*rank),
             SetOp::DeactivateRank(rank) => self.deactivate_rank(*rank),
+            SetOp::OutOfRange { op, .. } => self.out_of_range(*op),
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
             SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {}
+        }
+    }
+
+    /// An operator whose number is out of range (see
+    /// [`SetOp::OutOfRange`]). `_EvalSetExp` skips each such operator and
+    /// goes on to the next (@0x15873; C, E and H by @0x156e0, the bits by
+    /// their signed checks @0x1524a, @0x15271, @0x15298), but for `N`,
+    /// whose check (@0x158e3) runs the move's tail (@0x1593f): that queues
+    /// a stay by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
+    /// and does nothing by the other.
+    ///
+    /// `P`, `T` and `Q` have no check, and a number past 32767, the
+    /// engine's widest ID, names no resource, so each does what the
+    /// original does with a missing one: `T` nothing (an empty pick
+    /// skips, @0x15b47); `Q` a blank `Q` (`_GetRandomIndString` @0x72f0f
+    /// leaves the message empty, @0x15c02); `P` a sound that does not
+    /// load, which by [`ScriptEffectRules::sound`]'s engine reading
+    /// replaces a held one with none (@0x15a30; `_PlayGame`
+    /// @0x4631b-0x46348).
+    ///
+    /// [`ScriptEffectRules::out_of_range_move`]: crate::ScriptEffectRules::out_of_range_move
+    /// [`ScriptEffectRules::sound`]: crate::ScriptEffectRules::sound
+    fn out_of_range(&mut self, op: SetOpKind) {
+        match op {
+            SetOpKind::MoveKeepPosition
+                if self.script_effect_rules().out_of_range_move == RuleSource::Engine =>
+            {
+                self.queued.moves.push(ScriptMove::Stay);
+            }
+            SetOpKind::PlaySound => self.drop_script_sound(),
+            SetOpKind::LeaveStellar => self.leave_on_no_list(),
+            _ => {}
         }
     }
 
@@ -525,11 +559,8 @@ mod tests {
         assert!(session.pilot().has_explored(SystemId(131)), "X ran");
         let settled = session.settle_script(&catalog, &mut Scripted::default());
         assert_eq!(settled.moved, Some(SystemId(130)), "M and N queued");
-        assert_eq!(
-            settled.took_off,
-            Some(crate::catalog::StellarId(128)),
-            "Q queued"
-        );
+        assert!(session.leave_due(), "Q held");
+        let _ = session.take_off(&catalog, &mut Scripted::default());
         session.tick(crate::flight::Controls::default());
         assert!(
             session

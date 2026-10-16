@@ -2028,6 +2028,7 @@ mod tests {
             music_level: 7,
         },
         hyperspace_effects: true,
+        quicktime_movies: true,
     };
 
     /// `MUSIC_OFF` with the sound effects at `level`.
@@ -2086,6 +2087,7 @@ mod tests {
         log.borrow_mut().clear();
         let no_effects = Prefs {
             hyperspace_effects: false,
+            quicktime_movies: true,
             ..effects_at(4)
         };
         app.screen.prefs = vec![no_effects];
@@ -2098,6 +2100,7 @@ mod tests {
             GameSettings {
                 audio: AudioSettings::default().with_prefs(effects_at(4).sound),
                 hyperspace_effects: false,
+                quicktime_movies: true,
             }
         );
         let saved: serde_json::Value =

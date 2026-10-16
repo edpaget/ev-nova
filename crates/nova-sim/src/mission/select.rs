@@ -9,6 +9,10 @@
 //! compares the places of the two systems (their co-located chain heads)
 //! and their own Con links, and asks that every system at the stellar's
 //! place list it, the last alone with no origin, as availability asks.
+//! Whether an ally code, 15000-19999, also takes a stellar by the system
+//! at its index is as
+//! [`mission_ally_index`](crate::RuleKey::MissionAllyIndex) reads the
+//! original's test (@0x9a7af-0x9a7c8, @0x9a8e5-0x9a8fa).
 //!
 //! The galaxy it chooses from is a [`World`]: every active stellar,
 //! overlaid ([`stellars_of`]), where every listed stellar is
@@ -48,6 +52,59 @@ pub struct Stellar {
     /// (@0x9e60-0x9ee4), over the chain `_LoadObjectData` builds of every
     /// system at a place (@0x783d9-0x78517).
     pub listed_at_place: bool,
+    /// The government the system record at its index holds, the `sÿst`
+    /// with its ID, which an ally code's test reads beside `_GovtAllies`
+    /// (`_SelectMissionStellar` @0x9a7af-0x9a7c8, @0x9a8e5-0x9a8fa; see
+    /// `index_govt`): `None` when that slot matches no government.
+    pub index_govt: Option<GovtId>,
+}
+
+/// The highest system ID whose slot `_LoadObjectData` writes, for a
+/// catalog of systems `ids`. It loads `sÿst` 128 + i into slot i, from 0
+/// up, until it has loaded as many as `CountResources` counts
+/// (@0x77a14, @0x78393-0x783a1) or reached the array's end, 2175
+/// (@0x783b3): its highest ID when every one is in 128-2175, else 2175,
+/// as one it can never load keeps it going. With no system, only the
+/// first slot.
+fn written_to(ids: impl IntoIterator<Item = SystemId>) -> SystemId {
+    const LAST: SystemId = SystemId(2175);
+    let mut highest = SystemId(128);
+    for id in ids {
+        if !(SystemId(128)..=LAST).contains(&id) {
+            return LAST;
+        }
+        highest = highest.max(id);
+    }
+    highest
+}
+
+/// The government in the system array's slot at stellar `id`'s index,
+/// the catalog's `govt` of the system with that ID, as `_LoadObjectData`
+/// leaves it and as `_SelectMissionStellar` reads it (+0x8 @0x9a7ba,
+/// @0x9a8f2); the loader writes `written_to` and below. Nothing writes a
+/// system's +0x8 in play, so no overlay counts, and no visibility test is
+/// made of it.
+///
+/// - A system with that ID: its catalog `Govt`, kept when it is 128-383
+///   and otherwise -1 (@0x77c2f-0x77c33, the range check @0x77d6b-0x77d81),
+///   so `None` for an independent one or one out of range.
+/// - A gap, no system with that ID at or below `written_to`: the sentinel
+///   0x8001 (@0x77a92), which matches no government, `None`.
+/// - Past `written_to`: a slot the loader never writes, of the array's
+///   plain `_NewPtr(0xfe000)` (`_InitObjects` @0x1b7f9-0x1b80d). This
+///   rests on that memory being zero in practice, as a fresh allocation
+///   of that size is on OS X: government index 0, `GovtId(128)`. Nothing
+///   in the original guarantees it.
+fn index_govt(
+    id: StellarId,
+    catalog: impl Fn(SystemId) -> Option<GovtId>,
+    written_to: SystemId,
+) -> Option<GovtId> {
+    let system = SystemId(id.0);
+    if system > written_to {
+        return Some(GovtId(128));
+    }
+    catalog(system).filter(|govt| (128..=383).contains(&govt.0))
 }
 
 /// Every stellar of `listed` that is active in `galaxy` with the player in
@@ -57,7 +114,9 @@ pub struct Stellar {
 /// that lists it and is not shadowed at its place, by
 /// `colocated_resolution`, else the player's system when that lists it),
 /// with the overlay's government and destroyed state, and whether every
-/// system at its system's place lists it ([`Stellar::listed_at_place`]).
+/// system at its system's place lists it ([`Stellar::listed_at_place`]),
+/// and the catalog government of the system at its index
+/// ([`Stellar::index_govt`]).
 ///
 /// These are `_SelectMissionStellar`'s candidates: every scan of it tests
 /// a stellar's active byte (+0x44) before its distance, which
@@ -78,6 +137,7 @@ pub fn stellars_of(
     player: SystemId,
 ) -> Vec<Stellar> {
     let map = galaxy.map();
+    let written_to = written_to(galaxy.catalog_systems());
     listed
         .iter()
         .filter_map(|stellar| {
@@ -94,6 +154,7 @@ pub fn stellars_of(
                     .places()
                     .at(system)
                     .all(|at| stellar.systems.contains(&at)),
+                index_govt: index_govt(id, |system| galaxy.record_govt(system), written_to),
             })
         })
         .collect()
@@ -146,6 +207,10 @@ pub struct World<'a> {
     /// [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance),
     /// from the rule set the caller holds (see [`candidates`]).
     pub distance: RuleSource,
+    /// Whether an ally code also takes a stellar by the system at its
+    /// index: [`mission_ally_index`](crate::RuleKey::MissionAllyIndex),
+    /// from the rule set the caller holds (see [`Kind::Ally`]).
+    pub ally_index: RuleSource,
 }
 
 impl World<'_> {
@@ -247,7 +312,11 @@ pub enum Kind {
     /// (@0x9a5a9-0x9a74f).
     Govt(Option<GovtId>),
     /// 15000-19999: of another government, allied with this one,
-    /// inhabited (@0x9a755-0x9a99a).
+    /// inhabited (@0x9a755-0x9a99a). By the engine's reading of
+    /// [`mission_ally_index`](crate::RuleKey::MissionAllyIndex), a stellar
+    /// of another government is also taken when the system at its index
+    /// has this one ([`Stellar::index_govt`], @0x9a7af-0x9a7c8,
+    /// @0x9a8e5-0x9a8fa), allied or not.
     Ally(GovtId),
     /// 20000-24999: not of this government, an independent included,
     /// inhabited (@0x9a9a0-0x9aaff).
@@ -345,8 +414,11 @@ fn normal_landable(stellar: &Stellar) -> bool {
 }
 
 impl Kind {
-    /// Whether `stellar` is of this kind, the governments as `govts` say.
-    fn takes(self, stellar: &Stellar, govts: &Governments) -> bool {
+    /// Whether `stellar` is of this kind, the governments as `world`'s
+    /// say, an ally code's index test as `world.ally_index` reads
+    /// [`mission_ally_index`](crate::RuleKey::MissionAllyIndex).
+    fn takes(self, stellar: &Stellar, world: &World) -> bool {
+        let govts = world.govts;
         let govt = stellar.govt;
         // Of a government, and another than `of`.
         let other = |of: GovtId| govt.is_some_and(|govt| govt != of);
@@ -354,7 +426,11 @@ impl Kind {
             Self::Inhabited => inhabited(stellar) && !has(stellar, StellarFlags::STATION),
             Self::Uninhabited => !inhabited(stellar) && !has(stellar, StellarFlags::STATION),
             Self::Govt(of) => govt == of && (inhabited(stellar) || govts.derelict(of)),
-            Self::Ally(of) => other(of) && inhabited(stellar) && govts.allies(govt, Some(of)),
+            Self::Ally(of) => {
+                let by_index =
+                    world.ally_index == RuleSource::Engine && stellar.index_govt == Some(of);
+                other(of) && inhabited(stellar) && (by_index || govts.allies(govt, Some(of)))
+            }
             Self::NotGovt(of) => govt != Some(of) && inhabited(stellar),
             Self::Enemy(of) => other(of) && inhabited(stellar) && govts.enemies(govt, Some(of)),
             Self::SharedClass(of) => {
@@ -393,7 +469,7 @@ pub fn candidates(
             id != origin
                 && id != exclude
                 && normal_landable(stellar)
-                && kind.takes(stellar, world.govts)
+                && kind.takes(stellar, world)
                 && world.distant(origin, stellar)
         })
         .map(|stellar| stellar.id)
@@ -444,7 +520,7 @@ fn drawable(
     world
         .stellars
         .iter()
-        .filter(|stellar| open(stellar) && kind.takes(stellar, world.govts))
+        .filter(|stellar| open(stellar) && kind.takes(stellar, world))
         .map(|stellar| stellar.id)
         .collect()
 }
@@ -595,6 +671,7 @@ mod tests {
             govt,
             destroyed: false,
             listed_at_place: true,
+            index_govt: None,
         }
     }
 
@@ -628,6 +705,7 @@ mod tests {
             govts: &govts,
             draw: RuleSource::Engine,
             distance: reading,
+            ally_index: RuleSource::Engine,
         };
         candidates(kind, origin.map(StellarId), None, &world)
             .into_iter()
@@ -836,6 +914,7 @@ mod tests {
                 govts: &govts,
                 draw: RuleSource::Engine,
                 distance: reading,
+                ally_index: RuleSource::Engine,
             };
             assert_eq!(
                 candidates(Kind::Inhabited, Some(StellarId(128)), None, &world),
@@ -950,6 +1029,7 @@ mod tests {
             govts: &govts,
             draw: RuleSource::Engine,
             distance: RuleSource::Bible,
+            ally_index: RuleSource::Engine,
         };
         assert_eq!(
             candidates(Kind::Inhabited, None, None, &world),
@@ -973,6 +1053,7 @@ mod tests {
             govts: &govts,
             draw: RuleSource::Engine,
             distance: RuleSource::Bible,
+            ally_index: RuleSource::Engine,
         };
         assert_eq!(
             candidates(Kind::Inhabited, Some(StellarId(128)), None, &world),
@@ -1008,6 +1089,7 @@ mod tests {
             govts: &govts,
             draw,
             distance,
+            ally_index: RuleSource::Engine,
         })
     }
 
@@ -1410,6 +1492,76 @@ mod tests {
         );
     }
 
+    /// Two visible systems, 130 and 131, share a place, and the player is
+    /// in 132, which lists neither 140 nor 141, so `holder`'s rescue
+    /// (`_HandleStellarSystemVisibility` @0x32c58-0x32cb3) gives neither to
+    /// the player's system. By [`CoLocated::Lowest`] 130 claims 140 and
+    /// marks 131 done (`_PropagateMissionBitEffects` @0x9977e-0x997ae), so
+    /// 141, which only 131 lists, keeps no owner, is never set active, and
+    /// a -2 from 150 can't draw it. By [`CoLocated::Itself`] 131 owns 141
+    /// and the draw can take it.
+    ///
+    /// The rest of the rule is pinned elsewhere: the rescue in a shadowed
+    /// player's system by
+    /// `a_stellar_rescued_into_the_players_system_is_a_candidate_there`,
+    /// the chain taking in a hidden member by
+    /// `a_stellar_is_listed_at_its_place_when_every_system_there_lists_it`,
+    /// the readers that fall back to `_FindSystemFromStellar` by
+    /// `whereabouts_hold_the_rescued_holder_and_what_find_system_from_stellar_gives`
+    /// and `the_travel_system_is_the_holders_stand_in_else_find_system_from_stellar`,
+    /// and the session's wiring of the rule by
+    /// `by_the_engine_a_place_of_two_visible_systems_is_the_lowest_one`.
+    #[test]
+    fn a_random_draw_takes_a_stellar_only_a_shadowed_system_lists_only_by_the_other_reading() {
+        let systems: Vec<StarSystem> = vec![
+            star(130, (0.0, 0.0), &[]),
+            star(131, (0.0, 0.0), &[]),
+            star(132, (200.0, 0.0), &[]),
+        ];
+        let landable = |id, systems: &[i16]| ListedStellar {
+            id: StellarId(id),
+            systems: systems.iter().copied().map(SystemId).collect(),
+            flags: StellarFlags::CAN_LAND,
+            flags2: 0,
+            govt: None,
+            min_status: 0,
+        };
+        let listed = [
+            landable(140, &[130, 131]),
+            landable(141, &[131]),
+            landable(150, &[132]),
+        ];
+        let govts = govts();
+        let pool_of = |colocated| {
+            let mut galaxy = OverlaidGalaxy::new(systems.clone(), GalaxyOverlay::default());
+            galaxy.set_colocated(colocated);
+            let stellars = stellars_of(&galaxy, &listed, SystemId(132));
+            let world = World {
+                stellars: &stellars,
+                placed: &[],
+                map: galaxy.map(),
+                govts: &govts,
+                draw: RuleSource::Engine,
+                distance: RuleSource::Engine,
+                ally_index: RuleSource::Engine,
+            };
+            pool(Kind::Inhabited, Some(StellarId(150)), None, &world)
+                .iter()
+                .map(|id| id.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            pool_of(CoLocated::Lowest),
+            [140],
+            "131 is shadowed by 130 and claims nothing, and the player's 132 doesn't list 141"
+        );
+        assert_eq!(
+            pool_of(CoLocated::Itself),
+            [140, 141],
+            "131 stands for itself and owns 141"
+        );
+    }
+
     #[test]
     fn the_stellars_of_the_visible_systems_go_to_the_lowest_id_listing_each() {
         let mut overlay = GalaxyOverlay::default();
@@ -1450,6 +1602,8 @@ mod tests {
             govt,
             destroyed,
             listed_at_place: true,
+            // Past 132, the last system: never written, index 0.
+            index_govt: Some(FED),
         };
         assert_eq!(
             stellars,
@@ -1468,6 +1622,7 @@ mod tests {
             govts: &govts,
             draw: RuleSource::Engine,
             distance: RuleSource::Engine,
+            ally_index: RuleSource::Engine,
         };
         assert_eq!(world.system_of(StellarId(160)), Some(SystemId(132)));
         assert_eq!(world.system_of(StellarId(128)), None, "in a hidden system");
@@ -1571,6 +1726,7 @@ mod tests {
             govts: &govts,
             draw: RuleSource::Engine,
             distance: RuleSource::Engine,
+            ally_index: RuleSource::Engine,
         };
         for (at, id) in placed.iter().map(|placed| (placed.at, placed.id)) {
             assert_eq!(world.whereabouts(id), at, "{id:?}");
@@ -1579,6 +1735,271 @@ mod tests {
             world.whereabouts(StellarId(150)),
             Whereabouts::default(),
             "listed by no system"
+        );
+    }
+
+    /// Stellar `id` in `system`, inhabited, of `govt`, the system at its
+    /// index governed by `index_govt`.
+    fn indexed(system: i16, id: i16, govt: Option<GovtId>, index_govt: Option<GovtId>) -> Stellar {
+        Stellar {
+            index_govt,
+            ..at(system, id, 0, govt)
+        }
+    }
+
+    /// The world of `stellars` over [`map`] and [`govts`], an ally code's
+    /// index test read by `ally_index`, the draw and distance by the
+    /// engine, handed to `f`.
+    fn by_ally<T>(ally_index: RuleSource, stellars: &[Stellar], f: impl FnOnce(&World) -> T) -> T {
+        let (map, govts) = (map(), govts());
+        f(&World {
+            stellars,
+            placed: &[],
+            map: &map,
+            govts: &govts,
+            draw: RuleSource::Engine,
+            distance: RuleSource::Engine,
+            ally_index,
+        })
+    }
+
+    /// The candidates of `kind` from 128 among `stellars`, an ally code's
+    /// index test read by `ally_index`.
+    fn ally_candidates(ally_index: RuleSource, kind: Kind, stellars: &[Stellar]) -> Vec<i16> {
+        by_ally(ally_index, stellars, |world| {
+            candidates(kind, Some(StellarId(128)), None, world)
+                .into_iter()
+                .map(|id| id.0)
+                .collect()
+        })
+    }
+
+    #[test]
+    fn an_ally_code_takes_a_stellar_by_the_system_at_its_index_by_the_engine_only() {
+        let stellars = with_origin(&[
+            indexed(132, 140, Some(PIRATES), Some(FED)),
+            indexed(132, 141, Some(CIVVIES), None),
+        ]);
+        assert_eq!(
+            ally_candidates(RuleSource::Engine, Kind::Ally(FED), &stellars),
+            [140, 141],
+            "the pirates' 140 by the Federation's system at its index (@0x9a7af-0x9a7c8)"
+        );
+        assert_eq!(
+            ally_candidates(RuleSource::Bible, Kind::Ally(FED), &stellars),
+            [141],
+            "only the Civvies, allied by class"
+        );
+    }
+
+    #[test]
+    fn the_index_test_never_takes_an_independent_or_the_target_itself() {
+        let stellars = with_origin(&[
+            indexed(132, 140, None, Some(FED)),
+            indexed(132, 141, Some(FED), Some(FED)),
+        ]);
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                ally_candidates(reading, Kind::Ally(FED), &stellars),
+                [] as [i16; 0],
+                "refused before the index test (@0x9a794-0x9a7ad): {reading:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_index_test_needs_the_target_government() {
+        let stellars = with_origin(&[indexed(132, 140, Some(PIRATES), Some(CIVVIES))]);
+        assert_eq!(
+            ally_candidates(RuleSource::Engine, Kind::Ally(FED), &stellars),
+            [] as [i16; 0]
+        );
+    }
+
+    #[test]
+    fn the_index_test_still_needs_an_inhabited_stellar() {
+        let stellars = with_origin(&[Stellar {
+            index_govt: Some(FED),
+            ..at(132, 140, UNINHABITED, Some(PIRATES))
+        }]);
+        assert_eq!(
+            ally_candidates(RuleSource::Engine, Kind::Ally(FED), &stellars),
+            [] as [i16; 0],
+            "@0x9a825"
+        );
+    }
+
+    #[test]
+    fn only_the_ally_kind_reads_the_index_government() {
+        let stellars = with_origin(&[
+            indexed(132, 140, Some(PIRATES), Some(FED)),
+            indexed(132, 141, Some(CIVVIES), Some(FED)),
+            indexed(133, 150, Some(PIRATES), Some(CIVVIES)),
+            indexed(133, 151, Some(CIVVIES), Some(CIVVIES)),
+        ]);
+        for kind in [
+            Kind::Govt(Some(FED)),
+            Kind::Govt(Some(PIRATES)),
+            Kind::NotGovt(FED),
+            Kind::Enemy(FED),
+            Kind::Enemy(CIVVIES),
+            Kind::SharedClass(FED),
+            Kind::NoSharedClass(FED),
+            Kind::NoSharedClass(CIVVIES),
+            Kind::Inhabited,
+            Kind::Uninhabited,
+        ] {
+            assert_eq!(
+                ally_candidates(RuleSource::Engine, kind, &stellars),
+                ally_candidates(RuleSource::Bible, kind, &stellars),
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            ally_candidates(RuleSource::Engine, Kind::Ally(CIVVIES), &stellars),
+            [150],
+            "the pirates' 150 by the Civvies' system at its index, not 140 by the Federation's"
+        );
+    }
+
+    #[test]
+    fn the_draw_and_availability_take_the_index_stellar() {
+        let stellars = with_origin(&[
+            indexed(132, 140, Some(PIRATES), Some(FED)),
+            indexed(133, 150, Some(PIRATES), None),
+        ]);
+        let drawn = |reading| {
+            by_ally(reading, &stellars, |world| {
+                let mut chance = Draws::of(&[0]);
+                let chosen = select_stellar(15000, Some(StellarId(128)), None, world, &mut chance);
+                (chosen.map(|id| id.0), chance.asked)
+            })
+        };
+        assert_eq!(
+            drawn(RuleSource::Engine),
+            (Some(140), vec![1]),
+            "the draw's test (@0x9a8e5-0x9a8fa)"
+        );
+        assert_eq!(
+            drawn(RuleSource::Bible),
+            (Some(128), vec![]),
+            "no candidate: the origin, drawing nothing"
+        );
+        assert!(by_ally(RuleSource::Engine, &stellars, |world| selectable(
+            15000, world
+        )));
+        assert!(!by_ally(RuleSource::Bible, &stellars, |world| selectable(
+            15000, world
+        )));
+    }
+
+    /// The catalog of systems 130 (the Federation's), 131 (independent),
+    /// 133 (a `Govt` of 400) and 150 (the pirates'), as `index_govt` reads
+    /// it.
+    fn catalog_govt(system: SystemId) -> Option<GovtId> {
+        match system.0 {
+            130 => Some(FED),
+            133 => Some(GovtId(400)),
+            150 => Some(PIRATES),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_government_at_a_stellars_index_is_the_same_id_systems() {
+        let at = |id| index_govt(StellarId(id), catalog_govt, SystemId(150));
+        assert_eq!(at(130), Some(FED));
+        assert_eq!(at(150), Some(PIRATES), "the last system loaded");
+        assert_eq!(at(131), None, "independent: -1");
+        assert_eq!(
+            at(133),
+            None,
+            "outside 128-383 the loader writes -1 (@0x77d6b-0x77d81)"
+        );
+        assert_eq!(
+            at(140),
+            None,
+            "a gap keeps the sentinel 0x8001 (@0x77a92), which matches no government"
+        );
+        assert_eq!(
+            at(151),
+            Some(GovtId(128)),
+            "past the last system loaded the slot is never written (@0x78393-0x783a1) and reads _NewPtr's zeros, index 0"
+        );
+    }
+
+    #[test]
+    fn the_government_index_is_kept_from_128_to_383() {
+        let catalog = |system: SystemId| Some(GovtId(system.0));
+        let at = |id| index_govt(StellarId(id), catalog, SystemId(2175));
+        assert_eq!(at(128), Some(GovtId(128)));
+        assert_eq!(at(383), Some(GovtId(383)));
+        assert_eq!(at(384), None);
+        assert_eq!(
+            index_govt(StellarId(140), |_| Some(GovtId(127)), SystemId(2175)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_loader_writes_to_its_highest_system_when_it_can_reach_every_one() {
+        let ids = |ids: &[i16]| written_to(ids.iter().copied().map(SystemId));
+        assert_eq!(ids(&[128, 130, 150]), SystemId(150));
+        assert_eq!(ids(&[128, 2175]), SystemId(2175));
+        assert_eq!(
+            ids(&[128, 127]),
+            SystemId(2175),
+            "a system below 128 is counted (@0x77a14) but never loaded, so the loop runs to the array's end (@0x783b3)"
+        );
+        assert_eq!(ids(&[128, 2176]), SystemId(2175), "nor one above 2175");
+        assert_eq!(
+            ids(&[]),
+            SystemId(128),
+            "no system: the first slot is written before the count stops the loop"
+        );
+    }
+
+    #[test]
+    fn each_stellar_carries_the_catalog_government_at_its_index() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(140), Some(false));
+        overlay.set_govt(SystemId(141), Some(Some(PIRATES)));
+        let governed = |id: i16, govt| StarSystem {
+            govt,
+            ..star(id, (f32::from(id) * 100.0, 0.0), &[])
+        };
+        let galaxy = OverlaidGalaxy::new(
+            vec![
+                governed(130, None),
+                governed(140, Some(FED)),
+                governed(141, Some(CIVVIES)),
+                governed(143, None),
+            ],
+            overlay,
+        );
+        let stellars = stellars_of(
+            &galaxy,
+            &[
+                listed(140, &[130]),
+                listed(141, &[130]),
+                listed(142, &[130]),
+                listed(144, &[130]),
+            ],
+            SystemId(130),
+        );
+        let index_govts: Vec<(i16, Option<GovtId>)> = stellars
+            .iter()
+            .map(|stellar| (stellar.id.0, stellar.index_govt))
+            .collect();
+        assert_eq!(
+            index_govts,
+            [
+                (140, Some(FED)),
+                (141, Some(CIVVIES)),
+                (142, None),
+                (144, Some(GovtId(128))),
+            ],
+            "the hidden 140 counts, 141's overlaid government does not (+0x8 is never written in play), 142 is a gap and 144 past the last system"
         );
     }
 }

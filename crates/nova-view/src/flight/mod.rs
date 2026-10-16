@@ -23,8 +23,6 @@
 //!   fades it.
 //! - [`jump`]: the hyperspace jump's [`JumpEffect`], the stars streaking
 //!   and the screen fading to white and back.
-//! - [`missions`]: the [`FlightMissionDialogs`], the mission texts and
-//!   the mission info screen shown over flight.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
 //! - `pen`: the `Pen` the HUD's panels set their text with, and
@@ -52,7 +50,6 @@ pub mod flash;
 pub mod floating;
 pub mod hud;
 pub mod jump;
-pub mod missions;
 mod pen;
 pub mod radar;
 pub mod sprite;
@@ -66,6 +63,5 @@ pub use catalog::{
 };
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
-pub use missions::FlightMissionDialogs;
 pub use sprite::rotation_frame;
 pub use view::{FlightOverlays, FlightView, SharedChance};

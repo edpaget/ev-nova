@@ -14,7 +14,7 @@ use crate::ai::Goal;
 use crate::catalog::{GovtRecord, MissionId, MissionRecord, ShipId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::ShipRef;
-use crate::legal::{self, Crime, LegalCode};
+use crate::legal::{Crime, LegalCode};
 use crate::market::Good;
 use crate::message::SimMessage;
 use crate::mission::cargo::{
@@ -32,7 +32,12 @@ impl Session {
     /// @0xa1f28-0xa1fbf): with `PickupMode` 0 it is aboard, whatever its
     /// type, and its `LoadCargText` is shown, filled for the slot.
     /// Nothing when the slot no longer holds the mission.
-    pub(super) fn load_at_accept(&mut self, slot: u8, record: &MissionRecord) {
+    pub(super) fn load_at_accept(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        chance: &mut dyn Chance,
+    ) {
         if !loads_at_accept(record) {
             return;
         }
@@ -40,7 +45,7 @@ impl Session {
             return;
         };
         active.aboard = true;
-        self.show_mission_text(MissionTextKind::LoadCargo, record.id, Some(slot));
+        self.show_mission_text(MissionTextKind::LoadCargo, record.id, Some(slot), chance);
     }
 
     /// The cargo check of the mission in `slot` as the player lands on
@@ -53,7 +58,12 @@ impl Session {
     /// reaches it. Then the cargo is dropped off as [`drops_off`] says,
     /// showing its `DumpCargoText` and, when it has one, resetting
     /// ([`Session::reset_precalced`], @0x9eff9).
-    pub(super) fn cargo_at_landing(&mut self, slot: u8, stellar: StellarId) {
+    pub(super) fn cargo_at_landing(
+        &mut self,
+        slot: u8,
+        stellar: StellarId,
+        chance: &mut dyn Chance,
+    ) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
@@ -61,7 +71,7 @@ impl Session {
         let at_destination = self.docked_at_stop(active.destination, stellar);
         let at_return = self.docked_at_stop(active.return_to, stellar);
         if at_destination {
-            let reached = !picks_up_at_destination(&record, active) || self.pick_up(slot);
+            let reached = !picks_up_at_destination(&record, active) || self.pick_up(slot, chance);
             if let Some(active) = self.slot_holding(slot, record.id)
                 && reached
             {
@@ -79,7 +89,7 @@ impl Session {
             // mission has one (@0x9ef82-0x9eff9; see the `precalced`
             // module). One whose text resource is missing has none here,
             // where the original shows an empty dialog and resets.
-            if self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot)) {
+            if self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot), chance) {
                 self.reset_precalced();
             }
         }
@@ -109,7 +119,7 @@ impl Session {
 
     /// Picks up the cargo of the mission in `slot` at its destination:
     /// whether it is aboard now, its `LoadCargText` shown.
-    fn pick_up(&mut self, slot: u8) -> bool {
+    fn pick_up(&mut self, slot: u8, chance: &mut dyn Chance) -> bool {
         let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
             return false;
         };
@@ -119,7 +129,7 @@ impl Session {
         if let Some(active) = self.slot_holding(slot, mission) {
             active.aboard = true;
         }
-        self.show_mission_text(MissionTextKind::LoadCargo, mission, Some(slot));
+        self.show_mission_text(MissionTextKind::LoadCargo, mission, Some(slot), chance);
         true
     }
 
@@ -135,6 +145,9 @@ impl Session {
     /// boxes behind the player and its trader escorts, drawing on
     /// `chance` (see the `cargo_boxes` module); landed, neither.
     pub fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
+        // A new run of docked scripts, its failures' `OnFailure` (see
+        // [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
         let goods = self.pilot.goods_held();
         let decided = jettison(
             &self.pilot.missions,
@@ -265,8 +278,7 @@ impl Session {
         else {
             return;
         };
-        let changes = law.penalties(Crime::Smuggle, Some(govt_id), &self.govts);
-        legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+        self.convict_of(law, Crime::Smuggle, Some(govt_id));
         self.lose_ranks_to(Crime::Smuggle, Some(govt_id));
         self.set_on_player(id);
         let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = found;
@@ -466,7 +478,7 @@ mod tests {
             .with_strings(Rc::new(Cargoes));
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         let _ = session.settle_script(catalog, &mut NeverFires);
-        let _ = session.take_mission_texts();
+        let _ = session.take_texts_only();
         session
     }
 
@@ -502,6 +514,8 @@ mod tests {
             kind,
             mission: MissionId(mission),
             text: text.to_owned(),
+            graphic: None,
+            movie: None,
         }
     }
 
@@ -520,7 +534,7 @@ mod tests {
             .expect("accepted");
         assert!(aboard(&session, slot));
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [
                 text(MissionTextKind::Brief, 140, "Brief."),
                 text(
@@ -549,7 +563,7 @@ mod tests {
             .expect("accepted");
         assert!(aboard(&session, slot));
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::Brief, 140, "Brief.")],
             "no LoadCargText"
         );
@@ -568,7 +582,7 @@ mod tests {
                 .expect("accepted");
             assert!(!aboard(&session, slot), "{mode}");
             assert_eq!(
-                session.take_mission_texts(),
+                session.take_texts_only(),
                 [text(MissionTextKind::Brief, 140, "Brief.")],
                 "{mode}"
             );
@@ -591,7 +605,7 @@ mod tests {
         assert_eq!(session.pilot().total_cargo(), 0);
         assert!(
             session
-                .take_mission_texts()
+                .take_texts_only()
                 .iter()
                 .all(|shown| shown.kind != MissionTextKind::LoadCargo)
         );
@@ -642,7 +656,7 @@ mod tests {
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
-        let _ = session.take_mission_texts();
+        let _ = session.take_texts_only();
         session
     }
 
@@ -652,7 +666,7 @@ mod tests {
 
     fn kinds(session: &mut Session) -> Vec<MissionTextKind> {
         session
-            .take_mission_texts()
+            .take_texts_only()
             .into_iter()
             .map(|shown| shown.kind)
             .collect()
@@ -670,7 +684,7 @@ mod tests {
         assert!(aboard(&session, 0));
         assert!(reached(&session));
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(
                 MissionTextKind::LoadCargo,
                 140,
@@ -691,7 +705,7 @@ mod tests {
         session.pilot.missions.get_mut(0).expect("held").cargo_tons = 21;
         land_on(&mut session, &catalog, 129);
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)],
             "20 holds"
         );
@@ -701,7 +715,7 @@ mod tests {
         session.pilot.cargo.insert(Good::Commodity(0), 16);
         land_on(&mut session, &catalog, 129);
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::NoRoom, 140, NO_SPACE_TO_LOAD)],
             "4 free"
         );
@@ -749,13 +763,33 @@ mod tests {
         assert!(!session.pick_up_boarded_cargo(0));
         assert!(!aboard(&session, 0));
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)]
         );
         let catalog = cargo_catalog(vec![round_trip(140, 1, 1)], vec![]);
         let mut session = accepted(&catalog);
         assert!(!session.pick_up_boarded_cargo(0), "PickupMode 1");
         assert!(!aboard(&session, 0));
+    }
+
+    #[test]
+    fn a_pickup_no_space_text_reads_the_last_desc_loaded() {
+        use crate::catalog::DescMovie;
+        let catalog = cargo_catalog(vec![round_trip(140, 2, 1)], vec![]);
+        let mut session = accepted(&catalog);
+        session.pilot.missions.get_mut(0).expect("held").cargo_tons = 21;
+        let movie = DescMovie::from_desc("Last.mov", 0x0001);
+        let _ = session.load_description(Some("Earlier."), movie.as_ref(), &mut NeverFires);
+        assert!(!session.pick_up_boarded_cargo(0));
+        assert_eq!(
+            session.take_texts_only(),
+            [MissionText {
+                movie,
+                ..text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)
+            }],
+            "the STR# text loads no dësc (@0x98292-0x982ff), so its after-check reads the \
+             last one loaded (@0x5b40b)"
+        );
     }
 
     /// Makes rank 200 active outside any reset, as no set expression can,
@@ -800,7 +834,7 @@ mod tests {
             if pickup_mode == 2 {
                 assert!(session.pick_up_boarded_cargo(0), "a boarding pickup");
             } else {
-                session.cargo_at_landing(0, StellarId(128));
+                session.cargo_at_landing(0, StellarId(128), &mut NeverFires);
             }
             assert!(aboard(&session, 0), "{pickup_mode}");
             assert_eq!(
@@ -853,7 +887,7 @@ mod tests {
             // 30 tons of goods in 20 holds, set up past the landing's reset.
             session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
             convicted(&mut session);
-            session.cargo_at_landing(0, StellarId(128));
+            session.cargo_at_landing(0, StellarId(128), &mut NeverFires);
             assert!(!aboard(&session, 0), "{dump:?}: dropped off");
             assert_eq!(session.scan_latches == Latches::ARMED, resets, "{dump:?}");
             let food = if resets { 20 } else { 30 };
@@ -886,7 +920,7 @@ mod tests {
         land_on(&mut session, &catalog, 129);
         assert!(!aboard(&session, 0));
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(
                 MissionTextKind::DumpCargo,
                 140,
@@ -1034,7 +1068,7 @@ mod tests {
         let mut session = accepted(&catalog);
         land_on(&mut session, &catalog, 129);
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::DumpCargo, 140, "Dumped.")]
         );
     }
@@ -1086,7 +1120,7 @@ mod tests {
         }
         session.pilot.cargo.insert(Good::Commodity(0), 3);
         session.pilot.cargo.insert(Good::Junk(JunkId(146)), 2);
-        let _ = session.take_mission_texts();
+        let _ = session.take_texts_only();
         session
     }
 
@@ -1631,6 +1665,26 @@ mod tests {
                 junk: false,
                 outfits: true
             }
+        );
+    }
+
+    #[test]
+    fn a_smuggling_conviction_walks_the_records_from_the_players_system() {
+        let mut catalog = contraband_catalog(500);
+        for system in &mut catalog.star_map {
+            system.govt = Some(GovtId(128));
+        }
+        let mut session = smuggler(&catalog, 2, 0, 1200);
+        assert_eq!(session.system(), SystemId(130));
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.take_messages(), [illegal_junk(500)]);
+        let records =
+            [130, 131, 132, 133].map(|system| session.pilot().system_record(SystemId(system)));
+        assert_eq!(
+            records,
+            [-5, -3, -2, 0],
+            "SmugPenalty in the player's system, decayed by 0.65 a jump along its \
+             links; 133, linked to nothing, untouched"
         );
     }
 

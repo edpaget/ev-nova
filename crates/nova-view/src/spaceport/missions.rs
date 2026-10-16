@@ -44,9 +44,8 @@ use std::time::Duration;
 use nova_sim::mission::screens::{
     ABORT_LABEL, ACCEPT_LABEL, ACTIVE_MISSIONS, AVAILABLE_HERE, FAILED_MARK,
 };
-use nova_sim::{InfoRow, MissionComputer, MissionId, MissionInfo};
+use nova_sim::{ComputerRow, InfoRow, MissionComputer, MissionId, MissionInfo};
 
-use super::bar::MISSION_INFO_KEY;
 use super::layout::LEAVE_LABEL;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -61,6 +60,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::RowList;
 
@@ -137,11 +137,14 @@ pub struct MissionComputerScreen {
     computer: MissionComputer,
     /// The mission Accept asked for, until it is taken.
     accepted: Option<MissionId>,
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last taken.
     info_requested: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info_requested: bool,
+    /// The offer shown selected whose text is to be loaded, until it is
+    /// taken.
+    text_request: Option<MissionId>,
     closed: bool,
 }
 
@@ -195,6 +198,7 @@ impl MissionComputerScreen {
             accepted: None,
             info_requested: false,
             player_info_requested: false,
+            text_request: None,
             closed: false,
         };
         screen.set_computer(computer);
@@ -236,7 +240,7 @@ impl MissionComputerScreen {
         self.accepted.take()
     }
 
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last asked (`_DoMissionDialog` item 10,
     /// @0xa3e37-0xa3ec1).
     pub fn take_info_request(&mut self) -> bool {
@@ -281,7 +285,8 @@ impl MissionComputerScreen {
         self.computer.rows.get(index).map(|row| row.mission)
     }
 
-    /// Shows the selected offer's name and text, or none.
+    /// Shows the selected offer's name and text, or none, and asks for
+    /// its text to be loaded ([`MissionComputerScreen::take_text_request`]).
     fn show_selected(&mut self) {
         let Ok(laid) = &mut self.laid else {
             return;
@@ -294,6 +299,27 @@ impl MissionComputerScreen {
             .set_text(NAME_ITEM, row.map_or("", |row| row.name.as_str()));
         laid.dialog
             .set_text(TEXT_ITEM, row.map_or("", |row| row.text.as_str()));
+        self.text_request = row.map(|row| row.mission);
+    }
+
+    /// The offer shown selected since this was last taken, once, whose
+    /// text is to be loaded as the original's selection loads it
+    /// (`_MissionFilter` @0x9f9bd): whoever flies the ship answers with
+    /// [`MissionComputerScreen::show_row`].
+    pub fn take_text_request(&mut self) -> Option<MissionId> {
+        self.text_request.take()
+    }
+
+    /// Shows `row`, its name and text loaded, while its offer is the one
+    /// selected; otherwise nothing changes.
+    pub fn show_row(&mut self, row: &ComputerRow) {
+        if self.selected_mission() != Some(row.mission) {
+            return;
+        }
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_text(NAME_ITEM, &row.name);
+            laid.dialog.set_text(TEXT_ITEM, &row.text);
+        }
     }
 
     /// Activates dialog item `item`: Accept asks for the selected mission
@@ -321,13 +347,7 @@ impl Screen for MissionComputerScreen {
             self.closed = true;
             return ScreenAction::None;
         }
-        if *input
-            == (Input::Key {
-                key: MISSION_INFO_KEY,
-                pressed: true,
-                repeat: false,
-            })
-        {
+        if is_mission_info_press(input) {
             self.info_requested = true;
             return ScreenAction::None;
         }
@@ -416,6 +436,9 @@ pub struct MissionInfoScreen {
     info: MissionInfo,
     /// The slot Abort asked for, until it is taken.
     abort: Option<u8>,
+    /// The slot shown selected whose text is to be loaded, until it is
+    /// taken.
+    text_request: Option<u8>,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -462,6 +485,7 @@ impl MissionInfoScreen {
                 today: String::new(),
             },
             abort: None,
+            text_request: None,
             closed: false,
             sounds: vec![Sound::Ui(UiSound::MissionInfoOpened)],
         };
@@ -554,6 +578,26 @@ impl MissionInfoScreen {
             .set_text(INFO_TEXT_ITEM, row.map_or("", |row| row.text.as_str()));
         laid.dialog
             .set_greyed(ABORT_ITEM, !row.is_some_and(|row| row.abortable));
+        self.text_request = row.map(|row| row.slot);
+    }
+
+    /// The slot shown selected since this was last taken, once, whose
+    /// `QuickBrief` is to be loaded as the original's selection loads it
+    /// (`_MissionInfoFilter` @0x9d89f): whoever flies the ship answers
+    /// with [`MissionInfoScreen::show_text`].
+    pub fn take_text_request(&mut self) -> Option<u8> {
+        self.text_request.take()
+    }
+
+    /// Shows `text`, slot `slot`'s loaded, while that slot is the one
+    /// selected; otherwise nothing changes.
+    pub fn show_text(&mut self, slot: u8, text: &str) {
+        if self.selected_row().map(|row| row.slot) != Some(slot) {
+            return;
+        }
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_text(INFO_TEXT_ITEM, text);
+        }
     }
 
     /// Activates dialog item `item`: Done closes, and Abort asks for the
@@ -587,7 +631,7 @@ impl Screen for MissionInfoScreen {
                 repeat: false,
             } = *input
             {
-                self.closed = true;
+                self.close();
             }
             return ScreenAction::None;
         };
@@ -643,6 +687,7 @@ impl Screen for MissionInfoScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::ui::mission_info::MISSION_INFO_KEY;
     use nova_sim::ComputerRow;
 
     use super::*;
@@ -840,6 +885,37 @@ mod tests {
         click_at(&mut screen, first);
         assert_eq!(item_text(&screen, NAME_ITEM), "Run to Mars");
         assert!(!screen.closed());
+    }
+
+    #[test]
+    fn each_offer_shown_selected_asks_once_for_its_text_to_be_loaded() {
+        let mut screen = screen();
+        assert_eq!(
+            screen.take_text_request(),
+            Some(MissionId(130)),
+            "the first, as it opens (_DoMissionDialog @0xa3a96)"
+        );
+        assert_eq!(screen.take_text_request(), None, "once");
+        screen.input(&key(Key::Down));
+        assert_eq!(screen.take_text_request(), Some(MissionId(131)));
+        screen.input(&key(Key::Escape));
+        assert_eq!(screen.take_text_request(), None, "no new selection");
+    }
+
+    #[test]
+    fn a_loaded_row_shows_its_name_and_text_while_it_is_selected() {
+        let mut screen = screen();
+        let _ = screen.take_text_request();
+        screen.show_row(&row(131, "Walk loaded", "Not now."));
+        assert_eq!(
+            item_text(&screen, TEXT_ITEM),
+            "Take this to Mars.",
+            "131 is not selected"
+        );
+        screen.show_row(&row(130, "Run, loaded", "Loaded text."));
+        assert_eq!(item_text(&screen, NAME_ITEM), "Run, loaded");
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Loaded text.");
+        assert_eq!(screen.take_text_request(), None, "showing asks nothing");
     }
 
     #[test]
@@ -1139,6 +1215,22 @@ mod tests {
     }
 
     #[test]
+    fn each_mission_shown_selected_asks_once_for_its_text_to_be_loaded() {
+        let mut screen = info_screen();
+        let first = screen.info().rows[0].slot;
+        assert_eq!(screen.take_text_request(), Some(first), "as it opens");
+        assert_eq!(screen.take_text_request(), None, "once");
+        screen.show_text(first, "Loaded brief.");
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Loaded brief.");
+        screen.show_text(first + 1, "Another's.");
+        assert_eq!(
+            info_text(&screen, INFO_TEXT_ITEM),
+            "Loaded brief.",
+            "not selected"
+        );
+    }
+
+    #[test]
     fn done_return_and_escape_close_mission_info() {
         for close in [Key::Enter, Key::Escape] {
             let mut screen = info_screen();
@@ -1196,6 +1288,37 @@ mod tests {
     }
 
     /// `_TrackMissionInfoButtons` @0x2850e plays nothing under the pointer.
+    #[test]
+    fn mission_info_beeps_as_it_opens_and_as_it_closes() {
+        const OPENED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoOpened);
+        const CLOSED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoClosed);
+        let mut screen = info_screen();
+        assert_eq!(screen.take_sounds(), [OPENED]);
+        click_info(&mut screen, INFO_DONE_ITEM);
+        assert_eq!(screen.take_sounds(), [CLOSED]);
+        for close in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            screen.take_sounds();
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds(), [CLOSED], "{close:?}");
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds(), [], "{close:?} once closed");
+        }
+        let mut screen = info_screen();
+        screen.take_sounds();
+        screen.set_info(info());
+        assert_eq!(screen.take_sounds(), [], "still listing");
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [CLOSED], "emptied");
+        let mut broken =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
+        broken.input(&key(Key::Escape));
+        assert_eq!(broken.take_sounds(), [OPENED], "without its dialog");
+    }
+
     #[test]
     fn mission_infos_pointer_click_is_silent_and_a_click_abandoned_does_nothing() {
         let mut screen = info_screen();

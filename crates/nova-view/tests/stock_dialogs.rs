@@ -435,6 +435,8 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         let music = prefs.music_volume().rects().bounds();
         assert_eq!(prefs.hyperspace_effects().label(), HYPERSPACE_EFFECTS_LABEL);
         assert!(prefs.hyperspace_effects().enabled(), "{}", path.display());
+        assert_eq!(prefs.quicktime_movies().label(), "QuickTime Movies");
+        assert!(prefs.quicktime_movies().enabled(), "{}", path.display());
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
         let name = path.display();
@@ -445,7 +447,11 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         );
         assert!(dialog.bounds().contains(music.min) && dialog.bounds().contains(music.max));
         // Nothing else is drawn where the music volume is.
-        for toggle in prefs.inert().iter().chain([prefs.hyperspace_effects()]) {
+        for toggle in prefs
+            .inert()
+            .iter()
+            .chain([prefs.hyperspace_effects(), prefs.quicktime_movies()])
+        {
             let rect = toggle.rect();
             let apart = rect.max.x <= music.min.x
                 || rect.min.x >= music.max.x
@@ -453,7 +459,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 || rect.min.y >= music.max.y;
             assert!(apart, "{name}: {}", toggle.label());
         }
-        assert_eq!(prefs.inert().len(), 10, "{name}");
+        assert_eq!(prefs.inert().len(), 9, "{name}: QuickTime Movies works");
     }
 }
 
@@ -702,10 +708,12 @@ fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled()
             OfferPrompt {
                 mission: MissionId(128),
                 text: "Go.".to_owned(),
+                graphic: None,
                 labels: OfferLabels {
                     accept: "Yes".to_owned(),
                     refuse: Some("No".to_owned()),
                 },
+                movie: None,
             },
             ButtonStyle::STOCK,
         );
@@ -750,6 +758,87 @@ fn the_mission_screens_pictures_decode_at_their_dialogs_sizes() {
         (OFFER_FRAME.top_height, OFFER_FRAME.bottom_height),
         (9.0, 40.0)
     );
+}
+
+#[test]
+fn the_picture_variants_lay_out_with_their_items_where_recorded() {
+    use nova_view::spaceport::bar::{BAR_PICTURE_ITEM, PICTURE_BAR_DIALOG};
+    use nova_view::spaceport::offer::{OFFER_PICTURE_ITEM, PICTURE_OFFER_DIALOG};
+    use nova_view::ui::desc::{DESC_PICTURE_ITEM, PICTURE_DESC_DIALOG};
+    for (_, path) in builds() {
+        let ui = interface(&path);
+        for (id, size, items) in [
+            (
+                PICTURE_OFFER_DIALOG,
+                (651.0, 244.0),
+                vec![
+                    (1, rect(221.0, 213.0, 99.0, 25.0)),
+                    (2, rect(115.0, 213.0, 99.0, 25.0)),
+                    (3, rect(13.0, 7.0, 413.0, 200.0)),
+                    (6, rect(170.0, 213.0, 99.0, 25.0)),
+                    (OFFER_PICTURE_ITEM, rect(441.0, 7.0, 200.0, 200.0)),
+                ],
+            ),
+            (
+                PICTURE_DESC_DIALOG,
+                (648.0, 245.0),
+                vec![
+                    (DONE_ITEM, rect(173.0, 214.0, 99.0, 25.0)),
+                    (DESC_PICTURE_ITEM, rect(439.0, 7.0, 200.0, 200.0)),
+                    (TEXT_ITEM, rect(12.0, 7.0, 415.0, 201.0)),
+                ],
+            ),
+            (
+                PICTURE_BAR_DIALOG,
+                (266.0, 306.0),
+                vec![
+                    (1, rect(157.0, 276.0, 99.0, 25.0)),
+                    (2, rect(157.0, 247.0, 99.0, 25.0)),
+                    (3, rect(7.0, 275.0, 146.0, 26.0)),
+                    (5, rect(7.0, 246.0, 146.0, 26.0)),
+                    (7, rect(11.0, 128.0, 242.0, 114.0)),
+                    (BAR_PICTURE_ITEM, rect(3.0, 3.0, 260.0, 120.0)),
+                ],
+            ),
+        ] {
+            let template = ui.dialog_template(id).expect("converts");
+            assert_eq!(
+                (template.bounds.width(), template.bounds.height()),
+                size,
+                "DLOG {id}"
+            );
+            assert_eq!(template.placement, Placement::Center, "DLOG {id}");
+            for (item, bounds) in items {
+                assert_eq!(
+                    template.items[item - 1].bounds,
+                    bounds,
+                    "DLOG {id} item {item}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_picture_variants_frames_decode_at_their_sizes() {
+    use nova_view::spaceport::bar::PICTURE_BACKGROUND;
+    use nova_view::spaceport::offer::PICTURE_FRAME as OFFER_PICTURE_FRAME;
+    use nova_view::ui::desc::PICTURE_FRAME as DESC_PICTURE_FRAME;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let size = |key: ImageKey| {
+        let image = picture(&data, key.id);
+        (image.width(), image.height())
+    };
+    assert_eq!(
+        size(OFFER_PICTURE_FRAME),
+        (649, 244),
+        "Single mission + pict"
+    );
+    assert_eq!(size(DESC_PICTURE_FRAME), (649, 244), "Desc + pict");
+    assert_eq!(size(PICTURE_BACKGROUND), (266, 306), "Bar + pict");
 }
 
 #[test]

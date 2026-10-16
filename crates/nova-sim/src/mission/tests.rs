@@ -48,6 +48,7 @@ fn at(system: i16, id: i16, govt: Option<GovtId>) -> Stellar {
         govt,
         destroyed: false,
         listed_at_place: true,
+        index_govt: None,
     }
 }
 
@@ -146,6 +147,7 @@ impl Galaxy {
                 govts: &self.govts,
                 draw: self.rules.source_for(RuleKey::MissionStellarDraw),
                 distance: self.rules.source_for(RuleKey::MissionStellarDistance),
+                ally_index: self.rules.source_for(RuleKey::MissionAllyIndex),
             },
             player: Player {
                 record: 0,
@@ -186,6 +188,7 @@ fn refusals_with(visit: &Visit, mission: &MissionRecord, rolls: &RollTable) -> V
         mission,
         venue: Venue::of(mission.avail_loc),
         rolls,
+        cached_avail_bits: None,
     };
     availability()
         .all_refusals(&facts)
@@ -260,6 +263,7 @@ fn all_refusals_lists_every_failing_field_with_its_descriptor() {
         mission: &refused,
         venue: Venue::Computer,
         rolls: &ones(),
+        cached_avail_bits: None,
     };
     let named: Vec<(&str, Verdict<Refusal>)> = availability()
         .all_refusals(&facts)
@@ -298,6 +302,7 @@ fn the_facts_hand_over_the_visits_rule_set() {
         mission: &mission,
         venue: Venue::Computer,
         rolls: &ones(),
+        cached_avail_bits: None,
     };
     assert_eq!(facts.rulebook(), &rules);
 }
@@ -320,6 +325,7 @@ fn avail_loc_0_is_the_computers_and_every_other_but_minus_1_and_2_outside() {
             mission: &mission,
             venue,
             rolls: &ones(),
+            cached_avail_bits: None,
         };
         availability().first_refusal(&facts, &mut NeverFires)
     };
@@ -369,6 +375,7 @@ fn a_ship_offers_avail_loc_2_alone_and_only_a_ship_does() {
             mission: &mission,
             venue,
             rolls: &ones(),
+            cached_avail_bits: None,
         };
         availability().first_refusal(&facts, &mut NeverFires)
     };
@@ -1667,6 +1674,7 @@ fn a_mission_refused_by_avail_random_stays_refused_and_rechecking_draws_nothing(
         mission: rare,
         venue: Venue::Computer,
         rolls: offers.table(),
+        cached_avail_bits: None,
     };
     let mut chance = Draws::of(&[]);
     for _ in 0..3 {
@@ -1699,6 +1707,46 @@ fn an_offer_dropped_leaves_the_others_and_the_stellar() {
     assert_eq!(ids(offers.at(Venue::Computer)), [132]);
     assert!(offers.at(Venue::Outside).is_empty());
     assert_eq!(offers.rolled_at(), Some(StellarId(128)));
+}
+
+/// The courier at the mission computer, and 131, 134 and 135 at the bar.
+fn three_at_the_bar() -> Vec<MissionRecord> {
+    let bar = |id| MissionRecord {
+        avail_loc: 1,
+        ..mission(id)
+    };
+    vec![courier(), bar(131), bar(134), bar(135)]
+}
+
+#[test]
+fn drop_at_removes_the_entry_at_the_index_and_nothing_past_the_end() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&three_at_the_bar(), &visit, &mut NeverFires);
+    assert_eq!(ids(offers.at(Venue::Outside)), [131, 134, 135]);
+    assert_eq!(offers.drop_at(Venue::Outside, 1), Some(MissionId(134)));
+    assert_eq!(ids(offers.at(Venue::Outside)), [131, 135]);
+    assert_eq!(offers.drop_at(Venue::Outside, 2), None, "past the end");
+    assert_eq!(ids(offers.at(Venue::Outside)), [131, 135]);
+    assert_eq!(offers.drop_at(Venue::Ship, 0), None, "never listed");
+    assert_eq!(offers.drop_at(Venue::Computer, 0), Some(MissionId(130)));
+    assert!(offers.at(Venue::Computer).is_empty());
+    assert_eq!(ids(offers.at(Venue::Outside)), [131, 135]);
+}
+
+#[test]
+fn position_finds_an_offer_at_its_venue_only() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&three_at_the_bar(), &visit, &mut NeverFires);
+    assert_eq!(offers.position(Venue::Outside, MissionId(134)), Some(1));
+    assert_eq!(offers.position(Venue::Outside, MissionId(131)), Some(0));
+    assert_eq!(offers.position(Venue::Computer, MissionId(134)), None);
+    assert_eq!(offers.position(Venue::Computer, MissionId(130)), Some(0));
+    assert_eq!(offers.position(Venue::Outside, MissionId(130)), None);
+    assert_eq!(offers.position(Venue::Ship, MissionId(131)), None);
 }
 
 #[test]

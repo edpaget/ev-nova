@@ -16,7 +16,7 @@
 //!
 //! | [`RuleKey`] | settings key | engine | Bible |
 //! |---|---|---|---|
-//! | [`CrimeGains`](RuleKey::CrimeGains) | `crime_gains` | a crime pleases every government not allied with the victim's ([`NovaLaw`](crate::NovaLaw)) | only the victim's enemies |
+//! | [`CrimeGains`](RuleKey::CrimeGains) | `crime_gains` | a crime pleases every government not allied with the victim's, and its systems along the crime's walk ([`NovaLaw`](crate::NovaLaw)) | only the victim's enemies |
 //! | [`EmptyBooty`](RuleKey::EmptyBooty) | `empty_booty` | boarding a ship of `Booty` 0 opens the plunder dialog anyway ([`NovaBoarding`](crate::NovaBoarding)) | the player is repelled |
 //! | [`CrewlessCapture`](RuleKey::CrewlessCapture) | `crewless_capture` | a player of no crew still has odds of 1 or more ([`NovaBoarding`](crate::NovaBoarding)) | no odds: it cannot capture |
 //! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding ([`NovaAi`](crate::NovaAi)) | interceptors only |
@@ -67,6 +67,8 @@
 //! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
 //! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the player leaves all the same, with no message |
 //! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
+//! | [`OutOfRangeMove`](RuleKey::OutOfRangeMove) | `out_of_range_move` | an `N` whose system is out of range (128-2175) runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x158e3, @0x1593f-0x159ad; [`ScriptEffectRules`](crate::ScriptEffectRules)) | it does nothing, as every other operator out of range does\* |
+//! | [`MissingSystemMove`](RuleKey::MissingSystemMove) | `missing_system_move` | an `M` or `N` to a system 128-2175 with no `sÿst` runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x15723, @0x158ea, @0x1593f-0x159ad; [`ScriptEffectRules`](crate::ScriptEffectRules)) | it does nothing\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
 //! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, the fleet's holds less the goods and the mission cargo aboard (`_TotalCargo` @0x4a0b), measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b, @0x70863-0x70888; [`Session`](crate::Session)) | tribbles goods grow only into that free space, and perishable goods always decay‡ |
 //! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
@@ -102,11 +104,15 @@
 //! | [`SecondarySale`](RuleKey::SecondarySale) | `secondary_sale` | the outfitter's sale lets go of the secondary selected when the sold outfit's own count falls to 0 and one of its `ModType` 1 slots names it, even with another outfit still mounting it (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82; [`Session`](crate::Session)) | the sale lets it go when it leaves the ship not carrying it\* |
 //! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see [`mission`](crate::mission)) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
 //! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
+//! | [`StartOutsideDialog`](RuleKey::StartOutsideDialog) | `start_outside_dialog` | an accept with no offer dialog open (an `S` outside `OnAccept` and `OnRefuse`, or an unrefusable offer with no text) leaves a destination that is the stellar docked at, or in flight the stellar target, unreached, and drops and refilters no offers; the unrefusable offer's caller then shifts the list as [`offer_shift`](RuleKey::OfferShift) reads it, which, the list left as it is, drops that offer itself under either reading of that key (`_DoMissionAccept` @0xa1fde, @0xa200b; `_OfferMissionFromPort` @0xa377d-0xa37a1; see [`mission`](crate::mission)) | every accept acts as if made from the offer dialog, so the unrefusable offer's accept drops and refilters the offers, and the engine's `offer_shift` then drops the next listed offer as well\* |
+//! | [`OfferShift`](RuleKey::OfferShift) | `offer_shift` | once an outside offer is answered, by an accept from the dialog, a refusal or the accept at once, unless the accept fails, the outside list loses the entry at the index the offer was found at, in the list as the answer left it: a dialog accept, whose own offer is dropped already, drops the next listed offer whatever its venue; a refusal whose `OnRefuse` refilters can leave the refused offer listed; the accept at once drops its own offer, or the next one too when `start_outside_dialog` reads otherwise (`_OfferMissionFromPort` @0xa377d-0xa37a1; see [`mission`](crate::mission)) | each answer drops only the answered offer, so the next offer is offered next\* |
+//! | [`DescMovieGlobals`](RuleKey::DescMovieGlobals) | `desc_movie_globals` | the movie checks read the last `dësc` loaded: a `STR#` text (no room, a cargo pickup with no space, the mission computer's refusal) plays that `dësc`'s after-movie once it closes, so inside an offer the offer's after-movie plays after the no-room text too; and the offer dialog's after-check reads what its answer left, so a `RefuseText`'s after-movie plays a second time and the offer's none (`_LoadDescription` @0x71895-0x718de, @0x71a5e-0x71a77; `_ShowTextDialog` @0x5b40b-0x5b44f; `_OfferOneMission` @0xa3580-0xa35b8) | each dialog plays only its own `dësc`'s movie: a `STR#` text none, and the offer dialog its own after-movie\* |
 //! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
 //! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
-//! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, and an accept in flight reaches no destination\* |
+//! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, or spöb 128 with none (@0xa14e8-0xa1518), and an accept in flight reaches no destination\* |
 //! | [`MissionStellarDraw`](RuleKey::MissionStellarDraw) | `mission_stellar_draw` | a random destination -2 is drawn as the original draws it: any inhabited, normal-landable non-station stellar of a visible system but the origin and the one excluded, at any distance, once its scan finds a distant inhabited stellar, station or not; the draw tests the distance of the scan's first hit, not of the stellar drawn (`_SelectMissionStellar` @0x9a26a, @0x9a2c7-0x9a330, the distance test @0x9a3ce-0x9a3db; see [`mission`](crate::mission))\*\*\*\*\* | only a candidate distant from the origin is drawn, as every other random code draws\* |
 //! | [`MissionStellarDistance`](RuleKey::MissionStellarDistance) | `mission_stellar_distance` | a random stellar is distant from an origin in a visible system when its system is not at the origin's place, neither system's own Con links reach a system at the other's place, and every system at its system's place lists it; with no origin, as availability asks, only by that last test; from an origin of no visible system nothing is distant (`_StellarsAreDistant` @0x9cb9-0x9ef6, the co-located chain walk @0x9e60-0x9ee4; see [`mission`](crate::mission)) | it is in another system that the visible map does not link with the origin's either way, and nothing is tested with no origin or an origin of no visible system\* |
+//! | [`MissionAllyIndex`](RuleKey::MissionAllyIndex) | `mission_ally_index` | a random destination 15000-19999 also takes a stellar of another government, not independent, when the system with the stellar's own ID has the target government in its catalog `Govt`, hidden or not; a stellar past the last system loaded reads government index 0, so matches only 15000 (`_SelectMissionStellar` @0x9a7af-0x9a7c8, @0x9a8e5-0x9a8fa; `_LoadObjectData` @0x77a7e-0x77d81; see [`mission`](crate::mission)) | only a stellar allied with the target government (`_GovtAllies`)\* |
 //! | [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) | `mission_stellar_identity` | a mission's destination or return is the stellar docked at when their IDs match, or when both have the same `xPos` and `yPos` and the same name, in any system (`_StellarsAreIdentical` @0xab35-0xac90, called by `_MissionLandCargoCheck` @0x9edfd, @0x9f01d and `_MissionLandCheck` @0xa1a37; see [`mission`](crate::mission)) | only the stellar of that ID, as `TravelStel` and `ReturnStel` each name one stellar by ID |
 //! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see [`legal`](crate::legal)) | one record a government, read through the system's (landing: the stellar's) government |
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
@@ -119,6 +125,13 @@
 //! | [`SwapArrives`](RuleKey::SwapArrives) | `swap_arrives` | the ship swapped in for a person raises no arrived count and leaves the appear timer running, so for a `ShipStart` of 1 or more the timer still brings another ship in beside it (`_HandlePlayerCommunication` @0x6244b-0x6252f, `_EnterMoreShips` @0x437ec-0x43aa5; see [`mission::ships`](crate::mission::ships)) | the swapped ship counts as the timer's arrival: the timer stops, and for `ShipStart` 1 the arrived count goes up by one\* |
 //! | [`SmugglingShipName`](RuleKey::SmugglingShipName) | `smuggling_ship_name` | the smuggling notice names the scanner by the found mission's drawn ship name whenever that name is not empty, whoever the scanner is (`_ScanPlayer` @0x7e7ce; see [`scan`](crate::scan)) | by the mission's ship name only when the scanner is that mission's special ship, else by its class\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; docked, the bar holds between the port's redraws: the radar after an outfitter order, radar, nav and target on a ship purchase (everything on a new `ïntf`, @0x739bd), fuel on a recharge (@0x5fe05), everything as a shop closes (`_RefreshSAT`); see `nova_view::flight::cadence` | it follows every frame\* |
+//! | [`PaySlotOffset`](RuleKey::PaySlotOffset) | `pay_slot_offset` | a slot's `<PAY>` of a pay that is not cash, a fine or a charge reads the slot's byte offset, slot × 2,284 (`_MungeBriefing` @0x9cd2a-0x9cdb6; see [`text_tags`](crate::text_tags)) | it reads 0, as an offer's does\* |
+//! | [`MissionlessTags`](RuleKey::MissionlessTags) | `missionless_tags` | a text filled with no mission (a hail quote, a `RefuseText`) reads `"[Error]"` for each mission tag (`_MungeBriefing` @0x9c83f-0x9c843; see [`text_tags`](crate::text_tags)) | they are left as written\* |
+//! | [`PrkNnnName`](RuleKey::PrkNnnName) | `prk_nnn_name` | `<PRKnnn>` reads the rank's `ShortName`, as `<SRKnnn>` does (`_MungeBriefing` +0xde @0x9d1ef, @0x9d2d0; see [`text_tags`](crate::text_tags)) | its `ConvName`, "same as `<PRK>`" |
+//! | [`CrossedRankTags`](RuleKey::CrossedRankTags) | `crossed_rank_tags` | `<PRKnnn>` and `<SRKnnn>` read the governments the last tags of their kind named, remembered between texts and reset only as a `dësc` loads, crossed: `<PRKnnn>` the `<SRKnnn>` government's rank and `<SRKnnn>` the `<PRKnnn>` one's (`_ParseTextDescription` @0x14f34-0x15055, `_MungeBriefing` @0x9d53d-0x9d5a5; see [`text_tags`](crate::text_tags)) | each reads government nnn's own rank |
+//! | [`OfferingShipName`](RuleKey::OfferingShipName) | `offering_ship_name` | `<OSN>` names the person of the ship last hailed with a `LinkMission`, kept after the dialog until a quote, a board or a new pilot clears it, so a later text names it (`_HandlePlayerCommunication` @0x621de, @0x625a4; `_MungeBriefing` @0x9cebe-0x9cf28; see [`text_tags`](crate::text_tags)) | only the person offering while its offer is open, "only works when offering a mission from a ship" |
+//! | [`CachedAvailBits`](RuleKey::CachedAvailBits) | `cached_avail_bits` | a person's 0x0400 hail quote filter reads its mission's `AvailBits` verdict as cached at the last landing, arrival, load or check of it, so a bit changed in flight goes unseen until then (`_IsMissionAvailable` @0x9b4af-0x9b4f5, `_HandleShip` @0x33e1d) | the bits are tested now\* |
+//! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
 //! | [`CronRandomScale`](RuleKey::CronRandomScale) | `cron_random_scale` | `Rand(101) <= Random`, rolled for every inactive crön before its other checks (`_CronEventHandler` @0x38804-0x38818; see [`cron`](crate::cron)) | `Random` % (0 never, 100 or more always)§§§§§§ |
@@ -131,7 +144,7 @@
 //! | [`RankTradeIn`](RuleKey::RankTradeIn) | `rank_trade_in` | the trade-in goes through the flux twice, `_priceFluxMult[0]` then `[1]` (@0x4f769-0x4f7d3, @0x59433-0x5949a, @0x5ec13-0x5ec96), so the rank's factor is squared and the low-tech discount and rounding apply twice (see [`shipyard`](crate::shipyard)) | once, with `[1]`§§§§§§§§ |
 //! | [`RankPriceTiming`](RuleKey::RankPriceTiming) | `rank_price_timing` | the multipliers are taken as the spaceport opens (`_DoPortDialog` @0x5f970-0x5fa04, before the landing's mission check @0x5fbeb), so a rank gained while landed changes no price until the next landing (see [`rank`](crate::rank)) | live: the ranks and the stellar's government as they are when a price is asked¶¶¶¶¶¶¶¶ |
 //! | [`RankCrimeReach`](RuleKey::RankCrimeReach) | `rank_crime_reach` | a crime takes a rank of `Flags` 0x0004 or 0x0040 when `_GovtAllies` finds the victim's government allied with the rank's, an equal one included, so a crime against an independent ship takes an unaffiliated rank (`_SlapWithPenalty` @0x9c70; see [`rank`](crate::rank)) | 0x0040 only for a crime against the rank's own government, 0x0004 for its own or its allies, an unaffiliated rank never\*\*\*\*\*\*\*\*\* |
-//! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x996ed-0x997bd; see [`story`](crate::story)) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it¶¶¶¶¶¶¶ |
+//! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar, so a mission's random destination never draws a stellar only shadowed systems list, unless the player is in one that lists it (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x9968a-0x997ae, `_HandleStellarSystemVisibility` @0x32c58-0x32cdf; see [`story`](crate::story) and [`mission`](crate::mission)) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it, so a mission may draw it¶¶¶¶¶¶¶ |
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see [`story`](crate::story)) | after every settled script as well\*\*\*\*\*\*\*\* |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see [`cron`](crate::cron)) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see [`cron`](crate::cron)) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
@@ -186,6 +199,11 @@
 //! | [`ProximityFuse`](RuleKey::ProximityFuse) | `proximity_fuse` | a ship sets off an armed fuse at the end of the shot's move only: the first ship in slot order, the player first, within trunc(`ProxRadius` + 0.333 × its sprite's width) of the shot in whole pixels, each coordinate truncated, the hit at the shot (`_CheckShotProximities` @0x37549-0x376a5; see [`Shot::fused`](crate::combat::projectile::Shot::fused)) | swept along the move against each ship's hit radius plus `ProxRadius`, the first met along it taking the hit where the move entered its reach\* |
 //! | [`MapCycleStart`](RuleKey::MapCycleStart) | `map_cycle_start` | the galaxy map's Tab / `\` cycle, started in mode 2, starts after the link slot the selected stellar's index (its ID less 128) names when that is 0-15, and at the first slot otherwise, as `_MapFilter` steps +0x6c on from the stellar's index (@0x13f77-0x13fa6; [`Session::cycle_map_selection`](crate::Session::cycle_map_selection)) | outside mode 3 the cycle starts at the first slot, as Hyper Select does (@0x69c98)\* |
 //! | [`MapLinkPairing`](RuleKey::MapLinkPairing) | `map_link_pairing` | the galaxy map draws a link a qualifying system lists only when its far end isn't flagged yet, each system flagged after its links, by ascending ID, so a link listed only by the higher of its two systems, after the lower one qualified, is never drawn (`_DrawMap`'s `_doneFlag` @0xe9da-0xebd2; see [`galaxy_map`](crate::galaxy_map)) | every link a qualifying system lists is drawn once\* |
+//! | [`StellarIdentityRecord`](RuleKey::StellarIdentityRecord) | `stellar_identity_record` | two stellars are compared as the original's stellar records hold them: either ID outside 128..=2175 is identical to nothing, even itself (`_StellarsAreIdentical` @0xab51-0xab6c), a name keeps its full length but only its first 30 characters (`_LoadObjectData` @0x77310-0x7732a; compared @0xaba6-0xac74), and a `spöb` that doesn't load reads as a zeroed record at 0,0 with no name (see [`StellarMarks::identical`](crate::mission::StellarMarks::identical)) | as the `spöb`s are written: equal IDs are always identical, names are compared whole, and a missing `spöb` is identical only to itself\* |
+//! | [`OfferClock`](RuleKey::OfferClock) | `offer_clock` | a venue's next offer is due `30 + Rand(30)` ticks after its last ask (the bar's first 15 after it opens, and again 30 + Rand(30) after its hire screen opens), on wall time through the offer and every dialog or screen open over the venue; one that comes due while something is open over the venue is asked for on the first tick nothing does (`_BarFilter` @0x47be0-0x47c11, `_TradeFilter` @0x4e550-0x4e581, `_OutfitFilter` @0x589ce-0x58a01, `_ShipyardFilter` @0x60de5-0x60e21; `_MyModalDialog` @0x59fee; `_DoShipyardDialog` @0x5e74c-0x5e775) | the gap runs from the answer, and the wait stops while the offer, a venue's own dialog, the mission info or player info screen or a mission text is open\* |
+//! | [`CharacterStatusSpread`](RuleKey::CharacterStatusSpread) | `character_status_spread` | a new pilot's `chär` status spreads to every system of its government's allies, and negated to every system of its enemies (a xenophobe's to the independent ones too), and to the records with those governments (`_ActivateCharResource` @0x76dc0-0x76e6e; see [`legal::spread_statuses`](crate::legal::spread_statuses)) | each status is the record with its own government alone ("the player's initial legal status with the above governments") |
+//! | [`TextNegation`](RuleKey::TextNegation) | `text_negation` | a `!` in a conditional text flips that conditional and every later one in the same text, as the flag is cleared only as the text starts (`_ParseTextDescription` @0x14c0f, @0x14d2d, @0x14dc0; see [`text_parse`](crate::text_parse)) | it negates only its own conditional, "negate the logic" |
+//! | [`StrayTextBrace`](RuleKey::StrayTextBrace) | `stray_text_brace` | a `{` not followed by `G`, `P`, `B` or `!` drops the text up to the next of those letters (`_ParseTextDescription` @0x14efa; see [`text_parse`](crate::text_parse)) | the `{` and the text after it are copied as written\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -194,11 +212,15 @@
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `ship_change_bay_ammo`,
 //! `ship_change_default_weapons`, `ship_change_negative_stock`, `move_arrival`,
-//! `move_keep_flag`, `script_sound`, `ship_info_rounding`,
+//! `move_keep_flag`, `script_sound`, `out_of_range_move`, `missing_system_move`,
+//! `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
-//! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
-//! `mission_stellar_draw`, `mission_stellar_distance`,
+//! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
+//! `desc_movie_globals`,
+//! `pay_millions`,
+//! `person_mission_stellar`,
+//! `mission_stellar_draw`, `mission_stellar_distance`, `mission_ally_index`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
 //! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
 //! `route_rewrite`, `scan_outfits_past_junk`, `gate_escorts`,
@@ -208,11 +230,16 @@
 //! `ship_done_once`,
 //! `swap_arrives`,
 //! `smuggling_ship_name`,
+//! `pay_slot_offset`,
+//! `missionless_tags`,
+//! `stray_text_brace`,
+//! `cached_avail_bits`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor`,
-//! `newbie_fuel_refusal`, `missing_buoy_string`, `patrol_uninhabited`,
-//! `gate_exit_counts`, `move_left_behind`, `arrival_hits`, `hire_no_slot`,
+//! `stellar_identity_record`, `offer_clock`, `newbie_fuel_refusal`,
+//! `missing_buoy_string`, `patrol_uninhabited`, `gate_exit_counts`,
+//! `move_left_behind`, `arrival_hits`, `hire_no_slot`,
 //! `asteroid_entry_field`, `asteroid_respawn_ring`, `plunder_ammo_bays`,
 //! `ai_spend_without_shot`, `pd_exit_step`, `beam_hit_test`,
 //! `pd_hostility`, `ship_debris`, `combat_caps`, `proximity_fuse` (it
@@ -571,9 +598,9 @@ macro_rules! rule_keys {
 
 rule_keys! {
     /// Which governments a crime against a ship improves the player's
-    /// record with: by the engine, every government not allied with the
-    /// victim's; by the Bible, only its enemies (see
-    /// [`legal`](crate::legal)).
+    /// record with, and in which governments' systems along its walk: by
+    /// the engine, every government not allied with the victim's; by the
+    /// Bible, only its enemies (see [`legal`](crate::legal)).
     CrimeGains => "crime_gains",
     /// Boarding a ship whose `düde` `Booty` is 0: by the engine, the
     /// plunder dialog opens anyway; by the Bible, the player is repelled
@@ -1042,6 +1069,28 @@ rule_keys! {
     /// anything the Bible says (see
     /// [`ScriptEffectRules`](crate::ScriptEffectRules)).
     ScriptSound => "script_sound",
+    /// What an `N` set operator whose system is out of range (128-2175)
+    /// does: by the engine, the move's tail with no move, as
+    /// `_EvalSetExp`'s range check (@0x158e3) jumps to it (@0x1593f)
+    /// where every other operator's check skips only that operator
+    /// (@0x15873): landed, the offers are emptied (@0x15949); in flight,
+    /// the scene is reset and the system entered again where the ship is
+    /// (@0x1596e-0x159ad). Otherwise it does nothing, as every other
+    /// operator out of range does. The Bible is silent here, so the other
+    /// reading is the intended behaviour, not anything the Bible says
+    /// (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    OutOfRangeMove => "out_of_range_move",
+    /// What an `M` or `N` set operator to a system in range (128-2175)
+    /// with no `sÿst` does: by the engine, the move's tail with no move,
+    /// as `_EvalSetExp` never checks that the system exists (`M`
+    /// @0x15723, `N` @0x158ea) and runs the tail whatever it finds
+    /// (@0x157fb-0x158d4, @0x1593f-0x159ad): landed, the offers are
+    /// emptied; in flight, the scene is reset and the system entered again
+    /// where the ship is. The move itself, into a row with no record, is
+    /// left out. Otherwise it does nothing. The Bible is silent here, so
+    /// the other reading is the intended behaviour, not anything the Bible
+    /// says (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    MissingSystemMove => "missing_system_move",
     /// How a `BuyRandom` outside 1-100 reads: by the engine, an outfit's
     /// below 1 is never for sale and a ship's below 0 always, as the
     /// original's loader clamps them (`_LoadObjectData` @0x78b8d,
@@ -1517,6 +1566,85 @@ rule_keys! {
     /// the Bible says (see the [`mission`](crate::mission) module's
     /// "Active missions").
     StartActiveMission => "start_active_mission",
+    /// What an accept outside an offer dialog does, as `S` makes one from a
+    /// script that runs with no offer dialog open: an outfit's or ship's
+    /// `OnPurchase`, an `OnSuccess` at a landing, a cron, an `OnShipDone`,
+    /// and so on. By the engine, as `_DoMissionAccept` reads
+    /// `_missionDialog`: it marks a destination that is the stellar docked
+    /// at (in flight, the player's stellar target) reached only while the
+    /// dialog is open (@0xa1fde). It also drops the mission's own offer
+    /// and refilters the others only then (@0xa200b). So such an `S`
+    /// leaves that destination unreached and every offer listed. A
+    /// mission with no destination is reached either way (@0xa1fe7). The
+    /// unrefusable offer with no text that the offer dialog accepts at
+    /// once (@0xa230a) is outside it as well. Its caller then shifts the
+    /// outside list as [`RuleKey::OfferShift`] reads it
+    /// (`_OfferMissionFromPort` @0xa377d-0xa37a1), which, the list
+    /// unchanged by the accept, drops that offer itself and keeps the
+    /// others. By the other reading, every accept acts as if made from the
+    /// dialog.
+    ///
+    /// The two keys compose literally: the shift acts on whatever list the
+    /// accept left. So with this key's other reading and `offer_shift`'s
+    /// engine reading, the accept at once drops its own offer and refilters
+    /// the others, and the shift then drops the next listed offer too, as
+    /// a dialog accept does. With `offer_shift`'s other reading, it drops
+    /// only its own offer either way. The Bible's "start mission xxx" says
+    /// nothing of it, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see the [`mission`](crate::mission)
+    /// module's "Active missions").
+    StartOutsideDialog => "start_outside_dialog",
+    /// What answering an outside offer drops from the outside list (the
+    /// offers of the bar, the spaceport, the trade center, the shipyard
+    /// and the outfitter, in one list in the order they show). By the
+    /// engine, as `_OfferMissionFromPort` does once `_OfferOneMission`
+    /// returns anything but -1 (@0xa3765-0xa37a1): the list shifts down
+    /// one from the index the offer was found at (@0xa36f5), in the list
+    /// as the answer left it, and the mission is not looked up again. So:
+    ///
+    /// - an accept from the offer dialog, which dropped its own offer and
+    ///   refiltered the rest already (`_DoMissionAccept` @0xa200b-0xa2136),
+    ///   also drops the next offer still listed, whatever its venue, or
+    ///   nothing when it was the last;
+    /// - a refusal drops the refused offer, unless an `S` in its
+    ///   `OnRefuse` refiltered the list and moved it down, when it drops
+    ///   the offer now at that index and the refused one stays listed;
+    /// - the unrefusable offer's accept at once (@0xa230a), which by
+    ///   [`RuleKey::StartOutsideDialog`]'s engine reading leaves the list
+    ///   as it is, drops its own offer. The keys compose literally: with
+    ///   `start_outside_dialog`'s other reading the accept drops its own
+    ///   offer and refilters the rest, and the shift then drops the next
+    ///   listed offer too, as a dialog accept does.
+    ///
+    /// A failed accept (-1: every slot taken, or no room for the cargo)
+    /// suppresses the offer and drops nothing (@0xa3765-0xa377b). By the
+    /// other reading, each answer drops only the answered offer's own
+    /// entry, so the next offer is offered next. The mission computer has
+    /// no shift (`_DoMissionDialog` @0xa3bb4) either way. The Bible says
+    /// nothing of it, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see the [`mission`](crate::mission)
+    /// module's offers).
+    OfferShift => "offer_shift",
+    /// Whose movie the `STR#` texts and the offer dialog's after-check
+    /// play. The original keeps the last `dësc` loaded's `MovieFile` and
+    /// `Flags` in globals (*0x3b52f4, *0x3b5644) that every
+    /// `_LoadDescription` overwrites (@0x71895-0x718de; a missing `dësc`
+    /// empties the name, @0x71a5e-0x71a77), and every movie check reads
+    /// them as they stand. By the engine, as it does: a `STR#` text (the
+    /// no-room text @0xa1bb2, the cargo-pickup text @0x982ff, the mission
+    /// computer's refusal @0xa3956), which loads no `dësc`, plays the last
+    /// one loaded's after-movie once it closes (`_ShowTextDialog`
+    /// @0x5b40b-0x5b44f, not gated on its third argument; the before-check
+    /// is, @0x5a76c), so inside an offer the offer's after-movie plays
+    /// after the no-room text and again after the dialog; and the offer
+    /// dialog's after-check (@0xa3580-0xa35b8) reads what the answer left,
+    /// so after a `RefuseText` it plays that `dësc`'s after-movie a second
+    /// time, or none, and never the offer's. By the other reading each
+    /// dialog plays only its own `dësc`'s movie: a `STR#` text none, and
+    /// the offer dialog its own after-movie. The Bible says nothing of it,
+    /// so the other reading is the intended behaviour, not anything the
+    /// Bible says (see [`Session::loaded_after_movie`](crate::Session::loaded_after_movie)).
+    DescMovieGlobals => "desc_movie_globals",
     /// How a mission text's `<PAY>` writes an amount of a million or
     /// more. By the engine, in millions to two places, truncated, as
     /// `_StrcatCommaNumber` (@0x8990-0x8aa3) writes it: "1.23M". By the
@@ -1542,8 +1670,8 @@ rule_keys! {
     /// engine it is the player's navigation target: the offer is resolved
     /// from it, or from no stellar with none, and an accept in flight
     /// reaches a destination that is the navigation target. By the other
-    /// reading it is the first stellar the player's system lists, as `S`
-    /// resolves in flight: the offer is resolved from it, and an accept
+    /// reading it is the first stellar the player's system lists, or spöb
+    /// 128 with none, as `S` resolves in flight (@0xa14e8-0xa1518): the offer is resolved from it, and an accept
     /// in flight reaches no destination. The Bible says nothing of it, so
     /// the other reading is the intended behaviour, not anything the
     /// Bible says (see [`mission`](crate::mission)).
@@ -1576,6 +1704,21 @@ rule_keys! {
     /// other reading is the intended behaviour, not anything the Bible
     /// says (see [`mission`](crate::mission)).
     MissionStellarDistance => "mission_stellar_distance",
+    /// Which stellars a random mission destination of 15000-19999, an
+    /// ally of a government, takes (`_SelectMissionStellar`). By the
+    /// engine, as the original: beside a stellar allied with the
+    /// government (`_GovtAllies`), it takes a stellar of another
+    /// government, not independent, when the system record at the
+    /// stellar's own index, the `sÿst` with the stellar's ID, has the
+    /// government in its catalog `Govt` (the scan @0x9a7af-0x9a7c8, the
+    /// draw @0x9a8e5-0x9a8fa); a stellar past the last system loaded reads
+    /// a slot the loader never writes, taken as government index 0 (see
+    /// [`Stellar::index_govt`](crate::mission::select::Stellar::index_govt)).
+    /// By the other reading, the port's earlier test: only a stellar
+    /// allied with the government. The Bible says nothing of it, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see [`mission`](crate::mission)).
+    MissionAllyIndex => "mission_ally_index",
     /// Whether a mission's destination or return is reached at a stellar
     /// of another ID (`_StellarsAreIdentical` @0xab35-0xac90). By the
     /// engine, as the original tells it: the docked stellar is the stop
@@ -1711,6 +1854,62 @@ rule_keys! {
     /// nothing of it, so the other reading is the intended behaviour, not
     /// anything the Bible says (see [`scan`](crate::scan)).
     SmugglingShipName => "smuggling_ship_name",
+    /// What a slot's `<PAY>` reads for a pay that is not cash, a fine or a
+    /// charge (see [`text_tags`](crate::text_tags)). By the engine, as
+    /// `_MungeBriefing` leaves its register (@0x9cd2a-0x9cdb6), the slot's byte
+    /// offset, slot × 2,284 (0x8ec), so slot 1 reads "2,284". By the other
+    /// reading 0, as an offer's reads (@0x9c7e6-0x9c7f0). The Bible says only
+    /// that `<PAY>` "does nothing if the mission pay isn't monetary", which
+    /// neither reading does, so the other reading is the intended behaviour,
+    /// not anything the Bible says.
+    PaySlotOffset => "pay_slot_offset",
+    /// What a text filled with no mission reads for the mission tags, `<DST>`
+    /// to `<PAY>`: a hail quote or a `RefuseText` (see [`text_tags`](crate::text_tags)). By the engine, as
+    /// `_MungeBriefing` with index -1 leaves every mission value as it starts
+    /// (@0x9c83f-0x9c843 → 0x9ce14), `"[Error]"`. By the other reading they
+    /// are left as written. The Bible says nothing of it, so the other reading
+    /// is the intended behaviour, not anything the Bible says.
+    MissionlessTags => "missionless_tags",
+    /// Which name of a rank `<PRKnnn>` reads (see [`text_tags`](crate::text_tags)).
+    /// By the engine, as `_MungeBriefing` reads it (+0xde @0x9d1ef, @0x9d2d0),
+    /// the rank's `ShortName`, as `<SRKnnn>` does. By the Bible, "Same as
+    /// `<PRK>`, but only for ranks affiliated with government ID nnn": its
+    /// `ConvName`. `<SRKnnn>` reads `ShortName` under both.
+    PrkNnnName => "prk_nnn_name",
+    /// Which government's rank `<PRKnnn>` and `<SRKnnn>` read (see
+    /// [`text_tags`](crate::text_tags)). By the engine, as the original remembers
+    /// the last `<PRKnnn>` and `<SRKnnn>` government a text named
+    /// (`_descRankGovt`, set by `_ParseTextDescription` @0x14f34-0x15055 and reset
+    /// by `_LoadDescription` @0x71926-0x71930 before each `dësc`) and crosses
+    /// them (`_MungeBriefing` @0x9d53d-0x9d5a5): only the remembered nnn of each
+    /// kind is filled, `<PRKnnn>` with the `<SRKnnn>` government's rank and
+    /// `<SRKnnn>` with the `<PRKnnn>` one's, so a lone tag reads "captain" and a
+    /// text not loaded as a `dësc` reads the governments an earlier one left.
+    /// By the Bible, "only for ranks affiliated with government ID nnn": each
+    /// tag reads government nnn's own rank.
+    CrossedRankTags => "crossed_rank_tags",
+    /// Whom `<OSN>` names (see [`text_tags`](crate::text_tags) and the
+    /// session's `person_offers` module). By the engine, as the original reads
+    /// `_offeringShipIndex` (`_MungeBriefing` @0x9cebe-0x9cf28): the person of
+    /// the ship in the slot the last hail of a linked person named
+    /// (`_HandlePlayerCommunication` @0x621de, kept after the dialog @0x625a4),
+    /// until a quote, a board or a new pilot puts it back to none, so a later
+    /// text names the person hailed; and the boarded ship's during a board
+    /// offer. By the Bible, "the offering ship name (only works when offering a
+    /// mission from a ship)": the person offering while its offer is open, and
+    /// `"[Error]"` otherwise. A hail quote names its speaker under both.
+    OfferingShipName => "offering_ship_name",
+    /// Which `AvailBits` verdict a person's 0x0400 hail quote filter reads (see
+    /// the session's `persons` module). By the engine, as `_HandleShip` asks
+    /// `_IsMissionAvailable(m, 0)` (@0x33e1d), which reads the verdict cached in
+    /// `mïsn`+0x16: written for every mission at a landing, a jump's arrival, a
+    /// new pilot and a load (`_PropagateMissionBitEffects` @0x99887-0x998b2), and
+    /// for one mission by a check of it that writes it (an accept, a port offer,
+    /// the mission computer, a hail or a board; @0x9b4af-0x9b4d3), so a bit
+    /// changed in flight goes unseen until then. By the other reading the bits
+    /// are tested now. The Bible says nothing of it, so the other reading is
+    /// the intended behaviour, not anything the Bible says.
+    CachedAvailBits => "cached_avail_bits",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -2380,6 +2579,73 @@ rule_keys! {
     /// it, so the other reading is the intended behaviour, not anything
     /// the Bible says.
     MapLinkPairing => "map_link_pairing",
+    /// How two stellars' records are read when
+    /// [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) counts
+    /// them as one mission stop (see
+    /// [`StellarMarks::identical`](crate::mission::StellarMarks::identical)).
+    /// By the engine, as the original's stellar record array holds the
+    /// `spöb`s: `_StellarsAreIdentical` returns false when either ID is
+    /// outside 128..=2175, the array's 0x800 slots, before it compares the
+    /// IDs (@0xab51-0xab6c); `_LoadObjectData` keeps a name's full length
+    /// but only its first 30 characters (`strncpy` 0x1f @0x77310-0x7732a),
+    /// which the compare reads (@0xaba6-0xac74); and a `spöb` that doesn't
+    /// load leaves its slot as allocated, zeros, so it reads as place 0,0
+    /// with no name (@0x1b7d4, @0x779bd-0x779c6). By the other reading,
+    /// the `spöb`s as written: equal IDs are always identical, names are
+    /// compared whole, and a missing `spöb` is identical only to itself.
+    /// The Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says.
+    StellarIdentityRecord => "stellar_identity_record",
+    /// How a venue's offer timer runs (the bar, the trade center, the
+    /// outfitter and the shipyard each ask again `30 + Rand(30)` ticks on).
+    /// By the engine, as the original's one deadline does
+    /// (`_missionOfferTime`): a filter that finds it passed asks and sets
+    /// the next deadline at once (`_BarFilter` @0x47be0-0x47c11,
+    /// `_TradeFilter` @0x4e550-0x4e581, `_OutfitFilter` @0x589ce-0x58a01,
+    /// `_ShipyardFilter` @0x60de5-0x60e21), and nothing resets it after the
+    /// answer, so the gap runs from the ask, through the offer dialog. Its
+    /// wall-clock deadline passes while a dialog or screen is open over the
+    /// venue, whose own modal loop doesn't call the venue's filter
+    /// (`_MyModalDialog` @0x59fee); an offer that came due meanwhile is
+    /// asked for as soon as nothing covers the venue. The bar's hire screen,
+    /// the shipyard dialog in hire mode, sets the deadline again as it
+    /// opens (`_DoShipyardDialog` @0x5e74c-0x5e775), so it restarts the
+    /// bar's timer. By the other reading, the gap runs from the answer,
+    /// and the wait stops while the offer, a venue's own dialog, the
+    /// mission info or player info screen or a mission text is open. The
+    /// Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says.
+    OfferClock => "offer_clock",
+    /// Where a new pilot's `chär` statuses (`Govt1-4` with `Status1-4`)
+    /// apply. By the engine, as the original spreads them
+    /// (`_ActivateCharResource` @0x76dc0-0x76e6e): each status becomes
+    /// the record in every system, hidden or not, whose government is
+    /// allied with the status's government (that one included), and its
+    /// negation in every system whose government is its enemy, so a
+    /// xenophobe's reaches the independent systems; the record with each
+    /// government takes the same rule. A later slot overwrites an earlier
+    /// one. By the Bible ("the player's initial legal status with the
+    /// above governments"), each status is the record with its own
+    /// government alone, and in that government's systems (see
+    /// [`legal::spread_statuses`](crate::legal::spread_statuses)).
+    CharacterStatusSpread => "character_status_spread",
+    /// How far a `!` in a conditional text reaches (see
+    /// [`text_parse`](crate::text_parse)). By the engine, as
+    /// `_ParseTextDescription` clears its negate flag only as a text starts
+    /// (@0x14c0f) and sets it at each `!` (@0x14d2d): the conditional and
+    /// every later one in the same text read flipped (@0x14dc0). By the
+    /// Bible ("A ! character can be used to negate the logic"): only its
+    /// own conditional.
+    TextNegation => "text_negation",
+    /// What a `{` not followed by a test (`G`, `P`, `B` or `!`) does (see
+    /// [`text_parse`](crate::text_parse)). By the engine, as
+    /// `_ParseTextDescription` stays in its test state for any other
+    /// character (@0x14efa): the text is dropped up to the next `g`, `p`,
+    /// `b` (either case) or `!`, which starts a conditional there. By the
+    /// other reading the `{` and the text after it are copied as written.
+    /// The Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says.
+    StrayTextBrace => "stray_text_brace",
 }
 
 impl RuleKey {
@@ -2614,8 +2880,56 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(84),
+            RuleKey::ALL.iter().rev().nth(99),
             Some(&RuleKey::StartActiveMission)
+        );
+    }
+
+    #[test]
+    fn the_start_outside_dialog_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::StartOutsideDialog.key(), "start_outside_dialog");
+        assert_eq!(
+            RuleKey::from_key("start_outside_dialog"),
+            Some(RuleKey::StartOutsideDialog)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::StartOutsideDialog),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(98),
+            Some(&RuleKey::StartOutsideDialog)
+        );
+    }
+
+    #[test]
+    fn the_offer_shift_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::OfferShift.key(), "offer_shift");
+        assert_eq!(RuleKey::from_key("offer_shift"), Some(RuleKey::OfferShift));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::OfferShift),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(97),
+            Some(&RuleKey::OfferShift)
+        );
+    }
+
+    #[test]
+    fn the_desc_movie_globals_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::DescMovieGlobals.key(), "desc_movie_globals");
+        assert_eq!(
+            RuleKey::from_key("desc_movie_globals"),
+            Some(RuleKey::DescMovieGlobals)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::DescMovieGlobals),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(96),
+            Some(&RuleKey::DescMovieGlobals)
         );
     }
 
@@ -2654,7 +2968,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(83),
+            RuleKey::ALL.iter().rev().nth(95),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2676,7 +2990,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(82),
+            RuleKey::ALL.iter().rev().nth(94),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2701,7 +3015,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(81),
+            RuleKey::ALL.iter().rev().nth(93),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2727,7 +3041,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(80),
+            RuleKey::ALL.iter().rev().nth(92),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2747,11 +3061,28 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(79),
+            RuleKey::ALL.iter().rev().nth(91),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
             Rulebook::default().source_for(RuleKey::MissionStellarDistance),
+            RuleSource::Engine
+        );
+    }
+
+    #[test]
+    fn the_mission_ally_index_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::MissionAllyIndex.key(), "mission_ally_index");
+        assert_eq!(
+            RuleKey::from_key("mission_ally_index"),
+            Some(RuleKey::MissionAllyIndex)
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(90),
+            Some(&RuleKey::MissionAllyIndex)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MissionAllyIndex),
             RuleSource::Engine
         );
     }
@@ -2767,7 +3098,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(78),
+            RuleKey::ALL.iter().rev().nth(89),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2787,7 +3118,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(75),
+            RuleKey::ALL.iter().rev().nth(86),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2809,7 +3140,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(74),
+            RuleKey::ALL.iter().rev().nth(85),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2826,7 +3157,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -2843,7 +3174,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -2860,7 +3191,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::NonStrictSpeed)
         );
     }
@@ -2877,7 +3208,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::HunterBribe)
         );
     }
@@ -2894,7 +3225,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::ShipOverlap)
         );
     }
@@ -2911,7 +3242,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::QuadrantTurretArc)
         );
     }
@@ -2928,7 +3259,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(35),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::HiddenShips)
         );
     }
@@ -2945,7 +3276,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::HiddenShipHoverBox)
         );
     }
@@ -2966,7 +3297,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::BreakupStall)
         );
     }
@@ -2983,7 +3314,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(32),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::EjectVelocity)
         );
     }
@@ -3000,7 +3331,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(36),
             Some(&RuleKey::RescueArmor)
         );
     }
@@ -3021,7 +3352,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(30),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::UnlistedStellar)
         );
     }
@@ -3038,7 +3369,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::NewbieFuelRefusal)
         );
     }
@@ -3055,7 +3386,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(28),
+            RuleKey::ALL.iter().rev().nth(33),
             Some(&RuleKey::MissingBuoyString)
         );
     }
@@ -3072,7 +3403,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::PatrolUninhabited)
         );
     }
@@ -3089,7 +3420,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::GateExitCounts)
         );
     }
@@ -3106,7 +3437,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::SpawnReserve)
         );
     }
@@ -3123,7 +3454,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::ArrivalHits)
         );
     }
@@ -3137,7 +3468,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::HireNoSlot)
         );
     }
@@ -3154,7 +3485,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::AsteroidEntryField)
         );
     }
@@ -3171,7 +3502,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::AsteroidRespawnRing)
         );
     }
@@ -3191,7 +3522,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::FuseIgnoresAsteroids)
         );
     }
@@ -3208,7 +3539,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(30),
             Some(&RuleKey::MoveLeftBehind)
         );
     }
@@ -3225,7 +3556,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::PlayerPassThrough)
         );
     }
@@ -3242,7 +3573,7 @@ mod tests {
             Rulebook::new(RuleSource::Bible).source_for(RuleKey::ShotDecay),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(17), Some(&RuleKey::ShotDecay));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(22), Some(&RuleKey::ShotDecay));
     }
 
     #[test]
@@ -3261,7 +3592,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::PlunderAmmoBays)
         );
     }
@@ -3282,7 +3613,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::AiSpendWithoutShot)
         );
     }
@@ -3303,7 +3634,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::ExitCompression)
         );
     }
@@ -3321,7 +3652,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::PdExitStep)
         );
     }
@@ -3342,7 +3673,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::BeamHitTest)
         );
     }
@@ -3363,7 +3694,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::BombRocketLaunch)
         );
     }
@@ -3384,7 +3715,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::PdHostility)
         );
     }
@@ -3401,7 +3732,10 @@ mod tests {
             Rulebook::new(RuleSource::Bible).source_for(RuleKey::JamHalving),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(8), Some(&RuleKey::JamHalving));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(13),
+            Some(&RuleKey::JamHalving)
+        );
     }
 
     #[test]
@@ -3420,7 +3754,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::SeekerLockAngle)
         );
     }
@@ -3437,7 +3771,10 @@ mod tests {
             Rulebook::new(RuleSource::Engine).source_for(RuleKey::ShipDebris),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(6), Some(&RuleKey::ShipDebris));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(11),
+            Some(&RuleKey::ShipDebris)
+        );
     }
 
     #[test]
@@ -3459,7 +3796,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::QuadrantTurretBlindSpots)
         );
     }
@@ -3480,7 +3817,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::PlayerForwardRecoil)
         );
     }
@@ -3497,7 +3834,7 @@ mod tests {
             Rulebook::new(RuleSource::Engine).source_for(RuleKey::CombatCaps),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::CombatCaps));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(8), Some(&RuleKey::CombatCaps));
     }
 
     #[test]
@@ -3516,7 +3853,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::ProximityFuse)
         );
     }
@@ -3533,7 +3870,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::MapCycleStart)
         );
     }
@@ -3549,7 +3886,10 @@ mod tests {
             Rulebook::default().source_for(RuleKey::MapLinkPairing),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::MapLinkPairing));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(5),
+            Some(&RuleKey::MapLinkPairing)
+        );
     }
 
     #[test]
@@ -3568,8 +3908,59 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::BeamConeQuirks)
+        );
+    }
+
+    #[test]
+    fn the_stellar_identity_record_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::StellarIdentityRecord.key(),
+            "stellar_identity_record"
+        );
+        assert_eq!(
+            RuleKey::from_key("stellar_identity_record"),
+            Some(RuleKey::StellarIdentityRecord)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::StellarIdentityRecord),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(4),
+            Some(&RuleKey::StellarIdentityRecord)
+        );
+    }
+
+    #[test]
+    fn the_offer_clock_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::OfferClock.key(), "offer_clock");
+        assert_eq!(RuleKey::from_key("offer_clock"), Some(RuleKey::OfferClock));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::OfferClock),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::OfferClock));
+    }
+
+    #[test]
+    fn the_character_status_spread_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::CharacterStatusSpread.key(),
+            "character_status_spread"
+        );
+        assert_eq!(
+            RuleKey::from_key("character_status_spread"),
+            Some(RuleKey::CharacterStatusSpread)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::CharacterStatusSpread),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::CharacterStatusSpread)
         );
     }
 
@@ -3581,7 +3972,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(73), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(84), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -3596,7 +3987,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(72),
+            RuleKey::ALL.iter().rev().nth(83),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -3613,7 +4004,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(71),
+            RuleKey::ALL.iter().rev().nth(82),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -3630,7 +4021,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(70),
+            RuleKey::ALL.iter().rev().nth(81),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -3647,7 +4038,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(69),
+            RuleKey::ALL.iter().rev().nth(80),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -3664,7 +4055,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(68),
+            RuleKey::ALL.iter().rev().nth(79),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -3681,8 +4072,107 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(67),
+            RuleKey::ALL.iter().rev().nth(78),
             Some(&RuleKey::SmugglingShipName)
+        );
+    }
+
+    #[test]
+    fn the_pay_slot_offset_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PaySlotOffset.key(), "pay_slot_offset");
+        assert_eq!(
+            RuleKey::from_key("pay_slot_offset"),
+            Some(RuleKey::PaySlotOffset)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PaySlotOffset),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(77),
+            Some(&RuleKey::PaySlotOffset)
+        );
+    }
+
+    #[test]
+    fn the_missionless_tags_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::MissionlessTags.key(), "missionless_tags");
+        assert_eq!(
+            RuleKey::from_key("missionless_tags"),
+            Some(RuleKey::MissionlessTags)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MissionlessTags),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(76),
+            Some(&RuleKey::MissionlessTags)
+        );
+    }
+
+    #[test]
+    fn the_prk_nnn_name_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PrkNnnName.key(), "prk_nnn_name");
+        assert_eq!(RuleKey::from_key("prk_nnn_name"), Some(RuleKey::PrkNnnName));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PrkNnnName),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(75),
+            Some(&RuleKey::PrkNnnName)
+        );
+    }
+
+    #[test]
+    fn the_crossed_rank_tags_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::CrossedRankTags.key(), "crossed_rank_tags");
+        assert_eq!(
+            RuleKey::from_key("crossed_rank_tags"),
+            Some(RuleKey::CrossedRankTags)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::CrossedRankTags),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(74),
+            Some(&RuleKey::CrossedRankTags)
+        );
+    }
+
+    #[test]
+    fn the_offering_ship_name_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::OfferingShipName.key(), "offering_ship_name");
+        assert_eq!(
+            RuleKey::from_key("offering_ship_name"),
+            Some(RuleKey::OfferingShipName)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::OfferingShipName),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(73),
+            Some(&RuleKey::OfferingShipName)
+        );
+    }
+
+    #[test]
+    fn the_cached_avail_bits_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::CachedAvailBits.key(), "cached_avail_bits");
+        assert_eq!(
+            RuleKey::from_key("cached_avail_bits"),
+            Some(RuleKey::CachedAvailBits)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::CachedAvailBits),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(72),
+            Some(&RuleKey::CachedAvailBits)
         );
     }
 
@@ -3695,7 +4185,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(66),
+            RuleKey::ALL.iter().rev().nth(71),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -3709,7 +4199,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(65),
+            RuleKey::ALL.iter().rev().nth(70),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -3722,7 +4212,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(77),
+            RuleKey::ALL.iter().rev().nth(88),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -3740,7 +4230,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(63),
+            RuleKey::ALL.iter().rev().nth(68),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -3757,7 +4247,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(62),
+            RuleKey::ALL.iter().rev().nth(67),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -3774,10 +4264,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(61),
+            RuleKey::ALL.iter().rev().nth(66),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(60), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(65), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -3792,7 +4282,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(59),
+            RuleKey::ALL.iter().rev().nth(64),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -3811,15 +4301,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(58),
+            RuleKey::ALL.iter().rev().nth(63),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(57),
+            RuleKey::ALL.iter().rev().nth(62),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(56),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -3836,7 +4326,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(55),
+            RuleKey::ALL.iter().rev().nth(60),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -3850,11 +4340,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(54),
+            RuleKey::ALL.iter().rev().nth(59),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(53),
+            RuleKey::ALL.iter().rev().nth(58),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -3875,11 +4365,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(52),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(51),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -3893,11 +4383,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(55),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(49),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::BlessingLanding)
         );
     }
@@ -3917,7 +4407,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(53),
             Some(&RuleKey::BlessingAlwaysAttacks)
         );
     }
@@ -3934,7 +4424,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::ExploredByPlace)
         );
     }
@@ -3951,7 +4441,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::RouteRewrite)
         );
     }
@@ -3968,7 +4458,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(50),
             Some(&RuleKey::NebulaExploreOnce)
         );
     }
@@ -3985,7 +4475,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::NebulaNewPilot)
         );
     }
@@ -3999,11 +4489,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::ScanOutfitsPastJunk)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::OutfitScanFine)
         );
     }
@@ -4045,6 +4535,21 @@ mod tests {
         assert_eq!(RuleKey::MoveKeepFlag.key(), "move_keep_flag");
         assert_eq!(RuleKey::BlankLeave.key(), "blank_leave");
         assert_eq!(RuleKey::ScriptSound.key(), "script_sound");
+        assert_eq!(RuleKey::OutOfRangeMove.key(), "out_of_range_move");
+        assert_eq!(
+            RuleKey::from_key("out_of_range_move"),
+            Some(RuleKey::OutOfRangeMove)
+        );
+        assert_eq!(RuleKey::OutOfRangeMove.default_source(), RuleSource::Engine);
+        assert_eq!(RuleKey::MissingSystemMove.key(), "missing_system_move");
+        assert_eq!(
+            RuleKey::from_key("missing_system_move"),
+            Some(RuleKey::MissingSystemMove)
+        );
+        assert_eq!(
+            RuleKey::MissingSystemMove.default_source(),
+            RuleSource::Engine
+        );
         assert_eq!(
             RuleKey::ShipChangePersistence.key(),
             "ship_change_persistence"
@@ -4127,7 +4632,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(86),
+            RuleKey::ALL.iter().rev().nth(101),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -4233,6 +4738,8 @@ mod tests {
                 RuleKey::MoveKeepFlag,
                 RuleKey::BlankLeave,
                 RuleKey::ScriptSound,
+                RuleKey::OutOfRangeMove,
+                RuleKey::MissingSystemMove,
                 RuleKey::BuyRandom,
                 RuleKey::JunkFlags,
                 RuleKey::LauncherSale,
@@ -4268,11 +4775,15 @@ mod tests {
                 RuleKey::SecondarySale,
                 RuleKey::RepeatMissionFailure,
                 RuleKey::StartActiveMission,
+                RuleKey::StartOutsideDialog,
+                RuleKey::OfferShift,
+                RuleKey::DescMovieGlobals,
                 RuleKey::PayMillions,
                 RuleKey::MissionOrder,
                 RuleKey::PersonMissionStellar,
                 RuleKey::MissionStellarDraw,
                 RuleKey::MissionStellarDistance,
+                RuleKey::MissionAllyIndex,
                 RuleKey::MissionStellarIdentity,
                 RuleKey::LegalRecords,
                 RuleKey::LeftRespawn,
@@ -4285,6 +4796,12 @@ mod tests {
                 RuleKey::ShipDoneOnce,
                 RuleKey::SwapArrives,
                 RuleKey::SmugglingShipName,
+                RuleKey::PaySlotOffset,
+                RuleKey::MissionlessTags,
+                RuleKey::PrkNnnName,
+                RuleKey::CrossedRankTags,
+                RuleKey::OfferingShipName,
+                RuleKey::CachedAvailBits,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,
@@ -4351,7 +4868,12 @@ mod tests {
                 RuleKey::CombatCaps,
                 RuleKey::ProximityFuse,
                 RuleKey::MapCycleStart,
-                RuleKey::MapLinkPairing
+                RuleKey::MapLinkPairing,
+                RuleKey::StellarIdentityRecord,
+                RuleKey::OfferClock,
+                RuleKey::CharacterStatusSpread,
+                RuleKey::TextNegation,
+                RuleKey::StrayTextBrace
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
@@ -4391,6 +4913,37 @@ mod tests {
         }
         assert_eq!(RuleKey::from_key("Crime_Gains"), None);
         assert_eq!(RuleKey::from_key(""), None);
+    }
+
+    #[test]
+    fn the_text_negation_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::TextNegation.key(), "text_negation");
+        assert_eq!(
+            RuleKey::from_key("text_negation"),
+            Some(RuleKey::TextNegation)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::TextNegation),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::TextNegation)
+        );
+    }
+
+    #[test]
+    fn the_stray_text_brace_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::StrayTextBrace.key(), "stray_text_brace");
+        assert_eq!(
+            RuleKey::from_key("stray_text_brace"),
+            Some(RuleKey::StrayTextBrace)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::StrayTextBrace),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::StrayTextBrace));
     }
 
     #[test]

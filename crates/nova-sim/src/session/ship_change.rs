@@ -173,6 +173,7 @@ use crate::pilot;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::ship_change::{Fold, Limits, OutfitCarry, SET_OP_PERSISTENT, carried_outfits};
+use crate::strings::PatchedStrings;
 
 /// What the armour gains a step while the ship is disabled after a
 /// change (the constant @0xdd068).
@@ -186,7 +187,9 @@ const ARMOR_BUMP: f32 = 1.0;
 /// loads it and redraws the whole bar (`_RedrawStatus(1)`
 /// @0x739b6-0x739bd), drawing `nav` and `reserves` as they stood at the
 /// operator. Noted by `Session::change_ship`, taken by
-/// [`Session::take_interface_loads`].
+/// [`Session::take_interface_loads`], with how many mission texts had been
+/// queued by then, so that a view can order the redraws against the texts
+/// a script queues around them ([`TextBar`](super::TextBar)).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InterfaceLoad {
     /// The government whose `Interface` the operator's load asks for.
@@ -196,6 +199,11 @@ pub struct InterfaceLoad {
     /// The shield, armour and fuel at the operator, after its armour
     /// bump.
     pub reserves: Reserves,
+    /// How many mission texts had been queued at the operator
+    /// ([`Session::texts_queued`]): it ran after each text whose
+    /// [`TextBar::texts`](super::TextBar::texts) is at most this, and
+    /// before the others.
+    pub texts: u64,
 }
 
 /// The disputed rules of the ship-change set operators that the session
@@ -342,10 +350,15 @@ impl Session {
     }
 
     /// This session with `T` reading its names from `strings`' string
-    /// lists (see the module docs): none by default.
+    /// lists (see the module docs): none by default. The lists a plug-in's
+    /// `'STR '` patches are built once, patched, as `_LoadStrings` builds
+    /// them ([`PatchedStrings`]). The texts it fills are `l33t` when
+    /// `strings` says the data turns that on ([`CommCatalog::leet_mode`];
+    /// see [`text_tags`](crate::text_tags)).
     #[must_use]
     pub fn with_strings(mut self, strings: Rc<dyn CommCatalog>) -> Self {
-        self.strings = Strings(strings);
+        self.leet = strings.leet_mode();
+        self.strings = Strings(Rc::new(PatchedStrings::new(strings)));
         self
     }
 
@@ -426,22 +439,30 @@ impl Session {
         };
         self.become_class(&record, change, |_| {});
         self.bump_armor();
-        // `_LoadIntfResource` (@0x156c7), as the docked bar sees it: only
-        // the outfitter and the shipyard take these, and both are docked.
+        // `_LoadIntfResource` (@0x156c7), as the docked bar sees it.
         if self.landed.is_some() {
             self.interface_loads.push(InterfaceLoad {
                 government: self.interface_government(),
                 nav: self.nav_mode(),
                 reserves: self.reserves(),
+                texts: self.texts_queued,
             });
         }
     }
 
-    /// The `C`, `E` and `H` run while docked since the last outfit order
-    /// or ship purchase began, in order, each as the status bar's
+    /// The `C`, `E` and `H` run while docked since the last run of docked
+    /// scripts began, in order, each as the status bar's
     /// `_LoadIntfResource` saw it at the operator ([`InterfaceLoad`]);
-    /// taking them empties the list. An order or a purchase that is
-    /// refused before it begins clears nothing.
+    /// taking them empties the list. Each of these begins a run, clearing
+    /// what the one before left untaken: an outfit order
+    /// ([`Session::outfit_order`]), a ship purchase
+    /// ([`Session::buy_ship`]), a mission accept, refusal or abort
+    /// ([`Session::accept_mission`], [`Session::refuse_mission`],
+    /// [`Session::abort_mission`]), an offer asked for at a venue
+    /// ([`Session::next_offer`]), a settling ([`Session::settle_script`],
+    /// a landing's mission checks among what it settles) and a jettison
+    /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
+    /// or a purchase that is refused before it begins clears nothing.
     pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
         std::mem::take(&mut self.interface_loads)
     }
@@ -1995,7 +2016,11 @@ mod tests {
         let mut session = named(strings.clone());
         assert_eq!(rename(&mut session, "T25040", &[0]), [2]);
         assert_eq!(session.pilot().ship_name(), Some("Kestrel II Kestrel"));
-        assert_eq!(*strings.asked.borrow(), [25040], "the given lists are read");
+        assert_eq!(
+            *strings.asked.borrow(),
+            [4001, 4002, 4003, 25040],
+            "the given lists are read: the patched ones once as they are given"
+        );
         assert!(session.take_save_due());
         let mut session = named(lists());
         assert_eq!(rename(&mut session, "T25040", &[1]), [2]);
@@ -2018,6 +2043,14 @@ mod tests {
             "no strings given"
         );
         assert_eq!(session, before);
+    }
+
+    #[test]
+    fn a_t_past_32767_renames_nothing_and_the_rest_runs() {
+        let mut session = named(lists());
+        assert_eq!(rename(&mut session, "T40000 b7", &[0]), Vec::<u16>::new());
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"));
+        assert!(session.pilot().control_bit(Bit::new(7).expect("a bit")));
     }
 
     #[test]

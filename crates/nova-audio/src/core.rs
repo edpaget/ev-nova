@@ -140,6 +140,7 @@ impl<A: Audio> AudioCore<A> {
                     | Showing::MissionText
                     | Showing::MissionInfo
                     | Showing::PlayerInfo
+                    | Showing::Movie
             )
         );
         if self.scene != Some(Showing::Flight) || pauses {
@@ -198,6 +199,9 @@ impl<A: Audio> AudioCore<A> {
             Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
             Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
             Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
+            Sound::Sim(SimSound::PersonOfferBoarded | SimSound::Boarded) => {
+                self.play(self.table.airlock);
+            }
             Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
             Sound::Sim(SimSound::TargetSelected) => self.play(self.table.target_selected),
             Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
@@ -496,6 +500,7 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::MissionText
             | Showing::MissionInfo
             | Showing::PlayerInfo
+            | Showing::Movie
     )
 }
 
@@ -544,7 +549,8 @@ fn has_music(scene: Showing) -> bool {
         | Showing::Offer
         | Showing::MissionText
         | Showing::MissionInfo
-        | Showing::PlayerInfo => false,
+        | Showing::PlayerInfo
+        | Showing::Movie => false,
     }
 }
 
@@ -980,6 +986,60 @@ mod tests {
             Some(Showing::ShipBrowser),
             &[Sound::Sim(SimSound::CargoJettisoned)],
         );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_hail_quote_beeps_154_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::HailQuote)],
+        );
+        assert_eq!(drain(&log), [play(154, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::HailQuote)],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_persons_offer_plays_154_on_its_hail_and_390_on_its_boarding_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::HailOffer),
+                Sound::Sim(SimSound::PersonOfferBoarded),
+            ],
+        );
+        assert_eq!(drain(&log), [play(154, 0.5), play(390, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::HailOffer),
+                Sound::Sim(SimSound::PersonOfferBoarded),
+            ],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_board_plays_390_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Boarded)]);
+        assert_eq!(drain(&log), [play(390, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Boarded)]);
         assert_eq!(drain(&log), [], "sound off");
     }
 
@@ -1949,6 +2009,7 @@ mod tests {
             Showing::MissionText,
             Showing::MissionInfo,
             Showing::PlayerInfo,
+            Showing::Movie,
         ] {
             let (mut core, log) = engine();
             core.update(Some(Showing::Flight), &[THRUST]);

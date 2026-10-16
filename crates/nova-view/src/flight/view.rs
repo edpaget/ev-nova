@@ -412,11 +412,21 @@
 //!   more: its `_screenFaded` holds only while a jump fades out, and
 //!   nothing sets its `_fadePending` (only `_ResetPlayer` writes it, a 0,
 //!   @0x1d7c3).
-//! - I ([`MISSION_INFO_KEY`], a press), outside the map and a jump, asks
-//!   the router for the mission info screen over the paused flight
+//! - I ([`MISSION_INFO_KEY`], a press), outside the map, asks the router
+//!   for the mission info screen over the paused flight
 //!   ([`FlightView::take_mission_info_request`]), letting go of the
 //!   flight keys, when the session shows an active mission there; with
-//!   none it says "You have no active missions." (`STR#` 2002 #354).
+//!   none it says "You have no active missions." (`STR#` 2002 #354) after
+//!   the shared refusal beep
+//!   ([`SimSound::Refused`](nova_sim::SimSound::Refused), @0x70557). The
+//!   session decides ([`Session::press_mission_info`]), and refuses it in
+//!   silence during a jump, its pre-jump stage included (+0x50,
+//!   @0x70424), in the escape pod (+0xc908, @0x7042e), while the ship
+//!   breaks up (`_IsDying` @0x70439, +0x3c @0x7044b), once it has
+//!   exploded, and for
+//!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+//!   take-off or a gate's exit (`_frameCounter`, @0x7045e). A disabled
+//!   ship takes it.
 //! - The player's escorts fly beside it (see [`Session`]), their ship
 //!   types' sprite sheets read with the traffic's. F, D, V and C (presses)
 //!   command them ([`Session::command_escorts`]): attack the player's
@@ -517,7 +527,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -534,21 +544,22 @@ use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     ALERT_CICN, Allegiance, Assigned, Assignment, AsteroidCatalog, Behaviour, BoardRefusal,
     Boarding, BoardingRule, Chance, ClassRow, CombatCatalog, CombatEvent, CommCatalog, CommNote,
-    Condition, Controls, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep, GateKind,
-    GateRefusal, Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help,
-    JumpRefusal, LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires,
-    NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder,
-    OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule,
-    RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, ShipId,
-    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
-    StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal,
-    TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level,
-    lights_level,
+    Condition, Controls, Departure, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep,
+    GateKind, GateRefusal, Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls,
+    Help, JumpRefusal, LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode,
+    NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId,
+    OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView,
+    PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules,
+    Session, Settled, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
+    SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick,
+    TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
+    glow_level, lights_level,
 };
 use nova_sim::{
-    AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
-    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
-    NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent, StellarIff, TagNames,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, ControlBits, Hailed, HireList,
+    HireRefusal, HireTerms, Hired, InterfaceLoad, MissionBoardLine, MissionComputer, MissionId,
+    MissionInfo, MissionInfoPress, MissionShown, News, NotOffered, OfferPrompt, PayNote,
+    PersonRules, PlayerInfo, RefuseShown, SessionEvent, StellarIff, TagNames, TextBar,
     TutorialHint, VenueOffer, ship_layer::SlotSprites,
 };
 use nova_sim::{DrawnBox, DrawnShips};
@@ -580,7 +591,6 @@ use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::galaxy::map::MapPicture;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapCycle, MapMarks, MapMode};
 use crate::spaceport::PortDialog;
-use crate::spaceport::bar::MISSION_INFO_KEY;
 use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, StellarLook, SystemScene};
@@ -588,7 +598,9 @@ use crate::system::starfield;
 use crate::text::TextMetrics;
 use crate::time::{sixtieths, ticks};
 use crate::ui::PlunderShown;
+use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::comm::grouped;
+use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
@@ -603,7 +615,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave";
 /// The port's own overlays on the flight screen, which the original does
 /// not draw: developer settings, both off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -815,6 +827,9 @@ pub const ESCAPING_IN: &str = "Escaping in";
 /// `STR#` 2002 #38: a sabotage kill outfit went off with none named
 /// (`_HandlePlayer` @0x69645-0x6965e).
 pub const BOMB_EXPLODED_ONBOARD: &str = "A bomb has exploded onboard your ship!";
+/// The `l33t` mode's words for a kill outfit with no outfit named, the
+/// string at 0xd9962 (`_HandlePlayer` @0x6962d-0x6963e).
+pub const BOMB_SET_UP: &str = "Someone set up us the bomb!";
 /// `STR#` 2002 #35: a disabled player's pre-jump collapsed
 /// (`_HandlePlayer` `_GetIndString` @0x68a04).
 pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
@@ -971,6 +986,7 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
             return Some(format!("{ESCAPING_IN} {name}."));
         }
         SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
+        SimMessage::BombSetUp => BOMB_SET_UP,
         SimMessage::Sabotaged {
             outfit: Some((outfit, one)),
         }
@@ -1377,6 +1393,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::JumpCollapsed
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
+        | SimMessage::BombSetUp
         | SimMessage::BombExploded { .. }
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
@@ -2025,6 +2042,9 @@ pub struct FlightView<C> {
     sheet_ship: Option<ShipId>,
     /// The HUD's status bar, or why it cannot be shown.
     status_bar: Result<StatusBar, String>,
+    /// The government whose `Interface` `status_bar` was chosen for
+    /// ([`FlightView::choose_bar`]); `None` when the session failed.
+    bar_government: Option<BarFor>,
     /// Turns frame times into simulation steps.
     clock: FixedStep,
     /// The player's ship as it was a step before the session's.
@@ -2204,11 +2224,75 @@ pub struct FlightView<C> {
     /// they show while docked until the next under
     /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
     reserves_scene: Option<Reserves>,
+    /// The bar's redraws held for the docked mission texts shown, one for
+    /// each, made as each closes ([`FlightView::close_mission_text`]).
+    bar_steps: VecDeque<BarStep>,
+    /// The last of [`Session::text_bars`] staged into
+    /// [`FlightView::bar_steps`], by its [`TextBar::texts`].
+    bars_staged: u64,
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
     /// chance ([`radar::static_frame`]); `None` without.
     radar_static: Option<i16>,
     /// The mouse cursor sprite (see the `cursor` module).
     cursor: HoverCursor,
+}
+
+/// The government whose `Interface` a status bar was chosen for
+/// ([`FlightView::choose_bar`]), none or one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BarFor(Option<GovtId>);
+
+/// The bar's redraws as a docked mission text closes
+/// ([`FlightView::close_mission_text`]).
+#[derive(Clone, Debug, PartialEq)]
+struct BarStep {
+    /// The whole bar as the text noted it as it was queued, which its
+    /// caller's `_RefreshSAT` draws as it closes.
+    bar: TextBar,
+    /// The `C`, `E` and `H` run after the text and before the next that
+    /// each changed the `ïntf`: a whole-bar redraw at each operator.
+    loads: Vec<InterfaceLoad>,
+    /// What the dialog or order whose script queued the text draws once
+    /// it has closed, after the last text of its run.
+    then: Then,
+}
+
+impl BarStep {
+    /// Whether it holds the bar's graphic until it closes: a `C`, `E` or
+    /// `H` after its text loads another `ïntf`, or a ship purchase's own
+    /// load comes after it (@0x5f0ac).
+    fn holds_bar(&self) -> bool {
+        !self.loads.is_empty() || matches!(self.then, Then::Purchase { .. })
+    }
+}
+
+/// What a run of docked scripts' caller draws of the bar once its scripts
+/// and their mission texts are done ([`FlightView::stage_bar`]): at once,
+/// or as its last text closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Then {
+    /// Nothing: a landing's settling, an abort, an offer accepted at once.
+    Nothing,
+    /// The whole bar, as the offer dialog (@0xa2e44, @0xa365c) and the
+    /// mission computer's close before its re-entry (@0xa40d7) redraw it.
+    Redraw,
+    /// An outfitter order's own draw (`_DrawStatus` @0x5c5a1 after a buy,
+    /// @0x5d328 after a sale): the radar, and the nav the shipyard's
+    /// restore marked when `passed`, the order having gone through
+    /// ([`FlightView::after_outfit_order`]).
+    Outfit {
+        /// Whether the order passed its button's check.
+        passed: bool,
+    },
+    /// A ship purchase's own load and draw: the bar of the class bought
+    /// (`_LoadIntfResource` @0x5f0ac), the gauges when its `ïntf` is
+    /// another than the one its hooks left loaded (`reserves`), then the
+    /// radar, nav and target (`_DrawStatus` @0x5f0b1;
+    /// [`FlightView::buy_ship`]).
+    Purchase {
+        /// Whether the load redraws the whole bar, gauges and all.
+        reserves: bool,
+    },
 }
 
 /// A message on the message line.
@@ -2344,13 +2428,14 @@ impl<
         }
     }
 
-    /// Resumes a pilot opened from a save as [`Session::face_on_load`]
-    /// does, on the flight's chance: its ship faces a drawn heading, as
-    /// `_LoadPilotData` faces every pilot it loads (@0x7535b-0x75372). A
-    /// session that failed resumes nothing.
+    /// Resumes a pilot opened from a save as [`Session::resume`] does, on
+    /// the flight's chance: its ship faces a drawn heading, as
+    /// `_LoadPilotData` faces every pilot it loads (@0x7535b-0x75372), and
+    /// the offers' roll table is drawn, as the load's `_ResetPlayer` draws
+    /// it (@0x76502, @0x7673e). A session that failed resumes nothing.
     pub fn resume(&mut self) {
         if let Ok(session) = &mut self.session {
-            session.face_on_load(&mut self.chance);
+            session.resume(&mut self.chance);
         }
     }
 
@@ -2374,6 +2459,10 @@ impl<
             ),
             Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
+        let bar_government = session
+            .as_ref()
+            .ok()
+            .map(|session| BarFor(session.interface_government()));
         let previous = session
             .as_ref()
             .map(|session| *session.player())
@@ -2420,6 +2509,7 @@ impl<
             scene,
             sheet,
             sheet_ship,
+            bar_government,
             status_bar,
             clock: FixedStep::new(),
             previous,
@@ -2469,6 +2559,8 @@ impl<
             nav_texts: 0,
             target_scene: None,
             reserves_scene: None,
+            bar_steps: VecDeque::new(),
+            bars_staged: 0,
             radar_static: None,
             cursor: HoverCursor::default(),
         }
@@ -2734,10 +2826,16 @@ impl<
 
     /// Jettisons everything, mission cargo included, as the player info's
     /// Jettison does (`_JettisonCargo(1)` @0x5a66d), saying what went.
+    /// Docked, an `OnFailure` `C`, `E` or `H` of a mission it fails
+    /// (`_QuickMissionFailure` @0x99d83) that changes the `ïntf` redraws
+    /// the whole bar at its operator; the player info's close redraws
+    /// after it (@0x5a725).
     pub fn jettison_all(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.jettison_cargo(true, &mut self.chance);
-        }
+        self.run_docked(Then::Nothing, |view| {
+            if let Ok(session) = &mut view.session {
+                session.jettison_cargo(true, &mut view.chance);
+            }
+        });
         self.say_messages();
     }
 
@@ -2749,22 +2847,24 @@ impl<
     }
 
     /// Presses [`MISSION_INFO_KEY`], as `_HandlePlayer` does
-    /// (@0x70405-0x705a8), through [`Session::press_mission_info`]: with
-    /// an active mission shown, asks the router for the mission info
-    /// screen, letting go of the flight keys; with none, says the
-    /// session's beep and #354 on the message line. A flight whose session
-    /// never started says #354 alone, with no session to beep.
+    /// (@0x70405-0x705a8), the session deciding
+    /// ([`Session::press_mission_info`]): with an active mission shown,
+    /// asks the router for the mission info screen, letting go of the
+    /// flight keys; with none, says the session's #354 on the message
+    /// line after its refusal beep; refused, nothing. A flight whose
+    /// session never started says #354 alone, with no session to beep.
     fn ask_mission_info(&mut self) {
         let Ok(session) = self.session.as_mut() else {
             self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
             return;
         };
         match session.press_mission_info() {
-            Some(info) => {
+            MissionInfoPress::Refused => {}
+            MissionInfoPress::NoActiveMissions => self.say_messages(),
+            MissionInfoPress::Opens(info) => {
                 self.pending_mission_info = Some(info);
                 self.held.clear();
             }
-            None => self.say_messages(),
         }
     }
 
@@ -3586,6 +3686,7 @@ impl<
         if redrawn.ship {
             self.follow_ship();
         }
+        self.follow_bar();
         if redrawn.system {
             self.lay_out(system);
         } else if redrawn.stellar {
@@ -3676,23 +3777,66 @@ impl<
     }
 
     /// Takes off from the stellar landed on, and gives it; `None` when the
-    /// ship has not landed. The next frame draws the ship where it is, at
+    /// ship has not landed. The session leaves the port as its Leave does
+    /// ([`Session::leave_port`]), settling the take-off's events at once.
+    /// The next frame draws the ship where it is, at
     /// the stellar, not on its way from where it was, in the system a move
     /// made while landed went to, laid out afresh as the session tells
     /// ([`SessionEvent`]); it shows no message
     /// from before the landing, but greets the pilot past the tutorial
-    /// ([`take_off_greeting`]), followed by how many hired escorts defected
+    /// ([`take_off_greeting`]), or shows a held `Q`'s message, for
+    /// [`SCRIPT_MESSAGE_TICKS`], in place of the greeting
+    /// (`_PlayerLandOnStellar` @0x63588-0x635e3), followed by how many
+    /// hired escorts defected
     /// for want of the take-off's pay ([`defection_message`]); the
     /// session has populated the system's traffic afresh
     /// ([`Session::take_off`]), so no frame draws the ships from before
     /// the landing. Leaving passes the stay's days, their
-    /// events rolled on the flight's chance.
+    /// events rolled on the flight's chance, and what settling them did
+    /// shows as [`FlightView::settle_script`] shows it.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
-        let stellar = session.take_off(&self.catalog, &mut self.chance)?;
-        let (line, rest) = self.took_off();
-        self.say_after(&line, rest);
-        Some(stellar)
+        let departure = session.leave_port(&self.catalog, &mut self.chance)?;
+        Some(self.departed(departure))
+    }
+
+    /// Takes off for a `Q` run while landed, if its leave is due
+    /// ([`Session::leave_if_due`]), as [`FlightView::take_off`] does for
+    /// the port's Leave, and gives the stellar left; `None`, and nothing
+    /// changes, when no leave is due. The router calls it once nothing
+    /// shown over the spaceport holds the leave.
+    pub fn leave_if_due(&mut self) -> Option<StellarId> {
+        let session = self.session.as_mut().ok()?;
+        let departure = session.leave_if_due(&self.catalog, &mut self.chance)?;
+        Some(self.departed(departure))
+    }
+
+    /// Catches the screen up with `departure`: the take-off's line, then
+    /// what settling it did; gives the stellar left.
+    fn departed(&mut self, departure: Departure) -> StellarId {
+        let Departure { stellar, settled } = departure;
+        let mut said: Vec<(String, u16)> = self
+            .session
+            .as_mut()
+            .ok()
+            .and_then(Session::take_leave_message)
+            .into_iter()
+            .map(|text| (text, SCRIPT_MESSAGE_TICKS))
+            .collect();
+        let (line, rest, system) = self.took_off();
+        said.extend(line);
+        self.say_after(&said, rest);
+        self.show_settled(settled, system);
+        stellar
+    }
+
+    /// Whether a `Q` run while landed waits for the take-off
+    /// ([`Session::leave_due`]): whoever shows the spaceport leaves it
+    /// ([`FlightView::leave_if_due`]), as its Leave does, once nothing
+    /// shown over it holds the leave.
+    #[must_use]
+    pub fn leave_due(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::leave_due)
     }
 
     /// Catches the screen up with the session having taken off: the ship
@@ -3768,7 +3912,9 @@ impl<
     /// texts noted at the port's last nav redraw is kept, and
     /// [`FlightView::take_mission_texts`] draws that text's nav, noted
     /// before the deselect, while the flash lasts.
-    fn took_off(&mut self) -> (Said, Said) {
+    ///
+    /// It gives, last, whether the system was laid out afresh.
+    fn took_off(&mut self) -> (Said, Said, bool) {
         let (pay, messages, held) = self
             .session
             .as_mut()
@@ -3781,7 +3927,7 @@ impl<
             })
             .unwrap_or_default();
         let nav_texts = self.nav_texts;
-        self.catch_up();
+        let system = self.catch_up().system;
         self.place_ship();
         self.read_npc_sheets();
         self.message = None;
@@ -3799,7 +3945,7 @@ impl<
             .partition(|message| matches!(message, SimMessage::TookOff { .. }));
         let mut line = self.word(greeting);
         line.extend(pay_said(&pay));
-        (line, self.word(rest))
+        (line, self.word(rest), system)
     }
 
     /// Says `line` as [`FlightView::say_all`] does, then each of `rest` in
@@ -3825,11 +3971,11 @@ impl<
 
     /// Settles what the set expressions run since queued, as
     /// [`Session::settle_script`] does, reading the catalog and drawing on
-    /// the flight's chance, and gives the stellar a `Q` made the ship take
-    /// off from, for the router to close its spaceport. A take-off is
-    /// caught up with as [`FlightView::take_off`] is, the `Q`'s message
-    /// shown before what the take-off's pay has to say. Otherwise the
-    /// screen catches up with what the session told ([`SessionEvent`]): a
+    /// the flight's chance. A `Q` run while landed never takes off here:
+    /// it is held ([`FlightView::leave_due`]) for the router to leave the
+    /// spaceport once nothing shown over it holds the leave
+    /// ([`FlightView::leave_if_due`]), which shows its message. The screen
+    /// catches up with what the session told ([`SessionEvent`]): a
     /// move in flight lays out the system the ship is in afresh, even the
     /// same one, as the original kills its explosions and smoke, and how
     /// many fighters were abandoned, if any, is shown after a `Q`'s
@@ -3838,21 +3984,42 @@ impl<
     /// session's messages raised as it settled show at once, as a
     /// deadline missed on the take-off does, before a text dialog can
     /// pause flight; an arrival's waits for the arrival as on a tick.
-    pub fn settle_script(&mut self) -> Option<StellarId> {
-        let session = self.session.as_mut().ok()?;
-        let settled = session.settle_script(&self.catalog, &mut self.chance);
-        let flying = session.landed().is_none();
+    ///
+    /// Docked, the settling is a run of docked scripts as the bar sees it
+    /// ([`FlightView::stage_bar`]): a landing's `_MissionLandCheck`
+    /// (@0x5fbeb) shows each `CompText`, `FailText`, `ShipDoneText`,
+    /// `LoadCargText` and `DumpCargoText` over the last bar drawn, and the
+    /// `C`, `E` and `H` that `OnSuccess`, `OnFailure`, `OnShipDone`, an
+    /// `S`'s `OnAccept` and the crons of a success's days run redraw at
+    /// their operators, ordered against those texts. With no dialog of
+    /// its own, nothing redraws after the last text.
+    pub fn settle_script(&mut self) {
+        if self.session.is_err() {
+            return;
+        }
+        let settled = self.run_docked(Then::Nothing, |view| {
+            view.session
+                .as_mut()
+                .map(|session| session.settle_script(&view.catalog, &mut view.chance))
+                .unwrap_or_default()
+        });
+        self.show_settled(settled, false);
+    }
+
+    /// Shows what a settling did ([`FlightView::settle_script`]), the
+    /// screen caught up first; `laid_out` says the system was laid out
+    /// afresh since the settling, before this catches up.
+    fn show_settled(&mut self, settled: Settled, laid_out: bool) {
+        let flying = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_none());
         let mut said: Vec<(String, u16)> = settled
             .message
             .into_iter()
             .map(|text| (text, SCRIPT_MESSAGE_TICKS))
             .collect();
-        let mut rest = Vec::new();
-        if settled.took_off.is_some() {
-            let (line, after) = self.took_off();
-            said.extend(line);
-            rest = after;
-        } else if self.catch_up().system && flying {
+        if (self.catch_up().system || laid_out) && flying {
             let notes = self
                 .session
                 .as_mut()
@@ -3862,9 +4029,8 @@ impl<
                 (fighters_abandoned_message(count), MESSAGE_TICKS)
             }));
         }
-        self.say_after(&said, rest);
+        self.say_all(&said);
         self.say_messages();
-        settled.took_off
     }
 
     /// Plays `effect` for the ship having come out of a gate, caught up
@@ -4035,16 +4201,26 @@ impl<
     /// whatever its operators' order, as it runs first.
     ///
     /// The gauges (`[1]`, `[4]`) are not marked. A `C`, `E` or `H` in the old
-    /// class's `OnRetire` or the new one's `OnPurchase` that puts the
-    /// ship under another `ïntf` redraws the whole bar at that operator
-    /// (`FlightView::redraw_at_interface_loads`), so the gauges show as
-    /// they stood there, before the purchase's fill (@0x5f04e-0x5f09d).
-    /// Then the purchase's own `_LoadIntfResource` (@0x5f0ac) redraws the
-    /// gauges only when the ship's `ïntf` is still another than the one
-    /// loaded (`hud::interface_for`), as its whole-bar `_RedrawStatus`
-    /// (@0x739bd) runs only for an ID other than the one loaded
-    /// (`_currentIntf`, @0x73663-0x73672); otherwise they wait for the
-    /// shipyard to close ([`FlightView::refresh_status`]).
+    /// class's `OnRetire` (@0x5ecff) or the new one's `OnPurchase`
+    /// (@0x5f00d) that puts the ship under another `ïntf` redraws the
+    /// whole bar at that operator, so the gauges show as they stood
+    /// there, before the purchase's fill (@0x5f051-0x5f06b). Then the
+    /// purchase's own `_LoadIntfResource` (@0x5f0ac) loads the class's
+    /// bar and redraws the gauges only when the ship's `ïntf` is still
+    /// another than the one loaded (`hud::interface_for`), as its
+    /// whole-bar `_RedrawStatus` (@0x739bd) runs only for an ID other than
+    /// the one loaded (`_currentIntf`, @0x73663-0x73672); otherwise they
+    /// wait for the shipyard to close ([`FlightView::refresh_status`]).
+    ///
+    /// An `S` in either hook shows its mission's texts inside the
+    /// purchase (`_EvalSetExp` @0x153ff → `_DoMissionAccept` @0x15407), so
+    /// the hooks' redraws are ordered against them
+    /// ([`FlightView::stage_bar`]): those before the first text redraw at
+    /// once, each text shows over the last bar drawn and its close
+    /// redraws as the text noted it, then at the hooks' operators after
+    /// it; and the purchase's own load and draw come only after the last
+    /// text has closed ([`Then::Purchase`]). So under the text the old
+    /// class's bar shows, with the gauges from before the purchase.
     ///
     /// Before all that, the whole bar is redrawn as the name prompt
     /// closes on OK (`_RefreshSAT` @0x5eb73, right after
@@ -4058,28 +4234,15 @@ impl<
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
         let after = self.interface_now();
-        let loaded = self.redraw_at_interface_loads(before.as_ref());
+        let (changes, loaded) = self.interface_changes(before.as_ref());
+        self.stage_bar(
+            changes,
+            Then::Purchase {
+                reserves: after != loaded,
+            },
+        );
         self.catch_up();
-        self.retake_radar();
-        self.retake_nav();
-        self.retake_target();
-        if after != loaded {
-            self.retake_reserves();
-        }
         Ok(bought)
-    }
-
-    /// The `ïntf` the ship flies under now, as [`hud::interface_for`]
-    /// reads it from the session's government; none for a session that
-    /// failed. A ship purchase and an outfitter order each compare it
-    /// before and after, as `_LoadIntfResource` redraws the whole bar
-    /// only for an `ïntf` other than the one loaded (@0x73663-0x73672).
-    fn interface_now(&self) -> Option<Result<i16, String>> {
-        let session = self.session.as_ref().ok()?;
-        Some(hud::interface_for(
-            &self.catalog,
-            session.interface_government(),
-        ))
     }
 
     /// Buys or sells an outfit as [`Session::outfit`] does, it and its
@@ -4135,7 +4298,7 @@ impl<
     /// order's call, before any frame is drawn.
     ///
     /// The redraw is at the `C`, `E` or `H` itself, as the original's is
-    /// ([`FlightView::redraw_at_interface_loads`]): the nav and gauges
+    /// ([`FlightView::stage_bar`]): the nav and gauges
     /// show as they stood at the last operator that changed the `ïntf`,
     /// so an `M` or `N` after it in the same script (@0x156c7 → @0x739bd,
     /// then @0x156f2-0x15705) shows only at the port's next nav redraw,
@@ -4143,20 +4306,20 @@ impl<
     /// back within one order still redraws, though the one after the
     /// order is the one before it.
     ///
-    /// Left out: the same redraw at a `C`, `E` or `H` in the other
-    /// scripts run while docked: a mission's `OnAccept` (@0xa1da2),
-    /// `OnRefuse`, `OnSuccess` (@0xa04f8), `OnFailure` and `OnAbort`, and
-    /// the bar's and the other hooks. Ours redraws after the whole script
-    /// at its own points ([`FlightView::accept_mission`],
-    /// [`FlightView::refuse_mission`],
-    /// [`FlightView::take_mission_texts`]). Where a text dialog follows
-    /// before the dialog's own redraw, the original shows the bar as it
-    /// was before the script, or as its last such operator left it: the
-    /// `BriefText` @0xa1f0e before `_RefreshSAT` @0xa1f13, for one. Stock
-    /// reaches it: `mïsn` 197 and 320's `OnAccept`s, `H381 … G207` and
-    /// `H382 … G209`, change the shield's most after the `H`, under
-    /// `BriefText` 5422 and 5367. Filed as
-    /// rdm:phase/missions-fidelity/phase-31-cee-e-h-redraw-in-docked-scripts.
+    /// An `S` in the hook shows its mission's texts inside the order
+    /// (`_EvalSetExp` @0x153ff → `_DoMissionAccept` @0x15407, each text
+    /// closing with `_RefreshSAT` @0xa1f13), so the hook's redraws are
+    /// ordered against them as every docked script's are
+    /// ([`FlightView::stage_bar`]): the `C`, `E` and `H` before the first
+    /// text redraw at once, each text shows over the last bar drawn and
+    /// its close redraws the bar as the text noted it, then at the
+    /// operators after it; and the order's own draw (@0x5c5a1, @0x5d328,
+    /// after `_SystemInfoToShipStats` and `_SetupPortAvailableItems`)
+    /// comes only after the last text has closed ([`Then::Outfit`]). That
+    /// text's close has drawn the nav, letting go of the shipyard's mark,
+    /// so the order's draw then redraws only the radar. No stock outfit
+    /// reaches it: `oütf` 363's `S731` starts a mission with
+    /// no `BriefText`.
     ///
     /// The buy's and the sell's own `_DrawStatus` (@0x5c5a1, @0x5d328)
     /// draw the nav too when the shipyard's restore marked it
@@ -4169,60 +4332,8 @@ impl<
     /// button's check passed, as the loop then runs no pass and falls
     /// through to the draw (`_DoQuantityDialog` @0x5c1aa, @0x5c2fc-0x5c2ff).
     fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>, passed: bool) {
-        self.redraw_at_interface_loads(before);
-        // After a whole-bar redraw, both are what it drew: it took the
-        // radar, and its nav consumed the shipyard's mark, as
-        // `_RedrawStatus` marks and draws every area.
-        self.retake_radar();
-        if passed {
-            self.draw_marked_nav();
-        }
-    }
-
-    /// Redraws the whole bar at the `C`, `E` and `H` the session ran while
-    /// docked since its order or purchase began
-    /// ([`Session::take_interface_loads`]), given the `ïntf` loaded before
-    /// it (`before`, [`FlightView::interface_now`]). Gives the `ïntf`
-    /// loaded after them.
-    ///
-    /// Each operator's `_LoadIntfResource` (`_EvalSetExp` @0x156c7) asks
-    /// for its ship's `ïntf` and compares it with the one loaded at that
-    /// moment (`_currentIntf`, @0x73663-0x73672): the same returns at once,
-    /// and another is loaded and redraws the whole bar (`_RedrawStatus(1)`
-    /// @0x739b6-0x739bd). So two changes in one script redraw twice, the
-    /// last staying, and a change and a change back redraw though the
-    /// `ïntf` after the script is the one before it. Each redraw draws the
-    /// nav and the gauges as they stood at its operator: `M` and `N` mark
-    /// nothing (@0x15705, @0x157e3, @0x158fd), and an outfitter order's own
-    /// draw and reset mark only the cargo (@0x5c598-0x5c5a1,
-    /// @0xc82e-0xc833), so an `M`, `N`, `G` or `D` after the last redraw
-    /// shows only at the port's next redraw of its area. The radar and the
-    /// target panel are taken as they are after the script, which no
-    /// operator in it changes but the ship's own IFF.
-    fn redraw_at_interface_loads(
-        &mut self,
-        before: Option<&Result<i16, String>>,
-    ) -> Option<Result<i16, String>> {
-        let loads = self
-            .session
-            .as_mut()
-            .map(Session::take_interface_loads)
-            .unwrap_or_default();
-        let mut loaded = before.cloned();
-        let mut last = None;
-        for load in loads {
-            let interface = hud::interface_for(&self.catalog, load.government);
-            if loaded.as_ref() != Some(&interface) {
-                loaded = Some(interface);
-                last = Some(load);
-            }
-        }
-        if let Some(load) = last {
-            self.redraw_status();
-            self.nav_scene = Some((load.nav, self.nav_display(load.nav)));
-            self.reserves_scene = Some(load.reserves);
-        }
-        loaded
+        let (changes, _) = self.interface_changes(before);
+        self.stage_bar(changes, Then::Outfit { passed });
     }
 
     /// Assigns the ship captured, as [`Session::assign`] does, and says
@@ -4243,35 +4354,156 @@ impl<
         Some(assigned)
     }
 
-    /// Reads the player's sprite sheet and status bar afresh when the
-    /// session flies a class other than the one they were read for, so a
-    /// ship bought, captured or changed by a set expression is drawn under
-    /// its own bar; called only when the session tells the ship changed
+    /// Reads the player's sprite sheet afresh when the session flies a
+    /// class other than the one it was read for, so a ship bought,
+    /// captured or changed by a set expression is drawn in its own
+    /// sprites; called only when the session tells the ship changed
     /// ([`FlightView::catch_up`]), which it may tell of the class it was.
     /// A sheet that cannot be read is kept against its class too, so it is
-    /// not tried again. The bar is chosen again as `_LoadIntfResource`
-    /// does ([`hud::rechoose_status_bar`]); the original returns at once
-    /// for the bar already loaded, and asking only on a new class does the
-    /// same.
-    ///
-    /// The original loads the bar inside the purchase, capture or set
-    /// expression. Ours waits for the next `catch_up`, on the next frame or
-    /// in the view call that drove the change, which is still before any
-    /// frame is drawn, so the player never sees the old bar on the new
-    /// ship; a purchase while landed is chosen before flight is drawn
-    /// again.
+    /// not tried again. The status bar follows on its own
+    /// ([`FlightView::follow_bar`]).
     fn follow_ship(&mut self) {
         let Ok(session) = &self.session else { return };
         let ship = session.ship();
         if self.sheet_ship != Some(ship) {
             self.sheet = self.catalog.ship_sheet(ship);
-            self.status_bar = hud::rechoose_status_bar(
-                &self.catalog,
-                session.interface_government(),
-                self.status_bar.as_ref().ok(),
-            );
             self.sheet_ship = Some(ship);
         }
+    }
+}
+
+impl<C: StatusBars> FlightView<C> {
+    /// Chooses the status bar for the ship's government, as
+    /// `_LoadIntfResource` loads it ([`hud::rechoose_status_bar`]), unless
+    /// a mission text still shown holds the bar a `C`, `E` or `H` after it
+    /// loads ([`FlightView::bar_held`]). Called at every
+    /// [`FlightView::catch_up`] and as a text closes.
+    ///
+    /// The original loads the bar inside the purchase, capture or set
+    /// expression. Ours waits for the next `catch_up`, on the next frame or
+    /// in the view call that drove the change, which is still before any
+    /// frame is drawn: in flight, or docked with no text shown, the player
+    /// never sees the old bar on the new ship. Under a docked mission text
+    /// queued before the operator, the original shows the old bar
+    /// (`_LoadIntfResource` @0x156c7 comes after the text), and so does
+    /// ours, until that text's close redraws at the operator
+    /// ([`FlightView::close_mission_text`]). A redraw that drops a held
+    /// text's redraws ([`FlightView::redraw_status`]) lets go of the hold
+    /// at the next `catch_up`, a tick at most, before the next frame.
+    fn follow_bar(&mut self) {
+        if self.bar_held() {
+            return;
+        }
+        if let Ok(session) = &self.session {
+            let government = session.interface_government();
+            self.choose_bar(government);
+        }
+    }
+
+    /// Chooses the status bar for `government` ([`hud::rechoose_status_bar`])
+    /// when the bar shown was chosen for another: the original returns at
+    /// once for the `ïntf` already loaded (@0x73663-0x73672), and asking
+    /// only for another government does the same, as a ship type's
+    /// government picks its `ïntf` ([`Session::interface_government`]).
+    fn choose_bar(&mut self, government: Option<GovtId>) {
+        if self.bar_government == Some(BarFor(government)) {
+            return;
+        }
+        self.status_bar =
+            hud::rechoose_status_bar(&self.catalog, government, self.status_bar.as_ref().ok());
+        self.bar_government = Some(BarFor(government));
+    }
+
+    /// The `ïntf` the ship flies under now, as [`hud::interface_for`]
+    /// reads it from the session's government; none for a session that
+    /// failed. A ship purchase and an outfitter order each compare it
+    /// before and after, as `_LoadIntfResource` redraws the whole bar
+    /// only for an `ïntf` other than the one loaded (@0x73663-0x73672).
+    fn interface_now(&self) -> Option<Result<i16, String>> {
+        let session = self.session.as_ref().ok()?;
+        Some(hud::interface_for(
+            &self.catalog,
+            session.interface_government(),
+        ))
+    }
+
+    /// The `C`, `E` and `H` the session ran while docked since its last
+    /// run of docked scripts began ([`Session::take_interface_loads`])
+    /// that each loaded another `ïntf`, in order, from the `ïntf` loaded
+    /// before them (`before`, [`FlightView::interface_now`]), as
+    /// `_LoadIntfResource` compares each with the one loaded at that
+    /// moment (`_currentIntf`, @0x73663-0x73672); and the `ïntf` loaded
+    /// after them.
+    fn interface_changes(
+        &mut self,
+        before: Option<&Result<i16, String>>,
+    ) -> (Vec<InterfaceLoad>, Option<Result<i16, String>>) {
+        let loads = self
+            .session
+            .as_mut()
+            .map(Session::take_interface_loads)
+            .unwrap_or_default();
+        let mut loaded = before.cloned();
+        let mut changes = Vec::new();
+        for load in loads {
+            let interface = hud::interface_for(&self.catalog, load.government);
+            if loaded.as_ref() != Some(&interface) {
+                loaded = Some(interface);
+                changes.push(load);
+            }
+        }
+        (changes, loaded)
+    }
+
+    /// Runs `run` on the session, as the docked bar sees it: the `ïntf`
+    /// loaded before it is noted, and what it ran docked is staged
+    /// ([`FlightView::stage_bar`]), the dialog drawing `then` after it. In
+    /// flight `run` runs alone.
+    fn run_docked<T>(&mut self, then: Then, run: impl FnOnce(&mut Self) -> T) -> T {
+        if !self.docked() {
+            return run(self);
+        }
+        let before = self.interface_now();
+        let done = run(self);
+        let (changes, _) = self.interface_changes(before.as_ref());
+        self.stage_bar(changes, then);
+        done
+    }
+}
+
+impl<C: DescriptionSource + DescriptionGraphics> FlightView<C> {
+    /// `dësc` `id`, loaded as `_LoadDescription` loads one for a screen
+    /// that shows it now: read from the catalog, then taken in by the
+    /// session ([`Session::load_description`]), its conditional text
+    /// resolved for the pilot, the remembered rank governments reset and
+    /// parsed, its movie the last loaded ([`FlightView::loaded_after_movie`]),
+    /// and in the `l33t` mode its letters drawn on the flight's chance.
+    /// With a session that failed, only its conditional text is resolved,
+    /// for a new pilot ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)).
+    ///
+    /// # Errors
+    ///
+    /// Why the `dësc` cannot be read; the governments are kept and the
+    /// movie emptied, as a missing one's are (@0x71a5e-0x71a77).
+    pub fn load_description(&mut self, id: i16) -> Result<String, String> {
+        let raw = match self.catalog.description(id) {
+            Ok(raw) => raw,
+            Err(reason) => {
+                if let Ok(session) = &mut self.session {
+                    let _ = session.load_description(None, None, &mut self.chance);
+                }
+                return Err(reason);
+            }
+        };
+        let movie = self.catalog.description_movie(id);
+        Ok(match &mut self.session {
+            Ok(session) => session.load_description(Some(&raw), movie.as_ref(), &mut self.chance),
+            Err(_) => nova_sim::text_parse::conditional_text(
+                &raw,
+                nova_sim::control::Gate::FRESH.pilot,
+                nova_sim::text_parse::ParseRules::default(),
+            ),
+        })
     }
 }
 
@@ -4328,18 +4560,20 @@ impl<C> FlightView<C> {
     ///   @0xa395b), the same way.
     /// - The bar (@0x4945e), News (@0x48153), the ship description, the
     ///   shipyard's or the hire screen's (@0x5bac2), player info
-    ///   (@0x5a725) and mission info (@0x9e769), as the app hears from the
-    ///   spaceport; player info and mission info over flight too.
+    ///   (@0x5a725) and mission info (@0x9e769), whatever opened it (the
+    ///   spaceport, the bar, the computer, the outfitter, the exchange,
+    ///   the shipyard, the hire screen, either's ship description or an
+    ///   offer), as the app hears from the spaceport; player info and
+    ///   mission info over flight too.
     ///
     /// The shipyard's name prompt redraws the same way as it closes
     /// ([`FlightView::buy_ship`], [`FlightView::decline_ship`], @0x5eb73),
     /// and so does the bar's map in port ([`FlightView::close_map`],
     /// @0x13bc9). The closings the original redraws at that ours can't
     /// reach (the bar's Gamble text, the map from the other port screens,
-    /// mission info from the shops, the description or an offer,
     /// Preferences' menu command, the shops' faded text dialogs, an OS
-    /// update event) are recorded,
-    /// with their addresses, in the spaceport's module docs
+    /// update event) are recorded, with their addresses, in the
+    /// spaceport's module docs
     /// ([`crate::spaceport::view`]).
     pub fn refresh_status(&mut self) {
         self.redraw_status();
@@ -4432,14 +4666,19 @@ impl<C> FlightView<C> {
     /// ours as the map closes) and on closing the comm dialog
     /// ([`FlightView::hang_up`]), the mission dialog
     /// ([`FlightView::accept_mission`], [`FlightView::refuse_mission`]) and
-    /// the text dialog ([`FlightView::take_mission_texts`]), which ours
-    /// also runs in port.
+    /// the text dialog ([`FlightView::take_mission_texts`]). In port, and
+    /// for a person's offer answered over flight, the mission dialog's
+    /// and the text dialog's are held until the texts they wait for close
+    /// ([`FlightView::close_mission_text`]); this
+    /// redraw drops any still held, so a text never shows over a later
+    /// redraw.
     ///
     /// In port the original redraws the bar at other points too, each
     /// taken here in part: the radar alone after an outfitter order, and
-    /// everything at each `C`, `E` or `H` of its `OnPurchase` or `OnSell`
-    /// that puts the ship under another `ïntf` (`_LoadIntfResource`
-    /// @0x156c7 → @0x739bd, [`FlightView::redraw_at_interface_loads`]),
+    /// everything at each `C`, `E` or `H` of its `OnPurchase` or `OnSell`,
+    /// or of a docked mission script, that puts the ship under another
+    /// `ïntf` (`_LoadIntfResource` @0x156c7 → @0x739bd,
+    /// [`FlightView::stage_bar`]),
     /// the radar, nav and target on a ship purchase and everything on one
     /// under another `ïntf` ([`FlightView::buy_ship`]), the fuel gauge on a recharge
     /// ([`FlightView::recharge`]), everything as the shipyard's name
@@ -4447,6 +4686,13 @@ impl<C> FlightView<C> {
     /// [`FlightView::decline_ship`]), and everything as a dialog closes
     /// ([`FlightView::refresh_status`]).
     fn redraw_status(&mut self) {
+        self.bar_steps.clear();
+        self.redraw_whole();
+    }
+
+    /// The whole bar's snapshots taken afresh ([`FlightView::redraw_status`]),
+    /// keeping the redraws held for the mission texts shown.
+    fn redraw_whole(&mut self) {
         self.retake_radar();
         self.retake_nav();
         self.retake_target();
@@ -4657,9 +4903,10 @@ impl<C> FlightView<C> {
     /// Flight doesn't advance in port, so while docked only the port's
     /// nav redraws ours models retake the snapshot
     /// ([`FlightView::redraw_status`]: landing, a docked start, a shop
-    /// closing, an accept or refusal, mission texts, and an outfitter order
-    /// whose script changes the `ïntf`, as at its last change; a ship
-    /// purchase, [`FlightView::buy_ship`];
+    /// closing, an accept or refusal, a mission text closing
+    /// ([`FlightView::close_mission_text`]), and an outfitter order or a
+    /// docked mission script whose `C`, `E` or `H` changes the `ïntf`, as
+    /// at that change; a ship purchase, [`FlightView::buy_ship`];
     /// a port dialog's close, [`FlightView::close_port_dialog`]; and the
     /// other closings [`FlightView::refresh_status`] lists). A
     /// landed `M` or `N`'s write (`_EvalSetExp` @0x156f2-0x15705,
@@ -4675,6 +4922,9 @@ impl<C> FlightView<C> {
     /// models, or the take-off lets go of it. The take-off's own held nav
     /// shows in flight whatever the mode, in the first frame drawn after
     /// it and to the end of that frame's tick ([`FlightView::took_off`]).
+    /// The snapshot shows in flight whatever the mode, too, while the
+    /// texts of a person's offer answered over flight show
+    /// ([`FlightView::answer_in_flight`]).
     fn nav_shown(&self) -> NavDisplay {
         let docked = self
             .session
@@ -4683,7 +4933,10 @@ impl<C> FlightView<C> {
         match &self.nav_scene {
             Some((_, shown))
                 if self.hud_waits()
-                    && (docked || self.nav_flash.is_some() || self.nav_mode_shown()) =>
+                    && (docked
+                        || !self.bar_steps.is_empty()
+                        || self.nav_flash.is_some()
+                        || self.nav_mode_shown()) =>
             {
                 shown.clone()
             }
@@ -4792,7 +5045,8 @@ impl<C> FlightView<C> {
 
     /// Holds `offer`'s prompt for the router, letting go of the flight
     /// keys; a mission accepted at once shows nothing here, its texts
-    /// queued in the session for the router to show over flight.
+    /// queued in the session, its before-movie first, for the router to
+    /// show over flight.
     fn hold_offer(&mut self, offer: VenueOffer) {
         if let VenueOffer::Prompt(prompt) = offer {
             self.pending_offer = Some(prompt);
@@ -5100,50 +5354,190 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// Opens the mission computer of the stellar landed on, as
+    /// [`Session::open_mission_computer`] does; a session that failed has
+    /// nothing available.
+    ///
+    /// # Errors
+    ///
+    /// The [`ComputerRefusal`] that applies.
+    pub fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
+        match &mut self.session {
+            Ok(session) => session.open_mission_computer(),
+            Err(_) => Err(ComputerRefusal::NoneAvailable),
+        }
+    }
+
+    /// The mission computer's row of `mission`, selected and its text
+    /// loaded, as [`Session::show_computer_row`] gives it on the flight's
+    /// chance; none for a session that failed.
+    pub fn show_computer_row(&mut self, mission: MissionId) -> Option<ComputerRow> {
+        match &mut self.session {
+            Ok(session) => session.show_computer_row(mission, &mut self.chance),
+            Err(_) => None,
+        }
+    }
+
+    /// The after-movie a `STR#` text shown now plays, as
+    /// [`Session::loaded_after_movie`] gives it; none for a session that
+    /// failed.
+    #[must_use]
+    pub fn loaded_after_movie(&self) -> Option<nova_sim::DescMovie> {
+        self.session
+            .as_ref()
+            .ok()
+            .and_then(Session::loaded_after_movie)
+    }
+
+    /// Loads `mission`'s offer `dësc` again as the mission info screen
+    /// opened over its offer dialog closes, as
+    /// [`Session::reload_offer_desc`] does on the flight's chance; nothing
+    /// for a session that failed.
+    pub fn reload_offer_desc(&mut self, mission: MissionId) {
+        if let Ok(session) = &mut self.session {
+            session.reload_offer_desc(mission, &mut self.chance);
+        }
+    }
+
+    /// The mission info's text of `slot`, selected and loaded, as
+    /// [`Session::show_info_row`] gives it on the flight's chance; none
+    /// for a session that failed.
+    pub fn show_info_row(&mut self, slot: u8) -> Option<String> {
+        match &mut self.session {
+            Ok(session) => session.show_info_row(slot, &mut self.chance),
+            Err(_) => None,
+        }
+    }
+
     /// Accepts `mission` as [`Session::accept_mission`] does, on the
     /// flight's chance: the slot it went into. The HUD is redrawn, as the
     /// original's mission dialog does on closing
     /// ([`FlightView::redraw_status`]): every close of `_DoMissionDialog`
     /// that disposes the dialog, an accept with no text included, ends in
-    /// `_RefreshSAT` (@0xa40c8-0xa40d7), which redraws the whole bar. The
-    /// port's nav and cargo `_DrawStatus` after it (@0x6003a-0x60046) adds
-    /// nothing, so ours matches. The redraw comes after `OnAccept` runs
-    /// (@0xa3bb4 → @0xa40c8), and a landed `M` or `N` in it writes the nav
-    /// at its operator, so the redraw shows it; a `BriefText` queued after
-    /// `OnAccept` leaves this redraw shown
-    /// ([`FlightView::take_mission_texts`]).
+    /// `_RefreshSAT` (@0xa40c8-0xa40d7), which redraws the whole bar, and
+    /// so does the offer dialog after its accept (@0xa2e44, then
+    /// @0xa365c). The port's nav and cargo `_DrawStatus` after the
+    /// computer's (@0x6003a-0x60046) adds nothing, so ours matches. The
+    /// redraw comes after `OnAccept` runs (@0xa3bb4 → @0xa40c8), and a
+    /// landed `M` or `N` in it writes the nav at its operator, so the
+    /// redraw shows it.
+    ///
+    /// Docked, the bar is redrawn as the original draws it around the
+    /// accept ([`FlightView::stage_bar`]). The offer dialog with a refuse
+    /// button redraws the whole bar first (@0xa2df8,
+    /// [`FlightView::redraw_before_answer`]); the mission computer and the
+    /// one-button dialog don't. An `OnAccept` `C`, `E` or `H` that changes
+    /// the `ïntf` redraws at its operator. The `BriefText` (@0xa1f0e) and
+    /// the `LoadCargText` (@0xa1fb5) show over the last bar drawn, each
+    /// close redraws the whole bar as the text noted it (@0xa1f13,
+    /// @0xa1fba; [`FlightView::close_mission_text`]), and the dialog's own
+    /// redraw comes once the last has closed. So under the `BriefText` the
+    /// gauges and nav show as before `OnAccept`, or as its last `ïntf`
+    /// change left them, as stock `mïsn` 197's and 320's do.
+    ///
+    /// In flight, a person's offer is answered the same way
+    /// ([`FlightView::answer_in_flight`]): the bar is taken before the
+    /// accept and held under its texts, which show over it, and drawn
+    /// live again once the last has closed.
     ///
     /// # Errors
     ///
     /// The [`AcceptError`] that applies; a session that failed offers
     /// nothing.
-    pub fn accept_mission(&mut self, mission: MissionId) -> Result<u8, AcceptError> {
-        let accepted = match &mut self.session {
-            Ok(session) => session.accept_mission(mission, &mut self.chance),
+    pub fn accept_mission(&mut self, mission: MissionId) -> Result<u8, AcceptError>
+    where
+        C: StatusBars,
+    {
+        if !self.docked() {
+            return self.answer_in_flight(|view| match &mut view.session {
+                Ok(session) => session.accept_mission(mission, &mut view.chance),
+                Err(_) => Err(AcceptError::NotOffered),
+            });
+        }
+        self.redraw_before_answer(mission);
+        self.run_docked(Then::Redraw, |view| match &mut view.session {
+            Ok(session) => session.accept_mission(mission, &mut view.chance),
             Err(_) => Err(AcceptError::NotOffered),
-        };
+        })
+    }
+
+    /// Answers a person's offer over flight with `answer`, as
+    /// `_OfferOneMission` does from a hail (@0x62293) or a boarding
+    /// (@0x65936). The dialog with a refuse button hides and redraws the
+    /// whole bar first (`_RefreshSAT` @0xa2df8 before the accept, @0xa2e93
+    /// before a refusal's `RefuseText`). The one-button dialog makes no
+    /// such redraw (@0xa2f52-0xa2fba), but flight doesn't tick under the
+    /// comm dialog, so the bar it last drew is the same, and ours redraws
+    /// for both. The answer's texts then show over that bar: the text
+    /// dialog's modal loop draws no bar (`_TextDialogFilter`, and
+    /// `_HandleStatus`'s only caller, `_DoPlayGameWork` @0x4403c, doesn't
+    /// run under it), so `OnAccept`'s writes, or `OnRefuse`'s, show only
+    /// from the text's close (@0xa1f13, @0xa2f09), then the dialog's own
+    /// redraw (@0xa365c), after which flight draws the gauges and nav live
+    /// again ([`FlightView::reserves_shown`], [`FlightView::nav_shown`]).
+    /// The texts' closes come from the app ([`FlightView::close_mission_text`]).
+    fn answer_in_flight<T>(&mut self, answer: impl FnOnce(&mut Self) -> T) -> T
+    where
+        C: StatusBars,
+    {
         self.redraw_status();
-        accepted
+        let answered = answer(self);
+        self.stage_bar(Vec::new(), Then::Redraw);
+        answered
+    }
+
+    /// The offer dialog with a refuse button hides and redraws the whole
+    /// bar before it answers (`_OfferOneMission` @0xa2df8 before the
+    /// accept, @0xa2e93 before a refusal's `RefuseText`;
+    /// [`Session::refusable_offer_dialog`]); the one-button dialog and the
+    /// mission computer redraw nothing before theirs (@0xa2f52-0xa2fba,
+    /// @0xa3b37-0xa3bb4). A refusal with no `RefuseText` skips the redraw
+    /// (@0xa2e70-0xa2e78), but nothing shows before the dialog's own redraw
+    /// after it, so ours redraws either way.
+    fn redraw_before_answer(&mut self, mission: MissionId) {
+        if self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.refusable_offer_dialog(mission))
+        {
+            self.redraw_status();
+        }
     }
 
     /// Refuses `mission` as [`Session::refuse_mission`] does, on the
     /// flight's chance. The HUD is redrawn, as on accepting, after
-    /// `OnRefuse` runs, so a landed `M` or `N` in it shows; the
-    /// `RefuseText`, queued before `OnRefuse` (@0xa2ec9 → @0xa2f41),
-    /// leaves this redraw shown ([`FlightView::take_mission_texts`]), as
-    /// the mission dialog's `_RefreshSAT` (@0xa40c8-0xa40d7) redraws last.
+    /// `OnRefuse` runs, so a landed `M` or `N` in it shows, as the offer
+    /// dialog's `_RefreshSAT` (@0xa365c) redraws last.
+    ///
+    /// Docked, the offer dialog first hides and redraws the whole bar
+    /// (@0xa2e93, [`FlightView::redraw_before_answer`]), the `RefuseText`
+    /// shows over it (@0xa2f04), and its close redraws the bar as the text
+    /// noted it (@0xa2f09), before `OnRefuse` (@0xa2f41), whose `C`, `E`
+    /// or `H` changing the `ïntf` redraws at its operator; the dialog's
+    /// own redraw comes last ([`FlightView::stage_bar`]). A person's offer
+    /// refused over flight holds the bar the same way
+    /// ([`FlightView::answer_in_flight`]): under the `RefuseText`, it
+    /// shows as before the refusal.
     ///
     /// # Errors
     ///
     /// [`NotOffered`] when it is not offered; a session that failed offers
     /// nothing.
-    pub fn refuse_mission(&mut self, mission: MissionId) -> Result<(), NotOffered> {
-        let refused = match &mut self.session {
-            Ok(session) => session.refuse_mission(mission, &mut self.chance),
+    pub fn refuse_mission(&mut self, mission: MissionId) -> Result<RefuseShown, NotOffered>
+    where
+        C: StatusBars,
+    {
+        if !self.docked() {
+            return self.answer_in_flight(|view| match &mut view.session {
+                Ok(session) => session.refuse_mission(mission, &mut view.chance),
+                Err(_) => Err(NotOffered),
+            });
+        }
+        self.redraw_before_answer(mission);
+        self.run_docked(Then::Redraw, |view| match &mut view.session {
+            Ok(session) => session.refuse_mission(mission, &mut view.chance),
             Err(_) => Err(NotOffered),
-        };
-        self.redraw_status();
-        refused
+        })
     }
 
     /// The mission info screen's view, as [`Session::mission_info`] gives
@@ -5159,26 +5553,42 @@ impl<C> FlightView<C> {
     }
 
     /// Aborts the mission in `slot` as [`Session::abort_mission`] does, on
-    /// the flight's chance.
+    /// the flight's chance. Docked, an `OnAbort` `C`, `E` or `H` that
+    /// changes the `ïntf` redraws the whole bar at its operator
+    /// (`_AbortMission` @0x9e5e6 → @0x99ba1), and nothing else redraws
+    /// while the mission info screen stays open: its close does
+    /// (@0x9e769, [`FlightView::refresh_status`]).
     ///
     /// # Errors
     ///
     /// The [`AbortError`] that applies; a session that failed has none
     /// active.
-    pub fn abort_mission(&mut self, slot: u8) -> Result<(), AbortError> {
-        match &mut self.session {
-            Ok(session) => session.abort_mission(slot, &mut self.chance),
+    pub fn abort_mission(&mut self, slot: u8) -> Result<(), AbortError>
+    where
+        C: StatusBars,
+    {
+        self.run_docked(Then::Nothing, |view| match &mut view.session {
+            Ok(session) => session.abort_mission(slot, &mut view.chance),
             Err(_) => Err(AbortError::NotActive),
-        }
+        })
     }
 
     /// The next offer at venue `loc`, as [`Session::next_offer`] gives it,
-    /// on the flight's chance; none for a session that failed.
-    pub fn next_offer(&mut self, loc: i16) -> Option<VenueOffer> {
-        self.session
-            .as_mut()
-            .ok()?
-            .next_offer(loc, &mut self.chance)
+    /// on the flight's chance; none for a session that failed. An offer
+    /// accepted at once (@0xa230a) redraws as its accept's scripts and
+    /// texts do ([`FlightView::stage_bar`]), with no dialog's redraw
+    /// after them: `_OfferOneMission` returns at once (@0xa230f →
+    /// @0xa368e).
+    pub fn next_offer(&mut self, loc: i16) -> Option<VenueOffer>
+    where
+        C: StatusBars,
+    {
+        self.run_docked(Then::Nothing, |view| {
+            view.session
+                .as_mut()
+                .ok()?
+                .next_offer(loc, &mut view.chance)
+        })
     }
 
     /// Enters venue `loc` for its offers, as
@@ -5195,48 +5605,61 @@ impl<C> FlightView<C> {
         mac_ticks(offer_gap(&mut self.chance))
     }
 
-    /// The mission texts to show since they were last taken, as
-    /// [`Session::take_mission_texts`] gives them; none for a session that
-    /// failed. When there are any, the HUD is redrawn
+    /// The mission texts and offer movies to show since they were last
+    /// taken, as [`Session::take_mission_texts`] gives them; none for a
+    /// session that failed.
+    ///
+    /// Docked, nothing is redrawn as they are taken: each text shows over
+    /// the last bar drawn, and its close redraws the whole bar as it noted
+    /// it ([`FlightView::close_mission_text`]), as the original's caller
+    /// of each text runs `_RefreshSAT` once it returns. The runs of docked
+    /// scripts stage those redraws as they queue the texts
+    /// ([`FlightView::stage_bar`]), the outfitter's orders and the
+    /// shipyard's purchases among them; a text queued anywhere else is
+    /// staged here, with no `ïntf` change to order against it. So a
+    /// landing's `CompText`,
+    /// queued after the landing's redraw and before `OnSuccess` (@0xa048c,
+    /// @0xa0491, then @0xa04f8), shows over the landing's bar, and its
+    /// close draws the bar as it stood then, not where `OnSuccess`'s `M`
+    /// selects, which shows at the port's next nav redraw.
+    ///
+    /// In flight, when there are any, the HUD is redrawn
     /// ([`FlightView::redraw_status`]): the original's text dialog redraws
     /// it on closing, and flight does not tick under the dialog, so
-    /// redrawing as the texts are taken shows the same.
-    ///
-    /// The nav area is redrawn as the last text noted it
-    /// ([`Session::text_nav`]) when that text was queued after the nav
-    /// area was last taken: the original's text dialog draws the nav as
-    /// it was when the text showed, before any script run after it. So a
-    /// landing's `CompText`, queued after the landing's redraw and before
-    /// `OnSuccess` (@0xa048c, @0xa0491, then @0xa04f8), shows the stellar
-    /// landed on, not where `OnSuccess`'s `M` selects, until the port's
-    /// next nav redraw. A text queued before a redraw ours has made since
-    /// never shows over it, as in the original the dialog that ran the
-    /// script redraws after its texts close: a `BriefText`, queued after
-    /// `OnAccept` (@0xa1e0b-0xa1f13) and before
-    /// [`FlightView::accept_mission`]'s redraw, and a `RefuseText`, queued
-    /// before `OnRefuse` (@0xa2ec9 → @0xa2f41) and before
-    /// [`FlightView::refuse_mission`]'s redraw (the mission dialog's
-    /// `_RefreshSAT` @0xa40c8-0xa40d7), each leave that redraw shown. The
-    /// original shows the `BriefText` before its redraw, over a bar that
-    /// doesn't show `OnAccept`'s writes (@0xa1da2 → @0xa1f0e →
-    /// @0xa1f13), where ours' accept redraw shows them: left out with the
-    /// docked scripts' `C`, `E` and `H` redraws (see
-    /// [`FlightView::after_outfit_order`]). In flight a nav mode other
+    /// redrawing as the texts are taken shows the same. The nav area is
+    /// redrawn as the last text noted it ([`Session::text_nav`]) when that
+    /// text was queued after the nav area was last taken: a nav mode other
     /// than the session's shows live anyway ([`FlightView::nav_shown`]),
-    /// so this matters only while docked, and while the take-off's held
-    /// nav lasts, under which a text queued in the take-off's days shows
+    /// so this matters only while the take-off's held nav lasts, under
+    /// which a text queued in the take-off's days shows
     /// ([`FlightView::took_off`]). The dialog has then shown the held nav,
     /// and its closing redraws the bar, so the flash ends at the next tick
-    /// ([`NavFlash::UnderText`]).
-    pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
+    /// ([`NavFlash::UnderText`]). The texts of a person's offer answered
+    /// over flight were staged as it was answered
+    /// ([`FlightView::answer_in_flight`]), so nothing is redrawn for them:
+    /// they show over the bar held from before the answer.
+    pub fn take_mission_texts(&mut self) -> Vec<MissionShown>
+    where
+        C: StatusBars,
+    {
+        if self.docked() {
+            self.stage_bar(Vec::new(), Then::Nothing);
+            return self
+                .session
+                .as_mut()
+                .map(Session::take_mission_texts)
+                .unwrap_or_default();
+        }
         let Ok(session) = &mut self.session else {
             return Vec::new();
         };
         let noted = session
             .text_nav()
             .filter(|_| session.texts_queued() > self.nav_texts);
+        let bars = session.text_bars();
+        let staged = !bars.is_empty() && bars.iter().all(|bar| bar.texts <= self.bars_staged);
         let texts = session.take_mission_texts();
-        if !texts.is_empty() {
+        if !texts.is_empty() && !staged {
             self.redraw_status();
             if let Some(noted) = noted {
                 self.nav_scene = Some((noted, self.nav_display(noted)));
@@ -5246,6 +5669,178 @@ impl<C> FlightView<C> {
             }
         }
         texts
+    }
+
+    /// Redraws the whole bar as `_RedrawStatus(1)` does at `load`'s
+    /// operator (@0x739b6-0x739bd): the radar and the target panel as
+    /// they are, the nav and the gauges as they stood there.
+    fn redraw_at_load(&mut self, load: &InterfaceLoad)
+    where
+        C: StatusBars,
+    {
+        if self.hud_waits() {
+            self.choose_bar(load.government);
+        }
+        self.redraw_whole();
+        self.nav_scene = Some((load.nav, self.nav_display(load.nav)));
+        self.reserves_scene = Some(load.reserves);
+    }
+
+    /// Whether the ship is docked: the bar is the port's, held between
+    /// its redraws.
+    fn docked(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_some())
+    }
+
+    /// Stages the bar's redraws for a run of docked scripts, given the
+    /// `ïntf` changes it made (`changes`, [`FlightView::interface_changes`])
+    /// and the mission texts it queued that are not yet staged
+    /// ([`Session::text_bars`]). Each text the original shows docked is
+    /// modal and followed by its caller's `_RefreshSAT` (`_DoMissionAccept`
+    /// @0xa1f13, @0xa1fba, @0xa1bb7; `_OfferOneMission` @0xa2f09;
+    /// `_DoMissionSuccess` @0xa0491; `_DoMissionFailure` @0xa03d2;
+    /// `_MissionObjectivesCheck` @0x9ed14; `_MissionLandCargoCheck`
+    /// @0x9ef0c, @0x9effe, @0x9f13d), and `_ShowTextDialog` itself redraws
+    /// only on a faded screen, which the port never is (@0x5a7c7,
+    /// @0x5af9e, @0x5b45c). So:
+    ///
+    /// - the changes made before the first text redraw now, as at the last
+    ///   of them ([`FlightView::redraw_at_load`]);
+    /// - each text shows over the last bar drawn, and its close
+    ///   ([`FlightView::close_mission_text`]) redraws the whole bar as the
+    ///   text noted it, then at each change made after it and before the
+    ///   next text;
+    /// - `then`: what the dialog or order that ran the scripts draws once
+    ///   its last text has closed, or at once with none ([`Then`]).
+    ///
+    /// Each operator's `_LoadIntfResource` (`_EvalSetExp` @0x156c7) asks
+    /// for its ship's `ïntf` and compares it with the one loaded at that
+    /// moment (`_currentIntf`, @0x73663-0x73672): the same returns at once,
+    /// and another is loaded and redraws the whole bar (`_RedrawStatus(1)`
+    /// @0x739b6-0x739bd), its graphic included. So two changes between two
+    /// texts redraw twice, the last staying, and a change and a change
+    /// back redraw though the `ïntf` after the script is the one before
+    /// it. Each redraw draws the nav and the gauges as they stood at its
+    /// operator: `M` and `N` mark nothing (@0x15705, @0x157e3, @0x158fd).
+    /// Under [`RuleKey::HudCadence`]'s engine reading, the graphic waits
+    /// with the scenes ([`FlightView::follow_bar`]).
+    ///
+    /// The offer dialog's after-movie plays over the last text's redraw,
+    /// with no redraw of its own: `_PlayQTMovie` leaves the screen as
+    /// unfaded as it found it (@0x55eb8, @0x55edb), so its caller's
+    /// faded-only redraw never runs in port (@0xa3635-0xa3657).
+    fn stage_bar(&mut self, changes: Vec<InterfaceLoad>, then: Then)
+    where
+        C: StatusBars,
+    {
+        let bars: Vec<TextBar> = self.session.as_ref().map_or_else(
+            |_| Vec::new(),
+            |session| {
+                session
+                    .text_bars()
+                    .iter()
+                    .filter(|bar| bar.texts > self.bars_staged)
+                    .copied()
+                    .collect()
+            },
+        );
+        let first = bars.first().map_or(u64::MAX, |bar| bar.texts);
+        let (now, later): (Vec<_>, Vec<_>) =
+            changes.into_iter().partition(|load| load.texts < first);
+        if let Some(load) = now.last() {
+            self.redraw_at_load(load);
+        }
+        let Some(last) = bars.last() else {
+            self.draw_then(then);
+            return;
+        };
+        self.bars_staged = last.texts;
+        for (i, bar) in bars.iter().enumerate() {
+            let next = bars.get(i + 1).map_or(u64::MAX, |next| next.texts);
+            self.bar_steps.push_back(BarStep {
+                bar: *bar,
+                loads: later
+                    .iter()
+                    .filter(|load| (bar.texts..next).contains(&load.texts))
+                    .copied()
+                    .collect(),
+                then: if next == u64::MAX {
+                    then
+                } else {
+                    Then::Nothing
+                },
+            });
+        }
+    }
+
+    /// A mission text has closed, the first of those shown that had not:
+    /// the whole bar is redrawn as the text noted it as it was queued
+    /// ([`Session::text_bars`]), as the original's caller of
+    /// `_ShowTextDialog` runs `_RefreshSAT` once it returns; then at each
+    /// `C`, `E` or `H` run after it, before the next text, that changed
+    /// the `ïntf`, as at its operator, the bar's graphic with it
+    /// ([`FlightView::follow_bar`]); and, after the last text of a run,
+    /// what the dialog or order that ran it draws then (see
+    /// [`FlightView::stage_bar`]). Docked, or for a person's offer
+    /// answered over flight ([`FlightView::answer_in_flight`]). Nothing
+    /// for a text whose redraws were dropped by a whole-bar redraw since,
+    /// or by leaving the dock, or for any other text shown over flight.
+    pub fn close_mission_text(&mut self)
+    where
+        C: StatusBars,
+    {
+        let Some(step) = self.bar_steps.pop_front() else {
+            return;
+        };
+        self.redraw_whole();
+        self.nav_scene = Some((step.bar.nav, self.nav_display(step.bar.nav)));
+        self.reserves_scene = Some(step.bar.reserves);
+        for load in &step.loads {
+            self.redraw_at_load(load);
+        }
+        self.draw_then(step.then);
+        self.follow_bar();
+    }
+
+    /// Draws what a run of docked scripts' caller draws once they are
+    /// done ([`Then`]).
+    fn draw_then(&mut self, then: Then)
+    where
+        C: StatusBars,
+    {
+        match then {
+            Then::Nothing => {}
+            Then::Redraw => self.redraw_whole(),
+            Then::Outfit { passed } => {
+                // After a whole-bar redraw at an operator, both are what it
+                // drew: it took the radar, and its nav consumed the
+                // shipyard's mark, as `_RedrawStatus` marks and draws every
+                // area.
+                self.retake_radar();
+                if passed {
+                    self.draw_marked_nav();
+                }
+            }
+            Then::Purchase { reserves } => {
+                self.follow_bar();
+                self.retake_radar();
+                self.retake_nav();
+                self.retake_target();
+                if reserves {
+                    self.retake_reserves();
+                }
+            }
+        }
+    }
+
+    /// Whether a docked mission text still shown holds the status bar's
+    /// graphic: a `C`, `E` or `H` staged after it loads another `ïntf` only
+    /// as it closes ([`FlightView::close_mission_text`]), under
+    /// [`RuleKey::HudCadence`]'s engine reading, as the held scenes are.
+    fn bar_held(&self) -> bool {
+        self.hud_waits() && self.bar_steps.iter().any(BarStep::holds_bar)
     }
 
     /// The shipyard of the stellar landed on, as [`Session::shipyard`]
@@ -5473,8 +6068,11 @@ impl<C> FlightView<C> {
     /// taken at their last redraw, as the original's port draws them
     /// only at its redraws (`_statusRedraw[1]` and `[4]`): an outfitter
     /// order or a ship purchase under the same `ïntf` leaves them as they
-    /// were (@0x5c59d, @0x5d324). In flight, by the other reading, or
-    /// before the first redraw, the gauges as they are now
+    /// were (@0x5c59d, @0x5d324). In flight the same while the texts of
+    /// a person's offer answered over flight show
+    /// ([`FlightView::answer_in_flight`]), as the text dialog's modal loop
+    /// draws no bar. Otherwise in flight, by the other reading, or before
+    /// the first redraw, the gauges as they are now
     /// ([`FlightView::reserves`]): flight's every frame marks them as
     /// they change.
     fn reserves_shown(&self) -> Reserves {
@@ -5483,7 +6081,7 @@ impl<C> FlightView<C> {
             .as_ref()
             .is_ok_and(|session| session.landed().is_some());
         match self.reserves_scene {
-            Some(held) if docked && self.hud_waits() => held,
+            Some(held) if (docked || !self.bar_steps.is_empty()) && self.hud_waits() => held,
             _ => self.reserves(),
         }
     }
@@ -6988,6 +7586,10 @@ mod tests {
         /// default.
         sol_more: Vec<StellarContents>,
         systems_read: RefCell<Vec<SystemId>>,
+        /// The `dësc`s: none, by default.
+        descriptions: Vec<(i16, String)>,
+        /// The movies the `dësc`s name: none, by default.
+        desc_movies: Vec<(i16, nova_sim::DescMovie)>,
         /// The commodities: none, by default.
         commodities: CommodityStrings,
         /// The planetary events: none, by default.
@@ -7153,6 +7755,8 @@ mod tests {
                 site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
             ],
             systems_read: RefCell::default(),
+            descriptions: Vec::new(),
+            desc_movies: Vec::new(),
             commodities: CommodityStrings::default(),
             disasters: Vec::new(),
             outfits: Vec::new(),
@@ -7826,6 +8430,125 @@ mod tests {
         assert_eq!(view.frame(), Some(0));
     }
 
+    impl DescriptionSource for FakeCatalog {
+        fn description(&self, id: i16) -> Result<String, String> {
+            self.descriptions
+                .iter()
+                .find(|(found, _)| *found == id)
+                .map(|(_, text)| text.clone())
+                .ok_or_else(|| format!("no dësc {id}"))
+        }
+
+        fn button_style(&self) -> crate::ui::ButtonStyle {
+            crate::ui::ButtonStyle::STOCK
+        }
+    }
+
+    impl DescriptionGraphics for FakeCatalog {
+        fn description_graphic(&self, _: i16) -> Option<i16> {
+            None
+        }
+
+        fn description_movie(&self, id: i16) -> Option<nova_sim::DescMovie> {
+            self.desc_movies
+                .iter()
+                .find(|(found, _)| *found == id)
+                .map(|(_, movie)| movie.clone())
+        }
+    }
+
+    /// [`catalog`] with `dësc`s 3000 "{b5 "set" "clear"}, sir.", 3001
+    /// "<SRK128>" and 3002 "{G "<SRK128>" "x"}".
+    fn described() -> FakeCatalog {
+        FakeCatalog {
+            descriptions: vec![
+                (3000, "{b5 \"set\" \"clear\"}, sir.".to_owned()),
+                (3001, "<SRK128>".to_owned()),
+                (3002, "{G \"x\" \"<SRK128>\"} ".to_owned()),
+            ],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn a_loaded_description_reads_the_pilot_as_it_is_now() {
+        let mut view = FlightView::new(described());
+        assert_eq!(view.load_description(3000).as_deref(), Ok("clear, sir."));
+        view.session
+            .as_mut()
+            .expect("flying")
+            .set_control_bit(nova_sim::Bit::new(5).expect("a bit"), true);
+        assert_eq!(view.load_description(3000).as_deref(), Ok("set, sir."));
+    }
+
+    #[test]
+    fn a_loaded_description_resets_and_parses_the_rank_governments() {
+        let mut view = FlightView::new(described());
+        let srk = |view: &View| view.session().expect("flying").plain_text("<SRK128>");
+        assert_eq!(srk(&view), "<SRK128>", "no government remembered");
+        assert_eq!(view.load_description(3001).as_deref(), Ok("<SRK128>"));
+        assert_eq!(srk(&view), "captain", "<SRK128> remembered, crossed");
+        assert_eq!(
+            view.load_description(9999),
+            Err("no dësc 9999".to_owned()),
+            "a missing one"
+        );
+        assert_eq!(srk(&view), "captain", "kept by a missing one");
+        assert_eq!(view.load_description(3002).as_deref(), Ok("x "));
+        assert_eq!(
+            srk(&view),
+            "<SRK128>",
+            "reset, and the string not chosen never scanned"
+        );
+    }
+
+    #[test]
+    fn load_description_records_the_descs_movie() {
+        let movie = nova_sim::DescMovie::from_desc("Port.mov", 0x0001).expect("named");
+        let mut view = FlightView::new(FakeCatalog {
+            desc_movies: vec![(3000, movie.clone())],
+            ..described()
+        });
+        assert_eq!(view.loaded_after_movie(), None, "none loaded yet");
+        let _ = view.load_description(3000);
+        assert_eq!(
+            view.loaded_after_movie(),
+            Some(movie),
+            "a STR# text shown now plays it after (@0x5b40b)"
+        );
+        let _ = view.load_description(3001);
+        assert_eq!(view.loaded_after_movie(), None, "a dësc naming none");
+    }
+
+    #[test]
+    fn an_unreadable_desc_empties_it() {
+        let movie = nova_sim::DescMovie::from_desc("Port.mov", 0x0001).expect("named");
+        let mut view = FlightView::new(FakeCatalog {
+            desc_movies: vec![(3000, movie)],
+            ..described()
+        });
+        let _ = view.load_description(3001);
+        let _ = view.load_description(3000);
+        assert!(view.load_description(9999).is_err());
+        assert_eq!(
+            view.loaded_after_movie(),
+            None,
+            "as a missing dësc empties the MovieFile (@0x71a67-0x71a77)"
+        );
+        let srk = view.session().expect("flying").plain_text("<SRK128>");
+        assert_eq!(srk, "<SRK128>", "and keeps the governments 3000 left");
+    }
+
+    #[test]
+    fn with_no_session_a_loaded_description_reads_a_new_pilot() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..described()
+        });
+        assert_eq!(view.load_description(3000).as_deref(), Ok("clear, sir."));
+        assert_eq!(view.load_description(3002).as_deref(), Ok("x "));
+    }
+
     #[test]
     fn a_session_that_cannot_start_says_why_and_draws_nothing_else() {
         let failed = FakeCatalog {
@@ -8297,7 +9020,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -10441,6 +11164,11 @@ mod tests {
         }
         tap(&mut view, MISSION_INFO_KEY);
         assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS), "after 15 ticks");
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "no active missions, with the beep (@0x70557)"
+        );
         tap(&mut view, PLAYER_INFO_KEY);
         assert!(view.take_player_info_request(), "after 15 ticks");
         tap(&mut view, MAP_KEY);
@@ -13133,10 +13861,12 @@ mod tests {
             ("a refused purchase, after its prompt's close", |view| {
                 assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
             }),
-            ("a mission text", |view| {
+            ("a mission text closing", |view| {
                 run_set(view, "S131");
                 assert_eq!(port_nav(view), naming("Earth"), "queued, not shown");
                 assert_eq!(view.take_mission_texts().len(), 1);
+                assert_eq!(port_nav(view), naming("Earth"), "shown over the bar");
+                view.close_mission_text();
             }),
             ("a ship purchase", |view| {
                 view.buy_ship(ShipId(129), "Kestrel").expect("bought");
@@ -13588,7 +14318,7 @@ mod tests {
             (
                 "OnRefuse",
                 |catalog| catalog.missions[0].on_refuse = nova_sim::Script::parse("M131"),
-                |view| assert_eq!(view.refuse_mission(MissionId(130)), Ok(())),
+                |view| assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(())),
             ),
             (
                 "a RefuseText before OnRefuse",
@@ -13600,8 +14330,9 @@ mod tests {
                     }];
                 },
                 |view| {
-                    assert_eq!(view.refuse_mission(MissionId(130)), Ok(()));
+                    assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
                     assert_eq!(view.take_mission_texts().len(), 1);
+                    view.close_mission_text();
                 },
             ),
             (
@@ -13616,6 +14347,7 @@ mod tests {
                 |view| {
                     assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
                     assert_eq!(view.take_mission_texts().len(), 1);
+                    view.close_mission_text();
                 },
             ),
             (
@@ -13661,6 +14393,602 @@ mod tests {
             "the brief, noting Proxima"
         );
         assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
+        view.close_mission_text();
+        assert_eq!(
+            port_nav(&view),
+            naming(hud::NAV_NO_DESTINATION),
+            "the brief's close dropped with it"
+        );
+    }
+
+    // A docked mission script's `C`, `E` and `H`, and the bar under its
+    // texts.
+
+    use nova_sim::mission::screens::SPACEPORT;
+
+    /// [`port`] fitted by `fit`, docked at Earth by the engine's cadence.
+    fn docked_scripted(fit: impl FnOnce(&mut FakeCatalog)) -> View {
+        let mut catalog = port();
+        fit(&mut catalog);
+        docked_at_earth(catalog, RuleSource::Engine)
+    }
+
+    /// An `H` that puts the ship under another `ïntf` (ship 130, under
+    /// 129), and one that keeps it (ship 129, under 128 as ship 128 is).
+    const INTF_ROWS: [(&str, bool); 2] = [("H130", true), ("H129", false)];
+
+    #[test]
+    fn a_docked_on_abort_intf_change_redraws_the_whole_bar_at_the_operator() {
+        for (h, changes) in INTF_ROWS {
+            let mut view = docked_scripted(|catalog| {
+                catalog.missions[0].on_abort = nova_sim::Script::parse(&format!("{h} M131"));
+            });
+            assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+            stale_bar(&mut view);
+            view.abort_mission(0).expect("aborted");
+            if changes {
+                assert_eq!(
+                    retaken(&view),
+                    [true, false, true, true],
+                    "{h}: the whole bar, the nav from before the M"
+                );
+                assert_eq!(port_nav(&view), naming("Earth"), "{h}");
+            } else {
+                assert_eq!(retaken(&view), [false; 4], "{h}: held");
+            }
+        }
+    }
+
+    #[test]
+    fn a_docked_jettisons_on_failure_intf_change_redraws_the_whole_bar_at_the_operator() {
+        for (h, changes) in INTF_ROWS {
+            let mut view = docked_scripted(|catalog| {
+                let mission = &mut catalog.missions[0];
+                mission.cargo_type = 0;
+                mission.cargo_qty = 1;
+                mission.pickup_mode = 0;
+                mission.on_failure = nova_sim::Script::parse(&format!("{h} M131"));
+            });
+            assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+            stale_bar(&mut view);
+            view.jettison_all();
+            assert_eq!(
+                view.session()
+                    .map(|session| session.pilot().missions().missions().len()),
+                Ok(0),
+                "{h}: failed"
+            );
+            if changes {
+                assert_eq!(retaken(&view), [true, false, true, true], "{h}");
+            } else {
+                assert_eq!(retaken(&view), [false; 4], "{h}: held");
+            }
+        }
+    }
+
+    /// How an accept is made: from the mission computer, from the offer
+    /// dialog with a refuse button, or at once with no dialog.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Accepted {
+        Computer,
+        Offer,
+        AtOnce,
+    }
+
+    #[test]
+    fn a_brief_text_shows_over_the_bar_as_on_accept_left_it() {
+        for (h, changes) in INTF_ROWS {
+            for how in [Accepted::Computer, Accepted::Offer, Accepted::AtOnce] {
+                let what = format!("{h}, {how:?}");
+                let mut view = docked_scripted(|catalog| {
+                    let mission = &mut catalog.missions[1];
+                    mission.on_accept = nova_sim::Script::parse(&format!("{h} G201 M131"));
+                    if how != Accepted::Computer {
+                        mission.avail_loc = SPACEPORT;
+                    }
+                    if how == Accepted::AtOnce {
+                        mission.flags = nova_sim::mission::screens::UNREFUSABLE;
+                    }
+                });
+                assert_eq!(
+                    view.session()
+                        .map(|session| session.refusable_offer_dialog(MissionId(131))),
+                    Ok(how == Accepted::Offer),
+                    "{what}"
+                );
+                let before = view.reserves();
+                stale_bar(&mut view);
+                if how == Accepted::AtOnce {
+                    assert!(
+                        matches!(
+                            view.next_offer(SPACEPORT),
+                            Some(VenueOffer::Accepted {
+                                accepted: Ok(0),
+                                ..
+                            })
+                        ),
+                        "{what}"
+                    );
+                } else {
+                    assert_eq!(view.accept_mission(MissionId(131)), Ok(0), "{what}");
+                }
+                assert_eq!(view.take_mission_texts().len(), 1, "{what}: the brief");
+                let shown = view.reserves_shown();
+                match (changes, how) {
+                    (true, _) => {
+                        assert_eq!(
+                            shown.fuel.max,
+                            view.reserves().fuel.max - 100.0,
+                            "{what}: as at the H, before G201's tank"
+                        );
+                        assert_eq!(port_nav(&view), naming("Earth"), "{what}: before the M");
+                    }
+                    (false, Accepted::Offer) => {
+                        assert_eq!(shown, before, "{what}: the dialog's redraw before it");
+                        assert_eq!(port_nav(&view), naming("Earth"), "{what}");
+                    }
+                    (false, _) => {
+                        assert_eq!(retaken(&view), [false; 4], "{what}: held");
+                        assert_eq!(port_nav(&view), naming("Stale"), "{what}");
+                    }
+                }
+                view.close_mission_text();
+                assert_eq!(retaken(&view), WHOLE_BAR, "{what}: the brief closed");
+                assert_eq!(port_nav(&view), naming("Proxima"), "{what}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_refuse_text_shows_over_the_bar_from_before_the_refusal() {
+        for script in ["M131 G201", "H130 M131 G201"] {
+            let mut view = docked_scripted(|catalog| {
+                catalog.missions[0].avail_loc = SPACEPORT;
+                catalog.missions[0].on_refuse = nova_sim::Script::parse(script);
+                catalog.mission_texts.push(MissionTexts {
+                    refuse: Some("No.".to_owned()),
+                    ..MissionTexts::named(MissionId(130), "Run")
+                });
+            });
+            let before = view.reserves();
+            stale_bar(&mut view);
+            assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
+            assert_eq!(view.take_mission_texts().len(), 1, "{script}");
+            assert_eq!(view.reserves_shown(), before, "{script}: before OnRefuse");
+            assert_eq!(port_nav(&view), naming("Earth"), "{script}");
+            view.close_mission_text();
+            assert_eq!(retaken(&view), WHOLE_BAR, "{script}: the text closed");
+            assert_eq!(port_nav(&view), naming("Proxima"), "{script}");
+        }
+    }
+
+    /// [`port`] where mission 130 goes to Earth, its `CompText` "Done."
+    /// and its `FailText` "Failed.", with `on_success` and `on_failure`,
+    /// accepted by `S130` (and failed by `F130` when `fail`), then landed
+    /// on again: the landing's gauges, and the view before its landing
+    /// settles.
+    fn relanded(on_success: &str, on_failure: &str, fail: bool) -> (Reserves, View) {
+        relanded_by(RuleSource::Engine, on_success, on_failure, fail)
+    }
+
+    /// [`relanded`], the HUD's cadence read as `cadence` says.
+    fn relanded_by(
+        cadence: RuleSource,
+        on_success: &str,
+        on_failure: &str,
+        fail: bool,
+    ) -> (Reserves, View) {
+        let mut catalog = port();
+        catalog.missions = vec![MissionRecord {
+            travel_stel: 128,
+            on_success: nova_sim::Script::parse(on_success),
+            on_failure: nova_sim::Script::parse(on_failure),
+            ..errand(130)
+        }];
+        catalog.mission_texts = vec![MissionTexts {
+            comp: Some("Done.".to_owned()),
+            fail: Some("Failed.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
+        let mut view = docked_at_earth(catalog, cadence);
+        run_set(&mut view, if fail { "S130 F130" } else { "S130" });
+        view.take_off().expect("takes off");
+        view.settle_script();
+        land_now(&mut view);
+        (view.reserves_shown(), view)
+    }
+
+    /// A text queued before an `H` onto ship 130 (under `ïntf` 129, whose
+    /// background is `PICT` 705): a refusal's `RefuseText` before its
+    /// `OnRefuse` (@0xa2f04 → @0xa2f41), a landing's `CompText` before
+    /// its `OnSuccess` (@0xa048c → @0xa04f8), and a `ShipDoneText` before
+    /// its `OnShipDone` (@0x9ed0f → @0x9ed70), of a mission to destroy
+    /// no ships that an `S` in a landing's `OnSuccess` starts, whose goals
+    /// the landing's trailing check meets. Each gives the view, docked
+    /// with the text taken and a frame's catch-up made.
+    fn texts_before_an_h(cadence: RuleSource) -> Vec<(&'static str, View)> {
+        let refusal = {
+            let mut catalog = port();
+            catalog.missions[0].avail_loc = SPACEPORT;
+            catalog.missions[0].on_refuse = nova_sim::Script::parse("H130");
+            catalog.mission_texts.push(MissionTexts {
+                refuse: Some("No.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "Run")
+            });
+            let mut view = docked_at_earth(catalog, cadence);
+            assert_eq!(bar_shown(&view), Some(700), "ship 128's");
+            assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
+            view
+        };
+        let landing = {
+            let (_, mut view) = relanded_by(cadence, "H130", "", false);
+            assert_eq!(bar_shown(&view), Some(700), "ship 128's");
+            view.settle_script();
+            view
+        };
+        let ship_done = {
+            let mut catalog = port();
+            catalog.missions = vec![
+                MissionRecord {
+                    travel_stel: 128,
+                    on_success: nova_sim::Script::parse("S131"),
+                    ..errand(130)
+                },
+                MissionRecord {
+                    on_ship_done: nova_sim::Script::parse("H130"),
+                    ships: MissionShip {
+                        goal: 0,
+                        count: 0,
+                        ..MissionShip::NONE
+                    },
+                    ..errand(131)
+                },
+            ];
+            catalog.mission_texts = vec![
+                MissionTexts::named(MissionId(130), "Run"),
+                MissionTexts {
+                    ship_done: Some("Met.".to_owned()),
+                    ..MissionTexts::named(MissionId(131), "Escort")
+                },
+            ];
+            let mut view = docked_at_earth(catalog, cadence);
+            run_set(&mut view, "S130");
+            view.take_off().expect("takes off");
+            view.settle_script();
+            land_now(&mut view);
+            assert_eq!(bar_shown(&view), Some(700), "ship 128's");
+            view.settle_script();
+            view
+        };
+        let views = vec![
+            ("a RefuseText", refusal),
+            ("a CompText", landing),
+            ("a ShipDoneText", ship_done),
+        ];
+        views
+            .into_iter()
+            .map(|(what, mut view)| {
+                assert_eq!(view.take_mission_texts().len(), 1, "{what}");
+                view.catch_up();
+                assert_eq!(
+                    view.session().map(Session::ship),
+                    Ok(ShipId(130)),
+                    "{what}: the H ran"
+                );
+                (what, view)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_text_queued_before_an_h_shows_over_the_old_graphic_until_it_closes() {
+        for (what, mut view) in texts_before_an_h(RuleSource::Engine) {
+            assert_eq!(bar_shown(&view), Some(700), "{what}: the old graphic");
+            view.tick(TICK);
+            assert_eq!(bar_shown(&view), Some(700), "{what}: a frame on");
+            view.close_mission_text();
+            assert_eq!(bar_shown(&view), Some(705), "{what}: at the H, once closed");
+            view.tick(TICK);
+            assert_eq!(bar_shown(&view), Some(705), "{what}: kept");
+        }
+    }
+
+    /// [`port`] where the tank's `OnPurchase` (or, `sell`, its `OnSell`) is
+    /// `script`, docked, with a tank to sell when `sell`, and the nav
+    /// marked by the shipyard's restore when `marked`; the bar held stale,
+    /// then the order made and its texts taken.
+    fn outfit_hooked(script: &str, sell: bool, marked: bool) -> View {
+        let mut view = docked_scripted(|catalog| {
+            let tank = &mut catalog.outfits[0];
+            if sell {
+                tank.on_purchase = nova_sim::Script::default();
+                tank.on_sell = nova_sim::Script::parse(script);
+            } else {
+                tank.on_purchase = nova_sim::Script::parse(script);
+            }
+        });
+        if sell {
+            assert_eq!(view.outfit(BUY_TANK), Ok(()), "one to sell");
+        }
+        if marked {
+            view.open_port_dialog();
+            view.close_port_dialog(PortDialog::Shipyard);
+        }
+        stale_bar(&mut view);
+        let order = OutfitOrder {
+            direction: if sell {
+                Direction::Sell
+            } else {
+                Direction::Buy
+            },
+            ..BUY_TANK
+        };
+        assert_eq!(view.outfit(order), Ok(()));
+        assert_eq!(view.take_mission_texts().len(), 1, "S131's brief");
+        view.catch_up();
+        view
+    }
+
+    #[test]
+    fn an_outfit_hooks_s_text_shows_over_the_bar_as_the_hook_left_it() {
+        for sell in [false, true] {
+            let what = format!("sell: {sell}");
+            let mut view = outfit_hooked("H130 G201 S131 H129 M131", sell, false);
+            assert_eq!(bar_shown(&view), Some(705), "{what}: at the H130");
+            let noted = view.bar_steps.front().expect("staged").bar.reserves;
+            assert_eq!(
+                view.reserves_shown().fuel.max,
+                noted.fuel.max - 100.0,
+                "{what}: as at the H130, before G201's tank"
+            );
+            assert_eq!(port_nav(&view), naming("Earth"), "{what}: at the H130");
+            view.close_mission_text();
+            assert_eq!(bar_shown(&view), Some(700), "{what}: the H129, once closed");
+            assert_eq!(
+                view.reserves_shown(),
+                view.reserves(),
+                "{what}: at the H129"
+            );
+            assert_eq!(
+                port_nav(&view),
+                naming("Earth"),
+                "{what}: at the H129, before the M"
+            );
+        }
+    }
+
+    /// The order's own draw (@0x5c5a1, @0x5d328) comes after its hook's
+    /// texts, not under them. The text's close redraws the whole bar
+    /// first (`_RefreshSAT` @0xa1f13), which draws the nav and so lets go
+    /// of the shipyard's mark, so the order's draw then draws no nav.
+    #[test]
+    fn an_outfit_orders_own_draw_waits_for_its_hooks_texts() {
+        for sell in [false, true] {
+            for marked in [false, true] {
+                let what = format!("sell: {sell}, nav marked: {marked}");
+                let mut view = outfit_hooked("S131 M131", sell, marked);
+                assert_eq!(retaken(&view), [false; 4], "{what}: held under the text");
+                assert_eq!(port_nav(&view), naming("Stale"), "{what}");
+                assert_eq!(view.nav_marked, marked, "{what}: the mark kept");
+                view.close_mission_text();
+                assert_eq!(
+                    port_nav(&view),
+                    naming("Earth"),
+                    "{what}: the text's bar, before the M"
+                );
+                assert!(!view.nav_marked, "{what}: its redraw drew the nav");
+                assert_eq!(view.radar_scene, Some(view.radar_now()), "{what}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_hooks_s_text_shows_before_the_purchases_own_redraw() {
+        for retire in [false, true] {
+            let what = format!("retire: {retire}");
+            let mut view = docked_scripted(|catalog| {
+                for ship in &mut catalog.ships {
+                    if retire && ship.id == ShipId(129) {
+                        ship.on_retire = nova_sim::Script::parse("S131");
+                    }
+                    if !retire && ship.id == ShipId(130) {
+                        ship.on_purchase = nova_sim::Script::parse("S131");
+                    }
+                }
+            });
+            if retire {
+                let mut desk = view.pilot_desk().expect("flying");
+                desk.edit(PilotEdit::Credits(100_000)).expect("set");
+                view.buy_ship(ShipId(129), "First").expect("bought");
+                assert_eq!(bar_shown(&view), Some(700), "{what}: 129's is 128's");
+            }
+            desk_reserve(&mut view, nova_sim::Reserve::Fuel, 1.0);
+            view.refresh_status();
+            let before = view.reserves();
+            assert!(before.fuel.now < before.fuel.max, "{what}: not full");
+            view.buy_ship(ShipId(130), "Kestrel").expect("bought");
+            assert_eq!(view.take_mission_texts().len(), 1, "{what}: S131's brief");
+            view.catch_up();
+            assert_eq!(bar_shown(&view), Some(700), "{what}: the old graphic");
+            assert_eq!(view.reserves_shown(), before, "{what}: before the purchase");
+            view.close_mission_text();
+            assert_eq!(bar_shown(&view), Some(705), "{what}: the new ship's");
+            let filled = view.reserves();
+            assert_eq!(filled.fuel.now, filled.fuel.max, "{what}: filled");
+            assert_eq!(view.reserves_shown(), filled, "{what}: filled, once closed");
+        }
+    }
+
+    #[test]
+    fn under_the_bible_cadence_the_graphic_follows_at_once() {
+        for (what, mut view) in texts_before_an_h(RuleSource::Bible) {
+            assert_eq!(bar_shown(&view), Some(705), "{what}: at once");
+            view.close_mission_text();
+            assert_eq!(bar_shown(&view), Some(705), "{what}");
+        }
+    }
+
+    #[test]
+    fn a_comp_text_shows_the_gauges_from_before_on_success() {
+        for (script, at_h) in [("G201 M131", false), ("H130 G201 M131", true)] {
+            let (landed, mut view) = relanded(script, "", false);
+            view.settle_script();
+            assert_eq!(view.take_mission_texts().len(), 1, "{script}");
+            assert_eq!(view.reserves_shown(), landed, "{script}: the landing's");
+            assert_eq!(port_nav(&view), naming("Earth"), "{script}");
+            view.close_mission_text();
+            let shown = view.reserves_shown();
+            if at_h {
+                assert_eq!(
+                    shown.fuel.max,
+                    view.reserves().fuel.max - 100.0,
+                    "{script}: as at the H"
+                );
+            } else {
+                assert_eq!(shown, landed, "{script}: as at the text");
+            }
+            assert_eq!(port_nav(&view), naming("Earth"), "{script}: before the M");
+            view.refresh_status();
+            assert_eq!(retaken(&view), WHOLE_BAR, "{script}: the next redraw");
+            assert_eq!(port_nav(&view), naming("Proxima"), "{script}");
+        }
+    }
+
+    #[test]
+    fn a_fail_text_shows_over_the_bar_as_on_failure_left_it() {
+        for (h, changes) in INTF_ROWS {
+            let (landed, mut view) = relanded("", &format!("{h} G201 M131"), true);
+            view.settle_script();
+            assert_eq!(view.take_mission_texts().len(), 1, "{h}: the fail text");
+            let shown = view.reserves_shown();
+            if changes {
+                assert_eq!(
+                    shown.fuel.max,
+                    view.reserves().fuel.max - 100.0,
+                    "{h}: as at the H"
+                );
+            } else {
+                assert_eq!(shown, landed, "{h}: the landing's");
+            }
+            assert_eq!(port_nav(&view), naming("Earth"), "{h}");
+            view.close_mission_text();
+            assert_eq!(retaken(&view), WHOLE_BAR, "{h}: as the text noted it");
+            assert_eq!(port_nav(&view), naming("Proxima"), "{h}");
+        }
+    }
+
+    #[test]
+    fn a_landings_two_texts_each_close_to_their_own_bar_and_the_loads_before_the_next() {
+        let mut catalog = port();
+        catalog.missions = vec![
+            MissionRecord {
+                travel_stel: 128,
+                on_success: nova_sim::Script::parse("H130 G201"),
+                ..errand(130)
+            },
+            MissionRecord {
+                travel_stel: 128,
+                on_success: nova_sim::Script::parse("M131 H129"),
+                ..errand(131)
+            },
+        ];
+        catalog.mission_texts = vec![
+            MissionTexts {
+                comp: Some("A done.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "A")
+            },
+            MissionTexts {
+                comp: Some("B done.".to_owned()),
+                ..MissionTexts::named(MissionId(131), "B")
+            },
+        ];
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        run_set(&mut view, "S130 S131");
+        view.take_off().expect("takes off");
+        view.settle_script();
+        land_now(&mut view);
+        let landed = view.reserves_shown();
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::ship),
+            Ok(ShipId(129)),
+            "both OnSuccess ran"
+        );
+        assert_eq!(
+            view.take_mission_texts().len(),
+            2,
+            "A's CompText, then B's after A's OnSuccess"
+        );
+        assert_eq!(view.reserves_shown(), landed, "the landing's");
+        assert_eq!(landed.fuel.max, 250.0, "the landing's ship");
+        assert_eq!(port_nav(&view), naming("Earth"));
+        view.close_mission_text();
+        assert_eq!(
+            view.reserves_shown().fuel.max,
+            350.0,
+            "A's text as it noted the bar, then A's H130 as at its operator, \
+             before G201's tank"
+        );
+        assert_eq!(
+            port_nav(&view),
+            naming("Earth"),
+            "B's M and H come after B's text, and no dialog redraws"
+        );
+        view.close_mission_text();
+        assert_eq!(
+            retaken(&view),
+            WHOLE_BAR,
+            "B's text, then B's H129 after its M"
+        );
+        assert_eq!(port_nav(&view), naming("Proxima"));
+        assert!(view.bar_steps.is_empty());
+    }
+
+    #[test]
+    fn an_accepts_two_texts_close_to_their_own_bars_and_the_dialog_redraws_after_the_last() {
+        let mut view = docked_scripted(|catalog| {
+            let mission = &mut catalog.missions[1];
+            mission.cargo_type = 0;
+            mission.cargo_qty = 1;
+            mission.pickup_mode = 0;
+            mission.on_accept = nova_sim::Script::parse("M131");
+            catalog.mission_texts[0].load_cargo = Some("Loaded.".to_owned());
+        });
+        assert_eq!(view.accept_mission(MissionId(131)), Ok(0));
+        let queued = view.reserves();
+        assert_eq!(
+            view.take_mission_texts().len(),
+            2,
+            "the BriefText, then the LoadCargText"
+        );
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        view.close_mission_text();
+        assert_eq!(
+            view.reserves_shown(),
+            queued,
+            "the brief as it noted the bar, and no redraw of the dialog's yet"
+        );
+        assert_eq!(port_nav(&view), naming("Proxima"), "OnAccept's M");
+        view.close_mission_text();
+        assert_eq!(
+            retaken(&view),
+            WHOLE_BAR,
+            "the load's text, then the computer's redraw"
+        );
+        assert_eq!(view.reserves_shown().fuel.now, 100.0);
+        assert!(view.bar_steps.is_empty());
+    }
+
+    #[test]
+    fn leaving_the_dock_drops_the_texts_pending_redraws() {
+        let mut view = docked_scripted(|catalog| {
+            catalog.missions[1].on_accept = nova_sim::Script::parse("M131");
+        });
+        assert_eq!(view.accept_mission(MissionId(131)), Ok(0));
+        assert_eq!(view.take_mission_texts().len(), 1);
+        assert_eq!(view.bar_steps.len(), 1, "the brief's close");
+        view.take_off().expect("takes off");
+        assert!(view.bar_steps.is_empty(), "the take-off's redraw");
     }
 
     // The gauges while docked.
@@ -13982,7 +15310,8 @@ mod tests {
             }),
             ("a Q", |view| {
                 run_set(view, "M131 Q25048");
-                assert_eq!(view.settle_script(), Some(StellarId(128)));
+                view.settle_script();
+                assert_eq!(view.leave_if_due(), Some(StellarId(128)));
             }),
         ];
         for (what, take_off) in take_offs {
@@ -14220,7 +15549,28 @@ mod tests {
         assert_eq!(player(&view).heading, 0.0, "flying alone faces up");
         view.resume();
         assert_eq!(player(&view).heading, 123.0);
-        assert_eq!(script.borrow().asked, [360]);
+        let asked = &script.borrow().asked;
+        assert_eq!(asked[0], 360, "the heading first");
+        assert_eq!(
+            asked[1..],
+            [100; nova_sim::mission::ROLLED],
+            "then the offers' roll table, on the same chance"
+        );
+    }
+
+    #[test]
+    fn beginning_draws_the_offer_roll_table_on_the_flights_chance() {
+        let (script, chance) = scripted(&[]);
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        let mut view = FlightView::with_pilot(catalog, pilot).with_chance(chance);
+        view.begin();
+        let asked = &script.borrow().asked;
+        assert!(asked.len() >= nova_sim::mission::ROLLED);
+        assert_eq!(
+            asked[asked.len() - nova_sim::mission::ROLLED..],
+            [100; nova_sim::mission::ROLLED]
+        );
     }
 
     #[test]
@@ -16528,7 +17878,9 @@ mod tests {
     fn mission_info_and_landing_do_nothing_while_the_player_breaks_up() {
         let mut view = breaking_up();
         let nav = nav_target(&view);
+        let _ = view.take_sounds();
         tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.take_sounds(), [], "silently (@0x70445, @0x7044f)");
         tap(&mut view, LAND_KEY);
         assert!(view.take_mission_info_request().is_none());
         assert_eq!(view.take_landing(), None);
@@ -17809,6 +19161,17 @@ mod tests {
             _govts: &nova_sim::Governments,
         ) -> Vec<(GovtId, i32)> {
             self.seen.borrow_mut().push(crime);
+            Vec::new()
+        }
+
+        fn system_penalties(
+            &self,
+            _crime: nova_sim::Crime,
+            _victim: Option<GovtId>,
+            _from: nova_sim::SystemId,
+            _map: &dyn nova_sim::CrimeMap,
+            _govts: &nova_sim::Governments,
+        ) -> Vec<(nova_sim::SystemId, f32)> {
             Vec::new()
         }
     }
@@ -19655,12 +21018,21 @@ mod tests {
         let computer = view.mission_computer().expect("opens");
         let names: Vec<_> = computer.rows.iter().map(|row| row.name.as_str()).collect();
         assert_eq!(names, ["Run", "Walk"]);
+        assert_eq!(view.open_mission_computer(), Ok(computer.clone()));
+        assert_eq!(
+            view.show_computer_row(MissionId(131)),
+            Some(computer.rows[1].clone()),
+            "loaded through the session"
+        );
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-        assert_eq!(view.refuse_mission(MissionId(131)), Ok(()));
+        assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
         let texts: Vec<_> = view
             .take_mission_texts()
             .into_iter()
-            .map(|text| (text.kind, text.text))
+            .map(|shown| match shown {
+                MissionShown::Text(text) => (text.kind, text.text),
+                MissionShown::Movie(movie) => panic!("an offer movie: {movie:?}"),
+            })
             .collect();
         assert_eq!(
             texts,
@@ -19679,6 +21051,11 @@ mod tests {
             Err(ComputerRefusal::NoneAvailable)
         );
         assert_eq!(
+            broken.open_mission_computer(),
+            Err(ComputerRefusal::NoneAvailable)
+        );
+        assert_eq!(broken.show_computer_row(MissionId(130)), None);
+        assert_eq!(
             broken.accept_mission(MissionId(130)),
             Err(AcceptError::NotOffered)
         );
@@ -19687,7 +21064,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_mission_dialog_or_showing_its_texts_redraws_the_hud() {
+    fn closing_a_mission_dialog_or_its_texts_redraws_the_hud() {
         let mut errands = catalog();
         errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
         errands.missions = vec![errand(130), errand(131)];
@@ -19715,16 +21092,17 @@ mod tests {
         assert_ne!(view.reserves(), held);
         view.reserves_scene = Some(held);
         assert_eq!(view.reserves_shown(), held, "held");
-        assert_eq!(view.refuse_mission(MissionId(131)), Ok(()));
+        assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
         assert_eq!(view.reserves_shown(), view.reserves(), "refused docked");
         view.reserves_scene = Some(held);
-        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-        assert_eq!(view.reserves_shown(), view.reserves(), "accepted docked");
         view.radar_scene = Some(stale.clone());
-        view.reserves_scene = Some(held);
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
         assert_eq!(view.take_mission_texts().len(), 1);
-        assert_eq!(view.radar_scene, Some(view.radar_now()), "the brief shown");
-        assert_eq!(view.reserves_shown(), view.reserves(), "the brief shown");
+        assert_eq!(view.reserves_shown(), held, "the brief shown over the bar");
+        assert_eq!(view.radar_scene.as_ref(), Some(&stale), "the brief shown");
+        view.close_mission_text();
+        assert_eq!(view.radar_scene, Some(view.radar_now()), "the brief closed");
+        assert_eq!(view.reserves_shown(), view.reserves(), "the brief closed");
     }
 
     #[test]
@@ -20152,6 +21530,17 @@ mod tests {
             "an empty name is spelled out as it is"
         );
         assert_eq!(arrival_lead(&exploded(275, true)), None);
+    }
+
+    #[test]
+    fn the_leet_sabotage_notice_says_someone_set_up_the_bomb() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(&SimMessage::BombSetUp, session).as_deref(),
+            Some("Someone set up us the bomb!")
+        );
+        assert_eq!(arrival_lead(&SimMessage::BombSetUp), None);
     }
 
     #[test]
@@ -20649,6 +22038,10 @@ mod tests {
         let mut errands = catalog();
         errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
         errands.missions = vec![errand(130)];
+        errands.mission_texts = vec![MissionTexts {
+            quick_brief: Some("Quick.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
         let mut view = FlightView::new(errands);
         assert_eq!(view.mission_info().rows, []);
         assert_eq!(view.abort_mission(0), Err(AbortError::NotActive));
@@ -20662,6 +22055,8 @@ mod tests {
             .map(|row| row.slot)
             .collect();
         assert_eq!(slots, [0]);
+        assert_eq!(view.show_info_row(0).as_deref(), Some("Quick."));
+        assert_eq!(view.show_info_row(1), None, "a free slot");
         assert_eq!(view.abort_mission(0), Ok(()));
         assert_eq!(view.mission_info().rows, []);
         let mut broken = FlightView::new(FakeCatalog {
@@ -20669,6 +22064,7 @@ mod tests {
             ..catalog()
         });
         assert_eq!(broken.mission_info().rows, []);
+        assert_eq!(broken.show_info_row(0), None);
         assert_eq!(broken.abort_mission(0), Err(AbortError::NotActive));
     }
 
@@ -21017,7 +22413,10 @@ mod tests {
         let texts: Vec<(MissionTextKind, String)> = view
             .take_mission_texts()
             .into_iter()
-            .map(|text| (text.kind, text.text))
+            .map(|shown| match shown {
+                MissionShown::Text(text) => (text.kind, text.text),
+                MissionShown::Movie(movie) => panic!("an offer movie: {movie:?}"),
+            })
             .collect();
         assert_eq!(
             texts,
@@ -21249,22 +22648,40 @@ mod tests {
     fn a_q_in_flight_shows_its_message() {
         let mut view = told(flight());
         run_set(&mut view, "Q25048");
-        assert_eq!(view.settle_script(), None);
+        view.settle_script();
+        assert!(!view.leave_due());
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::ScriptMessage)]);
         assert_lasts(&mut view, "Off you go, <PSN>.", SCRIPT_MESSAGE_TICKS);
     }
 
     #[test]
-    fn a_landed_q_takes_off_and_shows_its_message() {
+    fn a_landed_q_waits_for_the_take_off_which_shows_its_message() {
         let mut view = told(landed_view());
         run_set(&mut view, "M131 Q25048");
-        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        view.settle_script();
         let session = view.session().expect("flying");
-        assert_eq!(session.landed(), None);
+        assert_eq!(session.landed(), Some(StellarId(128)), "held");
+        assert!(view.leave_due());
+        assert_eq!(view.message(), None, "nothing yet");
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert!(!view.leave_due());
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
-        assert_eq!(view.settle_script(), None, "settled");
         assert_lasts(&mut view, "Off you go, <PSN>.", 500);
+    }
+
+    #[test]
+    fn a_due_leave_takes_off_as_the_ports_leave_does() {
+        let mut view = told(landed_view());
+        assert_eq!(view.leave_if_due(), None, "nothing due");
+        assert_eq!(view.session().expect("ok").landed(), Some(StellarId(128)));
+        run_set(&mut view, "M131 Q25048");
+        view.settle_script();
+        assert_eq!(view.leave_if_due(), Some(StellarId(128)));
+        assert_eq!(view.session().expect("ok").landed(), None, "in flight");
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_lasts(&mut view, "Off you go, <PSN>.", 500);
+        assert_eq!(view.leave_if_due(), None, "once");
     }
 
     #[test]
@@ -21272,7 +22689,8 @@ mod tests {
         let mut view = told(paying(50, true));
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         run_set(&mut view, "Q25048");
-        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        view.settle_script();
+        assert_eq!(view.take_off(), Some(StellarId(128)));
         let said = format!("Off you go, <PSN>.  {DEFECTED_ONE}");
         assert_lasts(&mut view, &said, 500);
     }
@@ -21319,12 +22737,14 @@ mod tests {
     fn a_q_message_takes_the_greetings_place() {
         let mut view = told(landed_view());
         run_set(&mut view, "Q25048");
-        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        view.settle_script();
+        assert_eq!(view.leave_if_due(), Some(StellarId(128)));
         assert_eq!(view.message(), Some("Off you go, <PSN>."));
         let rules = Rulebook::default().with_override(RuleKey::BlankLeave, RuleSource::Bible);
         let mut view = told(landed_view()).with_rules(rules);
         run_set(&mut view, "Q25049");
-        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        view.settle_script();
+        assert_eq!(view.leave_if_due(), Some(StellarId(128)));
         assert_eq!(view.message(), Some(EARTH_GREETING), "an empty one greets");
     }
 
@@ -21336,18 +22756,26 @@ mod tests {
     }
 
     #[test]
+    fn a_take_off_with_no_q_shows_no_leave_message() {
+        let mut view = told(landed_view());
+        assert!(!view.leave_due());
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.message(), Some(EARTH_GREETING), "the greeting alone");
+    }
+
+    #[test]
     fn fighters_abandoned_in_a_move_are_told_after_a_qs_message() {
         let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
         let mut view = told(fighters_out()).with_rules(rules);
         run_set(&mut view, "Q25048 M131");
-        assert_eq!(view.settle_script(), None);
+        view.settle_script();
         assert_eq!(
             view.message(),
             Some("Off you go, <PSN>.  (Two fighters abandoned)")
         );
         assert_eq!(view.pilot().expect("flying").escorts(), []);
         view.message = None;
-        assert_eq!(view.settle_script(), None);
+        view.settle_script();
         assert_eq!(view.message(), None, "nothing more to tell");
     }
 
@@ -22037,7 +23465,7 @@ mod tests {
         settle_session(&mut view);
         view.tick(TICK);
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
-        assert_eq!(view.settle_script(), None);
+        view.settle_script();
         assert_eq!(view.message(), None, "no layout from this settling");
         let session = view.session.as_mut().expect("flying");
         assert_eq!(
@@ -22396,7 +23824,9 @@ mod tests {
         view.take_offer().expect("offered");
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
         view.input(&key(Key::Up, true));
+        let _ = view.take_sounds();
         tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.take_sounds(), [], "no beep from flight");
         let info = view.take_mission_info_request().expect("asked");
         assert_eq!(info, view.mission_info());
         assert_eq!(view.take_mission_info_request(), None, "once");
@@ -22558,6 +23988,11 @@ mod tests {
     }
 
     #[test]
+    fn the_help_line_names_mission_info() {
+        assert!(HELP.contains("P: player info   I: mission info"), "{HELP}");
+    }
+
+    #[test]
     fn i_with_the_map_open_does_nothing() {
         let mut view = flight();
         tap(&mut view, MAP_KEY);
@@ -22581,12 +24016,110 @@ mod tests {
         let mut view = targeting_ace(offering(0, Some("Help?"), false));
         tap(&mut view, HAIL_KEY);
         view.take_offer().expect("offered");
-        assert_eq!(view.refuse_mission(MissionId(130)), Ok(()));
+        assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
         assert_eq!(
             view.refuse_mission(MissionId(130)),
             Err(NotOffered),
             "answered"
         );
+    }
+
+    /// How a person's offer is answered over flight: accepted or refused
+    /// in the dialog with a refuse button, or accepted in the one-button
+    /// dialog.
+    const FLIGHT_ANSWERS: [(&str, bool, bool); 3] = [
+        ("an accept", false, false),
+        ("a refusal", false, true),
+        ("a one-button accept", true, false),
+    ];
+
+    /// [`offering`] Ace's refusable (or `unrefusable`) mission 130, with
+    /// a `BriefText` and a `RefuseText`, whose `OnAccept` (or, `refuse`,
+    /// `OnRefuse`) is `G200`, a tank: hailed and its offer taken, in
+    /// flight with the nearest stellar, the Moon, selected, the HUD's
+    /// cadence read as `cadence` says.
+    fn offered_in_flight(cadence: RuleSource, unrefusable: bool, refuse: bool) -> View {
+        let mut catalog = offering(0, Some("Help?"), unrefusable);
+        catalog.outfits = vec![shipbuying().outfits[0].clone()];
+        let script = nova_sim::Script::parse("G200");
+        let mission = &mut catalog.missions[0];
+        if refuse {
+            mission.on_refuse = script;
+        } else {
+            mission.on_accept = script;
+        }
+        let texts = &mut catalog.mission_texts[0];
+        texts.brief = Some("Go.".to_owned());
+        texts.refuse = Some("No.".to_owned());
+        let (_, chance) = scripted(&ACE[..4]);
+        let rules = Rulebook::default().with_override(RuleKey::HudCadence, cadence);
+        let mut view = FlightView::new(catalog)
+            .with_rules(rules)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        tap(&mut view, NEAREST_STELLAR_KEY);
+        tap(&mut view, TARGET_KEY);
+        tap(&mut view, HAIL_KEY);
+        view.take_offer().expect("offered");
+        view
+    }
+
+    #[test]
+    fn an_offer_answered_over_flight_shows_its_text_over_the_pre_answer_bar() {
+        for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
+            let mut view = offered_in_flight(RuleSource::Engine, unrefusable, refuse);
+            let before = view.reserves();
+            let nav = view.nav_shown();
+            if refuse {
+                assert_eq!(
+                    view.refuse_mission(MissionId(130)).map(|_| ()),
+                    Ok(()),
+                    "{what}"
+                );
+            } else {
+                assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
+            }
+            assert_eq!(
+                view.reserves().fuel.max,
+                before.fuel.max + 100.0,
+                "{what}: G200 ran"
+            );
+            // A selection the bar hasn't drawn: an `M` or `N` in the
+            // answer can't stand for it, as its move lays the system out
+            // afresh as it settles, which redraws the whole bar.
+            view.select_stellar(StellarPick::Slot(0));
+            assert_ne!(view.nav_now(), nav, "{what}: Earth selected");
+            assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
+            assert_eq!(view.reserves_shown(), before, "{what}: under the text");
+            assert_eq!(view.nav_shown(), nav, "{what}: the nav held too");
+            view.close_mission_text();
+            assert_eq!(
+                view.reserves_shown(),
+                view.reserves(),
+                "{what}: live once it closed"
+            );
+            assert_eq!(view.nav_shown(), view.nav_now(), "{what}: nav live too");
+            assert!(view.bar_steps.is_empty(), "{what}: let go");
+        }
+    }
+
+    #[test]
+    fn under_the_bible_cadence_flights_gauges_stay_live_under_an_offers_text() {
+        for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
+            let mut view = offered_in_flight(RuleSource::Bible, unrefusable, refuse);
+            if refuse {
+                assert_eq!(
+                    view.refuse_mission(MissionId(130)).map(|_| ()),
+                    Ok(()),
+                    "{what}"
+                );
+            } else {
+                assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
+            }
+            assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
+            assert_eq!(view.reserves_shown(), view.reserves(), "{what}: live");
+        }
     }
 
     #[test]
@@ -22611,6 +24144,21 @@ mod tests {
             Some("Aboard.".to_owned())
         );
         assert_eq!(view.message(), None, "nothing granted");
+    }
+
+    #[test]
+    fn an_offer_accepted_at_once_queues_its_before_movie_first() {
+        let mut catalog = offering(0, None, true);
+        catalog.mission_texts[0].movies.offer = nova_sim::DescMovie::from_desc("Ace.mov", 0x0004);
+        let mut view = targeting_ace(catalog);
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_offer(), None);
+        assert_eq!(
+            view.take_mission_texts().first(),
+            nova_sim::DescMovie::from_desc("Ace.mov", 0x0004)
+                .map(nova_sim::MissionShown::Movie)
+                .as_ref()
+        );
     }
 
     #[test]
@@ -23767,6 +25315,49 @@ mod tests {
         assert_eq!(view.course_map().mode(), MapMode::Hypergate);
         assert_eq!(view.take_landing(), None, "not landed");
         assert_eq!(system_of(&view), SystemId(130));
+    }
+
+    /// Taps I in `view`, its sounds taken first: nothing is asked for,
+    /// nothing said and nothing sounded.
+    fn i_does_nothing_and_says_nothing(view: &mut View, why: &str) {
+        let _ = view.take_sounds();
+        let message = view.message().map(str::to_owned);
+        tap(view, MISSION_INFO_KEY);
+        assert_eq!(view.take_mission_info_request(), None, "{why}");
+        assert_eq!(view.message(), message.as_deref(), "{why}");
+        assert_eq!(view.take_sounds(), [], "{why}");
+    }
+
+    #[test]
+    fn i_during_a_jump_does_nothing_and_says_nothing() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        i_does_nothing_and_says_nothing(&mut view, "turning to jump (@0x70424)");
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        i_does_nothing_and_says_nothing(&mut view, "streaking (@0x70424)");
+    }
+
+    #[test]
+    fn i_in_the_escape_pod_does_nothing_and_says_nothing() {
+        let mut pod = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
+        assert!(until_ejected(&mut pod).0);
+        i_does_nothing_and_says_nothing(&mut pod, "in the pod (@0x7042e)");
+    }
+
+    #[test]
+    fn i_while_disabled_is_taken() {
+        let mut view = disabled_player();
+        let _ = view.take_sounds();
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.take_mission_info_request(), None);
+        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Refused)]);
     }
 
     #[test]

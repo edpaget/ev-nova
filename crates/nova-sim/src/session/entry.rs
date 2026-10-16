@@ -100,6 +100,14 @@ pub(super) enum Entry {
     Gate,
     /// `M` or `N`, landed or in flight.
     ScriptMove { landed: bool },
+    /// An `N` out of range in flight, into the system the player is in:
+    /// the in-flight move's tail with no move (`_EvalSetExp` @0x1593f,
+    /// @0x1596e-0x159ad). It is never an arrival, whatever
+    /// [`RuleKey::MoveArrival`](crate::RuleKey::MoveArrival) says, as it
+    /// moves nowhere: its row is a move's within the system by the
+    /// engine's reading, and it names the entrance and tells the view as
+    /// an in-flight move does.
+    ScriptStay,
     /// The developer tools' move, landed, or a walker's landing
     /// ([`Session::land_at`]), landed or in flight.
     Relocate,
@@ -117,6 +125,7 @@ impl Entry {
             Self::Jump { .. } => Some(Entrance::Jump),
             Self::Gate => Some(Entrance::Gate),
             Self::ScriptMove { landed } => Some(Entrance::ScriptMove { landed }),
+            Self::ScriptStay => Some(Entrance::ScriptMove { landed: false }),
             Self::Relocate => Some(Entrance::Relocate),
             Self::Rescue => None,
         }
@@ -352,6 +361,7 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
         Entry::Gate => gate(),
         Entry::ScriptMove { landed: true } => script_move_landed(arrival),
         Entry::ScriptMove { landed: false } => script_move_in_flight(arrival, facts),
+        Entry::ScriptStay => script_move_in_flight(false, facts),
         Entry::Relocate => relocate(),
         Entry::Rescue => rescue(),
     }
@@ -592,9 +602,11 @@ fn relocate() -> Resets {
 /// [`SessionEvent::StellarChanged`].
 pub(super) fn scene_event(how: Entry, scene_changed: bool) -> Option<SessionEvent> {
     match how {
-        Entry::Jump { .. } | Entry::Gate | Entry::ScriptMove { landed: false } | Entry::Rescue => {
-            Some(SessionEvent::SystemChanged)
-        }
+        Entry::Jump { .. }
+        | Entry::Gate
+        | Entry::ScriptMove { landed: false }
+        | Entry::ScriptStay
+        | Entry::Rescue => Some(SessionEvent::SystemChanged),
         Entry::ScriptMove { landed: true } => None,
         Entry::Relocate if scene_changed => Some(SessionEvent::SystemChanged),
         Entry::Relocate => Some(SessionEvent::StellarChanged),
@@ -1285,6 +1297,24 @@ mod tests {
     }
 
     #[test]
+    fn a_stay_is_a_move_within_the_system_by_the_engine_whatever_the_reading() {
+        let always = with(&SCENE, &[Reset::Jump, Reset::GateEntry, Reset::SaveDue]);
+        for reading in READINGS {
+            for pending in [false, true] {
+                let mut set = always.clone();
+                if pending {
+                    set.push(Reset::Thrust);
+                }
+                assert_eq!(
+                    resets(Entry::ScriptStay, &arrival(reading), facts(false, pending)),
+                    Resets::of(&set, CourseStep::Keep, NavStep::Deselect, TrafficStep::None),
+                    "{reading:?} pending {pending}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn only_a_moves_rows_read_move_arrival_from_the_rulebook() {
         let rows = |reading| {
             let rules = arrival(reading);
@@ -1349,6 +1379,7 @@ mod tests {
                 Entry::ScriptMove { landed: false },
                 Entrance::ScriptMove { landed: false },
             ),
+            (Entry::ScriptStay, Entrance::ScriptMove { landed: false }),
             (Entry::Relocate, Entrance::Relocate),
         ] {
             assert_eq!(how.entrance(), Some(entrance), "{how:?}");
@@ -1370,6 +1401,7 @@ mod tests {
                 ),
                 (Entry::Gate, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: false }, Some(SystemChanged)),
+                (Entry::ScriptStay, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: true }, None),
                 (Entry::Rescue, Some(SystemChanged)),
             ] {

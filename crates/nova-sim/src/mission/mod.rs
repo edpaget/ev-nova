@@ -122,7 +122,12 @@
 //!    distant stellar (`_SelectMissionStellar` @0x9a3ce-0x9a3db), by the
 //!    other reading only a distant one, distance told as
 //!    [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
-//!    reads it;
+//!    reads it; an ally code, 15000-19999, by the engine's reading of
+//!    [`mission_ally_index`](crate::RuleKey::MissionAllyIndex) also takes
+//!    a stellar of another government when the system with the stellar's
+//!    own ID has the government it names (`_SelectMissionStellar`
+//!    @0x9a7af-0x9a7c8, @0x9a8e5-0x9a8fa), which `AvailStel`'s 15000-19999
+//!    never does (`_GovtAllies` alone, @0x9b3c2-0x9b3ef);
 //! 2. its return: the destination for `ReturnStel` -1, else the stellar
 //!    the code chooses, never the destination;
 //! 3. its cargo: `CargoType` 0-999 as it is, 1000 a `Rand(6)` commodity,
@@ -160,7 +165,9 @@
 //! # Draws
 //!
 //! The visit's table is 1000 `Rand(100) + 1` rolls, drawn in index order
-//! as the offers are rolled ([`RollTable::draw`]), and kept for the visit:
+//! as the offers are rolled ([`RollTable::draw`]), at a jump's arrival,
+//! when a new pilot begins and when a pilot is opened from a save (as
+//! `_ResetPlayer` draws it, @0x1d93a-0x1d956), and kept for the visit:
 //! `AvailRandom` reads it as a fact, so checking a mission's availability
 //! again draws nothing, and every check is plain. The original's own
 //! destination check draws a stellar and throws it away; here it only
@@ -186,12 +193,14 @@
 //!   "Cargo");
 //!   the slot filled; `OnAccept` (@0xa1da2); a `PayVal` below -50000 takes
 //!   `-50000 - PayVal`, the cash floored at none ([`accept_charge`]); the
-//!   destination reached when it has none, or, docked, when it is the
+//!   destination reached when it has none (@0xa1fe7), or, with an offer
+//!   dialog open (`_missionDialog`, @0xa1fde), docked, when it is the
 //!   stellar docked at, or, an offer from a ship accepted in flight, when
 //!   it is the navigation target as
 //!   [`person_mission_stellar`](crate::RuleKey::PersonMissionStellar)
-//!   reads (@0xa1fc5-0xa1ff8); docked, the mission's offer
-//!   dropped and the others kept only while available (@0xa1ffd-0xa2136);
+//!   reads (@0xa1fc5-0xa1ff8); docked with the dialog open (@0xa200b),
+//!   the mission's offer dropped and the others kept only while available
+//!   (@0xa1ffd-0xa2136);
 //!   the auto-abort when docked, with `Flags` 0x0001, the destination
 //!   reached, and no return stellar nor ship ([`auto_aborts_at_accept`],
 //!   @0xa2139-0xa217b); its roll made 0 (@0xa2196).
@@ -242,9 +251,27 @@
 //!   availability nor whether it is active: a mission active already
 //!   takes another slot, unless the Rulebook key
 //!   [`start_active_mission`](crate::RuleKey::StartActiveMission) reads
-//!   otherwise. `A` ends every slot holding the mission, running
-//!   `OnAbort`, whatever its `CanAbort`. `F` marks each failed, running
-//!   nothing.
+//!   otherwise. The offer dialog is open only while the player's accept
+//!   or refusal runs, so an `S` in its `OnAccept` or `OnRefuse` reaches
+//!   and refilters as that accept does. An `S` anywhere else, and the
+//!   offer dialog's accept at once of an offer that cannot be refused and
+//!   has no text (@0xa230a), leave a destination with one unreached and
+//!   the offers as they are, unless the Rulebook key
+//!   [`start_outside_dialog`](crate::RuleKey::StartOutsideDialog) reads
+//!   otherwise. Once an outside offer is answered, by an accept, a
+//!   refusal or the accept at once, unless the accept fails,
+//!   `_OfferMissionFromPort` shifts the outside list down from the index
+//!   it found the offer at, in the list as the answer left it
+//!   (@0xa377d-0xa37a1). So an accept from the dialog, its own offer
+//!   dropped already, drops the next outside offer listed too; a refusal
+//!   whose `OnRefuse` refilters can leave the refused offer listed; and
+//!   the accept at once drops its own offer, or with
+//!   `start_outside_dialog`'s other reading, which refilters, the next
+//!   one too. The Rulebook key
+//!   [`offer_shift`](crate::RuleKey::OfferShift) reads otherwise: each
+//!   answer drops only its own offer. `A` ends every slot holding the
+//!   mission, running `OnAbort`, whatever its `CanAbort`. `F` marks each
+//!   failed, running nothing.
 //!
 //! A pay (`_ApplyMissionPay` @0x98326) above 0 is cash; -10000 to -39999
 //! clean the negative records of a government, its allies or those
@@ -367,7 +394,11 @@
 //! (@0x9edfd, @0x9f01d) and the success and failure at the return
 //! (@0xa1a37) match so; the accept's "reached here" (@0xa1fd8) and the
 //! success check's "the destination is the return" (@0xa1a4e) compare
-//! raw IDs.
+//! raw IDs. By [`RuleKey::StellarIdentityRecord`](crate::RuleKey::StellarIdentityRecord)'s
+//! engine reading, the stellars compare as the original's records hold
+//! them ([`IdentityRules`]): no ID outside 128..=2175 matches, a name
+//! counts as its length and first 30 characters, and a `spöb` that
+//! didn't load reads as a zeroed record, unnamed at 0,0.
 
 pub mod active;
 pub mod aux_ships;
@@ -401,7 +432,7 @@ pub use self::goals::{
     departure, fails_on_destroyed, fails_on_disabled, goals_met_moment, held_disabled, met_before,
     plain_board_counts,
 };
-pub use self::identity::StellarMarks;
+pub use self::identity::{IdentityRules, StellarMarks};
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
 pub use self::screens::{
     OfferLabels, OfferPrompt, VenueOffer, display_order, offer_gap, offer_labels,
@@ -588,6 +619,11 @@ pub struct AvailFacts<'a> {
     pub venue: Venue,
     /// The visit's rolls.
     pub rolls: &'a RollTable,
+    /// The `AvailBits` verdict the original cached for the mission
+    /// (`mïsn`+0x16), read in place of testing the bits when given
+    /// ([`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits));
+    /// with none the bits are tested now.
+    pub cached_avail_bits: Option<bool>,
 }
 
 impl Context for AvailFacts<'_> {
@@ -721,10 +757,10 @@ fn avail_stel(facts: &AvailFacts) -> Result<(), Refusal> {
 }
 
 fn avail_bits(facts: &AvailFacts) -> Result<(), Refusal> {
-    pass(
-        facts.visit.gate.allows(&facts.mission.avail_bits),
-        Refusal::AvailBits,
-    )
+    let holds = facts
+        .cached_avail_bits
+        .unwrap_or_else(|| facts.visit.gate.allows(&facts.mission.avail_bits));
+    pass(holds, Refusal::AvailBits)
 }
 
 fn require(facts: &AvailFacts) -> Result<(), Refusal> {

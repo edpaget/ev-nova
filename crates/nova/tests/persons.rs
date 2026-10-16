@@ -222,13 +222,15 @@ fn alpha() -> Vec<u8> {
     bytes
 }
 
-/// The pad: a `spöb` at the centre that can be landed on, drawn from
-/// `spïn` 1004.
+/// The pad: a `spöb` at the centre that can be landed on whatever the
+/// record (`MinStatus` -32767), drawn from `spïn` 1004. Shooting Ace down
+/// in independent Alpha costs the record there a quarter of the Pirates'
+/// `KillPenalty` of 7, as the original's crime walk does.
 fn pad() -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
     bytes[0x06..0x0A].copy_from_slice(&0x01_u32.to_be_bytes());
-    put_i16s(&mut bytes, 0x14, &[-1]);
+    put_i16s(&mut bytes, 0x14, &[-1, -32767]);
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
     bytes
 }
@@ -477,10 +479,12 @@ impl Game {
             let pilot = Pilot::new(data.as_ref(), "Pilot").expect("a pilot");
             keeper.save(&pilot).expect("saved");
         }
-        // The load's heading first: 0, facing up.
+        // The load's heading first: 0, facing up; then the offers' roll
+        // table, each the last outcome.
         let heading = std::iter::once(0);
+        let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(
-            heading.chain(draws.iter().copied()).collect(),
+            heading.chain(table).chain(draws.iter().copied()).collect(),
         )));
         let screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
@@ -709,6 +713,13 @@ fn a_unique_person_shot_down_is_gone_for_good_after_a_save_and_another_comes_bac
     }
     game.key(Key::Space, false);
     assert_eq!(game.persons(), Vec::<i16>::new(), "both shot down");
+    assert_eq!(
+        game.session()
+            .pilot()
+            .system_record(nova_sim::SystemId(128)),
+        -1,
+        "Ace's killing, 7 / 4 in independent Alpha; Friend's, half of no gövt 128's"
+    );
     for _ in 0..60 {
         game.frame();
     }

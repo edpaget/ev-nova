@@ -70,10 +70,13 @@
 //! refused for want of room for the cargo. A deadline missed in flight
 //! raises [`SimMessage::DeadlineMissed`] unless the mission is hidden.
 
+use std::collections::BTreeMap;
+
 use super::Session;
 use super::mission_screens::MissionTextKind;
 use crate::catalog::{
-    AuxShip, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId, SystemId,
+    AuxShip, DescMovie, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId,
+    SystemId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
@@ -84,9 +87,10 @@ use crate::mission::goals::{ShipGoal, met_at_return};
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
-    AvailFacts, FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit,
-    World, abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
-    cleaned, failure_records, fined, pay_effect, placements, stellars_of, success_records,
+    AvailFacts, FailedBy, IdentityRules, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop,
+    Venue, Visit, World, abort_checks, abort_penalty, accept_charge, accept_checks,
+    auto_aborts_at_accept, cleaned, failure_records, fined, pay_effect, placements, stellars_of,
+    success_records,
 };
 use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -94,7 +98,10 @@ use crate::rules::Verdict;
 use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
-use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
+use crate::text_parse::{ParseRules, parse_text_description};
+use crate::text_tags::{
+    self, MissionTags, MissionValues, RankTagGovts, TagContext, TagNames, TagRules,
+};
 
 /// Why a mission's stop has no landing a player can reach
 /// ([`Session::stop_landing`]).
@@ -166,6 +173,18 @@ pub const fn slot_hook(slot: u8, hook: u8) -> SubscriptionId {
 #[error("the mission is not offered here")]
 pub struct NotOffered;
 
+/// What a refusal from the offer dialog left shown
+/// ([`Session::refuse_mission`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RefuseShown {
+    /// Whether the offer dialog was hidden: only when the mission's
+    /// `RefuseText` is not -1 (`_OfferOneMission` @0xa2e70-0xa2e8e). One
+    /// not hidden stays drawn, answered, under the texts the refusal
+    /// queued and the after-movie, until they have all closed
+    /// (`DisposeDialogNoFlash` @0xa361e).
+    pub offer_hidden: bool,
+}
+
 /// Why [`Session::abort_mission`] aborted nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AbortError {
@@ -230,11 +249,12 @@ impl Session {
     /// `_MissionLandCargoCheck` (@0x9edfd, @0x9f01d) and
     /// `_MissionLandCheck` (@0xa1a37) ask `_StellarsAreIdentical`: by
     /// [`RuleKey::MissionStellarIdentity`]'s engine reading, also a
-    /// stellar of another ID at the same place with the same name
+    /// stellar of another ID at the same place with the same name, read
+    /// as [`RuleKey::StellarIdentityRecord`] says
     /// ([`StellarMarks::identical`]). No stop is never docked at.
     pub(super) fn docked_at_stop(&self, stop: Option<Stop>, docked: StellarId) -> bool {
-        let source = self.rules.source_for(RuleKey::MissionStellarIdentity);
-        stop.is_some_and(|stop| self.stellar_marks.identical(stop.stellar, docked, source))
+        let rules = IdentityRules::of(&self.rules);
+        stop.is_some_and(|stop| self.stellar_marks.identical(stop.stellar, docked, rules))
     }
 
     /// Whether the ship is docked at a mission's `stop`, as
@@ -256,7 +276,8 @@ impl Session {
     /// system when that is a visible lister, else in its first visible
     /// lister. A hidden one is landed at through its first variant
     /// ([`StellarMarks::variants`], by
-    /// [`RuleKey::MissionStellarIdentity`]) that is visible, in that
+    /// [`RuleKey::MissionStellarIdentity`] and
+    /// [`RuleKey::StellarIdentityRecord`]) that is visible, in that
     /// variant's first visible lister, as `_StellarsAreIdentical`
     /// matches them. A visible lister shadowed by another at its place
     /// (`CoLocatedResolution`) counts as visible. Built only for the
@@ -286,9 +307,8 @@ impl Session {
                 .unwrap_or(first);
             return Ok((system, stop.stellar));
         }
-        let source = self.rules.source_for(RuleKey::MissionStellarIdentity);
         self.stellar_marks
-            .variants(stop.stellar, source)
+            .variants(stop.stellar, IdentityRules::of(&self.rules))
             .find_map(|variant| Some((visible_listers(variant).next()?, variant)))
             .ok_or(StopRefusal::Hidden)
     }
@@ -375,7 +395,7 @@ impl Session {
     /// The offer of `mission` on the visit under way, or in flight the
     /// offer from a ship the offer dialog shows (see the `person_offers`
     /// module).
-    fn offer_of(&self, mission: MissionId) -> Option<Offer> {
+    pub(super) fn offer_of(&self, mission: MissionId) -> Option<Offer> {
         if self.landed.is_none() {
             let offering = self
                 .offering
@@ -436,7 +456,10 @@ impl Session {
     /// flight, drawing on `chance`: the accept checks, then the original's
     /// accept (`_DoMissionAccept` @0xa1b11; see the [`mission`] module's
     /// "Active missions"), and a person's offer answered (see the
-    /// `person_offers` module). The slot it went into.
+    /// `person_offers` module). The slot it went into. It is the player's
+    /// accept from the offer dialog or the mission computer, so it runs
+    /// with the dialog open (`_missionDialog`, @0xa2e06, @0xa2fba,
+    /// @0xa3bb4; see [`Session::start_mission`]).
     ///
     /// # Errors
     ///
@@ -445,8 +468,40 @@ impl Session {
     /// [`AcceptError::Refused`] when a check refuses, and then nothing
     /// runs but an outside offer's suppression (see
     /// [`Session::next_offer`]) and, for want of room for its cargo, the
-    /// refusal queued to show ([`MissionTextKind::NoRoom`]).
+    /// refusal queued to show ([`MissionTextKind::NoRoom`]). Every slot
+    /// taken shows nothing and plays nothing (`_DoMissionAccept`
+    /// @0xa1b32-0xa1b42).
+    ///
+    /// Then the offer `dësc` is loaded again, refused or not, as the offer
+    /// dialog reloads it after its accept (`_OfferOneMission` @0xa2e29,
+    /// @0xa2fd7) and the mission computer after its own (`_DoMissionDialog`
+    /// @0xa3bea, then @0xa3c32), and the offer dialog's after-movie is
+    /// queued behind whatever the accept queued
+    /// ([`Session::show_offer_after_movie`]).
     pub fn accept_mission(
+        &mut self,
+        mission: MissionId,
+        chance: &mut dyn Chance,
+    ) -> Result<u8, AcceptError> {
+        // A new run of docked scripts (see [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
+        let venue = self.offer_of(mission).map(|offer| offer.venue);
+        let accepted = self.in_offer_dialog(|session| session.accept_offered(mission, chance));
+        if let Some(venue) = venue {
+            self.reload_offer_desc(mission, chance);
+            self.show_offer_after_movie(mission, venue);
+        }
+        accepted
+    }
+
+    /// Accepts `mission` as [`Session::accept_mission`] does, but with the
+    /// offer dialog as it is: the offer dialog's accept at once, of an
+    /// offer that cannot be refused and has no text, comes before the
+    /// dialog is made (`_OfferOneMission` @0xa230a, before @0xa237f).
+    /// An outside offer accepted is then shifted out of the list as
+    /// `_OfferMissionFromPort` shifts it ([`Session::drop_offered`]); one
+    /// refused is suppressed and nothing is dropped (@0xa3765-0xa377b).
+    pub(super) fn accept_offered(
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
@@ -456,24 +511,38 @@ impl Session {
             .mission_record(mission)
             .cloned()
             .ok_or(AcceptError::NotOffered)?;
+        let at = self.outside_position(&offer);
         let accepted = match self.refuse_accept(&offer, chance) {
             Ok(()) => self
                 .start_mission(&record, &offer, chance)
                 .ok_or(AcceptRefusal::SlotsFull),
             Err(refusal) => Err(refusal),
         };
-        if accepted.is_err() && offer.venue == Venue::Outside {
-            self.suppress_offer(mission);
+        if offer.venue == Venue::Outside {
+            if accepted.is_ok() {
+                self.drop_offered(mission, at);
+            } else {
+                self.suppress_offer(mission);
+            }
         }
         self.end_ship_offer(accepted.is_ok());
         accepted.map_err(AcceptError::Refused)
     }
 
     /// Refuses `mission`, offered on the visit under way, drawing on
-    /// `chance`: its `OnRefuse` runs (`_OfferOneMission` @0xa2f41), then
-    /// its offer is dropped (`_OfferMissionFromPort` @0xa3765-0xa37a1).
-    /// Nothing is forgotten. An offer from a ship is answered (see the
-    /// `person_offers` module).
+    /// `chance`: its `OnRefuse` runs with the offer dialog open
+    /// (`_OfferOneMission` @0xa2f41), then an outside offer is shifted out
+    /// of the list as `_OfferMissionFromPort` shifts it
+    /// (@0xa377d-0xa37a1, as [`RuleKey::OfferShift`] reads it), so an
+    /// `OnRefuse` that refilters can leave it listed, and a mission
+    /// computer's offer is dropped. Nothing is forgotten. An offer from a ship is answered (see the
+    /// `person_offers` module). The offer dialog's after-movie is queued
+    /// last ([`Session::show_offer_after_movie`]).
+    ///
+    /// A `RefuseText` that is not -1 hides the dialog and is loaded
+    /// (@0xa2e70-0xa2eb5), even when its `dësc` is missing, which shows
+    /// nothing and empties the loaded movie. What it gives back says
+    /// whether the dialog was hidden ([`RefuseShown`]).
     ///
     /// # Errors
     ///
@@ -483,15 +552,67 @@ impl Session {
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
-    ) -> Result<(), NotOffered> {
-        self.offer_of(mission).ok_or(NotOffered)?;
+    ) -> Result<RefuseShown, NotOffered> {
+        self.interface_loads.clear();
+        let offer = self.offer_of(mission).ok_or(NotOffered)?;
+        let at = self.outside_position(&offer);
         let record = self.lifecycle_record(mission);
+        let offer_hidden = self
+            .mission_texts(mission)
+            .is_some_and(|texts| texts.refuse_named);
         // `RefuseText`, filled with no mission (index -1, @0xa2ec9).
-        self.show_mission_text(MissionTextKind::Refuse, mission, None);
-        self.run_script(&record.on_refuse, chance);
-        self.offers.drop_offer(mission);
+        if !self.show_mission_text(MissionTextKind::Refuse, mission, None, chance) && offer_hidden {
+            // A missing `dësc` still loads (@0xa2eb5), emptying the movie.
+            let _ = self.load_description(None, None, chance);
+        }
+        self.in_offer_dialog(|session| session.run_script(&record.on_refuse, chance));
+        if offer.venue == Venue::Outside {
+            self.drop_offered(mission, at);
+        } else {
+            self.offers.drop_offer(mission);
+        }
         self.end_ship_offer(false);
-        Ok(())
+        self.show_offer_after_movie(mission, offer.venue);
+        Ok(RefuseShown { offer_hidden })
+    }
+
+    /// Where `offer` is listed among the outside offers, when it is one:
+    /// the index `_OfferMissionFromPort` found it at (-0x2a(%ebp),
+    /// @0xa36f5), taken before the answer changes the list.
+    fn outside_position(&self, offer: &Offer) -> Option<usize> {
+        (offer.venue == Venue::Outside)
+            .then(|| self.offers.position(Venue::Outside, offer.mission))
+            .flatten()
+    }
+
+    /// Drops what answering the outside offer of `mission`, found at `at`,
+    /// drops, as [`RuleKey::OfferShift`] reads it: by the engine, the
+    /// entry now at `at`, in the list as the answer left it
+    /// (`_OfferMissionFromPort` @0xa377d-0xa37a1), so after an accept that
+    /// refiltered the list the next offer listed; by the other reading,
+    /// `mission`'s own offer.
+    ///
+    /// It runs in the call that answers the offer, after the answer's
+    /// scripts and before the venue is rearmed or a frame is drawn, as the
+    /// original shifts once `_OfferOneMission` returns, so no boundary the
+    /// player sees comes between the two.
+    fn drop_offered(&mut self, mission: MissionId, at: Option<usize>) {
+        if self.rules.source_for(RuleKey::OfferShift) == RuleSource::Bible {
+            self.offers.drop_offer(mission);
+        } else if let Some(at) = at {
+            self.offers.drop_at(Venue::Outside, at);
+        }
+    }
+
+    /// Runs `f` with the offer dialog open, as `_OfferOneMission` and
+    /// `_DoMissionDialog` keep `_missionDialog` set from @0xa237f to
+    /// @0xa3628 and from @0xa39a4 to @0xa40cd, then puts it back as it
+    /// was, so a dialog's accept inside another's script leaves it open.
+    fn in_offer_dialog<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let was = std::mem::replace(&mut self.offer_dialog_open, true);
+        let done = f(self);
+        self.offer_dialog_open = was;
+        done
     }
 
     /// The player's abort of the mission in `slot`, drawing on `chance`
@@ -504,6 +625,7 @@ impl Session {
     /// [`AbortError::NotActive`] for a free slot; [`AbortError::Refused`]
     /// when a check refuses, and then nothing runs.
     pub fn abort_mission(&mut self, slot: u8, chance: &mut dyn Chance) -> Result<(), AbortError> {
+        self.interface_loads.clear();
         let mission = self
             .pilot
             .missions
@@ -534,12 +656,20 @@ impl Session {
     /// @0xa1c0c-0xa2196): the slot filled and its hooks registered;
     /// `OnAccept`; the cash a pay below -50000 takes; `BriefText`; the
     /// cargo loaded with `PickupMode` 0, and its `LoadCargText`; the destination
-    /// reached when it has none, or, docked, when it is the stellar docked
-    /// at, or, in flight with an offer from a ship open, when it is the
-    /// stellar [`Session::ship_offer_reaches`] gives (@0xa1fc5-0xa1ff8);
-    /// docked, the mission's offer dropped and the others kept only
-    /// while available; the auto-abort; and its roll made 0. The slot, or
-    /// `None` when every slot is taken.
+    /// reached when it has none (@0xa1fe7), or, with the offer dialog
+    /// open, when it is the stellar docked at, or, in flight with an
+    /// offer from a ship open, when it is the stellar
+    /// [`Session::ship_offer_reaches`] gives (@0xa1fc5-0xa1ff8, the
+    /// dialog read @0xa1fde); docked with the dialog open, the mission's
+    /// offer dropped and the others kept only while available
+    /// (@0xa1ffd-0xa2136, the dialog read @0xa200b); the auto-abort, which
+    /// reads no dialog (@0xa2139-0xa2186); and its roll made 0. The
+    /// dialog is open while the player's accept or refusal runs
+    /// ([`Session::accept_mission`], [`Session::refuse_mission`]), so for
+    /// an `S` in its `OnAccept` or `OnRefuse` too, and closed for an `S`
+    /// anywhere else and for the offer dialog's accept at once
+    /// ([`Session::accept_offered`]), unless [`RuleKey::StartOutsideDialog`]
+    /// reads otherwise. The slot, or `None` when every slot is taken.
     fn start_mission(
         &mut self,
         record: &MissionRecord,
@@ -565,16 +695,20 @@ impl Session {
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
         // `BriefText`, filled for the slot after `OnAccept` and the charge
         // (@0xa1e0b-0xa1f13, @0xa1e56).
-        self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot));
-        self.load_at_accept(slot, record);
+        self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot), chance);
+        self.load_at_accept(slot, record, chance);
+        let in_dialog = self.offer_dialog_open
+            || self.rules.source_for(RuleKey::StartOutsideDialog) == RuleSource::Bible;
         let docked = self.landed;
-        let here = docked.or_else(|| self.ship_offer_reaches());
+        let here = docked
+            .or_else(|| self.ship_offer_reaches())
+            .filter(|_| in_dialog);
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.reached = active
                 .destination
                 .is_none_or(|stop| Some(stop.stellar) == here);
         }
-        if docked.is_some() {
+        if docked.is_some() && in_dialog {
             self.offers.drop_offer(record.id);
             self.refilter_offers();
         }
@@ -627,6 +761,14 @@ impl Session {
         let Some(stellar) = self.landed else {
             return;
         };
+        // Each offer checked writes its cached `AvailBits` (@0xa207a).
+        let checked: Vec<MissionId> = [Venue::Computer, Venue::Outside]
+            .into_iter()
+            .flat_map(|venue| self.offers.at(venue).iter().map(|offer| offer.mission))
+            .collect();
+        for mission in checked {
+            self.check_avail_bits(mission);
+        }
         let mut offers = std::mem::take(&mut self.offers);
         self.at_visit(stellar, |visit| offers.refilter(&self.missions, visit));
         self.offers = offers;
@@ -813,7 +955,9 @@ impl Session {
             (GOALS | RECHECK, StoryEvent::Landed { .. }) => {
                 self.check_ship_goals(slot, false, chance);
             }
-            (ARRIVAL, StoryEvent::Landed { stellar }) => self.cargo_at_landing(slot, stellar),
+            (ARRIVAL, StoryEvent::Landed { stellar }) => {
+                self.cargo_at_landing(slot, stellar, chance);
+            }
             (RETURN, StoryEvent::Landed { stellar }) => {
                 self.mission_return_at(slot, stellar, chance);
             }
@@ -851,7 +995,7 @@ impl Session {
         self.end_mission(slot, &record, false, chance);
         // `FailText` (@0xa0358-0xa03cd), filled after the slot is freed
         // (@0xa0398), so its mission tags read "[Error]".
-        self.show_mission_text(MissionTextKind::Fail, record.id, Some(slot));
+        self.show_mission_text(MissionTextKind::Fail, record.id, Some(slot), chance);
         self.forget_offers();
     }
 
@@ -909,7 +1053,7 @@ impl Session {
         let record = self.lifecycle_record(mission);
         // `CompText` (@0xa0417-0xa048c), filled before the slot is freed
         // (@0xa0457).
-        self.show_mission_text(MissionTextKind::Comp, mission, Some(slot));
+        self.show_mission_text(MissionTextKind::Comp, mission, Some(slot), chance);
         let Some(done) = self.free_slot(slot) else {
             return;
         };
@@ -1016,7 +1160,10 @@ impl Session {
     /// (128 with none, `_RandomizeOneMission` @0x153ff), then accepted as
     /// the player's accept is once its checks pass (`_DoMissionAccept`
     /// @0x15407, its checks @0xa1b32-0xa1be5, a cargo refusal shown),
-    /// without asking whether it is available. A mission active already takes another slot, unless
+    /// without asking whether it is available, with the offer dialog as it
+    /// is: open in an `OnAccept` or `OnRefuse` the player's answer runs,
+    /// closed anywhere else (see [`Session::start_mission`]). A mission
+    /// active already takes another slot, unless
     /// [`RuleKey::StartActiveMission`] reads otherwise. Nothing for a
     /// mission the session has no record of; with every slot taken, its
     /// values are still drawn, then nothing is accepted.
@@ -1028,10 +1175,7 @@ impl Session {
         if !restarts && !self.pilot.missions.holding(mission).is_empty() {
             return;
         }
-        let origin = self
-            .landed
-            .or_else(|| self.sites.first().map(|site| site.id))
-            .unwrap_or(StellarId(128));
+        let origin = self.landed.unwrap_or_else(|| self.first_listed_stellar());
         let today = self.pilot.date;
         let offer = self.in_world(|world| {
             mission::resolve(
@@ -1068,6 +1212,17 @@ impl Session {
         self.offers.forget();
     }
 
+    /// Draws the offers' roll table afresh on `chance`, as `_ResetPlayer`
+    /// does whatever its argument (@0x1d795-0x1d7ab, @0x1d93a-0x1d956)
+    /// when a new pilot starts (`_DoNewPilot` @0x18dd4) or a pilot is
+    /// opened from a save (@0x76502, @0x7673e). The table is never saved,
+    /// so without this a pilot in space would read an undrawn table, all
+    /// 0, until its first landing or arrival. The offers stay; the
+    /// stellar they were rolled at is already none on both paths.
+    pub(super) fn draw_offer_rolls(&mut self, chance: &mut dyn Chance) {
+        self.offers.redraw(chance);
+    }
+
     /// Empties the offers, keeping the stellar they were rolled at.
     pub(super) fn empty_offers(&mut self) {
         self.offers.empty();
@@ -1099,6 +1254,7 @@ impl Session {
                 mission: record,
                 venue: Venue::of(record.avail_loc),
                 rolls: self.offers.table(),
+                cached_avail_bits: None,
             };
             mission::availability()
                 .all_refusals(&facts)
@@ -1133,6 +1289,7 @@ impl Session {
             govts: &self.govts,
             draw: self.rules.source_for(RuleKey::MissionStellarDraw),
             distance: self.rules.source_for(RuleKey::MissionStellarDistance),
+            ally_index: self.rules.source_for(RuleKey::MissionAllyIndex),
         })
     }
 
@@ -1174,22 +1331,11 @@ impl Session {
     }
 
     /// The player as availability reads it, its legal record the one in
-    /// `system`, as the [`LegalRecords`](RuleKey::LegalRecords) rule reads
-    /// it: by the engine the system's own, by the Bible the one with its
-    /// government.
+    /// `system`, as [`Session::record_in`] reads it.
     fn mission_player(&self, system: SystemId) -> Player {
         let ship = self.ship_record(self.pilot.ship);
         Player {
-            // `_IsMissionAvailable` reads the system's slot (@0x9b59d,
-            // @0x9b5bf); by the Bible, the record with its government.
-            record: match self.rules.source_for(RuleKey::LegalRecords) {
-                RuleSource::Engine => self.pilot.system_record(system),
-                RuleSource::Bible => self
-                    .galaxy
-                    .map()
-                    .govt(system)
-                    .map_or(0, |govt| self.pilot.legal_record(govt)),
-            },
+            record: self.record_in(system, None),
             rating: self.pilot.combat_rating,
             ship: self.pilot.ship,
             inherent_ai: ship.map_or(0, |ship| ship.inherent_ai),
@@ -1202,12 +1348,58 @@ impl Session {
         }
     }
 
+    /// Caches every mission's `AvailBits` verdict now, as the original's
+    /// refresh writes `mïsn`+0x16 for all (`_PropagateMissionBitEffects`
+    /// @0x99887-0x998b2): at a landing, a jump's arrival before its days,
+    /// a new pilot's start and a load, with the galaxy's refresh. Only the
+    /// hail quote filter reads the cache (see
+    /// [`Session::quoted_mission_available`]).
+    pub(crate) fn propagate_avail_bits(&mut self) {
+        let gate = self.gate();
+        let verdicts: BTreeMap<MissionId, bool> = self
+            .missions
+            .iter()
+            .map(|record| (record.id, gate.allows(&record.avail_bits)))
+            .collect();
+        self.avail_cache = verdicts;
+    }
+
+    /// Caches `mission`'s `AvailBits` verdict now, as a check of it that
+    /// writes the cache does (`_IsMissionAvailable(m, 1)` @0x9b4af-0x9b4d3:
+    /// an accept, a port offer, the mission computer, a hail or a board).
+    pub(super) fn check_avail_bits(&mut self, mission: MissionId) {
+        if let Some(record) = self.mission_record(mission) {
+            let holds = self.gate().allows(&record.avail_bits);
+            self.avail_cache.insert(mission, holds);
+        }
+    }
+
     /// Whether `mission` is available from a ship in flight, the visit's
     /// rolls read and nothing drawn (`_IsMissionAvailable(m, 1)` with
     /// `_offeringFromShip` set; see the [`mission`] module's "From a
     /// ship"): never while docked, nor for a mission the session has no
     /// record of.
     pub(crate) fn ship_mission_available(&self, mission: MissionId) -> bool {
+        self.ship_mission_available_reading(mission, None)
+    }
+
+    /// Whether `mission` is available from a ship in flight as the hail
+    /// quote filter checks it (`_IsMissionAvailable(m, 0)`, `_HandleShip`
+    /// @0x33e1d): its `AvailBits` as [`RuleKey::CachedAvailBits`] reads
+    /// them, by the engine the verdict cached at the last refresh or
+    /// check of it ([`Session::propagate_avail_bits`]), by the other
+    /// reading tested now; the rest as [`Session::ship_mission_available`].
+    pub(crate) fn quoted_mission_available(&self, mission: MissionId) -> bool {
+        let cached = match self.rules.source_for(RuleKey::CachedAvailBits) {
+            RuleSource::Engine => self.avail_cache.get(&mission).copied(),
+            RuleSource::Bible => None,
+        };
+        self.ship_mission_available_reading(mission, cached)
+    }
+
+    /// [`Session::ship_mission_available`], the `AvailBits` read as
+    /// `cached` when given.
+    fn ship_mission_available_reading(&self, mission: MissionId, cached: Option<bool>) -> bool {
         let Some(record) = self
             .mission_record(mission)
             .filter(|_| self.landed.is_none())
@@ -1220,6 +1412,7 @@ impl Session {
                 mission: record,
                 venue: Venue::Ship,
                 rolls: self.offers.table(),
+                cached_avail_bits: cached,
             };
             mission::availability()
                 .first_refusal(&facts, &mut NeverFires)
@@ -1233,14 +1426,24 @@ impl Session {
         self.offers.table()
     }
 
-    /// What `text`'s tags read for `mission`, or no mission: the pilot,
-    /// its ship, no person, and the session's cash, date and rules.
-    fn tag_context(&self, mission: Option<MissionValues>) -> TagContext<'_> {
+    /// What `text`'s tags read for `mission`, in `slot` (none for an
+    /// offer), or no mission, the crossed rank tags reading `rank_govts`:
+    /// the pilot, its ship, no person, and the session's cash, date and
+    /// rules.
+    fn tag_context(
+        &self,
+        mission: Option<MissionValues>,
+        slot: Option<u8>,
+        rank_govts: RankTagGovts,
+    ) -> TagContext<'_> {
         TagContext {
             pilot: &self.pilot.name,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
-            person: self.offering_person(),
+            person: match self.rules.source_for(RuleKey::OfferingShipName) {
+                RuleSource::Engine => self.offering_ship_name(),
+                RuleSource::Bible => self.offering_person(),
+            },
             ranks: self.rank_names(),
             mission: mission.map(|values| MissionTags {
                 values,
@@ -1248,42 +1451,185 @@ impl Session {
                 today: self.pilot.date,
                 date_affixes: &self.date_affixes,
                 pay_millions: self.rules.source_for(RuleKey::PayMillions),
+                slot,
             }),
+            rank_govts,
+            leet: self.leet,
+            rules: TagRules::from_rulebook(&self.rules),
         }
     }
 
-    /// `text` with its tags filled for `mission`'s offer on the visit
-    /// under way (`_MungeBriefing` with `offer` set; see
-    /// [`text_tags`](crate::text_tags)): none when it is not offered, or
-    /// in flight.
+    /// Takes in `raw`, a text from `source`, as the original does before
+    /// it fills it: its conditional text is resolved for the pilot as it
+    /// is now, and the remembered rank governments become those `source`
+    /// leaves ([`TextSource::parse`], `_ParseTextDescription`); then, in
+    /// the `l33t` mode, a `dësc`'s letters are drawn on `chance`
+    /// ([`load_leet`](text_tags::load_leet), @0x7194f, after the parse at
+    /// @0x71936). What it gives back is the text to fill.
+    ///
+    /// The `&self` texts below ([`Session::offer_text`],
+    /// [`Session::mission_text`], [`Session::plain_text`]) read the
+    /// remembered governments and change nothing; only the paths that
+    /// show a text take it in, so the governments settle as each text is
+    /// shown, as the original's `_LoadDescription` does.
+    pub(super) fn take_in(
+        &mut self,
+        source: TextSource,
+        raw: &str,
+        chance: &mut dyn Chance,
+    ) -> String {
+        let (parsed, govts) = source.parse(self, self.rank_govts, raw);
+        self.rank_govts = govts;
+        if self.leet && source == TextSource::Desc {
+            text_tags::load_leet(&parsed, chance)
+        } else {
+            parsed
+        }
+    }
+
+    /// Loads `raw`, a `dësc` that may be missing, naming `movie`, as
+    /// `_LoadDescription` (@0x717fe) loads one: taken in when there is one
+    /// ([`Session::take_in`]), its movie the last loaded
+    /// ([`Session::loaded_after_movie`]; `MovieFile` and `Flags`
+    /// @0x71895-0x718de), and otherwise empty. A missing one fails its
+    /// `GetResource` (@0x71825) and only empties the text and the
+    /// `MovieFile` (@0x71a5e-0x71a81), never reaching the reset
+    /// (@0x71926-0x71930), the parse (@0x71936) or the `l33t` letters, so
+    /// the governments the last text left are kept. The `Flags` it leaves
+    /// stale are never read, as every movie check tests the name first.
+    pub fn load_description(
+        &mut self,
+        raw: Option<&str>,
+        movie: Option<&DescMovie>,
+        chance: &mut dyn Chance,
+    ) -> String {
+        self.loaded_movie = raw.and(movie).cloned();
+        raw.map(|raw| self.take_in(TextSource::Desc, raw, chance))
+            .unwrap_or_default()
+    }
+
+    /// The after-movie a `STR#` text plays once it closes, as
+    /// `_ShowTextDialog`'s after-check reads the globals the last
+    /// `_LoadDescription` left (@0x5b40b-0x5b44f), as
+    /// [`RuleKey::DescMovieGlobals`] reads it: by the engine, the last
+    /// `dësc` loaded's movie when its `Flags` 0x0001 is set; by the other
+    /// reading none. A `STR#` text is shown with `_ShowTextDialog`'s third
+    /// argument 0, which gates off the before-check alone (@0x5a76c).
     #[must_use]
-    pub fn offer_text(&self, mission: MissionId, text: &str) -> Option<String> {
+    pub fn loaded_after_movie(&self) -> Option<DescMovie> {
+        match self.rules.source_for(RuleKey::DescMovieGlobals) {
+            RuleSource::Engine => self.loaded_movie.clone().filter(|movie| movie.after),
+            RuleSource::Bible => None,
+        }
+    }
+
+    /// `raw`, a `dësc` that may be missing, as loading it would give it
+    /// before any `l33t` letters are drawn, and the governments it would
+    /// leave, as [`Session::load_description`] leaves them, changing
+    /// nothing: a missing one empty, keeping the remembered governments.
+    pub(super) fn peek_desc(&self, raw: Option<&str>) -> (String, RankTagGovts) {
+        raw.map_or((String::new(), self.rank_govts), |raw| {
+            TextSource::Desc.parse(self, self.rank_govts, raw)
+        })
+    }
+
+    /// `text` filled for `mission`'s offer, its crossed rank tags reading
+    /// `rank_govts`: none when it is not offered, or in flight.
+    pub(super) fn offer_text_reading(
+        &self,
+        mission: MissionId,
+        text: &str,
+        rank_govts: RankTagGovts,
+    ) -> Option<String> {
         let offer = self.offer_of(mission)?;
-        let context = self.tag_context(Some(MissionValues::offered(&offer)));
+        let context = self.tag_context(Some(MissionValues::offered(&offer)), None, rank_govts);
         Some(text_tags::expand(text, &context, self))
     }
 
-    /// `text` with its tags filled for the mission in `slot`
-    /// (`_MungeBriefing` with a slot; see [`text_tags`](crate::text_tags)):
-    /// a free slot's mission tags read [`UNSET`](text_tags::UNSET).
-    #[must_use]
-    pub fn mission_text(&self, slot: u8, text: &str) -> String {
+    /// `text` filled for the mission in `slot`, its crossed rank tags
+    /// reading `rank_govts`.
+    pub(super) fn mission_text_reading(
+        &self,
+        slot: u8,
+        text: &str,
+        rank_govts: RankTagGovts,
+    ) -> String {
         let values = self
             .pilot
             .missions
             .get(slot)
             .map(MissionValues::active)
             .unwrap_or_default();
-        text_tags::expand(text, &self.tag_context(Some(values)), self)
+        let context = self.tag_context(Some(values), Some(slot), rank_govts);
+        text_tags::expand(text, &context, self)
+    }
+
+    /// `text` with its tags filled for `mission`'s offer on the visit
+    /// under way (`_MungeBriefing` with `offer` set; see
+    /// [`text_tags`](crate::text_tags)), reading the remembered rank
+    /// governments: none when it is not offered, or in flight.
+    #[must_use]
+    pub fn offer_text(&self, mission: MissionId, text: &str) -> Option<String> {
+        self.offer_text_reading(mission, text, self.rank_govts)
+    }
+
+    /// `text` with its tags filled for the mission in `slot`
+    /// (`_MungeBriefing` with a slot; see [`text_tags`](crate::text_tags)),
+    /// reading the remembered rank governments: a free slot's mission
+    /// tags read [`UNSET`](text_tags::UNSET).
+    #[must_use]
+    pub fn mission_text(&self, slot: u8, text: &str) -> String {
+        self.mission_text_reading(slot, text, self.rank_govts)
     }
 
     /// `text` with its tags filled with no mission, as the original's
     /// `RefuseText`, comm dialog and hail quotes are (`_MungeBriefing`
-    /// with index -1; see [`text_tags`](crate::text_tags)): the mission
-    /// tags are left as written.
+    /// with index -1; see [`text_tags`](crate::text_tags)), reading the
+    /// remembered rank governments: the mission tags read as
+    /// [`RuleKey::MissionlessTags`] says.
     #[must_use]
     pub fn plain_text(&self, text: &str) -> String {
-        text_tags::expand(text, &self.tag_context(None), self)
+        let context = self.tag_context(None, None, self.rank_govts);
+        text_tags::expand(text, &context, self)
+    }
+}
+
+/// Where a text the session fills comes from, which decides the rank
+/// governments its crossed tags read
+/// ([`RuleKey::CrossedRankTags`]; see [`RankTagGovts`]). Each is parsed
+/// by `_ParseTextDescription` ([`parse_text_description`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextSource {
+    /// A `dësc` loaded as `_LoadDescription` loads one: an offer's,
+    /// `BriefText`, `CompText`, `FailText`, `RefuseText`, the cargo texts,
+    /// `ShipDoneText`, `QuickBrief`, and the `dësc`s the screens show. The
+    /// governments are reset (@0x71926-0x71930), then it is parsed
+    /// (@0x71936).
+    Desc,
+    /// A hail quote, parsed with no reset (`_ShowPersonHailQuote`
+    /// @0x445ee).
+    Quote,
+    /// A ship's specific advice, parsed with no reset (`_LoadAdvice`
+    /// @0x919ca).
+    Advice,
+}
+
+impl TextSource {
+    /// `raw` from this source parsed for `session`'s pilot, its rules
+    /// those `session` holds, and the governments it leaves,
+    /// `remembered` before it.
+    pub(super) fn parse(
+        self,
+        session: &Session,
+        remembered: RankTagGovts,
+        raw: &str,
+    ) -> (String, RankTagGovts) {
+        let rules = ParseRules::from_rulebook(&session.rules);
+        let before = match self {
+            Self::Desc => RankTagGovts::NONE,
+            Self::Quote | Self::Advice => remembered,
+        };
+        parse_text_description(raw, session, rules, before)
     }
 }
 
@@ -1316,14 +1662,15 @@ impl TagNames for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{MissionRecord, StellarId, SystemId};
+    use crate::catalog::{LandingSite, MissionRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
     use crate::geometry::Vec2;
     use crate::mission::{ROLLED, Stop};
     use crate::pilot::Pilot;
     use crate::testkit::{
-        Draws, FakePilotCatalog, catalog, jump, land_now, mission, planet, swapped, with_variants,
+        Draws, FakePilotCatalog, catalog, govt, jump, land_now, mission, planet, swapped,
+        with_variants,
     };
 
     /// [`catalog`] with stellar 150 in system 132, two jumps from 130, 131
@@ -1480,6 +1827,46 @@ mod tests {
     }
 
     #[test]
+    fn each_reading_of_the_mission_ally_index_reaches_the_world() {
+        let mut catalog = offering();
+        // The pirates' 131 in 132, two jumps out: not allied with the
+        // Federation, but system 131, at its index, is the Federation's.
+        catalog.govts = vec![govt(FED.0), govt(PIRATES.0)];
+        catalog.star_map[1].govt = Some(FED);
+        catalog.sites[2].1.push(LandingSite {
+            govt: Some(PIRATES),
+            ..planet(131, 0.0, 0.0)
+        });
+        let mut ally = mission(130);
+        ally.travel_stel = 15000;
+        catalog.missions = vec![ally];
+        let bible = Rulebook::default().with_override(RuleKey::MissionAllyIndex, RuleSource::Bible);
+        for (rules, offered) in [(Rulebook::default(), true), (bible, false)] {
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+            let _ = session.settle_script(&catalog, &mut Draws::arriving(&[0]));
+            let destinations: Vec<_> = session
+                .mission_offers(Venue::Computer)
+                .iter()
+                .map(|offer| offer.destination)
+                .collect();
+            let expected = if offered {
+                vec![Some(Stop {
+                    stellar: StellarId(131),
+                    system: Some(SystemId(132)),
+                })]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                destinations, expected,
+                "by the engine the pirates' 131 by the Federation's system at its index; \
+                 by the other reading no ally, so no offer"
+            );
+        }
+    }
+
+    #[test]
     fn landing_again_on_the_same_stellar_keeps_the_offers_and_draws_nothing() {
         let catalog = offering();
         let mut session = landed(&catalog, &mut NeverFires);
@@ -1595,6 +1982,57 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert!(session.mission_offers(Venue::Computer).is_empty());
         assert_eq!(session.offers.rolled_at(), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn a_landed_out_of_range_n_empties_the_offers_by_the_engine_alone() {
+        let catalog = offering();
+        for (reading, emptied) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut session = landed(&catalog, &mut NeverFires).with_rules(
+                crate::Rulebook::default().with_override(crate::RuleKey::OutOfRangeMove, reading),
+            );
+            assert!(!session.mission_offers(Venue::Computer).is_empty());
+            session.run_set(&SetExpr::parse("N9999").expect("parses"), &mut NeverFires);
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.system(), SystemId(130), "{reading:?}");
+            assert_eq!(
+                session.mission_offers(Venue::Computer).is_empty(),
+                emptied,
+                "{reading:?}"
+            );
+            assert_eq!(
+                session.offers.rolled_at(),
+                Some(StellarId(128)),
+                "{reading:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_landed_move_to_a_missing_system_only_empties_the_offers() {
+        let catalog = offering();
+        for (reading, emptied) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            for text in ["M1500", "N1500"] {
+                let mut session = landed(&catalog, &mut NeverFires).with_rules(
+                    crate::Rulebook::default()
+                        .with_override(crate::RuleKey::MissingSystemMove, reading),
+                );
+                assert!(!session.mission_offers(Venue::Computer).is_empty());
+                session.run_set(&SetExpr::parse(text).expect("parses"), &mut NeverFires);
+                let _ = session.settle_script(&catalog, &mut NeverFires);
+                assert_eq!(session.system(), SystemId(130), "{reading:?} {text}");
+                assert_eq!(
+                    session.mission_offers(Venue::Computer).is_empty(),
+                    emptied,
+                    "{reading:?} {text}"
+                );
+                assert_eq!(
+                    session.offers.rolled_at(),
+                    Some(StellarId(128)),
+                    "{reading:?} {text}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1954,6 +2392,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["AvailRecord"],
             "by the Bible, govt 128's -5"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_in_a_hidden_system_avail_record_reads_the_markups_record() {
+        use crate::catalog::GovtId;
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let mut catalog = offering();
+        catalog.star_map[0].govt = Some(GovtId(128));
+        catalog.missions = vec![MissionRecord {
+            avail_record: 3,
+            ..mission(140)
+        }];
+        let session = landed(&catalog, &mut NeverFires);
+        let mut session = session.with_rules(
+            Rulebook::default().with_override(RuleKey::LegalRecords, RuleSource::Bible),
+        );
+        session.pilot.set_legal_record(GovtId(128), 5);
+        // Hidden under the player directly: a refresh would move the
+        // player out (`leave_hidden`), but every reader must still agree.
+        let mut overlay = session.galaxy.overlay().clone();
+        assert!(overlay.set_visible(SystemId(130), Some(false)));
+        session.galaxy.set_overlay(overlay);
+        assert!(!session.galaxy().visible(SystemId(130)), "hidden");
+        assert_eq!(session.system_record(), 5, "govt 128's, though hidden");
+        assert_eq!(
+            session.offer_refusals(MissionId(140)),
+            Some(vec![]),
+            "the same 5"
         );
     }
 
@@ -2344,7 +2811,7 @@ mod tests {
             .insert(crate::market::Good::Commodity(0), held);
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, catalog);
-        let _ = session.take_mission_texts();
+        let _ = session.take_texts_only();
         session
     }
 
@@ -2353,6 +2820,8 @@ mod tests {
             kind: MissionTextKind::NoRoom,
             mission: MissionId(mission),
             text: text.to_owned(),
+            graphic: None,
+            movie: None,
         }
     }
 
@@ -2368,7 +2837,7 @@ mod tests {
                 "20 holds, 21 tons of {cargo_type}"
             );
             assert_eq!(
-                session.take_mission_texts(),
+                session.take_texts_only(),
                 [refusal_text(140, NO_HOLDS_TO_ACCEPT)]
             );
             assert!(!session.control_bit(bit(20)), "no OnAccept");
@@ -2388,7 +2857,7 @@ mod tests {
             "10 free, 11 tons"
         );
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [refusal_text(140, NO_SPACE_TO_ACCEPT)]
         );
         assert!(!session.control_bit(bit(20)));
@@ -2433,7 +2902,7 @@ mod tests {
         assert_eq!(held(&session), []);
         assert!(!session.control_bit(bit(20)));
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [refusal_text(140, NO_HOLDS_TO_ACCEPT)]
         );
         run(&mut session, "S141");
@@ -2454,7 +2923,7 @@ mod tests {
             Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
         );
         run(&mut session, "S140");
-        assert_eq!(session.take_mission_texts(), []);
+        assert_eq!(session.take_texts_only(), []);
     }
 
     #[test]
@@ -2569,7 +3038,9 @@ mod tests {
         ]);
         let (mut session, _) = watched(&catalog, Rulebook::default());
         assert_eq!(
-            session.refuse_mission(MissionId(140), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(140), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         assert!(session.control_bit(bit(22)));
@@ -2858,6 +3329,45 @@ mod tests {
     }
 
     #[test]
+    fn a_comp_govt_the_catalog_does_not_hold_still_has_its_record_changed() {
+        const STRAY: GovtId = GovtId(140);
+        let stray = |id, reward, mission: fn(i16) -> MissionRecord| MissionRecord {
+            comp_govt: Some(STRAY),
+            comp_reward: reward,
+            flags: 0x0040,
+            ..mission(id)
+        };
+        let catalog = lifecycle(vec![
+            stray(140, 4, to_129),
+            stray(141, 6, back_to_128),
+            stray(142, 1, to_129),
+        ]);
+        assert!(catalog.govts.iter().all(|govt| govt.id != STRAY));
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session.pilot.set_legal_record(STRAY, 10);
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(held(&session), []);
+        assert_eq!(session.pilot().legal_record(STRAY), 14, "success: +4");
+        land_on(&mut session, &catalog, 128);
+        accept(&mut session, 141);
+        run(&mut session, "F141");
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(
+            session.pilot().legal_record(STRAY),
+            11,
+            "failure: half of 6"
+        );
+        let slot = accept(&mut session, 142);
+        assert_eq!(session.abort_mission(slot, &mut NeverFires), Ok(()));
+        assert_eq!(
+            session.pilot().legal_record(STRAY),
+            6,
+            "abort: five times 1"
+        );
+    }
+
+    #[test]
     fn a_cleaning_pay_cleans_the_records_in_each_system_of_its_governments() {
         let catalog = governed_lifecycle(vec![MissionRecord {
             pay_val: -20_128,
@@ -2989,6 +3499,44 @@ mod tests {
         land_on(&mut session, &catalog, 151);
         land_on(&mut session, &catalog, 128);
         assert_eq!(held(&session), [(0, 140), (1, 141)]);
+    }
+
+    /// `with_variants` with 153 unmarked, a `spöb` that didn't load, and
+    /// 152 marked unnamed at 0,0: what a zeroed record reads as.
+    fn with_a_missing_return() -> FakePilotCatalog {
+        let mut catalog = with_variants(lifecycle(vec![travel(140, -1, 153)]));
+        catalog.marks.retain(|mark| mark.id != StellarId(153));
+        catalog.unloaded.push(StellarId(153));
+        let unnamed = catalog
+            .marks
+            .iter_mut()
+            .find(|mark| mark.id == StellarId(152))
+            .expect("152 marked");
+        unnamed.place = (0, 0);
+        unnamed.name.clear();
+        catalog
+    }
+
+    #[test]
+    fn a_missing_return_is_reached_at_an_unnamed_stellar_at_0_0_by_the_record() {
+        let catalog = with_a_missing_return();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 152);
+        assert_eq!(held(&session), [], "153 reads as a zeroed record");
+    }
+
+    #[test]
+    fn a_missing_return_is_reached_only_at_itself_by_the_spobs_as_written() {
+        let catalog = with_a_missing_return();
+        let rules =
+            Rulebook::default().with_override(RuleKey::StellarIdentityRecord, RuleSource::Bible);
+        let (mut session, _) = watched(&catalog, rules);
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 152);
+        assert_eq!(held(&session), [(0, 140)]);
+        land_on(&mut session, &catalog, 153);
+        assert_eq!(held(&session), []);
     }
 
     /// The accept compares the docked stellar by its raw ID (@0xa1fd8).
@@ -3531,9 +4079,10 @@ mod tests {
             active.destination.map(|stop| stop.stellar),
             Some(StellarId(129))
         );
-        assert!(
-            session.mission_offers(Venue::Computer).is_empty(),
-            "dropped"
+        assert_eq!(
+            ids(session.mission_offers(Venue::Computer)),
+            [140],
+            "kept: no offer dialog is open (@0xa200b)"
         );
         run(&mut session, "S141");
         assert_eq!(held(&session), [(0, 140)], "no such mïsn");
@@ -3575,6 +4124,152 @@ mod tests {
         let session = started_in_flight_in(133);
         assert!(session.sites.is_empty(), "133 lists none");
         assert_eq!(destination(&session), Some(StellarId(128)));
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // untouched
+    fn an_s_in_flight_of_an_auto_aborting_mission_holds_its_slot_and_runs_only_on_accept() {
+        let catalog = lifecycle(vec![auto_aborting()]);
+        let marks = Rc::new(Marks::default());
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_set_op_observer(marks.clone());
+        settle(&mut session, &catalog);
+        let (today, fuel) = (session.date(), session.pilot().reserves().fuel.now);
+        run(&mut session, "S140");
+        assert_eq!(held(&session), [(0, 140)]);
+        assert_eq!(marks.taken(), [200], "OnAccept, no OnAbort");
+        assert_eq!(session.date(), today);
+        assert_eq!(session.pilot().reserves().fuel.now, fuel);
+    }
+
+    // `S` and the offer dialog (`_missionDialog`, @0xa1fde, @0xa200b).
+
+    /// [`lifecycle`] with 128 an outfitter selling outfit 300, free, whose
+    /// `OnPurchase` is `S141`, and missions offered at 128's computer:
+    /// 140 (to 129), available while `!b5`; 141, to 128 itself, whose
+    /// `OnAccept` sets b5; and 142 (to 129), whose `OnAccept` and
+    /// `OnRefuse` are `S141`.
+    fn dialog_catalog() -> FakePilotCatalog {
+        let mut catalog = lifecycle(vec![
+            MissionRecord {
+                avail_bits: crate::control::Test::parse("!b5"),
+                ..to_129(140)
+            },
+            MissionRecord {
+                avail_stel: 128,
+                travel_stel: 128,
+                on_accept: Script::parse("b5"),
+                ..mission(141)
+            },
+            MissionRecord {
+                on_accept: Script::parse("S141"),
+                on_refuse: Script::parse("S141"),
+                ..to_129(142)
+            },
+        ]);
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id == StellarId(128)) {
+                site.flags |= crate::landing::StellarFlags::OUTFITTER;
+                site.tech_level = 5;
+            }
+        }
+        catalog.outfits = vec![crate::catalog::OutfitRecord {
+            cost: 0,
+            mass: 0,
+            on_purchase: Script::parse("S141"),
+            ..crate::testkit::outfit(300, &[])
+        }];
+        catalog
+    }
+
+    fn reached(session: &Session, slot: u8) -> bool {
+        session.pilot().missions().get(slot).expect("held").reached
+    }
+
+    fn computer(session: &Session) -> Vec<i16> {
+        ids(session.mission_offers(Venue::Computer))
+    }
+
+    fn buy_s141(session: &mut Session) {
+        let order = crate::session::tests::buy(crate::catalog::OutfitId(300));
+        session.outfit(order, &mut NeverFires).expect("bought");
+    }
+
+    #[test]
+    fn an_s_from_an_outfits_on_purchase_leaves_its_destination_unreached_and_the_offers_as_they_were()
+     {
+        let catalog = dialog_catalog();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        assert_eq!(computer(&session), [140, 141, 142]);
+        buy_s141(&mut session);
+        assert_eq!(held(&session), [(0, 141)]);
+        assert!(session.control_bit(bit(5)), "its OnAccept ran");
+        assert!(!reached(&session, 0), "no dialog open (@0xa1fde)");
+        assert_eq!(
+            computer(&session),
+            [140, 141, 142],
+            "none dropped (@0xa200b)"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_an_s_from_an_outfits_on_purchase_reaches_and_refilters() {
+        let catalog = dialog_catalog();
+        let rules =
+            Rulebook::default().with_override(RuleKey::StartOutsideDialog, RuleSource::Bible);
+        let (mut session, _) = watched(&catalog, rules);
+        buy_s141(&mut session);
+        assert!(reached(&session, 0));
+        assert_eq!(computer(&session), [142], "140 by b5, 141 its own");
+    }
+
+    #[test]
+    fn an_s_in_an_accepts_on_accept_reaches_its_destination_and_refilters() {
+        let catalog = dialog_catalog();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        assert_eq!(accept(&mut session, 142), 0);
+        assert_eq!(held(&session), [(0, 142), (1, 141)]);
+        assert!(reached(&session, 1), "in the dialog");
+        assert_eq!(computer(&session), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn an_s_in_a_refusals_on_refuse_reaches_its_destination_and_refilters() {
+        let catalog = dialog_catalog();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session
+            .refuse_mission(MissionId(142), &mut NeverFires)
+            .expect("offered");
+        assert_eq!(held(&session), [(0, 141)]);
+        assert!(
+            reached(&session, 0),
+            "OnRefuse runs in the dialog (@0xa2f41)"
+        );
+        assert_eq!(computer(&session), Vec::<i16>::new(), "140 by b5");
+    }
+
+    #[test]
+    fn after_the_dialog_an_s_is_outside_it_again() {
+        let catalog = dialog_catalog();
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        buy_s141(&mut session);
+        assert_eq!(held(&session), [(0, 140), (1, 141)]);
+        assert!(!reached(&session, 1));
+        assert_eq!(computer(&session), [141, 142]);
+    }
+
+    /// A destination gives a return (`ReturnStel` -1 returns there), so
+    /// only a mission with neither auto-aborts, and it is reached with no
+    /// dialog open too (@0xa1fe7).
+    #[test]
+    fn a_docked_s_outside_the_dialog_still_auto_aborts_a_mission_with_no_destination() {
+        let catalog = lifecycle(vec![auto_aborting()]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        run(&mut session, "S140");
+        assert_eq!(held(&session), []);
+        assert_eq!(marks.taken(), [200, 201]);
     }
 
     #[test]
@@ -3847,6 +4542,7 @@ mod tests {
             let strings: &[&str] = match id {
                 4001 => &["food", "*passengers", "industrial"],
                 25048 => &["<PN>: off to <DST>."],
+                25049 => &["<PN>: paid <PAY>."],
                 _ => &[],
             };
             strings.iter().map(|&string| string.to_owned()).collect()
@@ -4015,11 +4711,19 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_text_fills_the_player_tags_and_leaves_the_mission_tags() {
+    fn a_plain_text_fills_the_player_tags_and_its_mission_tags_by_the_missionless_rule() {
         let catalog = briefed();
         let session = stocks(&catalog);
         assert_eq!(
             session.plain_text("<PN> of the <PSN>, a <PST>, <PRK>: <DST> <PAY> <OSN>"),
+            "Stock of the Kestrel, a Ship 128, captain: [Error] [Error] [Error]",
+            "by the engine"
+        );
+        let other = session.with_rules(
+            Rulebook::default().with_override(RuleKey::MissionlessTags, RuleSource::Bible),
+        );
+        assert_eq!(
+            other.plain_text("<PN> of the <PSN>, a <PST>, <PRK>: <DST> <PAY> <OSN>"),
             "Stock of the Kestrel, a Ship 128, captain: <DST> <PAY> [Error]"
         );
     }
@@ -4038,6 +4742,67 @@ mod tests {
         assert_eq!(
             full.offer_text(MissionId(130), "<PAY>").as_deref(),
             Some("1,234,567")
+        );
+    }
+
+    #[test]
+    fn a_slots_pay_of_0_reads_the_slots_byte_offset_by_the_engine_and_0_by_the_other() {
+        let mut catalog = briefed();
+        catalog.missions[0].pay_val = 0;
+        let mut session = stocks(&catalog);
+        let slot = accept(&mut session, 130);
+        let active = session.pilot.missions.free(slot).expect("accepted");
+        assert!(session.pilot.missions.put(1, active));
+        assert_eq!(session.mission_text(1, "<PAY>"), "2,284", "1 x 0x8ec");
+        assert_eq!(
+            session.offer_text(MissionId(130), "<PAY>"),
+            None,
+            "accepted, so no longer offered"
+        );
+        let other = session.with_rules(
+            Rulebook::default().with_override(RuleKey::PaySlotOffset, RuleSource::Bible),
+        );
+        assert_eq!(other.mission_text(1, "<PAY>"), "0");
+    }
+
+    #[test]
+    fn an_offers_pay_of_0_reads_0() {
+        let mut catalog = briefed();
+        catalog.missions[0].pay_val = 0;
+        let session = stocks(&catalog);
+        assert_eq!(
+            session.offer_text(MissionId(130), "<PAY>").as_deref(),
+            Some("0")
+        );
+    }
+
+    /// [`Told`]'s strings, with `'STR '` 9102 patching cargo type 2's name.
+    #[derive(Debug)]
+    struct Patched;
+
+    impl CommCatalog for Patched {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            Told.string_list(id)
+        }
+
+        fn plugin_string(&self, id: i16) -> crate::catalog::StringPatch {
+            match id {
+                9102 => crate::catalog::StringPatch::Text("*gems".to_owned()),
+                _ => crate::catalog::StringPatch::Absent,
+            }
+        }
+    }
+
+    #[test]
+    fn ct_reads_a_cargo_name_a_str_9100_patch_gives_its_star_dropped() {
+        let catalog = briefed();
+        let session = stocks(&catalog).with_strings(Rc::new(Patched));
+        assert_eq!(
+            session
+                .offer_text(MissionId(130), "<CQ> tons of <CT>")
+                .as_deref(),
+            Some("12 tons of gems"),
+            "_lcCargoName #3 from 'STR ' 9102 (@0x71ba4-0x71bf1)"
         );
     }
 
@@ -4062,9 +4827,14 @@ mod tests {
         catalog
     }
 
-    /// The message the next settling leaves on.
+    /// The message the next settling leaves on: in flight, the
+    /// settling's; landed, the take-off's, the leave held to it.
     fn left_on(session: &mut Session, catalog: &FakePilotCatalog) -> Option<String> {
-        session.settle_script(catalog, &mut NeverFires).message
+        let settled = session.settle_script(catalog, &mut NeverFires);
+        if session.take_off(catalog, &mut NeverFires).is_some() {
+            return session.take_leave_message();
+        }
+        settled.message
     }
 
     const FILLED: &str = "Stock: off to Luna.";
@@ -4122,7 +4892,8 @@ mod tests {
     #[test]
     fn a_q_in_an_auto_aborts_on_abort_fills_its_mission_tags() {
         let catalog = scripted(vec![MissionRecord {
-            on_abort: Script::parse("Q25048"),
+            on_abort: Script::parse("Q25049"),
+            pay_val: 1234,
             ..auto_aborting()
         }]);
         let mut session = stocks(&catalog);
@@ -4130,8 +4901,8 @@ mod tests {
         assert_eq!(held(&session), [], "aborted at once");
         assert_eq!(
             left_on(&mut session, &catalog).as_deref(),
-            Some("Stock: off to [Error]."),
-            "its slot's, which has no stellar"
+            Some("Stock: paid 1,234."),
+            "its slot's, still held as OnAbort runs (@0x99ba1, @0x99c3e)"
         );
     }
 
@@ -4269,6 +5040,65 @@ mod tests {
             !session.ship_mission_available(MissionId(132)),
             "no such mïsn"
         );
+    }
+
+    /// A chance whose every draw is `draw` (capped below `n`), so a
+    /// table drawn on it holds `draw + 1` at every index.
+    struct Always(u16);
+
+    impl Chance for Always {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            u32::from(self.0).min(n.saturating_sub(1))
+        }
+    }
+
+    /// Whether every one of the table's rolls is `roll`.
+    fn every_roll_is(session: &Session, roll: u16) -> bool {
+        (0..ROLLED)
+            .map(|index| MissionId(128 + i16::try_from(index).expect("an index")))
+            .all(|id| session.offer_rolls().roll(id) == Some(roll))
+    }
+
+    #[test]
+    fn a_new_pilot_begun_in_space_has_its_offer_rolls_drawn() {
+        let catalog = from_ships();
+        for (draw, available) in [(40, false), (39, true)] {
+            let mut session = Session::start(&catalog).expect("starts");
+            assert_eq!(session.landed(), None, "in space");
+            session.begin(&catalog, &mut Always(draw));
+            assert!(every_roll_is(&session, draw + 1));
+            assert_eq!(
+                session.ship_mission_available(MissionId(130)),
+                available,
+                "AvailRandom 40 against a roll of {}",
+                draw + 1
+            );
+        }
+    }
+
+    #[test]
+    fn a_pilot_resumed_in_space_has_its_offer_rolls_drawn() {
+        let catalog = from_ships();
+        for (draw, available) in [(40, false), (39, true)] {
+            let mut session = Session::start(&catalog).expect("starts");
+            assert_eq!(session.landed(), None, "in space");
+            session.resume(&mut Always(draw));
+            assert!(every_roll_is(&session, draw + 1));
+            assert!(
+                (session.player().heading - f32::from(draw)).abs() < f32::EPSILON,
+                "still faced on load"
+            );
+            assert_eq!(
+                session.ship_mission_available(MissionId(130)),
+                available,
+                "AvailRandom 40 against a roll of {}",
+                draw + 1
+            );
+        }
     }
 
     #[test]

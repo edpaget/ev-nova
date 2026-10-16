@@ -36,10 +36,11 @@
 //! - the player info, `playerInfoKey` (slot 0x32): @0x7030f-0x70329, with
 //!   the shared refusal beep ([`Session::press_player_info`]).
 //! - the mission info, `missionInfoKey` (slot 0x50): `js` @0x7045e,
-//!   silently. Its refusal clears its latch (0x705af), so in the original
-//!   an I key held through the grace opens the dialog on the first frame
-//!   after it. The view acts on presses for its dialog keys, so a held key
-//!   doesn't retry; that is the general held-key model, not this grace.
+//!   silently ([`Session::press_mission_info`]). Its refusal clears its
+//!   latch (0x705af), so in the original an I key held through the grace
+//!   opens the dialog on the first frame after it. The view acts on
+//!   presses for its dialog keys, so a held key doesn't retry; that is the
+//!   general held-key model, not this grace.
 //!
 //! The counter's other sign tests (0x2e6a1, 0x32637, 0x3529c, 0x45b7d,
 //! 0x68c79, 0x6fc4d, 0x706e4-0x7094d, 0x8fdbc) are periodic modulos, not

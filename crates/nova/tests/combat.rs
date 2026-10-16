@@ -475,6 +475,19 @@ impl Chance for Script {
     }
 }
 
+/// The draws of a pilot opened from a save: its heading, `draws[0]`;
+/// the offers' roll table, each the last outcome; then the rest of
+/// `draws`.
+fn resumed(draws: &[u32]) -> Vec<u32> {
+    let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
+    draws[..1]
+        .iter()
+        .copied()
+        .chain(table)
+        .chain(draws[1..].iter().copied())
+        .collect()
+}
+
 /// A shared source of chance drawing `draws`, and the script behind it.
 fn scripted(draws: &[u32]) -> (Rc<RefCell<Script>>, SharedChance) {
     let script = Rc::new(RefCell::new(Script {
@@ -1071,6 +1084,17 @@ impl nova_sim::LegalCode for Witness {
         self.seen.borrow_mut().push(crime);
         Vec::new()
     }
+
+    fn system_penalties(
+        &self,
+        _crime: nova_sim::Crime,
+        _victim: Option<nova_sim::GovtId>,
+        _from: nova_sim::SystemId,
+        _map: &dyn nova_sim::CrimeMap,
+        _govts: &nova_sim::Governments,
+    ) -> Vec<(nova_sim::SystemId, f32)> {
+        Vec::new()
+    }
 }
 
 #[test]
@@ -1383,7 +1407,7 @@ impl Boarder {
     /// rolled on a [`BoardChance`], its NPCs idling.
     fn opening(store: &MemoryPilots) -> Self {
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
-            setup: [0, 6, 6, 0, 0, 750, 650, 180, 0].into(),
+            setup: resumed(&[0, 6, 6, 0, 0, 750, 650, 180, 0]).into(),
             of_100: [99, 0].into(),
         }));
         Self::opening_over(
@@ -1604,7 +1628,7 @@ fn boarded_with(
         .save(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"))
         .expect("saved");
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
-        setup: [0, 6, 6, 0, 0, 750, 650, 180, 0].into(),
+        setup: resumed(&[0, 6, 6, 0, 0, 750, 650, 180, 0]).into(),
         of_100: [99, 0].into(),
     }));
     let mut game = Boarder::opening_over(data, interface, store, SharedChance::new(chance), router);
@@ -1975,7 +1999,7 @@ fn hailer(store: &MemoryPilots, dude: (i16, i16, i16), fuel: f32) -> Boarder {
     PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
         .save(&pilot)
         .expect("saved");
-    let (_, chance) = scripted(&[0, 6, 6, 0, 0, 750, 650, 180, 0]);
+    let (_, chance) = scripted(&resumed(&[0, 6, 6, 0, 0, 750, 650, 180, 0]));
     let mut game = Boarder::opening_over(data, hailing_interface(), store, chance, |screen| screen);
     game.open_pilot();
     // The first frame runs no step; the second's sets the system up.
@@ -2409,7 +2433,7 @@ fn reopened(
     } else {
         &[0, 6, 6, 0, 0, 750, 450, 180, 0]
     };
-    let (_, chance) = scripted(setup);
+    let (_, chance) = scripted(&resumed(setup));
     Boarder::opening_over(
         escort_data(alpha_dudes),
         escort_interface(),
@@ -2923,7 +2947,7 @@ fn refly(
     } else {
         &[0, 6, 6, 0, 0, 750, 450, 180, 0]
     };
-    let (_, chance) = scripted(setup);
+    let (_, chance) = scripted(&resumed(setup));
     Boarder::opening_over(
         fighter_data(alpha_dudes),
         escort_interface(),

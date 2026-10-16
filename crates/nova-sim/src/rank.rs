@@ -692,6 +692,13 @@ impl RankNames<'_> {
         self.highest(|rank| &rank.short_name, Some(govt))
     }
 
+    /// `<PRKnnn>` as the Bible reads it, "same as `<PRK>`": the `ConvName`
+    /// of government `govt`'s highest active rank.
+    #[must_use]
+    pub fn conversation_of(&self, govt: GovtId) -> &str {
+        self.highest(|rank| &rank.conv_name, Some(govt))
+    }
+
     /// `<RRK>`: the recent rank's full name, empty when it has no record.
     #[must_use]
     pub fn recent(&self) -> &str {
@@ -1393,6 +1400,27 @@ mod tests {
         assert_eq!(names.short_of(GovtId(129)), "Adm");
         assert_eq!(names.short_of(GovtId(130)), "captain");
         assert_eq!(names.short_of(GovtId(127)), "captain", "never -1's");
+    }
+
+    #[test]
+    fn conversation_of_a_government_reads_its_highest_conv_name_rank() {
+        let records = [
+            named(200, Some(128), 1, ["", "Envoy", "Env"]),
+            named(201, Some(128), 4, ["", "Ambassador Sir", "Ambassador"]),
+            named(202, Some(128), 9, ["", "", "Lord"]),
+            named(203, Some(129), 99, ["", "Admiral", "Adm"]),
+            named(204, None, 99, ["", "Rogue", "Rg"]),
+        ];
+        let active = ids(&[200, 201, 202, 203, 204]);
+        let names = names(&records, &active, None);
+        assert_eq!(
+            names.conversation_of(GovtId(128)),
+            "Ambassador Sir",
+            "ConvName, an empty one passed over"
+        );
+        assert_eq!(names.conversation_of(GovtId(129)), "Admiral");
+        assert_eq!(names.conversation_of(GovtId(130)), "captain");
+        assert_eq!(names.conversation_of(GovtId(127)), "captain", "never -1's");
     }
 
     /// Rank `id` of `weight` and full name `name`, unaffiliated.

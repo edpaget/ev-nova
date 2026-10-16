@@ -69,7 +69,12 @@
 //! are part of a storyline, not a fault.
 //!
 //! Every action is settled ([`Session::settle_script`]) before the next,
-//! so the `Landed`, `DayPassed` and `TookOff` subscriptions run. The
+//! so the `Landed`, `DayPassed` and `TookOff` subscriptions run. A `Q`
+//! run while docked (a finale's `OnSuccess`, `... M472 Q25048`) then
+//! leaves at once ([`Session::leave_if_due`]), as nothing is shown over
+//! the port to hold it, and its take-off settles in turn: the walker is
+//! in flight after the step, and its next landing is a walker's landing.
+//! The
 //! landings, settlings and accepts draw on [`NeverFires`], whose rolls
 //! are all 1: every `AvailRandom` above 0 passes and the offer rolls are
 //! forced through the source the session is handed, with no state of its
@@ -485,13 +490,16 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             .find(|record| record.id == mission)
     }
 
-    /// Settles what the last action left, every roll forced.
-    fn settle(&self, session: &mut Session) {
+    /// Settles what the last action left, every roll forced, then
+    /// carries out a `Q`'s leave it left due ([`Session::leave_if_due`]),
+    /// on the day chance: nothing shown over the port holds it here.
+    fn settle(&mut self, session: &mut Session) {
         let _ = session.settle_script(self.catalog, &mut NeverFires);
+        let _ = session.leave_if_due(self.catalog, &mut *self.day_chance);
     }
 
     /// `take <mission>` (see the module docs).
-    fn take(&self, session: &mut Session, mission: MissionId) -> Result<Done, Failed> {
+    fn take(&mut self, session: &mut Session, mission: MissionId) -> Result<Done, Failed> {
         let Some(record) = self.record(mission) else {
             return Err((Fault::NotOffered, Vec::new()));
         };
@@ -541,7 +549,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
     /// Accepts `mission`, offered at `stellar`, the stellar docked at,
     /// logging on `others` what it did to the other missions.
     fn accept(
-        &self,
+        &mut self,
         session: &mut Session,
         mission: MissionId,
         stellar: StellarId,
@@ -564,7 +572,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
     }
 
     /// `deliver <mission>` (see the module docs).
-    fn deliver(&self, session: &mut Session, mission: MissionId) -> Result<Done, Failed> {
+    fn deliver(&mut self, session: &mut Session, mission: MissionId) -> Result<Done, Failed> {
         let held = session
             .pilot()
             .missions()
@@ -626,7 +634,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
     }
 
     /// `meet goal <mission>` (see the module docs).
-    fn meet_goal(&self, session: &mut Session, mission: MissionId) -> Result<Done, Failed> {
+    fn meet_goal(&mut self, session: &mut Session, mission: MissionId) -> Result<Done, Failed> {
         let held = session
             .pilot()
             .missions()
@@ -671,7 +679,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
     /// one at its visible variant of the same place and name. Then
     /// settles. No lister is [`Fault::CannotLand`] for want of a system;
     /// hidden with no visible variant, [`Fault::StopHidden`].
-    fn land(&self, session: &mut Session, stop: Stop) -> Result<(), Failed> {
+    fn land(&mut self, session: &mut Session, stop: Stop) -> Result<(), Failed> {
         let (system, stellar) = session.stop_landing(stop).map_err(|refusal| {
             let fault = match refusal {
                 StopRefusal::NoSystem => Fault::CannotLand(RelocateRefusal::NoSystem),
@@ -759,10 +767,11 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         })
     }
 
-    /// Takes off, when docked, on the day chance: whether it took off.
+    /// Takes off, when docked, on the day chance, and settles the
+    /// take-off ([`Session::leave_port`]): whether it took off.
     fn take_off(&mut self, session: &mut Session) -> bool {
         session
-            .take_off(self.catalog, &mut *self.day_chance)
+            .leave_port(self.catalog, &mut *self.day_chance)
             .is_some()
     }
 

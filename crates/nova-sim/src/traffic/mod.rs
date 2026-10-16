@@ -328,6 +328,13 @@ pub struct Traffic {
     attack_quotes: Vec<NpcId>,
     /// The escort-strength timer, kept across systems.
     strength_timer: StrengthTimer,
+    /// The name of the person of the ship last brought in at each berth,
+    /// as the original's ship slot keeps its person (+0xc8d0): written as
+    /// a ship comes in (`_SpawnPerson` @0x40cef, and -1 for a ship with
+    /// no person, `_GenericRandomShipSpawn` @0x3cb48), kept as it dies or
+    /// leaves, and across systems, and cleared by a capture
+    /// ([`Traffic::forget_berth_person`]). `<OSN>` reads it.
+    berth_persons: BTreeMap<u32, String>,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
     /// system they are in, each in the order they appeared: still in the
     /// ship table until the end of the next tick ([`Traffic::tick_in`]),
@@ -391,6 +398,7 @@ impl Traffic {
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
             strength_timer: StrengthTimer::default(),
+            berth_persons: BTreeMap::new(),
             left_behind: BTreeMap::new(),
         }
     }
@@ -1183,8 +1191,44 @@ impl Traffic {
         self.reserved.remove(&berth);
         let id = NpcId(self.next_id);
         self.next_id += 1;
+        let name = npc
+            .person
+            .and_then(|person| self.table.persons.get(&person.id))
+            .map(|person| person.record.name.clone());
+        self.write_berth_person(berth, name);
         self.npcs.push(Npc { id, berth, ..npc });
         id
+    }
+
+    /// Writes `name` as the person of the ship just brought in at
+    /// `berth`, none for a ship with no person.
+    fn write_berth_person(&mut self, berth: u32, name: Option<String>) {
+        match name {
+            Some(name) => self.berth_persons.insert(berth, name),
+            None => self.berth_persons.remove(&berth),
+        };
+    }
+
+    /// The name of the person of the ship last brought in at `berth`,
+    /// whether or not it is still there: none when it had none, or a
+    /// capture cleared it (see the field's docs).
+    #[must_use]
+    pub fn berth_person(&self, berth: u32) -> Option<&str> {
+        self.berth_persons.get(&berth).map(String::as_str)
+    }
+
+    /// Writes `name` as the person of the ship last brought in at `berth`,
+    /// for the session's tests of a slot no ship holds.
+    #[cfg(test)]
+    pub(crate) fn set_berth_person(&mut self, berth: u32, name: &str) {
+        self.write_berth_person(berth, Some(name.to_owned()));
+    }
+
+    /// Clears the person `berth` holds, as a capture clears its ship
+    /// slot's (`_DoShipCapture` @0x411b3, `_AIShipCapturedByPlayer`
+    /// @0x89741, `_DoPlunderDialog` @0x946a6).
+    pub(crate) fn forget_berth_person(&mut self, berth: u32) {
+        self.berth_persons.remove(&berth);
     }
 
     /// The first berth from 1 that no NPC in the system holds and none is
@@ -1413,9 +1457,10 @@ impl Traffic {
             let hunts = ship
                 .mission
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
+            let name = person.map(|person| person.record.name.clone());
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
-            self.npcs.push(Npc {
+            let npc = Npc {
                 id,
                 berth,
                 ship: ship.ship,
@@ -1476,7 +1521,9 @@ impl Traffic {
                 former: None,
                 tractor: None,
                 ion: Ion::default(),
-            });
+            };
+            self.write_berth_person(berth, name);
+            self.npcs.push(npc);
         }
         placed.iter().flatten().count()
     }
@@ -2417,6 +2464,33 @@ mod tests {
         let led: Vec<NpcId> = traffic.player_led().map(|npc| npc.id).collect();
         assert_eq!(led, [mission, hired, fighter]);
         assert_eq!(traffic.strangers(), 4, "the rest");
+    }
+
+    #[test]
+    fn each_berth_keeps_the_person_of_the_ship_last_brought_in_at_it() {
+        let mut traffic = Traffic::new();
+        traffic.table = peopled(1);
+        let ace = traffic.table.persons[&PersonId(510)].record.clone();
+        let person = NpcPerson::of(&ace, false);
+        let first = traffic.add_npc(Npc {
+            person: Some(person),
+            ..crate::testkit::npc(0, ShipStats::default())
+        });
+        assert_eq!(traffic.berth_person(1), Some("Ace"));
+        assert_eq!(traffic.berth_person(2), None, "never held");
+        traffic.remove(first);
+        assert_eq!(traffic.berth_person(1), Some("Ace"), "kept once it left");
+        let second = traffic.add_npc(crate::testkit::npc(0, ShipStats::default()));
+        assert_eq!(traffic.npcs()[0].berth, 1, "reused");
+        assert_eq!(traffic.berth_person(1), None, "a ship with no person");
+        traffic.remove(second);
+        assert_eq!(traffic.berth_person(1), None, "the last ship's, not Ace's");
+        traffic.add_npc(Npc {
+            person: Some(person),
+            ..crate::testkit::npc(0, ShipStats::default())
+        });
+        traffic.forget_berth_person(1);
+        assert_eq!(traffic.berth_person(1), None, "a capture clears it");
     }
 
     /// The berths of the system's NPCs, in `Vec` order.

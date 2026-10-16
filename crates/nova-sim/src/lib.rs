@@ -150,9 +150,12 @@
 //!   [`Service`]s a stellar's flags offer.
 //! - [`legal`]: the player's legal record, kept with each government and
 //!   in each system: the [`LegalCode`] port that says what a [`Crime`]
-//!   against a ship does to it, Nova's [`NovaLaw`], [`legal::convict`],
-//!   which applies it, and [`legal::systems_from_govts`], which derives
-//!   the records in each system.
+//!   against a ship does to it, with each government and along its walk
+//!   through the [`CrimeMap`] from system to system, Nova's [`NovaLaw`],
+//!   [`legal::convict`], which applies it, and
+//!   [`legal::systems_from_govts`], which derives the records in each
+//!   system, and [`legal::spread_statuses`], which spreads a new pilot's
+//!   `chär` statuses.
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
@@ -267,6 +270,9 @@
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
+//! - [`text_parse`]: the conditional text (`{G "he" "she"}`, `{bnnn …}`,
+//!   `{Pnnn …}`) every loaded text is resolved by, as the original's
+//!   `_ParseTextDescription` ([`text_parse::conditional_text`]).
 //! - [`text_tags`]: the one substitution path for the text tags, as the
 //!   original's `_MungeBriefing`: a [`TagContext`] of the pilot, the
 //!   person, the ranks and the mission's resolved [`MissionValues`], its
@@ -362,10 +368,12 @@ pub mod sound;
 pub mod stats;
 pub mod status_cargo;
 pub mod story;
+pub mod strings;
 pub mod target_panel;
 pub mod targeting;
 #[cfg(test)]
 mod testkit;
+pub mod text_parse;
 pub mod text_tags;
 pub mod top_speed;
 pub mod traffic;
@@ -386,13 +394,14 @@ pub use board::{
 };
 pub use catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
-    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DisasterId,
-    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, FrameSize, GateSite,
-    GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar, MissionId,
-    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife,
-    StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DescMovie,
+    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, FrameSize,
+    GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar,
+    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
+    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics, TextMovies,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clearance::{Approach, DockKind, DockRequest, approach, approach_clears};
@@ -436,7 +445,7 @@ pub use landing::{
     UNLOADED_TYPE_WIDTH, check_landing, cleared, is_landable, land_or_select, landing_radius,
     landing_reach, nearest_stellar, nearest_stellar_station, services, stellar_width,
 };
-pub use legal::{Crime, LegalCode, NovaLaw};
+pub use legal::{Crime, CrimeMap, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
 pub use navigation::{NavMode, next_after, stellar_under};
@@ -466,10 +475,11 @@ pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
-    AbortError, AcceptError, ComputerRefusal, ComputerRow, ESCAPE_POD_SHIP, Hailed, HookRules,
-    InfoRow, InterfaceLoad, LandPress, MissionComputer, MissionInfo, MissionText, MissionTextKind,
-    NotOffered, OfferPrompt, PersonQuote, RelocateRefusal, ScriptEffectRules, Session,
-    SessionEvent, Settled, ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, VenueOffer,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
+    HookRules, InfoRow, InterfaceLoad, LandPress, MissionComputer, MissionInfo, MissionInfoPress,
+    MissionShown, MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote, RefuseShown,
+    RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules,
+    StellarPick, TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{

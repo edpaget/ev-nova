@@ -258,7 +258,9 @@ pub struct StellarMark {
     /// Its raw `xPos` and `yPos` (@0x7733b-0x7734d).
     pub place: (i16, i16),
     /// Its resource name up to its last ';', trailing spaces and ';'s
-    /// dropped (@0x772ab-0x7732a), empty when it has none.
+    /// dropped (@0x772ab-0x77308), empty when it has none. Kept whole:
+    /// [`StellarMarks`](crate::mission::StellarMarks) compares the 30
+    /// characters the original's record keeps (@0x77310-0x7732a).
     pub name: String,
 }
 
@@ -998,6 +1000,11 @@ pub struct MissionTexts {
     pub fail: Option<String>,
     /// Its `RefuseText`, shown as its offer is refused.
     pub refuse: Option<String>,
+    /// Whether its `RefuseText` is not -1, whether or not its `dësc` can
+    /// be read: what `_OfferOneMission` tests to hide the offer dialog
+    /// and load the refuse text (@0xa2e70), so one naming a missing
+    /// `dësc` hides the dialog and shows nothing.
+    pub refuse_named: bool,
     /// Its `LoadCargText`, shown as its cargo is loaded.
     pub load_cargo: Option<String>,
     /// Its `DumpCargoText`, shown as its cargo is unloaded.
@@ -1008,6 +1015,97 @@ pub struct MissionTexts {
     pub accept_button: String,
     /// Its `RefuseButton`, raw.
     pub refuse_button: String,
+    /// The `Graphic` of each text's `dësc`, the `PICT` shown with it.
+    pub graphics: TextGraphics,
+    /// The movie each text's `dësc` names, played around its dialog.
+    pub movies: TextMovies,
+}
+
+/// The `Graphic` of each of a mission's text `dësc`s, raw: none for -1,
+/// or a `dësc` that is missing or does not decode. A `dësc` the original
+/// cannot find reads as graphic 0 (`_LoadDescription` @0x71a7c-0x71a81),
+/// which shows no picture either.
+///
+/// The view decides whether a graphic is shown: the original shows the
+/// picture variant of a dialog for a graphic above 127 (`_OfferOneMission`
+/// @0xa2344, `_ShowTextDialog` @0x5a89a).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextGraphics {
+    /// The offer's, `dësc` 4000 + the mission's index.
+    pub offer: Option<i16>,
+    /// The `BriefText`'s.
+    pub brief: Option<i16>,
+    /// The `CompText`'s.
+    pub comp: Option<i16>,
+    /// The `FailText`'s.
+    pub fail: Option<i16>,
+    /// The `RefuseText`'s.
+    pub refuse: Option<i16>,
+    /// The `LoadCargText`'s.
+    pub load_cargo: Option<i16>,
+    /// The `DumpCargoText`'s.
+    pub dump_cargo: Option<i16>,
+    /// The `ShipDoneText`'s.
+    pub ship_done: Option<i16>,
+}
+
+/// The QuickTime movie a `dësc` names (`MovieFile`), and how its `Flags`
+/// play it: `_ShowTextDialog` (@0x5a76e-0x5a7ab, @0x5b40b-0x5b44f) and
+/// `_OfferOneMission` (@0xa2273-0xa22ab, @0xa3580-0xa35b8) pass `Flags`
+/// 0x0002 and 0x0004 to `_PlayQTMovie` (@0x55957).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DescMovie {
+    /// The movie file's name, as decoded: a bare file name.
+    pub file: String,
+    /// `Flags` 0x0001: it plays after the dialog, not before it.
+    pub after: bool,
+    /// `Flags` 0x0002: it plays at double size.
+    pub double_size: bool,
+    /// `Flags` 0x0004: it plays cinematic, the screen faded to black
+    /// around it.
+    pub cinematic: bool,
+}
+
+impl DescMovie {
+    /// The movie of a `dësc` whose `MovieFile` is `file` and whose `Flags`
+    /// are `flags`: none for an empty name, as each call site tests its
+    /// first byte (@0xa2279, @0x5a784). Any other name is kept as it is,
+    /// "\x01" too (`_LoadDescription` copies it as it stands,
+    /// @0x71895-0x718ba).
+    #[must_use]
+    pub fn from_desc(file: &str, flags: u16) -> Option<Self> {
+        (!file.is_empty()).then(|| Self {
+            file: file.to_owned(),
+            after: flags & 0x0001 != 0,
+            double_size: flags & 0x0002 != 0,
+            cinematic: flags & 0x0004 != 0,
+        })
+    }
+}
+
+/// The movie of each of a mission's text `dësc`s: none for -1, a `dësc`
+/// that is missing or does not decode, or one with no `MovieFile`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextMovies {
+    /// The offer's, `dësc` 4000 + the mission's index.
+    pub offer: Option<DescMovie>,
+    /// The `BriefText`'s.
+    pub brief: Option<DescMovie>,
+    /// The `QuickBrief`'s, which the mission info screen loads for the
+    /// row selected (`_MissionInfoFilter` @0x9d89f) and never plays.
+    pub quick_brief: Option<DescMovie>,
+    /// The `CompText`'s.
+    pub comp: Option<DescMovie>,
+    /// The `FailText`'s.
+    pub fail: Option<DescMovie>,
+    /// The `RefuseText`'s.
+    pub refuse: Option<DescMovie>,
+    /// The `LoadCargText`'s.
+    pub load_cargo: Option<DescMovie>,
+    /// The `DumpCargoText`'s.
+    pub dump_cargo: Option<DescMovie>,
+    /// The `ShipDoneText`'s.
+    pub ship_done: Option<DescMovie>,
 }
 
 impl MissionTexts {
@@ -1023,11 +1121,14 @@ impl MissionTexts {
             comp: None,
             fail: None,
             refuse: None,
+            refuse_named: false,
             load_cargo: None,
             dump_cargo: None,
             ship_done: None,
             accept_button: String::new(),
             refuse_button: String::new(),
+            graphics: TextGraphics::default(),
+            movies: TextMovies::default(),
         }
     }
 }
@@ -1500,11 +1601,18 @@ pub trait CommCatalog {
     /// cannot be read.
     fn string_list(&self, id: i16) -> Vec<String>;
 
+    /// Whether the data holds any `l33t` resource, which turns on the
+    /// original's `_leetMode` (`_LoadObjectData` @0x7e28c-0x7e2a2; see
+    /// [`text_tags`](crate::text_tags)). None by default.
+    fn leet_mode(&self) -> bool {
+        false
+    }
+
     /// The `'STR '` `id`, raw, from whichever open file holds it, the base
     /// data's or a plug-in's, as `_LoadPluginString` (@0x71a8e) looks it up
     /// with `GetResource`: a person's hail quote's patch (see
-    /// [`hail_quote_text`](crate::person::hail_quote_text)). None by
-    /// default.
+    /// [`hail_quote_text`](crate::person::hail_quote_text)), and one string
+    /// of a `STR#` (see [`strings`](crate::strings)). None by default.
     fn plugin_string(&self, id: i16) -> StringPatch {
         let _ = id;
         StringPatch::Absent
@@ -1517,6 +1625,10 @@ impl<T: CommCatalog + ?Sized> CommCatalog for &T {
         (**self).string_list(id)
     }
 
+    fn leet_mode(&self) -> bool {
+        (**self).leet_mode()
+    }
+
     fn plugin_string(&self, id: i16) -> StringPatch {
         (**self).plugin_string(id)
     }
@@ -1526,6 +1638,10 @@ impl<T: CommCatalog + ?Sized> CommCatalog for &T {
 impl<T: CommCatalog + ?Sized> CommCatalog for Rc<T> {
     fn string_list(&self, id: i16) -> Vec<String> {
         (**self).string_list(id)
+    }
+
+    fn leet_mode(&self) -> bool {
+        (**self).leet_mode()
     }
 
     fn plugin_string(&self, id: i16) -> StringPatch {
@@ -1990,6 +2106,53 @@ mod tests {
         assert_eq!(patch_id(i16::MAX - 4999, 4999), Some(i16::MAX));
         assert_eq!(patch_id(i16::MAX - 4998, 4999), None);
         assert_eq!(patch_id(i16::MIN, -1), None);
+    }
+
+    #[test]
+    fn a_desc_with_no_movie_name_has_no_movie() {
+        assert_eq!(DescMovie::from_desc("", 0x0007), None);
+    }
+
+    #[test]
+    fn each_movie_flag_sets_its_own_field_alone() {
+        let movie = |flags| DescMovie::from_desc("Race 1.mov", flags);
+        let plain = DescMovie {
+            file: "Race 1.mov".to_owned(),
+            after: false,
+            double_size: false,
+            cinematic: false,
+        };
+        assert_eq!(movie(0), Some(plain.clone()));
+        assert_eq!(
+            movie(0x0001),
+            Some(DescMovie {
+                after: true,
+                ..plain.clone()
+            })
+        );
+        assert_eq!(
+            movie(0x0002),
+            Some(DescMovie {
+                double_size: true,
+                ..plain.clone()
+            })
+        );
+        assert_eq!(
+            movie(0x0004),
+            Some(DescMovie {
+                cinematic: true,
+                ..plain.clone()
+            })
+        );
+        assert_eq!(movie(0xfff8), Some(plain), "the other bits mean nothing");
+    }
+
+    #[test]
+    fn a_movie_name_of_one_control_character_is_a_name() {
+        assert_eq!(
+            DescMovie::from_desc("\u{1}", 1).map(|movie| movie.file),
+            Some("\u{1}".to_owned())
+        );
     }
 
     #[test]

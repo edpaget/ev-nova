@@ -38,13 +38,14 @@ use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
-    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, FrameSize,
-    GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId,
-    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord,
+    FrameSize, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
+    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
+    RankId, RankRecord, ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId,
+    WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::escort::EscortClass;
@@ -508,8 +509,12 @@ impl PilotCatalog for GameData {
     }
 
     /// Each `spöb`'s `xPos`/`yPos` (@0x7733b-0x7734d) and its name as
-    /// `_LoadObjectData` keeps it (@0x772ab-0x7732a): up to its last ';',
-    /// trailing spaces and ';'s dropped, empty when it has none.
+    /// `_LoadObjectData` trims it (@0x772ab-0x77308): up to its last ';',
+    /// trailing spaces and ';'s dropped, empty when it has none. The name
+    /// is kept whole: the original's 30-character field (@0x77310-0x7732a)
+    /// is the core's to apply ([`StellarMarks`](crate::mission::StellarMarks)),
+    /// by [`StellarIdentityRecord`](crate::RuleKey::StellarIdentityRecord).
+    /// A `spöb` that can't be decoded is left out, as one that didn't load.
     fn stellar_marks(&self) -> Vec<StellarMark> {
         self.records::<Stellar>()
             .filter_map(|(id, stellar)| {
@@ -529,33 +534,67 @@ impl PilotCatalog for GameData {
 
     /// Each text from its `dësc`, none for -1 or one that cannot be read;
     /// the offer's is `dësc` 4000 + the mission's index (@0xa3a85-0xa3aad).
+    /// Each text's `Graphic` beside it, none for -1 too, and the movie its
+    /// `MovieFile` names, played as its `Flags` say ([`DescMovie::from_desc`]).
     fn mission_texts(&self) -> Vec<MissionTexts> {
         let text = |id: Option<i16>| -> Option<String> {
             let desc = self.get::<Desc>(id?)?.ok()?;
             Some(desc.record.text.as_str().to_owned())
+        };
+        let graphic = |id: Option<i16>| -> Option<i16> {
+            let desc = self.get::<Desc>(id?)?.ok()?;
+            Some(desc.record.graphic?.0)
+        };
+        let movie = |id: Option<i16>| -> Option<DescMovie> {
+            let desc = self.get::<Desc>(id?)?.ok()?;
+            DescMovie::from_desc(desc.record.movie_file.as_str(), desc.record.flags.0)
         };
         self.records::<Mission>()
             .filter_map(|(id, mission)| {
                 let mission = mission.ok()?;
                 let record = mission.record;
                 let raw = |desc: Option<nova_data::DescId>| text(desc.map(|desc| desc.0));
+                let pict = |desc: Option<nova_data::DescId>| graphic(desc.map(|desc| desc.0));
+                let film = |desc: Option<nova_data::DescId>| movie(desc.map(|desc| desc.0));
+                let offer = id
+                    .checked_sub(FIRST_MISSION)
+                    .and_then(|index| FIRST_OFFER_DESC.checked_add(index));
                 Some(MissionTexts {
                     id: MissionId(id),
                     name: shown_resource_name(mission.name.unwrap_or_default()).to_owned(),
-                    offer: text(
-                        id.checked_sub(FIRST_MISSION)
-                            .and_then(|index| FIRST_OFFER_DESC.checked_add(index)),
-                    ),
+                    offer: text(offer),
                     brief: raw(record.brief_text),
                     quick_brief: raw(record.quick_brief),
                     comp: raw(record.comp_text),
                     fail: raw(record.fail_text),
                     refuse: raw(record.refuse_text),
+                    refuse_named: record.refuse_text.is_some(),
                     load_cargo: raw(record.load_carg_text),
                     dump_cargo: raw(record.dump_cargo_text),
                     ship_done: raw(record.ship_done_text),
                     accept_button: record.accept_button.as_str().to_owned(),
                     refuse_button: record.refuse_button.as_str().to_owned(),
+                    graphics: TextGraphics {
+                        offer: graphic(offer),
+                        brief: pict(record.brief_text),
+                        comp: pict(record.comp_text),
+                        fail: pict(record.fail_text),
+                        refuse: pict(record.refuse_text),
+                        load_cargo: pict(record.load_carg_text),
+                        dump_cargo: pict(record.dump_cargo_text),
+                        ship_done: pict(record.ship_done_text),
+                    },
+                    movies: TextMovies {
+                        offer: movie(offer),
+                        brief: film(record.brief_text),
+                        quick_brief: film(record.quick_brief),
+                        comp: film(record.comp_text),
+                        fail: film(record.fail_text),
+                        refuse: film(record.refuse_text),
+                        load_cargo: film(record.load_carg_text),
+                        dump_cargo: film(record.dump_cargo_text),
+                        ship_done: film(record.ship_done_text),
+                    },
                 })
             })
             .collect()
@@ -1047,6 +1086,8 @@ impl CombatCatalog for GameData {
     }
 }
 
+/// The `l33t` resource type, whose presence alone turns on `_leetMode`.
+const LEET: ResType = ResType::new(*b"l33t");
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
 impl AsteroidCatalog for GameData {
@@ -1108,6 +1149,12 @@ impl AsteroidCatalog for GameData {
 impl CommCatalog for GameData {
     fn string_list(&self, id: i16) -> Vec<String> {
         strings(self, id)
+    }
+
+    /// Whether any `l33t` resource exists, whatever it holds
+    /// (`CountResources('l33t') > 0`, @0x7e28c-0x7e2a2).
+    fn leet_mode(&self) -> bool {
+        !self.ids(LEET).is_empty()
     }
 
     fn plugin_string(&self, id: i16) -> StringPatch {
@@ -2399,6 +2446,20 @@ mod tests {
     }
 
     #[test]
+    fn stellar_marks_keep_a_name_over_30_characters_whole() {
+        let name = "A Stellar Named Well Past Thirty Chars";
+        let data = store_named(&[(Stellar::TYPE, 128, Some(name), stellar(1, 2, 0, 1, 0))]);
+        assert_eq!(
+            data.stellar_marks(),
+            [StellarMark {
+                id: StellarId(128),
+                place: (1, 2),
+                name: name.to_owned(),
+            }]
+        );
+    }
+
+    #[test]
     fn a_systems_landing_sites_are_its_readable_stellars_in_nav_order() {
         let data = store(&[
             (System::TYPE, 130, system_with(&[129, 999, 128, 131])),
@@ -2981,6 +3042,43 @@ mod tests {
             bytes.extend(string.as_bytes());
         }
         bytes
+    }
+
+    #[test]
+    fn a_plugin_string_is_its_str_resource_raw() {
+        let data = store(&[
+            (StrResource::TYPE, 9100, str_resource("grain")),
+            (StrResource::TYPE, 9101, Vec::new()),
+            (StrResource::TYPE, 9102, b"\x05ab".to_vec()),
+            (StrResource::TYPE, 4999, b"\x02Hixyz".to_vec()),
+        ]);
+        assert_eq!(data.plugin_string(9100), StringPatch::Text("grain".into()));
+        assert_eq!(data.plugin_string(9101), StringPatch::Empty);
+        assert_eq!(data.plugin_string(9102), StringPatch::Unreadable);
+        assert_eq!(data.plugin_string(4999), StringPatch::Text("Hi".into()));
+        assert_eq!(data.plugin_string(9103), StringPatch::Absent);
+        assert_eq!(
+            CommCatalog::plugin_string(&&data, 9100),
+            StringPatch::Text("grain".into()),
+            "through a borrow"
+        );
+        let shared: std::rc::Rc<dyn CommCatalog> = std::rc::Rc::new(data);
+        assert_eq!(shared.plugin_string(9101), StringPatch::Empty, "shared");
+    }
+
+    #[test]
+    fn any_l33t_resource_turns_the_leet_mode_on() {
+        assert!(!store(&[]).leet_mode());
+        assert!(!CommCatalog::leet_mode(&&store(&[])), "a borrow asks");
+        assert!(
+            !store(&[(StrList::TYPE, 4001, str_list(&["food"]))]).leet_mode(),
+            "nothing else does"
+        );
+        let empty = store(&[(LEET, 128, Vec::new())]);
+        assert!(empty.leet_mode(), "even empty");
+        assert!(CommCatalog::leet_mode(&&empty), "through a borrow");
+        let shared: std::rc::Rc<dyn CommCatalog> = std::rc::Rc::new(store(&[(LEET, 200, vec![1])]));
+        assert!(shared.leet_mode(), "through the shared catalog");
     }
 
     #[test]
@@ -4687,10 +4785,24 @@ mod tests {
 
     /// A `dësc` of `text`, with no picture.
     fn desc(text: &str) -> Vec<u8> {
+        pictured(text, -1)
+    }
+
+    /// A `dësc` of `text` whose `Graphic` is `graphic`.
+    fn pictured(text: &str, graphic: i16) -> Vec<u8> {
         let mut bytes = text.as_bytes().to_vec();
         bytes.push(0);
-        bytes.extend([0xFF; 2]);
+        bytes.extend(graphic.to_be_bytes());
         bytes.extend([0; 34]);
+        bytes
+    }
+
+    /// A `dësc` of `text` naming the movie `file`, played as `flags` say.
+    fn filmed(text: &str, file: &str, flags: u16) -> Vec<u8> {
+        let mut bytes = pictured(text, -1);
+        let tail = bytes.len() - 34;
+        bytes[tail..tail + file.len()].copy_from_slice(file.as_bytes());
+        bytes[tail + 32..].copy_from_slice(&flags.to_be_bytes());
         bytes
     }
 
@@ -4741,15 +4853,15 @@ mod tests {
                 Some("Short"),
                 short(texted([-1; 8], b"\0", b"\0")),
             ),
-            (Desc::TYPE, 4002, None, desc("Offer <DST>.")),
-            (Desc::TYPE, 200, None, desc("Brief.")),
-            (Desc::TYPE, 201, None, desc("Quick <DL>.")),
-            (Desc::TYPE, 202, None, desc("Comp.")),
-            (Desc::TYPE, 203, None, desc("Fail.")),
-            (Desc::TYPE, 204, None, desc("Refuse.")),
-            (Desc::TYPE, 206, None, desc("Load <CQ>.")),
+            (Desc::TYPE, 4002, None, pictured("Offer <DST>.", 5008)),
+            (Desc::TYPE, 200, None, pictured("Brief.", 300)),
+            (Desc::TYPE, 201, None, pictured("Quick <DL>.", 301)),
+            (Desc::TYPE, 202, None, pictured("Comp.", 302)),
+            (Desc::TYPE, 203, None, pictured("Fail.", 303)),
+            (Desc::TYPE, 204, None, pictured("Refuse.", 304)),
+            (Desc::TYPE, 206, None, pictured("Load <CQ>.", 306)),
             (Desc::TYPE, 207, None, desc("Dump.")),
-            (Desc::TYPE, 209, None, desc("Done <SN>.")),
+            (Desc::TYPE, 209, None, pictured("Done <SN>.", 309)),
         ]);
         let texts = data.mission_texts();
         assert_eq!(
@@ -4764,21 +4876,100 @@ mod tests {
                     comp: Some("Comp.".to_owned()),
                     fail: Some("Fail.".to_owned()),
                     refuse: Some("Refuse.".to_owned()),
+                    refuse_named: true,
                     load_cargo: Some("Load <CQ>.".to_owned()),
                     dump_cargo: Some("Dump.".to_owned()),
                     ship_done: Some("Done <SN>.".to_owned()),
                     accept_button: "I'm in".to_owned(),
                     refuse_button: "No way".to_owned(),
+                    graphics: TextGraphics {
+                        offer: Some(5008),
+                        brief: Some(300),
+                        comp: Some(302),
+                        fail: Some(303),
+                        refuse: Some(304),
+                        load_cargo: Some(306),
+                        dump_cargo: None,
+                        ship_done: Some(309),
+                    },
+                    movies: TextMovies::default(),
                 },
                 MissionTexts::named(MissionId(131), "Plain run"),
                 MissionTexts {
                     accept_button: " ok".to_owned(),
+                    refuse_named: true,
                     ..MissionTexts::named(MissionId(132), "")
                 },
             ],
-            "-1 and a missing dësc (0 among them) are none; the undecodable mïsn is skipped"
+            "each text carries its own dësc's graphic, none for a graphic of -1; -1 and a missing dësc (0 among them) are no text and no graphic, a RefuseText naming a missing one still named; the undecodable mïsn is skipped"
         );
         assert_eq!(store(&[]).mission_texts(), []);
+    }
+
+    #[test]
+    fn each_text_carries_the_movie_its_own_desc_names() {
+        use nova_data::records::mission::Mission;
+        let data = store_named(&[
+            (
+                Mission::TYPE,
+                130,
+                Some("Filmed"),
+                texted([200, -1, 206, 207, 202, 203, 204, 209], b"\0", b"\0"),
+            ),
+            (
+                Desc::TYPE,
+                4002,
+                None,
+                filmed("Offer.", "Offer.mov", 0x0001),
+            ),
+            (Desc::TYPE, 200, None, filmed("Brief.", "Brief.mov", 0x0006)),
+            (Desc::TYPE, 202, None, filmed("Comp.", "Comp.mov", 0)),
+            (Desc::TYPE, 203, None, filmed("Fail.", "Fail.mov", 0)),
+            (Desc::TYPE, 204, None, filmed("Refuse.", "Refuse.mov", 0)),
+            (Desc::TYPE, 206, None, filmed("Load.", "Load.mov", 0)),
+            (Desc::TYPE, 207, None, desc("Dump.")),
+            (Desc::TYPE, 209, None, filmed("Done.", "Done.mov", 0)),
+        ]);
+        let movie = |file: &str| DescMovie::from_desc(file, 0);
+        let texts = data.mission_texts();
+        assert_eq!(
+            texts[0].movies,
+            TextMovies {
+                offer: DescMovie::from_desc("Offer.mov", 0x0001),
+                brief: DescMovie::from_desc("Brief.mov", 0x0006),
+                quick_brief: None,
+                comp: movie("Comp.mov"),
+                fail: movie("Fail.mov"),
+                refuse: movie("Refuse.mov"),
+                load_cargo: movie("Load.mov"),
+                dump_cargo: None,
+                ship_done: movie("Done.mov"),
+            },
+            "a dësc with no MovieFile, or a missing one, has none"
+        );
+        assert_eq!(
+            texts[0].movies.offer.as_ref().map(|movie| movie.after),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn the_quick_briefs_movie_is_decoded() {
+        use nova_data::records::mission::Mission;
+        let data = store_named(&[
+            (
+                Mission::TYPE,
+                130,
+                Some("Filmed"),
+                texted([-1, 201, -1, -1, -1, -1, -1, -1], b"\0", b"\0"),
+            ),
+            (Desc::TYPE, 201, None, filmed("Quick.", "Quick.mov", 0x0001)),
+        ]);
+        assert_eq!(
+            data.mission_texts()[0].movies.quick_brief,
+            DescMovie::from_desc("Quick.mov", 0x0001),
+            "the info screen loads it (@0x9d89f)"
+        );
     }
 
     #[test]

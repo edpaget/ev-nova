@@ -360,6 +360,48 @@ fn a_mission_is_delivered_at_its_return_paid_and_its_bits_set() {
 }
 
 #[test]
+fn a_delivery_whose_on_success_ends_in_q_leaves_in_flight_with_the_take_offs_day_passed() {
+    let strings = || FakePilotCatalog {
+        strings: vec![(25048, vec!["Off you go.".to_owned()])],
+        ..catalog()
+    };
+    // Delivered by `on_success`, the date the walk ends on.
+    let delivered = |on_success: &str| {
+        let catalog = FakePilotCatalog {
+            strings: strings().strings,
+            ..galaxy(vec![errand(200, 128, 140, on_success)])
+        };
+        let mut session = docked(&catalog).with_strings(std::rc::Rc::new(strings()));
+        let walked = StoryWalker::new(&catalog)
+            .walk(&mut session, &[Step::Take(A), Step::Deliver(A)])
+            .expect("walks");
+        (session, walked)
+    };
+    let (stayed, _) = delivered("b10");
+    let (mut session, walked) = delivered("b10 Q25048");
+    assert_eq!(
+        walked.done[1],
+        Done::Delivered {
+            mission: A,
+            stellar: StellarId(140),
+            pay: 1000,
+            others: Vec::new(),
+        },
+        "delivered where it landed"
+    );
+    assert_eq!(stayed.landed(), Some(StellarId(140)), "no Q, docked");
+    assert_eq!(session.landed(), None, "the Q took off");
+    assert!(!session.leave_due());
+    assert_eq!(
+        session.date(),
+        stayed.date().next_day(),
+        "the take-off's day passed"
+    );
+    assert_eq!(session.story_raised(), [], "the take-off settled");
+    assert_eq!(session.take_leave_message().as_deref(), Some("Off you go."));
+}
+
+#[test]
 fn a_mission_with_a_destination_picks_its_cargo_up_there_then_is_delivered_at_its_return() {
     let catalog = galaxy(vec![MissionRecord {
         travel_stel: 129,

@@ -1,7 +1,8 @@
 //! The player's settings, all of them, kept in one settings file.
 //!
-//! - [`GameSettings`]: the sound settings ([`AudioSettings`]) and whether
-//!   hyperspace jumps play their white fades.
+//! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
+//!   hyperspace jumps play their white fades, and whether `dësc` movies
+//!   play.
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
 //!   or they cannot be used), and saves each change. It is the only
@@ -10,8 +11,8 @@
 //!   somewhere to save.
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
-//! `music_volume` and `hyperspace_effects`; files saved before the last
-//! one existed load unchanged, with the hyperspace effects on.
+//! `music_volume`, `hyperspace_effects` and `quicktime_movies`; files
+//! saved before the last two existed load unchanged, with them on.
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
 use nova_view::Prefs;
@@ -25,14 +26,19 @@ pub struct GameSettings {
     /// Whether hyperspace jumps fade to white and back: the original's
     /// Hyperspace Effects preference.
     pub hyperspace_effects: bool,
+    /// Whether a `dësc`'s movie plays: the original's QuickTime Movies
+    /// preference.
+    pub quicktime_movies: bool,
 }
 
 impl Default for GameSettings {
-    /// The default sound settings, with the hyperspace effects on.
+    /// The default sound settings, with the hyperspace effects and the
+    /// movies on.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
             hyperspace_effects: true,
+            quicktime_movies: true,
         }
     }
 }
@@ -44,6 +50,7 @@ impl GameSettings {
         Prefs {
             sound: self.audio.prefs(),
             hyperspace_effects: self.hyperspace_effects,
+            quicktime_movies: self.quicktime_movies,
         }
     }
 
@@ -54,6 +61,7 @@ impl GameSettings {
         Self {
             audio: self.audio.with_prefs(prefs.sound),
             hyperspace_effects: prefs.hyperspace_effects,
+            quicktime_movies: prefs.quicktime_movies,
         }
     }
 }
@@ -63,12 +71,14 @@ impl GameSettings {
 /// `rule_overrides`, are kept and saved back as they were.
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // One field per key of the file.
 struct Saved {
     sound: bool,
     music: bool,
     effects_volume: f32,
     music_volume: f32,
     hyperspace_effects: bool,
+    quicktime_movies: bool,
     #[serde(flatten)]
     others: Others,
 }
@@ -91,6 +101,7 @@ impl From<GameSettings> for Saved {
             effects_volume: audio.effects_volume.amplitude(),
             music_volume: audio.music_volume.amplitude(),
             hyperspace_effects: settings.hyperspace_effects,
+            quicktime_movies: settings.quicktime_movies,
             others: Others::new(),
         }
     }
@@ -110,6 +121,7 @@ impl From<Saved> for GameSettings {
             }
             .capped(),
             hyperspace_effects: saved.hyperspace_effects,
+            quicktime_movies: saved.quicktime_movies,
         }
     }
 }
@@ -253,6 +265,7 @@ mod tests {
         GameSettings {
             audio,
             hyperspace_effects: false,
+            quicktime_movies: true,
         }
     }
 
@@ -267,6 +280,7 @@ mod tests {
             GameSettings {
                 audio: AudioSettings::default(),
                 hyperspace_effects: true,
+                quicktime_movies: true,
             }
         );
     }
@@ -330,6 +344,7 @@ mod tests {
                     ..AudioSettings::default()
                 },
                 hyperspace_effects: true,
+                quicktime_movies: true,
             }
         );
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding("{}"));
@@ -349,8 +364,34 @@ mod tests {
                     ..AudioSettings::default()
                 },
                 hyperspace_effects: true,
+                quicktime_movies: true,
             }
         );
+    }
+
+    #[test]
+    fn the_movies_flag_is_saved_and_a_file_without_it_has_them_on() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(keeper.settings().quicktime_movies, "an old file");
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                quicktime_movies: false,
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["quicktime_movies"], false);
+        let (restarted, _) = SettingsKeeper::open(store);
+        assert!(!restarted.settings().quicktime_movies);
+        assert!(!restarted.settings().prefs().quicktime_movies);
+        let movies_on = GameSettings::default().with_prefs(Prefs {
+            quicktime_movies: false,
+            ..Prefs::default()
+        });
+        assert!(!movies_on.quicktime_movies, "the prefs choose it");
     }
 
     #[test]
@@ -389,6 +430,7 @@ mod tests {
                 "effects_volume": 0.25,
                 "music_volume": 0.5,
                 "hyperspace_effects": false,
+                "quicktime_movies": true,
             })
         );
     }
@@ -440,11 +482,13 @@ mod tests {
             .change(GameSettings {
                 audio: quiet(),
                 hyperspace_effects: true,
+                quicktime_movies: true,
             })
             .expect("saves");
         keeper
             .change(GameSettings {
                 hyperspace_effects: false,
+                quicktime_movies: true,
                 ..keeper.settings()
             })
             .expect("saves");
@@ -487,6 +531,7 @@ mod tests {
             Prefs {
                 sound: quiet().prefs(),
                 hyperspace_effects: false,
+                quicktime_movies: true,
             }
         );
         assert_eq!(settings.with_prefs(prefs), settings, "between levels kept");
@@ -496,6 +541,7 @@ mod tests {
                 ..prefs.sound
             },
             hyperspace_effects: true,
+            quicktime_movies: true,
         });
         assert_eq!(changed.audio.effects_volume, effects_level_volume(3));
         assert_eq!(changed.audio.music_volume, Volume::new(0.5));
@@ -547,6 +593,7 @@ mod tests {
                 ..AudioSettings::default()
             },
             hyperspace_effects: false,
+            quicktime_movies: true,
         };
         assert_eq!((settings, warning), (expected, None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");

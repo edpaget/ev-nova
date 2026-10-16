@@ -33,7 +33,10 @@
 //!
 //! **Advice lines** ([`Reply::Advice`]). Greetings to a friendly ship
 //! reads one string of a list. A blank one, when the option says so,
-//! reads "Greetings." (`STR#` 2002 #175, [`GREETINGS`]) instead. Then the
+//! reads "Greetings." (`STR#` 2002 #175, [`GREETINGS`]) instead; a
+//! specific advice line that is not blank is parsed, its conditional text
+//! resolved, as the press picks it (`_LoadAdvice` @0x919ca,
+//! [`Reply::say_parsed`]). Then the
 //! check at @0x91aa9-0x91ae2 ([`advice_fallback`]) replaces a line that
 //! is blank or starts with `*` with group 9, "Nice to meet you."
 //! ([`NICE_TO_MEET_YOU`]). The original holds the line as a Pascal string
@@ -187,13 +190,32 @@ impl Reply {
 
     /// The reply's words in `variant`, read from `catalog`, a
     /// [`Reply::Named`] naming the player's ship `ship_name` (see the
-    /// module docs): a string missing, or of a list missing, is none.
+    /// module docs): a string missing, or of a list missing, is none. A
+    /// specific advice line is read as it is, unparsed
+    /// ([`Reply::say_parsed`]).
     #[must_use]
     pub fn say(
         self,
         variant: u8,
         catalog: &(impl CommCatalog + ?Sized),
         ship_name: &str,
+    ) -> String {
+        self.say_parsed(variant, catalog, ship_name, str::to_owned)
+    }
+
+    /// The reply's words as [`Reply::say`] gives them, but a specific
+    /// advice line ([`Reply::Advice`] with `greet_if_blank`, `STR#` 7500
+    /// on) that is not blank is first given to `parse`, as `_LoadAdvice`
+    /// parses it (@0x919b0-0x919ca) before the "Nice to meet you." check
+    /// (@0x91aa9). "Greetings." in a blank one's place is not parsed
+    /// (@0x919e6), nor is any other line.
+    #[must_use]
+    pub fn say_parsed(
+        self,
+        variant: u8,
+        catalog: &(impl CommCatalog + ?Sized),
+        ship_name: &str,
+        parse: impl FnOnce(&str) -> String,
     ) -> String {
         let line = |(list, index): (i16, u16)| {
             let at = usize::from(index.checked_sub(1)?);
@@ -213,6 +235,8 @@ impl Reply {
                 let mut text = line((list, index));
                 if text.is_empty() && greet_if_blank {
                     text = line(GREETINGS);
+                } else if greet_if_blank {
+                    text = parse(&text);
                 }
                 if advice_fallback(&text, long_advice) {
                     line(Self::locate(NICE_TO_MEET_YOU, variant))
@@ -349,6 +373,31 @@ mod tests {
             advice(7000, 3, false, RuleSource::Engine).say(2, &catalog, ""),
             "Hi",
             "a two-character line is shown"
+        );
+    }
+
+    #[test]
+    fn only_a_specific_advice_line_not_blank_is_parsed() {
+        let catalog = strings("Raw");
+        let parse = |line: &str| format!("parsed {line}");
+        let said = |index, greet_if_blank| {
+            advice(7000, index, greet_if_blank, RuleSource::Engine)
+                .say_parsed(0, &catalog, "", parse)
+        };
+        assert_eq!(said(1, true), "parsed Raw", "specific advice (@0x919ca)");
+        assert_eq!(said(1, false), "Raw", "a government's line is not parsed");
+        assert_eq!(
+            said(2, true),
+            "Greetings.",
+            "nor Greetings in a blank one's place"
+        );
+        let empty = advice(7000, 1, true, RuleSource::Engine)
+            .say_parsed(0, &catalog, "", |_| String::new());
+        assert_eq!(empty, "c46", "emptied, then passed over (@0x91aa9)");
+        assert_eq!(
+            Reply::Comm(0).say_parsed(3, &catalog, "", parse),
+            "c4",
+            "nor any other reply"
         );
     }
 

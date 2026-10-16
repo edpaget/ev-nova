@@ -200,8 +200,8 @@
 //! The player's crimes change its legal records as the fight's
 //! [`LegalCode`] says: disabling an NPC, and breaking one up (which is
 //! disabling it too when it was intact), each against the NPC's
-//! government, the record with each government changed and, by that
-//! government's change, the record in each of its systems
+//! government, the record with each government changed and the record
+//! in each system along the crime's walk from the player's system
 //! ([`legal::convict`]). Each conviction then takes the ranks its crime
 //! reaches (see [`rank`](crate::rank)'s **Crimes**). A mere hit is no
 //! crime, as in the original, and a mission's special ship, of any mark,
@@ -416,15 +416,15 @@ pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use mission_screens::{
-    ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionText,
-    MissionTextKind,
+    ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionInfoPress,
+    MissionShown, MissionText, MissionTextKind, TextBar,
 };
 #[cfg(any(test, feature = "fixture"))]
 pub(crate) use missions::StopRefusal;
-pub use missions::{AbortError, NotOffered};
+pub use missions::{AbortError, NotOffered, RefuseShown};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
-pub use script_effects::{ScriptEffectRules, Settled};
+pub use script_effects::{Departure, ScriptEffectRules, Settled};
 pub use takeoff_grace::TAKEOFF_GRACE_TICKS;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -444,10 +444,11 @@ use crate::board::{
     check_board,
 };
 use crate::catalog::{
-    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DudeId, GateSite, GovtId, JunkId,
-    LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId,
-    OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord,
-    StartError, StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, GateSite, GovtId,
+    JunkId, LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord,
+    OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId,
+    ShipRecord, StartError, StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog,
+    WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -520,6 +521,7 @@ use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
 use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
+use crate::text_tags::RankTagGovts;
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
@@ -1173,6 +1175,10 @@ pub struct Session {
     /// mission in the slot, once the settling that accepted it begins
     /// (see the `mission_ships` module); never saved.
     swap_due: Option<(NpcId, u8)>,
+    /// The stellar a move ([`Session::relocate`]) docked at, whose
+    /// offers the next settling rolls if the ship is still landed there
+    /// (see the `edit` module); never saved.
+    offer_roll_due: Option<StellarId>,
     /// The slot whose mission's script is running, if any: what a `Q`
     /// fills its mission tags from (see the `missions` module); never
     /// saved.
@@ -1182,14 +1188,38 @@ pub struct Session {
     ending: BTreeSet<u8>,
     /// The mission texts to show, until they are taken (see the
     /// `mission_screens` module); never saved.
-    shown_texts: Vec<MissionText>,
+    shown_texts: Vec<MissionShown>,
+    /// The governments the last `<PRKnnn>` and `<SRKnnn>` taken in named
+    /// (`_descRankGovt`; see the `missions` module's text sources), as
+    /// the crossed rank tags read them; never saved, as the original
+    /// saves none of it.
+    rank_govts: RankTagGovts,
+    /// The movie the last `dësc` loaded names: the original's `MovieFile`
+    /// and `Flags` globals (*0x3b52f4, *0x3b5644), which each
+    /// `_LoadDescription` overwrites (@0x71895-0x718de) and a missing
+    /// `dësc` empties (@0x71a5e-0x71a77), and which every movie check
+    /// reads as they stand ([`RuleKey::DescMovieGlobals`]). Written with
+    /// the governments above by [`Session::load_description`], so the two
+    /// can't drift; none at a new session, and never saved.
+    loaded_movie: Option<DescMovie>,
+    /// The ship `<OSN>` names by the engine (`_offeringShipIndex`; see
+    /// the `person_offers` module); never saved, and none at a new pilot
+    /// or a load (`_InitMissions` @0x97bbf).
+    offering_ship: Option<person_offers::OfferingShip>,
+    /// Each mission's `AvailBits` verdict as the original last cached it
+    /// (`mïsn`+0x16; see [`Session::propagate_avail_bits`]); never saved,
+    /// as a load refreshes it.
+    avail_cache: BTreeMap<MissionId, bool>,
+    /// Whether the data turns on the `l33t` mode (`_leetMode`; see
+    /// [`Session::with_strings`]); never saved.
+    leet: bool,
     /// How many mission texts have been queued, never reset (see the
     /// `mission_screens` module); never saved.
     texts_queued: u64,
-    /// The nav mode as the last text queued since they were last taken
-    /// was queued: what its dialog's redraw shows (see the
-    /// `mission_screens` module); never saved.
-    text_nav: Option<NavMode>,
+    /// The status bar as each text queued since they were last taken was
+    /// queued: what its caller's redraw shows as it closes (see the
+    /// `mission_screens` module's [`TextBar`]); never saved.
+    text_bars: Vec<TextBar>,
     /// The `C`, `E` and `H` run while docked since the last outfit order
     /// or ship purchase began, in order (see the `ship_change` module's
     /// [`InterfaceLoad`]); never saved.
@@ -1212,6 +1242,11 @@ pub struct Session {
     /// The offer from a ship the offer dialog shows, until the player
     /// answers it (see the `person_offers` module); never saved.
     offering: Option<person_offers::Offering>,
+    /// Whether an offer dialog is open, as the original's `_missionDialog`
+    /// is set: while the player's accept or refusal runs, so an `S` in
+    /// that `OnAccept` or `OnRefuse` sees it (see the `missions` module);
+    /// never saved.
+    offer_dialog_open: bool,
     /// Whether the load had to fall back for data the save references
     /// and the catalog lacks ([`Session::load_repaired`]); never saved.
     load_repaired: bool,
@@ -1570,16 +1605,23 @@ impl Session {
             reoffer_due: false,
             goal_checks_due: Vec::new(),
             swap_due: None,
+            offer_roll_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
+            rank_govts: RankTagGovts::NONE,
+            loaded_movie: None,
+            offering_ship: None,
+            avail_cache: BTreeMap::new(),
+            leet: false,
             texts_queued: 0,
-            text_nav: None,
+            text_bars: Vec::new(),
             interface_loads: Vec::new(),
             takeoff_nav: None,
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),
             offering: None,
+            offer_dialog_open: false,
             script_slot: None,
             load_repaired,
             pilot,
@@ -1630,6 +1672,18 @@ impl Session {
     /// off keeps the heading.
     pub fn face_on_load(&mut self, chance: &mut dyn Chance) {
         self.player.heading = f32::from(chance.roll(360));
+    }
+
+    /// Resumes a pilot opened from a save, after [`Session::fly`], on
+    /// `chance`: faces it as [`Session::face_on_load`] does, then draws
+    /// the offers' roll table, docked or not, as the load's
+    /// `_ResetPlayer` does (`_OpenLastPilotFile` @0x76502,
+    /// `_OpenPilotFile` @0x7673e). The table is not in the pilot file. A
+    /// docked pilot's landing roll draws it again on its `Landed` effect,
+    /// as the original's dock request does.
+    pub fn resume(&mut self, chance: &mut dyn Chance) {
+        self.face_on_load(chance);
+        self.draw_offer_rolls(chance);
     }
 
     /// This session with every disputed rule reading as `rules` says
@@ -2886,11 +2940,24 @@ impl Session {
                 (None, _) => &[],
             };
             for &crime in crimes {
-                let changes = law.penalties(crime, govt, &self.govts);
-                legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+                self.convict_of(law, crime, govt);
                 self.lose_ranks_to(crime, govt);
             }
         }
+    }
+
+    /// Convicts the player of one `crime` against a ship of `victim`, as
+    /// `law` says: its records with each government, and its record in
+    /// each system along the crime's walk from the player's system, as
+    /// every caller of `_SlapWithPenalty` passes it (player +0x74; see the
+    /// [`legal`] module's **The walk**). The walk never reads the records,
+    /// so a crime convicted again walks the same systems and each
+    /// conviction truncates in turn.
+    fn convict_of(&mut self, law: &dyn LegalCode, crime: Crime, victim: Option<GovtId>) {
+        let govt_changes = law.penalties(crime, victim, &self.govts);
+        let system_changes =
+            law.system_penalties(crime, victim, self.system(), &self.galaxy, &self.govts);
+        legal::convict(&mut self.pilot, &govt_changes, &system_changes);
     }
 
     /// Credits the player's combat rating for each NPC among `strikes`
@@ -3528,8 +3595,9 @@ impl Session {
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
-        // @0x6c144).
+        // @0x6c144); the `AvailBits` cached with it.
         let refresh = self.refresh_now();
+        self.propagate_avail_bits();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
@@ -4072,6 +4140,8 @@ impl Session {
         self.warp_ups.clear();
         self.warp_out.clear();
         self.pilot.stellar = Some(stellar);
+        // `_PlayerLandOnStellar` clears `_absquatulateStr` (@0x63335).
+        self.drop_leave();
         self.bar_news = None;
         self.bar_nav = None;
         self.combat.clear();
@@ -4160,8 +4230,8 @@ impl Session {
     /// Then the pilot is greeted ([`SimMessage::TookOff`]), past the
     /// tutorial, the lead rolled on `chance`; a newbie is not, and moves
     /// on to the hyperspace hint (see the [`tutorial`](crate::tutorial)
-    /// module). A `Q`'s take-off with a message greets no one
-    /// (`Session::settle_script`).
+    /// module). A held `Q`'s take-off with a message greets no one
+    /// ([`Session::take_leave_message`]).
     ///
     /// The take-off starts the take-off grace: for
     /// [`TAKEOFF_GRACE_TICKS`] the map, mission info and player info keys
@@ -4172,7 +4242,9 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
         let stellar = self.lift_off(catalog, chance)?;
-        self.greet(stellar, chance);
+        if !self.left_with_message() {
+            self.greet(stellar, chance);
+        }
         Some(stellar)
     }
 
@@ -4200,6 +4272,9 @@ impl Session {
         // @0x633a0), before the stay's days (@0x63440) and the deselect
         // (@0x674d2); see the flight view's `took_off`.
         self.takeoff_nav = Some(self.nav_mode());
+        // A held `Q`'s leave is consumed (@0x63588-0x635e3; see the
+        // `script_effects` module).
+        self.depart();
         let stay = std::mem::take(&mut self.stay);
         self.bar_news = None;
         self.bar_nav = None;
@@ -4317,17 +4392,31 @@ impl Session {
         )
     }
 
-    /// The player's legal record in the current system, as the
-    /// [`LegalRecords`](RuleKey::LegalRecords) rule reads it: by the
-    /// engine the system's own; by the Bible the record with its
-    /// government, 0 in an independent system.
+    /// The player's legal record in the current system, as
+    /// [`Session::record_in`] reads it.
     fn system_record(&self) -> i16 {
+        self.record_in(self.pilot.system, None)
+    }
+
+    /// The player's legal record in `system`, at `site` when landing
+    /// there, as the [`LegalRecords`](RuleKey::LegalRecords) rule reads
+    /// it; the one place the rule is read. By the engine the system's own,
+    /// whatever the stellar's government (`_IsMissionAvailable` @0x9b59d,
+    /// @0x9b5bf; `_HandlePlayerDockRequest` @0x67903). By the Bible the
+    /// record with the system's government (hidden or not), 0 in an
+    /// independent system; at `site`,
+    /// [`landing_record`](crate::landing::landing_record).
+    fn record_in(&self, system: SystemId, site: Option<&LandingSite>) -> i16 {
         match self.rules.source_for(RuleKey::LegalRecords) {
-            RuleSource::Engine => self.pilot.system_record(self.pilot.system),
-            RuleSource::Bible => self
-                .galaxy
-                .govt(self.pilot.system)
-                .map_or(0, |govt| self.pilot.legal_record(govt)),
+            RuleSource::Engine => self.pilot.system_record(system),
+            RuleSource::Bible => {
+                let govt = self.galaxy.govt(system);
+                let record = |govt| self.pilot.legal_record(govt);
+                site.map_or_else(
+                    || govt.map_or(0, record),
+                    |site| crate::landing::landing_record(site, govt, record),
+                )
+            }
         }
     }
 
@@ -4359,18 +4448,9 @@ impl Session {
     }
 
     /// The player's legal record that `site`'s `MinStatus` is checked
-    /// against: by the engine the record in the current system, whatever
-    /// the stellar's government (`_HandlePlayerDockRequest` @0x67903); by
-    /// the Bible [`landing_record`](crate::landing::landing_record).
+    /// against, as [`Session::record_in`] reads it at `site`.
     fn landing_record(&self, site: &LandingSite) -> i16 {
-        match self.rules.source_for(RuleKey::LegalRecords) {
-            RuleSource::Engine => self.pilot.system_record(self.pilot.system),
-            RuleSource::Bible => {
-                crate::landing::landing_record(site, self.galaxy.govt(self.pilot.system), |govt| {
-                    self.pilot.legal_record(govt)
-                })
-            }
-        }
+        self.record_in(self.pilot.system, Some(site))
     }
 
     /// Trades on the exchange as `order` asks, on its row at that row's
@@ -5292,7 +5372,9 @@ impl Session {
     /// says its crew repels the boarders, its plunder is rolled on
     /// `chance` and the boarding is under way ([`Session::plunder`]). A
     /// board that passes the checks raises [`Fate::Boarded`], repelled
-    /// or not. A person of `Flags` 0x0200 whose `LinkMission` is
+    /// or not, and the airlock, [`SimSound::Boarded`], as the boarders go
+    /// aboard, before the crew may repel them (@0x659b3, @0x65f00). A
+    /// person of `Flags` 0x0200 whose `LinkMission` is
     /// available from a ship offers it instead, once the crime is
     /// convicted ([`Boarding::Offered`], see the `person_offers` module):
     /// nothing is rolled or granted, and the ship is marked boarded, and
@@ -5342,8 +5424,7 @@ impl Session {
         }
         self.player.velocity = npc.state.velocity;
         if npc.mission.is_none() {
-            let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
-            legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+            self.convict_of(law, Crime::Board, npc.govt);
             self.lose_ranks_to(Crime::Board, npc.govt);
         }
         // A direct, intended strike of no damage: `_HandlePlayerBoardAttempt`
@@ -5357,10 +5438,19 @@ impl Session {
             intended: true,
             lock: false,
         });
+        let linked = self.linked_ship(&npc, person_offers::OfferedBy::Boarding);
+        let named = linked.is_some();
+        self.reach_linked(linked);
         if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
             return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
         }
+        if named {
+            // Named and put back to none around the plunder
+            // (@0x65882, @0x65a11).
+            self.offering_ship = None;
+        }
         self.mark_boarded(npc.id);
+        self.sounds.push(SimSound::Boarded);
         if rule.repels(npc.booty.unwrap_or(0)) {
             return Ok(Boarding::Repelled);
         }
@@ -8482,6 +8572,34 @@ pub(super) mod tests {
             assert_eq!(session.player().heading, f32::from(draw));
             assert_eq!(chance.sides_asked, [360]);
         }
+    }
+
+    #[test]
+    fn a_pilot_resumed_over_its_stellar_has_its_offer_rolls_drawn_by_the_resume() {
+        use crate::catalog::MissionId;
+        let catalog = catalog();
+        let mut session = Session::fly(&catalog, landed_pilot(&catalog)).expect("flies");
+        let mut chance = Scripted::rolling(&[7, 41]);
+        session.resume(&mut chance);
+        assert_eq!(session.player().heading, 7.0, "faced first");
+        assert_eq!(
+            chance.sides_asked.len(),
+            1 + crate::mission::ROLLED,
+            "a heading, then the whole table"
+        );
+        assert!(chance.sides_asked[1..].iter().all(|&sides| sides == 100));
+        assert_eq!(
+            session.offer_rolls().roll(MissionId(128)),
+            Some(42),
+            "drawn before any landing effect runs"
+        );
+        assert_eq!(session.offer_rolls().roll(MissionId(129)), Some(1));
+        assert_eq!(session.landed(), None, "in space");
+        assert_eq!(
+            resumed_on(&session),
+            Some(StellarId(128)),
+            "over its stellar"
+        );
     }
 
     #[test]
@@ -13783,6 +13901,161 @@ pub(super) mod tests {
         );
     }
 
+    // The docked loads ordered against the mission texts.
+
+    /// [`shipbuying`] with mission 130 at the computer, running
+    /// `on_accept`, `on_refuse` and `on_abort`, with a `BriefText` and a
+    /// `RefuseText`; docked and settled, so it is offered.
+    fn missioned(on_accept: &str, on_refuse: &str, on_abort: &str) -> Session {
+        let mut catalog = shipbuying();
+        catalog.missions = vec![MissionRecord {
+            on_accept: crate::control::Script::parse(on_accept),
+            on_refuse: crate::control::Script::parse(on_refuse),
+            on_abort: crate::control::Script::parse(on_abort),
+            ..crate::testkit::mission(130)
+        }];
+        catalog.mission_texts = vec![MissionTexts {
+            brief: Some("Go.".to_owned()),
+            refuse: Some("No.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
+        let mut session = outfitted(&catalog);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(
+            session
+                .mission_offers(crate::mission::Venue::Computer)
+                .len(),
+            1
+        );
+        session
+    }
+
+    #[test]
+    fn a_docked_load_notes_the_texts_queued_before_it() {
+        let mut session = missioned("H129", "", "");
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let loads = session.take_interface_loads();
+        let bars = session.text_bars().to_vec();
+        assert_eq!((loads.len(), bars.len()), (1, 1));
+        assert!(
+            loads[0].texts < bars[0].texts,
+            "OnAccept's H before the BriefText: {loads:?}, {bars:?}"
+        );
+        let mut session = missioned("", "H129", "");
+        session
+            .refuse_mission(MissionId(130), &mut NeverFires)
+            .expect("refused");
+        let loads = session.take_interface_loads();
+        let bars = session.text_bars().to_vec();
+        assert_eq!((loads.len(), bars.len()), (1, 1));
+        assert_eq!(
+            loads[0].texts, bars[0].texts,
+            "OnRefuse's H after the RefuseText, before any other"
+        );
+    }
+
+    #[test]
+    fn each_text_notes_the_bar_as_it_was_queued() {
+        let mut session = missioned("M131 G302", "", "");
+        let (nav, before) = (session.nav_mode(), session.reserves());
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let bars = session.text_bars().to_vec();
+        assert_eq!(bars.len(), 1);
+        assert_ne!(bars[0].nav, nav);
+        assert_eq!(bars[0].nav, session.nav_mode(), "M131's");
+        assert_eq!(
+            bars[0].reserves.shield.max,
+            before.shield.max + 50.0,
+            "G302's"
+        );
+        assert_eq!(session.text_nav(), Some(bars[0].nav), "the last text's nav");
+        assert_eq!(session.take_mission_texts().len(), 1);
+        assert_eq!(session.text_bars(), [], "taken with the texts");
+        assert_eq!(session.text_nav(), None);
+    }
+
+    #[test]
+    fn a_mission_accept_refuse_or_abort_clears_the_loads_before_it() {
+        type Step = fn(&mut Session);
+        let steps: [(&str, Step); 4] = [
+            ("an accept", |session| {
+                session
+                    .accept_mission(MissionId(130), &mut NeverFires)
+                    .expect("accepted");
+            }),
+            ("a refusal", |session| {
+                session
+                    .refuse_mission(MissionId(130), &mut NeverFires)
+                    .expect("refused");
+            }),
+            ("an abort", |session| {
+                session
+                    .accept_mission(MissionId(130), &mut NeverFires)
+                    .expect("accepted");
+                run_expr(session, "H128");
+                session.abort_mission(0, &mut NeverFires).expect("aborted");
+            }),
+            ("an offer asked for at a venue", |session| {
+                assert_eq!(
+                    session.next_offer(crate::mission::screens::BAR, &mut NeverFires),
+                    None
+                );
+            }),
+        ];
+        for (what, step) in steps {
+            let mut session = missioned("", "", "");
+            run_expr(&mut session, "H129");
+            step(&mut session);
+            assert_eq!(session.take_interface_loads(), [], "{what}");
+        }
+        let mut session = missioned("H128", "", "H129");
+        assert_eq!(
+            session.accept_mission(MissionId(130), &mut NeverFires),
+            Ok(0)
+        );
+        assert_eq!(session.take_interface_loads().len(), 1, "its own kept");
+        session.abort_mission(0, &mut NeverFires).expect("aborted");
+        assert_eq!(session.take_interface_loads().len(), 1, "OnAbort's kept");
+    }
+
+    #[test]
+    fn a_settling_clears_the_loads_before_it() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        run_expr(&mut session, "H129");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.take_interface_loads(), []);
+    }
+
+    #[test]
+    fn a_jettison_clears_the_loads_before_it_and_keeps_its_on_failures() {
+        let mut catalog = shipbuying();
+        catalog.missions = vec![MissionRecord {
+            cargo_type: 0,
+            cargo_qty: 1,
+            pickup_mode: 0,
+            on_failure: crate::control::Script::parse("H129"),
+            ..crate::testkit::mission(130)
+        }];
+        let mut session = outfitted(&catalog);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        run_expr(&mut session, "H128");
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.take_interface_loads(), [], "nothing to fail");
+        assert_eq!(
+            session.accept_mission(MissionId(130), &mut NeverFires),
+            Ok(0)
+        );
+        run_expr(&mut session, "H128");
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.pilot.missions.missions().len(), 0, "failed");
+        assert_eq!(session.take_interface_loads().len(), 1, "OnFailure's alone");
+    }
+
     #[test]
     fn buying_a_ship_keeps_the_cargo_as_its_rule_says_with_the_trader_escorts() {
         let catalog = FakePilotCatalog {
@@ -16808,10 +17081,12 @@ pub(super) mod tests {
     }
 
     /// Records each crime it is asked about, and the victim's
-    /// government, and changes nothing.
+    /// government, and each system a walk starts from, and changes
+    /// nothing.
     #[derive(Debug, Default)]
     struct Witness {
         seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+        from: std::cell::RefCell<Vec<(Crime, SystemId)>>,
     }
 
     impl LegalCode for Witness {
@@ -16822,6 +17097,18 @@ pub(super) mod tests {
             _govts: &Governments,
         ) -> Vec<(GovtId, i32)> {
             self.seen.borrow_mut().push((crime, victim));
+            Vec::new()
+        }
+
+        fn system_penalties(
+            &self,
+            crime: Crime,
+            _victim: Option<GovtId>,
+            from: SystemId,
+            _map: &dyn crate::legal::CrimeMap,
+            _govts: &Governments,
+        ) -> Vec<(SystemId, f32)> {
+            self.from.borrow_mut().push((crime, from));
             Vec::new()
         }
     }
@@ -16860,19 +17147,22 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn disabling_an_npc_changes_the_records_in_each_system_of_a_changed_government() {
+    fn disabling_an_npc_walks_the_records_in_each_system_from_the_players() {
         let mut catalog = lawful();
-        for (system, govt) in catalog
-            .star_map
-            .iter_mut()
-            .zip([Some(140), Some(142), None])
+        for (system, govt) in
+            catalog
+                .star_map
+                .iter_mut()
+                .zip([Some(140), Some(142), None, Some(140)])
         {
             system.govt = govt.map(GovtId);
         }
         let mut session = facing_an_npc(&catalog, 180);
+        assert_eq!(session.system(), SystemId(130));
+        session.pilot.set_system_record(SystemId(130), -32_000);
         session.hold_trigger(FIRE);
         let systems = |session: &Session| {
-            [130, 131, 132].map(|system| session.pilot().system_record(SystemId(system)))
+            [130, 131, 132, 133].map(|system| session.pilot().system_record(SystemId(system)))
         };
         for _ in 0..80 {
             session.tick_combat(Rules::default(), &mut NeverFires);
@@ -16882,9 +17172,10 @@ pub(super) mod tests {
         }
         assert_eq!(
             systems(&session),
-            [-3, 4, 0],
-            "the victim's system and its enemy's, each its government's change; \
-             the independent untouched"
+            [-32_000, 2, 0, 0],
+            "the victim's system held at the limit, yet changed, so the walk goes on: \
+             its enemy's next door gains 8 / 2 x 0.65 truncated; the independent beyond \
+             skips 0.75 x 0.4225; the victim's 133, linked to nothing, untouched"
         );
     }
 
@@ -16908,6 +17199,14 @@ pub(super) mod tests {
                 (Crime::Disable, Some(GovtId(140))),
                 (Crime::Kill, Some(GovtId(140)))
             ]
+        );
+        assert_eq!(
+            witness.from.take(),
+            [
+                (Crime::Disable, SystemId(130)),
+                (Crime::Kill, SystemId(130))
+            ],
+            "each walked from the player's system"
         );
         assert_eq!(records(&session), [0; 4], "as the witness says");
     }
@@ -22410,6 +22709,11 @@ pub(super) mod tests {
             Ok(Boarding::Opened(ON_BOARD))
         );
         assert_eq!(*witness.seen.borrow(), [(Crime::Board, Some(GovtId(140)))]);
+        assert_eq!(
+            *witness.from.borrow(),
+            [(Crime::Board, session.system())],
+            "walked from the player's system"
+        );
         assert_eq!(session.player().velocity, Vec2::new(0.3, -0.2));
         assert!(session.npcs()[0].boarded);
         assert!(!session.npcs()[1].boarded);
@@ -22647,6 +22951,54 @@ pub(super) mod tests {
             (Taken::Aborted, vec![])
         );
         assert_eq!(session.boarding(), None);
+    }
+
+    /// How many [`SimSound::Boarded`](crate::sound::SimSound::Boarded)
+    /// are among the sounds raised since the last taken.
+    fn airlocks(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == crate::sound::SimSound::Boarded)
+            .count()
+    }
+
+    #[test]
+    fn a_plain_board_plays_the_airlock_once() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let _ = session.take_sounds();
+        assert!(matches!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Opened(_))
+        ));
+        assert_eq!(airlocks(&mut session), 1, "snd 390 (@0x65f00)");
+    }
+
+    #[test]
+    fn a_repelled_board_plays_the_airlock_and_a_refused_one_nothing() {
+        let mut catalog = boardable();
+        catalog.dudes[0].1.booty = 0;
+        let bible = NovaBoarding {
+            empty_booty: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        let mut session = alongside(&catalog);
+        let _ = session.take_sounds();
+        assert_eq!(
+            session.board(&NovaLaw::default(), &bible, &mut Draws::of(&[])),
+            Ok(Boarding::Repelled)
+        );
+        assert_eq!(airlocks(&mut session), 1, "aboard before repelled");
+        assert_eq!(
+            session.board(&NovaLaw::default(), &bible, &mut Draws::of(&[])),
+            Err(BoardRefusal::CantBoard),
+            "boarded already"
+        );
+        assert_eq!(session.take_sounds(), [], "refused (@0x65fdb)");
+        session.target = None;
+        assert!(board_by(&mut session, &NovaLaw::default()).is_err());
+        assert_eq!(session.take_sounds(), [], "no target");
     }
 
     #[test]

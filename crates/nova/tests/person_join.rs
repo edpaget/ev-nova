@@ -74,6 +74,7 @@ use nova_view::Key;
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
+use nova_view::movie::MoviePlayer;
 use nova_view::text::fixture::MonoMetrics;
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
@@ -193,6 +194,15 @@ fn desc(text: &str) -> Vec<u8> {
     bytes
 }
 
+/// A `dësc` of `text` naming the movie `file`, played as `flags` say.
+fn filmed(text: &str, file: &str, flags: u16) -> Vec<u8> {
+    let mut bytes = desc(text);
+    let at = text.len() + 3;
+    bytes[at..at + file.len()].copy_from_slice(file.as_bytes());
+    bytes[at + 32..at + 34].copy_from_slice(&flags.to_be_bytes());
+    bytes
+}
+
 /// What the game data's knobs are set to: Wreck's `Flags` and
 /// `LinkMission`, and mission 128's `Flags`, `BriefText` and
 /// `RefuseText`.
@@ -203,6 +213,15 @@ struct Knobs {
     mission_flags: u16,
     brief: i16,
     refuse: i16,
+    /// The `Flags` of mission 128's offer `dësc` 4000, of
+    /// [`Knobs::offer_text`], naming the movie "Offer.mov": none without
+    /// one.
+    offer_movie: Option<u16>,
+    /// The text of mission 128's offer `dësc` 4000: with no
+    /// [`Knobs::offer_movie`] and no text, there is no such `dësc`.
+    offer_text: &'static str,
+    /// The `Flags` of the `BriefText`'s `dësc` 200, naming "Brief.mov".
+    brief_movie: Option<u16>,
 }
 
 /// The game data as the module docs give it.
@@ -212,6 +231,9 @@ const PLAIN: Knobs = Knobs {
     mission_flags: 0,
     brief: -1,
     refuse: -1,
+    offer_movie: None,
+    offer_text: "",
+    brief_movie: None,
 };
 
 /// The game data with mission 128's `BriefText` `dësc` 200, "Stay close.",
@@ -374,7 +396,15 @@ fn game_data(knobs: Knobs) -> Rc<GameData> {
             Some(b"Escort"),
             &escort_mission(knobs.mission_flags, knobs.brief, knobs.refuse),
         )
-        .resource(Desc::TYPE, 200, None, &desc("Stay close."))
+        .resource(
+            Desc::TYPE,
+            200,
+            None,
+            &match knobs.brief_movie {
+                Some(flags) => filmed("Stay close.", "Brief.mov", flags),
+                None => desc("Stay close."),
+            },
+        )
         .resource(Desc::TYPE, 201, None, &desc("Your loss."))
         .resource(Outfit::TYPE, 128, Some(b"Spare Part"), &spare_part())
         .resource(System::TYPE, 128, Some(b"Alpha"), &alpha())
@@ -397,6 +427,16 @@ fn game_data(knobs: Knobs) -> Rc<GameData> {
             &status_bar(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &pict(194, 16, [66, 66, 66]));
+    if let Some(flags) = knobs.offer_movie {
+        fork = fork.resource(
+            Desc::TYPE,
+            4000,
+            None,
+            &filmed(knobs.offer_text, "Offer.mov", flags),
+        );
+    } else if !knobs.offer_text.is_empty() {
+        fork = fork.resource(Desc::TYPE, 4000, None, &desc(knobs.offer_text));
+    }
     for id in [8511, 5001, 5002] {
         fork = fork.resource(PICT, id, None, &pict(6, 5, [40, 40, 40]));
     }
@@ -559,16 +599,30 @@ impl Game {
         showing: Showing,
         settings: &str,
     ) -> Self {
+        Self::opened_playing(knobs, store, draws, showing, settings, None)
+    }
+
+    /// [`Game::opened_with`], playing movies through `player` when given.
+    fn opened_playing(
+        knobs: Knobs,
+        store: &MemoryPilots,
+        draws: &[u32],
+        showing: Showing,
+        settings: &str,
+        player: Option<Rc<dyn MoviePlayer>>,
+    ) -> Self {
         let data = game_data(knobs);
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         if store.text("Pilot").is_none() {
             let pilot = Pilot::new(data.as_ref(), "Pilot").expect("a pilot");
             keeper.save(&pilot).expect("saved");
         }
-        // The load's heading first: 0, facing up.
+        // The load's heading first: 0, facing up; then the offers' roll
+        // table, each the last outcome.
         let heading = std::iter::once(0);
+        let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(
-            heading.chain(draws.iter().copied()).collect(),
+            heading.chain(table).chain(draws.iter().copied()).collect(),
         )));
         let rulebook = saved_rulebook(settings);
         let screen = start_screen(Rc::clone(&data))
@@ -577,6 +631,10 @@ impl Game {
             .with_chance(SharedChance::new(chance))
             .with_rulebook(&rulebook)
             .with_behaviour(Rc::new(Still));
+        let screen = match player {
+            Some(player) => screen.with_movie_player(player),
+            None => screen,
+        };
         let mut game = Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
@@ -1011,4 +1069,289 @@ fn boarding_wreck_says_what_it_retrieved_and_adds_it() {
             1
         )
     );
+}
+
+// A dësc's movie around a person's offer and its texts.
+
+/// A movie player whose movies, 160 x 120, end on their third advance;
+/// it logs each start and stop.
+#[derive(Default)]
+struct Projector {
+    log: RefCell<Vec<String>>,
+    advanced: std::cell::Cell<u32>,
+}
+
+impl MoviePlayer for Projector {
+    fn start(&self, file: &str) -> Option<(u32, u32)> {
+        self.log.borrow_mut().push(format!("start {file}"));
+        self.advanced.set(0);
+        Some((160, 120))
+    }
+
+    fn advance(&self, _dt: Duration) -> bool {
+        self.advanced.set(self.advanced.get() + 1);
+        self.advanced.get() < 3
+    }
+
+    fn stop(&self) {
+        self.log.borrow_mut().push("stop".to_owned());
+    }
+
+    fn draw_frame(&self, _rect: nova_view::geometry::Bounds, _list: &mut nova_view::DrawList) {}
+}
+
+/// Merchant hailed, with `knobs` and movies played through a new
+/// [`Projector`].
+fn hailed_with_movies(knobs: Knobs) -> (Game, Rc<Projector>) {
+    let store = MemoryPilots::new();
+    let projector = Rc::new(Projector::default());
+    let player: Rc<dyn MoviePlayer> = Rc::clone(&projector) as Rc<dyn MoviePlayer>;
+    let mut game = Game::opened_playing(knobs, &store, &BOTH, Showing::Flight, "{}", Some(player));
+    game.target_person(128);
+    game.tap(Key::Char('y'));
+    (game, projector)
+}
+
+fn log(projector: &Projector) -> Vec<String> {
+    projector.log.borrow().clone()
+}
+
+impl Game {
+    /// Clicks Done on the mission text shown over flight.
+    fn click_done(&mut self) {
+        let done = self
+            .app
+            .screen()
+            .flight_mission_text()
+            .and_then(|text| text.dialog().item_bounds(nova_view::ui::desc::DONE_ITEM))
+            .expect("Done")
+            .center();
+        self.click(done);
+    }
+}
+
+#[test]
+fn a_persons_offer_over_flight_plays_its_movie_before_the_dialog() {
+    let (mut game, projector) = hailed_with_movies(Knobs {
+        offer_movie: Some(0),
+        ..PLAIN
+    });
+    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(game.showing(), Showing::Movie, "over the paused flight");
+    let alpha = game.alpha();
+    let shown = texts(&game.frame());
+    assert!(
+        !shown.iter().any(|text| text == "Yes"),
+        "no dialog: {shown:?}"
+    );
+    game.frame();
+    assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
+    game.frame();
+    assert_eq!(log(&projector), ["start Offer.mov", "stop"]);
+    assert_eq!(game.showing(), Showing::Offer, "then the dialog");
+    assert!(texts(&game.frame()).iter().any(|text| text == "Yes"));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), [128]);
+}
+
+#[test]
+fn n_pressed_under_a_persons_offer_movie_refuses_it_on_the_frame_the_movie_ends() {
+    let (mut game, projector) = hailed_with_movies(Knobs {
+        offer_movie: Some(0),
+        ..TEXTED
+    });
+    game.tap(Key::Char('n'));
+    assert_eq!(game.showing(), Showing::Movie);
+    game.frame();
+    game.frame();
+    assert_eq!(game.showing(), Showing::Movie);
+    game.frame();
+    assert_eq!(log(&projector), ["start Offer.mov", "stop"]);
+    assert_eq!(
+        game.showing(),
+        Showing::MissionText,
+        "refused with no input after the movie: its refuse text shows"
+    );
+    assert_eq!(game.flight_text().as_deref(), Some("Your loss."));
+    assert_eq!(game.active(), Vec::<i16>::new());
+}
+
+#[test]
+fn a_persons_offer_over_flight_plays_its_after_movie_after_the_brief() {
+    let (mut game, projector) = hailed_with_movies(Knobs {
+        offer_movie: Some(0x0001),
+        ..TEXTED
+    });
+    assert_eq!(game.showing(), Showing::Offer, "the dialog first");
+    assert!(log(&projector).is_empty());
+    game.tap(Key::Enter);
+    assert_eq!(game.active(), [128], "accepted at once");
+    assert_eq!(game.showing(), Showing::MissionText);
+    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
+    assert!(log(&projector).is_empty(), "not before the brief");
+    game.click_done();
+    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(game.showing(), Showing::Movie);
+    let alpha = game.alpha();
+    game.frame();
+    game.frame();
+    assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
+    game.frame();
+    assert_eq!(
+        game.showing(),
+        Showing::Flight,
+        "flight resumes on the frame the movie ends"
+    );
+}
+
+#[test]
+fn a_persons_offer_refused_without_a_text_stays_under_its_after_movie_over_flight() {
+    let (mut game, projector) = hailed_with_movies(Knobs {
+        offer_movie: Some(0x0001),
+        ..PLAIN
+    });
+    assert_eq!(game.showing(), Showing::Offer);
+    game.tap(Key::Char('n'));
+    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(game.showing(), Showing::Movie);
+    assert!(
+        texts(&game.frame()).iter().any(|text| text == "Yes"),
+        "not hidden with no RefuseText (@0xa2e70-0xa2e78)"
+    );
+    game.frame();
+    game.frame();
+    assert_eq!(
+        log(&projector),
+        ["start Offer.mov", "stop"],
+        "the movie runs on"
+    );
+    assert_eq!(game.showing(), Showing::Flight);
+    assert!(
+        !texts(&game.frame()).iter().any(|text| text == "Yes"),
+        "disposed once it closed (@0xa361e)"
+    );
+}
+
+#[test]
+fn a_persons_unrefusable_offer_accepted_stays_drawn_under_its_brief_over_flight() {
+    let store = MemoryPilots::new();
+    let knobs = Knobs {
+        mission_flags: 0x0004,
+        offer_text: "Come along.",
+        ..TEXTED
+    };
+    let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::Offer, "one button, with a text");
+    let shown = texts(&game.frame());
+    assert!(shown.iter().any(|text| text == "Okay"), "{shown:?}");
+    assert!(!shown.iter().any(|text| text == "No"), "{shown:?}");
+    game.tap(Key::Enter);
+    assert_eq!(game.active(), [128]);
+    assert_eq!(game.showing(), Showing::MissionText);
+    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
+    let shown = texts(&game.frame());
+    assert!(
+        shown.iter().any(|text| text == "Okay"),
+        "the one-button dialog's accept leaves it drawn (@0xa2f52-0xa2ff7): {shown:?}"
+    );
+    assert!(shown.iter().any(|text| text == "Stay close."), "{shown:?}");
+    game.tap(Key::Enter);
+    assert_eq!(
+        game.flight_text(),
+        None,
+        "Return reaches the brief over the answered offer"
+    );
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.offered(), None, "disposed with it (@0xa361e)");
+    let shown = texts(&game.frame());
+    assert!(!shown.iter().any(|text| text == "Okay"), "{shown:?}");
+}
+
+#[test]
+fn a_persons_offer_refused_with_a_text_is_hidden_under_it() {
+    let (mut game, _) = hailed_with_movies(TEXTED);
+    game.tap(Key::Char('n'));
+    assert_eq!(game.flight_text().as_deref(), Some("Your loss."));
+    assert!(
+        !texts(&game.frame()).iter().any(|text| text == "Yes"),
+        "hidden for its RefuseText (@0xa2e8e)"
+    );
+}
+
+#[test]
+fn an_offer_accepted_at_once_over_flight_plays_its_movie_before_its_brief() {
+    let (mut game, projector) = hailed_with_movies(Knobs {
+        mission_flags: 0x0004,
+        offer_movie: Some(0x0004),
+        brief_movie: Some(0x0001),
+        ..TEXTED
+    });
+    assert_eq!(game.active(), [128]);
+    assert_eq!(game.showing(), Showing::Movie, "the offer's movie first");
+    assert_eq!(log(&projector), ["start Offer.mov"]);
+    for _ in 0..(2 * 60 + 3 + 2 * 60 + 2) {
+        game.frame();
+    }
+    assert_eq!(game.showing(), Showing::MissionText, "then the brief");
+    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
+    game.click_done();
+    assert_eq!(
+        log(&projector),
+        ["start Offer.mov", "stop", "start Brief.mov"],
+        "the brief's own after-movie"
+    );
+}
+
+#[test]
+fn the_return_that_closes_the_brief_skips_the_after_movie_as_it_is_let_go() {
+    let (mut game, projector) = hailed_with_movies(Knobs {
+        offer_movie: Some(0x0001),
+        ..TEXTED
+    });
+    game.tap(Key::Enter);
+    game.key(Key::Enter, true);
+    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(game.showing(), Showing::Movie);
+    game.key(Key::Enter, false);
+    assert_eq!(
+        log(&projector),
+        ["start Offer.mov", "stop"],
+        "Return still down as the movie starts skips it (KeyCheck 0x24 @0x55e6c)"
+    );
+    assert_eq!(game.showing(), Showing::Flight);
+}
+
+#[test]
+fn with_the_engines_player_a_texts_movie_is_skipped_and_its_text_shows() {
+    let store = MemoryPilots::new();
+    let knobs = Knobs {
+        offer_movie: Some(0),
+        brief_movie: Some(0),
+        ..TEXTED
+    };
+    let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::Offer, "no movie plays");
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::MissionText);
+    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
+}
+
+#[test]
+fn a_cinematic_offer_movie_over_flight_hides_the_pointer() {
+    use nova_view::Screen;
+    let (mut game, _) = hailed_with_movies(Knobs {
+        offer_movie: Some(0x0004),
+        ..PLAIN
+    });
+    assert!(!game.app.screen().hides_pointer(), "during the fade out");
+    for _ in 0..61 {
+        game.frame();
+    }
+    assert_eq!(game.showing(), Showing::Movie);
+    assert!(game.app.screen().hides_pointer(), "_HideTheCursor @0x55a73");
 }

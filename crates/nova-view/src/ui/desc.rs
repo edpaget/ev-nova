@@ -1,5 +1,14 @@
 //! The "Desc Dialog" (`DLOG` 3003): a long description in a scrolling box
 //! with a Done button, over the game's text-and-briefing frame.
+//!
+//! A `dësc` whose `Graphic` is above [`LAST_UNSHOWN_GRAPHIC`] shows in
+//! its picture variant, `DLOG` 3004 ([`DescTemplates::open`]), as
+//! `_ShowTextDialog` picks it when its caller allows a picture
+//! (@0x5a881-0x5a8df): the text in item 3 as before, over the single
+//! frame `PICT` 8527, and the graphic stretched into item 2
+//! (`_TextDialogUpdate` @0x51b7a, @0x51dc7-0x51e28). The choice reads the
+//! ID alone; a graphic whose `PICT` is missing leaves item 2 empty, as
+//! `GetPicture` finds nothing to draw.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -14,6 +23,7 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
+use super::picture_variant::VariantTemplates;
 use super::scroll_text::ScrollText;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
@@ -44,11 +54,72 @@ pub const FRAME: DialogFrame = DialogFrame {
     bottom_height: 40.0,
 };
 
+/// The picture variant's `DLOG` (and `DITL`) ID ("Desc + pict",
+/// `GetNewDialog` 0xbbc @0x5a8bf).
+pub const PICTURE_DESC_DIALOG: i16 = 3004;
+
+/// The picture variant's picture item (`GetDialogItem` 2 @0x51e00).
+pub const DESC_PICTURE_ITEM: usize = 2;
+
+/// The picture variant's frame, one picture over the whole dialog: `PICT`
+/// 8527, "Desc + pict" (0x214f @0x5a913).
+pub const PICTURE_FRAME: ImageKey = ImageKey::picture(8527);
+
+pub use super::picture_variant::{LAST_UNSHOWN_GRAPHIC, shown_graphic};
+
+/// Both "Desc Dialog" templates, or why each is missing: `DLOG` 3003's and
+/// `DLOG` 3004's.
+#[derive(Clone, Debug)]
+pub struct DescTemplates {
+    /// "Desc Dialog" ([`DESC_DIALOG`]).
+    pub plain: Result<DialogTemplate, String>,
+    /// "Desc Dialog" with a picture ([`PICTURE_DESC_DIALOG`]).
+    pub picture: Result<DialogTemplate, String>,
+}
+
+impl VariantTemplates for DescTemplates {
+    fn plain_template(&self) -> &Result<DialogTemplate, String> {
+        &self.plain
+    }
+
+    fn picture_template(&self) -> &Result<DialogTemplate, String> {
+        &self.picture
+    }
+}
+
+impl DescTemplates {
+    /// `text` in the variant `graphic` picks ([`VariantTemplates::pick`]), its
+    /// button labelled in `style`, its text measured by `metrics`.
+    ///
+    /// # Errors
+    ///
+    /// Why that variant's template is missing: nothing shows then, as
+    /// `_ShowTextDialog` shows nothing when `GetNewDialog` fails
+    /// (@0x5a8fb).
+    pub fn open(
+        &self,
+        text: &str,
+        graphic: Option<i16>,
+        style: ButtonStyle,
+        metrics: Rc<dyn TextMetrics>,
+    ) -> Result<DescDialog, String> {
+        let (shown, template) = self.pick(graphic);
+        let template = template.as_ref().map_err(Clone::clone)?;
+        Ok(match shown {
+            Some(id) => DescDialog::pictured(template, text, id, style, metrics),
+            None => DescDialog::new(template, text, style, metrics),
+        })
+    }
+}
+
 /// "Desc Dialog": `text` scrolling in item 3, and item 1 a Done button
 /// that Return, Escape or a click activates, which closes it.
 #[derive(Clone, Debug)]
 pub struct DescDialog {
     dialog: Dialog,
+    /// The picture variant's graphic, drawn in item 2 over
+    /// [`PICTURE_FRAME`]; none for the plain dialog over [`FRAME`].
+    picture: Option<i16>,
     closed: bool,
     reported: bool,
 }
@@ -58,6 +129,35 @@ impl DescDialog {
     /// labelled in `style`, its text measured by `metrics`.
     #[must_use]
     pub fn new(
+        template: &DialogTemplate,
+        text: &str,
+        style: ButtonStyle,
+        metrics: Rc<dyn TextMetrics>,
+    ) -> Self {
+        let mut desc = Self::laid(template, text, style, metrics);
+        desc.dialog = desc.dialog.with_frame(FRAME);
+        desc
+    }
+
+    /// The picture variant `template` (stock `DLOG` 3004) showing `text`,
+    /// over [`PICTURE_FRAME`], with `graphic` in item 2; its button
+    /// labelled in `style`, its text measured by `metrics`.
+    #[must_use]
+    pub fn pictured(
+        template: &DialogTemplate,
+        text: &str,
+        graphic: i16,
+        style: ButtonStyle,
+        metrics: Rc<dyn TextMetrics>,
+    ) -> Self {
+        Self {
+            picture: Some(graphic),
+            ..Self::laid(template, text, style, metrics)
+        }
+    }
+
+    /// `text` laid out by `template`, with no frame and no picture.
+    fn laid(
         template: &DialogTemplate,
         text: &str,
         style: ButtonStyle,
@@ -76,15 +176,21 @@ impl DescDialog {
             ),
         ];
         let dialog = Dialog::new(template, &roles, metrics)
-            .with_frame(FRAME)
             .with_buttons(ButtonSkin::NOVA, style)
             .with_default(Some(DONE_ITEM))
             .with_cancel(Some(DONE_ITEM));
         Self {
             dialog,
+            picture: None,
             closed: false,
             reported: false,
         }
+    }
+
+    /// The picture variant's graphic, if this is the picture variant.
+    #[must_use]
+    pub fn picture(&self) -> Option<i16> {
+        self.picture
     }
 
     /// Whether Done has been activated.
@@ -136,8 +242,19 @@ impl Screen for DescDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
+    /// The plain dialog draws its frame under its items. The picture
+    /// variant draws [`PICTURE_FRAME`] stretched over the dialog, as
+    /// `DrawPicHandle` fills the port with it, then the items, then the
+    /// graphic stretched into item 2.
     fn draw(&self, list: &mut DrawList) {
+        let Some(graphic) = self.picture else {
+            self.dialog.draw(list);
+            return;
+        };
+        self.dialog.draw_stretched_over(list, PICTURE_FRAME);
         self.dialog.draw(list);
+        self.dialog
+            .draw_picture_in(list, DESC_PICTURE_ITEM, graphic);
     }
 
     fn cancel_pointer(&mut self) {
@@ -340,6 +457,149 @@ mod tests {
         desc.input(&button(false));
         assert_eq!(desc.take_sounds(), []);
         assert_eq!(desc.take_sounds(), []);
+    }
+
+    // The picture variant, `DLOG` 3004.
+
+    /// `DLOG` 3004's shape, smaller: 300 x 120 at (0, 0), fixed, with
+    /// Done (1) at (100, 90), the picture (2) at (200, 10) 90 x 90 and a
+    /// 60 x 36 text box (3) at (10, 10).
+    fn picture_template() -> DialogTemplate {
+        let item = |bounds, enabled| ItemTemplate {
+            bounds,
+            enabled,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 300.0, 120.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(100.0, 90.0, 99.0, 25.0), true),
+                item(rect(200.0, 10.0, 90.0, 90.0), false),
+                item(rect(10.0, 10.0, 60.0, 36.0), false),
+            ],
+        }
+    }
+
+    fn templates() -> DescTemplates {
+        DescTemplates {
+            plain: Ok(template()),
+            picture: Ok(picture_template()),
+        }
+    }
+
+    fn shown(templates: &DescTemplates, graphic: Option<i16>) -> Result<DescDialog, String> {
+        templates.open(TEXT, graphic, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+    }
+
+    #[test]
+    fn the_picture_variants_named_values() {
+        assert_eq!(
+            (PICTURE_DESC_DIALOG, DESC_PICTURE_ITEM, PICTURE_FRAME),
+            (3004, 2, ImageKey::picture(8527))
+        );
+        assert_eq!(LAST_UNSHOWN_GRAPHIC, 127);
+    }
+
+    #[test]
+    fn a_graphic_is_shown_only_above_127() {
+        for graphic in [None, Some(-5), Some(0), Some(127)] {
+            assert_eq!(shown_graphic(graphic), None, "{graphic:?}");
+        }
+        for id in [128, 5008] {
+            assert_eq!(shown_graphic(Some(id)), Some(id));
+        }
+    }
+
+    #[test]
+    fn a_graphic_above_127_shows_3004_over_8527_its_picture_in_item_2() {
+        let desc = shown(&templates(), Some(5008)).expect("shown");
+        assert_eq!(desc.dialog().bounds(), rect(0.0, 0.0, 300.0, 120.0));
+        assert_eq!(desc.picture(), Some(5008));
+        assert_eq!(desc.lines(), ["one", "two", "three", "four", "five"]);
+        let commands = drawn(&desc);
+        assert_eq!(
+            commands[0],
+            DrawCommand::StretchedPicture {
+                image: PICTURE_FRAME,
+                top_left: Point::new(0.0, 0.0),
+                width: 300.0,
+                height: 120.0,
+            },
+            "_TextDialogUpdate draws 8527 over the port (@0x51b7a)"
+        );
+        let mut alone = DrawList::new();
+        desc.dialog().draw(&mut alone);
+        let alone: Vec<DrawCommand> = alone.iter().cloned().collect();
+        assert_eq!(commands[1..=alone.len()], alone[..]);
+        assert_eq!(
+            commands[alone.len() + 1..],
+            [DrawCommand::StretchedPicture {
+                image: ImageKey::picture(5008),
+                top_left: Point::new(200.0, 10.0),
+                width: 90.0,
+                height: 90.0,
+            }],
+            "the graphic stretched into item 2 (@0x51dc7-0x51e28)"
+        );
+        let plain = [FRAME.top, FRAME.middle, FRAME.bottom];
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Picture { image, .. }
+                    | DrawCommand::StretchedPicture { image, .. }
+                    | DrawCommand::TiledPicture { image, .. }
+                    if plain.contains(image)
+            )),
+            "no plain three-slice frame under the picture variant: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn the_picture_variant_closes_as_the_plain_one_does() {
+        for input in [key(Key::Enter), key(Key::Escape)] {
+            let mut desc = shown(&templates(), Some(200)).expect("shown");
+            desc.input(&input);
+            assert!(desc.closed(), "{input:?}");
+        }
+        let mut desc = shown(&templates(), Some(200)).expect("shown");
+        let done = desc.dialog().item_bounds(DONE_ITEM).expect("Done").center();
+        for pressed in [true, false] {
+            desc.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: done,
+            });
+        }
+        assert!(desc.closed());
+    }
+
+    #[test]
+    fn a_graphic_of_127_or_none_shows_the_plain_dialog() {
+        for graphic in [None, Some(127)] {
+            let desc = shown(&templates(), graphic).expect("shown");
+            assert_eq!(desc.picture(), None);
+            assert_eq!(drawn(&desc), drawn(&self::desc()), "{graphic:?}");
+        }
+    }
+
+    #[test]
+    fn the_variants_missing_template_is_the_reason_none_shows() {
+        let missing = DescTemplates {
+            plain: Ok(template()),
+            picture: Err("no DLOG 3004".to_owned()),
+        };
+        assert_eq!(
+            shown(&missing, Some(200)).err().as_deref(),
+            Some("no DLOG 3004")
+        );
+        assert!(shown(&missing, None).is_ok());
+        let missing = DescTemplates {
+            plain: Err("no DLOG 3003".to_owned()),
+            picture: Ok(picture_template()),
+        };
+        assert_eq!(shown(&missing, None).err().as_deref(), Some("no DLOG 3003"));
+        assert!(shown(&missing, Some(200)).is_ok());
     }
 
     /// A key that activates Done plays nothing in the original:

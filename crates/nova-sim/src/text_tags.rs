@@ -17,13 +17,13 @@
 //! |---|---|
 //! | `<DST>`, `<DSY>` | the destination stellar's name and its system's; each `"[Error]"` takes `<RST>`'s or `<RSY>`'s on its own (@0x9c53a-0x9c5fc, @0x9caa4-0x9cb66) |
 //! | `<RST>`, `<RSY>` | the return stellar's name and its system's |
-//! | `<CT>` | for a cargo type of 0-255, `STR#` 4001's string type + 1, a leading `*` dropped (@0x9c65f-0x9c6bf) |
+//! | `<CT>` | for a cargo type of 0-255, `STR#` 4001's string type + 1, as a plug-in's `'STR '` 9100 + type patches it ([`strings`](crate::strings)), a leading `*` dropped (@0x9c65f-0x9c6bf) |
 //! | `<CQ>` | the tons in plain digits, with a cargo type of 0-255 (@0x9c6c1-0x9c710) |
 //! | `<SN>` | a slot's ship name (+0x70, @0x9ccf1); an offer has none |
 //! | `<DL>` | the deadline, written long ([`long_date_text`]); one of today is `"[Error]"` (@0x9c715-0x9c78e) |
 //! | `<PN>`, `<PNN>` | the pilot's name; its nickname, or the name with none (@0x9cf2d-0x9cfb6) |
 //! | `<PSN>`, `<PST>` | the player's ship's name and its class's (@0x9cfbb-0x9d034) |
-//! | `<OSN>` | the name of the person offering (@0x9cebe-0x9cf28) |
+//! | `<OSN>` | the name of the person of the ship last named offering (@0x9cebe-0x9cf28; see [`RuleKey::OfferingShipName`](crate::RuleKey::OfferingShipName)) |
 //! | `<PRK>`, `<SRK>`, `<RRK>` | the ranks' names, `STR#` 2002 #341 ("captain") with none (@0x9d039-0x9d3b3; see [`rank`](crate::rank)) |
 //! | `<PAY>` | the amount [`pay_shown`] gives, written by [`comma_number`]; below 0 `"[Error]"` (@0x9c7a0-0x9c835, @0x9cd2a-0x9cdb6) |
 //! | `<REG>` | the registration's licence name (`_RT3_GetDisplayName` @0xd1517) |
@@ -34,8 +34,12 @@
 //! ([`MissionValues::offered`]) or a slot's ([`MissionValues::active`]),
 //! resolved, never the `mïsn`'s encodings; a free slot's is the default,
 //! every mission tag [`UNSET`]. With no mission at all, as in a person's
-//! hail quote ([`expand_tags`](crate::person::expand_tags)), the mission
-//! tags are left as written. Where the engine reads otherwise:
+//! hail quote ([`expand_tags`](crate::person::expand_tags)) or a
+//! `RefuseText`, the mission tags
+//! follow [`RuleKey::MissionlessTags`](crate::RuleKey::MissionlessTags):
+//! by the engine [`UNSET`], as `_MungeBriefing` with index -1 leaves them
+//! (@0x9c83f-0x9c843 → 0x9ce14); by the other reading left as written.
+//! Where the engine reads otherwise:
 //!
 //! - `<DSY>` and `<RSY>` read the stop's stellar's system live, through
 //!   the port ([`TagNames::stellar_system`]), not the system the offer
@@ -49,22 +53,41 @@
 //!   licence, so `<REG>` is empty.
 //! - `<SN>` reads a slot's ship name, which stays empty until
 //!   rdm:phase/mission-ships/phase-1-spawn-mission-ships draws one.
-//! - The rank tags read the context's [`RankNames`]: `<PRKnnn>` and
-//!   `<SRKnnn>` for nnn 128-383, any other nnn left as written, each
-//!   read uncrossed, as government nnn's highest active rank's
-//!   `ShortName`. The original crosses the two governments, which
-//!   rdm:phase/missions-fidelity/phase-2-text-substitution-quirks
-//!   ports. A context with no ranks wired ([`RankNames::none`]) reads
-//!   "captain" ([`NO_RANK`](crate::person::NO_RANK)) for each.
-//! - `<PAY>` of a million or more follows [`RuleKey::PayMillions`](crate::RuleKey::PayMillions).
+//! - The rank tags read the context's [`RankNames`]. `<PRKnnn>` and
+//!   `<SRKnnn>` follow [`RuleKey::CrossedRankTags`](crate::RuleKey::CrossedRankTags):
+//!   by the engine, as the original crosses them, only the nnn of each
+//!   kind the context's [`RankTagGovts`] remember is filled, `<PRKnnn>`
+//!   with the `<SRKnnn>` government's rank and `<SRKnnn>` with the
+//!   `<PRKnnn>` one's; by the Bible, each nnn of
+//!   128-383 with government nnn's own, any other nnn left as written.
+//!   A rank is named by its `ShortName`; by the Bible's reading of
+//!   [`RuleKey::PrkNnnName`](crate::RuleKey::PrkNnnName), `<PRKnnn>`
+//!   reads its `ConvName`, "same as `<PRK>`". A context with no ranks
+//!   wired ([`RankNames::none`]) reads "captain"
+//!   ([`NO_RANK`](crate::person::NO_RANK)) for each.
+//! - `<PAY>` of a million or more follows [`RuleKey::PayMillions`](crate::RuleKey::PayMillions),
+//!   and a slot's `<PAY>` of a pay that is not cash, a fine or a charge
+//!   follows [`RuleKey::PaySlotOffset`](crate::RuleKey::PaySlotOffset):
+//!   by the engine the slot's byte offset, as the original's register
+//!   leaves it ([`MissionTags::other_pay`]).
 //!
-//! The original's quirks not reproduced here (a slot's `<PAY>` reading
-//! its byte offset, the crossed `<PRKnnn>`/`<SRKnnn>` governments, a stale
-//! `<OSN>`, the `l33t` mode, `'STR '` 9100+ cargo name patches, and
-//! `"[Error]"` for the mission tags with no mission) are
-//! rdm:phase/missions/phase-13-text-substitution-quirks.
+//! - A text is filled after its conditional text is resolved
+//!   ([`text_parse`](crate::text_parse), `_ParseTextDescription`), which
+//!   the session does as it takes a text in: `expand` sees no `{G …}`.
+//!
+//! - With the data's `l33t` mode on ([`TagContext::leet`]), the filled
+//!   text is [`munge_leet`]ed last, as `_MungeBriefing` does
+//!   (@0x9d5aa-0x9d667); a `dësc` the session shows has its letters drawn
+//!   first ([`load_leet`], `_LoadDescription` @0x7194f-0x71a5c), which
+//!   can break a tag (`<PAY>` to `<P4Y>`) that is then left as written.
+//!
+//! - `<OSN>` reads the context's person, which the session gives as
+//!   [`RuleKey::OfferingShipName`](crate::RuleKey::OfferingShipName)
+//!   says: by the engine, the original's `_offeringShipIndex`, which a
+//!   hail leaves set, so a later text names the person last hailed.
 
 use crate::catalog::{DateAffixes, GovtId, PilotCatalog, ShipId, StellarId, SystemId};
+use crate::chance::Chance;
 use crate::date::{GameDate, long_date_text};
 use crate::mission::{ActiveMission, Offer, Stop};
 use crate::rank::RankNames;
@@ -80,15 +103,21 @@ const FINES: std::ops::RangeInclusive<i64> = -40_099..=-40_001;
 /// `PayVal` below which a pay is cash taken at accept: `-50000 - pay`.
 const CHARGES_BELOW: i64 = -50_000;
 
+/// The bytes of one active mission slot (`_currentMissions`, 0x8ec):
+/// what a slot's `<PAY>` of any other pay reads by the engine, times the
+/// slot (@0x9c874-0x9c87c).
+pub const SLOT_BYTES: i64 = 0x8ec;
+
 /// The amount `<PAY>` shows for a pay of `pay` with `cash` held
 /// (@0x9c7a0-0x9c835, @0x9cd2a-0x9cdb6): above 0, the pay; -40099 to
 /// -40001, its percent of the cash, worked in doubles and truncated as
 /// the original does (trunc(cash × (percent × 0.01)), 0.01 @0xdd098);
-/// below -50000, the cash taken at accept; any other pay, 0. `None` for
-/// an amount below 0, which the tag shows as [`UNSET`].
+/// below -50000, the cash taken at accept; any other pay, `other`
+/// ([`MissionTags::other_pay`]). `None` for an amount below 0, which the
+/// tag shows as [`UNSET`].
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-pub fn pay_shown(pay: i64, cash: i64) -> Option<i64> {
+pub fn pay_shown(pay: i64, cash: i64, other: i64) -> Option<i64> {
     let amount = match pay {
         1.. => pay,
         pay if FINES.contains(&pay) => {
@@ -96,7 +125,7 @@ pub fn pay_shown(pay: i64, cash: i64) -> Option<i64> {
             (cash as f64 * (percent * 0.01)).trunc() as i64
         }
         pay if pay < CHARGES_BELOW => CHARGES_BELOW - pay,
-        _ => 0,
+        _ => other,
     };
     (amount >= 0).then_some(amount)
 }
@@ -142,7 +171,8 @@ pub trait TagNames {
     /// when no system lists it.
     fn stellar_system(&self, stellar: StellarId) -> Option<SystemId>;
     /// Cargo type `cargo`'s name, raw: `STR#` 4001's string `cargo` + 1
-    /// (`_lcCargoName`, 0x1b8de0), `None` past the list's end.
+    /// as `_LoadStrings` patches it (`_lcCargoName`, 0x1b8de0; see
+    /// [`strings`](crate::strings)), `None` past the list's end.
     fn cargo_name(&self, cargo: u8) -> Option<String>;
 }
 
@@ -237,6 +267,165 @@ pub struct MissionTags<'a> {
     /// How a pay of a million or more is written
     /// ([`RuleKey::PayMillions`](crate::RuleKey::PayMillions)).
     pub pay_millions: RuleSource,
+    /// The active slot the mission is in; `None` for an offer.
+    pub slot: Option<u8>,
+}
+
+impl MissionTags<'_> {
+    /// What `<PAY>` shows of a pay that is not cash, a fine or a charge,
+    /// as `rule` ([`RuleKey::PaySlotOffset`](crate::RuleKey::PaySlotOffset))
+    /// reads it: an offer's is 0 (@0x9c7e6-0x9c7f0); a slot's is, by the
+    /// engine, the slot's byte offset, [`SLOT_BYTES`] × the slot, which
+    /// the original's register still holds (@0x9cd2a-0x9cdb6), and by
+    /// the other reading 0, as an offer's.
+    #[must_use]
+    pub fn other_pay(&self, rule: RuleSource) -> i64 {
+        match (self.slot, rule) {
+            (Some(slot), RuleSource::Engine) => SLOT_BYTES * i64::from(slot),
+            _ => 0,
+        }
+    }
+}
+
+/// The disputed rules the tags follow, each a
+/// [`RuleKey`](crate::RuleKey)'s reading: the engine's by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TagRules {
+    /// What a slot's `<PAY>` of any other pay reads
+    /// ([`RuleKey::PaySlotOffset`](crate::RuleKey::PaySlotOffset)).
+    pub pay_slot_offset: RuleSource,
+    /// What a text with no mission reads for the mission tags
+    /// ([`RuleKey::MissionlessTags`](crate::RuleKey::MissionlessTags)).
+    pub missionless: RuleSource,
+    /// Which name of a rank `<PRKnnn>` reads
+    /// ([`RuleKey::PrkNnnName`](crate::RuleKey::PrkNnnName)).
+    pub prk_nnn_name: RuleSource,
+    /// Whether `<PRKnnn>` and `<SRKnnn>` cross their remembered
+    /// governments ([`RuleKey::CrossedRankTags`](crate::RuleKey::CrossedRankTags)).
+    pub crossed_rank_tags: RuleSource,
+}
+
+impl TagRules {
+    /// The readings `rules` gives.
+    #[must_use]
+    pub fn from_rulebook(rules: &crate::rulebook::Rulebook) -> Self {
+        use crate::rulebook::RuleKey;
+        Self {
+            pay_slot_offset: rules.source_for(RuleKey::PaySlotOffset),
+            missionless: rules.source_for(RuleKey::MissionlessTags),
+            prk_nnn_name: rules.source_for(RuleKey::PrkNnnName),
+            crossed_rank_tags: rules.source_for(RuleKey::CrossedRankTags),
+        }
+    }
+}
+
+/// The governments the last `<PRKnnn>` and `<SRKnnn>` a text named,
+/// as the original remembers them between texts (`_descRankGovt`, +0
+/// and +2): what the crossed rank tags read
+/// ([`RuleKey::CrossedRankTags`](crate::RuleKey::CrossedRankTags)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RankTagGovts {
+    /// The last `<PRKnnn>`'s government nnn.
+    pub prk: Option<GovtId>,
+    /// The last `<SRKnnn>`'s government nnn.
+    pub srk: Option<GovtId>,
+}
+
+impl RankTagGovts {
+    /// Neither: what `_LoadDescription` resets both to before each `dësc`
+    /// (@0x71926-0x71930).
+    pub const NONE: Self = Self {
+        prk: None,
+        srk: None,
+    };
+
+    /// These governments after `_ParseTextDescription`'s scan of `text`
+    /// (@0x14f34-0x15055), counted in characters: a text of 5 or fewer
+    /// is not scanned. At each place before the last 5 characters, a
+    /// `<`, then `P` or `S`, then `RK` and anything but `>` is a tag:
+    /// its digits (none reads 0) name government nnn when it is 128-383,
+    /// remembered for its kind, and else that kind is forgotten; the scan
+    /// goes on after the `<PRK`. So the last tag of each kind wins, and a
+    /// kind with no tag in `text` is kept.
+    #[must_use]
+    pub fn parsed(self, text: &str) -> Self {
+        let chars: Vec<char> = text.chars().collect();
+        let mut govts = self;
+        let mut at = 0;
+        while at + 5 < chars.len() {
+            let kind = chars[at + 1];
+            if chars[at] == '<'
+                && matches!(kind, 'P' | 'S')
+                && chars[at + 2..at + 4] == ['R', 'K']
+                && chars[at + 4] != '>'
+            {
+                let nnn = chars[at + 4..]
+                    .iter()
+                    .map_while(|c| c.to_digit(10))
+                    .fold(0_u64, |nnn, digit| {
+                        nnn.saturating_mul(10).saturating_add(u64::from(digit))
+                    });
+                let govt = u32::try_from(nnn)
+                    .ok()
+                    .filter(|nnn| RANKED_GOVTS.contains(nnn))
+                    .and_then(|nnn| i16::try_from(nnn).ok())
+                    .map(GovtId);
+                if kind == 'P' {
+                    govts.prk = govt;
+                } else {
+                    govts.srk = govt;
+                }
+                at += 4;
+            }
+            at += 1;
+        }
+        govts
+    }
+}
+
+/// `text` with `_MungeBriefing`'s `l33t` replacements made, after every
+/// tag (@0x9d5aa-0x9d667, strings 0xdb20f-0xdb232): `you` and `You` to
+/// `j00`, `ck` to `x0r`, then `i` and `I` to `1`, `e` and `E` to `3`, `l`
+/// and `L` to `7`, each in that order, every occurrence.
+#[must_use]
+pub fn munge_leet(text: &str) -> String {
+    const LEET: [(&str, &str); 9] = [
+        ("you", "j00"),
+        ("You", "j00"),
+        ("ck", "x0r"),
+        ("i", "1"),
+        ("I", "1"),
+        ("e", "3"),
+        ("E", "3"),
+        ("l", "7"),
+        ("L", "7"),
+    ];
+    LEET.iter()
+        .fold(text.to_owned(), |text, (from, to)| text.replace(from, to))
+}
+
+/// `text` with `_LoadDescription`'s `l33t` letters drawn on `chance`, as
+/// a `dësc` is loaded before its tags are filled (@0x7194f-0x71a5c): each
+/// character in turn, an `a` or `A` becomes `4`, an `e` or `E` `3`, an
+/// `i` or `I` `1` and an `o` or `O` `0`, each on a draw of
+/// `_Rand(3)` landing on 0 or 1, 2 in 3; then a `y` or `Y` followed by a
+/// lower-case `ou`, more than 4 characters from the end, becomes `j00`.
+/// Only what each draw decides, and its odds, are the original's, not
+/// the order of the draws (`chance` is not the original's generator).
+pub fn load_leet(text: &str, chance: &mut dyn Chance) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    for at in 0..len {
+        for (letter, digit) in [('a', '4'), ('e', '3'), ('i', '1'), ('o', '0')] {
+            if chars[at].eq_ignore_ascii_case(&letter) && chance.below(3) < 2 {
+                chars[at] = digit;
+            }
+        }
+        if at + 4 < len && matches!(chars[at], 'y' | 'Y') && chars[at + 1..at + 3] == ['o', 'u'] {
+            chars[at..at + 3].copy_from_slice(&['j', '0', '0']);
+        }
+    }
+    chars.into_iter().collect()
 }
 
 /// What a text's tags read.
@@ -255,6 +444,17 @@ pub struct TagContext<'a> {
     /// The mission, if the text has one; with none its tags are left as
     /// written.
     pub mission: Option<MissionTags<'a>>,
+    /// The governments the crossed rank tags read
+    /// ([`RuleKey::CrossedRankTags`](crate::RuleKey::CrossedRankTags)'s
+    /// engine reading): those the text's source leaves (see the
+    /// [`story`](crate::story) module's "Text substitution").
+    pub rank_govts: RankTagGovts,
+    /// Whether the data holds a `l33t` resource (`_leetMode`,
+    /// `_LoadObjectData` @0x7e28c-0x7e2a2): the filled text is then
+    /// [`munge_leet`]ed.
+    pub leet: bool,
+    /// The disputed rules the tags follow.
+    pub rules: TagRules,
 }
 
 /// `stop`'s stellar's and system's names, [`UNSET`] for each missing.
@@ -276,9 +476,16 @@ fn or_else(value: String, fallback: &str) -> String {
     }
 }
 
+/// The mission tags, in the table's order (0xdb198), as
+/// [`mission_values`] gives them.
+const MISSION_TAGS: [&str; 9] = [
+    "<DST>", "<DSY>", "<RST>", "<RSY>", "<CT>", "<CQ>", "<SN>", "<DL>", "<PAY>",
+];
+
 /// The mission tags' values, in the table's order (@0x9c38a-0x9cdb6).
 fn mission_values(
     mission: &MissionTags,
+    rules: TagRules,
     names: &(impl TagNames + ?Sized),
 ) -> [(&'static str, String); 9] {
     let values = &mission.values;
@@ -299,7 +506,7 @@ fn mission_values(
         });
     let pay = values
         .pay
-        .and_then(|pay| pay_shown(pay, mission.cash))
+        .and_then(|pay| pay_shown(pay, mission.cash, mission.other_pay(rules.pay_slot_offset)))
         .map_or_else(unset, |amount| comma_number(amount, mission.pay_millions));
     [
         ("<DST>", or_else(dst, &rst)),
@@ -346,17 +553,46 @@ fn fill_ranked<'a>(text: &str, prefix: &str, rank: impl Fn(GovtId) -> &'a str) -
     filled
 }
 
+/// `text` with its rank-nnn tags crossed as `_MungeBriefing` fills them
+/// after its table (@0x9d53d-0x9d5a5): with a `<PRKnnn>` government
+/// remembered, every `<PRKnnn>` of it reads the remembered `<SRKnnn>`
+/// government's rank as `prk_name` names it; with an `<SRKnnn>`
+/// government remembered, every `<SRKnnn>` of it reads the `<PRKnnn>`
+/// government's `ShortName`. A government not remembered, or one with no
+/// rank, reads the fallback (@0x9d25f, @0x9d33a). Any other rank-nnn tag
+/// is left as written.
+fn fill_crossed<'a>(
+    text: &str,
+    govts: RankTagGovts,
+    ranks: &'a RankNames,
+    prk_name: impl Fn(GovtId) -> &'a str,
+) -> String {
+    let fallback: &str = &ranks.fallback;
+    let mut filled = text.to_owned();
+    if let Some(prk) = govts.prk {
+        let name = govts.srk.map_or(fallback, &prk_name);
+        filled = filled.replace(&format!("<PRK{}>", prk.0), name);
+    }
+    if let Some(srk) = govts.srk {
+        let name = govts.prk.map_or(fallback, |govt| ranks.short_of(govt));
+        filled = filled.replace(&format!("<SRK{}>", srk.0), name);
+    }
+    filled
+}
+
 /// `text` with its tags filled as `context` and `names` say, as
 /// `_MungeBriefing` (@0x9c11d) fills them: one tag at a time in the
 /// table's order (0xdb198), every occurrence, case-sensitively, so a
 /// value naming a later tag has it filled too; any other tag is left as
-/// written. With no mission, the mission tags are left as written too.
+/// written. With no mission, the mission tags read as
+/// [`TagRules::missionless`] says.
 #[must_use]
 pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)) -> String {
-    let mission = context
-        .mission
-        .as_ref()
-        .map(|mission| mission_values(mission, names));
+    let mission = match (&context.mission, context.rules.missionless) {
+        (Some(mission), _) => Some(mission_values(mission, context.rules, names)),
+        (None, RuleSource::Engine) => Some(MISSION_TAGS.map(|tag| (tag, UNSET.to_owned()))),
+        (None, RuleSource::Bible) => None,
+    };
     let (early, pay) = match &mission {
         Some([early @ .., pay]) => (early.as_slice(), Some(pay)),
         None => (&[][..], None),
@@ -380,9 +616,23 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
     let filled = tags.fold(text.to_owned(), |text, (tag, value)| {
         text.replace(tag, value)
     });
-    let short_of = |govt| context.ranks.short_of(govt);
-    let filled = fill_ranked(&filled, "<PRK", short_of);
-    fill_ranked(&filled, "<SRK", short_of)
+    let ranks = &context.ranks;
+    let prk_name = |govt| match context.rules.prk_nnn_name {
+        RuleSource::Engine => ranks.short_of(govt),
+        RuleSource::Bible => ranks.conversation_of(govt),
+    };
+    let filled = match context.rules.crossed_rank_tags {
+        RuleSource::Engine => fill_crossed(&filled, context.rank_govts, ranks, prk_name),
+        RuleSource::Bible => {
+            let filled = fill_ranked(&filled, "<PRK", prk_name);
+            fill_ranked(&filled, "<SRK", |govt| ranks.short_of(govt))
+        }
+    };
+    if context.leet {
+        munge_leet(&filled)
+    } else {
+        filled
+    }
 }
 
 /// `text` with its tags filled as `_MungeBriefing(0, -1)` fills them
@@ -415,6 +665,7 @@ pub fn expand_before_any_pilot(text: &str, ships: &(impl PilotCatalog + ?Sized))
         today,
         date_affixes: &NO_AFFIXES,
         pay_millions: RuleSource::Engine,
+        slot: None,
     });
     // Ship class 0 is shïp 128.
     let ship_type = ships
@@ -430,6 +681,12 @@ pub fn expand_before_any_pilot(text: &str, ships: &(impl PilotCatalog + ?Sized))
         person: None,
         ranks: RankNames::none(),
         mission,
+        // The `dësc` loads as any does, its rank-nnn governments reset and
+        // parsed from it; the tags read the engine's rules, and the
+        // `l33t` mode is not read here.
+        rank_govts: RankTagGovts::NONE.parsed(text),
+        leet: false,
+        rules: TagRules::default(),
     };
     expand(text, &context, &NoNames)
 }
@@ -442,34 +699,43 @@ mod tests {
 
     #[test]
     fn a_pay_above_0_shows_itself() {
-        assert_eq!(pay_shown(1, 500), Some(1));
-        assert_eq!(pay_shown(25_000, 500), Some(25_000));
+        assert_eq!(pay_shown(1, 500, 0), Some(1));
+        assert_eq!(pay_shown(25_000, 500, 0), Some(25_000));
     }
 
     #[test]
     fn a_fining_pay_shows_its_percent_of_the_cash_truncated() {
-        assert_eq!(pay_shown(-40_001, 12_345), Some(123));
-        assert_eq!(pay_shown(-40_010, 12_345), Some(1234));
-        assert_eq!(pay_shown(-40_099, 12_345), Some(12_221));
-        assert_eq!(pay_shown(-40_050, 0), Some(0));
+        assert_eq!(pay_shown(-40_001, 12_345, 0), Some(123));
+        assert_eq!(pay_shown(-40_010, 12_345, 0), Some(1234));
+        assert_eq!(pay_shown(-40_099, 12_345, 0), Some(12_221));
+        assert_eq!(pay_shown(-40_050, 0, 0), Some(0));
     }
 
     #[test]
     fn a_fine_of_a_negative_cash_shows_nothing() {
-        assert_eq!(pay_shown(-40_010, -500), None);
+        assert_eq!(pay_shown(-40_010, -500, 0), None);
     }
 
     #[test]
     fn a_charging_pay_shows_what_it_takes() {
-        assert_eq!(pay_shown(-50_001, 500), Some(1));
-        assert_eq!(pay_shown(-60_000, 500), Some(10_000));
+        assert_eq!(pay_shown(-50_001, 500, 0), Some(1));
+        assert_eq!(pay_shown(-60_000, 500, 0), Some(10_000));
     }
 
     #[test]
-    fn any_other_pay_shows_0() {
+    fn any_other_pay_shows_the_other_amount() {
         for pay in [0, -1, -10_128, -40_000, -40_100, -50_000] {
-            assert_eq!(pay_shown(pay, 12_345), Some(0), "{pay}");
+            assert_eq!(pay_shown(pay, 12_345, 0), Some(0), "{pay}");
+            assert_eq!(pay_shown(pay, 12_345, 4568), Some(4568), "{pay}");
         }
+    }
+
+    #[test]
+    fn the_other_amount_changes_no_cash_fine_or_charge() {
+        assert_eq!(pay_shown(25_000, 12_345, 4568), Some(25_000));
+        assert_eq!(pay_shown(-40_010, 12_345, 4568), Some(1234));
+        assert_eq!(pay_shown(-60_000, 12_345, 4568), Some(10_000));
+        assert_eq!(pay_shown(-40_010, -500, 4568), None);
     }
 
     // Numbers with commas.
@@ -606,7 +872,11 @@ mod tests {
                 today: today(),
                 date_affixes: &AFFIXES,
                 pay_millions: RuleSource::Engine,
+                slot: None,
             }),
+            rank_govts: RankTagGovts::NONE,
+            leet: false,
+            rules: TagRules::default(),
         }
     }
 
@@ -819,6 +1089,69 @@ mod tests {
         assert_eq!(with(fine, "<PAY>"), "1,234", "10 % of 12,345");
     }
 
+    /// `values` filled in slot `slot` (none for an offer) under the
+    /// `pay_slot_offset` reading `rule`.
+    fn in_slot(values: MissionValues, slot: Option<u8>, rule: RuleSource, text: &str) -> String {
+        let mut tags = context(Some(values));
+        if let Some(mission) = &mut tags.mission {
+            mission.slot = slot;
+        }
+        tags.rules.pay_slot_offset = rule;
+        expand(text, &tags, &names())
+    }
+
+    #[test]
+    fn by_the_engine_a_slots_other_pay_reads_its_byte_offset() {
+        for (slot, shown) in [(0, "0"), (1, "2,284"), (3, "6,852"), (15, "34,260")] {
+            for pay in [0, -45_000] {
+                let values = MissionValues {
+                    pay: Some(pay),
+                    ..values()
+                };
+                assert_eq!(
+                    in_slot(values, Some(slot), RuleSource::Engine, "<PAY>"),
+                    shown,
+                    "slot {slot}, pay {pay}: slot x 0x8ec (@0x9cd2a-0x9cdb6)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_slots_other_pay_reads_0() {
+        let values = MissionValues {
+            pay: Some(0),
+            ..values()
+        };
+        assert_eq!(in_slot(values, Some(3), RuleSource::Bible, "<PAY>"), "0");
+    }
+
+    #[test]
+    fn an_offers_other_pay_reads_0_by_either_reading() {
+        for rule in RuleSource::ALL {
+            let values = MissionValues {
+                pay: Some(-10),
+                ..values()
+            };
+            assert_eq!(in_slot(values, None, rule, "<PAY>"), "0", "{rule:?}");
+        }
+    }
+
+    #[test]
+    fn a_slots_fine_and_charge_are_unchanged_by_the_offset() {
+        for (pay, shown) in [(-40_010, "1,234"), (-60_000, "10,000"), (25_000, "25,000")] {
+            let values = MissionValues {
+                pay: Some(pay),
+                ..values()
+            };
+            assert_eq!(
+                in_slot(values, Some(3), RuleSource::Engine, "<PAY>"),
+                shown,
+                "{pay}"
+            );
+        }
+    }
+
     #[test]
     fn pay_with_no_amount_reads_unset() {
         let none = MissionValues {
@@ -844,8 +1177,17 @@ mod tests {
 
     #[test]
     fn the_rank_tags_read_captain() {
+        let text = "<PRK> <SRK> <RRK> <PRK128> <SRK383> <PRK200>";
+        let mut loaded = context(Some(values()));
+        loaded.rank_govts = RankTagGovts::NONE.parsed(text);
         assert_eq!(
-            with(values(), "<PRK> <SRK> <RRK> <PRK128> <SRK383> <PRK200>"),
+            expand(text, &loaded, &names()),
+            "captain captain captain <PRK128> captain captain",
+            "by the engine only the last <PRKnnn> parsed is filled"
+        );
+        loaded.rules.crossed_rank_tags = RuleSource::Bible;
+        assert_eq!(
+            expand(text, &loaded, &names()),
             "captain captain captain captain captain captain"
         );
     }
@@ -897,38 +1239,266 @@ mod tests {
         assert_eq!(expand("<PRK> <SRK> <RRK>", &none, &names()), "sir sir sir");
     }
 
-    #[test]
-    fn prk_nnn_and_srk_nnn_read_government_nnns_short_name() {
-        let records = ranks();
-        let active = BTreeSet::from([RankId(200), RankId(201)]);
-        let tags = TagContext {
+    /// [`context`] with [`ranks`] all held, `<PRKnnn>` named as
+    /// `prk_nnn_name` reads it and the tags crossed as `crossed` reads
+    /// them, the governments remembered `govts`.
+    fn ranked<'a>(
+        records: &'a [RankRecord],
+        active: &'a BTreeSet<RankId>,
+        prk_nnn_name: RuleSource,
+        crossed: RuleSource,
+        govts: RankTagGovts,
+    ) -> TagContext<'a> {
+        let mut tags = TagContext {
             ranks: RankNames {
-                records: &records,
-                active: &active,
+                records,
+                active,
                 recent: None,
                 fallback: "sir".into(),
             },
+            rank_govts: govts,
             ..context(Some(values()))
         };
+        tags.rules.prk_nnn_name = prk_nnn_name;
+        tags.rules.crossed_rank_tags = crossed;
+        tags
+    }
+
+    /// The governments `prk` and `srk` remembered.
+    fn govts(prk: Option<i16>, srk: Option<i16>) -> RankTagGovts {
+        RankTagGovts {
+            prk: prk.map(GovtId),
+            srk: srk.map(GovtId),
+        }
+    }
+
+    /// `text` filled with [`ranks`] all held, by the engine's names, the
+    /// tags crossed as `crossed` reads them, the governments remembered
+    /// `remembered`.
+    fn crossing(crossed: RuleSource, remembered: RankTagGovts, text: &str) -> String {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let tags = ranked(&records, &active, RuleSource::Engine, crossed, remembered);
+        expand(text, &tags, &names())
+    }
+
+    #[test]
+    fn by_the_bible_each_rank_nnn_tag_reads_its_own_government() {
         assert_eq!(
-            expand(
-                "<PRK128> <SRK128> <PRK129> <SRK129> <PRK130> <SRK383>",
-                &tags,
-                &names()
+            crossing(
+                RuleSource::Bible,
+                RankTagGovts::NONE,
+                "<PRK128> <SRK128> <PRK129> <SRK129> <PRK130> <SRK383>"
             ),
             "Cdr Cdr Ad Ad sir sir",
-            "uncrossed, each its own government's"
+            "uncrossed, each its own government's, nothing remembered needed"
         );
     }
 
     #[test]
-    fn a_rank_tag_of_a_government_outside_128_to_383_is_left_as_written() {
+    fn by_the_engine_two_governments_swap() {
         assert_eq!(
-            with(
-                values(),
-                "<PRK999> <SRK127> <PRK384> <PRK> <PRKx> <PRK12a> <PRK130x> <SRK130"
+            crossing(
+                RuleSource::Engine,
+                govts(Some(128), Some(129)),
+                "<PRK128> <SRK129>"
             ),
-            "<PRK999> <SRK127> <PRK384> captain <PRKx> <PRK12a> <PRK130x> <SRK130"
+            "Ad Cdr",
+            "<PRKnnn> takes the SRK government's, <SRKnnn> the PRK's (@0x9d53d-0x9d5a5)"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_lone_tag_reads_the_fallback() {
+        assert_eq!(
+            crossing(RuleSource::Engine, govts(Some(128), None), "<PRK128>"),
+            "sir"
+        );
+        assert_eq!(
+            crossing(RuleSource::Engine, govts(None, Some(129)), "<SRK129>"),
+            "sir"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_only_the_remembered_nnn_is_filled() {
+        assert_eq!(
+            crossing(
+                RuleSource::Engine,
+                govts(Some(129), Some(129)),
+                "<PRK128> <PRK129> <SRK128> <SRK129>"
+            ),
+            "<PRK128> Ad <SRK128> Ad"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_tag_of_an_unset_government_is_left_as_written() {
+        assert_eq!(
+            crossing(RuleSource::Engine, RankTagGovts::NONE, "<PRK128> <SRK129>"),
+            "<PRK128> <SRK129>"
+        );
+        assert_eq!(
+            crossing(
+                RuleSource::Engine,
+                govts(None, Some(128)),
+                "<PRK128> <SRK128>"
+            ),
+            "<PRK128> sir"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_prk_nnn_reads_short_name() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        for crossed in RuleSource::ALL {
+            let tags = ranked(
+                &records,
+                &active,
+                RuleSource::Engine,
+                crossed,
+                govts(Some(128), Some(128)),
+            );
+            assert_eq!(
+                expand("<PRK128>", &tags, &names()),
+                "Cdr",
+                "+0xde @0x9d1ef, @0x9d2d0; {crossed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_bible_prk_nnn_reads_conv_name() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let tags = ranked(
+            &records,
+            &active,
+            RuleSource::Bible,
+            RuleSource::Bible,
+            RankTagGovts::NONE,
+        );
+        assert_eq!(
+            expand("<PRK128> <PRK129> <PRK130>", &tags, &names()),
+            "Cmdr Adm sir",
+            "same as <PRK>"
+        );
+    }
+
+    #[test]
+    fn srk_nnn_reads_short_name_by_either_reading() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        for rule in RuleSource::ALL {
+            let tags = ranked(
+                &records,
+                &active,
+                rule,
+                RuleSource::Bible,
+                RankTagGovts::NONE,
+            );
+            assert_eq!(
+                expand("<SRK128> <SRK129>", &tags, &names()),
+                "Cdr Ad",
+                "{rule:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn prk_nnn_name_by_each_reading_with_the_crossing() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let remembered = govts(Some(128), Some(129));
+        let cases = [
+            (RuleSource::Engine, RuleSource::Engine, "Ad Cdr"),
+            (RuleSource::Bible, RuleSource::Engine, "Adm Cdr"),
+            (RuleSource::Engine, RuleSource::Bible, "Cdr Ad"),
+            (RuleSource::Bible, RuleSource::Bible, "Cmdr Ad"),
+        ];
+        for (name, crossed, filled) in cases {
+            let tags = ranked(&records, &active, name, crossed, remembered);
+            assert_eq!(
+                expand("<PRK128> <SRK129>", &tags, &names()),
+                filled,
+                "prk_nnn_name {name:?}, crossed_rank_tags {crossed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rank_tag_of_a_government_outside_128_to_383_is_left_as_written() {
+        let text = "<PRK999> <SRK127> <PRK384> <PRK> <PRKx> <PRK12a> <PRK130x> <SRK130";
+        let filled = "<PRK999> <SRK127> <PRK384> captain <PRKx> <PRK12a> <PRK130x> <SRK130";
+        let mut tags = context(Some(values()));
+        tags.rules.crossed_rank_tags = RuleSource::Bible;
+        assert_eq!(expand(text, &tags, &names()), filled);
+        tags.rules.crossed_rank_tags = RuleSource::Engine;
+        tags.rank_govts = RankTagGovts::NONE.parsed(text);
+        assert_eq!(expand(text, &tags, &names()), filled);
+    }
+
+    // `_ParseTextDescription`'s scan (@0x14f34-0x15055).
+
+    #[test]
+    fn the_scan_remembers_the_last_prk_and_srk_government() {
+        assert_eq!(
+            RankTagGovts::NONE.parsed("<PRK128> and <SRK130> then <PRK129>."),
+            govts(Some(129), Some(130))
+        );
+    }
+
+    #[test]
+    fn the_scan_keeps_a_kind_it_finds_no_tag_of() {
+        assert_eq!(
+            govts(Some(128), Some(129)).parsed("Only <SRK140> here."),
+            govts(Some(128), Some(140))
+        );
+        assert_eq!(
+            govts(Some(128), Some(129)).parsed("<PRK> <SRK> <prk130> <PRk130>"),
+            govts(Some(128), Some(129)),
+            "<PRK> with no number is not read, nor another case"
+        );
+    }
+
+    #[test]
+    fn a_tag_with_no_number_or_one_outside_128_to_383_forgets_its_kind() {
+        for text in ["<PRKx> padding", "<PRK127>!!", "<PRK384>!!", "<PRK99999>!"] {
+            assert_eq!(
+                govts(Some(128), Some(129)).parsed(text),
+                govts(None, Some(129)),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            govts(Some(128), Some(129)).parsed("<PRK383x> <SRK128a"),
+            govts(Some(383), Some(128)),
+            "the digits end at the first other character"
+        );
+    }
+
+    #[test]
+    fn the_scan_skips_a_text_of_5_characters_or_fewer_and_the_last_5() {
+        assert_eq!(
+            RankTagGovts::NONE.parsed("<PRK1"),
+            RankTagGovts::NONE,
+            "5 characters"
+        );
+        assert_eq!(
+            govts(Some(130), None).parsed("ab<PRK1"),
+            govts(Some(130), None),
+            "a '<' among the last 5 is not looked at"
+        );
+        assert_eq!(
+            govts(Some(130), None).parsed("<PRK1x"),
+            RankTagGovts::NONE,
+            "6 characters: read, and 1 is out of range"
+        );
+        assert_eq!(
+            RankTagGovts::NONE.parsed("é<PRK128>"),
+            govts(Some(128), None),
+            "counted in characters"
         );
     }
 
@@ -980,15 +1550,100 @@ mod tests {
     }
 
     #[test]
-    fn with_no_mission_the_mission_tags_are_left_as_written() {
+    fn by_the_engine_a_missionless_texts_mission_tags_read_unset() {
         assert_eq!(
             expand(
                 "<DST> <DSY> <RST> <RSY> <CT> <CQ> <SN> <DL> <PAY> <PN> <PRK>",
                 &context(None),
                 &names()
             ),
+            "[Error] [Error] [Error] [Error] [Error] [Error] [Error] [Error] [Error] Stock \
+             captain",
+            "index -1 (@0x9c83f-0x9c843 -> 0x9ce14)"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_missionless_texts_mission_tags_are_left_as_written() {
+        let mut tags = context(None);
+        tags.rules.missionless = RuleSource::Bible;
+        assert_eq!(
+            expand(
+                "<DST> <DSY> <RST> <RSY> <CT> <CQ> <SN> <DL> <PAY> <PN> <PRK>",
+                &tags,
+                &names()
+            ),
             "<DST> <DSY> <RST> <RSY> <CT> <CQ> <SN> <DL> <PAY> Stock captain"
         );
+    }
+
+    // `l33t`.
+
+    #[test]
+    fn munge_leet_replaces_in_the_originals_order() {
+        assert_eq!(munge_leet("You lick"), "j00 71x0r");
+        assert_eq!(munge_leet("yours"), "j00rs", "you before i");
+        assert_eq!(munge_leet("Elite"), "371t3");
+        assert_eq!(munge_leet("LAST pick"), "7AST p1x0r");
+        assert_eq!(munge_leet("1337"), "1337");
+    }
+
+    #[test]
+    fn with_leet_mode_the_filled_text_is_munged_last() {
+        let mut tags = TagContext {
+            pilot: "Ellie",
+            ..context(Some(values()))
+        };
+        assert_eq!(expand("Hi <PN>, <DST>", &tags, &names()), "Hi Ellie, Mars");
+        tags.leet = true;
+        assert_eq!(
+            expand("Hi <PN>, <DST>", &tags, &names()),
+            "H1 37713, Mars",
+            "the pilot's name filled in is munged too (@0x9d5aa-0x9d667)"
+        );
+    }
+
+    #[test]
+    fn load_leet_replaces_a_letter_on_2_draws_in_3() {
+        let mut chance = crate::testkit::Draws::of(&[0, 2, 1, 2, 1, 0, 2, 2]);
+        assert_eq!(
+            load_leet("aeioAEIO", &mut chance),
+            "4e1o43IO",
+            "_Rand(3) of 0 or 1 replaces (@0x7198a-0x71993)"
+        );
+        assert_eq!(chance.asked, [3; 8], "one draw a vowel");
+    }
+
+    #[test]
+    fn load_leet_draws_nothing_for_other_letters() {
+        let mut chance = crate::testkit::Draws::of(&[]);
+        assert_eq!(load_leet("thrysm ", &mut chance), "thrysm ");
+        assert_eq!(chance.asked, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn load_leet_turns_you_into_j00() {
+        let mut chance = crate::testkit::Draws::of(&[]);
+        assert_eq!(load_leet("Your hymn", &mut chance), "j00r hymn");
+        assert_eq!(load_leet("you!!", &mut chance), "j00!!");
+        assert_eq!(
+            chance.asked,
+            Vec::<u32>::new(),
+            "the o of you is not drawn for"
+        );
+        assert_eq!(
+            load_leet("YOU!!", &mut chance),
+            "YOU!!",
+            "only a lower-case ou (@0x71a35-0x71a3e)"
+        );
+    }
+
+    #[test]
+    fn load_leet_leaves_a_you_too_near_the_end() {
+        let mut chance = crate::testkit::Draws::of(&[]);
+        assert_eq!(load_leet("you!", &mut chance), "you!", "i < strlen - 4");
+        assert_eq!(load_leet("Thank you", &mut chance), "Thank you");
+        assert_eq!(chance.asked, [3, 3, 3], "its o drawn for, kept");
     }
 
     #[test]

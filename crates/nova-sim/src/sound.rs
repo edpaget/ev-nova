@@ -144,6 +144,24 @@ pub enum SimSound {
     /// within reach and "No response." are silent (see
     /// [`clearance`](crate::clearance)).
     TrafficControl,
+    /// The player boarded a person who offers its mission: `snd ` 390
+    /// "Airlock" (loaded by `_LoadSounds` @0x1c277-0x1c289), played by
+    /// `_HandlePlayerBoardAttempt` before `_OfferOneMission`
+    /// (@0x658e5-0x65907). Its priority, 8, is not modelled.
+    PersonOfferBoarded,
+    /// The player's boarders went aboard a ship to plunder it: `snd ` 390
+    /// "Airlock", as for [`SimSound::PersonOfferBoarded`], played by
+    /// `_HandlePlayerBoardAttempt` before `_DoPlunderDialog` on both of
+    /// its plunder paths: a person whose mission is not available
+    /// (@0x65991-0x659b3), and every other ship plundered, after
+    /// `_DoGoodSamaritan` or not (@0x65ede-0x65f00). So it sounds for a
+    /// failed mission's special ship too, but never for one whose mission
+    /// stands, nor for a person's offer, nor for a board refused. It
+    /// sounds for a board the crew repels by the Bible's
+    /// [`RuleKey::EmptyBooty`](crate::RuleKey::EmptyBooty), which the
+    /// original never does: the boarders go aboard first. Its priority,
+    /// 8, is not modelled.
+    Boarded,
     /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
     /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
     /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is
@@ -180,6 +198,10 @@ pub enum SimSound {
     /// The player info key's refusals raise it (`_HandlePlayer`
     /// @0x7039a-0x703bd, priority 5, not modelled; see
     /// [`Session::press_player_info`](crate::Session::press_player_info)),
+    /// as does the mission info key with no mission to show, before its
+    /// "You have no active missions." (`PlaySound` @0x70557, priority 1,
+    /// not modelled; see
+    /// [`Session::press_mission_info`](crate::Session::press_mission_info)),
     /// as do the jump key's (@0x6b89f, @0x6b9cc, @0x6ba72; see
     /// [`Session::jump_refusal_told`](crate::Session::jump_refusal_told))
     /// and every refusal of a hail, with no target too

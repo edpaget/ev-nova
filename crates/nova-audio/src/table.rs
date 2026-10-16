@@ -104,6 +104,9 @@ pub struct SoundTable {
     /// Plays as a key's action is refused, whether or not the player is
     /// told why.
     pub refused: Option<SoundId>,
+    /// Plays as any board goes aboard: to plunder, or as a boarded person
+    /// offers its mission.
+    pub airlock: Option<SoundId>,
     /// Plays as M opens the course map in flight.
     pub map_open: Option<SoundId>,
     /// Plays as the course map closes in flight.
@@ -269,6 +272,12 @@ impl SoundTable {
     ///   (@0x6a842-0x6a85a), however the map closed. The hypergate's map
     ///   plays neither: `_PlayerEnterHypergate` calls `_DoSystemMap`
     ///   (@0x6385b) with no `PlaySound` before or after it.
+    /// - `airlock`: 390, "Airlock", which `_LoadSounds` loads
+    ///   (@0x1c277-0x1c289) and `_HandlePlayerBoardAttempt` plays as any
+    ///   board goes aboard: as a boarded person offers its mission, before
+    ///   `_OfferOneMission` (@0x65907), and before `_DoPlunderDialog` on
+    ///   its two plunder paths (@0x659b3, @0x65f00). The original plays it
+    ///   at priority 8, not modelled.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -311,6 +320,7 @@ impl SoundTable {
         onboard_explosion: Some(SoundId(300)),
         jump_collapsed: Some(SoundId(151)),
         refused: Some(SoundId(153)),
+        airlock: Some(SoundId(390)),
         map_open: Some(SoundId(152)),
         map_close: Some(SoundId(150)),
     };
@@ -384,6 +394,7 @@ mod tests {
         assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");
         assert_eq!(table.jump_collapsed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.airlock, Some(SoundId(390)), "Airlock");
         assert_eq!(table.map_open, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.map_close, Some(SoundId(150)), "_beepSnd[0]");
     }

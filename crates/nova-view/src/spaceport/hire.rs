@@ -136,6 +136,8 @@ pub struct HireScreen {
     /// The ship asked for, until it is taken.
     order: Option<ShipId>,
     closed: bool,
+    /// The `dësc` shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
 }
 
 impl HireScreen {
@@ -197,6 +199,7 @@ impl HireScreen {
             panel: None,
             order: None,
             closed: false,
+            description_request: None,
         };
         screen.select(0);
         screen
@@ -249,6 +252,36 @@ impl HireScreen {
         self.closed
     }
 
+    /// The `dësc` of the ship the hire screen has shown since this was last
+    /// taken, once, read raw until whoever flies the ship loads it as
+    /// `_ShipyardFilter` does (with `_hiringEscort` set, @0x607e1, @0x60c0c) and answers with
+    /// `show_description`, in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request.take()
+    }
+
+    /// Shows `text`, `dësc` `id` loaded, as the description of the ship
+    /// shown, while it is the ship whose `dësc` that is.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        let Ok(Laid {
+            dialog,
+            metrics,
+            shown: Some((ship, shown)),
+            ..
+        }) = &mut self.laid
+        else {
+            return;
+        };
+        if pilot_desc_id(*ship) == id {
+            let area = dialog.item_bounds(DESCRIPTION_ITEM).unwrap_or(Bounds::at(
+                Point::new(0.0, 0.0),
+                0.0,
+                0.0,
+            ));
+            shown.retext(text, area, &metrics.0);
+        }
+    }
+
     /// The ship asked for since it was last taken, once.
     pub fn take_order(&mut self) -> Option<ShipId> {
         self.order.take()
@@ -292,6 +325,7 @@ impl HireScreen {
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
         let picture = ship_picture(ship, &self.bases, |id| catalog.picture_exists(id));
         let description = Some(pilot_desc_id(ship));
+        self.description_request = description;
         let shown = Shown::read(&*catalog, picture, description, area, &laid.metrics.0);
         laid.shown = Some((ship, shown));
     }
@@ -596,6 +630,11 @@ mod tests {
                 .iter()
                 .find(|(desc, _)| *desc == id)
                 .map(|(_, graphic)| *graphic)
+        }
+
+        /// Names no movie: these screens never play one.
+        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+            None
         }
     }
 
@@ -928,6 +967,22 @@ mod tests {
         let mut screen = screen;
         screen.input(&key(Key::Right, false));
         assert_eq!(*art.asked.borrow(), ["dësc 14000", "dësc 14012"]);
+    }
+
+    #[test]
+    fn the_pilots_description_is_asked_to_load_and_shows_loaded() {
+        let mut screen = screen();
+        assert_eq!(screen.take_description_request(), Some(14000));
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(14000, "Loaded pilot.");
+        let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
+        assert!(words.contains(&"Loaded pilot.".to_owned()), "{words:?}");
+        screen.show_description(14012, "Another.");
+        let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
+        assert!(
+            !words.contains(&"Another.".to_owned()),
+            "not the ship shown"
+        );
     }
 
     #[test]

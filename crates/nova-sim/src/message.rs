@@ -165,6 +165,11 @@ pub enum SimMessage {
         /// (see [`kill_notice`](crate::sabotage::kill_notice)).
         outfit: Option<(OutfitId, bool)>,
     },
+    /// A sabotage kill outfit with no outfit named went off aboard the
+    /// player's ship in the `l33t` mode: "Someone set up us the bomb!",
+    /// the string at 0xd9962 in place of `STR#` 2002 #38 (`_HandlePlayer`
+    /// @0x69623-0x6963e).
+    BombSetUp,
     /// A sabotage bomb outfit went off aboard the player's ship
     /// (`_HandlePlayer` @0x69701-0x698b0), in the same words as
     /// [`Sabotaged`](Self::Sabotaged) names an outfit, whatever its names.
@@ -225,7 +230,8 @@ impl SimMessage {
     ///   (`_HandlePlayerDockApproach` @0x64e8e).
     /// - [`EscapingIn`](Self::EscapingIn): 512 (`_HandlePlayer`
     ///   @0x6f62a).
-    /// - [`Sabotaged`](Self::Sabotaged): 360 (`_HandlePlayer` @0x6969d).
+    /// - [`Sabotaged`](Self::Sabotaged) and [`BombSetUp`](Self::BombSetUp):
+    ///   360 (`_HandlePlayer` @0x6969d).
     /// - [`BombExploded`](Self::BombExploded): 400 (`_HandlePlayer`
     ///   @0x698b0).
     /// - [`JumpCollapsed`](Self::JumpCollapsed): 250 (`_HandlePlayer`
@@ -233,7 +239,10 @@ impl SimMessage {
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
-            Self::ExitedHypergate(_) | Self::FleetArrivalQuote(_) | Self::Sabotaged { .. } => 360,
+            Self::ExitedHypergate(_)
+            | Self::FleetArrivalQuote(_)
+            | Self::Sabotaged { .. }
+            | Self::BombSetUp => 360,
             Self::MissionScanned
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
@@ -296,6 +305,7 @@ mod tests {
             (SimMessage::JumpCollapsed, 250),
             (SimMessage::EscapingIn { ship: ShipId(144) }, 512),
             (SimMessage::Sabotaged { outfit: None }, 360),
+            (SimMessage::BombSetUp, 360),
             (
                 SimMessage::BombExploded {
                     outfit: OutfitId(262),

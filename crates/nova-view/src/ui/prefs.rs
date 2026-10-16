@@ -1,5 +1,6 @@
 //! The Preferences dialog, "new prefs dialog" (`DLOG` 4003): sound effects
-//! and music on or off, each one's volume, and Hyperspace Effects.
+//! and music on or off, each one's volume, Hyperspace Effects and
+//! QuickTime Movies.
 //!
 //! The stock dialog has a column of check boxes for options this game
 //! does not have yet, one volume (item 4's "Sound Volume:", its value in
@@ -11,6 +12,8 @@
 //!   labelled "Sound".
 //! - Check box 21 ("Hyperspace Effects") works as it stands: on, a jump
 //!   fades to white and back; off, it does not.
+//! - Check box 9 ("QuickTime Movies") works as it stands: on, a `dësc`'s
+//!   movie plays; off, none does (`_PlayQTMovie` @0x5597c).
 //! - The stock volume is the sound effects' volume. The music's is the
 //!   same four parts moved [`MUSIC_VOLUME_OFFSET`] down, into item 3's
 //!   empty area above the buttons, labelled "Music Volume:".
@@ -56,6 +59,9 @@ pub const SOUND_ITEM: usize = 20;
 /// The Hyperspace Effects toggle's item.
 pub const HYPERSPACE_EFFECTS_ITEM: usize = 21;
 
+/// The QuickTime Movies toggle's item.
+pub const QUICKTIME_MOVIES_ITEM: usize = 9;
+
 /// The sound effects volume's label item.
 pub const VOLUME_LABEL_ITEM: usize = 4;
 
@@ -79,6 +85,9 @@ pub const SOUND_LABEL: &str = "Sound";
 
 /// The Hyperspace Effects toggle's label, the stock check box's title.
 pub const HYPERSPACE_EFFECTS_LABEL: &str = "Hyperspace Effects";
+
+/// The QuickTime Movies toggle's label, the stock check box's title.
+pub const QUICKTIME_MOVIES_LABEL: &str = "QuickTime Movies";
 
 /// The sound effects volume's label.
 pub const EFFECTS_VOLUME_LABEL: &str = "Sound Volume:";
@@ -108,6 +117,8 @@ pub enum Focus {
     Sound,
     /// The Hyperspace Effects toggle.
     HyperspaceEffects,
+    /// The QuickTime Movies toggle.
+    QuickTimeMovies,
     /// The sound effects volume.
     EffectsVolume,
     /// The music volume.
@@ -121,7 +132,8 @@ impl Focus {
         match self {
             Self::Music => Self::Sound,
             Self::Sound => Self::HyperspaceEffects,
-            Self::HyperspaceEffects => Self::EffectsVolume,
+            Self::HyperspaceEffects => Self::QuickTimeMovies,
+            Self::QuickTimeMovies => Self::EffectsVolume,
             Self::EffectsVolume => Self::MusicVolume,
             Self::MusicVolume => Self::Ok,
             Self::Ok => Self::Music,
@@ -135,6 +147,7 @@ enum Target {
     Music,
     Sound,
     HyperspaceEffects,
+    QuickTimeMovies,
     EffectsVolume,
     MusicVolume,
     Dialog,
@@ -150,6 +163,7 @@ pub struct PrefsDialog {
     effects_volume: VolumeControl,
     music_volume: VolumeControl,
     hyperspace: Toggle,
+    movies: Toggle,
     /// The check boxes for options that do not work yet, greyed.
     inert: Vec<Toggle>,
     style: ButtonStyle,
@@ -215,6 +229,11 @@ impl PrefsDialog {
             HYPERSPACE_EFFECTS_LABEL,
             prefs.hyperspace_effects,
         );
+        let movies = Toggle::new(
+            place(QUICKTIME_MOVIES_ITEM)?,
+            QUICKTIME_MOVIES_LABEL,
+            prefs.quicktime_movies,
+        );
         let prefs = prefs.sound;
         let music = Toggle::new(place(MUSIC_ITEM)?, MUSIC_LABEL, prefs.music);
         let sound = Toggle::new(place(SOUND_ITEM)?, SOUND_LABEL, prefs.sound);
@@ -225,8 +244,13 @@ impl PrefsDialog {
             .enumerate()
             .filter_map(|(index, item)| match &item.kind {
                 ItemSpec::CheckBox(title)
-                    if ![MUSIC_ITEM, SOUND_ITEM, HYPERSPACE_EFFECTS_ITEM]
-                        .contains(&(index + 1))
+                    if ![
+                        MUSIC_ITEM,
+                        SOUND_ITEM,
+                        HYPERSPACE_EFFECTS_ITEM,
+                        QUICKTIME_MOVIES_ITEM,
+                    ]
+                    .contains(&(index + 1))
                         && inside(item.bounds, size) =>
                 {
                     Some(Toggle::greyed(
@@ -243,6 +267,7 @@ impl PrefsDialog {
             effects_volume: VolumeControl::new(effects, EFFECTS_VOLUME_LABEL, prefs.effects_level),
             music_volume: VolumeControl::new(music_rects, MUSIC_VOLUME_LABEL, prefs.music_level),
             hyperspace,
+            movies,
             inert,
             dialog,
             style,
@@ -265,6 +290,7 @@ impl PrefsDialog {
                 music_level: self.music_volume.level(),
             },
             hyperspace_effects: self.hyperspace.on(),
+            quicktime_movies: self.movies.on(),
         }
     }
 
@@ -286,6 +312,7 @@ impl PrefsDialog {
             (_, Some(Focus::Music)) => self.changed |= self.music.input(input),
             (_, Some(Focus::Sound)) => self.changed |= self.sound.input(input),
             (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.input(input),
+            (_, Some(Focus::QuickTimeMovies)) => self.changed |= self.movies.input(input),
             (_, Some(Focus::EffectsVolume)) => self.changed |= self.effects_volume.input(input),
             (_, Some(Focus::MusicVolume)) => self.changed |= self.music_volume.input(input),
             _ => {}
@@ -306,6 +333,8 @@ impl PrefsDialog {
                 Target::Sound
             } else if self.hyperspace.contains(at) {
                 Target::HyperspaceEffects
+            } else if self.movies.contains(at) {
+                Target::QuickTimeMovies
             } else if self.effects_volume.arrow_at(at).is_some() {
                 Target::EffectsVolume
             } else if self.music_volume.arrow_at(at).is_some() {
@@ -318,6 +347,7 @@ impl PrefsDialog {
             Some(Target::Music) => self.changed |= self.music.input(input),
             Some(Target::Sound) => self.changed |= self.sound.input(input),
             Some(Target::HyperspaceEffects) => self.changed |= self.hyperspace.input(input),
+            Some(Target::QuickTimeMovies) => self.changed |= self.movies.input(input),
             Some(Target::EffectsVolume) => self.changed |= self.effects_volume.input(input),
             Some(Target::MusicVolume) => self.changed |= self.music_volume.input(input),
             Some(Target::Dialog) => self.dialog_input(input),
@@ -367,6 +397,12 @@ impl PrefsDialog {
         &self.hyperspace
     }
 
+    /// The QuickTime Movies toggle.
+    #[must_use]
+    pub fn quicktime_movies(&self) -> &Toggle {
+        &self.movies
+    }
+
     /// The sound effects volume.
     #[must_use]
     pub fn effects_volume(&self) -> &VolumeControl {
@@ -390,7 +426,8 @@ impl Screen for PrefsDialog {
     /// - A click on a toggle flips it, and a click on a volume's arrow
     ///   steps it. A click on OK closes the dialog; the greyed check boxes
     ///   and Key Settings do nothing.
-    /// - Tab moves the focus (music, sound, Hyperspace Effects, the sound
+    /// - Tab moves the focus (music, sound, Hyperspace Effects, QuickTime
+    ///   Movies, the sound
     ///   volume, the music volume, OK, and round). Space flips a focused toggle or activates
     ///   OK; the arrow keys step a focused volume, repeats included.
     /// - Return and Escape close it.
@@ -428,6 +465,8 @@ impl Screen for PrefsDialog {
         self.sound.draw(focused(Focus::Sound), &self.metrics, list);
         self.hyperspace
             .draw(focused(Focus::HyperspaceEffects), &self.metrics, list);
+        self.movies
+            .draw(focused(Focus::QuickTimeMovies), &self.metrics, list);
         self.effects_volume
             .draw(focused(Focus::EffectsVolume), list);
         self.music_volume.draw(focused(Focus::MusicVolume), list);
@@ -441,6 +480,7 @@ impl Screen for PrefsDialog {
         self.music.cancel_pointer();
         self.sound.cancel_pointer();
         self.hyperspace.cancel_pointer();
+        self.movies.cancel_pointer();
         self.effects_volume.cancel_pointer();
         self.music_volume.cancel_pointer();
         self.target = None;
@@ -549,6 +589,7 @@ mod tests {
                 music_level: 2,
             },
             hyperspace_effects: true,
+            quicktime_movies: true,
         }
     }
 
@@ -661,7 +702,6 @@ mod tests {
             titles,
             [
                 "Share Processor Time",
-                "QuickTime Movies",
                 "Smoke Trails",
                 "Run in a window",
                 "Ship Animations",
@@ -673,7 +713,7 @@ mod tests {
             ]
         );
         assert!(inert.iter().all(|(_, enabled, on)| !enabled && !on));
-        assert_eq!(dialog.inert()[2].rect(), placed(11.0, 121.0, 172.0, 139.0));
+        assert_eq!(dialog.inert()[1].rect(), placed(11.0, 121.0, 172.0, 139.0));
     }
 
     #[test]
@@ -705,6 +745,80 @@ mod tests {
         )
         .expect("builds");
         assert!(on.hyperspace_effects().on(), "on by default");
+    }
+
+    #[test]
+    fn the_quicktime_movies_box_is_enabled_and_shows_the_pref() {
+        let mut dialog = prefs();
+        let toggle = dialog.quicktime_movies();
+        assert_eq!(toggle.rect(), placed(171.0, 99.0, 307.0, 117.0));
+        assert_eq!(toggle.label(), QUICKTIME_MOVIES_LABEL);
+        assert_eq!(QUICKTIME_MOVIES_LABEL, "QuickTime Movies");
+        assert_eq!(QUICKTIME_MOVIES_ITEM, 9);
+        assert!(toggle.enabled() && toggle.on(), "on as given");
+        let off = PrefsDialog::new(
+            &template(),
+            Prefs {
+                quicktime_movies: false,
+                ..start()
+            },
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        assert!(!off.quicktime_movies().on());
+        assert!(!off.prefs().quicktime_movies);
+        let point = dialog.quicktime_movies().rect().center();
+        click(&mut dialog, point);
+        assert_eq!(
+            dialog.take_change(),
+            Some(Prefs {
+                quicktime_movies: false,
+                ..start()
+            })
+        );
+        assert_eq!(dialog.take_change(), None, "once");
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Some(Focus::QuickTimeMovies));
+        let unfocused = {
+            let mut list = DrawList::new();
+            dialog
+                .quicktime_movies()
+                .draw(false, &MonoMetrics, &mut list);
+            list.len()
+        };
+        let mut outlined = DrawList::new();
+        dialog
+            .quicktime_movies()
+            .draw(true, &MonoMetrics, &mut outlined);
+        let outlined: Vec<DrawCommand> = outlined.iter().cloned().collect();
+        assert!(outlined.len() > unfocused);
+        assert!(
+            drawn(&dialog)
+                .windows(outlined.len())
+                .any(|w| w == outlined)
+        );
+        dialog.input(&key(Key::Space));
+        assert!(dialog.prefs().quicktime_movies, "Space flips it back on");
+        let pressed_at = dialog.quicktime_movies().rect().center();
+        dialog.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: pressed_at,
+        });
+        dialog.cancel_pointer();
+        dialog.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at: pressed_at,
+        });
+        assert!(
+            dialog.prefs().quicktime_movies,
+            "a cancelled click does nothing"
+        );
     }
 
     #[test]
@@ -767,6 +881,7 @@ mod tests {
             MUSIC_ITEM,
             SOUND_ITEM,
             HYPERSPACE_EFFECTS_ITEM,
+            QUICKTIME_MOVIES_ITEM,
             VOLUME_LABEL_ITEM,
             VOLUME_DOWN_ITEM,
         ] {
@@ -891,7 +1006,7 @@ mod tests {
     fn tab_moves_the_focus_round_the_ring() {
         let mut dialog = prefs();
         let mut order = Vec::new();
-        for _ in 0..7 {
+        for _ in 0..8 {
             dialog.input(&key(Key::Tab));
             order.push(dialog.focus().expect("focused"));
         }
@@ -901,6 +1016,7 @@ mod tests {
                 Focus::Music,
                 Focus::Sound,
                 Focus::HyperspaceEffects,
+                Focus::QuickTimeMovies,
                 Focus::EffectsVolume,
                 Focus::MusicVolume,
                 Focus::Ok,
@@ -933,7 +1049,7 @@ mod tests {
         let mut dialog = prefs();
         dialog.input(&key(Key::Up));
         assert_eq!(dialog.prefs(), start(), "nothing focused");
-        for _ in 0..4 {
+        for _ in 0..5 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&key(Key::Up));
@@ -969,7 +1085,7 @@ mod tests {
             assert!(dialog.closed(), "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..6 {
+        for _ in 0..7 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&held(Key::Space));
@@ -1003,7 +1119,7 @@ mod tests {
         assert_eq!(dialog.take_prefs(), Some(changed));
         assert_eq!(dialog.take_prefs(), None, "once");
         // A step that changes nothing is not a change.
-        for _ in 0..4 {
+        for _ in 0..5 {
             dialog.input(&key(Key::Tab));
         }
         for _ in 0..3 {
@@ -1030,9 +1146,11 @@ mod tests {
         assert!(!sound.sound.sound);
         let hyperspace = focused(3, key(Key::Space)).expect("Space on Hyperspace Effects");
         assert!(!hyperspace.hyperspace_effects);
-        let effects = focused(4, key(Key::Up)).expect("Up on the sound volume");
+        let movies = focused(4, key(Key::Space)).expect("Space on QuickTime Movies");
+        assert!(!movies.quicktime_movies);
+        let effects = focused(5, key(Key::Up)).expect("Up on the sound volume");
         assert_eq!(effects.sound.effects_level, 5);
-        let volume = focused(5, key(Key::Down)).expect("Down on the music volume");
+        let volume = focused(6, key(Key::Down)).expect("Down on the music volume");
         assert_eq!(volume.sound.music_level, 1);
         let clicked = |part: fn(&PrefsDialog) -> Point| {
             let mut dialog = prefs();
@@ -1054,6 +1172,8 @@ mod tests {
         );
         let hyperspace = clicked(|d| d.hyperspace_effects().rect().center());
         assert!(!hyperspace.expect("Hyperspace Effects").hyperspace_effects);
+        let movies = clicked(|d| d.quicktime_movies().rect().center());
+        assert!(!movies.expect("QuickTime Movies").quicktime_movies);
         let up = clicked(|d| d.effects_volume().rects().up.center());
         assert_eq!(up.expect("the sound volume").sound.effects_level, 5);
         let up = clicked(|d| d.music_volume().rects().up.center());
@@ -1132,7 +1252,7 @@ mod tests {
             assert_eq!(dialog.take_sounds(), [], "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..6 {
+        for _ in 0..7 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.take_sounds(), [], "Tab to OK");
@@ -1167,6 +1287,9 @@ mod tests {
         dialog.sound().draw(false, &MonoMetrics, &mut expected);
         dialog
             .hyperspace_effects()
+            .draw(false, &MonoMetrics, &mut expected);
+        dialog
+            .quicktime_movies()
             .draw(false, &MonoMetrics, &mut expected);
         dialog.effects_volume().draw(false, &mut expected);
         dialog.music_volume().draw(false, &mut expected);
@@ -1205,7 +1328,7 @@ mod tests {
         assert_eq!(commands.len(), unfocused.len() + 4);
         let music: Vec<DrawCommand> = music.iter().cloned().collect();
         assert!(commands.windows(music.len()).any(|window| window == music));
-        for _ in 0..3 {
+        for _ in 0..4 {
             dialog.input(&key(Key::Tab));
         }
         let mut effects = DrawList::new();
