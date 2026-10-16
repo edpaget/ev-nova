@@ -18,6 +18,7 @@ use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::ion::Ion;
 use crate::control::{ControlBits, PilotFacts, Script, Test, TestExpr};
+use crate::escort::EscortClass;
 use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
@@ -439,6 +440,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         cost: 0,
         speed: 0,
         exits: None,
+        escort_class: EscortClass::Freighter,
     }
 }
 

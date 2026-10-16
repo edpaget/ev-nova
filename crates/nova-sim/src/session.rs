@@ -1495,6 +1495,8 @@ impl Session {
             .set_beam_hit_test(rules.source_for(RuleKey::BeamHitTest));
         self.combat
             .set_beam_cone_quirks(rules.source_for(RuleKey::BeamConeQuirks));
+        self.combat
+            .set_bomb_rocket_launch(rules.source_for(RuleKey::BombRocketLaunch));
         self.rules = rules;
         self
     }
@@ -5588,7 +5590,7 @@ pub(super) mod tests {
     use crate::chance::NeverFires;
     use crate::clock::TICKS_PER_SECOND;
     use crate::control::{SetExpr, Test};
-    use crate::escort::{EscortDuty, FormationSlot};
+    use crate::escort::{EscortClass, EscortDuty, FormationSlot};
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
     use crate::gate::{GateArrivalRule, GateKind, GateRefusal, HYPERGATE, WORMHOLE, WormholeRule};
@@ -14586,6 +14588,18 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_rulebook_says_how_an_npcs_bombs_and_rockets_leave() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session(Rulebook::default()).combat, Combat::default());
+        let mut dropped = Combat::default();
+        dropped.set_bomb_rocket_launch(RuleSource::Bible);
+        assert_ne!(dropped, Combat::default());
+        let other = Rulebook::default().with_override(RuleKey::BombRocketLaunch, RuleSource::Bible);
+        assert_eq!(session(other).combat, dropped);
+    }
+
+    #[test]
     fn the_rulebook_says_how_beams_hit() {
         let catalog = armed();
         let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
@@ -18945,6 +18959,27 @@ pub(super) mod tests {
             });
             assert_eq!(fired, fires, "{flags2:#x} cloaked {cloaked}");
         }
+    }
+
+    #[test]
+    fn an_npc_warships_turret_misses_the_player_in_a_fighter_class_hull() {
+        // NeverFires rolls the top of the warship's range, 100.
+        let shield_after = |player: EscortClass| {
+            let mut catalog = arming(blaster(), guided(4, 2), 0);
+            catalog.hulls[0].escort_class = player;
+            catalog.hulls[1].escort_class = EscortClass::Warship;
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            let full = session.reserves().shield.now;
+            for _ in 0..30 {
+                session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
+                session.tick_combat(Rules::default(), &mut NeverFires);
+            }
+            (full, session.reserves().shield.now)
+        };
+        let (full, fighter) = shield_after(EscortClass::Fighter);
+        assert_eq!(fighter, full, "every shot missed");
+        let (full, freighter) = shield_after(EscortClass::Freighter);
+        assert!(freighter < full, "{freighter} of {full}");
     }
 
     #[test]

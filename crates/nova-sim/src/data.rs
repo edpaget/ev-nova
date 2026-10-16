@@ -43,6 +43,7 @@ use crate::catalog::{
     SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
+use crate::escort::EscortClass;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::nebula;
@@ -886,6 +887,11 @@ impl CombatCatalog for GameData {
                     cost: record.cost,
                     speed: record.speed,
                     exits,
+                    escort_class: EscortClass::of(
+                        record.escort_type,
+                        record.inherent_ai,
+                        record.mass,
+                    ),
                 })
             })
             .collect()
@@ -3119,6 +3125,7 @@ mod tests {
             cost: -1,
             speed: 2,
             exits,
+            escort_class: EscortClass::Fighter,
         };
         assert_eq!(
             data.hulls(),
@@ -3159,6 +3166,33 @@ mod tests {
                 frames: 64,
             })
         );
+    }
+
+    /// The hull of a `shïp` of `EscortType` `escort_type`, `InherentAI`
+    /// `inherent_ai` and `Mass` `mass`, as the combat catalog reads it.
+    fn classed(escort_type: i16, inherent_ai: i16, mass: i16) -> crate::combat::hull::HullSpec {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x3E, &[mass]);
+        put_i16s(&mut bytes, 0x42, &[inherent_ai]);
+        put_i16s(&mut bytes, 0x732, &[escort_type]);
+        let hulls = store(&[(Ship::TYPE, 128, bytes)]).hulls();
+        crate::combat::hull::HullSpec::new(&hulls[0])
+    }
+
+    #[test]
+    fn a_hulls_miss_class_comes_from_its_escort_type_or_one_worked_out() {
+        let miss =
+            |escort_type, inherent_ai, mass| classed(escort_type, inherent_ai, mass).miss_class;
+        // Worked out from the mass for an `EscortType` outside 0-3.
+        for (mass, class) in [(49, 80), (50, 90), (199, 90), (200, 100)] {
+            assert_eq!(miss(-1, 3, mass), class, "mass {mass}");
+        }
+        assert_eq!(miss(-1, 2, 10), 100, "a freighter by its InherentAI");
+        // Named directly, whatever the mass.
+        for (escort_type, class) in [(0, 80), (1, 90), (2, 100), (3, 100)] {
+            assert_eq!(miss(escort_type, 3, 500), class, "{escort_type}");
+            assert_eq!(miss(escort_type, 1, 10), class, "{escort_type}");
+        }
     }
 
     /// A `gövt` with every field the combat catalog reads set to something

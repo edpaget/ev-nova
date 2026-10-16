@@ -4,14 +4,18 @@
 //! The values are the original's (`_SpawnShot`, `_HandleShotGuidance`,
 //! `_HandleShot` and `_ShotCanHitShip` in the `EV Nova` executable):
 //!
-//! - A shot starts at its firer's position with its firer's velocity (a
-//!   freefall bomb with [`BOMB_LAUNCH`] of it), heading as it was aimed;
-//!   any but a bomb or a rocket then adds its speed along its heading. A
-//!   homing shot never carries its firer's velocity.
+//! - A shot starts at its firer's position with its firer's velocity,
+//!   heading as it was aimed, and adds its speed along its heading. A
+//!   homing shot never carries its firer's velocity. A bomb or a rocket
+//!   goes as [`BombLaunch`] says: an NPC's as any other shot by the
+//!   engine, the player's, and every ship's by the Bible, with no speed
+//!   added, a freefall bomb with [`BOMB_LAUNCH`] of the velocity.
 //! - Each tick an unguided shot keeps its velocity. A rocket's velocity
 //!   becomes [`ROCKET_KEEP`] of itself and [`ROCKET_PUSH`] of its top
 //!   speed along its heading, so it closes on its top speed. A bomb keeps
-//!   its velocity and turns its heading [`BOMB_TURN`] a tick towards it.
+//!   its velocity and turns its heading a whole degree ([`BOMB_TURN`]) a
+//!   tick towards the table's bearing of it while its truncated heading
+//!   is off it, towards up at rest (see `Shot::weathervane`).
 //! - A homing shot flies at its speed along its heading every tick. Once
 //!   it has flown [`HOMING_DELAY`] ticks it steers at its target, turning
 //!   `GuidedTurn` a tick the short way while the target's bearing is
@@ -44,9 +48,10 @@ use super::hull::Condition;
 use super::sides::{Sides, Ties};
 use super::weapon::{Guidance, WeaponSpec};
 use crate::catalog::{GovtId, ShipId};
-use crate::flight::{ShipState, facing, heading_of, normalized, shortest_turn};
+use crate::flight::{ShipState, facing, normalized, shortest_turn};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
+use crate::trig;
 
 /// A freefall bomb's share of its firer's velocity at launch.
 pub const BOMB_LAUNCH: f32 = 0.8;
@@ -88,6 +93,10 @@ pub struct Target {
     pub sprite_x: f32,
     /// How it is holding up.
     pub condition: Condition,
+    /// Its hull's turret miss class
+    /// ([`HullSpec::miss_class`](super::hull::HullSpec::miss_class)): a
+    /// shot whose roll is above it misses it while it is intact.
+    pub miss_class: u32,
 }
 
 /// How far along the segment from `from` to `to`, as a fraction, it first
@@ -237,19 +246,66 @@ pub struct Shot {
     /// [`disable_only`](WeaponSpec::disable_only), set at launch
     /// (`_SpawnShot` @0x3e7e2), a sub-munition's from its own weapon.
     pub disable_only: bool,
+    /// Its turret miss roll (the original's shot +0x42), 1 to its firer's
+    /// [`miss_class`](super::hull::HullSpec::miss_class): it misses an
+    /// intact ship of a lower class (see [`sides`](super::sides)). Only a
+    /// ship's turret (4) or point-defence (9) shot rolls (`_SpawnShot`
+    /// @0x3e89e-0x3e963); any other shot carries none, the original's -1,
+    /// and never misses. A sub-munition carries none too: see
+    /// [`submunition`](super::submunition).
+    pub miss_roll: Option<u32>,
+}
+
+/// How a freefall bomb (5) or a rocket (6) leaves its ship. `_SpawnShot`
+/// gives the player's bomb 0.8 of the ship's velocity (@0x3e73a-0x3e783)
+/// and adds `Speed` along the heading only for a weapon of another
+/// guidance or a ship other than the player (`-0x41`, source above 0,
+/// @0x3ede8-0x3ee0a), so an NPC's bomb or rocket, an escort's too, leaves
+/// faster than the Bible says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BombLaunch {
+    /// The player's, and every ship's by the Bible ("launched at 80% of
+    /// the ship's current velocity"; "launched straight ahead, accelerates
+    /// to its maximum velocity"): a bomb [`BOMB_LAUNCH`] of the ship's
+    /// velocity, a rocket the ship's, neither sent broadside.
+    Dropped,
+    /// An NPC's in the original: the ship's velocity and the weapon's
+    /// `Speed` along the heading, broadside or not, as any other guidance.
+    Thrown,
+}
+
+impl BombLaunch {
+    /// How an `npc`'s, or else the player's, bombs and rockets leave, as
+    /// the rulebook's
+    /// [`RuleKey::BombRocketLaunch`](crate::RuleKey::BombRocketLaunch) reads
+    /// `source`.
+    #[must_use]
+    pub fn of(npc: bool, source: RuleSource) -> Self {
+        if npc && source == RuleSource::Engine {
+            Self::Thrown
+        } else {
+            Self::Dropped
+        }
+    }
 }
 
 /// The velocity a shot of `weapon` leaves a ship flying `from` with, sent
-/// along `heading`: a bomb a share of the ship's velocity, a rocket the
-/// ship's, a homing missile its `Speed` along `heading`, and any other its
-/// `Speed` along `heading` on top of the ship's. A broadside shot is sent
-/// to the side this way, facing ahead (see [`exits`](super::exits)).
+/// along `heading`, a bomb or a rocket as `launch` says ([`BombLaunch`]):
+/// a homing missile its `Speed` along `heading`, and any other, a thrown
+/// bomb or rocket too, its `Speed` along `heading` on top of the ship's
+/// velocity. A broadside shot is sent to the side this way, facing ahead
+/// (see [`exits`](super::exits)).
 #[must_use]
-pub fn launch_velocity(weapon: &WeaponSpec, from: &ShipState, heading: f32) -> Vec2 {
-    match weapon.guidance {
-        Guidance::FreefallBomb => from.velocity * BOMB_LAUNCH,
-        Guidance::Rocket => from.velocity,
-        Guidance::Homing => facing(heading) * weapon.speed,
+pub fn launch_velocity(
+    weapon: &WeaponSpec,
+    from: &ShipState,
+    heading: f32,
+    launch: BombLaunch,
+) -> Vec2 {
+    match (weapon.guidance, launch) {
+        (Guidance::FreefallBomb, BombLaunch::Dropped) => from.velocity * BOMB_LAUNCH,
+        (Guidance::Rocket, BombLaunch::Dropped) => from.velocity,
+        (Guidance::Homing, _) => facing(heading) * weapon.speed,
         _ => from.velocity + facing(heading) * weapon.speed,
     }
 }
@@ -267,7 +323,7 @@ impl Shot {
         heading: f32,
     ) -> Self {
         let heading = normalized(heading);
-        let velocity = launch_velocity(&weapon, from, heading);
+        let velocity = launch_velocity(&weapon, from, heading, BombLaunch::Dropped);
         Self {
             weapon,
             firer,
@@ -284,6 +340,7 @@ impl Shot {
             durability: weapon.durability,
             generation: 0,
             disable_only: weapon.disable_only(),
+            miss_roll: None,
         }
     }
 
@@ -298,16 +355,47 @@ impl Shot {
                 self.velocity = self.velocity * ROCKET_KEEP
                     + facing(self.heading) * (self.weapon.speed * ROCKET_PUSH);
             }
-            Guidance::FreefallBomb if self.velocity != Vec2::ZERO => {
-                let off = shortest_turn(self.heading, heading_of(self.velocity));
-                self.heading = normalized(self.heading + off.clamp(-BOMB_TURN, BOMB_TURN));
-            }
+            Guidance::FreefallBomb => self.weathervane(),
             _ => {}
         }
         let was = self.position;
         self.position = self.position + self.velocity;
         self.age += 1;
         was
+    }
+
+    /// Turns a bomb into the wind, as `_HandleShotGuidance`'s bomb tail
+    /// does every tick before the shot moves (@0x329e3-0x32a98): its
+    /// bearing is the table's whole-degree heading of its velocity
+    /// (`_CalcInterceptAngle` from the origin, [`trig::intercept_angle`]),
+    /// up (0) for a bomb at rest; the original scales the velocity by 1000
+    /// first (@0xdd058), which changes no ratio the table reads. While its
+    /// truncated heading is not the bearing (`_AngularDifference` @0x649e
+    /// is 0 only then), it turns [`BOMB_TURN`] a whole degree: back when
+    /// the truncated difference from the heading to the bearing, taken
+    /// into 0-359 (@0x32a62-0x32a7d), is above 180, and on otherwise, half
+    /// round included. So it may pass its bearing within the degree (89.5
+    /// towards 90 goes to 90.5) and then holds.
+    ///
+    /// The original never wraps the heading after the turn, so a bomb that
+    /// crosses up stops up to a degree and a half short of its bearing
+    /// there, and is drawn on the end frame its frame index is clamped to;
+    /// here the heading is wrapped (weapons-fidelity phase 21).
+    fn weathervane(&mut self) {
+        let bearing = trig::intercept_angle(Vec2::ZERO, self.velocity);
+        // A wrapped heading is within 0..360, so its truncation is too.
+        #[allow(clippy::cast_possible_truncation)]
+        let facing = self.heading.trunc() as i16;
+        if facing == bearing {
+            return;
+        }
+        // Within -359..=359, so only a negative one needs taking round; the
+        // original's wrap of 360 and more (@0x32a66) never applies.
+        #[allow(clippy::cast_possible_truncation)]
+        let off = (f32::from(bearing) - self.heading).trunc() as i16;
+        let off = if off < 0 { off + 360 } else { off };
+        let turn = if off > 180 { -BOMB_TURN } else { BOMB_TURN };
+        self.heading = normalized(self.heading + turn);
     }
 
     /// `_HandleShot`'s target rule (@0x355e0-0x35621), run before the
@@ -648,16 +736,117 @@ mod tests {
         );
         left.step(&[]);
         assert!((left.heading - 359.0).abs() < 1e-3, "{left:?}");
-        let mut still = Shot::launch(
-            spec(5, 1000, 60),
-            FIRER,
-            FIRER,
-            &state(0.0, 0.0, 0.0, 0.0, 30.0),
-            30.0,
-        );
-        still.step(&[]);
-        assert_eq!(still.heading, 30.0, "no wind");
         assert_eq!(BOMB_TURN, 1.0);
+    }
+
+    /// A bomb facing `heading`, moving `velocity`, after `ticks` ticks.
+    fn vaned(heading: f32, velocity: Vec2, ticks: u32) -> f32 {
+        let mut bomb = Shot {
+            velocity,
+            heading,
+            ..Shot::launch(spec(5, 1000, 600), FIRER, FIRER, &ShipState::default(), 0.0)
+        };
+        for _ in 0..ticks {
+            bomb.step(&[]);
+        }
+        bomb.heading
+    }
+
+    #[test]
+    fn a_bomb_turns_a_whole_degree_while_its_truncated_heading_is_off_its_bearing() {
+        let right = Vec2::new(4.0, 0.0);
+        assert_eq!(
+            vaned(9.5, Vec2::new(0.0, -4.0), 1),
+            8.5,
+            "bearing 0, the short way"
+        );
+        assert_eq!(
+            vaned(89.5, right, 1),
+            90.5,
+            "past the bearing within its degree"
+        );
+        assert_eq!(vaned(89.5, right, 5), 90.5, "then it holds");
+        assert_eq!(vaned(90.5, right, 3), 90.5, "on its degree already");
+        assert_eq!(vaned(80.0, right, 3), 83.0);
+    }
+
+    #[test]
+    fn a_stationary_bomb_turns_towards_up() {
+        assert_eq!(vaned(30.0, Vec2::ZERO, 1), 29.0);
+        assert_eq!(vaned(30.0, Vec2::ZERO, 30), 0.0);
+        assert_eq!(vaned(300.0, Vec2::ZERO, 10), 310.0);
+    }
+
+    #[test]
+    fn a_bomb_half_round_from_its_bearing_turns_clockwise() {
+        assert_eq!(vaned(270.0, Vec2::new(4.0, 0.0), 1), 271.0, "180 off");
+        assert_eq!(vaned(269.0, Vec2::new(4.0, 0.0), 1), 268.0, "181 off");
+        assert_eq!(vaned(271.0, Vec2::new(4.0, 0.0), 1), 272.0, "179 off");
+    }
+
+    #[test]
+    fn a_bomb_settles_on_the_tables_bearing() {
+        // Up and right on the diagonal is the table's 46, not 45.
+        assert_eq!(vaned(40.0, Vec2::new(1.0, -1.0), 10), 46.0);
+        assert_eq!(vaned(50.0, Vec2::new(1.0, -1.0), 10), 46.0);
+    }
+
+    #[test]
+    fn a_bomb_turns_across_up_and_wraps() {
+        let up = Vec2::new(0.0, -4.0);
+        assert!(
+            (vaned(359.5, up, 1) - 0.5).abs() < 1e-4,
+            "{}",
+            vaned(359.5, up, 1)
+        );
+        assert!((vaned(359.5, up, 4) - 0.5).abs() < 1e-4, "then holds");
+        assert_eq!(vaned(1.0, Vec2::new(-1.0, -40.0), 1), 0.0);
+        assert_eq!(vaned(0.0, Vec2::new(-1.0, -40.0), 1), 359.0);
+    }
+
+    #[test]
+    fn a_thrown_bomb_or_rocket_adds_its_speed_and_a_dropped_one_does_not() {
+        let from = state(0.0, 0.0, 1.0, 2.0, 90.0);
+        let rocket = spec(6, 1000, 60);
+        let bomb = spec(5, 1000, 60);
+        let thrown = |weapon| launch_velocity(&weapon, &from, 90.0, BombLaunch::Thrown);
+        let dropped = |weapon| launch_velocity(&weapon, &from, 90.0, BombLaunch::Dropped);
+        assert!(
+            close(thrown(rocket), Vec2::new(11.0, 2.0)),
+            "{:?}",
+            thrown(rocket)
+        );
+        assert!(
+            close(thrown(bomb), Vec2::new(11.0, 2.0)),
+            "{:?}",
+            thrown(bomb)
+        );
+        assert_eq!(dropped(rocket), Vec2::new(1.0, 2.0));
+        assert!(
+            close(dropped(bomb), Vec2::new(0.8, 1.6)),
+            "{:?}",
+            dropped(bomb)
+        );
+        for guidance in [-1, 4] {
+            let other = spec(guidance, 1000, 60);
+            assert_eq!(thrown(other), dropped(other), "{guidance}");
+            assert!(close(thrown(other), Vec2::new(11.0, 2.0)), "{guidance}");
+        }
+        let homing = spec(1, 1000, 60);
+        assert!(
+            close(thrown(homing), Vec2::new(10.0, 0.0)),
+            "no ship velocity"
+        );
+        assert_eq!(thrown(homing), dropped(homing));
+    }
+
+    #[test]
+    fn an_npcs_bomb_or_rocket_is_thrown_by_the_engine_and_any_other_dropped() {
+        assert_eq!(BombLaunch::of(true, RuleSource::Engine), BombLaunch::Thrown);
+        assert_eq!(BombLaunch::of(true, RuleSource::Bible), BombLaunch::Dropped);
+        for source in RuleSource::ALL {
+            assert_eq!(BombLaunch::of(false, source), BombLaunch::Dropped);
+        }
     }
 
     #[test]
@@ -704,6 +893,7 @@ mod tests {
             radius: 5.0,
             sprite_x: 15.0,
             condition,
+            miss_class: 100,
         }
     }
 

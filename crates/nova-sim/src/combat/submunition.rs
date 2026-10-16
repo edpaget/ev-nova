@@ -25,9 +25,22 @@
 //!   parent's heading.
 //! - A positive `SubTheta` turns each by `θ - below(2θ + 1)`, within θ
 //!   either way; a negative one spreads them in a starburst |θ| apart,
-//!   centred on the heading.
-//! - Each flies as a shot launched from rest along its heading would; a
-//!   rocket's (6) starts with its parent's velocity instead.
+//!   centred on the heading less half the spread in whole degrees
+//!   (`|θ|·(count − 1) / 2` in integers, @0x3f49c-0x3f4da), so an odd
+//!   spread leans half a degree clockwise.
+//! - Each takes its `Speed` along its heading from rest, a bomb's (5) too,
+//!   whoever fired the parent; a rocket's (6) starts with its parent's
+//!   velocity instead, with no speed added (@0x3f55c-0x3f5a5).
+//! - None carries a turret miss roll ([`Shot::miss_roll`]), so none is
+//!   ever missed, its own seek included. The original's
+//!   `_SpawnShot(…, 1)` never writes the roll (+0x42, written only under
+//!   -0x42 @0x3e89e), so a sub-munition carries whatever its shot slot's
+//!   last shot left there: -1, 0 for a slot never used, or a turret's roll.
+//!   That depends on how the fixed 128-slot shot table was reused, which
+//!   the engine does not keep, so it is ported as -1.
+//! - The release plays the sub-munition's `Sound` once at the parent, at
+//!   [`SUBMUNITION_PRIORITY`](super::SUBMUNITION_PRIORITY) (see
+//!   [`Combat`](super::Combat)).
 //!
 //! [`Submunitions`]: super::weapon::Submunitions
 
@@ -37,7 +50,7 @@ use super::projectile::{Shot, Target};
 use super::sides::Sides;
 use super::weapon::{Guidance, WeaponSpec};
 use crate::chance::Chance;
-use crate::flight::ShipState;
+use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
 
 /// The sub-munitions of `sub` that `parent` releases, aimed at `target`
@@ -60,11 +73,7 @@ pub fn release(
     };
     let launcher = ShipState {
         position: parent.position,
-        velocity: if sub.guidance == Guidance::Rocket {
-            parent.velocity
-        } else {
-            Vec2::ZERO
-        },
+        velocity: Vec2::ZERO,
         heading: parent.heading,
     };
     let unaimed = Shot {
@@ -94,16 +103,18 @@ pub fn release(
         (target, parent.heading)
     };
     let theta = f32::from(subs.theta);
-    let spread = theta.abs();
+    let spread = u32::from(subs.theta.unsigned_abs());
+    // Halved in whole degrees (@0x3f49c-0x3f4da), as `count - 1` is never
+    // below none.
+    let centred = spread * subs.count.saturating_sub(1) / 2;
     (0..subs.count)
         .map(|n| {
             let offset = if subs.theta > 0 {
-                let width = u32::from(subs.theta.unsigned_abs()) * 2 + 1;
-                theta - chance.below(width) as f32
+                theta - chance.below(spread * 2 + 1) as f32
             } else {
-                spread * n as f32 - spread * (subs.count - 1) as f32 / 2.0
+                (spread * n) as f32 - centred as f32
             };
-            Shot {
+            let shot = Shot {
                 target,
                 aimed_at: target,
                 generation: unaimed.generation,
@@ -115,7 +126,15 @@ pub fn release(
                     &launcher,
                     heading + offset,
                 )
-            }
+            };
+            // A rocket keeps its parent's velocity; any other, a bomb too,
+            // takes its `Speed` along its heading from rest (@0x3f55c-0x3f5a5).
+            let velocity = if sub.guidance == Guidance::Rocket {
+                parent.velocity
+            } else {
+                facing(shot.heading) * sub.speed
+            };
+            Shot { velocity, ..shot }
         })
         .collect()
 }
@@ -189,6 +208,7 @@ mod tests {
             radius: 10.0,
             sprite_x: 30.0,
             condition: Condition::Intact,
+            miss_class: 100,
         }
     }
 
@@ -441,6 +461,40 @@ mod tests {
     }
 
     #[test]
+    fn a_sub_munition_carries_no_miss_roll_whatever_its_parents() {
+        let turret = Shot {
+            miss_roll: Some(100),
+            ..parent(4, 2, 0, 0, 0)
+        };
+        let subs = release(&turret, &sub(4), None, &among(&[]), &mut Draws::of(&[]));
+        assert_eq!(subs.len(), 2);
+        assert!(subs.iter().all(|shot| shot.miss_roll.is_none()), "{subs:?}");
+    }
+
+    #[test]
+    fn a_seeking_sub_munition_of_a_turret_takes_the_nearest_fighter_class_ship() {
+        let turret = Shot {
+            miss_roll: Some(100),
+            ..parent(4, 1, 0, 0, 0x0010)
+        };
+        let targets = [
+            ship(HIT, 100.0, 450.0),
+            Target {
+                miss_class: 80,
+                ..ship(NEAR, 100.0, 60.0)
+            },
+        ];
+        let subs = release(
+            &turret,
+            &sub(4),
+            None,
+            &among(&targets),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(subs[0].target, Some(NEAR), "never missed, at -1");
+    }
+
+    #[test]
     fn a_point_defence_parent_passes_on_its_own_target() {
         let defence = Shot {
             target: Some(NEAR),
@@ -464,6 +518,51 @@ mod tests {
         assert_eq!(subs[0].velocity, parent.velocity);
         let unguided = release(&parent, &sub(-1), None, &among(&[]), &mut Draws::of(&[]));
         assert!((unguided[0].velocity - facing(90.0) * 13.0).length() < 1e-4);
+    }
+
+    #[test]
+    fn a_bomb_sub_munition_leaves_at_its_speed_from_rest_whoever_fired_the_parent() {
+        for firer in [FIRER, ShipRef::Player] {
+            let parent = Shot {
+                firer,
+                fleet: firer,
+                ..parent(-1, 1, 0, 0, 0)
+            };
+            let subs = release(&parent, &sub(5), None, &among(&[]), &mut Draws::of(&[]));
+            let along = facing(90.0) * 13.0;
+            assert!(
+                (subs[0].velocity - along).length() < 1e-4,
+                "{firer:?}: {subs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_npcs_rocket_sub_munition_takes_its_parents_velocity_and_no_speed() {
+        let parent = parent(-1, 1, 0, 0, 0);
+        assert_eq!(parent.firer, FIRER, "an NPC's");
+        let subs = release(&parent, &sub(6), None, &among(&[]), &mut Draws::of(&[]));
+        assert_eq!(subs[0].velocity, parent.velocity);
+    }
+
+    #[test]
+    fn a_starburst_halves_its_spread_in_whole_degrees() {
+        let pair = release(
+            &parent(-1, 2, -15, 0, 0),
+            &sub(-1),
+            None,
+            &among(&[]),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(headings(&pair), [83.0, 98.0], "15 / 2 is 7");
+        let three = release(
+            &parent(-1, 3, -15, 0, 0),
+            &sub(-1),
+            None,
+            &among(&[]),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(headings(&three), [75.0, 90.0, 105.0], "30 / 2 is 15");
     }
 
     #[test]

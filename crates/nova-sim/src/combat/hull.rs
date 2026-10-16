@@ -38,6 +38,11 @@
 //!   (`_HandleBeams` @0x31210). The original's explosion size for one is a stale stack
 //!   value (copied @0x2d900 from a local only 0x2d968 writes); the engine
 //!   reads it as none.
+//! - Its turret miss class ([`HullSpec::miss_class`], [`miss_class`]) is
+//!   80 for a Fighter-class ship, 90 for a Medium one and 100 for any
+//!   other, from its escort class: its turret and point-defence shots roll
+//!   1 to it, and a roll above it misses it while it is intact (see
+//!   [`sides`](super::sides)).
 //! - Its `KeyCarried` ([`HullSpec::key_carried`]) is the ship a weapon of
 //!   `Flags2` 0x0080 needs aboard (`_WeaponHasAmmo` @0xba07-0xba85, see
 //!   [`Armament::has_ammo`](super::armament::Armament::has_ammo)); none
@@ -49,6 +54,7 @@ use super::exits::ExitPoints;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{HullRecord, ShipId};
+use crate::escort::EscortClass;
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
@@ -114,6 +120,30 @@ pub const DEATH_SIZE_MASS: f32 = 100.0;
 pub const DEATH_SIZE_PER_TON: f32 = 0.075;
 /// The death explosion's size before the mass (the double @0xdd590).
 pub const DEATH_SIZE_BASE: f32 = 50.0;
+
+/// The turret miss class of a Fighter-class ship (`_LoadObjectData`
+/// @0x7a4c4).
+pub const FIGHTER_MISS_CLASS: u32 = 80;
+/// The turret miss class of a Medium ship (@0x7a4d1).
+pub const MEDIUM_MISS_CLASS: u32 = 90;
+/// The turret miss class of any heavier class, a Freighter's too
+/// (@0x7a4d6).
+pub const HEAVY_MISS_CLASS: u32 = 100;
+
+/// The turret miss class of a ship of escort class `class`, as
+/// `_LoadObjectData` sets class +0xa10 from its escort type +0xe
+/// (@0x7a4bb-0x7a4de): [`FIGHTER_MISS_CLASS`], [`MEDIUM_MISS_CLASS`], or
+/// [`HEAVY_MISS_CLASS`] for a Warship or a Freighter. Nothing else writes
+/// it, so it is never 0 or less, and `_SpawnShot`'s `Rand(100) + 1` for a
+/// class of 0 or less (@0x3e924-0x3e93c) is never reached.
+#[must_use]
+pub const fn miss_class(class: EscortClass) -> u32 {
+    match class {
+        EscortClass::Fighter => FIGHTER_MISS_CLASS,
+        EscortClass::Medium => MEDIUM_MISS_CLASS,
+        EscortClass::Warship | EscortClass::Freighter => HEAVY_MISS_CLASS,
+    }
+}
 
 /// A ship type's hull, in the simulation's units.
 // Each flag is one of the ship type's `Flags` bits, read on its own.
@@ -185,6 +215,11 @@ pub struct HullSpec {
     /// shots and beams leave from its centre (see
     /// [`exits`](super::exits)).
     pub exits: Option<ExitPoints>,
+    /// Its turret miss class (the original's class +0xa10,
+    /// [`miss_class`]): the range a turret or point-defence shot it fires
+    /// rolls in, and the highest roll that hits it while it is intact (see
+    /// [`sides`](super::sides)).
+    pub miss_class: u32,
 }
 
 impl Default for HullSpec {
@@ -211,6 +246,7 @@ impl Default for HullSpec {
             stock_reach: None,
             hidden: false,
             exits: None,
+            miss_class: miss_class(EscortClass::Freighter),
         }
     }
 }
@@ -242,6 +278,7 @@ impl HullSpec {
             stock_reach: None,
             hidden: record.cost == HIDDEN_COST,
             exits: record.exits.as_ref().and_then(ExitPoints::new),
+            miss_class: miss_class(record.escort_class),
         }
     }
 
@@ -610,6 +647,23 @@ mod tests {
             assert!(!shown.hidden, "cost {cost}");
         }
         assert!(!HullSpec::default().hidden);
+    }
+
+    #[test]
+    fn a_hulls_miss_class_is_80_90_or_100_by_its_escort_class() {
+        for (escort_class, miss_class) in [
+            (EscortClass::Fighter, 80),
+            (EscortClass::Medium, 90),
+            (EscortClass::Warship, 100),
+            (EscortClass::Freighter, 100),
+        ] {
+            let spec = HullSpec::new(&HullRecord {
+                escort_class,
+                ..hull(141)
+            });
+            assert_eq!(spec.miss_class, miss_class, "{escort_class:?}");
+        }
+        assert_eq!(HullSpec::default().miss_class, 100);
     }
 
     #[test]

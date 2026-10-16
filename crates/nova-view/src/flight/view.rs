@@ -10465,6 +10465,7 @@ mod tests {
             cost: 0,
             speed: 0,
             exits: None,
+            escort_class: nova_sim::EscortClass::Freighter,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
@@ -10611,6 +10612,7 @@ mod tests {
             cost: 0,
             speed: 0,
             exits: None,
+            escort_class: nova_sim::EscortClass::Freighter,
         }
     }
 

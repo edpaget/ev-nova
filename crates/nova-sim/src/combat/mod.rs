@@ -51,7 +51,11 @@
 //!    that cannot fire spends nothing. Each shot or beam leaves from the
 //!    ship's exit point for its weapon's `ExitType`, on the frame the ship
 //!    was last drawn on ([`exits`], [`Fighter::drawn_heading`]), a turret
-//!    leading its target from there (see `Combat::launch`). A fighter
+//!    leading its target from there (see `Combat::launch`). A turret or
+//!    point-defence shot rolls its miss in its ship's class ([`sides`]),
+//!    and an NPC's bomb or rocket leaves at its ship's velocity and its
+//!    `Speed`, the player's at four fifths or all of its ship's velocity
+//!    ([`BombLaunch`](projectile::BombLaunch)). A fighter
 //!    bay's launch is no shot but a [`Sortie`], which the session takes
 //!    ([`Combat::take_sorties`]) and puts in the system as a ship. An NPC
 //!    fires its pick as `_FireAIShipWeapon` does ([`ai_fire`]): a copy
@@ -218,7 +222,9 @@ use hull::{
 };
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion};
-use projectile::{DecayStep, Fuse, Jam, Meeting, Shot, ShotId, Source, Target, contact};
+use projectile::{
+    BombLaunch, DecayStep, Fuse, Jam, Meeting, Shot, ShotId, Source, Target, contact,
+};
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
@@ -310,8 +316,8 @@ pub enum CombatEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FireSound {
     /// The priority it plays at; none where the function firing it isn't
-    /// ported yet (the player's `_FirePlayerWeapon`, point defence, a
-    /// fighter bay's launch and sub-munitions).
+    /// ported yet (the player's `_FirePlayerWeapon`, point defence and a
+    /// fighter bay's launch).
     pub priority: Option<u8>,
 }
 
@@ -325,6 +331,14 @@ impl FireSound {
 /// passes channel 3 for guidance 0 and 3, which `_PlaySoundDistance`
 /// (@0xe007) never reads.
 pub const AI_FIRE_PRIORITY: u8 = 4;
+
+/// The priority a shot's released sub-munitions play their weapon's sound
+/// at, once a release, at the parent (`_SpawnShotSubmunitions` @0x3f23b-0x3f2f2,
+/// `_PlaySoundDistance(-1, snd, 4, …)`). Under the sub-munition's `Flags`
+/// 0x0010 the original plays it only when that sound is not already
+/// playing (`_ST_IsSoundPlaying` @0x3f264), which weapons-fidelity phase 19
+/// owns.
+pub const SUBMUNITION_PRIORITY: u8 = 4;
 
 /// How a strike left the ship it hit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -591,6 +605,9 @@ pub struct Combat {
     /// How beams hit ([`RuleKey::BeamHitTest`](crate::RuleKey::BeamHitTest),
     /// [`RuleKey::BeamConeQuirks`](crate::RuleKey::BeamConeQuirks)).
     beam_rules: BeamRules,
+    /// How an NPC's bombs and rockets leave it
+    /// ([`RuleKey::BombRocketLaunch`](crate::RuleKey::BombRocketLaunch)).
+    bomb_launch: RuleSource,
 }
 
 impl Combat {
@@ -812,6 +829,13 @@ impl Combat {
         self.beam_rules.angle = ConeAngle::from(source);
     }
 
+    /// Has an NPC's bombs and rockets leave it as `source` says
+    /// ([`BombLaunch::of`]): by default, the engine's, thrown at the
+    /// ship's velocity and their `Speed`.
+    pub fn set_bomb_rocket_launch(&mut self, source: RuleSource) {
+        self.bomb_launch = source;
+    }
+
     /// The next shot's number.
     fn next_id(&mut self) -> ShotId {
         let id = ShotId(self.next_shot);
@@ -853,7 +877,8 @@ impl Combat {
     }
 
     /// Puts `launch` in flight from `side`, from `muzzle`, its damage aimed
-    /// at `aimed_at` among `targets`, sounding as `sound` says: a fighter's
+    /// at `aimed_at` among `targets`, sounding as `sound` says, its miss
+    /// roll drawn on `chance`: a fighter's
     /// [`Sortie`] from a bay, a beam held on the missile `quarry`, on its
     /// target, or ahead, or a shot of its government. Its firing is heard
     /// at the ship's centre (`_PlaySoundDistance(&ship)`).
@@ -879,15 +904,26 @@ impl Combat {
     ///   `Flags3` 0x0010, and is aimed from it (`_CalcInterceptAngle`
     ///   @0x39790). A point-defence beam never takes the nearest
     ///   (@0x398d2, kind 1).
+    /// - A shot's velocity is [`projectile::launch_velocity`]'s along its
+    ///   heading, a bomb's or rocket's as the fight's [`BombLaunch`] reading
+    ///   gives for its ship: an NPC's, an escort's too, thrown at the ship's
+    ///   velocity and its `Speed` by the engine, the player's dropped
+    ///   (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a). A bomb's
+    ///   velocity goes along its aim before its inaccuracy, which turns only
+    ///   its facing (@0x3ef0a-0x3efed).
     /// - A negative `Inaccuracy` flies the shot out from its ship's heading
     ///   by as many degrees, to the side of its exit's x, facing as aimed
     ///   (@0x3ee10-0x3eec0); a shot from an exit on the centre line, or
-    ///   from none, flies as aimed, and so does point defence. A bomb or
-    ///   rocket keeps its launch velocity, as
-    ///   [`projectile::launch_velocity`] gives it whatever the heading
-    ///   (the gate on 5 and 6 is weapons-fidelity phase 10's).
+    ///   from none, flies as aimed, and so does point defence. A dropped
+    ///   bomb or rocket reads no heading, so keeps its launch velocity, as
+    ///   the gate it fails holds the broadside too.
+    /// - A ship's turret (4) or point-defence (9) shot rolls its miss,
+    ///   `below(class) + 1` in its ship's
+    ///   [`HullSpec::miss_class`] (@0x3e89e-0x3e918), drawn on `chance`;
+    ///   any other carries none (@0x3e95c). See [`sides`] for the misses.
     /// - A beam's exit is kept, and it starts there every tick
     ///   ([`Beam::follow`]).
+    #[allow(clippy::too_many_arguments)]
     fn launch(
         &mut self,
         (side, ties): (Side, Ties),
@@ -896,6 +932,7 @@ impl Combat {
         (quarry, aimed_at): (Option<ShotId>, Option<ShipRef>),
         sound: Option<FireSound>,
         targets: &[Target],
+        chance: &mut dyn Chance,
     ) {
         let Side { ship, fleet, .. } = side;
         let from = muzzle.from;
@@ -954,18 +991,33 @@ impl Combat {
                 ..from
             };
             let heading = launch.heading_from(&leaving);
+            let thrown = BombLaunch::of(ship != ShipRef::Player, self.bomb_launch);
+            // A bomb flies along its aim, its inaccuracy turning only its
+            // facing, after its velocity is set (@0x3ef0a-0x3efed).
+            let along = if weapon.guidance == Guidance::FreefallBomb {
+                normalized(launch.pointing.heading_from(&leaving))
+            } else {
+                heading
+            };
+            let rolls = matches!(weapon.guidance, Guidance::Turret | Guidance::PointDefence);
             let mut shot = Shot {
                 id: self.next_id(),
                 target: launch.target,
                 aimed_at,
                 source: Source::Ship(ties),
+                miss_roll: rolls.then(|| chance.below(muzzle.miss_class) + 1),
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
-            if weapon.broadside > 0 && side_of_exit != 0.0 && quarry.is_none() {
+            // A dropped bomb or rocket reads no heading, so it is never sent
+            // broadside, as the gate it fails holds the broadside
+            // (@0x3ede8-0x3ee0a).
+            let out = if weapon.broadside > 0 && side_of_exit != 0.0 && quarry.is_none() {
                 // Wrapped in float, then truncated (@0x3ee7e-0x3eeb8).
-                let out = normalized(from.heading + side_of_exit * weapon.broadside as f32).trunc();
-                shot.velocity = projectile::launch_velocity(&weapon, &from, out);
-            }
+                normalized(from.heading + side_of_exit * weapon.broadside as f32).trunc()
+            } else {
+                along
+            };
+            shot.velocity = projectile::launch_velocity(&weapon, &from, out, thrown);
             self.shots.push(shot);
         }
     }
@@ -1060,6 +1112,7 @@ impl Combat {
                     (None, aimed_at),
                     Some(FireSound::UNPORTED),
                     targets,
+                    chance,
                 );
             }
             let Some(pick) = fighter.trigger.only.filter(|_| npc) else {
@@ -1086,7 +1139,15 @@ impl Combat {
                 let sound = (copy == 0).then_some(FireSound {
                     priority: Some(AI_FIRE_PRIORITY),
                 });
-                self.launch(sides, &mut muzzle, launch, (None, aimed_at), sound, targets);
+                self.launch(
+                    sides,
+                    &mut muzzle,
+                    launch,
+                    (None, aimed_at),
+                    sound,
+                    targets,
+                    chance,
+                );
             }
             let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
             if let Some(velocity) = pushed {
@@ -1147,6 +1208,7 @@ impl Combat {
                     (Some(missile), None),
                     Some(FireSound::UNPORTED),
                     &[],
+                    chance,
                 );
             }
         }
@@ -1606,7 +1668,9 @@ impl Combat {
             ship: parent.firer,
             weapon: sub.id,
             at: parent.position,
-            sound: Some(FireSound::UNPORTED),
+            sound: Some(FireSound {
+                priority: Some(SUBMUNITION_PRIORITY),
+            }),
         });
         for shot in shots {
             let id = self.next_id();
@@ -1849,6 +1913,7 @@ impl Fighter<'_> {
             radius: self.hull.hit_radius,
             sprite_x: self.hull.sprite_size.unwrap_or(beam::NO_SPRITE_WIDTH),
             condition: *self.condition,
+            miss_class: self.hull.miss_class,
         }
     }
 }
@@ -1872,6 +1937,9 @@ struct Muzzle<'a> {
     angle: f32,
     /// Its cursors.
     cursors: &'a mut ExitCursors,
+    /// Its hull's turret miss class, the range its turret and
+    /// point-defence shots roll in.
+    miss_class: u32,
 }
 
 impl<'a> Muzzle<'a> {
@@ -1893,6 +1961,7 @@ impl<'a> Muzzle<'a> {
             exits,
             angle,
             cursors,
+            miss_class: hull.miss_class,
         }
     }
 }
@@ -5194,7 +5263,9 @@ mod tests {
                 ship: A,
                 weapon: WeaponId(148),
                 at,
-                sound: Some(crate::combat::FireSound::UNPORTED),
+                sound: Some(FireSound {
+                    priority: Some(SUBMUNITION_PRIORITY)
+                }),
             })
         );
         let (shell, arsenal) = cluster(0x0020);
@@ -5243,8 +5314,11 @@ mod tests {
             ship: A,
             weapon: WeaponId(148),
             at,
-            sound: Some(crate::combat::FireSound::UNPORTED),
+            sound: Some(FireSound {
+                priority: Some(SUBMUNITION_PRIORITY)
+            }),
         }));
+        assert_eq!(SUBMUNITION_PRIORITY, 4);
     }
 
     #[test]
@@ -6704,31 +6778,56 @@ mod tests {
         assert!(close_to(velocity, along), "{velocity:?} {along:?}");
     }
 
+    /// The velocity and heading of the shot of `guidance` and `inaccuracy`
+    /// that `ship`, moving (1, 2) and facing up, fires from a starboard
+    /// exit, after its first tick.
+    fn fired_broadside(ship: Ship, guidance: i16, inaccuracy: i16) -> (Vec2, f32) {
+        let mut combat = Combat::default();
+        let record = WeaponRecord {
+            guidance,
+            inaccuracy,
+            ..gun()
+        };
+        let mut ships = [Ship {
+            state: ShipState {
+                position: Vec2::ZERO,
+                velocity: Vec2::new(1.0, 2.0),
+                heading: 0.0,
+            },
+            ..ship.armed(record).of(exits_at(0, [(3, 10); 4]))
+        }];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shot = combat.shots().last().expect("a shot");
+        (shot.velocity, shot.heading)
+    }
+
     #[test]
-    fn a_broadside_bomb_or_rocket_keeps_its_launch_velocity() {
-        let fired = |guidance, inaccuracy| {
-            let mut combat = Combat::default();
-            let record = WeaponRecord {
-                guidance,
-                inaccuracy,
-                ..gun()
-            };
-            let mut ships = [Ship {
-                state: ShipState {
-                    position: Vec2::ZERO,
-                    velocity: Vec2::new(1.0, 2.0),
-                    heading: 0.0,
-                },
-                ..Ship::at(1, 0.0, 0.0)
-                    .armed(record)
-                    .of(exits_at(0, [(3, 10); 4]))
-            }];
-            tick(&mut combat, &mut ships, &NovaDisable);
-            let shot = combat.shots().last().expect("a shot");
-            (shot.position, shot.velocity, shot.heading)
+    fn an_npcs_broadside_bomb_or_rocket_flies_out_to_its_side() {
+        // (1, 2) and 10 to starboard, 90 degrees off its heading of 0.
+        let out = Vec2::new(11.0, 2.0);
+        let (bomb, facing) = fired_broadside(Ship::at(1, 0.0, 0.0), 5, -90);
+        assert!(close_to(bomb, out), "{bomb:?}");
+        assert_eq!(facing, 1.0, "aimed ahead, then a degree into the wind");
+        let (rocket, facing) = fired_broadside(Ship::at(1, 0.0, 0.0), 6, -90);
+        let flown = out * projectile::ROCKET_KEEP
+            + crate::flight::facing(0.0) * (10.0 * projectile::ROCKET_PUSH);
+        assert!(close_to(rocket, flown), "{rocket:?}");
+        assert_eq!(facing, 0.0, "aimed ahead");
+    }
+
+    #[test]
+    fn the_players_broadside_bomb_or_rocket_keeps_its_launch_velocity() {
+        let player = || Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(0, 0.0, 0.0)
         };
         for guidance in [5, 6] {
-            assert_eq!(fired(guidance, -90), fired(guidance, 0), "{guidance}");
+            assert_eq!(
+                fired_broadside(player(), guidance, -90),
+                fired_broadside(player(), guidance, 0),
+                "{guidance}"
+            );
         }
     }
 
@@ -7747,5 +7846,346 @@ mod tests {
         ];
         shoves_after_one(&mut ships, 12);
         assert_eq!(ships[1].ion.charge, 30.0);
+    }
+
+    // The turret miss (`_SpawnShot` @0x3e89e-0x3e963, `_ShotCanHitShip`
+    // @0x448ad-0x448d5).
+
+    /// A tick among `ships` drawing on `chance`.
+    fn tick_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        combat.tick(
+            &mut fighters,
+            &Arsenal::default(),
+            &Governments::default(),
+            Rules::default(),
+            &mut [],
+            chance,
+        );
+    }
+
+    /// A hull of turret miss class `class`.
+    fn of_class(class: u32) -> HullSpec {
+        HullSpec {
+            miss_class: class,
+            ..HullSpec::default()
+        }
+    }
+
+    /// The miss roll of the shot `ship` fires at B, at (0, -300), with
+    /// `record`, on the draws `draws`, and the ranges asked.
+    fn rolled_by(ship: Ship, record: WeaponRecord, draws: &[u32]) -> (Option<u32>, Vec<u32>) {
+        let mut combat = Combat::default();
+        let mut ships = [ship.armed(record).targeting(B), Ship::at(2, 0.0, -300.0)];
+        let mut chance = crate::testkit::Draws::of(draws);
+        tick_drawing(&mut combat, &mut ships, &mut chance);
+        let shot = combat.shots().first().expect("a shot");
+        (shot.miss_roll, chance.asked)
+    }
+
+    #[test]
+    fn a_turret_shot_rolls_its_miss_in_its_firers_class() {
+        for (class, asked) in [(100, 100), (90, 90), (80, 80)] {
+            let firer = Ship::at(1, 0.0, 0.0).of(of_class(class));
+            assert_eq!(
+                rolled_by(firer, turret(4), &[42]),
+                (Some(43), vec![asked]),
+                "class {class}"
+            );
+        }
+        let firer = Ship::at(1, 0.0, 0.0).of(of_class(100));
+        assert_eq!(rolled_by(firer, turret(4), &[80]).0, Some(81));
+    }
+
+    #[test]
+    fn the_players_turret_rolls_in_the_players_class() {
+        let player = Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(0, 0.0, 0.0).of(of_class(90))
+        };
+        assert_eq!(rolled_by(player, turret(4), &[89]), (Some(90), vec![90]));
+    }
+
+    #[test]
+    fn only_a_turret_or_point_defence_shot_rolls_its_miss() {
+        let missile = WeaponRecord {
+            guidance: 1,
+            guided_turn: 70,
+            ..blaster()
+        };
+        for guidance in [7, 8, -1, 5, 6] {
+            let record = WeaponRecord {
+                guidance,
+                ..turret(4)
+            };
+            // B, up the screen, ahead or, for the rear turret, behind.
+            let facing = if guidance == 8 { 180.0 } else { 0.0 };
+            let firer = Ship::at(1, 0.0, 0.0).facing(facing).of(of_class(100));
+            assert_eq!(rolled_by(firer, record, &[]), (None, vec![]), "{guidance}");
+        }
+        let firer = Ship::at(1, 0.0, 0.0).of(of_class(100));
+        assert_eq!(rolled_by(firer, missile, &[]), (None, vec![]), "homing");
+    }
+
+    #[test]
+    fn a_point_defence_shot_rolls_its_miss_in_its_defenders_class() {
+        let [defender, attacker] = defended();
+        let hull = HullSpec {
+            miss_class: 90,
+            ..defender.hull
+        };
+        let mut ships = [defender.of(hull), attacker];
+        let mut combat = Combat::default();
+        let mut chance = crate::testkit::Draws::of(&[60]);
+        tick_drawing(&mut combat, &mut ships, &mut chance);
+        let defence = combat
+            .shots()
+            .iter()
+            .find(|shot| shot.weapon.guidance == Guidance::PointDefence)
+            .expect("a point-defence shot");
+        assert_eq!(defence.miss_roll, Some(61));
+        assert_eq!(chance.asked, [90]);
+    }
+
+    /// The ships a heavy NPC's turret shot, rolling `draw` + 1, hits over
+    /// 30 ticks: a Fighter-class C, `condition` (with its armour down to 5
+    /// when disabled), 100 pixels up its path, and a Warship B 200 behind
+    /// it.
+    fn struck_through(draw: u32, condition: Condition) -> Vec<ShipRef> {
+        let mut fighter = Ship {
+            condition,
+            ..Ship::at(3, 0.0, -100.0).of(of_class(80))
+        };
+        if condition == Condition::Disabled {
+            fighter.reserves.armor.now = 5.0;
+        }
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0)
+                .armed(turret(4))
+                .targeting(B)
+                .of(of_class(100)),
+            Ship::at(2, 0.0, -300.0).of(of_class(100)),
+            fighter,
+        ];
+        let mut chance = crate::testkit::Draws::of(&[draw]);
+        let mut struck = Vec::new();
+        for _ in 0..30 {
+            tick_drawing(&mut combat, &mut ships, &mut chance);
+            ships[0].trigger = QUIET;
+            struck.extend(combat.take_strikes().iter().map(|strike| strike.ship));
+        }
+        struck
+    }
+
+    #[test]
+    fn a_heavy_turrets_shot_flies_through_an_intact_fighter_it_rolled_over() {
+        assert_eq!(struck_through(80, Condition::Intact), [B], "roll 81");
+        assert_eq!(struck_through(79, Condition::Intact), [C], "roll 80");
+    }
+
+    #[test]
+    fn a_heavy_turrets_shot_hits_a_disabled_fighter_whatever_its_roll() {
+        assert_eq!(struck_through(99, Condition::Disabled), [C]);
+    }
+
+    #[test]
+    fn a_point_defence_shot_flies_through_an_intact_fighter_it_rolled_over() {
+        let struck = |draw| {
+            let [defender, attacker] = defended();
+            let hull = HullSpec {
+                miss_class: 100,
+                ..defender.hull
+            };
+            let fighter = Ship {
+                hull: HullSpec {
+                    hit_radius: 40.0,
+                    ..of_class(80)
+                },
+                ..Ship::at(3, 70.0, 50.0)
+            };
+            let mut ships = [defender.of(hull), attacker, fighter];
+            let mut combat = Combat::default();
+            let mut chance = crate::testkit::Draws::of(&[draw]);
+            let mut struck = Vec::new();
+            for _ in 0..12 {
+                tick_drawing(&mut combat, &mut ships, &mut chance);
+                ships[0].trigger = QUIET;
+                ships[0].trigger.point_defence = false;
+                struck.extend(combat.take_strikes().iter().map(|strike| strike.ship));
+            }
+            struck
+        };
+        assert_eq!(struck(80), [], "roll 81 passes the fighter");
+        assert_eq!(struck(79), [C], "roll 80 hits it");
+    }
+
+    // Bomb and rocket launch (`_SpawnShot` @0x3e73a-0x3e783,
+    // @0x3ede8-0x3ef0a, @0x3ef0a-0x3efed).
+
+    /// A bomb or rocket of `guidance`, 10 pixels a tick, `inaccuracy`.
+    fn dropping(guidance: i16, inaccuracy: i16) -> WeaponRecord {
+        WeaponRecord {
+            guidance,
+            inaccuracy,
+            count: 60,
+            speed: 1000,
+            ..weapon(128)
+        }
+    }
+
+    /// The velocity and heading, after its first tick, of the shot `ship`
+    /// (moving `velocity`, facing right) fires with `record`, by `source`'s
+    /// reading of the bomb and rocket launch, on `draws`.
+    fn launched(
+        ship: Ship,
+        velocity: Vec2,
+        record: WeaponRecord,
+        source: RuleSource,
+        draws: &[u32],
+    ) -> (Vec2, f32) {
+        let mut combat = Combat::default();
+        combat.set_bomb_rocket_launch(source);
+        let mut ships = [Ship {
+            state: ShipState {
+                velocity,
+                ..ship.state
+            },
+            ..ship.armed(record)
+        }];
+        tick_drawing(
+            &mut combat,
+            &mut ships,
+            &mut crate::testkit::Draws::of(draws),
+        );
+        let shot = combat.shots().last().expect("a shot");
+        (shot.velocity, shot.heading)
+    }
+
+    fn the_player() -> Ship {
+        Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(0, 0.0, 0.0)
+        }
+    }
+
+    /// A rocket's velocity after its first tick from `v`, heading right at
+    /// 10 pixels a tick.
+    fn rocket_after(v: Vec2) -> Vec2 {
+        v * projectile::ROCKET_KEEP + Vec2::new(10.0 * projectile::ROCKET_PUSH, 0.0)
+    }
+
+    #[test]
+    fn an_npcs_rocket_leaves_at_its_ships_velocity_and_its_speed_and_the_players_at_its_ships() {
+        let v = Vec2::new(1.0, 2.0);
+        let rocket = dropping(6, 0);
+        let (npc, _) = launched(Ship::at(1, 0.0, 0.0), v, rocket, RuleSource::Engine, &[]);
+        assert!(close_to(npc, rocket_after(Vec2::new(11.0, 2.0))), "{npc:?}");
+        let (player, _) = launched(the_player(), v, rocket, RuleSource::Engine, &[]);
+        assert!(close_to(player, rocket_after(v)), "{player:?}");
+    }
+
+    #[test]
+    fn an_npcs_bomb_leaves_at_its_ships_velocity_and_its_speed_and_the_players_at_four_fifths() {
+        let v = Vec2::new(1.0, 2.0);
+        let bomb = dropping(5, 0);
+        let (npc, _) = launched(Ship::at(1, 0.0, 0.0), v, bomb, RuleSource::Engine, &[]);
+        assert!(close_to(npc, Vec2::new(11.0, 2.0)), "{npc:?}");
+        let (player, _) = launched(the_player(), v, bomb, RuleSource::Engine, &[]);
+        assert!(close_to(player, Vec2::new(0.8, 1.6)), "{player:?}");
+    }
+
+    #[test]
+    fn an_escorts_bomb_and_rocket_leave_as_any_npcs() {
+        let escort = Ship {
+            leader: Some(ShipRef::Player),
+            fleet: ShipRef::Player,
+            ..Ship::at(1, 0.0, 0.0)
+        };
+        let v = Vec2::new(1.0, 2.0);
+        let (bomb, _) = launched(escort, v, dropping(5, 0), RuleSource::Engine, &[]);
+        assert!(close_to(bomb, Vec2::new(11.0, 2.0)), "{bomb:?}");
+        let escort = Ship {
+            leader: Some(ShipRef::Player),
+            fleet: ShipRef::Player,
+            ..Ship::at(1, 0.0, 0.0)
+        };
+        let (rocket, _) = launched(escort, v, dropping(6, 0), RuleSource::Engine, &[]);
+        assert!(
+            close_to(rocket, rocket_after(Vec2::new(11.0, 2.0))),
+            "{rocket:?}"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_every_ships_bomb_and_rocket_leave_as_the_players() {
+        let v = Vec2::new(1.0, 2.0);
+        let (bomb, _) = launched(
+            Ship::at(1, 0.0, 0.0),
+            v,
+            dropping(5, 0),
+            RuleSource::Bible,
+            &[],
+        );
+        assert!(close_to(bomb, Vec2::new(0.8, 1.6)), "{bomb:?}");
+        let (rocket, _) = launched(
+            Ship::at(1, 0.0, 0.0),
+            v,
+            dropping(6, 0),
+            RuleSource::Bible,
+            &[],
+        );
+        assert!(close_to(rocket, rocket_after(v)), "{rocket:?}");
+        let (gun, _) = launched(
+            Ship::at(1, 0.0, 0.0),
+            v,
+            dropping(-1, 0),
+            RuleSource::Bible,
+            &[],
+        );
+        assert!(
+            close_to(gun, Vec2::new(11.0, 2.0)),
+            "any other as ever: {gun:?}"
+        );
+    }
+
+    #[test]
+    fn a_bombs_inaccuracy_turns_only_its_facing_and_a_rockets_its_flight_too() {
+        // Inaccuracy 9 draws below 18, less 9: 14 is +5.
+        let at_rest = Vec2::ZERO;
+        let (bomb, facing) = launched(
+            Ship::at(1, 0.0, 0.0),
+            at_rest,
+            dropping(5, 9),
+            RuleSource::Engine,
+            &[14],
+        );
+        assert!(
+            close_to(bomb, Vec2::new(10.0, 0.0)),
+            "along the aim: {bomb:?}"
+        );
+        assert_eq!(facing, 94.0, "95, then a degree back into the wind");
+        let (rocket, facing) = launched(
+            Ship::at(1, 0.0, 0.0),
+            at_rest,
+            dropping(6, 9),
+            RuleSource::Engine,
+            &[14],
+        );
+        let off = crate::flight::facing(95.0) * 10.0;
+        assert!(close_to(rocket, off), "turned with it: {rocket:?} {off:?}");
+        assert_eq!(facing, 95.0);
+        let moving = Vec2::new(5.0, 0.0);
+        let (bomb, facing) = launched(
+            the_player(),
+            moving,
+            dropping(5, 9),
+            RuleSource::Engine,
+            &[14],
+        );
+        assert!(close_to(bomb, Vec2::new(4.0, 0.0)), "{bomb:?}");
+        assert_eq!(facing, 94.0, "the player's facing takes it too");
     }
 }

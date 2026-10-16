@@ -15,6 +15,7 @@ pub use nova_data::{
 
 use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
+use crate::escort::EscortClass;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::warp::SoundLength;
@@ -1143,6 +1144,10 @@ pub struct HullRecord {
     /// Its `shän`'s weapon exit points, or `None` when it has no `shän`
     /// that can be read.
     pub exits: Option<ShipExits>,
+    /// Its escort class, from its `EscortType`, `InherentAI` and `Mass`
+    /// ([`EscortClass::of`]), which sets which turret shots miss it (see
+    /// [`HullSpec::miss_class`](crate::combat::hull::HullSpec::miss_class)).
+    pub escort_class: EscortClass,
 }
 
 /// A government's penalties for crimes against its ships, raw from its

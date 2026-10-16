@@ -258,6 +258,7 @@ mod tests {
             radius: 0.0,
             sprite_x: 0.0,
             condition: Condition::Intact,
+            miss_class: 100,
         }
     }
 

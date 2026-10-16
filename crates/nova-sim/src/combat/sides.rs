@@ -33,6 +33,15 @@
 //! - with the same leader as its firer (6a, @0x44846-0x44873);
 //! - of its firer's government (6b, @0x44879-0x4488d), an independent's
 //!   and the player's excepted;
+//! - that is intact and of a turret miss class below the shot's miss roll
+//!   (6d, @0x448ad-0x448d5): `_SpawnShot` rolls a ship's turret (4) and
+//!   point-defence (9) shots 1 to its firer's class
+//!   ([`Shot::miss_roll`]), so a heavy firer's misses Fighter-class (80)
+//!   and Medium (90) ships on its high rolls; an equal roll hits, and so
+//!   does every roll on a disabled or breaking-up ship (`_IsDisabled`, true
+//!   at armour 0 or less), whose [`Condition`] is anything but intact. Any
+//!   other shot carries the original's -1 and is never missed, a
+//!   sub-munition too (see [`submunition`](super::submunition));
 //! - that is an escort's fighter (its leader's leader the player), allied
 //!   with the player, when its firer is on the player's side (6f,
 //!   @0x44936-0x4495f);
@@ -76,18 +85,23 @@
 //! A shot on the move that spends it is not tested at all (@0x447c2): its
 //! end of life takes it ([`Combat`](super::Combat)'s step 7).
 //!
-//! Left out, each with its owner: the nag ship (@0x44803), as
-//! there is none; two defence ships of one stellar (6c, @0x44893) and a
-//! non-ship shot's +0x8c clause (@0x44a81), task `planet-domination`; the
-//! turret miss (6d, @0x448ad), weapons-fidelity phase 10; a miner's shots
-//! and beams (6k, @0x44a54; @0x30f4c), asteroids phase 5; the planet-type
-//! match (8, @0x44a8e; the beam's @0x30d4f), stellar-fidelity phase 2;
-//! the beam's system test (@0x30dc1), as only the player's system is
-//! simulated. None of these functions draws or plays a sound.
+//! The rules read each ship as it was when the tick began
+//! ([`Combat`](super::Combat)'s step 7), where the original reads it as
+//! each hit before it in the frame has left it: a turret shot rolling over
+//! a fighter that an earlier shot that tick disabled passes it here, and
+//! hits it there (weapons-fidelity phase 21).
+//!
+//! Left out, each with its owner: the nag ship (@0x44803), as there is
+//! none; two defence ships of one stellar (6c, @0x44893) and a non-ship
+//! shot's +0x8c clause (@0x44a81), task `planet-domination`; a miner's
+//! shots and beams (6k, @0x44a54; @0x30f4c), asteroids phase 5; the
+//! planet-type match (8, @0x44a8e; the beam's @0x30d4f), stellar-fidelity
+//! phase 2; the beam's system test (@0x30dc1), as only the player's system
+//! is simulated. None of these functions draws or plays a sound.
 
 use super::ShipRef;
 use super::beam::Beam;
-use super::hull::ESCAPE_POD_SHIP;
+use super::hull::{Condition, ESCAPE_POD_SHIP};
 use super::projectile::{Jam, Shot, Source, Target};
 use super::weapon::Guidance;
 use crate::catalog::GovtId;
@@ -183,6 +197,11 @@ impl Sides<'_> {
         if target.ship == firer
             || (ties.leader.is_some() && ties.leader == theirs.leader)
             || (ties.govt.is_some() && ties.govt == theirs.govt)
+        {
+            return false;
+        }
+        if shot.miss_roll.is_some_and(|roll| roll > target.miss_class)
+            && target.condition == Condition::Intact
         {
             return false;
         }
@@ -350,7 +369,6 @@ impl Sides<'_> {
 mod tests {
     use super::*;
     use crate::catalog::ShipId;
-    use crate::combat::hull::Condition;
     use crate::combat::projectile::Jam;
     use crate::combat::weapon::WeaponSpec;
     use crate::flight::ShipState;
@@ -377,6 +395,7 @@ mod tests {
             radius: 5.0,
             sprite_x: 15.0,
             condition: Condition::Intact,
+            miss_class: 100,
         }
     }
 
@@ -437,6 +456,73 @@ mod tests {
         );
         assert_eq!(PassThrough::default(), PassThrough::PlayerSide);
         assert_eq!(UNTOUCHABLE_BY_PLAYER, 0x0100);
+    }
+
+    /// A turret shot of `npc(1)`'s rolling `roll`, none for -1.
+    fn rolled(roll: Option<u32>) -> Shot {
+        Shot {
+            miss_roll: roll,
+            ..Shot::launch(
+                WeaponSpec::new(&crate::catalog::WeaponRecord {
+                    guidance: 4,
+                    ..weapon(128)
+                }),
+                npc(1),
+                npc(1),
+                &ShipState::default(),
+                0.0,
+            )
+        }
+    }
+
+    /// `npc(2)`, of turret miss class `class`, holding up as `condition`.
+    fn classed(class: u32, condition: Condition) -> Target {
+        Target {
+            miss_class: class,
+            condition,
+            ..ship(npc(2), None)
+        }
+    }
+
+    #[test]
+    fn a_turret_shot_misses_an_intact_ship_whose_class_is_below_its_roll() {
+        let sides = among(&[]);
+        let hits =
+            |roll, class| sides.shot_can_hit(&rolled(roll), &classed(class, Condition::Intact));
+        assert!(!hits(Some(81), 80), "81 over a fighter's 80");
+        assert!(hits(Some(80), 80), "an equal roll hits");
+        assert!(!hits(Some(91), 90), "91 over a medium ship's 90");
+        assert!(hits(Some(90), 90));
+        assert!(
+            hits(Some(100), 100),
+            "a warship or freighter is never missed"
+        );
+        assert!(hits(Some(1), 80));
+        assert!(hits(None, 80), "no roll (-1) never misses");
+    }
+
+    #[test]
+    fn a_turret_shot_always_hits_a_disabled_or_breaking_up_ship() {
+        let sides = among(&[]);
+        let dying = Condition::Dying {
+            ticks_left: 5,
+            starting: false,
+        };
+        for condition in [Condition::Disabled, dying] {
+            assert!(
+                sides.shot_can_hit(&rolled(Some(100)), &classed(80, condition)),
+                "{condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shot_no_ship_fired_never_misses_by_its_roll() {
+        let shot = Shot {
+            source: Source::Other,
+            ..rolled(Some(100))
+        };
+        assert!(among(&[]).shot_can_hit(&shot, &classed(80, Condition::Intact)));
     }
 
     #[test]
