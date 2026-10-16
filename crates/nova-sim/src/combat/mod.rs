@@ -11708,6 +11708,12 @@ mod tests {
             ..QUIET
         };
         assert_eq!(heard(player_carrying(bay, 1, launching)), [Some(6)]);
+        // A bay is heard at 6 for its guidance alone, primary or not.
+        let primary_bay = WeaponRecord { flags: 0, ..bay };
+        assert_eq!(
+            heard(player_carrying(primary_bay, 1, PRIMARY_HELD)),
+            [Some(6)]
+        );
         assert_eq!(
             (PLAYER_FIRE_PRIORITY, PLAYER_SECONDARY_FIRE_PRIORITY),
             (5, 6)
