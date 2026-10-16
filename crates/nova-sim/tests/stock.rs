@@ -1338,6 +1338,8 @@ use nova_sim::combat::armament::{Arsenal, LauncherRounds, Rounds};
 use nova_sim::combat::flags::FlagField;
 use nova_sim::combat::impact::TractorLock;
 use nova_sim::combat::ion::Ion;
+use nova_sim::combat::jamming::{Halving, Jamming};
+use nova_sim::combat::projectile::Jam;
 use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
 use nova_sim::combat::{Combat, Fighter, Rules, Shove, Strike};
 use nova_sim::{
@@ -2661,6 +2663,214 @@ fn every_stock_homing_weapon_flies_its_speed_hits_its_target_and_turns_its_turn(
                 "{id} on {tick}: {headings:?}"
             );
         }
+    }
+}
+
+// Jamming and sensor interference (`_ShipECM`, `_SpawnShot`,
+// `_HandleShotGuidance`).
+
+/// Draws what a range is keyed to, and the middle outcome for any other
+/// range, as [`Straight`] does: tests over it pin ranges, not the order
+/// of the draws.
+struct Keyed(&'static [(u32, u32)]);
+
+impl nova_sim::Chance for Keyed {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0
+            .iter()
+            .find(|&&(range, _)| range == n)
+            .map_or(n / 2, |&(_, outcome)| outcome)
+    }
+}
+
+/// A tick of `combat` among `ships` in `field`, each ship of `jamming`
+/// jamming as it says, drawing on `chance`.
+fn fight_in(
+    combat: &mut Combat,
+    ships: &mut [Combatant],
+    (field, jamming): (nova_sim::Field, &[(ShipRef, Jamming)]),
+    chance: &mut dyn nova_sim::Chance,
+) {
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+    for fighter in &mut fighters {
+        if let Some(&(_, jams)) = jamming.iter().find(|(ship, _)| *ship == fighter.ship) {
+            fighter.jamming = jams;
+        }
+    }
+    combat.tick(
+        &mut fighters,
+        &Arsenal::default(),
+        &nova_sim::Governments::default(),
+        Rules::default(),
+        field,
+        &mut [],
+        chance,
+    );
+}
+
+/// The headings of the missile `ships[0]` fires on the first of `ticks`
+/// ticks, after each, its target moved 90 degrees off after the first.
+fn headings_in(
+    ships: &mut [Combatant],
+    ticks: u32,
+    (field, jamming): (nova_sim::Field, &[(ShipRef, Jamming)]),
+    chance: &mut dyn nova_sim::Chance,
+) -> Vec<f32> {
+    let mut combat = Combat::default();
+    let mut headings = Vec::new();
+    for tick in 0..ticks {
+        fight_in(&mut combat, ships, (field, jamming), chance);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+            ships[1].state.position = Vec2::new(0.0, 5000.0);
+        }
+        headings.push(combat.shots()[0].heading);
+    }
+    headings
+}
+
+/// The stock Military IR Jammer (240, +30 to Jamming 1) aboard the stock
+/// Shuttle jams 30 of type 1; a stock IR Missile (134, `JamVuln` [100, 0,
+/// 0, 0]) fired at it keeps its heading on a roll of 71 and turns its
+/// `GuidedTurn`/10 on 70. A stock Fed Destroyer (141) of the Federation
+/// (128, `Flags` 0x0080) jams 28 by the engine and 57 by the Bible.
+#[test]
+fn a_stock_jammer_turns_a_stock_missile_aside() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let govts = nova_sim::Governments::read(&data);
+    let outfits = data.outfits();
+    let ships = data.ships();
+    let class = |id| {
+        ships
+            .iter()
+            .find(|record| record.id == ShipId(id))
+            .expect("a stock ship")
+    };
+    let owned = BTreeMap::from([(OutfitId(240), 1)]);
+    let shuttle = class(128);
+    let jammer = Jamming::of_player(govts.inh_jam(shuttle.inherent_govt), &owned, &outfits);
+    assert_eq!(jammer, Jamming([30, 0, 0, 0]));
+    let ir = stock_weapon(&data, 134);
+    assert_eq!(ir.jam_vuln, [100, 0, 0, 0]);
+    let rolls: [(&'static [(u32, u32)], bool); 2] = [(&[(101, 71)], false), (&[(101, 70)], true)];
+    for (table, turns) in rolls {
+        let mut ships = [aiming(&ir), sponge(5000.0, 0.0)];
+        let headings = headings_in(
+            &mut ships,
+            17,
+            (nova_sim::Field::default(), &[(QUARRY, jammer)]),
+            &mut Keyed(table),
+        );
+        assert!(headings[..15].iter().all(|&h| (h - 90.0).abs() < 1e-6));
+        let turned = headings[16] - headings[15];
+        let expected = if turns { ir.turn } else { 0.0 };
+        assert!((turned - expected).abs() < 1e-3, "{table:?}: {headings:?}");
+    }
+    let destroyer = class(141);
+    let fed = Some(GovtId(128));
+    assert!(govts.flag(fed, nova_sim::govt::HALF_JAMMING));
+    let jamming = |source| {
+        let halving = Halving::of(true, false, source);
+        Jamming::of_npc(
+            govts.inh_jam(destroyer.inherent_govt),
+            &destroyer.defaults,
+            &outfits,
+            halving,
+        )
+    };
+    assert_eq!(jamming(nova_sim::RuleSource::Engine).0[0], 28);
+    assert_eq!(jamming(nova_sim::RuleSource::Bible).0[0], 57);
+}
+
+/// In Obatta (sÿst 155, `Interference` 50) a stock Radar Missile (135,
+/// `Seeker` 0x000a) and a stock EW Missile (137, 0x0009) are confused on a
+/// roll of 49 and circle from their 15th tick; on 50 they home.
+#[test]
+fn a_stock_interference_system_confuses_a_stock_seeker() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let obatta = data
+        .star_map()
+        .into_iter()
+        .find(|system| system.id == SystemId(155))
+        .expect("Obatta");
+    assert_eq!(obatta.interference, 50);
+    let field = nova_sim::Field {
+        frame: 0,
+        interference: obatta.interference,
+    };
+    for id in [135, 137] {
+        let missile = stock_weapon(&data, id);
+        let mut combat = Combat::default();
+        let mut ships = [aiming(&missile), sponge(5000.0, 0.0)];
+        fight_in(
+            &mut combat,
+            &mut ships,
+            (field, &[]),
+            &mut Keyed(&[(100, 49)]),
+        );
+        assert_eq!(combat.shots()[0].jam, Jam::Interfered, "{id}");
+        let mut ships = [aiming(&missile), sponge(5000.0, 0.0)];
+        let headings = headings_in(&mut ships, 17, (field, &[]), &mut Keyed(&[(100, 49)]));
+        assert!(headings[..15].iter().all(|&h| (h - 90.0).abs() < 1e-6));
+        // Frame 0 turns it back, whatever its target.
+        let turned = headings[16] - headings[15];
+        assert!((turned + missile.turn).abs() < 1e-3, "{id}: {headings:?}");
+        let mut ships = [aiming(&missile), sponge(5000.0, 0.0)];
+        let headings = headings_in(&mut ships, 17, (field, &[]), &mut Keyed(&[(100, 50)]));
+        let turned = headings[16] - headings[15];
+        assert!(
+            (turned - missile.turn).abs() < 1e-3,
+            "{id} homes: {headings:?}"
+        );
+    }
+}
+
+/// A stock IR Missile (134) given `Seeker` 0x4000, which no stock weapon
+/// sets, drops its lock on a target 200 pixels behind it as it starts to
+/// steer, and keeps it on one 300 pixels behind, out of the box.
+#[test]
+fn a_stock_seeker_with_0x4000_drops_its_lock_in_the_box() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let ir = stock_weapon(&data, 134);
+    assert!(
+        data.weapons()
+            .iter()
+            .all(|record| record.seeker & nova_sim::combat::weapon::LOSES_LOCK_OFF_AHEAD == 0),
+        "no stock weapon sets 0x4000"
+    );
+    let locked = WeaponSpec {
+        seeker: ir.seeker | nova_sim::combat::weapon::LOSES_LOCK_OFF_AHEAD,
+        ..ir
+    };
+    for (behind, kept) in [(200.0, false), (300.0, true)] {
+        let mut combat = Combat::default();
+        // Where it is as its 16th tick begins, and the target behind it,
+        // 100 pixels below its path.
+        let at = ir.speed * 15.0;
+        let mut ships = [aiming(&locked), sponge(at - behind, 100.0)];
+        for _ in 0..16 {
+            fight_in(
+                &mut combat,
+                &mut ships,
+                (nova_sim::Field::default(), &[]),
+                &mut Straight,
+            );
+            ships[0].trigger = Trigger::default();
+        }
+        assert_eq!(combat.shots()[0].target.is_some(), kept, "{behind}");
     }
 }
 
