@@ -3706,11 +3706,9 @@ impl<
     /// their operators, ordered against those texts. With no dialog of
     /// its own, nothing redraws after the last text.
     pub fn settle_script(&mut self) {
-        let Ok(session) = self.session.as_mut() else {
+        if self.session.is_err() {
             return;
-        };
-        // What no run of docked scripts took is no part of this one.
-        let _ = session.take_interface_loads();
+        }
         let settled = self.run_docked(false, |view| {
             view.session
                 .as_mut()

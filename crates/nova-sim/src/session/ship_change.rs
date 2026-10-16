@@ -450,12 +450,19 @@ impl Session {
         }
     }
 
-    /// The `C`, `E` and `H` run while docked since the last outfit order,
-    /// ship purchase, mission accept, refusal or abort, or offer asked for
-    /// at a venue began, in order, each as the status bar's
+    /// The `C`, `E` and `H` run while docked since the last run of docked
+    /// scripts began, in order, each as the status bar's
     /// `_LoadIntfResource` saw it at the operator ([`InterfaceLoad`]);
-    /// taking them empties the list. An order or a purchase that is
-    /// refused before it begins clears nothing.
+    /// taking them empties the list. Each of these begins a run, clearing
+    /// what the one before left untaken: an outfit order
+    /// ([`Session::outfit_order`]), a ship purchase
+    /// ([`Session::buy_ship`]), a mission accept, refusal or abort
+    /// ([`Session::accept_mission`], [`Session::refuse_mission`],
+    /// [`Session::abort_mission`]), an offer asked for at a venue
+    /// ([`Session::next_offer`]), a settling ([`Session::settle_script`],
+    /// a landing's mission checks among what it settles) and a jettison
+    /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
+    /// or a purchase that is refused before it begins clears nothing.
     pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
         std::mem::take(&mut self.interface_loads)
     }

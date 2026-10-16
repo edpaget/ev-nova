@@ -333,6 +333,8 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
+        // A new run of docked scripts (see [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
         let mut settled = Settled::default();
         if let Some(stellar) = self.offer_roll_due.take()
             && self.landed == Some(stellar)

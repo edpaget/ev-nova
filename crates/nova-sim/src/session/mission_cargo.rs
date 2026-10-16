@@ -145,6 +145,9 @@ impl Session {
     /// boxes behind the player and its trader escorts, drawing on
     /// `chance` (see the `cargo_boxes` module); landed, neither.
     pub fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
+        // A new run of docked scripts, its failures' `OnFailure` (see
+        // [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
         let goods = self.pilot.goods_held();
         let decided = jettison(
             &self.pilot.missions,

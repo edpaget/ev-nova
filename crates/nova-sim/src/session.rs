@@ -13764,6 +13764,40 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_settling_clears_the_loads_before_it() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        run_expr(&mut session, "H129");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.take_interface_loads(), []);
+    }
+
+    #[test]
+    fn a_jettison_clears_the_loads_before_it_and_keeps_its_on_failures() {
+        let mut catalog = shipbuying();
+        catalog.missions = vec![MissionRecord {
+            cargo_type: 0,
+            cargo_qty: 1,
+            pickup_mode: 0,
+            on_failure: crate::control::Script::parse("H129"),
+            ..crate::testkit::mission(130)
+        }];
+        let mut session = outfitted(&catalog);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        run_expr(&mut session, "H128");
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.take_interface_loads(), [], "nothing to fail");
+        assert_eq!(
+            session.accept_mission(MissionId(130), &mut NeverFires),
+            Ok(0)
+        );
+        run_expr(&mut session, "H128");
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.pilot.missions.missions().len(), 0, "failed");
+        assert_eq!(session.take_interface_loads().len(), 1, "OnFailure's alone");
+    }
+
+    #[test]
     fn buying_a_ship_keeps_the_cargo_as_its_rule_says_with_the_trader_escorts() {
         let catalog = FakePilotCatalog {
             ship_records: [shipbuying().ship_records, vec![holds_record(130, 15, 1)]].concat(),
