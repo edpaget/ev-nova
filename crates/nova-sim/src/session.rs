@@ -441,7 +441,7 @@ use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
-use crate::combat::jamming::Jamming;
+use crate::combat::jamming::{Halving, Jamming};
 use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
@@ -456,7 +456,7 @@ use crate::gate::{
 };
 use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
-use crate::govt::Governments;
+use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
@@ -502,7 +502,7 @@ use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::{AiType, Npc, NpcId};
 use crate::traffic::table::{SpawnDude, SpawnTable};
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
@@ -524,6 +524,8 @@ struct FightTerms {
     top_speed: f32,
     /// The heading it was last drawn at ([`Fighter::drawn_heading`]).
     drawn_heading: f32,
+    /// How strongly it jams ([`Fighter::jamming`]).
+    jamming: Jamming,
 }
 
 impl FightTerms {
@@ -536,6 +538,7 @@ impl FightTerms {
         let attacking = npc.goal.attacking();
         let emerging = npc.emerging();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
+        let cloak_device = npc.cloak_gear.device;
         let Npc {
             id,
             ship,
@@ -576,8 +579,8 @@ impl FightTerms {
             threatens_player: self.threatens_player,
             emerging,
             cloak_scanner,
-            has_cloak: false,
-            jamming: Jamming::NONE,
+            has_cloak: cloak_device,
+            jamming: self.jamming,
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
@@ -903,6 +906,11 @@ pub struct Session {
     /// saved, as the
     /// original's pilot file does not keep it.
     frame: i16,
+    /// The frame counter as the last [`Session::tick`] read it, before it
+    /// moved it on: the counter `_DoPlayGameWork` sees, as `_PlayGame` adds
+    /// 1 after it (@0x45f36), which the fight's interfered shots circle by
+    /// ([`Field::frame`]).
+    fight_frame: i16,
     /// The take-off grace's ticks still to run (see the `takeoff_grace`
     /// module); not saved, as the original's pilot file does not keep its
     /// frame counter.
@@ -1353,6 +1361,7 @@ impl Session {
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
+            fight_frame: 0,
             takeoff_grace: 0,
             red_alert: RedAlert::default(),
             nav_fly_in: crate::brackets::FlyIn::default(),
@@ -1513,6 +1522,8 @@ impl Session {
             .set_bomb_rocket_launch(rules.source_for(RuleKey::BombRocketLaunch));
         self.combat
             .set_pd_hostility(rules.source_for(RuleKey::PdHostility));
+        self.combat
+            .set_seeker_lock_angle(rules.source_for(RuleKey::SeekerLockAngle));
         self.rules = rules;
         self
     }
@@ -1668,6 +1679,7 @@ impl Session {
         self.takeoff_grace_tick();
         self.sound_script();
         let frame = self.frame;
+        self.fight_frame = frame;
         self.frame = market::next_frame(frame);
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
             let capacity = self.capacity();
@@ -2152,6 +2164,7 @@ impl Session {
         self.take_scans(rules.law, &mut &mut *chance);
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let (player_terms, terms) = self.fight_terms();
+        let field = self.field();
         let mut stellars = self.stellar_targets();
         let scanner = self.scanner();
         let pilot = &mut self.pilot;
@@ -2185,7 +2198,7 @@ impl Session {
             emerging: false,
             cloak_scanner: scanner.on_screen,
             has_cloak: false,
-            jamming: Jamming::NONE,
+            jamming: player_terms.jamming,
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
             jumping: self.jump.is_some(),
@@ -2202,7 +2215,7 @@ impl Session {
             &self.arsenal,
             &self.govts,
             rules,
-            Field::default(),
+            field,
             &mut stellars,
             chance,
         );
@@ -2282,11 +2295,59 @@ impl Session {
         }
     }
 
+    /// When and where the fight is fought this tick ([`Field`]): the frame
+    /// counter this tick read, and the player's system's raw
+    /// `Interference`, which no anti-interference lessens for a shot
+    /// (`_SpawnShot` @0x3eb1f-0x3eb29).
+    fn field(&self) -> Field {
+        Field {
+            frame: i32::from(self.fight_frame),
+            interference: self.galaxy.map().interference(self.pilot.system),
+        }
+    }
+
+    /// How strongly the player's ship jams, as `_ShipECM` works it out
+    /// ([`Jamming::of_player`]): its class's `InherentGovt`'s `InhJam`, and
+    /// once each jammer it owns, never halved.
+    fn player_jamming(&self) -> Jamming {
+        let class_govt = self
+            .ship_record(self.pilot.ship)
+            .and_then(|record| record.inherent_govt);
+        Jamming::of_player(
+            self.govts.inh_jam(class_govt),
+            &self.pilot.outfits,
+            &self.outfits,
+        )
+    }
+
+    /// How strongly `npc` jams, as `_ShipECM` works it out
+    /// ([`Jamming::of_npc`]): its class's `InherentGovt`'s `InhJam` and its
+    /// class's default items, halved as its government's `Flags` 0x0080
+    /// says by [`RuleKey::JamHalving`]; none without a class record.
+    fn npc_jamming(&self, npc: &Npc) -> Jamming {
+        let Some(record) = self.ship_record(npc.ship) else {
+            return Jamming::NONE;
+        };
+        let freighter = matches!(npc.ai_type, AiType::WimpyTrader | AiType::BraveTrader);
+        let halving = Halving::of(
+            self.govts.flag(npc.govt, HALF_JAMMING),
+            freighter,
+            self.rules.source_for(RuleKey::JamHalving),
+        );
+        Jamming::of_npc(
+            self.govts.inh_jam(record.inherent_govt),
+            &record.defaults,
+            &self.outfits,
+            halving,
+        )
+    }
+
     /// What the fight needs of the player's ship and of each NPC, in
     /// order, that the ship does not carry: whether it is held disabled
     /// ([`Session::mission_ship_held`]; the player never is), its class
-    /// and top speeds, which every push is capped against, and the heading
-    /// it was last drawn at, its own for a ship new to the fight.
+    /// and top speeds, which every push is capped against, the heading it
+    /// was last drawn at, its own for a ship new to the fight, and how
+    /// strongly it jams.
     fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
         let drawn = |ship: ShipRef, heading: f32| self.drawn.get(&ship).copied().unwrap_or(heading);
         let player = FightTerms {
@@ -2295,6 +2356,7 @@ impl Session {
             class_speed: self.class_speed(self.pilot.ship),
             top_speed: self.top_speed(),
             drawn_heading: drawn(ShipRef::Player, self.player.heading),
+            jamming: self.player_jamming(),
         };
         let led_speed = self.led_speed();
         let npcs = self
@@ -2307,6 +2369,7 @@ impl Session {
                 class_speed: self.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
+                jamming: self.npc_jamming(npc),
             })
             .collect();
         (player, npcs)
@@ -14115,9 +14178,10 @@ pub(super) mod tests {
     use crate::combat::defence::Allegiance;
     use crate::combat::hull::DisableRule;
     use crate::combat::weapon::Explosion;
+    use crate::govt::HALF_JAMMING;
     use crate::legal::{Crime, LegalCode, NovaLaw};
     use crate::rulebook::RuleSource;
-    use crate::testkit::{hull, weapon};
+    use crate::testkit::{Ranged, hull, weapon};
     use crate::traffic::npc::Npc;
 
     /// A blaster firing every other tick, 20 pixels a tick for 30 ticks,
@@ -14661,6 +14725,188 @@ pub(super) mod tests {
         assert_eq!(session(engine).combat, quirks);
         assert_ne!(segment, Combat::default());
         assert_ne!(quirks, Combat::default());
+    }
+
+    #[test]
+    fn the_rulebook_says_how_a_seeker_measures_its_lock_and_whose_jamming_is_halved() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        let mut plain = Combat::default();
+        plain.set_seeker_lock_angle(RuleSource::Engine);
+        assert_ne!(plain, Combat::default());
+        let engine =
+            Rulebook::default().with_override(RuleKey::SeekerLockAngle, RuleSource::Engine);
+        assert_eq!(session(engine).combat, plain);
+        let mut shortest = Combat::default();
+        shortest.set_seeker_lock_angle(RuleSource::Bible);
+        assert_eq!(shortest, Combat::default(), "the default");
+        let bible = Rulebook::default().with_override(RuleKey::JamHalving, RuleSource::Bible);
+        assert_eq!(
+            session(bible).rules().source_for(RuleKey::JamHalving),
+            RuleSource::Bible
+        );
+    }
+
+    // Jamming and sensor interference (see `combat::jamming` and the
+    // `projectile` module).
+
+    /// A homing missile of `seeker`, every type's `JamVuln` [100, 0, 0, 0],
+    /// 10 pixels a tick for 60.
+    fn jammable(seeker: u16) -> WeaponRecord {
+        WeaponRecord {
+            seeker,
+            jam_vuln: [100, 0, 0, 0],
+            ..homing_missile(134, 1000)
+        }
+    }
+
+    /// [`arming`] the player with `player` and the NPC with `npc`, the
+    /// NPC's class 129 taking the `InhJam` [57, 0, 0, 0] of government 150,
+    /// its own government 140 of `Flags` `flags`, and outfit 240 jamming
+    /// 30 of type 1.
+    fn jamming_catalog(player: WeaponRecord, npc: WeaponRecord, flags: u16) -> FakePilotCatalog {
+        let mut catalog = arming(player, npc, 0);
+        catalog.ship_records[0].inherent_govt = Some(GovtId(150));
+        catalog.govts = vec![
+            GovtRecord {
+                flags,
+                ..crate::testkit::govt(140)
+            },
+            GovtRecord {
+                inh_jam: [57, 0, 0, 0],
+                ..crate::testkit::govt(150)
+            },
+        ];
+        catalog
+            .outfits
+            .push(outfit(240, &[(crate::combat::jamming::JAMMING_MOD, 30)]));
+        catalog
+    }
+
+    /// `catalog`'s session with its NPC at (650, 0), to the right of the
+    /// player at the centre facing up, its AI type `ai_type`.
+    fn beside_an_npc(catalog: &FakePilotCatalog, ai_type: AiType) -> Session {
+        let mut session = facing_an_npc(catalog, 0);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.state.position = Vec2::new(650.0, 0.0);
+        npc.ai_type = ai_type;
+        session
+    }
+
+    /// The heading of the first missile in flight after `ticks` fight
+    /// ticks, the first of which fires it, drawing on `chance`.
+    fn missile_after(
+        session: &mut Session,
+        ticks: u32,
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) -> f32 {
+        for _ in 0..ticks {
+            session.tick_combat(rules, chance);
+            session.hold_trigger(Trigger::default());
+            if let Some(npc) = session.traffic.npcs_mut().first_mut() {
+                npc.trigger = Trigger::default();
+            }
+        }
+        session.shots()[0].heading
+    }
+
+    #[test]
+    fn a_players_missile_reads_its_npc_targets_halved_jamming_by_either_reading() {
+        // A roll of 50 is jammed by 57, not by 57 halved to 28.
+        for (flags, ai_type, source, jammed) in [
+            (HALF_JAMMING, AiType::Warship, RuleSource::Engine, false),
+            (0, AiType::Warship, RuleSource::Engine, true),
+            (HALF_JAMMING, AiType::Warship, RuleSource::Bible, true),
+            (HALF_JAMMING, AiType::WimpyTrader, RuleSource::Bible, false),
+            (HALF_JAMMING, AiType::BraveTrader, RuleSource::Bible, false),
+        ] {
+            let catalog = jamming_catalog(jammable(0), blaster(), flags);
+            let rules = Rulebook::default().with_override(RuleKey::JamHalving, source);
+            let mut session = beside_an_npc(&catalog, ai_type).with_rules(rules);
+            session.target = Some(NpcId(0));
+            session.hold_trigger(FIRE);
+            let heading = missile_after(
+                &mut session,
+                16,
+                Rules::default(),
+                &mut Ranged::of(&[(101, 50)]),
+            );
+            let expected = if jammed { 0.0 } else { 7.0 };
+            assert!(
+                (heading - expected).abs() < 1e-4,
+                "{flags:#x} {ai_type:?} {source:?}: {heading}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_npcs_missile_is_jammed_by_a_jammer_the_player_owns() {
+        let catalog = jamming_catalog(blaster(), jammable(0), 0);
+        for (owned, roll, jammed) in [(1, 71, true), (1, 70, false), (0, 71, false)] {
+            let mut session = beside_an_npc(&catalog, AiType::Warship);
+            if owned > 0 {
+                session.pilot.outfits.insert(OutfitId(240), owned);
+            }
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.trigger = FIRE;
+            npc.target = Some(ShipRef::Player);
+            let heading = missile_after(
+                &mut session,
+                16,
+                Rules::default(),
+                &mut Ranged::of(&[(101, roll)]),
+            );
+            // Fired up, the player off to its left.
+            let expected = if jammed { 0.0 } else { 353.0 };
+            assert!(
+                (heading - expected).abs() < 1e-4,
+                "{owned} {roll}: {heading}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missile_in_a_system_of_interference_circles_by_the_frame_its_tick_read() {
+        let mut catalog = jamming_catalog(
+            jammable(crate::combat::weapon::SENSOR_INTERFERENCE),
+            blaster(),
+            0,
+        );
+        catalog.star_map[0].interference = 100;
+        let mut session = beside_an_npc(&catalog, AiType::Warship);
+        session.target = Some(NpcId(0));
+        session.hold_trigger(FIRE);
+        // The 16th tick reads frame 149, the 17th 150.
+        session.frame = 134;
+        let mut chance = NeverFires;
+        for tick in 1..=17 {
+            session.tick(Controls::default());
+            session.tick_combat(Rules::default(), &mut chance);
+            session.hold_trigger(Trigger::default());
+            let shot = session.shots()[0];
+            assert_eq!(shot.jam, crate::combat::projectile::Jam::Interfered);
+            let expected = match tick {
+                16 => 353.0,
+                _ => 0.0,
+            };
+            assert!(
+                (shot.heading - expected).abs() < 1e-4,
+                "{tick}: {}",
+                shot.heading
+            );
+        }
+        let mut draws = Ranged::of(&[(100, 99)]);
+        catalog.star_map[0].interference = 99;
+        let mut quiet = beside_an_npc(&catalog, AiType::Warship);
+        quiet.target = Some(NpcId(0));
+        quiet.hold_trigger(FIRE);
+        quiet.tick_combat(Rules::default(), &mut draws);
+        assert_eq!(
+            quiet.shots()[0].jam,
+            crate::combat::projectile::Jam::Clear,
+            "a roll of 100 against 99"
+        );
     }
 
     #[test]
@@ -19337,6 +19583,7 @@ pub(super) mod tests {
             class_speed: 0.0,
             top_speed: 0.0,
             drawn_heading: 0.0,
+            jamming: Jamming([5, 0, 0, 9]),
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         let player = ShipRef::Player;
@@ -19362,6 +19609,10 @@ pub(super) mod tests {
         npc.cloak_gear.scanner.on_screen = true;
         let fighter = terms(false).fighter(&mut npc);
         assert!(fighter.emerging && fighter.cloak_scanner);
+        assert_eq!(fighter.jamming, Jamming([5, 0, 0, 9]));
+        assert!(!fighter.has_cloak);
+        npc.cloak_gear.device = true;
+        assert!(terms(false).fighter(&mut npc).has_cloak);
     }
 
     /// Every NPC takes `goal`, fires as Nova's AI picks
