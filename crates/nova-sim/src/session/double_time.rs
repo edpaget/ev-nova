@@ -98,13 +98,16 @@
 //!   `_ShowPersonHailQuote` @0x89ce1) runs there as on the advance pass.
 //!   Its caller answers them after this pass
 //!   ([`Session::answer_strikes`]) and says the attack quotes
-//!   ([`Session::say_attack_quotes`]), before the frame is drawn. The
+//!   ([`Session::tick_quotes_again`]), before the frame is drawn. The
 //!   block plays no sound and tells no comm.
-//! - Known difference: `_HandleShip`'s hail-quote roll (`Rand(140)`
-//!   @0x33f31-0x33f9e) has no pass test either, so it rolls on both
-//!   passes; ours rolls once a frame ([`Session::tick_quotes`], advance
-//!   pass only; see
-//!   rdm:phase/system-traffic-fidelity/phase-33-double-time-second-pass-hail-quote-roll).
+//! - `_HandleShip`'s hail-quote block (@0x33f0f-0x33fba) has no pass
+//!   test, so each eligible person draws `Rand(140)` on both passes
+//!   ([`Session::tick_quotes_again`], after the attack quotes). The
+//!   display timer (0x3b5020) is counted down only by `_HandleComm`
+//!   (@0x301ce-0x301de), on the advance pass, so after any quote on the
+//!   advance pass only a quote due now (forced, @0x33f65-0x33f6c) can
+//!   follow on the second; otherwise each frame's odds of a random quote
+//!   double. The quote clock moves once a frame, on the advance pass.
 //! - `_HandleBeams(arg)` (@0x4452f-0x4453d): on the second pass a beam
 //!   only ages (see [`GamePass`]).
 //! - The warp's clock is `TickCount` less the warp stage's stamp (see the
@@ -192,7 +195,8 @@ impl Session {
     /// rescue then due ([`Session::rescue_if_due`], which its caller asks
     /// after this pass as after the advance pass's tick). Its caller
     /// then answers the pass's strikes ([`Session::answer_strikes`]) and
-    /// says the attack quotes they raise ([`Session::say_attack_quotes`]).
+    /// runs the second-pass quote roll, the attack quotes they raise
+    /// first ([`Session::tick_quotes_again`]).
     pub fn tick_again(
         &mut self,
         controls: Controls,

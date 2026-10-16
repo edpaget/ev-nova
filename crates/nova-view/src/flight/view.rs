@@ -49,9 +49,9 @@
 //! drains the fight's events after it as after the advance pass
 //! (`_HandleExplods` runs on both, @0x444e1). The second pass answers
 //! its hits ([`Session::answer_strikes`]) and says the attack quotes they
-//! raise ([`Session::say_attack_quotes`]), as `_HandleShot` (@0x44385)
-//! runs on both passes; it rolls no hail quote, gives no help and tells
-//! no comm. The mode is the screen's own
+//! raise, then rolls the hail quotes ([`Session::tick_quotes_again`]),
+//! as `_HandleShot` (@0x44385) and `_HandleShip` (@0x44483) run on both
+//! passes; it gives no help and tells no comm. The mode is the screen's own
 //! and outlives the hails, the map, the jumps and the sessions it flies;
 //! while it is on, `cïcn` 20000 is drawn at the top left over the Red
 //! Alert icon (see the `alert` module).
@@ -3115,12 +3115,13 @@ impl<
                     // The pass's hits are answered before the frame is
                     // drawn, as `_HandleShot` answers them (@0x44385)
                     // before `_HandleShip` and the display pass, on both
-                    // passes. The advance pass then runs the quote block;
-                    // the second says only the attack quotes its answers
-                    // raise (`_ShowPersonHailQuote` @0x89ce1).
+                    // passes. Each pass then says the attack quotes its
+                    // answers raise (`_ShowPersonHailQuote` @0x89ce1) and
+                    // runs `_HandleShip`'s quote roll (@0x33f0f-0x33fba),
+                    // the quote clock moving on the advance pass alone.
                     session.answer_strikes(&*self.behaviour);
                     if again {
-                        session.say_attack_quotes(&self.catalog);
+                        session.tick_quotes_again(&self.catalog, &mut self.chance);
                     } else {
                         session.tick_quotes(&self.catalog, &mut self.chance);
                     }
@@ -20508,6 +20509,21 @@ mod tests {
         );
         assert_lasts(&mut view, "Ace: Prepare to die, !", 420);
         assert_eq!(HAIL_QUOTE_TICKS, 420);
+    }
+
+    #[test]
+    fn in_double_time_a_person_rolls_its_hail_quote_on_both_passes() {
+        // `_HandleShip` (@0x44483) runs on both passes and its quote block
+        // (@0x33f0f-0x33fba) tests no pass.
+        let (script, chance) = scripted(&[99, 750, 650, 0, 1, 0]);
+        let mut view = FlightView::new(peopled())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_double_time(true);
+        view.tick(TICK);
+        assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
+        let asked = &script.borrow().asked;
+        assert_eq!(asked[asked.len() - 2..], [140, 140], "{asked:?}");
     }
 
     #[test]

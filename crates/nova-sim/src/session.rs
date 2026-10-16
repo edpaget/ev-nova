@@ -15587,15 +15587,15 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_attack_quotes_alone_are_said_with_the_beep_and_leave_the_quote_clock() {
+    fn the_second_pass_says_the_attack_quotes_with_the_beep_and_leaves_the_quote_clock() {
         // Double time's second pass says them (`_HandleShot` @0x44385 runs
-        // on both passes, `_ShowPersonHailQuote` @0x89ce1) without
+        // on both passes, `_ShowPersonHailQuote` @0x89ce1) before
         // `_HandleShip`'s roll, whose clock ours moves once a frame.
         let catalog = quoting_armed();
         let mut session = hit_in_its_gate(&catalog);
         session.answer_strikes(&crate::ai::NovaAi::default());
         let ticks = session.quote_clock.ticks;
-        session.say_attack_quotes(&catalog);
+        session.tick_quotes_again(&catalog, &mut crate::chance::NeverFires);
         let said: Vec<String> = session
             .take_quotes()
             .into_iter()
@@ -15605,7 +15605,7 @@ pub(super) mod tests {
         assert!(session.take_sounds().contains(&SimSound::HailQuote));
         assert_eq!(session.quote_clock.ticks, ticks, "the clock stands");
         assert!(session.npcs()[0].person.expect("a person").quoted);
-        session.say_attack_quotes(&catalog);
+        session.tick_quotes_again(&catalog, &mut crate::chance::NeverFires);
         assert!(session.take_quotes().is_empty(), "said once");
     }
 
@@ -15615,7 +15615,7 @@ pub(super) mod tests {
         let mut session = hit_in_its_gate(&catalog);
         session.answer_strikes(&crate::ai::NovaAi::default());
         session.landed = Some(crate::catalog::StellarId(128));
-        session.say_attack_quotes(&catalog);
+        session.tick_quotes_again(&catalog, &mut crate::chance::NeverFires);
         assert!(session.take_quotes().is_empty());
         assert!(!session.take_sounds().contains(&SimSound::HailQuote));
     }
