@@ -919,6 +919,8 @@ pub struct MissionTexts {
     pub refuse_button: String,
     /// The `Graphic` of each text's `dësc`, the `PICT` shown with it.
     pub graphics: TextGraphics,
+    /// The movie each text's `dësc` names, played around its dialog.
+    pub movies: TextMovies,
 }
 
 /// The `Graphic` of each of a mission's text `dësc`s, raw: none for -1,
@@ -949,6 +951,62 @@ pub struct TextGraphics {
     pub ship_done: Option<i16>,
 }
 
+/// The QuickTime movie a `dësc` names (`MovieFile`), and how its `Flags`
+/// play it: `_ShowTextDialog` (@0x5a76e-0x5a7ab, @0x5b40b-0x5b44f) and
+/// `_OfferOneMission` (@0xa2273-0xa22ab, @0xa3580-0xa35b8) pass `Flags`
+/// 0x0002 and 0x0004 to `_PlayQTMovie` (@0x55957).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DescMovie {
+    /// The movie file's name, as decoded: a bare file name.
+    pub file: String,
+    /// `Flags` 0x0001: it plays after the dialog, not before it.
+    pub after: bool,
+    /// `Flags` 0x0002: it plays at double size.
+    pub double_size: bool,
+    /// `Flags` 0x0004: it plays cinematic, the screen faded to black
+    /// around it.
+    pub cinematic: bool,
+}
+
+impl DescMovie {
+    /// The movie of a `dësc` whose `MovieFile` is `file` and whose `Flags`
+    /// are `flags`: none for an empty name, as each call site tests its
+    /// first byte (@0xa2279, @0x5a784). Any other name is kept as it is,
+    /// "\x01" too (`_LoadDescription` copies it as it stands,
+    /// @0x71895-0x718ba).
+    #[must_use]
+    pub fn from_desc(file: &str, flags: u16) -> Option<Self> {
+        (!file.is_empty()).then(|| Self {
+            file: file.to_owned(),
+            after: flags & 0x0001 != 0,
+            double_size: flags & 0x0002 != 0,
+            cinematic: flags & 0x0004 != 0,
+        })
+    }
+}
+
+/// The movie of each of a mission's text `dësc`s: none for -1, a `dësc`
+/// that is missing or does not decode, or one with no `MovieFile`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextMovies {
+    /// The offer's, `dësc` 4000 + the mission's index.
+    pub offer: Option<DescMovie>,
+    /// The `BriefText`'s.
+    pub brief: Option<DescMovie>,
+    /// The `CompText`'s.
+    pub comp: Option<DescMovie>,
+    /// The `FailText`'s.
+    pub fail: Option<DescMovie>,
+    /// The `RefuseText`'s.
+    pub refuse: Option<DescMovie>,
+    /// The `LoadCargText`'s.
+    pub load_cargo: Option<DescMovie>,
+    /// The `DumpCargoText`'s.
+    pub dump_cargo: Option<DescMovie>,
+    /// The `ShipDoneText`'s.
+    pub ship_done: Option<DescMovie>,
+}
+
 impl MissionTexts {
     /// Mission `id` named `name`, with no text and blank labels.
     #[must_use]
@@ -968,6 +1026,7 @@ impl MissionTexts {
             accept_button: String::new(),
             refuse_button: String::new(),
             graphics: TextGraphics::default(),
+            movies: TextMovies::default(),
         }
     }
 }
@@ -1637,6 +1696,53 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_desc_with_no_movie_name_has_no_movie() {
+        assert_eq!(DescMovie::from_desc("", 0x0007), None);
+    }
+
+    #[test]
+    fn each_movie_flag_sets_its_own_field_alone() {
+        let movie = |flags| DescMovie::from_desc("Race 1.mov", flags);
+        let plain = DescMovie {
+            file: "Race 1.mov".to_owned(),
+            after: false,
+            double_size: false,
+            cinematic: false,
+        };
+        assert_eq!(movie(0), Some(plain.clone()));
+        assert_eq!(
+            movie(0x0001),
+            Some(DescMovie {
+                after: true,
+                ..plain.clone()
+            })
+        );
+        assert_eq!(
+            movie(0x0002),
+            Some(DescMovie {
+                double_size: true,
+                ..plain.clone()
+            })
+        );
+        assert_eq!(
+            movie(0x0004),
+            Some(DescMovie {
+                cinematic: true,
+                ..plain.clone()
+            })
+        );
+        assert_eq!(movie(0xfff8), Some(plain), "the other bits mean nothing");
+    }
+
+    #[test]
+    fn a_movie_name_of_one_control_character_is_a_name() {
+        assert_eq!(
+            DescMovie::from_desc("\u{1}", 1).map(|movie| movie.file),
+            Some("\u{1}".to_owned())
+        );
+    }
 
     #[test]
     fn the_loader_rebases_a_low_weapon_or_government_mod_val_to_an_id() {

@@ -25,7 +25,7 @@
 
 use super::Session;
 use super::missions::TextSource;
-use crate::catalog::{MissionId, MissionTexts};
+use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
 use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
 use crate::mission::{
@@ -131,6 +131,22 @@ impl MissionTextKind {
             Self::NoRoom => None,
         }
     }
+
+    /// The movie of this text's `dësc` in `texts`. The no-room text is
+    /// `STR#` 2002's and loads no `dësc` (@0xa1b83-0xa1bb2), so it has none.
+    fn movie_of(self, texts: &MissionTexts) -> Option<DescMovie> {
+        let movies = &texts.movies;
+        match self {
+            Self::Brief => movies.brief.clone(),
+            Self::Comp => movies.comp.clone(),
+            Self::Fail => movies.fail.clone(),
+            Self::Refuse => movies.refuse.clone(),
+            Self::LoadCargo => movies.load_cargo.clone(),
+            Self::DumpCargo => movies.dump_cargo.clone(),
+            Self::ShipDone => movies.ship_done.clone(),
+            Self::NoRoom => None,
+        }
+    }
 }
 
 /// A mission text to show in the "Desc Dialog" (`_ShowTextDialog`
@@ -147,6 +163,10 @@ pub struct MissionText {
     /// `dësc`'s. The view shows the picture variant of the dialog
     /// (`DLOG` 3004) for one above 127 (`_ShowTextDialog` @0x5a89a).
     pub graphic: Option<i16>,
+    /// The movie its `dësc` names, played before or after its dialog
+    /// (`_ShowTextDialog` @0x5a76e-0x5a7ab, @0x5b40b-0x5b44f): none for a
+    /// text that is no `dësc`'s.
+    pub movie: Option<DescMovie>,
 }
 
 /// One active mission the mission info screen lists.
@@ -249,11 +269,13 @@ impl Session {
         slot: Option<u8>,
         chance: &mut dyn Chance,
     ) -> bool {
-        let Some((raw, graphic)) = self
-            .mission_texts
-            .get(&mission)
-            .and_then(|texts| Some((kind.of(texts)?.to_owned(), kind.graphic_of(texts))))
-        else {
+        let Some((raw, graphic, movie)) = self.mission_texts.get(&mission).and_then(|texts| {
+            Some((
+                kind.of(texts)?.to_owned(),
+                kind.graphic_of(texts),
+                kind.movie_of(texts),
+            ))
+        }) else {
             return false;
         };
         let raw = self.take_in(TextSource::Desc, &raw, chance);
@@ -266,6 +288,7 @@ impl Session {
             mission,
             text,
             graphic,
+            movie,
         });
         true
     }
@@ -278,6 +301,7 @@ impl Session {
             mission,
             text,
             graphic: None,
+            movie: None,
         });
     }
 
@@ -490,8 +514,15 @@ impl Session {
             // @0xa368e), so `_OfferMissionFromPort` shifts the list
             // (@0xa377d-0xa37a1), which `accept_offered` does
             // (`Session::drop_offered`).
+            let movie = texts
+                .and_then(|texts| texts.movies.offer.clone())
+                .filter(|movie| !movie.after);
             let accepted = self.accept_offered(mission, chance);
-            return VenueOffer::Accepted { mission, accepted };
+            return VenueOffer::Accepted {
+                mission,
+                accepted,
+                movie,
+            };
         }
         let labels = offer_labels(
             texts.map_or("", |texts| texts.accept_button.as_str()),
@@ -499,6 +530,7 @@ impl Session {
             can_refuse,
         );
         let graphic = texts.and_then(|texts| texts.graphics.offer);
+        let movie = texts.and_then(|texts| texts.movies.offer.clone());
         let raw = raw.map(str::to_owned);
         let raw = self.load_description(raw.as_deref(), chance);
         VenueOffer::Prompt(OfferPrompt {
@@ -506,6 +538,7 @@ impl Session {
             text: self.offer_text(mission, &raw).unwrap_or_default(),
             labels,
             graphic,
+            movie,
         })
     }
 
@@ -556,7 +589,8 @@ impl Session {
 mod tests {
     use super::*;
     use crate::catalog::{
-        DateAffixes, MissionRecord, PlaceNames, StellarId, SystemId, TextGraphics,
+        DateAffixes, DescMovie, MissionRecord, PlaceNames, StellarId, SystemId, TextGraphics,
+        TextMovies,
     };
     use crate::combat::hull::Condition;
     use crate::control::{Bit, Script, SetExpr, Test};
@@ -1325,6 +1359,7 @@ mod tests {
             mission: MissionId(mission),
             text: text.to_owned(),
             graphic: None,
+            movie: None,
         }
     }
 
@@ -1418,6 +1453,94 @@ mod tests {
                     graphic: Some(5010),
                     ..text(MissionTextKind::Brief, 131, "Off.")
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn each_kind_reads_its_own_texts_movie_and_no_room_none() {
+        let texts = MissionTexts {
+            movies: TextMovies {
+                offer: film("0", 0),
+                brief: film("1", 0),
+                comp: film("2", 0),
+                fail: film("3", 0),
+                refuse: film("4", 0),
+                load_cargo: film("5", 0),
+                dump_cargo: film("6", 0),
+                ship_done: film("7", 0),
+            },
+            ..MissionTexts::named(MissionId(130), "Run")
+        };
+        let movies = [
+            MissionTextKind::Brief,
+            MissionTextKind::Comp,
+            MissionTextKind::Fail,
+            MissionTextKind::Refuse,
+            MissionTextKind::LoadCargo,
+            MissionTextKind::DumpCargo,
+            MissionTextKind::ShipDone,
+            MissionTextKind::NoRoom,
+        ]
+        .map(|kind| kind.movie_of(&texts).map(|movie| movie.file));
+        assert_eq!(
+            movies,
+            [
+                Some("1"),
+                Some("2"),
+                Some("3"),
+                Some("4"),
+                Some("5"),
+                Some("6"),
+                Some("7"),
+                None
+            ]
+            .map(|file| file.map(str::to_owned)),
+            "the STR# 2002 no-room text loads no dësc"
+        );
+    }
+
+    #[test]
+    fn a_shown_text_carries_its_dëscs_movie() {
+        let catalog = screens(
+            vec![
+                MissionRecord {
+                    on_refuse: Script::parse("S131"),
+                    ..to_mars(130)
+                },
+                MissionRecord {
+                    avail_loc: -1,
+                    ..to_mars(131)
+                },
+            ],
+            vec![
+                MissionTexts {
+                    refuse: Some("No.".to_owned()),
+                    movies: TextMovies {
+                        refuse: film("No.mov", 0x0001),
+                        brief: film("Other.mov", 0),
+                        ..TextMovies::default()
+                    },
+                    ..MissionTexts::named(MissionId(130), "Run")
+                },
+                MissionTexts {
+                    brief: Some("Off.".to_owned()),
+                    ..MissionTexts::named(MissionId(131), "Walk")
+                },
+            ],
+        );
+        let mut session = docked(&catalog);
+        session
+            .refuse_mission(MissionId(130), &mut NeverFires)
+            .expect("refused");
+        assert_eq!(
+            session.take_mission_texts(),
+            [
+                MissionText {
+                    movie: film("No.mov", 0x0001),
+                    ..text(MissionTextKind::Refuse, 130, "No.")
+                },
+                text(MissionTextKind::Brief, 131, "Off."),
             ]
         );
     }
@@ -1621,6 +1744,71 @@ mod tests {
         );
     }
 
+    fn film(file: &str, flags: u16) -> Option<DescMovie> {
+        DescMovie::from_desc(file, flags)
+    }
+
+    #[test]
+    fn an_offer_carries_its_offer_dëscs_movie() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![MissionTexts {
+                movies: TextMovies {
+                    offer: film("Offer.mov", 0x0001),
+                    refuse: film("Refuse.mov", 0),
+                    ..TextMovies::default()
+                },
+                ..offering(142, "Ferry.", "", "")
+            }],
+        );
+        let mut session = docked(&catalog);
+        let Some(VenueOffer::Prompt(prompt)) = session.next_offer(BAR, &mut NeverFires) else {
+            panic!("a prompt");
+        };
+        assert_eq!(prompt.movie, film("Offer.mov", 0x0001), "the offer's own");
+    }
+
+    #[test]
+    fn an_offer_accepted_at_once_carries_its_before_movie_and_never_its_after_movie() {
+        let unrefusable = |id| MissionRecord {
+            flags: UNREFUSABLE,
+            ..at_the_bar(id)
+        };
+        let silent = |id, movie| MissionTexts {
+            movies: TextMovies {
+                offer: movie,
+                ..TextMovies::default()
+            },
+            ..offering(id, "", "", "")
+        };
+        let catalog = screens(
+            vec![unrefusable(141), unrefusable(142)],
+            vec![
+                silent(141, film("Before.mov", 0x0004)),
+                silent(142, film("After.mov", 0x0001)),
+            ],
+        );
+        let mut session = docked(&catalog);
+        assert_eq!(
+            session.next_offer(BAR, &mut NeverFires),
+            Some(VenueOffer::Accepted {
+                mission: MissionId(141),
+                accepted: Ok(0),
+                movie: film("Before.mov", 0x0004),
+            }),
+            "it plays before the empty-text check (@0xa2273-0xa22ec)"
+        );
+        assert_eq!(
+            session.next_offer(BAR, &mut NeverFires),
+            Some(VenueOffer::Accepted {
+                mission: MissionId(142),
+                accepted: Ok(1),
+                movie: None,
+            }),
+            "the accept at once returns before the after-movie (@0xa230a-0xa231c)"
+        );
+    }
+
     fn prompted(offer: Option<VenueOffer>) -> MissionId {
         match offer {
             Some(VenueOffer::Prompt(prompt)) => prompt.mission,
@@ -1667,6 +1855,7 @@ mod tests {
                     refuse: Some(NO_LABEL.to_owned()),
                 },
                 graphic: None,
+                movie: None,
             })),
             "142 weighs 0, 141 below it; 140 is the spaceport's"
         );
@@ -1717,6 +1906,7 @@ mod tests {
             Some(VenueOffer::Accepted {
                 mission: MissionId(141),
                 accepted: Ok(0),
+                movie: None,
             })
         );
         assert_eq!(session.pilot().missions().missions(), [MissionId(141)]);
@@ -1968,6 +2158,7 @@ mod tests {
                 Some(VenueOffer::Accepted {
                     mission: MissionId(141),
                     accepted: Ok(0),
+                    movie: None,
                 })
             );
             assert_eq!(outside(&session), left, "{dialog:?} {shift:?}");
@@ -2038,6 +2229,7 @@ mod tests {
             Some(VenueOffer::Accepted {
                 mission: MissionId(141),
                 accepted: Err(AcceptError::Refused(AcceptRefusal::SlotsFull)),
+                movie: None,
             })
         );
         assert_eq!(

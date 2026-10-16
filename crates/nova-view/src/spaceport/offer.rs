@@ -639,6 +639,7 @@ pub(crate) mod fixture {
                 accept: "I'm in".to_owned(),
                 refuse: Some("No".to_owned()),
             },
+            movie: None,
         }
     }
 }
@@ -701,6 +702,7 @@ mod tests {
                 accept: accept.to_owned(),
                 refuse: refuse.map(str::to_owned),
             },
+            movie: None,
         }
     }
 

@@ -707,6 +707,7 @@ fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled()
                     accept: "Yes".to_owned(),
                     refuse: Some("No".to_owned()),
                 },
+                movie: None,
             },
             ButtonStyle::STOCK,
         );

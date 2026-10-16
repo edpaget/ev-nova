@@ -631,6 +631,7 @@ mod tests {
                     refuse: Some("No".to_owned()),
                 },
                 graphic: None,
+                movie: None,
             })))
         );
         assert!(asked.is_empty(), "no conversation rolled: {asked:?}");
@@ -725,6 +726,7 @@ mod tests {
             Ok(Hailed::Offer(VenueOffer::Accepted {
                 mission: MissionId(130),
                 accepted: Ok(0),
+                movie: None,
             }))
         );
         assert_eq!(session.pilot().missions().missions(), [MissionId(130)]);

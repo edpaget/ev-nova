@@ -34,13 +34,13 @@ use nova_rsrc::ResType;
 use crate::blink::Blink;
 use crate::catalog::{
     AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
+    DateAffixes, DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
     RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
     StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TextGraphics, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -463,7 +463,8 @@ impl PilotCatalog for GameData {
 
     /// Each text from its `dësc`, none for -1 or one that cannot be read;
     /// the offer's is `dësc` 4000 + the mission's index (@0xa3a85-0xa3aad).
-    /// Each text's `Graphic` beside it, none for -1 too.
+    /// Each text's `Graphic` beside it, none for -1 too, and the movie its
+    /// `MovieFile` names, played as its `Flags` say ([`DescMovie::from_desc`]).
     fn mission_texts(&self) -> Vec<MissionTexts> {
         let text = |id: Option<i16>| -> Option<String> {
             let desc = self.get::<Desc>(id?)?.ok()?;
@@ -473,12 +474,17 @@ impl PilotCatalog for GameData {
             let desc = self.get::<Desc>(id?)?.ok()?;
             Some(desc.record.graphic?.0)
         };
+        let movie = |id: Option<i16>| -> Option<DescMovie> {
+            let desc = self.get::<Desc>(id?)?.ok()?;
+            DescMovie::from_desc(desc.record.movie_file.as_str(), desc.record.flags.0)
+        };
         self.records::<Mission>()
             .filter_map(|(id, mission)| {
                 let mission = mission.ok()?;
                 let record = mission.record;
                 let raw = |desc: Option<nova_data::DescId>| text(desc.map(|desc| desc.0));
                 let pict = |desc: Option<nova_data::DescId>| graphic(desc.map(|desc| desc.0));
+                let film = |desc: Option<nova_data::DescId>| movie(desc.map(|desc| desc.0));
                 let offer = id
                     .checked_sub(FIRST_MISSION)
                     .and_then(|index| FIRST_OFFER_DESC.checked_add(index));
@@ -505,6 +511,16 @@ impl PilotCatalog for GameData {
                         load_cargo: pict(record.load_carg_text),
                         dump_cargo: pict(record.dump_cargo_text),
                         ship_done: pict(record.ship_done_text),
+                    },
+                    movies: TextMovies {
+                        offer: movie(offer),
+                        brief: film(record.brief_text),
+                        comp: film(record.comp_text),
+                        fail: film(record.fail_text),
+                        refuse: film(record.refuse_text),
+                        load_cargo: film(record.load_carg_text),
+                        dump_cargo: film(record.dump_cargo_text),
+                        ship_done: film(record.ship_done_text),
                     },
                 })
             })
@@ -4056,6 +4072,15 @@ mod tests {
         bytes
     }
 
+    /// A `dësc` of `text` naming the movie `file`, played as `flags` say.
+    fn filmed(text: &str, file: &str, flags: u16) -> Vec<u8> {
+        let mut bytes = pictured(text, -1);
+        let tail = bytes.len() - 34;
+        bytes[tail..tail + file.len()].copy_from_slice(file.as_bytes());
+        bytes[tail + 32..].copy_from_slice(&flags.to_be_bytes());
+        bytes
+    }
+
     /// A `mïsn` whose `BriefText`, `QuickBrief`, `LoadCargText`,
     /// `DumpCargoText`, `CompText`, `FailText`, `RefuseText` and
     /// `ShipDoneText` are `texts`, in that order, with these button
@@ -4141,6 +4166,7 @@ mod tests {
                         dump_cargo: None,
                         ship_done: Some(309),
                     },
+                    movies: TextMovies::default(),
                 },
                 MissionTexts::named(MissionId(131), "Plain run"),
                 MissionTexts {
@@ -4151,6 +4177,52 @@ mod tests {
             "each text carries its own dësc's graphic, none for a graphic of -1; -1 and a missing dësc (0 among them) are no text and no graphic; the undecodable mïsn is skipped"
         );
         assert_eq!(store(&[]).mission_texts(), []);
+    }
+
+    #[test]
+    fn each_text_carries_the_movie_its_own_desc_names() {
+        use nova_data::records::mission::Mission;
+        let data = store_named(&[
+            (
+                Mission::TYPE,
+                130,
+                Some("Filmed"),
+                texted([200, -1, 206, 207, 202, 203, 204, 209], b"\0", b"\0"),
+            ),
+            (
+                Desc::TYPE,
+                4002,
+                None,
+                filmed("Offer.", "Offer.mov", 0x0001),
+            ),
+            (Desc::TYPE, 200, None, filmed("Brief.", "Brief.mov", 0x0006)),
+            (Desc::TYPE, 202, None, filmed("Comp.", "Comp.mov", 0)),
+            (Desc::TYPE, 203, None, filmed("Fail.", "Fail.mov", 0)),
+            (Desc::TYPE, 204, None, filmed("Refuse.", "Refuse.mov", 0)),
+            (Desc::TYPE, 206, None, filmed("Load.", "Load.mov", 0)),
+            (Desc::TYPE, 207, None, desc("Dump.")),
+            (Desc::TYPE, 209, None, filmed("Done.", "Done.mov", 0)),
+        ]);
+        let movie = |file: &str| DescMovie::from_desc(file, 0);
+        let texts = data.mission_texts();
+        assert_eq!(
+            texts[0].movies,
+            TextMovies {
+                offer: DescMovie::from_desc("Offer.mov", 0x0001),
+                brief: DescMovie::from_desc("Brief.mov", 0x0006),
+                comp: movie("Comp.mov"),
+                fail: movie("Fail.mov"),
+                refuse: movie("Refuse.mov"),
+                load_cargo: movie("Load.mov"),
+                dump_cargo: None,
+                ship_done: movie("Done.mov"),
+            },
+            "a dësc with no MovieFile, or a missing one, has none"
+        );
+        assert_eq!(
+            texts[0].movies.offer.as_ref().map(|movie| movie.after),
+            Some(true)
+        );
     }
 
     #[test]

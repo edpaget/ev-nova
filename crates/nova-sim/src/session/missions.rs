@@ -2728,6 +2728,7 @@ mod tests {
             mission: MissionId(mission),
             text: text.to_owned(),
             graphic: None,
+            movie: None,
         }
     }
 

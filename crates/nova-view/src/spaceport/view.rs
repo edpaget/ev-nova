@@ -3727,6 +3727,7 @@ mod tests {
             kind: MissionTextKind::Brief,
             mission: MissionId(mission),
             text: text.to_owned(),
+            movie: None,
         };
         view.show_mission_texts(vec![text(130, "First."), text(131, "Second.")]);
         assert_eq!(shown_text(&view).as_deref(), Some("First."));
@@ -3758,6 +3759,7 @@ mod tests {
             mission: MissionId(130),
             text: "Done.".to_owned(),
             graphic: None,
+            movie: None,
         }]);
         let at = view
             .mission_text()
@@ -3834,6 +3836,7 @@ mod tests {
                 accept: "Yes".to_owned(),
                 refuse: Some("No".to_owned()),
             },
+            movie: None,
         }
     }
 
@@ -3910,6 +3913,7 @@ mod tests {
             mission: MissionId(130),
             text: "Well done.".to_owned(),
             graphic: None,
+            movie: None,
         }]);
         view.open_offer(offered());
         let offer = view.offer_dialog().expect("open");
@@ -4125,6 +4129,7 @@ mod tests {
             mission: MissionId(130),
             text: "Off you go.".to_owned(),
             graphic,
+            movie: None,
         };
         view.show_mission_texts(vec![text(Some(5008)), text(Some(127)), text(None)]);
         let mut shown = Vec::new();
@@ -4179,6 +4184,7 @@ mod tests {
             mission: MissionId(141),
             text: "Pity.".to_owned(),
             graphic: None,
+            movie: None,
         }]);
         view.tick(FIRST_OFFER_DELAY);
         assert_eq!(view.take_offer_request(), None);
@@ -4721,6 +4727,7 @@ mod tests {
                 mission: MissionId(141),
                 text: "Pity.".to_owned(),
                 graphic: None,
+                movie: None,
             }]),
         }
         let open = view.mission_info().is_some()
@@ -4882,6 +4889,7 @@ mod tests {
             kind: MissionTextKind::Comp,
             mission: MissionId(130),
             text: "Well done.".to_owned(),
+            movie: None,
         };
         view.show_mission_texts(vec![text.clone(), text]);
         assert!(view.holds_leave());

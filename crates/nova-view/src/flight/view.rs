@@ -14665,6 +14665,7 @@ mod tests {
             accepted: Err(AcceptError::Refused(
                 nova_sim::mission::AcceptRefusal::SlotsFull,
             )),
+            movie: None,
         });
         assert_eq!(view.next_offer(1), refused);
         assert_eq!(view.next_offer(1), None, "suppressed");

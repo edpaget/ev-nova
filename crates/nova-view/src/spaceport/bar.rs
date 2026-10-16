@@ -1487,6 +1487,7 @@ mod tests {
                 accept: "I'm in".to_owned(),
                 refuse: Some("No".to_owned()),
             },
+            movie: None,
         }
     }
 

@@ -5,7 +5,7 @@ use std::cmp::Reverse;
 use std::time::Duration;
 
 use super::{AcceptError, AcceptRefusal, SLOTS};
-use crate::catalog::MissionId;
+use crate::catalog::{DescMovie, MissionId};
 use crate::chance::Chance;
 use crate::rulebook::RuleSource;
 
@@ -141,6 +141,10 @@ pub struct OfferPrompt {
     /// `dësc`. The view shows the picture variant of the dialog (`DLOG`
     /// 1020) for one above 127 (@0xa2344).
     pub graphic: Option<i16>,
+    /// The movie its offer `dësc` names: played before the dialog, or,
+    /// [`after`](DescMovie::after), after the texts its answer shows
+    /// (`_OfferOneMission` @0xa2273-0xa22ab, @0xa3580-0xa35b8).
+    pub movie: Option<DescMovie>,
 }
 
 impl OfferPrompt {
@@ -164,6 +168,11 @@ pub enum VenueOffer {
         mission: MissionId,
         /// The slot it went into, or why it was not accepted.
         accepted: Result<u8, AcceptError>,
+        /// The movie its offer `dësc` names, when it plays before the
+        /// dialog: it plays before the accept's texts, as the before-movie
+        /// comes before the empty-text check (@0xa2273-0xa22ec). The accept
+        /// at once returns before the after-movie (@0xa230a-0xa231c).
+        movie: Option<DescMovie>,
     },
 }
 
