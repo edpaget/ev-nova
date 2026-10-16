@@ -23709,12 +23709,15 @@ mod tests {
     }
 
     #[test]
-    fn in_port_tab_with_the_map_key_held_closes_the_map() {
-        let mut view = in_the_bar(None);
-        view.open_bar_map();
-        view.port_map_input(&held(MAP));
-        view.port_map_input(&key(Key::Tab, true));
-        assert!(!view.map_open(), "Tab falls through on a planet (@0x13d20)");
+    fn in_port_tab_or_backslash_with_the_map_key_held_closes_the_map() {
+        // Both fall through on a planet (@0x13d20).
+        for k in [Key::Tab, Key::Char('\\')] {
+            let mut view = in_the_bar(None);
+            view.open_bar_map();
+            view.port_map_input(&held(MAP));
+            view.port_map_input(&key(k, true));
+            assert!(!view.map_open(), "{k:?}");
+        }
     }
 
     #[test]
