@@ -55,7 +55,9 @@
 //!    point-defence shot rolls its miss in its ship's class ([`sides`]),
 //!    and an NPC's bomb or rocket leaves at its ship's velocity and its
 //!    `Speed`, the player's at four fifths or all of its ship's velocity
-//!    ([`BombLaunch`](projectile::BombLaunch)). A fighter
+//!    ([`BombLaunch`](projectile::BombLaunch)). Every shot rolls its
+//!    weapon's `JamVuln` ([`jamming`]), and a `Seeker` 0x0008 homing one
+//!    the [`Field`]'s `Interference` ([`Shot::roll_at_launch`]). A fighter
 //!    bay's launch is no shot but a [`Sortie`], which the session takes
 //!    ([`Combat::take_sorties`]) and puts in the system as a ship. An NPC
 //!    fires its pick as `_FireAIShipWeapon` does ([`ai_fire`]): a copy
@@ -71,7 +73,12 @@
 //!    and never of a ship.
 //! 3. Every reload timer counts down a tick.
 //! 4. Shots fly a tick, homing ones steering at their target, breaking up
-//!    or not, and each beam spends a tick of its life, or fades a tick at
+//!    or not, unless it jams them, their firer cannot see it, or a
+//!    `Seeker` 0x4000 lock fails, and confused ones circling by the
+//!    [`Field`]'s frame ([`projectile`]); each ship's jamming and sight
+//!    are read as the tick began ([`Sight`]). A hit by
+//!    a shot turned on its firer is by no ship ([`Strike::by`]). Each beam
+//!    spends a tick of its life, or fades a tick at
 //!    its end ([`Beam::live`]), one that has ended going before it hits or
 //!    is drawn again. The rest follow their firers ([`Beam::follow`]),
 //!    each from its exit on the frame its firer is drawn on this tick,
@@ -589,7 +596,7 @@ impl Default for Rules<'static> {
 pub struct Field {
     /// The frame counter (`_frameCounter`) as `_DoPlayGameWork` sees it,
     /// before `_PlayGame` adds 1: what an interfered shot circles by
-    /// ([`Jam::Interfered`](projectile::Jam::Interfered)).
+    /// ([`Jam::Interfered`]).
     pub frame: i32,
     /// The player's system's `sÿst` `Interference`, raw (+0x96), not less
     /// any anti-interference: what a `Seeker` 0x0008 homing shot rolls

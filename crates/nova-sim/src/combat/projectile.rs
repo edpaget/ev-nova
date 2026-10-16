@@ -21,6 +21,36 @@
 //!   `GuidedTurn` a tick the short way while the target's bearing is
 //!   further off than that, and keeping its heading otherwise, a target
 //!   breaking up included. One fired with no target flies straight.
+//!   Before it turns, `_HandleShotGuidance` (@0x320dc-0x32aa4) tests it,
+//!   in this order, every tick:
+//!   - **Jamming** ([`jamming`](super::jamming)): it rolled each jamming
+//!     type as it was launched (`_SpawnShot` @0x3f051-0x3f0a7); its target
+//!     jams it when, for a type rolled above none, the target's jamming is
+//!     above 100 less the roll. Jammed, it stops turning, or under `Seeker`
+//!     0x0010 turns away, and under 0x8000 turns on its firer at one in
+//!     [`JAMMED_TURNS_ON_FIRER`]. It is not [`Jam`]-jammed: it still hits
+//!     its target, counts as aimed at it and locks.
+//!   - **Sight**: when its firer cannot see the target
+//!     ([`cloak::seen`]: cloaked with no scanner within 200 pixels and no
+//!     escort's cloak, or coming out of a gate), it stops turning, and
+//!     under 0x8000 turns on its firer at one in
+//!     [`BLINDED_TURNS_ON_FIRER`].
+//!   - **`Seeker` 0x4000**: within [`LOCK_BOX`] of its target on each
+//!     axis, it loses its lock when the target is more than [`LOCK_CONE`]
+//!     off ahead, as [`LockAngle`] measures it.
+//!
+//!   A shot turned on its firer is aimed at it and launched by no ship
+//!   ([`Source::Other`]). On the tick of a retarget or a lost lock it
+//!   still turns at the bearing it read before the tests.
+//! - A homing shot of `Seeker` 0x0008 is confused by sensor interference
+//!   ([`Jam::Interfered`]) when, as it is launched, `below(100) + 1` is at
+//!   most the player's system's `Interference` (`_SpawnShot`
+//!   @0x3eab2-0x3eb66). Confused, it flies straight for its
+//!   [`HOMING_DELAY`] ticks, then turns `GuidedTurn` a tick, back for 150
+//!   frames of the frame counter and on for 150 ([`CIRCLE_FRAMES`]),
+//!   whatever its target; it hits nothing, and under 0x8000 clears and
+//!   turns on its firer at one in [`BLINDED_TURNS_ON_FIRER`] each tick.
+//!   Neither function plays a sound.
 //! - Any shot but point defence whose ship ([`Shot::aimed_at`]) is gone
 //!   (destroyed, or out of the fight as it landed or jumped) is lost
 //!   ([`Jam::Lost`]) before it next moves: it flies on, aimed at nothing,
