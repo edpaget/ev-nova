@@ -23199,7 +23199,8 @@ mod tests {
     /// [`offering`] Ace's refusable (or `unrefusable`) mission 130, with
     /// a `BriefText` and a `RefuseText`, whose `OnAccept` (or, `refuse`,
     /// `OnRefuse`) is `G200`, a tank: hailed and its offer taken, in
-    /// flight, the HUD's cadence read as `cadence` says.
+    /// flight with the nearest stellar, the Moon, selected, the HUD's
+    /// cadence read as `cadence` says.
     fn offered_in_flight(cadence: RuleSource, unrefusable: bool, refuse: bool) -> View {
         let mut catalog = offering(0, Some("Help?"), unrefusable);
         catalog.outfits = vec![shipbuying().outfits[0].clone()];
@@ -23220,6 +23221,7 @@ mod tests {
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
         view.tick(TICK);
+        tap(&mut view, NEAREST_STELLAR_KEY);
         tap(&mut view, TARGET_KEY);
         tap(&mut view, HAIL_KEY);
         view.take_offer().expect("offered");
@@ -23231,6 +23233,7 @@ mod tests {
         for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
             let mut view = offered_in_flight(RuleSource::Engine, unrefusable, refuse);
             let before = view.reserves();
+            let nav = view.nav_shown();
             if refuse {
                 assert_eq!(view.refuse_mission(MissionId(130)), Ok(()), "{what}");
             } else {
@@ -23241,7 +23244,11 @@ mod tests {
                 before.fuel.max + 100.0,
                 "{what}: G200 ran"
             );
-            let nav = view.nav_shown();
+            // A selection the bar hasn't drawn: an `M` or `N` in the
+            // answer can't stand for it, as its move lays the system out
+            // afresh as it settles, which redraws the whole bar.
+            view.select_stellar(StellarPick::Slot(0));
+            assert_ne!(view.nav_now(), nav, "{what}: Earth selected");
             assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
             assert_eq!(view.reserves_shown(), before, "{what}: under the text");
             assert_eq!(view.nav_shown(), nav, "{what}: the nav held too");
@@ -23251,6 +23258,7 @@ mod tests {
                 view.reserves(),
                 "{what}: live once it closed"
             );
+            assert_eq!(view.nav_shown(), view.nav_now(), "{what}: nav live too");
             assert!(view.bar_steps.is_empty(), "{what}: let go");
         }
     }
