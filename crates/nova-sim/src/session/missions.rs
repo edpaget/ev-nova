@@ -98,6 +98,7 @@ use crate::rules::Verdict;
 use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
+use crate::text_parse::{ParseRules, parse_text_description};
 use crate::text_tags::{
     self, MissionTags, MissionValues, RankTagGovts, TagContext, TagNames, TagRules,
 };
@@ -1415,10 +1416,12 @@ impl Session {
     }
 
     /// Takes in `raw`, a text from `source`, as the original does before
-    /// it fills it: the remembered rank governments become those `source`
-    /// leaves ([`TextSource::govts`]), and in the `l33t` mode a `dësc`'s
-    /// letters are drawn on `chance` ([`load_leet`](text_tags::load_leet)).
-    /// What it gives back is the text to fill.
+    /// it fills it: its conditional text is resolved for the pilot as it
+    /// is now, and the remembered rank governments become those `source`
+    /// leaves ([`TextSource::parse`], `_ParseTextDescription`); then, in
+    /// the `l33t` mode, a `dësc`'s letters are drawn on `chance`
+    /// ([`load_leet`](text_tags::load_leet), @0x7194f, after the parse at
+    /// @0x71936). What it gives back is the text to fill.
     ///
     /// The `&self` texts below ([`Session::offer_text`],
     /// [`Session::mission_text`], [`Session::plain_text`]) read the
@@ -1431,11 +1434,12 @@ impl Session {
         raw: &str,
         chance: &mut dyn Chance,
     ) -> String {
-        self.rank_govts = source.govts(self.rank_govts, raw);
+        let (parsed, govts) = source.parse(self, self.rank_govts, raw);
+        self.rank_govts = govts;
         if self.leet && source == TextSource::Desc {
-            text_tags::load_leet(raw, chance)
+            text_tags::load_leet(&parsed, chance)
         } else {
-            raw.to_owned()
+            parsed
         }
     }
 
@@ -1446,16 +1450,18 @@ impl Session {
     /// text (@0x71a5e-0x71a81), never reaching the reset
     /// (@0x71926-0x71930), the parse (@0x71936) or the `l33t` letters, so
     /// the governments the last text left are kept.
-    pub(super) fn load_desc(&mut self, raw: Option<&str>, chance: &mut dyn Chance) -> String {
+    pub fn load_description(&mut self, raw: Option<&str>, chance: &mut dyn Chance) -> String {
         raw.map(|raw| self.take_in(TextSource::Desc, raw, chance))
             .unwrap_or_default()
     }
 
-    /// The governments loading `raw`, a `dësc` that may be missing, would
-    /// leave, as [`Session::load_desc`] leaves them, changing nothing.
-    pub(super) fn desc_govts(&self, raw: Option<&str>) -> RankTagGovts {
-        raw.map_or(self.rank_govts, |raw| {
-            TextSource::Desc.govts(self.rank_govts, raw)
+    /// `raw`, a `dësc` that may be missing, as loading it would give it
+    /// before any `l33t` letters are drawn, and the governments it would
+    /// leave, as [`Session::load_description`] leaves them, changing
+    /// nothing: a missing one empty, keeping the remembered governments.
+    pub(super) fn peek_desc(&self, raw: Option<&str>) -> (String, RankTagGovts) {
+        raw.map_or((String::new(), self.rank_govts), |raw| {
+            TextSource::Desc.parse(self, self.rank_govts, raw)
         })
     }
 
@@ -1522,13 +1528,15 @@ impl Session {
 
 /// Where a text the session fills comes from, which decides the rank
 /// governments its crossed tags read
-/// ([`RuleKey::CrossedRankTags`]; see [`RankTagGovts`]).
+/// ([`RuleKey::CrossedRankTags`]; see [`RankTagGovts`]). Each is parsed
+/// by `_ParseTextDescription` ([`parse_text_description`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TextSource {
     /// A `dësc` loaded as `_LoadDescription` loads one: an offer's,
     /// `BriefText`, `CompText`, `FailText`, `RefuseText`, the cargo texts,
-    /// `ShipDoneText`, `QuickBrief`. The governments are reset
-    /// (@0x71926-0x71930), then its own are parsed (@0x71936).
+    /// `ShipDoneText`, `QuickBrief`, and the `dësc`s the screens show. The
+    /// governments are reset (@0x71926-0x71930), then it is parsed
+    /// (@0x71936).
     Desc,
     /// A hail quote, parsed with no reset (`_ShowPersonHailQuote`
     /// @0x445ee).
@@ -1536,13 +1544,21 @@ pub(super) enum TextSource {
 }
 
 impl TextSource {
-    /// The governments `raw` from this source leaves, `remembered`
-    /// before it.
-    pub(super) fn govts(self, remembered: RankTagGovts, raw: &str) -> RankTagGovts {
-        match self {
-            Self::Desc => RankTagGovts::NONE.parsed(raw),
-            Self::Quote => remembered.parsed(raw),
-        }
+    /// `raw` from this source parsed for `session`'s pilot, its rules
+    /// those `session` holds, and the governments it leaves,
+    /// `remembered` before it.
+    pub(super) fn parse(
+        self,
+        session: &Session,
+        remembered: RankTagGovts,
+        raw: &str,
+    ) -> (String, RankTagGovts) {
+        let rules = ParseRules::from_rulebook(&session.rules);
+        let before = match self {
+            Self::Desc => RankTagGovts::NONE,
+            Self::Quote => remembered,
+        };
+        parse_text_description(raw, session, rules, before)
     }
 }
 

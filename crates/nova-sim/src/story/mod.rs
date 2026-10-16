@@ -1748,6 +1748,13 @@
 //! `&mut` paths that show a text take it in first, so the governments
 //! settle as each text is shown, as the original's do.
 //!
+//! **Conditional text** (missions-fidelity phase 26). A text taken in
+//! has its conditional text resolved first
+//! ([`text_parse`](crate::text_parse), `_ParseTextDescription`): `{G
+//! …}`, `{bnnn …}` and `{Pnnn …}` read the pilot as it is at that moment,
+//! and the rank scan reads only the strings chosen. The `&self` screens
+//! resolve it alike, as if loaded.
+//!
 //! ## Checked for phase 3
 //!
 //! - The firing points stand as "One landing", "One take-off" and "One

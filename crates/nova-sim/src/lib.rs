@@ -254,6 +254,9 @@
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
+//! - [`text_parse`]: the conditional text (`{G "he" "she"}`, `{bnnn …}`,
+//!   `{Pnnn …}`) every loaded text is resolved by, as the original's
+//!   `_ParseTextDescription` ([`text_parse::conditional_text`]).
 //! - [`text_tags`]: the one substitution path for the text tags, as the
 //!   original's `_MungeBriefing`: a [`TagContext`] of the pilot, the
 //!   person, the ranks and the mission's resolved [`MissionValues`], its
@@ -345,6 +348,7 @@ pub mod target_panel;
 pub mod targeting;
 #[cfg(test)]
 mod testkit;
+pub mod text_parse;
 pub mod text_tags;
 pub mod top_speed;
 pub mod traffic;

@@ -71,6 +71,10 @@
 //!   by the engine the slot's byte offset, as the original's register
 //!   leaves it ([`MissionTags::other_pay`]).
 //!
+//! - A text is filled after its conditional text is resolved
+//!   ([`text_parse`](crate::text_parse), `_ParseTextDescription`), which
+//!   the session does as it takes a text in: `expand` sees no `{G …}`.
+//!
 //! - With the data's `l33t` mode on ([`TagContext::leet`]), the filled
 //!   text is [`munge_leet`]ed last, as `_MungeBriefing` does
 //!   (@0x9d5aa-0x9d667); a `dësc` the session shows has its letters drawn

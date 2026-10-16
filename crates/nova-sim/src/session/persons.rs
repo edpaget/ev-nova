@@ -1216,6 +1216,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_quote_reads_its_conditional_text_by_the_pilots_gender() {
+        for (gender, said) in [
+            (crate::pilot::Gender::Male, "Die, sir!"),
+            (crate::pilot::Gender::Female, "Die, madam!"),
+        ] {
+            let mut catalog = quoters([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+            catalog.strings = vec![(7101, vec!["Die, {G \"sir\" \"madam\"}!".to_owned()])];
+            let pilot = Pilot::new(&catalog, "Stock")
+                .expect("a pilot")
+                .with_gender(gender);
+            let mut session = Session::fly(&catalog, pilot).expect("flies");
+            session.populate(&catalog, &mut NeverFires);
+            session.traffic.npcs_mut()[1].person = None;
+            session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+            let (quotes, _) = quote_tick(&catalog, &mut session, &[77]);
+            assert_eq!(quotes, [said], "parsed (@0x445ee)");
+        }
+    }
+
     /// A hailed ship named for `<OSN>` that is not among the NPCs: "Earlier".
     fn named_earlier(session: &mut Session) {
         session.offering_ship = Some(super::super::person_offers::OfferingShip {

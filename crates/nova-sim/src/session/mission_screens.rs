@@ -287,7 +287,7 @@ impl Session {
     /// name and text filled for its offer, and today's medium date. The
     /// names read the remembered rank governments, as the original's list
     /// munges them before any text is loaded (@0xa0947); each text reads
-    /// its own, as if loaded ([`Session::desc_govts`]: a missing one the
+    /// its own, as if loaded ([`Session::peek_desc`]: a missing one the
     /// remembered), changing nothing: the screen loads the selected one
     /// ([`Session::show_computer_row`]).
     ///
@@ -311,13 +311,12 @@ impl Session {
             .map(|offer| {
                 let texts = self.mission_texts(offer.mission);
                 let name = texts.map_or("", |texts| texts.name.as_str());
-                let text = texts.and_then(|texts| texts.offer.as_deref());
-                let loaded = self.desc_govts(text);
+                let (text, loaded) = self.peek_desc(texts.and_then(|texts| texts.offer.as_deref()));
                 ComputerRow {
                     mission: offer.mission,
                     name: self.offer_text(offer.mission, name).unwrap_or_default(),
                     text: self
-                        .offer_text_reading(offer.mission, text.unwrap_or_default(), loaded)
+                        .offer_text_reading(offer.mission, &text, loaded)
                         .unwrap_or_default(),
                 }
             })
@@ -335,7 +334,7 @@ impl Session {
     /// slot whose `mïsn` is gone reads with no text, and abortable. The
     /// names read the remembered rank governments, as the original's list
     /// munges them before any text is loaded (@0x9e108); each text reads
-    /// its own, as if loaded ([`Session::desc_govts`]: a missing one the
+    /// its own, as if loaded ([`Session::peek_desc`]: a missing one the
     /// remembered), changing nothing: the screen loads the selected one
     /// ([`Session::show_info_row`]).
     #[must_use]
@@ -351,13 +350,13 @@ impl Session {
                 }
                 let texts = self.mission_texts(active.mission);
                 let name = texts.map_or("", |texts| texts.name.as_str());
-                let text = texts.and_then(|texts| texts.quick_brief.as_deref());
-                let loaded = self.desc_govts(text);
+                let (text, loaded) =
+                    self.peek_desc(texts.and_then(|texts| texts.quick_brief.as_deref()));
                 Some(InfoRow {
                     slot,
                     name: self.mission_text(slot, name),
                     failed: active.failed.is_some(),
-                    text: self.mission_text_reading(slot, text.unwrap_or_default(), loaded),
+                    text: self.mission_text_reading(slot, &text, loaded),
                     abortable: record.can_abort != 0,
                 })
             })
@@ -369,7 +368,7 @@ impl Session {
     }
 
     /// Shows the mission computer's row of `mission`, selected: its offer
-    /// text loaded as a `dësc` ([`Session::load_desc`]: a missing one
+    /// text loaded as a `dësc` ([`Session::load_description`]: a missing one
     /// empty, keeping the governments) and filled for its offer, as
     /// `_MissionFilter` loads a selected row's (@0x9f9bd-0x9f9eb), and
     /// then its name filled, as `_MissionDialogUpdate` munges the
@@ -384,7 +383,7 @@ impl Session {
         let texts = self.mission_texts(mission);
         let name = texts.map_or("", |texts| texts.name.as_str()).to_owned();
         let raw = texts.and_then(|texts| texts.offer.clone());
-        let raw = self.load_desc(raw.as_deref(), chance);
+        let raw = self.load_description(raw.as_deref(), chance);
         Some(ComputerRow {
             mission,
             text: self.offer_text(mission, &raw)?,
@@ -393,7 +392,7 @@ impl Session {
     }
 
     /// Shows the mission info screen's row of `slot`, selected: its
-    /// `QuickBrief` loaded as a `dësc` ([`Session::load_desc`]: a missing
+    /// `QuickBrief` loaded as a `dësc` ([`Session::load_description`]: a missing
     /// one empty, keeping the governments) and filled for the slot, as
     /// `_MissionInfoFilter` loads a selected row's (@0x9d89f-0x9d8bc),
     /// drawing on `chance`. `None` for a free slot.
@@ -402,7 +401,7 @@ impl Session {
         let raw = self
             .mission_texts(active.mission)
             .and_then(|texts| texts.quick_brief.clone());
-        let raw = self.load_desc(raw.as_deref(), chance);
+        let raw = self.load_description(raw.as_deref(), chance);
         Some(self.mission_text(slot, &raw))
     }
 
@@ -470,7 +469,7 @@ impl Session {
 
     /// The offer dialog for `mission`, offered now (`_OfferOneMission`
     /// @0xa21ac), drawing on `chance`: its offer text loaded
-    /// ([`Session::load_desc`]: a missing one empty, keeping the
+    /// ([`Session::load_description`]: a missing one empty, keeping the
     /// governments) and filled for the offer, and its labels; or, for one
     /// that cannot be refused with no offer text, its accept at once
     /// (@0xa22ec-0xa231c), made before the dialog is, so with no offer
@@ -501,7 +500,7 @@ impl Session {
         );
         let graphic = texts.and_then(|texts| texts.graphics.offer);
         let raw = raw.map(str::to_owned);
-        let raw = self.load_desc(raw.as_deref(), chance);
+        let raw = self.load_description(raw.as_deref(), chance);
         VenueOffer::Prompt(OfferPrompt {
             mission,
             text: self.offer_text(mission, &raw).unwrap_or_default(),
@@ -885,6 +884,106 @@ mod tests {
             vec![to_mars(130)],
             vec![texts(130, "Ride", Some("You go to <DST> alone."))],
         )
+    }
+
+    // The conditional text (`_ParseTextDescription` @0x14bdd-0x14f2f).
+
+    /// A session of `texts`' mission 130, docked, its pilot of `gender`.
+    fn conditioned(texts_of_130: MissionTexts, gender: crate::pilot::Gender) -> Session {
+        let catalog = screens(vec![to_mars(130)], vec![texts_of_130]);
+        let mut session = docked(&catalog);
+        session.pilot.gender = gender;
+        session
+    }
+
+    #[test]
+    fn a_shown_offer_reads_its_conditional_text_by_the_pilots_gender() {
+        use crate::pilot::Gender;
+        let offer = texts(130, "Ride", Some("Go, {G \"sir\" \"ma'am\"}."));
+        for (gender, said) in [(Gender::Male, "Go, sir."), (Gender::Female, "Go, ma'am.")] {
+            let mut session = conditioned(offer.clone(), gender);
+            let shown = session
+                .show_computer_row(MissionId(130), &mut NeverFires)
+                .expect("offered");
+            assert_eq!(shown.text, said);
+            assert_eq!(
+                session.mission_computer().expect("opens").rows[0].text,
+                said,
+                "the computer's view too, as if loaded"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shown_texts_bit_test_reads_the_bit_as_of_its_load() {
+        let offer = texts(130, "Ride", Some("{b7 \"Again\" \"First\"}"));
+        let mut session = conditioned(offer, crate::pilot::Gender::Male);
+        let first = session
+            .show_computer_row(MissionId(130), &mut NeverFires)
+            .expect("offered");
+        assert_eq!(first.text, "First");
+        session.run_set(&SetExpr::parse("b7").expect("parses"), &mut NeverFires);
+        let again = session
+            .show_computer_row(MissionId(130), &mut NeverFires)
+            .expect("offered");
+        assert_eq!(again.text, "Again");
+    }
+
+    #[test]
+    fn a_computer_rows_view_reads_the_governments_of_its_chosen_string() {
+        let mut session = ranked(
+            vec![to_mars(130)],
+            vec![texts(130, "Run", Some("{b7 \"<SRK128>\" \"\"}<PRK129>."))],
+            Rulebook::default(),
+        );
+        let computer = session.mission_computer().expect("opens");
+        assert_eq!(
+            computer.rows[0].text, "captain.",
+            "crossed, <PRK129> reads the <SRK> government, which the string \
+             not chosen never named"
+        );
+        let shown = session
+            .show_computer_row(MissionId(130), &mut NeverFires)
+            .expect("offered");
+        assert_eq!(shown.text, "captain.", "loaded alike");
+        session.run_set(&SetExpr::parse("b7").expect("parses"), &mut NeverFires);
+        let shown = session
+            .show_computer_row(MissionId(130), &mut NeverFires)
+            .expect("offered");
+        assert_eq!(
+            shown.text, "AdCdr.",
+            "chosen, <SRK128> names 128 for <PRK129>"
+        );
+    }
+
+    #[test]
+    fn with_leet_mode_the_letters_are_drawn_on_the_conditioned_text() {
+        let catalog = screens(
+            vec![to_mars(130)],
+            vec![texts(130, "Ride", Some("{G \"Hy\" \"Ha\"}"))],
+        );
+        let mut session = leet(&catalog);
+        let mut chance = Draws::of(&[0]);
+        let shown = session
+            .show_computer_row(MissionId(130), &mut chance)
+            .expect("offered");
+        assert_eq!(
+            chance.asked,
+            Vec::<u32>::new(),
+            "the a of the string not chosen is never drawn on"
+        );
+        assert_eq!(shown.text, "Hy");
+        let catalog = screens(
+            vec![to_mars(130)],
+            vec![texts(130, "Ride", Some("{G \"Ho\" \"Hy\"}"))],
+        );
+        let mut session = leet(&catalog);
+        let mut chance = Draws::of(&[0]);
+        let shown = session
+            .show_computer_row(MissionId(130), &mut chance)
+            .expect("offered");
+        assert_eq!(chance.asked, [3], "only the o of Ho");
+        assert_eq!(shown.text, "H0");
     }
 
     #[test]
