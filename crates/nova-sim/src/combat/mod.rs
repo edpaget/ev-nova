@@ -12281,6 +12281,73 @@ mod tests {
     }
 
     #[test]
+    fn a_release_in_the_hit_pass_counts_the_asteroid_and_point_defence_ends_before_it() {
+        let (shell, arsenal) = cluster(0);
+        let flown = |record: WeaponRecord, at: Vec2, age: u32| Shot {
+            position: at,
+            moved_from: Some(at - Vec2::new(10.0, 0.0)),
+            age,
+            ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
+        };
+        let spent_shell = flown(shell, Vec2::new(0.0, -3000.0), 3);
+        // A shot spent on an asteroid; and a point-defence shot and the
+        // missile it downs, both ended.
+        let on_a_rock = vec![flown(blaster(), Vec2::new(500.0, 0.0), 1)];
+        let defended = vec![
+            Shot {
+                moved_from: Some(Vec2::new(0.0, 300.0)),
+                age: 1,
+                ..Shot::launch(
+                    WeaponSpec::new(&pd_shot()),
+                    A,
+                    A,
+                    &ShipState {
+                        position: Vec2::new(0.0, 300.0),
+                        ..ShipState::default()
+                    },
+                    0.0,
+                )
+            },
+            Shot {
+                moved_from: Some(Vec2::new(3.0, 300.0)),
+                age: 1,
+                ..Shot::launch(
+                    WeaponSpec::new(&still_missile()),
+                    B,
+                    B,
+                    &ShipState {
+                        position: Vec2::new(3.0, 300.0),
+                        ..ShipState::default()
+                    },
+                    0.0,
+                )
+            },
+        ];
+        for (what, endings) in [
+            ("on an asteroid", on_a_rock),
+            ("to point defence", defended),
+        ] {
+            // The others, the shots that end, and the shell: all hold
+            // their slots as the shell releases, leaving one free.
+            for (capped, released) in [(false, 2), (true, 1)] {
+                let mut combat = crowded(MAX_SHOTS - 2 - endings.len(), capped);
+                combat.shots.extend(endings.iter().copied());
+                combat.shots.push(spent_shell);
+                let mut ships = [Ship::at(1, 0.0, 1000.0)];
+                let mut rocks = [rock(0, 500.0, 0.0)];
+                tick_amid(
+                    &mut combat,
+                    &mut ships,
+                    &arsenal,
+                    Rules::default(),
+                    &mut rocks,
+                );
+                assert_eq!(sub_shots(&combat).len(), released, "{what} {capped}");
+            }
+        }
+    }
+
+    #[test]
     fn a_point_defence_shot_of_ammo_type_minus_999_breaks_its_firer_up() {
         let mut combat = Combat::default();
         let mut ships = missile_attack(self_destructing(quad()));
