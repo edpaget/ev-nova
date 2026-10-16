@@ -1183,6 +1183,34 @@ mod tests {
     }
 
     #[test]
+    fn the_hire_screens_description_is_asked_and_shown_through_the_bar() {
+        let mut screen = laid_hire_bar();
+        let bar_desc = screen.take_description_request().expect("the bar's");
+        screen.open_hire(list(2));
+        assert_eq!(screen.take_description_request(), Some(14_000));
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(14_000, "Loaded pilot.");
+        let hire_words = |screen: &BarScreen| -> Vec<String> {
+            let mut list = DrawList::new();
+            screen.hire_screen().expect("open").draw(&mut list);
+            list.iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let words = hire_words(&screen);
+        assert!(words.contains(&"Loaded pilot.".to_owned()), "{words:?}");
+        screen.show_description(bar_desc, "Loaded bar.");
+        assert!(!hire_words(&screen).contains(&"Loaded bar.".to_owned()));
+        assert!(
+            texts(&screen).iter().any(|(text, _)| text == "Loaded bar."),
+            "the bar's text"
+        );
+    }
+
+    #[test]
     fn the_mission_info_key_asks_from_the_hire_screen_which_stays_open() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
