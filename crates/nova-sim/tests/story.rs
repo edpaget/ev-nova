@@ -159,7 +159,6 @@ impl PilotCatalog for Home {
             frame_size: Some((200, 200)),
             flags: StellarFlags::CAN_LAND,
             min_status: 0,
-            landing_sound: None,
             tech_level: 0,
             special_tech: [0; 8],
             govt: None,

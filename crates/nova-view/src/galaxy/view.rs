@@ -36,6 +36,30 @@ pub const FIT_MARGIN: f32 = 24.0;
 /// How far one arrow-key press pans the view, in logical units.
 pub const PAN_STEP: f32 = 64.0;
 
+/// Where a map draws a world point: `screen + (p - world) x scale`. The
+/// course map's is its view's ([`MapView::transform`]); the floating map
+/// centres its own on the current system.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Transform {
+    /// Where `world` is drawn.
+    pub screen: Point,
+    /// The world point drawn at `screen`.
+    pub world: Point,
+    /// Logical units per map unit.
+    pub scale: f32,
+}
+
+impl Transform {
+    /// Where the world point `p` is drawn.
+    #[must_use]
+    pub fn world_to_screen(&self, p: Point) -> Point {
+        Point::new(
+            self.screen.x + (p.x - self.world.x) * self.scale,
+            self.screen.y + (p.y - self.world.y) * self.scale,
+        )
+    }
+}
+
 /// What the map area shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MapView {
@@ -101,11 +125,17 @@ impl MapView {
     /// Where the world point `p` is drawn.
     #[must_use]
     pub fn world_to_screen(&self, p: Point) -> Point {
-        let scale = self.scale();
-        Point::new(
-            MAP_CENTER.x + (p.x - self.center.x) * scale,
-            MAP_CENTER.y + (p.y - self.center.y) * scale,
-        )
+        self.transform().world_to_screen(p)
+    }
+
+    /// The view as a [`Transform`]: `center` drawn at [`MAP_CENTER`].
+    #[must_use]
+    pub fn transform(&self) -> Transform {
+        Transform {
+            screen: MAP_CENTER,
+            world: self.center,
+            scale: self.scale(),
+        }
     }
 
     /// The world point drawn at screen point `s`.
@@ -237,6 +267,20 @@ mod tests {
         assert_eq!(
             view.screen_to_world(at(0.0, 0.0)),
             at(114.5 - 512.0 / 0.75, -15.0 - 304.0 / 0.75)
+        );
+    }
+
+    #[test]
+    fn a_transform_draws_its_world_point_at_its_screen_point_scaled() {
+        let transform = Transform {
+            screen: at(686.0, 278.0),
+            world: at(10.0, -20.0),
+            scale: 0.75,
+        };
+        assert_eq!(transform.world_to_screen(at(10.0, -20.0)), at(686.0, 278.0));
+        assert_eq!(
+            transform.world_to_screen(at(50.0, -40.0)),
+            at(686.0 + 30.0, 278.0 - 15.0)
         );
     }
 

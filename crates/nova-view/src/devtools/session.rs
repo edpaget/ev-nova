@@ -169,7 +169,6 @@ mod tests {
             frame_size: Some((100, 100)),
             flags: CAN_LAND,
             min_status: 0,
-            landing_sound: None,
             tech_level: 0,
             special_tech: [0; 8],
             govt: None,

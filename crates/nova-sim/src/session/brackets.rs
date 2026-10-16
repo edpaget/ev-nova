@@ -35,7 +35,7 @@ impl Session {
     /// stellar selected (@0x2fcbf-0x2fccf), so neither mode 2 with none
     /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
     /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
-    /// [`Session::stellar_iff`]'s standing models.
+    /// `Session::iff_dominated` models.
     #[must_use]
     pub fn nav_brackets(&self) -> Option<NavBrackets> {
         let stellar = self.nav_target()?;
@@ -43,7 +43,7 @@ impl Session {
             .sites
             .iter()
             .find(|site| site.id == stellar)
-            .is_some_and(|site| Self::iff_standing(site).dominated);
+            .is_some_and(Self::iff_dominated);
         Some(NavBrackets {
             stellar,
             expand: self.nav_fly_in.expand(),

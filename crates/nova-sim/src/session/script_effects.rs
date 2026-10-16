@@ -8,7 +8,7 @@
 //! | Operator | Where | What |
 //! |---|---|---|
 //! | `M` | @0x1570e-0x158d4 | the player's system is set (ship +0x74) and its stellar cleared (+0x6c = -1); the first of the new system's nav slots that is not -1 is found, with no check of landability or gates. Landed, that stellar becomes +0x6c and nothing else changes; in flight, the ship is put at its x/y at rest. With no stellar, nothing more: in flight the position and velocity are kept |
-//! | `N` | @0x158d9-0x159ad | as `M`, but the position and velocity are never touched, and `_dontMovePlayerAfterLanding` (0x316951) is set |
+//! | `N` | @0x158d9-0x159ad | the system set and +0x6c = -1, landed or not (@0x158fd), with no stellar looked for; the position and velocity are never touched, and `_dontMovePlayerAfterLanding` (0x316951) is set |
 //! | both | @0x15807-0x1583e | every active ship whose parent is the player (+0x9a 0: its escorts and fighters out) takes the new system; the others keep the old one, and `_DoPlayGameWork` runs only the ships in the player's system, so they stay behind |
 //! | both, landed | | `_dockedPortMissions` is filled with -1, and that is all |
 //! | both, in flight | @0x158a4 | the shots, cargo boxes (here the entry table's `Reset::Boxes`), explosions, smoke and asteroids (here `Reset::Asteroids`) are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
@@ -36,7 +36,10 @@
 //! **Here.** `Mxxx` and `Nxxx`
 //! only queue their move: a set expression runs in the middle of a
 //! purchase, a capture or a hook, with no catalog to read the new system
-//! from. [`Session::settle_script`] applies the moves in order at a safe
+//! from. Landed, each writes the nav selection at once, at its operator,
+//! as the original does, from each system's first stellar read as the
+//! session starts (see the `nav` module), so a dialog's redraw after the
+//! script shows it. [`Session::settle_script`] applies the moves in order at a safe
 //! point, which whoever runs set expressions calls after each input and
 //! tick, before saving; a move to a system that does not exist changes
 //! nothing (the original indexes it blindly). Each move makes a save
@@ -765,7 +768,11 @@ mod tests {
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
         let flown = reloaded(&catalog, session.pilot());
-        assert_eq!(flown.landed(), Some(StellarId(128)), "docked again");
+        assert_eq!(
+            crate::testkit::resumed_on(&flown),
+            Some(StellarId(128)),
+            "on it again"
+        );
     }
 
     #[test]
@@ -1016,7 +1023,8 @@ mod tests {
         let catalog = moving();
         for reading in READINGS {
             for text in ["M131", "N130"] {
-                for mut session in [flying(&catalog), landed(&catalog)] {
+                for start in [flying as fn(&FakePilotCatalog) -> Session, landed] {
+                    let mut session = start(&catalog);
                     session = session.with_rules(arrival(reading));
                     run(&mut session, text);
                     let mut chance = crate::testkit::Draws::of(&[]);
@@ -1154,14 +1162,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_saved_after_a_landed_m_flies_again_docked_at_the_new_stellar() {
+    fn a_pilot_saved_after_a_landed_m_flies_again_on_the_new_stellar() {
         let catalog = moving();
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M131");
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
         assert_eq!(flown.system(), SystemId(131));
-        assert_eq!(flown.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(100.0, 200.0));
     }
 

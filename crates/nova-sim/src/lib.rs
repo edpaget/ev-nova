@@ -428,7 +428,7 @@ pub use landing::{
     DockPress, DockSaid, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH,
     OUT_OF_RANGE_FRAME_WIDTH, REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth,
     UNLOADED_TYPE_WIDTH, check_landing, cleared, is_landable, land_or_select, landing_radius,
-    landing_reach, nearest_landable, nearest_landable_station, services, stellar_width,
+    landing_reach, nearest_stellar, nearest_stellar_station, services, stellar_width,
 };
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
@@ -461,9 +461,9 @@ pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, ESCAPE_POD_SHIP, Hailed, HookRules,
-    InfoRow, LandPress, MissionComputer, MissionInfo, MissionText, MissionTextKind, NotOffered,
-    OfferPrompt, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
-    ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, VenueOffer,
+    InfoRow, InterfaceLoad, LandPress, MissionComputer, MissionInfo, MissionText, MissionTextKind,
+    NotOffered, OfferPrompt, PersonQuote, RelocateRefusal, ScriptEffectRules, Session,
+    SessionEvent, Settled, ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{

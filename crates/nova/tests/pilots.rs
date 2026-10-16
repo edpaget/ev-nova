@@ -18,6 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova::app::screen::QUIT_DELAY;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
@@ -33,7 +34,7 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
-use nova_data::{GameData, InterfaceData, Record};
+use nova_data::{GameData, InterfaceData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
@@ -158,11 +159,14 @@ fn system() -> Vec<u8> {
     bytes
 }
 
-/// Alpha Prime: a landable planet with a bar at the system's centre,
-/// whose landscape is `PICT` 10004.
+/// Where [`stellar`] is: (50, 50), where a new pilot's ship starts.
+const ALPHA_PRIME_AT: nova_sim::Vec2 = nova_sim::Vec2::new(50.0, 50.0);
+
+/// Alpha Prime: a landable planet with a bar at (50, 50), where a new
+/// pilot's ship starts, whose landscape is `PICT` 10004.
 fn stellar() -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
+    put_i16s(&mut bytes, 0x00, &[50, 50, 4]);
     bytes[0x06..0x0A].copy_from_slice(&0x41_u32.to_be_bytes());
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
     bytes
@@ -297,12 +301,19 @@ struct Harness {
     frames: u64,
     /// What the app's audio was asked to play.
     log: AudioLog,
+    /// The app's audio, to say what is still playing.
+    audio: RecordingAudio,
 }
 
 impl Harness {
     /// The app on the main menu, keeping pilots in `store`, before any
     /// frame.
     fn opening(store: &MemoryPilots) -> Self {
+        Self::opening_with(store, AudioSettings::default())
+    }
+
+    /// [`Harness::opening`], its audio on `settings`.
+    fn opening_with(store: &MemoryPilots, settings: AudioSettings) -> Self {
         let data = game_data();
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
@@ -311,12 +322,14 @@ impl Harness {
             .with_dialogs(Rc::new(interface()), metrics);
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+        let handle = audio.clone();
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(settings);
         Self {
             app: App::new(&FakeWindow, data, screen).with_audio(core),
             gpu: RecordingGpu::new(),
             frames: 0,
             log,
+            audio: handle,
         }
     }
 
@@ -407,8 +420,47 @@ impl Harness {
             .collect()
     }
 
+    /// The `snd `s played since the last call; the rest let go.
+    fn played(&self) -> Vec<SoundId> {
+        std::mem::take(&mut *self.log.borrow_mut())
+            .into_iter()
+            .filter_map(|command| match command {
+                AudioCommand::Play { sound, .. } => Some(sound),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Sends the next redraw, 16 ms on, and says whether the app goes on.
+    fn redraw(&mut self) -> Control {
+        self.frames += 1;
+        let elapsed = Duration::from_millis(16 * self.frames);
+        self.handle(WindowEvent::Redraw { elapsed })
+    }
+
+    /// Redraws until the app exits, and says how many frames that took.
+    fn frames_until_exit(&mut self) -> u64 {
+        for frames in 1..=100 {
+            if self.redraw() == Control::Exit {
+                return frames;
+            }
+        }
+        panic!("the app never exits");
+    }
+
     fn showing(&self) -> Showing {
         self.app.screen().showing()
+    }
+
+    fn ship(&self) -> nova_sim::ShipState {
+        *self
+            .app
+            .screen()
+            .flight_view()
+            .expect("flying")
+            .session()
+            .expect("a session")
+            .player()
     }
 
     fn pilot(&self) -> Pilot {
@@ -520,13 +572,27 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     assert_eq!(saved(&store, "Ada P"), landed);
     assert_eq!(game.app.take_warnings(), Vec::<String>::new());
 
-    // A new app: Open Pilot lists it and resumes it in the spaceport.
+    // A new app: Open Pilot lists it and resumes it in space over the
+    // stellar it landed on, no spaceport opened.
     let mut game = Harness::opening(&store);
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     assert_eq!(game.showing(), Showing::OpenPilot);
     assert!(texts(&game.frame()).contains(&"Ada P".to_owned()));
     game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert!(game.app.screen().spaceport_view().is_none());
+    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
+    let resumed = game.pilot();
+    assert_eq!(resumed, landed);
+    assert_eq!(resumed.stellar(), Some(StellarId(128)));
+    assert_eq!(resumed.date(), landed.date());
+    assert_eq!(resumed.ship(), landed.ship());
+    assert_eq!(resumed.cash(), landed.cash());
+    game.frame();
+
+    // L, L lands it there.
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(
         game.app
@@ -536,12 +602,6 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
             .stellar(),
         StellarId(128)
     );
-    let resumed = game.pilot();
-    assert_eq!(resumed, landed);
-    assert_eq!(resumed.date(), landed.date());
-    assert_eq!(resumed.ship(), landed.ship());
-    assert_eq!(resumed.cash(), landed.cash());
-    game.frame();
 
     // Take off, back to the menu, and Quit exits.
     game.press(KeyCode::Escape);
@@ -555,13 +615,104 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
         button: MouseButton::Left,
         pressed: true,
     });
+    game.send(WindowEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+    });
     assert_eq!(
-        game.handle(WindowEvent::PointerButton {
-            button: MouseButton::Left,
-            pressed: false,
-        }),
-        Control::Exit
+        game.frames_until_exit(),
+        frames_to(QUIT_DELAY),
+        "Quit waits out its delay first"
     );
+}
+
+/// How many 16 ms frames it takes to reach `delay`.
+fn frames_to(delay: Duration) -> u64 {
+    u64::try_from(delay.as_millis().div_ceil(16)).expect("short")
+}
+
+const DOWN: SoundId = SoundId(600);
+const UP: SoundId = SoundId(601);
+
+#[test]
+fn a_keyed_new_pilot_opens_only_once_its_click_has_played() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    game.frame();
+    game.played();
+    game.audio.set_playing(DOWN, true);
+    game.type_key(KeyCode::KeyN, Some("n"));
+    for _ in 0..3 {
+        game.frame();
+        assert_eq!(game.showing(), Showing::MainMenu, "600 still plays");
+    }
+    assert_eq!(game.played(), [DOWN], "no 601 yet");
+    game.audio.set_playing(DOWN, false);
+    game.frame();
+    assert_eq!(game.played(), [UP]);
+    assert_eq!(
+        game.showing(),
+        Showing::NewPilot,
+        "in the frame that plays 601"
+    );
+}
+
+#[test]
+fn a_keyed_quit_exits_only_after_its_click_and_the_quit_delay() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    game.frame();
+    game.played();
+    game.audio.set_playing(DOWN, true);
+    game.type_key(KeyCode::KeyQ, Some("q"));
+    for _ in 0..frames_to(QUIT_DELAY) * 2 {
+        assert_eq!(game.redraw(), Control::Continue, "600 still plays");
+    }
+    assert_eq!(game.played(), [DOWN]);
+    game.audio.set_playing(DOWN, false);
+    assert_eq!(game.redraw(), Control::Continue, "601 starts");
+    assert_eq!(game.played(), [UP]);
+    assert_eq!(game.frames_until_exit(), frames_to(QUIT_DELAY));
+}
+
+#[test]
+fn with_sound_off_a_keyed_new_pilot_opens_at_once() {
+    let store = MemoryPilots::new();
+    let quiet = AudioSettings {
+        sound: false,
+        ..AudioSettings::default()
+    };
+    let mut game = Harness::opening_with(&store, quiet);
+    game.audio.set_playing(DOWN, true);
+    game.type_key(KeyCode::KeyN, Some("n"));
+    assert_eq!(game.showing(), Showing::NewPilot, "before any frame");
+    assert_eq!(game.played(), []);
+}
+
+#[test]
+fn a_new_pilot_reopened_before_it_lands_resumes_over_the_stellar_its_first_save_names() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.ship().position, nova_sim::Vec2::new(50.0, 50.0));
+    assert_eq!(
+        saved(&store, "Ada").stellar(),
+        Some(StellarId(128)),
+        "the nearest stellar, saved as last landed on"
+    );
+    assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
+
+    let mut game = Harness::opening(&store);
+    let open_pilot = game.menu_button(MenuChoice::OpenPilot);
+    game.click(open_pilot);
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.pilot().stellar(), Some(StellarId(128)));
+    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over it");
 }
 
 #[test]

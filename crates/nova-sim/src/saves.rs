@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(opened.reserves(), pilot.reserves());
         assert_eq!(opened.system(), SystemId(131));
         let resumed = Session::fly(&edge_lander(), opened).expect("flies");
-        assert_eq!(resumed.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&resumed), Some(StellarId(140)));
         assert_eq!(resumed.reserves().fuel.now, 200.0);
     }
 

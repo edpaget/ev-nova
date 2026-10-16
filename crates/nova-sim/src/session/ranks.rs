@@ -20,8 +20,8 @@
 //! [`SalaryCap`](crate::rulebook::RuleKey::SalaryCap) rule; a change to
 //! the cash makes a save due.
 //!
-//! **Prices.** As the spaceport opens (a landing, a relocation that
-//! docks, and a load that resumes docked, which opens the port too), the
+//! **Prices.** As the spaceport opens (a landing, and a relocation that
+//! docks; a load opens none, resuming in flight), the
 //! session takes the active ranks and the docked stellar's government,
 //! never saved, as `_DoPortDialog` takes `_priceFluxMult`
 //! (@0x5f970-0x5fa04). It does so before the landing's mission land check
@@ -744,14 +744,19 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_pilot_resumed_docked_has_its_ranks_in_the_prices() {
+    fn a_pilot_resumed_takes_its_ranks_into_the_prices_at_its_first_landing() {
         let catalog = port(Vec::new());
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.ranks.insert(RankId(202));
         pilot.stellar = Some(crate::catalog::StellarId(128));
         let pilot = save::decode(&save::encode(&pilot)).expect("loads");
         let mut session = Session::fly(&catalog, pilot.clone()).expect("flies");
-        assert!(session.landed().is_some(), "resumed docked");
+        assert_eq!(
+            session.port_ranks,
+            super::PortRanks::default(),
+            "no spaceport opens on resuming"
+        );
+        land_now(&mut session).expect("lands");
         assert_eq!(
             prices(&mut session),
             ONE_RANK,
@@ -760,6 +765,7 @@ pub(super) mod tests {
         let mut own_only = Session::fly(&catalog, pilot)
             .expect("flies")
             .with_rules(reading(RuleKey::RankGovtReach, RuleSource::Bible));
+        land_now(&mut own_only).expect("lands");
         assert_eq!(
             prices(&mut own_only),
             UNRANKED,

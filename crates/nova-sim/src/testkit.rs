@@ -129,6 +129,9 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) asteroid_fields: Vec<AsteroidFieldRecord>,
     /// Each box graphic's frame size: none, by default.
     pub(crate) box_frames: [Option<(u32, u32)>; BOX_GRAPHICS],
+    /// The warp-out sound's length: none, by default, so an arrival's
+    /// warp-out never plays on and every jump arrival plays it.
+    pub(crate) warp_out_sound: Option<SoundLength>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -305,7 +308,6 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         frame_size: Some((100, 100)),
         flags: StellarFlags::CAN_LAND,
         min_status: 0,
-        landing_sound: None,
         tech_level: 0,
         special_tech: [0; 8],
         govt: None,
@@ -628,6 +630,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         asteroid_types: Vec::new(),
         asteroid_fields: Vec::new(),
         box_frames: [None; BOX_GRAPHICS],
+        warp_out_sound: None,
     }
 }
 
@@ -920,8 +923,29 @@ impl PilotCatalog for FakePilotCatalog {
         self.warp_sound_double_time
     }
 
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        self.warp_out_sound
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         TrafficCatalog::dude(self, id)
+    }
+
+    /// The first of each existing system's [`FakePilotCatalog::sites`], as
+    /// [`PilotCatalog::landing_sites`] gives them, read without counting
+    /// as a read of the star map or the sites.
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        let mut first = std::collections::BTreeMap::new();
+        for (system, sites) in &self.sites {
+            first
+                .entry(*system)
+                .or_insert_with(|| sites.first().map(|site| site.id));
+        }
+        first
+            .into_iter()
+            .filter(|(system, _)| self.systems.contains(system))
+            .filter_map(|(system, stellar)| Some((system, stellar?)))
+            .collect()
     }
 }
 
@@ -1063,6 +1087,15 @@ pub(crate) fn land_now(session: &mut Session) -> Result<StellarId, LandingRefusa
     })();
     session.forget_dock_chatter(before);
     landed
+}
+
+/// The stellar a session just flown from a save resumed on: asserts it
+/// flies, at rest, nothing about a landing run, and gives the stellar the
+/// pilot last landed on, which the load keeps (see [`Session::load`]).
+pub(crate) fn resumed_on(session: &Session) -> Option<StellarId> {
+    assert_eq!(session.landed(), None, "resumed in flight");
+    assert_eq!(session.player().velocity, Vec2::ZERO, "at rest");
+    session.pilot().stellar()
 }
 
 /// Plots a course to `to`, flies out and jumps, and arrives, no chance

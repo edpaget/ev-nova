@@ -960,11 +960,9 @@ fn by_the_settings_other_reading_merchant_joins_and_flies_again_after_a_save() {
     let saved: serde_json::Value =
         serde_json::from_str(&store.text("Pilot").expect("saved")).expect("JSON");
     assert_eq!(saved["escorts"][0]["person"], 128);
-    // Reopened in a new app, the pilot takes off: Merchant's slot is
-    // passed over, Wreck's draws, and Merchant flies beside the player.
-    let mut game = Game::opened(&store, &[99, 750, 450, 0], Showing::Spaceport, JOINING);
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Flight);
+    // Reopened in a new app, the pilot resumes in flight: Merchant's slot
+    // is passed over, Wreck's draws, and Merchant flies beside the player.
+    let mut game = Game::opened(&store, &[99, 750, 450, 0], Showing::Flight, JOINING);
     game.frame();
     game.frame();
     let escort = game

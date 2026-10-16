@@ -499,8 +499,10 @@ impl Harness {
                 self.hold(&mut held, &[]);
                 return;
             }
+            // Drifting in at a crawl, as a ship at rest off the centre
+            // can, isn't moving in: Down would hold it there.
             let moving_in =
-                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < 0.0;
+                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < -1e-3;
             let facing_out = ship.position.length() == 0.0
                 || shortest_turn(ship.heading, heading_of(ship.position)).abs() < 1e-3;
             let codes = if moving_in && !facing_out {

@@ -24,6 +24,8 @@ impl SpaceportCatalog for GameData {
             flags: stellar.flags.bits(),
             cust_pic_id: stellar.cust_pic_id,
             graphic_type: stellar.graphic_type,
+            cust_snd_id: stellar.cust_snd_id,
+            flags2: stellar.flags2.bits(),
         })
     }
 
@@ -71,24 +73,37 @@ mod tests {
         }
     }
 
-    /// A `spöb` of graphic type `graphic_type`, with these `Flags` and
-    /// `CustPicID`.
-    fn stellar(graphic_type: i16, flags: u32, cust_pic_id: i16) -> Vec<u8> {
+    /// A `spöb` of graphic type `graphic_type`, with these `Flags`,
+    /// `CustPicID`, `CustSndID` and `Flags2`.
+    fn stellar(
+        graphic_type: i16,
+        flags: u32,
+        cust_pic_id: i16,
+        cust_snd_id: i16,
+        flags2: u16,
+    ) -> Vec<u8> {
         let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
         bytes[0x04..0x06].copy_from_slice(&graphic_type.to_be_bytes());
         bytes[0x06..0x0A].copy_from_slice(&flags.to_be_bytes());
         bytes[0x18..0x1A].copy_from_slice(&cust_pic_id.to_be_bytes());
+        bytes[0x1A..0x1C].copy_from_slice(&cust_snd_id.to_be_bytes());
+        bytes[0x20..0x22].copy_from_slice(&flags2.to_be_bytes());
         bytes
     }
 
     /// Earth (128), a nameless stellar (129), a short one (130), and
     /// `PICT` 10003, which need not decode.
     fn data() -> GameData {
-        let mut short = stellar(0, 0, 0);
+        let mut short = stellar(0, 0, 0, 0, 0);
         short.pop();
         let fork = ForkBuilder::new()
-            .resource(Stellar::TYPE, 128, Some(b"Earth"), &stellar(3, 0x43, 9000))
-            .resource(Stellar::TYPE, 129, None, &stellar(255, 0x21, -1))
+            .resource(
+                Stellar::TYPE,
+                128,
+                Some(b"Earth"),
+                &stellar(3, 0x43, 9000, 10_032, 0x0011),
+            )
+            .resource(Stellar::TYPE, 129, None, &stellar(255, 0x21, -1, -1, 0))
             .resource(Stellar::TYPE, 130, Some(b"Short"), &short)
             .resource(PICT, 10_003, None, &[0; 4])
             .build()
@@ -98,7 +113,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stellars_port_is_its_name_flags_and_pictures() {
+    fn a_stellars_port_is_its_name_flags_pictures_and_sound() {
         let data = data();
         assert_eq!(
             data.stellar_port(StellarId(128)),
@@ -107,6 +122,8 @@ mod tests {
                 flags: 0x43,
                 cust_pic_id: 9000,
                 graphic_type: 3,
+                cust_snd_id: 10_032,
+                flags2: 0x0011,
             })
         );
         assert_eq!(
@@ -116,6 +133,8 @@ mod tests {
                 flags: 0x21,
                 cust_pic_id: -1,
                 graphic_type: 255,
+                cust_snd_id: -1,
+                flags2: 0,
             })
         );
     }

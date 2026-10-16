@@ -720,11 +720,9 @@ fn a_unique_person_shot_down_is_gone_for_good_after_a_save_and_another_comes_bac
     let saved: serde_json::Value =
         serde_json::from_str(&store.text("Pilot").expect("saved")).expect("JSON");
     assert_eq!(saved["gone_persons"], serde_json::json!([128]));
-    // Reopened in a new app, the pilot takes off: Friend's slot draws, and
-    // Ace's draws nothing.
-    let mut game = Game::opened(&store, &[99, 750, 600, 180], Showing::Spaceport, idle);
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Flight);
+    // Reopened in a new app, the pilot resumes in flight: Friend's slot
+    // draws, and Ace's draws nothing.
+    let mut game = Game::opened(&store, &[99, 750, 600, 180], Showing::Flight, idle);
     game.frame();
     game.frame();
     assert_eq!(game.persons(), [129]);

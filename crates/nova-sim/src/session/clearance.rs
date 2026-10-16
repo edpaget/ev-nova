@@ -30,7 +30,8 @@
 //! - at a flight start (`_InitObjects` @0x1d071-0x1d085, `_ResetPlayer`
 //!   @0x1d774-0x1d77e, `_ResetGameData` @0x1df6e-0x1df78): a session
 //!   starts with none;
-//! - on Nav Off (@0x69b2f-0x69b3c, [`Session::nav_off`]);
+//! - on Nav Off and Hyperspace Mode (@0x69b1e-0x69b3c,
+//!   [`Session::nav_mode_keys`]);
 //! - when a stellar key or a click changes the selection or the mode
 //!   (@0x69efd-0x69f12, @0x6a6e7-0x6a6fc, [`Session::select_stellar`]),
 //!   not when it finds the stellar already selected in mode 2
@@ -527,7 +528,8 @@ mod tests {
     fn a_tick_in_hyperspace_mode_drops_the_request() {
         let mut session = greeted(session());
         session.hyperspace_mode();
-        assert_eq!(session.dock_request(), request(128, CLEARED), "H alone");
+        assert_eq!(session.dock_request(), None, "H alone");
+        session.dock = request(128, CLEARED);
         session.set_land_key(true);
         tick(&mut session);
         assert_eq!(session.dock_request(), None, "even with L held");

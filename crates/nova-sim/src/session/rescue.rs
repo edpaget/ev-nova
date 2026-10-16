@@ -1056,14 +1056,13 @@ mod tests {
     }
 
     #[test]
-    fn a_strict_rescued_pilot_flown_again_resumes_docked_at_the_first_stellar() {
+    fn a_strict_rescued_pilot_flown_again_resumes_on_the_first_stellar() {
         let catalog = rescuing();
         let mut session = strict(due(&catalog));
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("decodes");
         let resumed = Session::fly(&catalog, saved).expect("flies");
-        resumed.assert_docked_among_shown();
         assert_eq!(resumed.system(), SystemId(131));
-        assert_eq!(resumed.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&resumed), Some(StellarId(140)));
     }
 }

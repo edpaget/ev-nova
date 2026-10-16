@@ -173,8 +173,12 @@ impl Session {
                 self.change_ship(*ship, carry, rules.clamps());
             }
             SetOp::RenameShip(list) => self.rename_ship(list.0, chance),
-            SetOp::MoveTo(system) => self.queued.moves.push(ScriptMove::To(*system)),
+            SetOp::MoveTo(system) => {
+                self.select_for_landed_move(*system, true);
+                self.queued.moves.push(ScriptMove::To(*system));
+            }
             SetOp::MoveKeepPosition(system) => {
+                self.select_for_landed_move(*system, false);
                 self.queued.moves.push(ScriptMove::KeepPosition(*system));
             }
             SetOp::LeaveStellar(list) => self.leave_stellar(list.0, chance),

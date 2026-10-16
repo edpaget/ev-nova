@@ -528,6 +528,8 @@ fn set_up(data: &GameData, record: &MissionRecord, extra: &[&Test]) -> Session {
         mission: record.id,
     };
     let mut session = Session::fly(&probed, docked).expect("flies");
+    let system = session.pilot().system();
+    session.land_at(&probed, system, site.id).expect("lands");
     let _ = session.settle_script(data, &mut NeverFires);
     session.set_credits(100_000_000);
     for test in std::iter::once(&record.avail_bits).chain(extra.iter().copied()) {
@@ -708,6 +710,10 @@ impl PilotCatalog for Probed<'_> {
 
     fn ranks(&self) -> Vec<cat::RankRecord> {
         self.data.ranks()
+    }
+
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        self.data.first_stellars()
     }
 
     fn nebulae(&self) -> Vec<cat::NebulaRecord> {

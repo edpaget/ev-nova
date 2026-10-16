@@ -97,11 +97,17 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Key::Char('-'),
         // The system view's movement keys, by position: W, A, S and D on a
         // US-layout keyboard, wherever another layout puts those letters.
+        // S is also the spaceport's Shipyard key.
         PhysicalKey::Code(KeyCode::KeyW) => Key::Char('w'),
         PhysicalKey::Code(KeyCode::KeyA) => Key::Char('a'),
         PhysicalKey::Code(KeyCode::KeyS) => Key::Char('s'),
         PhysicalKey::Code(KeyCode::KeyD) => Key::Char('d'),
-        // Flight's key, by position: F on a US-layout keyboard.
+        // E, by position: flight's escort menu key, the comm dialog's
+        // close key, and the main menu's E, which waits for this key's
+        // release as `_QuickKeyCheck(0x0e)` does.
+        PhysicalKey::Code(KeyCode::KeyE) => Key::Char('e'),
+        // Flight's key and the spaceport's other Recharge key, by
+        // position: F on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyF) => Key::Char('f'),
         // The About text's key, by position: I on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyI) => Key::Char('i'),
@@ -124,12 +130,20 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Command+comma opens the Preferences, by position: the comma on a
         // US-layout keyboard.
         PhysicalKey::Code(KeyCode::Comma) => Key::Char(','),
-        // The Trade Center's buy key, by position: B on a US-layout
-        // keyboard. Its sell key is S, above.
+        // The Trade Center's buy key and the spaceport's Bar key, by
+        // position: B on a US-layout keyboard. Its sell key is S, above.
         PhysicalKey::Code(KeyCode::KeyB) => Key::Char('b'),
-        // Flight's nearest target key, by position: R on a US-layout
-        // keyboard.
+        // Flight's nearest target key and the spaceport's Recharge key,
+        // by position: R on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyR) => Key::Char('r'),
+        // The spaceport's letter keys, by position, as `_PortFilter` reads
+        // the Mac key code: C (also flight's escort recall key) and T the
+        // Trade Center, O the Outfitter, and N the Mission BBS (also the
+        // bar's news key and an offer's refuse key).
+        PhysicalKey::Code(KeyCode::KeyC) => Key::Char('c'),
+        PhysicalKey::Code(KeyCode::KeyT) => Key::Char('t'),
+        PhysicalKey::Code(KeyCode::KeyO) => Key::Char('o'),
+        PhysicalKey::Code(KeyCode::KeyN) => Key::Char('n'),
         // Either Alt (Option on a Mac), which makes a trade the most
         // possible, and flight's weapon select go back, while held.
         PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
@@ -242,6 +256,11 @@ mod tests {
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::KeyK, Key::Char('k')),
             (KeyCode::KeyX, Key::Char('x')),
+            (KeyCode::KeyE, Key::Char('e')),
+            (KeyCode::KeyC, Key::Char('c')),
+            (KeyCode::KeyT, Key::Char('t')),
+            (KeyCode::KeyO, Key::Char('o')),
+            (KeyCode::KeyN, Key::Char('n')),
             (KeyCode::SuperLeft, Key::Command),
             (KeyCode::SuperRight, Key::Command),
             (KeyCode::CapsLock, Key::CapsLock),
@@ -271,7 +290,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 33] = [
+    const GAME_CHARACTER_KEYS: [Key; 44] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -305,6 +324,17 @@ mod tests {
         nova_view::spaceport::outfitter::SELL_KEY,
         nova_view::spaceport::shipyard::BUY_KEY,
         nova_view::spaceport::shipyard::INFO_KEY,
+        nova_view::flight::escorts::MENU_KEY,
+        nova_view::flight::view::ESCORT_RECALL_KEY,
+        nova_view::spaceport::bar::NEWS_KEYS[0],
+        nova_view::spaceport::PORT_KEYS[0].0,
+        nova_view::spaceport::PORT_KEYS[1].0,
+        nova_view::spaceport::PORT_KEYS[2].0,
+        nova_view::spaceport::PORT_KEYS[3].0,
+        nova_view::spaceport::PORT_KEYS[4].0,
+        nova_view::spaceport::PORT_KEYS[5].0,
+        nova_view::spaceport::PORT_KEYS[6].0,
+        nova_view::spaceport::PORT_KEYS[7].0,
     ];
 
     /// The physical key that types `c` on a US-layout keyboard.
@@ -312,7 +342,9 @@ mod tests {
         match c {
             'a' => KeyCode::KeyA,
             'b' => KeyCode::KeyB,
+            'c' => KeyCode::KeyC,
             'd' => KeyCode::KeyD,
+            'e' => KeyCode::KeyE,
             'f' => KeyCode::KeyF,
             'h' => KeyCode::KeyH,
             'i' => KeyCode::KeyI,
@@ -320,9 +352,12 @@ mod tests {
             'k' => KeyCode::KeyK,
             'l' => KeyCode::KeyL,
             'm' => KeyCode::KeyM,
+            'n' => KeyCode::KeyN,
+            'o' => KeyCode::KeyO,
             'p' => KeyCode::KeyP,
             'r' => KeyCode::KeyR,
             's' => KeyCode::KeyS,
+            't' => KeyCode::KeyT,
             'w' => KeyCode::KeyW,
             'x' => KeyCode::KeyX,
             '1' => KeyCode::Digit1,

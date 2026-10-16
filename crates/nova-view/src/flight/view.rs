@@ -109,8 +109,8 @@
 //! redraw it (a new system, landing, take-off, or closing the map, the
 //! comm dialog or a mission dialog); by the other, every frame. The nav
 //! area likewise holds its text and colours between refreshes every 15
-//! ticks, and when `_RedrawStatus` would redraw it, but shows a change of
-//! selection at once. The target panel likewise holds what it showed
+//! ticks, and when `_RedrawStatus` would redraw it, but in flight shows a
+//! change of selection at once. The target panel likewise holds what it showed
 //! between its redraws every 45 ticks, at the next radar refresh once the
 //! target's shield or ship type changes, and when `_RedrawStatus` would
 //! redraw it or the plunder dialog closes, but shows a change of target
@@ -126,14 +126,29 @@
 //! ([`FlightView::draw_status_bar`]), its radar blank. Flight doesn't
 //! advance there, so by the engine's reading the bar shows what the
 //! port's redraws last took: landing and a docked start take everything,
-//! as do the mission dialogs and texts and a shop closing
-//! ([`FlightView::shop_closed`]); an outfitter order takes the radar
-//! alone; a ship purchase the radar, nav and target, and the gauges too
-//! under another `ïntf`; and a recharge the fuel gauge alone. The shield,
+//! as do the mission dialogs and texts, a port dialog closing, and the
+//! bar, News, player info, mission info, a ship description and the
+//! shipyard's name prompt closing ([`FlightView::refresh_status`]); an
+//! outfitter order takes the radar alone; a ship purchase the radar, nav
+//! and target, and the gauges too under another `ïntf`; and a recharge
+//! the fuel gauge alone. The shield,
 //! armour and fuel gauges, live in flight, hold while docked between
 //! those points (`FlightView::reserves_shown`), as the original's port
-//! draws them only at its redraws. By the other reading, everything
-//! follows every frame.
+//! draws them only at its redraws. So does the nav area
+//! (`FlightView::nav_shown`): a landed `M` or `N`'s selection, written at
+//! its operator, shows from the next of them, named by its `spöb` name
+//! when the flight scene, still the system docked in, doesn't hold it. A
+//! mission text's redraw shows the nav as the text noted it when it was
+//! queued, unless ours has redrawn since ([`FlightView::take_mission_texts`]),
+//! and the mission dialogs' and a ship purchase's redraws come after the
+//! script run with them, as the original's do. The outfitter, exchange,
+//! shipyard, the bar's hire screen and the mission computer save the nav
+//! as they open and restore it as they close
+//! ([`FlightView::close_port_dialog`]), so a landed `M` or `N` run inside
+//! one is undone: shown at once after the outfitter, the exchange and the
+//! computer, whose close redraws the nav; after the shipyard and the hire
+//! screen, the close's redraw stays until the port's next draw. By the
+//! other reading, everything follows every frame.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
@@ -170,7 +185,7 @@
 //!   either overrides Down.
 //! - L, once a press (its repeats do nothing), requests clearance, then
 //!   lands, as [`landing`](nova_sim::landing) says, in two presses: with
-//!   no navigation target it selects the nearest landable stellar, and
+//!   no navigation target it selects the nearest stellar, and
 //!   the press requests the stellar selected. Away from it traffic
 //!   control answers with the request's line ([`request_line`]); within
 //!   249 pixels it says nothing. On the ticks after, the dock approach
@@ -227,7 +242,7 @@
 //!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
 //!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`], presses) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
-//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest landable one,
+//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest stellar,
 //!   as L does with none. A left click in space
 //!   ([`Session::click_in_space`]) picks a ship first: one under it
 //!   becomes the target, a click on the player's own ship lets go of the
@@ -250,6 +265,22 @@
 //!   [`Session::select_next_system`] says, so the nav area shows that
 //!   system and J jumps there. By the engine's reading the course is
 //!   kept, and the course map draws the selection as its own link.
+//! - The floating map ([`floating`](super::floating)) is shown on every
+//!   frame H is held outside a jump, and every frame `\` is held in nav
+//!   mode 3, during a jump too, each from its press's own frame; then it
+//!   stays full for 118 ticks, fades out by 150 and is hidden once more
+//!   than 500 have passed, or by Return. It is the course map's drawing
+//!   centred on the current system, with the session's course and mode-3
+//!   selection, in a 256 x 256 frame at (558, 150) bordered in `cölr`
+//!   `FloatingMap`, drawn after the double-time icon and before the escort
+//!   menu. While it is up, faded out or not, a left click in its frame is
+//!   its own: on the current system's centre it selects mode 3 with
+//!   nothing, on a link's box mode 3 with that link, each with `snd ` 152
+//!   ([`Session::select_on_floating_map`]), except during a jump, and
+//!   anything else picks nothing. `-` zooms it out a step and `=` or the keypad's
+//!   `+` in ([`ZOOM_OUT_KEY`], [`ZOOM_IN_KEY`], [`ZOOM_IN_KEYPAD_KEY`]),
+//!   with `snd ` 150, during a jump too, but only while no key the flight
+//!   holds is down. A hit or a zoom shows it again.
 //! - J (a press) begins the pre-jump turn and slow-down towards the
 //!   system selected when the session allows a jump, and otherwise
 //!   says why in the original's words (`STR#` 2002), as a refused landing
@@ -259,12 +290,20 @@
 //!   a jump is under way, the stage braking for it included, only the keys
 //!   the original's `_HandlePlayer` does not gate on its jump state are
 //!   taken ([`FlightView::taken_during_jump`]): Tab, R, W, Option-\`, B,
-//!   Y, Command-K and the escort menu's keys. The rest, J included, are
+//!   Y, Command-K, the escort menu's keys and the floating map's zoom
+//!   keys. The rest, J included, are
 //!   ignored, P is refused, and a click in space selects no stellar,
 //!   though it still targets a ship under it. The keys
 //!   held are still tracked through the jump, so a steering, thrust or fire
 //!   key still held at arrival acts on the first tick after it, as the
-//!   original reads the keys live. The stars streak when the session says
+//!   original reads the keys live. H, \`, `\` and J are polled each tick
+//!   with the original's latches ([`FlightView::held_keys_frame`]): H or
+//!   \` held through a jump's end, and a `\` first pressed (or pressed
+//!   again) during the jump and held, act once on the first tick after
+//!   the arrival tick, with their sounds; a `\` held from before the jump,
+//!   and J held through it, do nothing after it. J held into a disable, or
+//!   first pressed while disabled, acts on the first tick the ship is
+//!   intact again. The stars streak when the session says
 //!   the jump has begun ([`Session::jumping`]), at once for a ship already
 //!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
 //!   the session waits while the stars streak and the screen, HUD
@@ -430,7 +469,7 @@
 //!   flight places its field as its rules say
 //!   ([`Session::settle_asteroid_field`]).
 //! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
-//!   message line and closes the escort menu.
+//!   message line, closes the escort menu and hides the floating map.
 //! - While the player's ship breaks up, M, L and I do nothing, saying
 //!   nothing, as `_HandlePlayer`'s breakup-timer gates refuse them
 //!   (0x6a7b3, 0x6a8cb, 0x7044b); every other key is taken, and the
@@ -509,6 +548,7 @@ use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
     Toggled, escort_command_message, fighters_abandoned_message,
 };
+use super::floating::{self, FloatingMap, Hit};
 use super::hud::{self, HudState, NavDestination, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::radar::{self, RadarScene, RadarShip, RadarStellar};
@@ -518,14 +558,15 @@ use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
-use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
+use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMarks, MapMode};
+use crate::spaceport::PortDialog;
 use crate::spaceport::bar::MISSION_INFO_KEY;
 use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::system::starfield;
 use crate::text::TextMetrics;
-use crate::time::ticks;
+use crate::time::{sixtieths, ticks};
 use crate::ui::PlunderShown;
 use crate::ui::comm::grouped;
 use crate::ui::player_info::PLAYER_INFO_KEY;
@@ -568,8 +609,7 @@ pub struct FlightOverlays {
 /// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
 /// the abandoned fighters on arrival (@0x6c46d). It is also the time of
 /// the messages the original does not have ([`TAKE_OFF_FIRST`],
-/// [`JUMP_DISABLED`], [`IN_HYPERSPACE`], [`REPELLED`], [`NO_STELLARS`] on
-/// L) and of the defection notice, which the original
+/// [`REPELLED`]) and of the defection notice, which the original
 /// shows in a dialog (`_DoEscortPayment` @0x40301).
 pub const MESSAGE_TICKS: u16 = 240;
 /// A person's hail quote: 420 (0x1a4, `_ShowPersonHailQuote` @0x4464d).
@@ -589,10 +629,11 @@ pub const ESCORT_TICKS: u16 = 250;
 /// (`_PlayGame` @0x465a8, `_PlayerLandOnStellar` @0x635c4).
 pub const SCRIPT_MESSAGE_TICKS: u16 = 500;
 /// A landing denied or not possible: 250 (`_HandlePlayerDockRequest`
-/// @0x67ef3, @0x67e67).
+/// @0x67ef3; the not-landable line @0x67cda-0x67e5c).
 pub const LANDING_TICKS: u16 = 250;
-/// A landing refused as too far or too fast: 360
-/// (`_HandlePlayerDockRequest` @0x6787f).
+/// A landing refused as too far or too fast, at a gate as at a station
+/// or a planet: 360 (`_HandlePlayerDockRequest` @0x677c2-0x67838,
+/// @0x6787f).
 pub const TOO_FAR_TICKS: u16 = 360;
 /// A hypergate jump cancelled, or a wormhole leading nowhere: 250
 /// (`_PlayerEnterHypergate` @0x6397e, `_PlayerEnterWormhole` @0x646a3).
@@ -606,7 +647,9 @@ pub const OLD_SHIP_TICKS: u16 = 360;
 
 /// How long the message for `refusal` stays: [`JUMP_REFUSAL_TICKS`] too
 /// close or with no destination, 240 short of fuel (`_HandlePlayer`
-/// @0x6baac), and [`MESSAGE_TICKS`] for the engine's own refusals.
+/// @0x6baac), and [`MESSAGE_TICKS`] for the engine's own refusals. A
+/// disabled ship's refusal shows no message ([`jump_refusal_message`]),
+/// so its time is never used.
 #[must_use]
 pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
     match refusal {
@@ -617,17 +660,19 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
 /// or too fast, [`LANDING_TICKS`] denied or not landable, and
-/// [`MESSAGE_TICKS`] for the engine's own refusals. A disabled ship's
-/// refusal shows no message ([`refusal_message`]), so its time is never
-/// used.
+/// [`MESSAGE_TICKS`] for the silent ones. A disabled ship's refusal, and
+/// one where the land key makes no dock request (jumping, no stellars,
+/// nothing landable), shows no message ([`refusal_message`]), so its
+/// time is never used.
 #[must_use]
 pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
     match refusal {
         LandingRefusal::TooFar { .. } | LandingRefusal::TooFast { .. } => TOO_FAR_TICKS,
         LandingRefusal::Denied { .. } | LandingRefusal::NotLandable { .. } => LANDING_TICKS,
-        LandingRefusal::Jumping | LandingRefusal::Disabled | LandingRefusal::NoStellars => {
-            MESSAGE_TICKS
-        }
+        LandingRefusal::Jumping
+        | LandingRefusal::Disabled
+        | LandingRefusal::NoStellars
+        | LandingRefusal::NothingLandable => MESSAGE_TICKS,
     }
 }
 
@@ -645,9 +690,14 @@ pub fn assigned_ticks(assigned: Assigned) -> u16 {
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
 /// Command, which the jettison and eject keys need, the eject key, which
-/// works only held with Command, and the land key, which holds the dock
-/// approach back while it is down.
-const FLIGHT_KEYS: [Key; 11] = [
+/// works only held with Command, the land key, which holds the dock
+/// approach back while it is down, H and `\`, which show the floating map
+/// while they are down, and \` and J. H, `\`, \` and J act again when
+/// held across a jump's end, a release of Option or a repair, as the
+/// original polls them with a latch each ([`FlightView::held_keys_frame`]);
+/// the original's `_quickKeyCheckResult` counts \` and J as held too
+/// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
+const FLIGHT_KEYS: [Key; 15] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -659,6 +709,10 @@ const FLIGHT_KEYS: [Key; 11] = [
     Key::Command,
     LAND_KEY,
     EJECT_KEY,
+    HYPERSPACE_MODE_KEY,
+    HYPER_SELECT_KEY,
+    NAV_OFF_KEY,
+    JUMP_KEY,
 ];
 
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
@@ -1062,23 +1116,45 @@ pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
 /// original's default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32,
 /// handled in `_HandlePlayer` @0x69a94-0x69b63). With Option held it
 /// lets go of the ship target instead ([`Session::clear_target`],
-/// @0x69a17-0x69a90). While the dev overlay is built in, backquote
-/// toggles the overlay instead and never reaches flight.
+/// @0x69a17-0x69a90). It shares H's latch: held through a jump's end it
+/// turns the nav off after it, Option let go with it still down turns
+/// the nav off, and Option-\` held lets go of a target picked meanwhile
+/// on the next frame ([`FlightView::nav_keys_frame`]). While the dev
+/// overlay is built in, backquote toggles the overlay instead and never
+/// reaches flight.
 pub const NAV_OFF_KEY: Key = Key::Char('`');
 
 /// The Hyper Select key, which cycles the hyperspace selection through
 /// the systems the current one links to, keeping the course by the
 /// engine's reading: the original's default, `\`
 /// (`Keys.nib`'s `hyperSel`, "Hyper Select:", default keycode 0x2a in
-/// `_loadKeys`). H is the original's separate Hyperspace Mode key.
+/// `_loadKeys`). H is the original's separate Hyperspace Mode key. Held
+/// in nav mode 3, during a jump too, it shows the floating map
+/// (@0x69cdd-0x69ce7, @0x69be7; see the [`floating`](super::floating)
+/// module). One first pressed during a jump, or let go and pressed again
+/// then, and held past its end selects on the first frame after it; one
+/// held from before the jump does nothing after it
+/// ([`FlightView::select_frame`]).
 pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
 
 /// The Hyperspace Mode key, which puts the nav system in hyperspace mode
 /// and selects the course's next hop ([`Session::hyperspace_mode`]): the
 /// original's default, H (`_loadKeys` @0xcd5f8 `hyperMode`, keycode
-/// 0x04, handled in `_HandlePlayer` @0x69b76-0x69b89). The floating map
-/// it shows while held is not drawn.
+/// 0x04, handled in `_HandlePlayer` @0x69b76-0x69b89). Held outside a
+/// jump, it shows the floating map (@0x69b8e-0x69ba8; see the
+/// [`floating`](super::floating) module). Held through a jump's end, it
+/// acts as a press on the first frame after it, as its latch is cleared
+/// on every frame of a jump ([`FlightView::nav_keys_frame`]).
 pub const HYPERSPACE_MODE_KEY: Key = Key::Char('h');
+
+/// The floating map's zoom-out key, `-` and the keypad's `-` (keycodes
+/// 0x1b and 0x4e, `_HandlePlayer` @0x70f4e-0x71110), which the platform
+/// both gives as this.
+pub const ZOOM_OUT_KEY: Key = Key::Char('-');
+/// The floating map's zoom-in key, `=` (keycode 0x18).
+pub const ZOOM_IN_KEY: Key = Key::Char('=');
+/// The floating map's other zoom-in key, the keypad's `+` (keycode 0x45).
+pub const ZOOM_IN_KEYPAD_KEY: Key = Key::Char('+');
 
 /// `STR#` 2002 #29.
 pub const NO_DESTINATION: &str =
@@ -1091,9 +1167,6 @@ pub const NO_FUEL: &str = "Insufficient energy for hyperspace jump.";
 /// Not the original's, which never flies a landed ship: worded after
 /// `STR#` 2002 #42 and #73 ("Disengage cloaking device first.").
 pub const TAKE_OFF_FIRST: &str = "Can't initiate hyperspace jump - take off first.";
-/// Not the original's, whose disabled ship takes no keys: worded after
-/// `STR#` 2002 #42.
-pub const JUMP_DISABLED: &str = "Can't initiate hyperspace jump - your ship is disabled.";
 
 /// `STR#` 2002 #22: the land hint's lead for a station.
 pub const TUTORIAL_DOCK: &str = "Welcome to Nova - it would be a good idea to start by docking at";
@@ -1331,6 +1404,10 @@ pub fn gate_refusal_message(kind: GateKind) -> String {
 
 /// `STR#` 2002 #49.
 pub const NO_STELLARS: &str = "No stellar objects present.";
+/// `STR#` 2002 #65: too far to enter a hypergate (@0x67802-0x67838).
+pub const TOO_FAR_HYPERGATE: &str = "You're too far away to enter this hypergate.";
+/// `STR#` 2002 #66: too far to enter a wormhole (@0x67802-0x67838).
+pub const TOO_FAR_WORMHOLE: &str = "You're too far away to enter this wormhole.";
 /// `STR#` 2002 #67.
 pub const TOO_FAR_STATION: &str = "You're too far away to dock at this station.";
 /// `STR#` 2002 #68.
@@ -1339,6 +1416,16 @@ pub const TOO_FAR_PLANET: &str = "You're too far away to land on this planet.";
 pub const TOO_FAST_STATION: &str = "You're moving too fast to dock at this station.";
 /// `STR#` 2002 #72.
 pub const TOO_FAST_PLANET: &str = "You're moving too fast to land on this planet.";
+/// `STR#` 2002 #69: too fast to enter a hypergate (@0x677c2-0x67800).
+pub const TOO_FAST_HYPERGATE: &str = "You're moving too fast to enter this hypergate.";
+/// `STR#` 2002 #70: too fast to enter a wormhole (@0x677c2-0x67800).
+pub const TOO_FAST_WORMHOLE: &str = "You're moving too fast to enter this wormhole.";
+/// `STR#` 2002 #87: the not-landable line's verb at a station, ending
+/// in a space (@0x67d4c).
+pub const DOCK_AT: &str = "dock at ";
+/// `STR#` 2002 #88: the not-landable line's verb at a planet, ending in
+/// a space (@0x67d56).
+pub const LAND_ON: &str = "land on ";
 /// `STR#` 2002 #82.
 pub const DOCKING_DENIED: &str = "Docking request denied.";
 /// `STR#` 2002 #83.
@@ -1347,10 +1434,6 @@ pub const LANDING_DENIED: &str = "Landing request denied.";
 pub const HOSTILE_STATION: &str = "The station's hull integrity is too unstable.";
 /// `STR#` 2002 #90: why a ship cannot land on a planet.
 pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
-/// Not the original's, which takes no keys during a jump: worded after
-/// `STR#` 2002 #54 ("Unable to send hail - target ship is entering
-/// hyperspace.").
-pub const IN_HYPERSPACE: &str = "Unable to land - your ship is in hyperspace.";
 
 /// `STR#` 2002 #76.
 pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
@@ -1512,27 +1595,73 @@ pub fn approach_greeting(
     }
 }
 
-/// What the player is told when `refusal` stops a landing: the original's
-/// words for it, for a station or a planet; nothing for a disabled ship,
-/// which `_HandlePlayerDockRequest` refuses silently (`_IsDisabled`
-/// @0x66af7, the bare epilogue 0x67eef).
+/// What the player is told when `refusal` stops a landing at a stellar
+/// that is the `gate` kind, if any, named `name`: the original's words
+/// for it, as `_HandlePlayerDockRequest` picks them; nothing for a
+/// disabled ship, which it refuses silently (`_IsDisabled` @0x66af7, the
+/// bare epilogue 0x67eef), and nothing either when the land key makes no
+/// dock request: jumping (@0x6a8cb → 0x6a95d), or nothing selected and
+/// nothing to select (@0x6a94c).
+///
+/// - Too far and too fast (@0x677c2-0x67838): a hypergate's or a
+///   wormhole's own string, tested before the station flag, else the
+///   station's or the planet's.
+/// - Not landable (@0x67cda-0x67e2b): a gate's [`gate_refusal_message`];
+///   else [`UNABLE_TO`], " ", [`DOCK_AT`] or [`LAND_ON`], " " again
+///   (@0x67d94, so two spaces before the name), the name, ". " and
+///   [`HOSTILE_STATION`] or [`HOSTILE_PLANET`].
+/// - Denied (@0x67ea3-0x67eea): [`HYPERGATE_DENIED`] at a hypergate only;
+///   a wormhole says the station's or the planet's.
 #[must_use]
-pub fn refusal_message(refusal: &LandingRefusal) -> Option<&'static str> {
-    let pick = |station: bool, at_station, on_planet| {
+pub fn refusal_message(
+    refusal: &LandingRefusal,
+    gate: Option<GateKind>,
+    name: &str,
+) -> Option<String> {
+    let pick = |station: bool, at_station: &'static str, on_planet: &'static str| {
         if station { at_station } else { on_planet }
     };
-    let text = match *refusal {
-        LandingRefusal::Jumping => IN_HYPERSPACE,
-        LandingRefusal::Disabled => return None,
-        LandingRefusal::NoStellars => NO_STELLARS,
-        LandingRefusal::TooFar { station, .. } => pick(station, TOO_FAR_STATION, TOO_FAR_PLANET),
-        LandingRefusal::NotLandable { station, .. } => {
-            pick(station, HOSTILE_STATION, HOSTILE_PLANET)
-        }
-        LandingRefusal::Denied { station, .. } => pick(station, DOCKING_DENIED, LANDING_DENIED),
-        LandingRefusal::TooFast { station, .. } => pick(station, TOO_FAST_STATION, TOO_FAST_PLANET),
+    let by_gate = |station, hypergate, wormhole, at_station, on_planet| match gate {
+        Some(GateKind::Hypergate) => hypergate,
+        Some(GateKind::Wormhole) => wormhole,
+        None => pick(station, at_station, on_planet),
     };
-    Some(text)
+    let text = match *refusal {
+        LandingRefusal::Jumping
+        | LandingRefusal::Disabled
+        | LandingRefusal::NoStellars
+        | LandingRefusal::NothingLandable => return None,
+        LandingRefusal::TooFar { station, .. } => by_gate(
+            station,
+            TOO_FAR_HYPERGATE,
+            TOO_FAR_WORMHOLE,
+            TOO_FAR_STATION,
+            TOO_FAR_PLANET,
+        ),
+        LandingRefusal::TooFast { station, .. } => by_gate(
+            station,
+            TOO_FAST_HYPERGATE,
+            TOO_FAST_WORMHOLE,
+            TOO_FAST_STATION,
+            TOO_FAST_PLANET,
+        ),
+        LandingRefusal::NotLandable { station, .. } => {
+            if let Some(kind) = gate {
+                return Some(gate_refusal_message(kind));
+            }
+            let verb = pick(station, DOCK_AT, LAND_ON);
+            let why = pick(station, HOSTILE_STATION, HOSTILE_PLANET);
+            return Some(format!("{UNABLE_TO} {verb} {name}. {why}"));
+        }
+        LandingRefusal::Denied { station, .. } => {
+            if gate == Some(GateKind::Hypergate) {
+                HYPERGATE_DENIED
+            } else {
+                pick(station, DOCKING_DENIED, LANDING_DENIED)
+            }
+        }
+    };
+    Some(text.to_owned())
 }
 
 /// Where a ship is drawn `alpha` of the way from `from` to `to`.
@@ -1751,15 +1880,16 @@ fn pay_said(notes: &[PayNote]) -> Vec<(String, u16)> {
 }
 
 /// What the player is told when `refusal` stops a jump: the original's
-/// words for it.
+/// words for it, or none for a disabled ship, whose J the original
+/// ignores (`_HandlePlayer` @0x6b0f5 → 0x6bada).
 #[must_use]
-pub fn jump_refusal_message(refusal: &JumpRefusal) -> &'static str {
+pub fn jump_refusal_message(refusal: &JumpRefusal) -> Option<&'static str> {
     match refusal {
-        JumpRefusal::NoDestination => NO_DESTINATION,
-        JumpRefusal::TooClose { .. } => TOO_CLOSE,
-        JumpRefusal::NoFuel { .. } => NO_FUEL,
-        JumpRefusal::Landed => TAKE_OFF_FIRST,
-        JumpRefusal::Disabled => JUMP_DISABLED,
+        JumpRefusal::NoDestination => Some(NO_DESTINATION),
+        JumpRefusal::TooClose { .. } => Some(TOO_CLOSE),
+        JumpRefusal::NoFuel { .. } => Some(NO_FUEL),
+        JumpRefusal::Landed => Some(TAKE_OFF_FIRST),
+        JumpRefusal::Disabled => None,
     }
 }
 
@@ -1803,6 +1933,36 @@ impl Chance for SharedChance {
     }
 }
 
+/// How long the take-off's held nav lasts ([`FlightView::took_off`]): it
+/// shows in the first frame drawn after the take-off, and on to the end of
+/// the tick that frame lands in, so about one tick and never less than a
+/// frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NavFlash {
+    /// Held by the take-off, before any tick has advanced the HUD.
+    Held,
+    /// Shown from the given tick, the first frame's, through to its end.
+    Through(u128),
+    /// Shown already, under a mission text's dialog
+    /// ([`FlightView::take_mission_texts`]), whose closing redraws the
+    /// bar: the next advance ends it.
+    UnderText,
+}
+
+impl NavFlash {
+    /// The flash after the HUD advances to tick `now`: stamped with `now`
+    /// on the first advance after the take-off, which comes before the
+    /// first frame is drawn; ended on the first advance past that tick, or
+    /// on the first after a mission text showed over it.
+    fn advance(self, now: u128) -> Option<Self> {
+        match self {
+            Self::Held => Some(Self::Through(now)),
+            Self::Through(tick) => (now <= tick).then_some(self),
+            Self::UnderText => None,
+        }
+    }
+}
+
 /// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
@@ -1831,6 +1991,20 @@ pub struct FlightView<C> {
     elapsed: Duration,
     /// The flight keys held down.
     held: HashSet<Key>,
+    /// `_navModeSelectFlag` (0xdee04), the latch the Nav Off and
+    /// Hyperspace Mode block and Option-\` share: set as one of them acts,
+    /// so a key held acts once; cleared on a frame neither \` without
+    /// Option nor H is down, and on every frame of a jump
+    /// ([`FlightView::nav_keys_frame`]).
+    nav_latch: bool,
+    /// `_navTargetSelectFlag` (0xdee48), Hyper Select's latch: set as `\`
+    /// acts, cleared on a frame it is up, and left as it is during a jump
+    /// ([`FlightView::select_frame`]).
+    select_latch: bool,
+    /// The jump key's latch (0xdee44): set on every frame J runs its
+    /// block, a jump's included; cleared on a frame J is up, or down while
+    /// the player is not intact ([`FlightView::jump_frame`]).
+    jump_latch: bool,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
@@ -1867,6 +2041,10 @@ pub struct FlightView<C> {
     map: GalaxyMap,
     /// Whether the course map is shown.
     map_open: bool,
+    /// Whether the map shown is the bar's ([`FlightView::open_bar_map`]),
+    /// whose close puts back the nav the bar opened with; cleared as the
+    /// map closes ([`FlightView::close_map`]).
+    bar_map: bool,
     /// The jump's effect, while it holds flight: the streak and the
     /// fade-out, until the ship arrives.
     jump: Option<JumpEffect>,
@@ -1926,8 +2104,12 @@ pub struct FlightView<C> {
     /// The escort menu, shut or open.
     escort_menu: EscortMenu,
     /// The interface's beeps not yet taken ([`Screen::take_sounds`]): the
-    /// escort menu's, and the player info key refused during a jump.
+    /// escort menu's, the floating map's zooms, and the player info key
+    /// refused during a jump.
     ui_sounds: Vec<UiSound>,
+    /// The floating map shown while H or `\` is held (see the
+    /// [`floating`](super::floating) module).
+    floating: FloatingMap,
     /// The escort menu's colours, read once.
     escort_colors: EscortMenuColors,
     /// When the HUD refreshes, and the radar target's blink.
@@ -1940,6 +2122,17 @@ pub struct FlightView<C> {
     /// showed it for, which it shows until the next under
     /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
     nav_scene: Option<(NavMode, NavDisplay)>,
+    /// How long the nav area shows the take-off's snapshot from before its
+    /// deselect ([`FlightView::took_off`]); `None` when none is held.
+    nav_flash: Option<NavFlash>,
+    /// Whether the nav area is marked to redraw at the port's next
+    /// `_DrawStatus`, as the shipyard's restore leaves it
+    /// (`_statusRedraw[0]` @0x5f8fe; see [`FlightView::close_port_dialog`]).
+    nav_marked: bool,
+    /// How many mission texts the session had queued when the nav area
+    /// was last taken ([`Session::texts_queued`]): a text queued since is
+    /// newer than that redraw ([`FlightView::take_mission_texts`]).
+    nav_texts: u64,
     /// What the target panel showed at its last redraw, and what it drew
     /// it for, which it shows until the next under
     /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
@@ -2058,9 +2251,9 @@ impl<
     }
 
     /// `pilot`'s flight, read from `catalog`, which the screen keeps. A
-    /// pilot docked at a stellar resumes landed there: the landing is
-    /// reported once ([`FlightView::take_landing`]), with no sound, so the
-    /// router shows the spaceport.
+    /// pilot last landed on a stellar resumes in flight over it, at rest,
+    /// as [`Session::fly`] places it: nothing lands, so no landing is
+    /// reported ([`FlightView::take_landing`]) and nothing sounds.
     pub fn with_pilot(catalog: C, pilot: Pilot) -> Self {
         let session = Session::fly(&catalog, pilot);
         Self::flying(catalog, session)
@@ -2076,12 +2269,15 @@ impl<
 
     /// Begins a new pilot's game as [`Session::begin`] does, on the
     /// flight's chance, and shows on the course map any system it
-    /// explored: for a pilot just created, before its first save. A
+    /// explored: for a pilot just created, before its first save. The
+    /// ship, which the beginning puts at (50, 50), is drawn there from the
+    /// first frame, not on its way from where the view was read. A
     /// session that failed begins nothing.
     pub fn begin(&mut self) {
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
             self.map.show_explored(session.pilot().explored());
+            self.place_ship();
         }
     }
 
@@ -2095,20 +2291,15 @@ impl<
         }
     }
 
-    /// The flight of `session`, or why it could not start. A pilot
-    /// resumed docked starts with the bar redrawn, as `_PlayGame`'s
-    /// `_RedrawStatus` (@0x457d8) does before `_DoPortDialog`; flight's
-    /// first frame redraws it otherwise.
+    /// The flight of `session`, or why it could not start. No session
+    /// starts landed, so flight's first frame redraws the bar, as
+    /// `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
     fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
-        let mut view = Self::read(catalog, session);
-        if view.pending_landing.is_some() {
-            view.redraw_status();
-        }
-        view
+        Self::read(catalog, session)
     }
 
-    /// The flight of `session` as [`FlightView::flying`] reads it, before
-    /// any redraw.
+    /// The flight of `session` as [`FlightView::flying`] reads it.
+    #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
     fn read(catalog: C, session: Result<Session, StartError>) -> Self {
         let session = session.map_err(|err| err.to_string());
         let (scene, sheet, sheet_ship, status_bar) = match &session {
@@ -2130,7 +2321,6 @@ impl<
             map.show_course(session.system(), &session.course_shown());
             map.show_explored(session.pilot().explored());
         }
-        let pending_landing = session.as_ref().ok().and_then(Session::landed);
         let looks = match &session {
             Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
             Err(_) => Looks::default(),
@@ -2151,6 +2341,7 @@ impl<
             catalog,
             map,
             map_open: false,
+            bar_map: false,
             jump: None,
             fade_in: None,
             death_fade: None,
@@ -2168,7 +2359,10 @@ impl<
             alpha: 0.0,
             elapsed: Duration::ZERO,
             held: HashSet::new(),
-            pending_landing,
+            nav_latch: false,
+            select_latch: false,
+            jump_latch: false,
+            pending_landing: None,
             message: None,
             overlays: FlightOverlays::default(),
             pending_boarding: false,
@@ -2197,10 +2391,14 @@ impl<
             metrics: None,
             escort_menu: EscortMenu::default(),
             ui_sounds: Vec::new(),
+            floating: FloatingMap::new(),
             escort_colors,
             hud_cadence: HudCadence::default(),
             radar_scene: None,
             nav_scene: None,
+            nav_flash: None,
+            nav_marked: false,
+            nav_texts: 0,
             target_scene: None,
             reserves_scene: None,
             radar_static: None,
@@ -2761,6 +2959,35 @@ impl<
         }
     }
 
+    /// Opens the course map from the bar, as `_DoBarDialog`'s item 8 does
+    /// (@0x492a3-0x492b2), over the spaceport: in
+    /// [`MapMode::Course`](crate::galaxy::MapMode::Course), as the bar
+    /// clears the hypergate flag first (@0x492aa-0x492af). Ours' map is
+    /// in that mode whenever it is closed, as the hypergate map's close
+    /// takes its pick ([`GalaxyMap::take_gate_choice`]). Its close is
+    /// [`FlightView::close_map`]'s in port.
+    pub fn open_bar_map(&mut self) {
+        self.open_map();
+        self.bar_map = true;
+    }
+
+    /// The input to the map opened in port ([`FlightView::open_bar_map`]):
+    /// a press of [`MAP_KEY`] closes it ([`FlightView::close_map`]), and
+    /// anything else goes to the map, so flight's own keys and cursor stay
+    /// out of the port.
+    pub fn port_map_input(&mut self, input: &Input) {
+        let closing = Input::Key {
+            key: MAP_KEY,
+            pressed: true,
+            repeat: false,
+        };
+        if *input == closing {
+            self.close_map();
+        } else {
+            self.map_input(input);
+        }
+    }
+
     /// The map's input; a destination clicked on it becomes the session's
     /// course, which the map then shows, with the hop it cues as the
     /// system selected in nav mode 3.
@@ -2786,9 +3013,11 @@ impl<
     /// tractor's #36 has no engine source). The original's second jump
     /// path clears them again (@0x6d601-0x6d7b1), once the pilot is past
     /// the tutorial, which the arrival line replaces anyway. The keys
-    /// held stay held: the session flies the jump without them, and one
-    /// still held at arrival acts then, as the original reads the keys
-    /// live and keeps no held state.
+    /// held stay held: the session flies the jump without them, and a
+    /// steering, thrust or fire key still held at arrival acts then, as
+    /// the original reads those live. J held through the jump does
+    /// nothing after it: its latch is set on every frame of the jump
+    /// ([`FlightView::jump_frame`]).
     fn jump(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -2801,8 +3030,10 @@ impl<
                 self.start_streak_if_jumping();
             }
             Err(refusal) => {
-                if session.jump_refusal_told(&refusal) {
-                    self.say_for(jump_refusal_message(&refusal), jump_refusal_ticks(&refusal));
+                if session.jump_refusal_told(&refusal)
+                    && let Some(text) = jump_refusal_message(&refusal)
+                {
+                    self.say_for(text, jump_refusal_ticks(&refusal));
                 }
             }
         }
@@ -2937,6 +3168,65 @@ impl<
         self.session
             .as_ref()
             .is_ok_and(|session| session.preparing_jump().is_some())
+    }
+
+    /// The keys `_HandlePlayer` polls with a latch, once a frame, with
+    /// those held down, in its order: Option-\` and the Nav Off /
+    /// Hyperspace Mode block ([`FlightView::nav_keys_frame`]), Hyper
+    /// Select ([`FlightView::select_frame`]), then the jump key
+    /// ([`FlightView::jump_frame`]), each while the session takes its
+    /// command. A key held across a jump's end, a release of Option or a
+    /// repair acts here, as a press would, on the first frame its latch
+    /// lets it.
+    ///
+    /// It runs before the tick's steps, as `_HandlePlayer` runs before the
+    /// ships' `_HandleShip` (@0x43e19, @0x44483): a repair made in one
+    /// tick's steps is acted on at the next, the frame the original sees
+    /// it. And it runs before the jump effect's arrival, which is where
+    /// the original's arrival frame runs its keys (+0x50 still above 0):
+    /// the arrival tick still counts as jumping, and the first tick after
+    /// it is the original's first frame to act (@0x6c625).
+    fn held_keys_frame(&mut self) {
+        let down = |key: Key| self.held.contains(&key);
+        let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
+        let (select, jump) = (down(HYPER_SELECT_KEY), down(JUMP_KEY));
+        if self.takes(PlayerCommand::Nav) {
+            self.nav_keys_frame(nav_off, option, h);
+        }
+        if self.takes(PlayerCommand::SelectSystem) {
+            self.select_frame(select);
+        }
+        if self.takes(PlayerCommand::Jump) {
+            self.jump_frame(jump);
+        }
+    }
+
+    /// One frame of the jump key, with J down or not, as `_HandlePlayer`
+    /// runs it (@0x6b0da-0x6badf) on [`FlightView::jump_latch`]: during a
+    /// jump, the latch set (@0x6bad3), so J held through a jump does
+    /// nothing after it; with J down and the player intact, a jump begun
+    /// or refused when the latch is clear (@0x6b86d, @0x6b955), and the
+    /// latch set; otherwise, J up or the player disabled or breaking up
+    /// (`_IsDisabled`), the latch cleared (@0x6badf). So J held into a
+    /// disable, or first pressed while disabled, acts on the first frame
+    /// the player is intact again.
+    fn jump_frame(&mut self, down: bool) {
+        if self.jump_under_way() {
+            self.jump_latch = true;
+            return;
+        }
+        let intact = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.player_condition() == Condition::Intact);
+        if down && intact {
+            if !self.jump_latch {
+                self.jump();
+            }
+            self.jump_latch = true;
+        } else {
+            self.jump_latch = false;
+        }
     }
 
     /// Ends the jump: the ship arrives in the next system, caught up with
@@ -3181,17 +3471,91 @@ impl<
     /// (`_PlayerLandOnStellar` @0x63732), which a newbie, or a `Q`'s
     /// message, goes without; a message from before the landing would be
     /// further from what the player sees than none.
+    ///
+    /// The whole bar is redrawn once the take-off has let go of the nav
+    /// selection. Under [`RuleKey::HudCadence`]'s engine reading, the nav
+    /// area then shows the nav as the take-off began
+    /// ([`Session::take_takeoff_nav`]) in the first frame drawn after it
+    /// and to the end of that frame's tick ([`NavFlash`],
+    /// [`FlightView::advance_hud`]), when that differs from the nav now,
+    /// as after a landed `M`: built by operator decision on 2026-10-15.
+    /// The flash isn't timed from the take-off's own tick: the take-off
+    /// comes between frames, and the next frame's tick may already be
+    /// past it.
+    ///
+    /// The original redraws the whole bar after the port closes
+    /// (`_PlayerLandOnStellar` @0x63399-0x633a0, `_RedrawStatus(1)`) with
+    /// +0x6c still the landed selection, and flushes it at once
+    /// (`QDFlushPortBuffer` @0x4cd4d-0x4cd71, unless
+    /// `_useLegacyRenderingPipeline`). The deselect (@0x674d2) and the
+    /// redraws after it (`_RefreshSAT` @0x6765d, `_RedrawStatus(1)`
+    /// @0x67662-0x67669) come inside the same `_HandlePlayerDockRequest`
+    /// call (@0x66f29 → @0x67669). No game frame passes between the two
+    /// redraws: the flash lasts from one flush to the next, at least one
+    /// display refresh, under one of ours' 30 Hz ticks. Ours holds it for
+    /// at least one presented frame of ours, up to 1/30 s past that
+    /// frame's start.
+    ///
+    /// Every take-off reaches it, not only a landed `M`'s. While docked
+    /// the original holds the selection the ship landed with: the land
+    /// key puts mode 2 over any mode, a course's mode-3 cue too, with the
+    /// nearest stellar (`_HandlePlayer` @0x6a8ed-0x6a932); the dock
+    /// request lands on +0x6c (`_StellarIsLandable` @0x66968-0x66977);
+    /// and `_PlayerLandOnStellar` passes +0x6c on as the stellar docked
+    /// at, to `_DoAutoRefuel` (@0x632b2-0x632c5), `_DoPortDialog`
+    /// (@0x6336e-0x63381) and `_SavePilotFile` (@0x6353e-0x6354b). Nothing
+    /// between the landing and @0x633a0 writes the player's +0x6a or
+    /// +0x6c but a landed `M` or `N` (`_EvalSetExp` @0x15705, @0x157e3,
+    /// @0x158fd): the port dialogs put back what they saved
+    /// (`_DoPortDialog` @0x5fcf0-0x5fd1b, @0x60084-0x60096, and the
+    /// `nav` module's restores), and `_PlayerLandOnStellar`'s and
+    /// `_HandlePlayerDockRequest`'s other writes at +0x6c (@0x63520,
+    /// @0x672ac) are the auxiliary ships'. So the take-off's redraw names
+    /// the landed stellar in mode 2 (`_DrawStatusNav` @0x4a09e-0x4a18c),
+    /// or a landed `M`'s (the seven stock finales' `M472 Q25048` name
+    /// "Our Spiel"), until the deselect's redraw shows "No Destination",
+    /// or the course cued again in mode 3 (`_CueNextHyperRouteDest`
+    /// @0xe33c-0xe344, from @0x674d8). Only a take-off whose held
+    /// selection is let go already, after an `N` or an `M` to a system
+    /// with no stellar, shows no flash.
+    ///
+    /// Only a set expression run in that window could hold the bar
+    /// longer, by starting a mission whose text shows (`S` →
+    /// `_DoMissionAccept` @0x15407, its texts @0xa1bb2, @0xa1f0e,
+    /// @0xa1fb5): a `crön`'s `OnStart` or `OnEnd` (@0xb58b), a `spöb`'s
+    /// `OnRegen` (@0xb6ee), a `nëbu`'s `OnExplore` (@0x634da), or an
+    /// auto-aborting mission's `OnAbort` (@0x4317e → @0x99c3e). No stock
+    /// one does. Ours runs the stay's days inside the take-off, so a text
+    /// they queue is newer than the take-off's held nav: the count of
+    /// texts noted at the port's last nav redraw is kept, and
+    /// [`FlightView::take_mission_texts`] draws that text's nav, noted
+    /// before the deselect, while the flash lasts.
     fn took_off(&mut self) -> (Said, Said) {
-        let (pay, messages) = self
+        let (pay, messages, held) = self
             .session
             .as_mut()
-            .map(|session| (session.take_pay_notes(), session.take_messages()))
+            .map(|session| {
+                (
+                    session.take_pay_notes(),
+                    session.take_messages(),
+                    session.take_takeoff_nav(),
+                )
+            })
             .unwrap_or_default();
+        let nav_texts = self.nav_texts;
         self.catch_up();
         self.place_ship();
         self.read_npc_sheets();
         self.message = None;
         self.redraw_status();
+        if let Some(held) = held
+            && self.hud_waits()
+            && held != self.nav_mode()
+        {
+            self.nav_scene = Some((held, self.nav_display(held)));
+            self.nav_flash = Some(NavFlash::Held);
+            self.nav_texts = nav_texts;
+        }
         let (greeting, rest): (Vec<_>, Vec<_>) = messages
             .into_iter()
             .partition(|message| matches!(message, SimMessage::TookOff { .. }));
@@ -3313,18 +3677,19 @@ impl<
                 Err(refusal) => self.gate_refused(Some(refusal)),
             },
             Err(refusal) => {
-                let text = match refusal {
-                    LandingRefusal::NotLandable { stellar, .. } => {
-                        session.gate_kind(stellar).map(gate_refusal_message)
-                    }
-                    LandingRefusal::Denied { stellar, .. }
-                        if session.gate_kind(stellar) == Some(GateKind::Hypergate) =>
-                    {
-                        Some(HYPERGATE_DENIED.to_owned())
-                    }
-                    _ => None,
-                }
-                .or_else(|| refusal_message(&refusal).map(str::to_owned));
+                let stellar = match refusal {
+                    LandingRefusal::TooFar { stellar, .. }
+                    | LandingRefusal::TooFast { stellar, .. }
+                    | LandingRefusal::NotLandable { stellar, .. }
+                    | LandingRefusal::Denied { stellar, .. } => Some(stellar),
+                    LandingRefusal::Jumping
+                    | LandingRefusal::NoStellars
+                    | LandingRefusal::NothingLandable
+                    | LandingRefusal::Disabled => None,
+                };
+                let gate = stellar.and_then(|stellar| session.gate_kind(stellar));
+                let name = stellar.map_or("", |stellar| stellar_name(self.scene.as_ref(), stellar));
+                let text = refusal_message(&refusal, gate, name);
                 if let Some(text) = text {
                     self.say_for(text, landing_refusal_ticks(&refusal));
                 }
@@ -3357,11 +3722,41 @@ impl<
     /// `_DoSystemMap` returns (@0x6a85a). The hypergate map closes
     /// silently: `_PlayerEnterHypergate` plays no beep around it
     /// (@0x6385b).
+    ///
+    /// Docked, its close is `_DoSystemMap`'s in port: the whole bar is
+    /// redrawn (`_RefreshSAT` @0x13bc9), showing the nav as the map left
+    /// it, and the course is not cued (@0x13be2-0x13c0a skips
+    /// `_CueNextHyperRouteDest` in port). It beeps nothing: the
+    /// [`UiSound::MapClosed`] beep is `_HandlePlayer`'s, around the map M
+    /// opens in flight. When the bar opened it
+    /// ([`FlightView::open_bar_map`]), the bar's close of it follows: the
+    /// nav the bar opened with is put back ([`Session::restore_bar_nav`],
+    /// `_DoBarDialog` @0x492b7-0x492d3) with no redraw, as
+    /// `_UpdateAllPortDialogs` (@0x492d7) draws no status. The nav area
+    /// shows the map's selection until the port's next nav redraw, such
+    /// as the bar's close. A map opened in port any other way puts back
+    /// nothing of the bar's.
+    ///
+    /// `_DoSystemMap`'s own put-back of +0x6c in port (@0x13bee-0x13c06)
+    /// is left out: under the bar, the bar's restore overwrites it before
+    /// anything is drawn, so it can't be seen. It matters for the map
+    /// opened from the other port screens, filed with them in
+    /// rdm:phase/hud-fidelity-followups/phase-1-map-key-from-the-other-port-screens.
     pub fn close_map(&mut self) {
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
+        let bar_map = std::mem::take(&mut self.bar_map);
         if self.map.mode() != MapMode::Hypergate {
+            if let Ok(session) = &mut self.session
+                && session.landed().is_some()
+            {
+                self.redraw_status();
+                if bar_map && let Ok(session) = &mut self.session {
+                    session.restore_bar_nav();
+                }
+                return;
+            }
             self.ui_sounds.push(UiSound::MapClosed);
             if let Ok(session) = &mut self.session {
                 session.cue_course();
@@ -3393,24 +3788,42 @@ impl<
     ///
     /// A purchase redraws the radar, the nav area and the target panel,
     /// as the original's does inside the purchase (`_DrawStatus`
-    /// @0x5f0b1, after marking nav and the target @0x5f03a-0x5f04a), so a
-    /// ship whose default outfits carry IFF shows it at once. The gauges
-    /// are redrawn too only when the new ship asks for another `ïntf`
-    /// than the old (`hud::interface_for`), as `_LoadIntfResource`'s
-    /// whole-bar `_RedrawStatus` (@0x739bd) runs only for an ID other
-    /// than the one loaded (`_currentIntf`, @0x73663-0x73672); otherwise
-    /// they wait for the shipyard to close ([`FlightView::shop_closed`]).
-    /// A refused purchase redraws nothing.
+    /// @0x5f0b1, after marking nav, target, weapons and cargo,
+    /// `_statusRedraw[0]`, `[6]`, `[3]` and `[2]`, @0x5f03a-0x5f04a), so a ship whose default outfits carry IFF
+    /// shows it at once, and the nav area shows what the ship's
+    /// `OnPurchase` (@0x5f00d) wrote, a landed `M` or `N`'s selection,
+    /// whatever its operators' order, as it runs first.
+    ///
+    /// The gauges (`[1]`, `[4]`) are not marked. A `C`, `E` or `H` in the old
+    /// class's `OnRetire` or the new one's `OnPurchase` that puts the
+    /// ship under another `ïntf` redraws the whole bar at that operator
+    /// (`FlightView::redraw_at_interface_loads`), so the gauges show as
+    /// they stood there, before the purchase's fill (@0x5f04e-0x5f09d).
+    /// Then the purchase's own `_LoadIntfResource` (@0x5f0ac) redraws the
+    /// gauges only when the ship's `ïntf` is still another than the one
+    /// loaded (`hud::interface_for`), as its whole-bar `_RedrawStatus`
+    /// (@0x739bd) runs only for an ID other than the one loaded
+    /// (`_currentIntf`, @0x73663-0x73672); otherwise they wait for the
+    /// shipyard to close ([`FlightView::refresh_status`]).
+    ///
+    /// Before all that, the whole bar is redrawn as the name prompt
+    /// closes on OK (`_RefreshSAT` @0x5eb73, right after
+    /// `_EVTextInputDialog` returns @0x5eb6c and before the purchase
+    /// @0x5ebc0), whatever the purchase then does. The app checks every
+    /// refusal before the prompt opens ([`FlightView::ship_naming`]), so
+    /// no refusal follows it there.
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
+        self.redraw_status();
         let before = self.interface_now();
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
         let after = self.interface_now();
+        let loaded = self.redraw_at_interface_loads(before.as_ref());
         self.catch_up();
         self.retake_radar();
         self.retake_nav();
         self.retake_target();
-        if after != before {
+        if after != loaded {
             self.retake_reserves();
         }
         Ok(bought)
@@ -3434,13 +3847,7 @@ impl<
     /// outfitter. The bar is redrawn after it
     /// (`FlightView::after_outfit_order`).
     pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
-        let before = self.interface_now();
-        let done = match &mut self.session {
-            Ok(session) => session.outfit(order, &mut self.chance),
-            Err(_) => Err(OutfitRefusal::NoOutfitter),
-        };
-        self.after_outfit_order(before.as_ref());
-        done
+        self.outfit_counted(order, 1).map(|_| ())
     }
 
     /// Buys or sells up to `count` of an outfit as
@@ -3449,12 +3856,12 @@ impl<
     /// The bar is redrawn after it (`FlightView::after_outfit_order`).
     pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
         let before = self.interface_now();
-        let done = match &mut self.session {
-            Ok(session) => session.outfit_counted(order, count, &mut self.chance),
-            Err(_) => Err(OutfitRefusal::NoOutfitter),
+        let run = match &mut self.session {
+            Ok(session) => session.outfit_counted_run(order, count, &mut self.chance),
+            Err(_) => no_outfitter(),
         };
-        self.after_outfit_order(before.as_ref());
-        done
+        self.after_outfit_order(before.as_ref(), run.button_passed);
+        run.run.counted()
     }
 
     /// Buys or sells up to `count` of an outfit as
@@ -3464,31 +3871,18 @@ impl<
     /// it (`FlightView::after_outfit_order`).
     pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
         let before = self.interface_now();
-        let run = self.run_outfit_order(order, count);
-        self.after_outfit_order(before.as_ref());
+        let run = match &mut self.session {
+            Ok(session) => session.outfit_order(order, count, &mut self.chance),
+            Err(_) => no_outfitter(),
+        };
+        self.after_outfit_order(before.as_ref(), run.button_passed);
         run
     }
 
-    /// [`FlightView::outfit_order`]'s run.
-    fn run_outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
-        match &mut self.session {
-            Ok(session) => session.outfit_order(order, count, &mut self.chance),
-            Err(_) => OutfitRun {
-                run: OrderRun {
-                    done: 0,
-                    stopped: Some(Stopped {
-                        pass: 0,
-                        refusal: OutfitRefusal::NoOutfitter,
-                    }),
-                },
-                alert: None,
-                after: Reselection::Kept,
-            },
-        }
-    }
-
     /// Redraws the bar after an outfitter order, given the `ïntf` the
-    /// ship flew under before it ([`FlightView::interface_now`]).
+    /// ship flew under before it ([`FlightView::interface_now`]) and
+    /// whether it passed its button's own check (`passed`, the run's
+    /// [`OutfitRun::button_passed`]).
     ///
     /// The order's `OnPurchase` (`_EvalMissionBitSetString` @0x5c2cb) or
     /// `OnSell` (@0x5cff6) runs inside it. When its `C`, `E` or `H`
@@ -3499,12 +3893,96 @@ impl<
     /// is redrawn ([`FlightView::retake_radar`]). A refused order changes
     /// no ship, so it redraws only the radar. The redraw runs inside the
     /// order's call, before any frame is drawn.
-    fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>) {
-        if self.interface_now().as_ref() == before {
-            self.retake_radar();
-        } else {
-            self.redraw_status();
+    ///
+    /// The redraw is at the `C`, `E` or `H` itself, as the original's is
+    /// ([`FlightView::redraw_at_interface_loads`]): the nav and gauges
+    /// show as they stood at the last operator that changed the `ïntf`,
+    /// so an `M` or `N` after it in the same script (@0x156c7 → @0x739bd,
+    /// then @0x156f2-0x15705) shows only at the port's next nav redraw,
+    /// and one before it shows at once. An `ïntf` changed and changed
+    /// back within one order still redraws, though the one after the
+    /// order is the one before it.
+    ///
+    /// Left out: the same redraw at a `C`, `E` or `H` in the other
+    /// scripts run while docked: a mission's `OnAccept` (@0xa1da2),
+    /// `OnRefuse`, `OnSuccess` (@0xa04f8), `OnFailure` and `OnAbort`, and
+    /// the bar's and the other hooks. Ours redraws after the whole script
+    /// at its own points ([`FlightView::accept_mission`],
+    /// [`FlightView::refuse_mission`],
+    /// [`FlightView::take_mission_texts`]). Where a text dialog follows
+    /// before the dialog's own redraw, the original shows the bar as it
+    /// was before the script, or as its last such operator left it: the
+    /// `BriefText` @0xa1f0e before `_RefreshSAT` @0xa1f13, for one. Stock
+    /// reaches it: `mïsn` 197 and 320's `OnAccept`s, `H381 … G207` and
+    /// `H382 … G209`, change the shield's most after the `H`, under
+    /// `BriefText` 5422 and 5367. Filed as
+    /// rdm:phase/missions-fidelity/phase-31-cee-e-h-redraw-in-docked-scripts.
+    ///
+    /// The buy's and the sell's own `_DrawStatus` (@0x5c5a1, @0x5d328)
+    /// draw the nav too when the shipyard's restore marked it
+    /// ([`FlightView::close_port_dialog`]), but only for an order that
+    /// went through: a buy `_CanBuyOutfitItem` refuses (@0x5c087,
+    /// @0x5c09f-0x5c0a2) jumps past the buy's draw to @0x5c5ca, and a
+    /// sell with nothing to sell (the flag at 0xded1c, @0x5c5d5-0x5c5dd)
+    /// past the sell's to @0x5d351. A run stopped after its first pass
+    /// still reaches them, and so does a Cancel's count of 0 once the
+    /// button's check passed, as the loop then runs no pass and falls
+    /// through to the draw (`_DoQuantityDialog` @0x5c1aa, @0x5c2fc-0x5c2ff).
+    fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>, passed: bool) {
+        self.redraw_at_interface_loads(before);
+        // After a whole-bar redraw, both are what it drew: it took the
+        // radar, and its nav consumed the shipyard's mark, as
+        // `_RedrawStatus` marks and draws every area.
+        self.retake_radar();
+        if passed {
+            self.draw_marked_nav();
         }
+    }
+
+    /// Redraws the whole bar at the `C`, `E` and `H` the session ran while
+    /// docked since its order or purchase began
+    /// ([`Session::take_interface_loads`]), given the `ïntf` loaded before
+    /// it (`before`, [`FlightView::interface_now`]). Gives the `ïntf`
+    /// loaded after them.
+    ///
+    /// Each operator's `_LoadIntfResource` (`_EvalSetExp` @0x156c7) asks
+    /// for its ship's `ïntf` and compares it with the one loaded at that
+    /// moment (`_currentIntf`, @0x73663-0x73672): the same returns at once,
+    /// and another is loaded and redraws the whole bar (`_RedrawStatus(1)`
+    /// @0x739b6-0x739bd). So two changes in one script redraw twice, the
+    /// last staying, and a change and a change back redraw though the
+    /// `ïntf` after the script is the one before it. Each redraw draws the
+    /// nav and the gauges as they stood at its operator: `M` and `N` mark
+    /// nothing (@0x15705, @0x157e3, @0x158fd), and an outfitter order's own
+    /// draw and reset mark only the cargo (@0x5c598-0x5c5a1,
+    /// @0xc82e-0xc833), so an `M`, `N`, `G` or `D` after the last redraw
+    /// shows only at the port's next redraw of its area. The radar and the
+    /// target panel are taken as they are after the script, which no
+    /// operator in it changes but the ship's own IFF.
+    fn redraw_at_interface_loads(
+        &mut self,
+        before: Option<&Result<i16, String>>,
+    ) -> Option<Result<i16, String>> {
+        let loads = self
+            .session
+            .as_mut()
+            .map(Session::take_interface_loads)
+            .unwrap_or_default();
+        let mut loaded = before.cloned();
+        let mut last = None;
+        for load in loads {
+            let interface = hud::interface_for(&self.catalog, load.government);
+            if loaded.as_ref() != Some(&interface) {
+                loaded = Some(interface);
+                last = Some(load);
+            }
+        }
+        if let Some(load) = last {
+            self.redraw_status();
+            self.nav_scene = Some((load.nav, self.nav_display(load.nav)));
+            self.reserves_scene = Some(load.reserves);
+        }
+        loaded
     }
 
     /// Assigns the ship captured, as [`Session::assign`] does, and says
@@ -3597,13 +4075,107 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// Redraws the whole status bar as an exchange, outfitter or shipyard
-    /// closes (`FlightView::redraw_status`), as each of the original's
-    /// shops ends in `_RefreshSAT` (the outfitter @0x5dba4, the exchange
-    /// @0x5e642, the shipyard @0x5f8d4, after its `_RedrawStatus` @0x5f87c
-    /// and @0x5f8c5). The gauges an order left held show the order then.
-    pub fn shop_closed(&mut self) {
+    /// Redraws the whole status bar (`FlightView::redraw_status`) as a
+    /// dialog closes: the original's `_RefreshSAT` at a dialog's close.
+    /// The gauges an order left held show the order then. Its callers:
+    ///
+    /// - The shops: the outfitter (@0x5dba4), the exchange (@0x5e642) and
+    ///   the shipyard (@0x5f8d4, after its `_RedrawStatus` @0x5f87c and
+    ///   @0x5f8c5), through [`FlightView::close_port_dialog`], before the
+    ///   nav's restore.
+    /// - The bar's hire screen, the shipyard's function in hire mode
+    ///   (@0x5f8d4), and the mission computer (@0xa40d7, or its refusal's
+    ///   @0xa395b), the same way.
+    /// - The bar (@0x4945e), News (@0x48153), the ship description, the
+    ///   shipyard's or the hire screen's (@0x5bac2), player info
+    ///   (@0x5a725) and mission info (@0x9e769), as the app hears from the
+    ///   spaceport; player info and mission info over flight too.
+    ///
+    /// The shipyard's name prompt redraws the same way as it closes
+    /// ([`FlightView::buy_ship`], [`FlightView::decline_ship`], @0x5eb73),
+    /// and so does the bar's map in port ([`FlightView::close_map`],
+    /// @0x13bc9). The closings the original redraws at that ours can't
+    /// reach (the bar's Gamble text, the map from the other port screens,
+    /// mission info from the shops, the description or an offer,
+    /// Preferences' menu command, the shops' faded text dialogs, an OS
+    /// update event) are recorded,
+    /// with their addresses, in the spaceport's module docs
+    /// ([`crate::spaceport::view`]).
+    pub fn refresh_status(&mut self) {
         self.redraw_status();
+    }
+
+    /// A port dialog (the outfitter, exchange, shipyard, the bar's hire
+    /// screen or the mission computer) opens: the nav is saved
+    /// ([`Session::save_port_nav`]), as each of the original's saves +0x6a
+    /// and +0x6c as it opens (the outfitter @0x5bafc-0x5bb12, the exchange
+    /// @0x5dbed-0x5dc08, the shipyard and the hire screen
+    /// @0x5e70f-0x5e71e, the computer @0x5ffc0-0x5ffd0). A
+    /// session that failed has no nav to save.
+    pub fn open_port_dialog(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.save_port_nav();
+        }
+    }
+
+    /// `dialog` closes, as `_DoPortDialog` closes each: its close
+    /// redraws the whole bar first ([`FlightView::refresh_status`],
+    /// `_RefreshSAT`), then the nav saved as it opened is restored
+    /// ([`Session::restore_port_nav`]; the outfitter @0x5dbb8-0x5dbc5,
+    /// the exchange @0x5e64d-0x5e65d, the shipyard @0x5f8e8-0x5f8f5, the
+    /// computer @0x60084-0x60096), undoing a landed `M` or `N` run inside
+    /// it. When the restored nav shows:
+    ///
+    /// - The outfitter and the exchange: at once, as `_DoPortDialog` runs
+    ///   `_DrawStatus` right after each returns (@0x5ff04-0x5ff10,
+    ///   @0x5fe99-0x5fea5 → @0x5ff10).
+    /// - The mission computer: at once, as its close draws nav and cargo
+    ///   itself (@0x6009a-0x600a6), even when the restore changed nothing.
+    ///   Its whole-bar redraw is its loop's close's `_RefreshSAT`
+    ///   (@0xa40d7), or a refusal's after its text (@0xa395b). The
+    ///   re-entry after an accept skips it when the slots are full
+    ///   (@0xa3814) or nothing is left (@0xa391a), but follows an accept
+    ///   whose own redraws ([`FlightView::accept_mission`]) ran in the same
+    ///   input. Nothing a docked session holds changes while its texts
+    ///   show, so ours' redraw there draws what is already shown: an
+    ///   ordering difference no frame crosses, not filed.
+    /// - The shipyard, and the bar's hire screen, the same function in
+    ///   hire mode: the bar keeps what its close drew, before the
+    ///   restore, as no `_DrawStatus` follows it in the port
+    ///   (@0x5ff85-0x5ffa3 marks only `_statusRedraw[2]`). Its restore
+    ///   marks nav (`_statusRedraw[0]` @0x5f8fe), drawn at the port's next
+    ///   `_DrawStatus` ours models: a trade (@0x5e33a, @0x5e59e), a
+    ///   recharge (@0x5fe05), an outfitter order (@0x5c5a1, @0x5d328), each
+    ///   only when it goes through, or any nav redraw.
+    pub fn close_port_dialog(&mut self, dialog: PortDialog) {
+        self.refresh_status();
+        if let Ok(session) = &mut self.session {
+            session.restore_port_nav();
+        }
+        if matches!(dialog, PortDialog::Shipyard | PortDialog::Hire) {
+            self.nav_marked = true;
+        } else {
+            self.retake_nav();
+        }
+    }
+
+    /// An outfitter that listed nothing returned without opening
+    /// ([`SpaceportView::set_opened_outfitter`](crate::spaceport::SpaceportView::set_opened_outfitter)):
+    /// `_DoPortDialog` still runs `_DrawStatus` after it, as after every
+    /// outfitter (@0x5ff09-0x5ff10), which draws a nav the shipyard's
+    /// restore left marked. An empty shipyard or hire screen gets no such
+    /// draw: `_DoPortDialog` marks only cargo after them (@0x5ff85-0x5ffa3).
+    pub fn empty_outfitter_returned(&mut self) {
+        self.draw_marked_nav();
+    }
+
+    /// The port's `_DrawStatus` with nothing else redrawing nav: the nav
+    /// area is redrawn when the shipyard's restore marked it
+    /// ([`FlightView::close_port_dialog`]).
+    fn draw_marked_nav(&mut self) {
+        if self.nav_marked {
+            self.retake_nav();
+        }
     }
 
     /// Redraws the HUD at once, as the original's `_RedrawStatus`
@@ -3612,8 +4184,8 @@ impl<C> FlightView<C> {
     /// target's blink are left as they are.
     ///
     /// The original calls it at flight start (`_PlayGame` @0x457d8, ours
-    /// the first frame, which shows the radar as it is, or as a pilot
-    /// resumed docked starts), on landing and take-off
+    /// the first frame, which shows the radar as it is), on landing and
+    /// take-off
     /// (`_PlayerLandOnStellar`), on arrival in a system (`_HandlePlayer`;
     /// ours whenever a system is laid out), on closing the map
     /// (`_DoSystemMap`), on entering a hypergate (`_PlayerEnterHypergate`,
@@ -3625,13 +4197,15 @@ impl<C> FlightView<C> {
     ///
     /// In port the original redraws the bar at other points too, each
     /// taken here in part: the radar alone after an outfitter order, and
-    /// everything after one whose `OnPurchase` or `OnSell` puts the ship
-    /// under another `ïntf` (`_LoadIntfResource` @0x156c7 → @0x739bd,
-    /// [`FlightView::outfit`]), the radar, nav and target on a ship
-    /// purchase and everything on one under another `ïntf`
-    /// ([`FlightView::buy_ship`]), the fuel gauge on a recharge
-    /// ([`FlightView::recharge`]), and everything as a shop closes
-    /// ([`FlightView::shop_closed`]).
+    /// everything at each `C`, `E` or `H` of its `OnPurchase` or `OnSell`
+    /// that puts the ship under another `ïntf` (`_LoadIntfResource`
+    /// @0x156c7 → @0x739bd, [`FlightView::redraw_at_interface_loads`]),
+    /// the radar, nav and target on a ship purchase and everything on one
+    /// under another `ïntf` ([`FlightView::buy_ship`]), the fuel gauge on a recharge
+    /// ([`FlightView::recharge`]), everything as the shipyard's name
+    /// prompt closes ([`FlightView::buy_ship`],
+    /// [`FlightView::decline_ship`]), and everything as a dialog closes
+    /// ([`FlightView::refresh_status`]).
     fn redraw_status(&mut self) {
         self.retake_radar();
         self.retake_nav();
@@ -3650,10 +4224,10 @@ impl<C> FlightView<C> {
     /// only the cargo area, which ours draws live, and `_DrawStatus`
     /// redraws the radar on its 15-tick timer, nearly always run out in
     /// port. A refused order changes no gear, so the radar redrawn is the
-    /// same. An order whose `OnPurchase` (@0x5c2cb) or `OnSell` (@0x5cff6)
-    /// changes the `ïntf` redraws the whole bar instead (`_EvalSetExp`
-    /// @0x156c7 → `_RedrawStatus(1)` @0x739bd,
-    /// [`FlightView::after_outfit_order`]).
+    /// same. An order whose script, `OnPurchase` (@0x5c2cb) or `OnSell`
+    /// (@0x5cff6), changes the `ïntf` redraws the whole bar instead, as at
+    /// its last change (`_EvalSetExp` @0x156c7 → `_RedrawStatus(1)`
+    /// @0x739bd, [`FlightView::after_outfit_order`]).
     fn retake_radar(&mut self) {
         self.radar_scene = Some(self.radar_now());
     }
@@ -3715,9 +4289,12 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// Takes the nav area's snapshot afresh.
+    /// Takes the nav area's snapshot afresh, noting how many mission texts
+    /// the session had queued then.
     fn retake_nav(&mut self) {
+        self.nav_marked = false;
         self.nav_scene = Some((self.nav_mode(), self.nav_now()));
+        self.nav_texts = self.session.as_ref().map_or(0, Session::texts_queued);
     }
 
     /// The player's nav mode ([`Session::nav_mode`]); off without a
@@ -3728,23 +4305,33 @@ impl<C> FlightView<C> {
             .map_or(NavMode::Off, Session::nav_mode)
     }
 
-    /// What the HUD's nav area shows now, for the session's nav mode (see
-    /// [`NavDisplay`]): in mode 2 the stellar selected, by its name in the
-    /// scene ("No Destination" for none, or one not in the scene); in
-    /// mode 3 the system selected, by its name on the map if the pilot has
-    /// explored it ("No Destination" for none), with whether the ship can
-    /// jump there; with the nav system off, "Nav System Off".
+    /// What the HUD's nav area shows now, for the session's nav mode
+    /// ([`FlightView::nav_display`]).
     fn nav_now(&self) -> NavDisplay {
+        self.nav_display(self.nav_mode())
+    }
+
+    /// What the HUD's nav area shows for nav mode `mode` (see
+    /// [`NavDisplay`]): in mode 2 the stellar selected, by its name in the
+    /// scene, or, for one the scene doesn't hold, such as a landed `M`'s
+    /// in another system, by its `spöb` name, as `_DrawStatusNav` reads it
+    /// with no check of the system (@0x4a0fd-0x4a149) ("No Destination"
+    /// for none, or one with no name); in mode 3 the system selected, by
+    /// its name on the map if the pilot has explored it ("No Destination"
+    /// for none), with whether the ship can jump there now; with the nav
+    /// system off, "Nav System Off". Off without a session.
+    fn nav_display(&self, mode: NavMode) -> NavDisplay {
         let Ok(session) = &self.session else {
             return NavDisplay::Off;
         };
-        match session.nav_mode() {
+        match mode {
             NavMode::Off => NavDisplay::Off,
             NavMode::Stellar(target) => NavDisplay::Stellar(target.and_then(|target| {
                 self.scene
                     .as_ref()
                     .and_then(|scene| scene.stellars().iter().find(|s| s.id == target))
                     .map(|stellar| stellar.name.clone())
+                    .or_else(|| session.stellar_name(target))
             })),
             NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
                 destination: next.map_or(NavDestination::None, |next| {
@@ -3773,7 +4360,11 @@ impl<C> FlightView<C> {
     /// redrawing at once (`_statusRedraw[0]`, e.g. @0x69b39, @0x69efa,
     /// @0x6a919, @0xe34d, @0x1379b). This is settled before the frame is
     /// drawn, and [`FlightView::nav_shown`] shows a changed mode at once
-    /// anyway, so no boundary is crossed. The target panel's is taken
+    /// anyway, so no boundary is crossed. While the take-off's held nav
+    /// lasts ([`FlightView::took_off`]) the area is not taken; the first
+    /// advance after the take-off stamps it with its tick, and the first
+    /// past that tick ends it ([`NavFlash::advance`]). The target panel's
+    /// is taken
     /// afresh as [`retake_target`] says: on a change of target, on its
     /// 45-tick redraw, and on a radar refresh once its shield or ship type
     /// has changed. The crossing test may settle the 45-tick redraw a
@@ -3793,7 +4384,10 @@ impl<C> FlightView<C> {
         if refresh.radar {
             self.retake_radar();
         }
-        if refresh.nav || !self.nav_mode_shown() {
+        self.nav_flash = self
+            .nav_flash
+            .and_then(|flash| flash.advance(u128::from(now)));
+        if self.nav_flash.is_none() && (refresh.nav || !self.nav_mode_shown()) {
             self.retake_nav();
         }
         let shown = self.target_scene.as_ref().and_then(|(drawn, _)| *drawn);
@@ -3815,12 +4409,44 @@ impl<C> FlightView<C> {
 
     /// What the nav area shows this frame: by [`RuleKey::HudCadence`]'s
     /// engine reading, the snapshot taken at its last refresh, text and
-    /// colours both; by the other, before the first refresh, or once the
-    /// nav mode has changed since, the nav area as it is now
-    /// ([`FlightView::nav_now`]).
+    /// colours both, in flight while the nav mode is the one it was taken
+    /// for and while docked whatever it is; by the other, before the first
+    /// refresh, or in flight once the nav mode has changed since, the nav
+    /// area as it is now ([`FlightView::nav_now`]).
+    ///
+    /// Flight doesn't advance in port, so while docked only the port's
+    /// nav redraws ours models retake the snapshot
+    /// ([`FlightView::redraw_status`]: landing, a docked start, a shop
+    /// closing, an accept or refusal, mission texts, and an outfitter order
+    /// whose script changes the `ïntf`, as at its last change; a ship
+    /// purchase, [`FlightView::buy_ship`];
+    /// a port dialog's close, [`FlightView::close_port_dialog`]; and the
+    /// other closings [`FlightView::refresh_status`] lists). A
+    /// landed `M` or `N`'s write (`_EvalSetExp` @0x156f2-0x15705,
+    /// @0x158fd) shows from the next of them, as the original's port bar
+    /// shows it only at its next nav redraw; one run inside a port dialog
+    /// is undone as it closes. A trade, a recharge, an outfitter order
+    /// that keeps the `ïntf` leave it held, unless
+    /// the shipyard's restore marked the nav, which a trade, recharge or
+    /// outfitter order that goes through then draws. The original's port
+    /// `_DrawStatus` also draws nav when it lands on `TickCount() % 30 ==
+    /// 0` (@0x4c88a-0x4c8b6), recorded and not built (see the `cadence`
+    /// module). A write held in port shows at the next redraw ours
+    /// models, or the take-off lets go of it. The take-off's own held nav
+    /// shows in flight whatever the mode, in the first frame drawn after
+    /// it and to the end of that frame's tick ([`FlightView::took_off`]).
     fn nav_shown(&self) -> NavDisplay {
+        let docked = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_some());
         match &self.nav_scene {
-            Some((_, shown)) if self.hud_waits() && self.nav_mode_shown() => shown.clone(),
+            Some((_, shown))
+                if self.hud_waits()
+                    && (docked || self.nav_flash.is_some() || self.nav_mode_shown()) =>
+            {
+                shown.clone()
+            }
             _ => self.nav_now(),
         }
     }
@@ -4115,12 +4741,16 @@ impl<C> FlightView<C> {
     }
 
     /// Trades as [`Session::trade`] does; a session that failed has no
-    /// exchange.
+    /// exchange. A trade that goes through runs the exchange's
+    /// `_DrawStatus` (@0x5e33a, @0x5e59e), which draws the nav when the
+    /// shipyard's restore marked it ([`FlightView::close_port_dialog`]).
     pub fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
-        match &mut self.session {
-            Ok(session) => session.trade(order),
-            Err(_) => Err(TradeRefusal::NoMarket),
-        }
+        let traded = match &mut self.session {
+            Ok(session) => session.trade(order)?,
+            Err(_) => return Err(TradeRefusal::NoMarket),
+        };
+        self.draw_marked_nav();
+        Ok(traded)
     }
 
     /// The outfitter of the stellar landed on, as [`Session::outfitter`]
@@ -4158,12 +4788,15 @@ impl<C> FlightView<C> {
     /// sells no fuel. A recharge redraws the fuel gauge alone, as the
     /// original's marks only fuel and cargo (`_statusRedraw[4]` @0x5fdf6)
     /// before its `_DrawStatus` (@0x5fe05); the shield and armour stay as
-    /// they were drawn.
+    /// they were drawn. The nav is drawn too when the shipyard's restore
+    /// marked it ([`FlightView::close_port_dialog`]). A refused recharge
+    /// draws nothing.
     pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
         let paid = match &mut self.session {
             Ok(session) => session.recharge()?,
             Err(_) => return Err(RechargeRefusal::NoFuel),
         };
+        self.draw_marked_nav();
         let fuel = self.reserves().fuel;
         if let Some(held) = &mut self.reserves_scene {
             held.fuel = fuel;
@@ -4234,7 +4867,11 @@ impl<C> FlightView<C> {
     /// that disposes the dialog, an accept with no text included, ends in
     /// `_RefreshSAT` (@0xa40c8-0xa40d7), which redraws the whole bar. The
     /// port's nav and cargo `_DrawStatus` after it (@0x6003a-0x60046) adds
-    /// nothing, so ours matches.
+    /// nothing, so ours matches. The redraw comes after `OnAccept` runs
+    /// (@0xa3bb4 → @0xa40c8), and a landed `M` or `N` in it writes the nav
+    /// at its operator, so the redraw shows it; a `BriefText` queued after
+    /// `OnAccept` leaves this redraw shown
+    /// ([`FlightView::take_mission_texts`]).
     ///
     /// # Errors
     ///
@@ -4250,7 +4887,11 @@ impl<C> FlightView<C> {
     }
 
     /// Refuses `mission` as [`Session::refuse_mission`] does, on the
-    /// flight's chance. The HUD is redrawn, as on accepting.
+    /// flight's chance. The HUD is redrawn, as on accepting, after
+    /// `OnRefuse` runs, so a landed `M` or `N` in it shows; the
+    /// `RefuseText`, queued before `OnRefuse` (@0xa2ec9 → @0xa2f41),
+    /// leaves this redraw shown ([`FlightView::take_mission_texts`]), as
+    /// the mission dialog's `_RefreshSAT` (@0xa40c8-0xa40d7) redraws last.
     ///
     /// # Errors
     ///
@@ -4320,14 +4961,49 @@ impl<C> FlightView<C> {
     /// ([`FlightView::redraw_status`]): the original's text dialog redraws
     /// it on closing, and flight does not tick under the dialog, so
     /// redrawing as the texts are taken shows the same.
+    ///
+    /// The nav area is redrawn as the last text noted it
+    /// ([`Session::text_nav`]) when that text was queued after the nav
+    /// area was last taken: the original's text dialog draws the nav as
+    /// it was when the text showed, before any script run after it. So a
+    /// landing's `CompText`, queued after the landing's redraw and before
+    /// `OnSuccess` (@0xa048c, @0xa0491, then @0xa04f8), shows the stellar
+    /// landed on, not where `OnSuccess`'s `M` selects, until the port's
+    /// next nav redraw. A text queued before a redraw ours has made since
+    /// never shows over it, as in the original the dialog that ran the
+    /// script redraws after its texts close: a `BriefText`, queued after
+    /// `OnAccept` (@0xa1e0b-0xa1f13) and before
+    /// [`FlightView::accept_mission`]'s redraw, and a `RefuseText`, queued
+    /// before `OnRefuse` (@0xa2ec9 → @0xa2f41) and before
+    /// [`FlightView::refuse_mission`]'s redraw (the mission dialog's
+    /// `_RefreshSAT` @0xa40c8-0xa40d7), each leave that redraw shown. The
+    /// original shows the `BriefText` before its redraw, over a bar that
+    /// doesn't show `OnAccept`'s writes (@0xa1da2 → @0xa1f0e →
+    /// @0xa1f13), where ours' accept redraw shows them: left out with the
+    /// docked scripts' `C`, `E` and `H` redraws (see
+    /// [`FlightView::after_outfit_order`]). In flight a nav mode other
+    /// than the session's shows live anyway ([`FlightView::nav_shown`]),
+    /// so this matters only while docked, and while the take-off's held
+    /// nav lasts, under which a text queued in the take-off's days shows
+    /// ([`FlightView::took_off`]). The dialog has then shown the held nav,
+    /// and its closing redraws the bar, so the flash ends at the next tick
+    /// ([`NavFlash::UnderText`]).
     pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
-        let texts = self
-            .session
-            .as_mut()
-            .map(Session::take_mission_texts)
-            .unwrap_or_default();
+        let Ok(session) = &mut self.session else {
+            return Vec::new();
+        };
+        let noted = session
+            .text_nav()
+            .filter(|_| session.texts_queued() > self.nav_texts);
+        let texts = session.take_mission_texts();
         if !texts.is_empty() {
             self.redraw_status();
+            if let Some(noted) = noted {
+                self.nav_scene = Some((noted, self.nav_display(noted)));
+            }
+            if self.nav_flash.is_some() {
+                self.nav_flash = Some(NavFlash::UnderText);
+            }
         }
         texts
     }
@@ -4348,8 +5024,10 @@ impl<C> FlightView<C> {
     }
 
     /// Declines to buy a ship of class `ship`, as [`Session::decline_ship`]
-    /// does; nothing for a session that failed.
+    /// does; nothing for a session that failed. The whole bar is redrawn
+    /// as the name prompt closes on Cancel (`_RefreshSAT` @0x5eb73).
     pub fn decline_ship(&mut self, ship: ShipId) {
+        self.redraw_status();
         if let Ok(session) = &mut self.session {
             session.decline_ship(ship);
         }
@@ -4631,7 +5309,9 @@ impl<C> FlightView<C> {
             | ESCORT_RECALL_KEY => PlayerCommand::Escort,
             _ if self.escort_menu.is_open() && GROUP_KEYS.contains(&key) => PlayerCommand::Escort,
             SELECT_KEY => PlayerCommand::SelectWeapon,
-            NEAREST_STELLAR_KEY | NAV_OFF_KEY => PlayerCommand::Nav,
+            NEAREST_STELLAR_KEY | NAV_OFF_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY => {
+                PlayerCommand::Nav
+            }
             _ if STELLAR_SLOT_KEYS.iter().any(|keys| keys.contains(&key)) => PlayerCommand::Nav,
             _ => return None,
         };
@@ -4652,30 +5332,124 @@ impl<C> FlightView<C> {
         match slot {
             Some(slot) => self.select_stellar(StellarPick::Slot(slot)),
             _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
-            _ if key == NAV_OFF_KEY => {
-                let option = self.held.contains(&Key::Alt);
-                if let Ok(session) = &mut self.session {
-                    if option {
-                        session.clear_target();
-                    } else {
-                        session.nav_off();
-                    }
-                }
-            }
+            _ if key == NAV_OFF_KEY => self.press_nav_block(key),
             _ => {}
         }
     }
 
     /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
-    /// ([`HYPERSPACE_MODE_KEY`]).
+    /// ([`HYPERSPACE_MODE_KEY`]). The press's own frame shows the floating
+    /// map: H's always (presses are taken only outside a jump), and
+    /// `\`'s when it leaves the mode at 3, unless it found no system. A tap released before the next tick
+    /// still shows it, as the frame's key poll would see it down.
+    ///
+    /// Each runs its key's routine with the key counted as down, its latch
+    /// first cleared as the release before the press clears it: `\`'s
+    /// always, H's unless \` without Option is still down, when the
+    /// latch holds and H only shows the map (@0x69b8e-0x69ba3).
     fn hyperspace_key(&mut self, key: Key) {
+        if self.session.is_err() {
+            return;
+        }
+        if key == HYPER_SELECT_KEY {
+            self.select_latch = false;
+            self.select_frame(true);
+            if self
+                .session
+                .as_ref()
+                .is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)))
+            {
+                self.show_floating_map();
+            }
+        } else {
+            self.press_nav_block(key);
+            self.show_floating_map();
+        }
+    }
+
+    /// A fresh press of \` or H ([`NAV_OFF_KEY`], [`HYPERSPACE_MODE_KEY`]):
+    /// the OS sends one only after a release, which clears the block's
+    /// latch unless the block's other keys still hold it (H for \`; \`
+    /// without Option for H). Then the block runs with the key down
+    /// ([`FlightView::nav_keys_frame`]).
+    fn press_nav_block(&mut self, key: Key) {
+        let down = |held: Key| key == held || self.held.contains(&held);
+        let option = self.held.contains(&Key::Alt);
+        let others = if key == NAV_OFF_KEY {
+            self.held.contains(&HYPERSPACE_MODE_KEY)
+        } else {
+            self.held.contains(&NAV_OFF_KEY) && !option
+        };
+        let (nav_off, h) = (down(NAV_OFF_KEY), down(HYPERSPACE_MODE_KEY));
+        if !others {
+            self.nav_latch = false;
+        }
+        self.nav_keys_frame(nav_off, option, h);
+    }
+
+    /// Whether a jump is under way, the pre-jump stage included: the
+    /// original's +0x50 > 0, which its key blocks test.
+    fn jump_under_way(&self) -> bool {
+        self.jump.is_some()
+            || self
+                .session
+                .as_ref()
+                .is_ok_and(|session| session.preparing_jump().is_some())
+    }
+
+    /// One frame of Option-\` and the Nav Off / Hyperspace Mode block,
+    /// with \` (`nav_off`), Option and H down or not, as `_HandlePlayer`
+    /// runs them (@0x69a17-0x69baa) on [`FlightView::nav_latch`]:
+    ///
+    /// - With \` and Option down and the latch clear, the latch set and
+    ///   the ship target let go ([`Session::clear_target`], @0x69a17-0x69a90),
+    ///   during a jump too.
+    /// - Then, with \` without Option or H down outside a jump
+    ///   (@0x69aa1-0x69ad4), and the latch clear, the latch set and the
+    ///   block run ([`Session::nav_mode_keys`]); otherwise, the latch
+    ///   cleared (@0x69baa).
+    ///
+    /// So Option-\` held lets go of a target picked meanwhile on the next
+    /// frame, unless H is down; Option let go with \` still down is a
+    /// fresh Nav Off; H and \` block each other while one is held; and
+    /// either held through a jump's end acts after it.
+    fn nav_keys_frame(&mut self, nav_off: bool, option: bool, h: bool) {
+        let jumping = self.jump_under_way();
         let Ok(session) = &mut self.session else {
             return;
         };
-        if key == HYPER_SELECT_KEY {
-            session.select_next_system();
+        if nav_off && option && !self.nav_latch {
+            self.nav_latch = true;
+            session.clear_target();
+        }
+        if ((nav_off && !option) || h) && !jumping {
+            if !self.nav_latch {
+                self.nav_latch = true;
+                session.nav_mode_keys(nav_off, h);
+            }
         } else {
-            session.hyperspace_mode();
+            self.nav_latch = false;
+        }
+    }
+
+    /// One frame of Hyper Select, with `\` down or not, as `_HandlePlayer`
+    /// runs it (@0x69bb2-0x69cee) on [`FlightView::select_latch`]: up, the
+    /// latch cleared (@0x69cee); down with the latch clear outside a jump,
+    /// the latch set (@0x69bf1) and the next linked system selected
+    /// ([`Session::select_next_system`]). During a jump the latch is left
+    /// as it is (@0x69be7): a `\` held from before stays latched, and one
+    /// first pressed during the jump acts after it.
+    fn select_frame(&mut self, down: bool) {
+        if !down {
+            self.select_latch = false;
+            return;
+        }
+        if self.select_latch || self.jump_under_way() {
+            return;
+        }
+        self.select_latch = true;
+        if let Ok(session) = &mut self.session {
+            session.select_next_system();
         }
     }
 
@@ -4712,6 +5486,140 @@ impl<C> FlightView<C> {
         if let Ok(session) = &mut self.session {
             session.click_in_space(Vec2::new(world.x, world.y), &drawn);
         }
+    }
+
+    /// The floating map's clock: the flight's elapsed time in Mac ticks
+    /// (see the [`floating`](super::floating) module's trade-offs).
+    fn mac_now(&self) -> u128 {
+        sixtieths(self.elapsed)
+    }
+
+    /// Shows the floating map, restarting its clock, as
+    /// `_ShowFloatingMap` does.
+    fn show_floating_map(&mut self) {
+        self.floating.show(self.mac_now());
+    }
+
+    /// The floating map's work each frame, as `_HandlePlayer` does it
+    /// before `_HandleComm`: shown while H is held outside a jump
+    /// (@0x69b8e-0x69ba8; its jump gate skips it, @0x69ad4), and while `\`
+    /// is held in nav mode 3, jumping or not (@0x69cdd-0x69ce7; its jump
+    /// gate jumps straight to the show, @0x69be7), each while the session
+    /// takes its command; then hidden once more than 500 ticks have
+    /// passed since it was last shown (@0x30262-0x30285). It runs once a
+    /// frame, not once a pass: double time's second pass would only show
+    /// it again at the same tick.
+    fn floating_frame(&mut self) {
+        let session = self.session.as_ref();
+        let jumping =
+            self.jump.is_some() || session.is_ok_and(|session| session.preparing_jump().is_some());
+        let mode_3 =
+            session.is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)));
+        let h =
+            self.held.contains(&HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
+        let backslash = self.held.contains(&HYPER_SELECT_KEY)
+            && mode_3
+            && self.takes(PlayerCommand::SelectSystem);
+        if h || backslash {
+            self.show_floating_map();
+        }
+        self.floating.expire(self.mac_now());
+    }
+
+    /// A left click at `at`, if the floating map takes it, as
+    /// `_HandlePlayer` does (@0x6a130-0x6a762): while the map is up, faded
+    /// out or not, inside its frame. A hit on the current system's centre
+    /// or a link's box selects through the session
+    /// ([`Session::select_on_floating_map`]) and shows the map again
+    /// (@0x6a735); a miss is swallowed (@0x6a342). Whether it took it.
+    /// During a jump the original passes the click on (@0x6a145), where a
+    /// click in space selects nothing either; here the session refuses the
+    /// hit, so the click does nothing and the map isn't shown again.
+    fn click_floating_map(&mut self, at: Point) -> bool {
+        let frame = floating::frame(VIEW_SIZE);
+        if !self.floating.is_up() || !floating::contains(frame, at) {
+            return false;
+        }
+        let Ok(session) = &mut self.session else {
+            return true;
+        };
+        let galaxy = session.galaxy();
+        let point = |id| {
+            galaxy
+                .position(id)
+                .map_or_else(Point::default, |at| Point::new(at.x, at.y))
+        };
+        let links: Vec<(SystemId, Point)> = session
+            .floating_map_links()
+            .into_iter()
+            .map(|link| (link, point(link)))
+            .collect();
+        let current = point(session.system());
+        let picked = match floating::hit(&self.floating, frame, at, current, &links) {
+            Hit::Centre => Some(None),
+            Hit::Link(link) => Some(Some(link)),
+            Hit::Miss | Hit::Outside => None,
+        };
+        if let Some(link) = picked
+            && session.select_on_floating_map(link)
+        {
+            self.show_floating_map();
+        }
+        true
+    }
+
+    /// A zoom key's press: while the floating map is up and no key the
+    /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
+    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. One
+    /// that changes the scale shows the map again and raises
+    /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
+    /// one at a limit does nothing.
+    fn zoom_floating_map(&mut self, key: Key) {
+        if !self.floating.is_up() || !self.held.is_empty() {
+            return;
+        }
+        let moved = if key == ZOOM_OUT_KEY {
+            self.floating.zoom_out()
+        } else {
+            self.floating.zoom_in()
+        };
+        if moved {
+            self.show_floating_map();
+            self.ui_sounds.push(UiSound::FloatingMapZoomed);
+        }
+    }
+
+    /// Draws the floating map while it is up: centred on the current
+    /// system at its zoom, the course map's drawing ([`GalaxyMap::draw_marks`])
+    /// with the session's course and mode-3 selection as they are now,
+    /// no gate offers (`_hypergateMapMode` = 0, @0x114cb) and no selection
+    /// square, in its frame bordered in `cölr` `FloatingMap`, clipped and
+    /// faded to its level ([`floating::draw`]).
+    fn draw_floating_map(&self, list: &mut DrawList) {
+        let Some(level) = self.floating.level(self.mac_now()) else {
+            return;
+        };
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let current = session.system();
+        let at = session
+            .galaxy()
+            .position(current)
+            .map_or_else(Point::default, |at| Point::new(at.x, at.y));
+        let frame = floating::frame(VIEW_SIZE);
+        let transform = floating::transform(frame, at, self.floating.zoom());
+        let route = session.course_shown();
+        let marks = MapMarks {
+            current: Some(current),
+            route: &route,
+            hyper_selection: session.nav_mode().hyperspace(),
+            offered: &[],
+            selected: None,
+        };
+        floating::draw(list, frame, level, self.escort_colors.border, |raw| {
+            self.map.draw_marks(raw, &transform, &marks);
+        });
     }
 
     /// The escort menu's class rows ([`Session::escort_menu`]); none for
@@ -4780,7 +5688,10 @@ impl<C> FlightView<C> {
     /// - Jettison, Command-K and Command-Option-K ([`JETTISON_KEY`],
     ///   @0x6fd54-0x6fdaf);
     /// - the escort menu's keys: E, Return, F, D, V and C, and 1-5 while the
-    ///   menu is open (@0x6dd00-0x6e452).
+    ///   menu is open (@0x6dd00-0x6e452);
+    /// - the floating map's zoom keys, `-`, `=` and the keypad's `+`
+    ///   ([`ZOOM_OUT_KEY`], [`ZOOM_IN_KEY`], [`ZOOM_IN_KEYPAD_KEY`],
+    ///   @0x70f4e-0x71110).
     ///
     /// Every other key is ignored, as the original gates it on +0x50 ≤ 0:
     /// \` without Option and H (@0x69ad4), \\ (@0x69be7), 1-4 with the
@@ -4788,12 +5699,15 @@ impl<C> FlightView<C> {
     /// I (@0x70424), and J, which changes nothing during a jump
     /// (@0x6b0da-0x6b10d). P is refused apart
     /// ([`FlightView::refuse_player_info`]); the flight keys are tracked
-    /// as held whatever this says.
+    /// as held whatever this says, so H, \` and `\` dropped here act after
+    /// the jump as their latches let them, and J, whose latch the jump
+    /// sets, does not ([`FlightView::held_keys_frame`]).
     fn taken_during_jump(key: Key, option: bool, menu_open: bool) -> bool {
         match key {
             TARGET_KEY | NEAREST_KEY | SELECT_KEY | BOARD_KEY | HAIL_KEY | JETTISON_KEY
             | MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY
-            | ESCORT_HOLD_KEY | ESCORT_RECALL_KEY => true,
+            | ESCORT_HOLD_KEY | ESCORT_RECALL_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY
+            | ZOOM_IN_KEYPAD_KEY => true,
             NAV_OFF_KEY => option,
             _ => menu_open && GROUP_KEYS.contains(&key),
         }
@@ -4818,11 +5732,13 @@ impl<C> FlightView<C> {
     }
 
     /// Return (`ackComm`, `_keyPrefs` +0xc): clears the message line,
-    /// whatever it shows, and closes the escort menu (`_HandlePlayer`
-    /// @0x6dd00-0x6dd6a).
+    /// whatever it shows, closes the escort menu (`_HandlePlayer`
+    /// @0x6dd00-0x6dd6a) and hides the floating map (@0x6dd6a-0x6dd75),
+    /// during a jump too.
     fn acknowledge(&mut self) {
         self.message = None;
         self.escort_menu.close();
+        self.floating.hide();
     }
 
     /// Gives the escorts `command`, through the session, as the menu says
@@ -5139,7 +6055,8 @@ impl<
     /// @0x6a7de, @0x7045e). The session refuses some taken commands
     /// itself, P with its beep among them. The flight keys are still
     /// tracked as held, so one held at arrival acts on the next tick, as
-    /// the original reads them live (see the module docs).
+    /// the original reads them live, H, \`, `\` and J as their latches
+    /// let them ([`FlightView::held_keys_frame`]; see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.cursor_input(input);
         let press = match *input {
@@ -5168,6 +6085,7 @@ impl<
             at,
         } = *input
             && self.takes(PlayerCommand::Nav)
+            && !self.click_floating_map(at)
         {
             self.click_in_space(at);
         }
@@ -5204,15 +6122,16 @@ impl<
                 return ScreenAction::None;
             }
             Some(JUMP_KEY) => {
-                self.jump();
-                return ScreenAction::None;
+                // A fresh press follows a release, which clears the latch.
+                self.jump_latch = false;
+                self.jump_frame(true);
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(),
             Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
-            Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => {
-                self.hyperspace_key(key);
-                return ScreenAction::None;
+            Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
+            Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
+                self.zoom_floating_map(key);
             }
             Some(TARGET_KEY) => self.select_target(
                 match (
@@ -5292,6 +6211,8 @@ impl<
             return;
         }
         self.elapsed += dt;
+        self.held_keys_frame();
+        self.floating_frame();
         if self.jump.is_some() {
             let leading_in = self.session.as_ref().is_ok_and(Session::in_warp_lead_in);
             if leading_in {
@@ -5363,6 +6284,9 @@ impl<
         if self.session.as_ref().is_ok_and(Session::double_time) {
             alert::draw_double_time(list);
         }
+        // `_PostDrawCallback`'s order: the floating map over the sprites
+        // and icons, under the escort menu (@0x38b95-0x38c72).
+        self.draw_floating_map(list);
         self.escort_menu
             .draw(list, &self.escort_rows(), self.escort_colors, metrics);
         if self.overlays.title {
@@ -5401,8 +6325,9 @@ impl<
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),
-    /// then the fight's, then the interface's (the player info refused).
-    /// The course map has no buttons that sound.
+    /// then the interface's (the escort menu's, the floating map's zooms,
+    /// the player info refused), then the fight's. The course map has no
+    /// buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
             .session
@@ -5639,6 +6564,24 @@ fn play_area() -> nova_sim::cloak::Area {
     }
 }
 
+/// The run of an outfitter order a session that failed gives: no
+/// outfitter, refused at the first pass with no alert, its button
+/// failing.
+fn no_outfitter() -> OutfitRun {
+    OutfitRun {
+        run: OrderRun {
+            done: 0,
+            stopped: Some(Stopped {
+                pass: 0,
+                refusal: OutfitRefusal::NoOutfitter,
+            }),
+        },
+        alert: None,
+        after: Reselection::Kept,
+        button_passed: false,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -5650,8 +6593,8 @@ mod tests {
     use nova_sim::{
         CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling,
         JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord,
-        ShipStats, SimDiagnostic, SimSound, SoundId, StarSystem, StartDate, StartError, SystemId,
-        TICK, Vec2, step,
+        ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId, TICK,
+        Vec2, step,
     };
 
     use super::*;
@@ -5732,6 +6675,8 @@ mod tests {
         hulls: Vec<nova_sim::HullRecord>,
         /// The governments: none, by default.
         govts: Vec<nova_sim::GovtRecord>,
+        /// The ranks: none, by default.
+        ranks: Vec<nova_sim::catalog::RankRecord>,
         /// The weapons' looks: none, by default.
         looks: Vec<(i16, Result<WeaponLook, String>)>,
         /// The explosions' looks: none, by default.
@@ -5761,6 +6706,10 @@ mod tests {
         /// Whether Sol lists Barnard too, after Alpha Centauri, so that
         /// Hyper Select has two systems to cycle through: not by default.
         fan: bool,
+        /// Whether Proxima Near (134) exists at (40, 30), close enough to
+        /// Sol to show on the floating map, listed by Sol after its other
+        /// links and linking back, with no stellars: not by default.
+        near: bool,
         /// Every stellar a gate may lead to: none, by default.
         gates: Vec<GateSite>,
         /// The gates each system lists beyond its stellars: none, by
@@ -5783,6 +6732,10 @@ mod tests {
         /// Each system's `Visibility`: none, by default, so every system
         /// is visible.
         visibility: Vec<nova_sim::catalog::SystemVisibility>,
+        /// The session's `spöb` and `sÿst` names: none, by default.
+        place_names: nova_sim::catalog::PlaceNames,
+        /// The `crön`s: none, by default.
+        crons: Vec<nova_sim::catalog::CronRecord>,
     }
 
     /// No strings unless a test sets them.
@@ -5792,6 +6745,21 @@ mod tests {
                 .iter()
                 .find(|(list, _)| *list == id)
                 .map_or_else(Vec::new, |(_, strings)| strings.clone())
+        }
+    }
+
+    impl FakeCatalog {
+        /// Sol's links: Alpha Centauri, then Barnard with `fan`, then
+        /// Proxima Near with `near`.
+        fn sol_links(&self) -> Vec<i16> {
+            let mut links = vec![131];
+            if self.fan {
+                links.push(132);
+            }
+            if self.near {
+                links.push(134);
+            }
+            links
         }
     }
 
@@ -5861,6 +6829,7 @@ mod tests {
             weapons: Vec::new(),
             hulls: Vec::new(),
             govts: Vec::new(),
+            ranks: Vec::new(),
             looks: Vec::new(),
             booms: Vec::new(),
             cards: Vec::new(),
@@ -5880,6 +6849,7 @@ mod tests {
             defaults: Vec::new(),
             onward: false,
             fan: false,
+            near: false,
             reborn: false,
             home: false,
             sol_navs: Vec::new(),
@@ -5892,6 +6862,8 @@ mod tests {
             missions: Vec::new(),
             mission_texts: Vec::new(),
             visibility: Vec::new(),
+            place_names: nova_sim::catalog::PlaceNames::default(),
+            crons: Vec::new(),
         }
     }
 
@@ -5903,7 +6875,6 @@ mod tests {
             frame_size: Some((20, 20)),
             flags,
             min_status: 0,
-            landing_sound: None,
             tech_level: 1,
             special_tech: [0; 8],
             govt: None,
@@ -5982,6 +6953,7 @@ mod tests {
                 || (id.0 == 132 && self.onward)
                 || (id.0 == 133 && self.reborn)
                 || (id.0 == 128 && self.home)
+                || (id.0 == 134 && self.near)
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -5991,6 +6963,7 @@ mod tests {
                 132 if self.onward => Vec::new(),
                 133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
                 128 if self.home => Vec::new(),
+                134 if self.near => Vec::new(),
                 other => panic!("asked for sÿst {other}'s sites"),
             }
         }
@@ -6006,12 +6979,12 @@ mod tests {
                 message: -1,
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
-            let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
+            let sol = self.sol_links();
             let mut systems = vec![
                 StarSystem {
                     stellars: self.sol_navs.clone(),
                     interference: self.sol_interference,
-                    ..star(130, (0.0, 0.0), sol)
+                    ..star(130, (0.0, 0.0), &sol)
                 },
                 StarSystem {
                     message: self.alpha_buoy,
@@ -6024,6 +6997,9 @@ mod tests {
             }
             if self.home {
                 systems.push(star(128, (-600.0, 0.0), &[]));
+            }
+            if self.near {
+                systems.push(star(134, (40.0, 30.0), &[130]));
             }
             systems
         }
@@ -6091,6 +7067,9 @@ mod tests {
             if self.reborn {
                 systems.push(SystemId(133));
             }
+            if self.near {
+                systems.push(SystemId(134));
+            }
             let sites: Vec<(SystemId, Vec<LandingSite>)> = systems
                 .into_iter()
                 .map(|system| (system, self.landing_sites(system)))
@@ -6109,7 +7088,7 @@ mod tests {
         }
 
         fn place_names(&self) -> nova_sim::catalog::PlaceNames {
-            nova_sim::catalog::PlaceNames::default()
+            self.place_names.clone()
         }
 
         fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
@@ -6117,11 +7096,11 @@ mod tests {
         }
 
         fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
-            Vec::new()
+            self.crons.clone()
         }
 
         fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
-            Vec::new()
+            self.ranks.clone()
         }
 
         fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
@@ -6245,6 +7224,7 @@ mod tests {
                     vec![stellar(141, "Proxima Reborn", (0, 0), 1)],
                 ),
                 128 if self.home => ("Home", Vec::new()),
+                134 if self.near => ("Proxima Near", Vec::new()),
                 other => panic!("asked for sÿst {other}"),
             };
             SystemContents {
@@ -6274,14 +7254,17 @@ mod tests {
                 stellars: Vec::new(),
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
-            let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
+            let sol = self.sol_links();
             let mut systems = vec![
-                entry(130, "Sol", (0, 0), sol),
+                entry(130, "Sol", (0, 0), &sol),
                 entry(131, "Alpha Centauri", (600, 0), onward),
                 entry(132, "Barnard", (0, 600), &[]),
             ];
             if self.reborn {
                 systems.push(entry(133, "Alpha Reborn", (600, 0), &[]));
+            }
+            if self.near {
+                systems.push(entry(134, "Proxima Near", (40, 30), &[130]));
             }
             Galaxy {
                 systems,
@@ -8470,20 +9453,12 @@ mod tests {
         };
         let station = StellarFlags::CAN_LAND | StellarFlags::STATION;
         assert_eq!(
-            refused(Vec::new()).as_deref(),
-            Some("No stellar objects present.")
-        );
-        assert_eq!(
             refused(vec![site(140, (0.0, -600.0), StellarFlags::CAN_LAND)]).as_deref(),
             Some("You're too far away to land on this planet.")
         );
         assert_eq!(
             refused(vec![site(140, (0.0, -600.0), station)]).as_deref(),
             Some("You're too far away to dock at this station.")
-        );
-        assert_eq!(
-            refused(vec![centre(0, 0)]).as_deref(),
-            Some("The planet's environment is too hostile.")
         );
         assert_eq!(
             refused(vec![centre(StellarFlags::CAN_LAND, 1)]).as_deref(),
@@ -8493,6 +9468,53 @@ mod tests {
             refused(vec![centre(station, 32767)]).as_deref(),
             Some("Docking request denied.")
         );
+        // Only a selected stellar reaches the dock request's not-landable
+        // line (@0x6a945-0x6a94c, @0x66977-0x669ae).
+        let mut view = flight_among(vec![centre(0, 0)]);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        tap(&mut view, LAND);
+        assert_eq!(nav_target(&view), Some(StellarId(140)), "kept");
+        assert_eq!(
+            view.message(),
+            Some("Your ship is unable to land on  . The planet's environment is too hostile."),
+            "140 is not in Sol's scene: no name"
+        );
+    }
+
+    /// Says `earlier` in `view`, taps L, and asserts the message line
+    /// still says `earlier`: the press said nothing and cleared nothing.
+    #[track_caller]
+    fn l_says_nothing(view: &mut View) {
+        view.say_for("earlier", MESSAGE_TICKS);
+        tap(view, LAND);
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(view.message(), Some("earlier"), "unchanged");
+    }
+
+    #[test]
+    fn l_with_no_stellars_says_nothing() {
+        // Nothing to select, so no dock request (@0x6a94c).
+        let mut view = flight_among(Vec::new());
+        l_says_nothing(&mut view);
+    }
+
+    #[test]
+    fn l_with_nothing_landable_and_no_target_says_nothing() {
+        // `_FindNearestStellar` gives -1: no dock request (@0x6a94c).
+        let mut view = flight_among(vec![site(140, (0.0, 0.0), 0)]);
+        l_says_nothing(&mut view);
+        assert_eq!(nav_target(&view), None, "nothing selected");
+        let mut fresh = flight_among(vec![site(140, (0.0, 0.0), 0)]);
+        tap(&mut fresh, LAND);
+        assert_eq!(fresh.message(), None, "no line either");
+    }
+
+    #[test]
+    fn l_during_a_jump_says_nothing() {
+        // The jump words send the land key to 0x6a95d (@0x6a8cb-0x6a8e3).
+        for mut view in through_a_jump(flight) {
+            l_says_nothing(&mut view);
+        }
     }
 
     #[test]
@@ -8525,8 +9547,6 @@ mod tests {
     fn each_refusal_and_assignment_lasts_its_callers_ticks() {
         let stellar = StellarId(128);
         let landing = [
-            (LandingRefusal::Jumping, 240),
-            (LandingRefusal::NoStellars, 240),
             (
                 LandingRefusal::TooFar {
                     stellar,
@@ -8566,7 +9586,6 @@ mod tests {
             (JumpRefusal::TooClose { distance: 1.0 }, 360),
             (JumpRefusal::NoFuel { fuel: 1.0 }, 240),
             (JumpRefusal::Landed, 240),
-            (JumpRefusal::Disabled, 240),
         ];
         for (refusal, ticks) in jump {
             assert_eq!(jump_refusal_ticks(&refusal), ticks, "{refusal:?}");
@@ -8640,8 +9659,6 @@ mod tests {
     fn every_refusal_has_its_string() {
         let stellar = StellarId(128);
         let cases = [
-            (LandingRefusal::Jumping, IN_HYPERSPACE),
-            (LandingRefusal::NoStellars, NO_STELLARS),
             (
                 LandingRefusal::TooFar {
                     stellar,
@@ -8655,20 +9672,6 @@ mod tests {
                     station: false,
                 },
                 TOO_FAR_PLANET,
-            ),
-            (
-                LandingRefusal::NotLandable {
-                    stellar,
-                    station: true,
-                },
-                HOSTILE_STATION,
-            ),
-            (
-                LandingRefusal::NotLandable {
-                    stellar,
-                    station: false,
-                },
-                HOSTILE_PLANET,
             ),
             (
                 LandingRefusal::Denied {
@@ -8704,13 +9707,28 @@ mod tests {
             ),
         ];
         for (refusal, text) in cases {
-            assert_eq!(refusal_message(&refusal), Some(text), "{refusal:?}");
+            assert_eq!(
+                refusal_message(&refusal, None, "Earth").as_deref(),
+                Some(text),
+                "{refusal:?}"
+            );
         }
         assert_eq!(
-            refusal_message(&LandingRefusal::Disabled),
+            refusal_message(&LandingRefusal::Disabled, None, "Earth"),
             None,
             "silent (@0x66af7, 0x67eef)"
         );
+        for (refusal, at) in [
+            (LandingRefusal::Jumping, "@0x6a95d"),
+            (LandingRefusal::NoStellars, "@0x6a94c"),
+            (LandingRefusal::NothingLandable, "@0x6a94c"),
+        ] {
+            assert_eq!(
+                refusal_message(&refusal, None, "Earth"),
+                None,
+                "no dock request, silent ({at})"
+            );
+        }
         assert_eq!(
             [
                 NO_STELLARS,
@@ -8722,7 +9740,6 @@ mod tests {
                 LANDING_DENIED,
                 HOSTILE_STATION,
                 HOSTILE_PLANET,
-                IN_HYPERSPACE,
             ],
             [
                 "No stellar objects present.",
@@ -8734,9 +9751,177 @@ mod tests {
                 "Landing request denied.",
                 "The station's hull integrity is too unstable.",
                 "The planet's environment is too hostile.",
-                "Unable to land - your ship is in hyperspace.",
             ]
         );
+    }
+
+    #[test]
+    fn too_far_at_a_gate_says_its_own_words() {
+        let stellar = StellarId(128);
+        for station in [true, false] {
+            let refusal = LandingRefusal::TooFar { stellar, station };
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Hypergate), "x").as_deref(),
+                Some(TOO_FAR_HYPERGATE)
+            );
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Wormhole), "x").as_deref(),
+                Some(TOO_FAR_WORMHOLE)
+            );
+            let plain = if station {
+                TOO_FAR_STATION
+            } else {
+                TOO_FAR_PLANET
+            };
+            assert_eq!(refusal_message(&refusal, None, "x").as_deref(), Some(plain));
+        }
+        assert_eq!(
+            [TOO_FAR_HYPERGATE, TOO_FAR_WORMHOLE],
+            [
+                "You're too far away to enter this hypergate.",
+                "You're too far away to enter this wormhole.",
+            ]
+        );
+    }
+
+    #[test]
+    fn too_fast_at_a_gate_says_its_own_words() {
+        let stellar = StellarId(128);
+        for station in [true, false] {
+            let refusal = LandingRefusal::TooFast {
+                stellar,
+                station,
+                speed: 2.0,
+            };
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Hypergate), "x").as_deref(),
+                Some(TOO_FAST_HYPERGATE)
+            );
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Wormhole), "x").as_deref(),
+                Some(TOO_FAST_WORMHOLE)
+            );
+            let plain = if station {
+                TOO_FAST_STATION
+            } else {
+                TOO_FAST_PLANET
+            };
+            assert_eq!(refusal_message(&refusal, None, "x").as_deref(), Some(plain));
+        }
+        assert_eq!(
+            [TOO_FAST_HYPERGATE, TOO_FAST_WORMHOLE],
+            [
+                "You're moving too fast to enter this hypergate.",
+                "You're moving too fast to enter this wormhole.",
+            ]
+        );
+    }
+
+    #[test]
+    fn not_landable_at_a_station_or_planet_leads_with_its_name() {
+        let stellar = StellarId(128);
+        let station = LandingRefusal::NotLandable {
+            stellar,
+            station: true,
+        };
+        let planet = LandingRefusal::NotLandable {
+            stellar,
+            station: false,
+        };
+        assert_eq!(
+            refusal_message(&station, None, "Earth Station").as_deref(),
+            Some(
+                "Your ship is unable to dock at  Earth Station. \
+                 The station's hull integrity is too unstable."
+            )
+        );
+        assert_eq!(
+            refusal_message(&planet, None, "Earth").as_deref(),
+            Some("Your ship is unable to land on  Earth. The planet's environment is too hostile.")
+        );
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            for refusal in [&station, &planet] {
+                assert_eq!(
+                    refusal_message(refusal, Some(kind), "Earth"),
+                    Some(gate_refusal_message(kind))
+                );
+            }
+        }
+        assert_eq!([DOCK_AT, LAND_ON], ["dock at ", "land on "]);
+    }
+
+    #[test]
+    fn denied_at_a_hypergate_says_hypergate_usage_denied() {
+        let stellar = StellarId(128);
+        for station in [true, false] {
+            let refusal = LandingRefusal::Denied {
+                stellar,
+                station,
+                min_status: 1,
+            };
+            assert_eq!(
+                refusal_message(&refusal, Some(GateKind::Hypergate), "x").as_deref(),
+                Some(HYPERGATE_DENIED)
+            );
+            let plain = if station {
+                DOCKING_DENIED
+            } else {
+                LANDING_DENIED
+            };
+            for gate in [Some(GateKind::Wormhole), None] {
+                assert_eq!(refusal_message(&refusal, gate, "x").as_deref(), Some(plain));
+            }
+        }
+    }
+
+    #[test]
+    fn too_far_at_a_hypergate_or_wormhole_says_so_for_360_ticks() {
+        for (flags2, text) in [(0x1000, TOO_FAR_HYPERGATE), (0x2000, TOO_FAR_WORMHOLE)] {
+            let mut view = flight_among(vec![LandingSite {
+                flags2,
+                ..site(128, (0.0, -600.0), StellarFlags::CAN_LAND)
+            }]);
+            tap(&mut view, LAND);
+            tap(&mut view, LAND);
+            assert_lasts(&mut view, text, TOO_FAR_TICKS);
+        }
+    }
+
+    #[test]
+    fn too_fast_at_a_hypergate_or_wormhole_says_so_for_360_ticks() {
+        for (flags2, text) in [(0x1000, TOO_FAST_HYPERGATE), (0x2000, TOO_FAST_WORMHOLE)] {
+            let mut view = flight_among(vec![LandingSite {
+                flags2,
+                frame_size: Some((400, 400)),
+                ..site(128, (0.0, 0.0), StellarFlags::CAN_LAND)
+            }]);
+            view.input(&key(Key::Up, true));
+            ticks(&mut view, 15);
+            land_now(&mut view);
+            assert_eq!(view.take_landing(), None);
+            assert_lasts(&mut view, text, TOO_FAR_TICKS);
+        }
+    }
+
+    #[test]
+    fn a_not_landable_station_or_planet_is_named_for_250_ticks() {
+        for (flags, text) in [
+            (
+                StellarFlags::STATION,
+                "Your ship is unable to dock at  Earth. The station's hull integrity is too unstable.",
+            ),
+            (
+                0,
+                "Your ship is unable to land on  Earth. The planet's environment is too hostile.",
+            ),
+        ] {
+            // Selected: only a selected stellar reaches the dock request
+            // (@0x6a945-0x6a94c).
+            let mut view = flight_among(vec![site(128, (0.0, 0.0), flags)]);
+            tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+            tap(&mut view, LAND);
+            assert_lasts(&mut view, text, LANDING_TICKS);
+        }
     }
 
     #[test]
@@ -8874,12 +10059,13 @@ mod tests {
         assert_eq!(view.take_off(), None);
     }
 
+    /// Only the landing beep sounds at touchdown: the stellar's own sound
+    /// is its spaceport's ambient sound, which plays once the spaceport is
+    /// frontmost (see the spaceport's
+    /// `the_ambient_sound_plays_on_the_first_frame_then_after_each_wait`).
     #[test]
-    fn l_over_a_stellar_sounds_the_landing_with_its_own_sound() {
-        let mut view = flight_among(vec![LandingSite {
-            landing_sound: Some(SoundId(10_032)),
-            ..site(140, (6.0, -8.0), StellarFlags::CAN_LAND)
-        }]);
+    fn l_over_a_stellar_sounds_only_the_landing_at_touchdown() {
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
         assert_eq!(view.take_sounds(), []);
         tap(&mut view, LAND);
         assert_eq!(view.take_sounds(), [], "a request over it is silent");
@@ -8890,12 +10076,7 @@ mod tests {
             "the greeting"
         );
         tap(&mut view, LAND);
-        assert_eq!(
-            view.take_sounds(),
-            [Sound::Sim(SimSound::Landed {
-                stellar_sound: Some(SoundId(10_032))
-            })]
-        );
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Landed)]);
         assert_eq!(view.take_sounds(), [], "taken");
         view.take_off();
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TookOff)]);
@@ -9248,6 +10429,39 @@ mod tests {
     }
 
     #[test]
+    fn j_while_disabled_is_silent() {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: false,
+            },
+        ] {
+            let mut view = new_pilot(flight());
+            let Ok(session) = &mut view.session else {
+                panic!("flying");
+            };
+            nova_sim::fixture::set_player_condition(session, condition);
+            view.input(&key(JUMP, true));
+            assert_eq!(view.message(), None, "{condition:?}");
+            let session = view.session().expect("flying");
+            assert_eq!(session.preparing_jump(), None, "{condition:?}");
+            assert!(
+                !view.take_sounds().contains(&REFUSED),
+                "{condition:?}: no beep"
+            );
+            // Made intact again, the same J is told: the gate, not a dead key.
+            let Ok(session) = &mut view.session else {
+                panic!("flying");
+            };
+            nova_sim::fixture::set_player_condition(session, Condition::Intact);
+            view.input(&key(JUMP, true));
+            assert_eq!(view.take_sounds(), [REFUSED], "{condition:?}");
+            assert_eq!(view.message(), Some(NO_DESTINATION), "{condition:?}");
+        }
+    }
+
+    #[test]
     fn a_new_pilots_j_with_nothing_selected_says_no_destination_for_360() {
         let mut view = new_pilot(flight());
         view.input(&key(JUMP, true));
@@ -9321,9 +10535,10 @@ mod tests {
     fn the_hyperspace_hint_names_m_and_j() {
         let hint = "Now you should probably hyperspace to another system. Hit 'M' to access the map, select a nearby system, then move outward and hit 'J' to begin your jump.";
         assert_eq!(hyperspace_hint("M", "J"), hint);
+        // At (50, 50), where a new pilot starts.
         let mut view = new_pilot(flight_among(vec![site(
             128,
-            (0.0, 0.0),
+            (50.0, 50.0),
             StellarFlags::CAN_LAND,
         )]));
         land_now(&mut view);
@@ -9406,22 +10621,21 @@ mod tests {
     fn every_jump_refusal_has_its_string() {
         assert_eq!(
             jump_refusal_message(&JumpRefusal::NoDestination),
-            NO_DESTINATION
+            Some(NO_DESTINATION)
         );
         assert_eq!(
             jump_refusal_message(&JumpRefusal::TooClose { distance: 1.0 }),
-            TOO_CLOSE
+            Some(TOO_CLOSE)
         );
         assert_eq!(
             jump_refusal_message(&JumpRefusal::NoFuel { fuel: 1.0 }),
-            NO_FUEL
+            Some(NO_FUEL)
         );
-        assert_eq!(jump_refusal_message(&JumpRefusal::Landed), TAKE_OFF_FIRST);
-        assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), JUMP_DISABLED);
         assert_eq!(
-            JUMP_DISABLED,
-            "Can't initiate hyperspace jump - your ship is disabled."
+            jump_refusal_message(&JumpRefusal::Landed),
+            Some(TAKE_OFF_FIRST)
         );
+        assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), None);
         assert_eq!(
             [NO_DESTINATION, TOO_CLOSE, NO_FUEL, TAKE_OFF_FIRST],
             [
@@ -9745,10 +10959,10 @@ mod tests {
         assert_eq!(view.session().expect("flying").system(), SystemId(132));
     }
 
-    /// Presses J and ticks until the streak begins, as the session says
-    /// the jump has begun.
+    /// Taps J and ticks until the streak begins, as the session says the
+    /// jump has begun.
     fn jump_now(view: &mut View) {
-        view.input(&key(JUMP, true));
+        tap(view, JUMP);
         for _ in 0..1000 {
             if view.jump_effect().is_some() {
                 return;
@@ -9917,13 +11131,13 @@ mod tests {
 
     /// Two of `build`'s flights, each with its course to Alpha Centauri
     /// plotted and flown out: the first braking and turning for the jump
-    /// on J, the second 300 ms into the jump's streak. Boxed: two flights
+    /// on a tap of J, the second 300 ms into the jump's streak. Boxed: two flights
     /// are too large for the stack together.
     fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
         let mut braking = Box::new(build());
         plot(&mut braking, 131);
         fly_out(&mut braking);
-        braking.input(&key(JUMP, true));
+        tap(&mut braking, JUMP);
         assert!(braking.preparing_jump(), "braking");
         let mut streaking = Box::new(build());
         plot(&mut streaking, 131);
@@ -10082,6 +11296,9 @@ mod tests {
             ESCORT_DEFEND_KEY,
             ESCORT_HOLD_KEY,
             ESCORT_RECALL_KEY,
+            ZOOM_OUT_KEY,
+            ZOOM_IN_KEY,
+            ZOOM_IN_KEYPAD_KEY,
         ];
         for key in always {
             assert_eq!(taken_with(key), [true; 4], "{key:?}");
@@ -10446,11 +11663,15 @@ mod tests {
 
     // Pilot edits.
 
-    /// A view of Ada docked at Earth, the landing taken, with the systems
-    /// read so far forgotten.
+    /// A view of Ada resumed over Earth and landed there, the landing,
+    /// its sounds and its message taken, with the systems read so far
+    /// forgotten.
     fn landed_view() -> View {
         let mut view = FlightView::with_pilot(catalog(), docked_pilot("Ada"));
-        view.take_landing();
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        view.take_sounds();
+        view.message = None;
         view.catalog().systems_read.borrow_mut().clear();
         view
     }
@@ -10534,21 +11755,31 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_docked_at_a_stellar_resumes_landed_there_silently() {
+    fn a_pilot_saved_at_a_stellar_resumes_in_flight_over_it_silently() {
         let pilot = docked_pilot("Ada");
         assert_eq!(pilot.stellar(), Some(StellarId(128)));
         let mut view = FlightView::with_pilot(catalog(), pilot.clone());
         assert_eq!(view.pilot(), Some(&pilot));
-        assert_eq!(
-            view.take_landing(),
-            Some(StellarId(128)),
-            "the router lands"
-        );
-        assert_eq!(view.take_landing(), None, "once");
+        assert_eq!(view.take_landing(), None, "nothing lands");
+        assert_eq!(view.session().map(Session::landed), Ok(None));
         assert_eq!(player(&view).position, Vec2::new(0.0, -600.0));
+        assert_eq!(view.shown_position(), Point::new(0.0, -600.0));
         assert_eq!(view.take_sounds(), [], "no landing sound");
         assert!(!view.take_save_due());
-        assert_eq!(view.take_off(), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn a_new_pilots_ship_is_first_shown_at_50_50() {
+        let mut view = flight();
+        view.begin();
+        assert_eq!(player(&view).position, Vec2::new(50.0, 50.0));
+        assert_eq!(
+            view.shown_position(),
+            Point::new(50.0, 50.0),
+            "before any tick, not on its way from the centre"
+        );
+        view.tick(TICK / 2);
+        assert_eq!(view.shown_position(), Point::new(50.0, 50.0), "at rest");
     }
 
     #[test]
@@ -10562,7 +11793,8 @@ mod tests {
 
     #[test]
     fn a_pilot_whose_system_is_gone_flies_in_the_lowest_that_exists() {
-        // In flight: a docked pilot resumes in its stellar's system.
+        // In flight: a pilot last landed on a stellar resumes in its
+        // stellar's system.
         let mut pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         pilot.explore(SystemId(132));
         let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 132");
@@ -10867,6 +12099,7 @@ mod tests {
             },
             alert: None,
             after: Reselection::Kept,
+            button_passed: false,
         };
         let mut view = FlightView::new(catalog);
         assert_eq!(
@@ -10888,6 +12121,7 @@ mod tests {
                 },
                 alert: None,
                 after: Reselection::Kept,
+                button_passed: true,
             }
         );
         assert_eq!(view.pilot().map(Pilot::cash), Some(0));
@@ -11084,7 +12318,9 @@ mod tests {
         let shared: Rc<RefCell<dyn Chance>> = always.clone();
         let mut view = FlightView::with_pilot(eventful(), docked_pilot("Ada"))
             .with_chance(SharedChance::new(shared));
-        view.take_landing();
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        always.borrow_mut().asked.clear();
         let landed = view.session().expect("docked").date();
         view.take_off().expect("took off");
         assert_eq!(always.borrow().asked, [35], "the take-off's day");
@@ -11445,11 +12681,650 @@ mod tests {
         assert_eq!(view.nav_shown(), stale_nav, "held");
         assert_eq!(*view.target_shown(), Some(stale_target.clone()), "held");
         assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
-        assert_eq!(view.nav_shown(), stale_nav, "a refusal redraws nothing");
+        assert_eq!(view.nav_shown(), view.nav_now(), "the prompt's close");
+        stale(&mut view);
+        assert_eq!(view.nav_shown(), stale_nav, "held again");
+        assert_eq!(*view.target_shown(), Some(stale_target.clone()), "held");
         view.buy_ship(ShipId(129), "Kestrel").expect("bought");
         assert_eq!(view.nav_shown(), view.nav_now(), "redrawn");
         assert_ne!(view.nav_shown(), stale_nav);
         assert_eq!(*view.target_shown(), None, "redrawn");
+    }
+
+    // The nav area while docked.
+
+    /// The texts drawn in the nav area of the port's status bar
+    /// ([`FlightView::draw_status_bar`]), as [`nav`] reads flight's.
+    fn port_nav(view: &View) -> Vec<String> {
+        let area = layout().nav.offset(at(830.0, 0.0));
+        let mut bar = DrawList::new();
+        view.draw_status_bar(&mut bar);
+        bar.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if area.contains(*origin) => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The nav area naming `name` in mode 2.
+    fn naming(name: &str) -> Vec<String> {
+        vec![hud::NAV_STELLAR.to_owned(), name.to_owned()]
+    }
+
+    /// Outfit 201: [`outfitting`]'s fuel tank with no `OnPurchase`.
+    const BUY_PLAIN_TANK: OutfitOrder = OutfitOrder {
+        outfit: OutfitId(201),
+        direction: Direction::Buy,
+    };
+
+    /// An outfit no outfitter sells, so its order is refused.
+    const UNKNOWN_OUTFIT: OutfitOrder = OutfitOrder {
+        outfit: OutfitId(999),
+        direction: Direction::Buy,
+    };
+
+    /// [`shipbuying`]'s Earth, a trade center too selling food, the ship
+    /// holding 10 tons; ship 130 under gövt 150, whose `Interface` is 129
+    /// ([`governed`]); the fuel tank's `OnPurchase` an `H130`, and outfit
+    /// 201 a tank with none; missions 130 and 131, errands at the mission
+    /// computer, 131 with a `BriefText`; Barnard (132), with no stellar;
+    /// and Proxima (140), Alpha Centauri's first stellar, named by the
+    /// session alone, as the flight scene is Sol's while docked.
+    fn port() -> FakeCatalog {
+        let mut catalog = governed(shipbuying(), 130, 129);
+        catalog.sites[0].flags |= trading().sites[0].flags;
+        catalog.fields.holds = 10;
+        catalog.commodities = trading().commodities;
+        let plain = OutfitRecord {
+            id: OutfitId(201),
+            ..catalog.outfits[0].clone()
+        };
+        catalog.outfits[0].on_purchase = nova_sim::Script::parse("H130");
+        catalog.outfits.push(plain);
+        catalog.missions = vec![errand(130), errand(131)];
+        catalog.mission_texts = vec![MissionTexts {
+            brief: Some("Go.".to_owned()),
+            ..MissionTexts::named(MissionId(131), "Walk")
+        }];
+        catalog.onward = true;
+        catalog.place_names.stellars = BTreeMap::from([(StellarId(140), "Proxima".to_owned())]);
+        catalog
+    }
+
+    /// A view of `catalog` landed on Earth in mode 2, settled, with the
+    /// HUD's cadence read as `cadence` says.
+    fn docked_at_earth(catalog: FakeCatalog, cadence: RuleSource) -> View {
+        let rules = Rulebook::default().with_override(RuleKey::HudCadence, cadence);
+        let mut view = FlightView::new(catalog).with_rules(rules);
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128))))
+        );
+        assert_eq!(port_nav(&view), naming("Earth"));
+        view
+    }
+
+    #[test]
+    fn by_the_bible_the_port_names_a_landed_ms_stellar_outside_the_scene_at_once() {
+        let mut view = docked_at_earth(port(), RuleSource::Bible);
+        run_set(&mut view, "M131");
+        assert_eq!(port_nav(&view), naming("Proxima"), "the session's name");
+        assert_eq!(
+            view.scene().map(SystemScene::id),
+            Some(SystemId(130)),
+            "Sol's scene"
+        );
+        run_set(&mut view, "M132");
+        assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
+    }
+
+    /// An accept's and a refusal's redraws are pinned by
+    /// [`a_dialogs_redraw_shows_what_the_script_run_with_it_wrote`], as a
+    /// move empties the offers.
+    #[test]
+    fn by_the_engine_a_landed_ms_stellar_shows_at_the_ports_next_nav_redraw() {
+        type Step = fn(&mut View);
+        let redraws: [(&str, Step); 6] = [
+            ("a shop closing", FlightView::refresh_status),
+            ("a name prompt's Cancel", |view| {
+                view.decline_ship(ShipId(129));
+            }),
+            ("a refused purchase, after its prompt's close", |view| {
+                assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
+            }),
+            ("a mission text", |view| {
+                run_set(view, "S131");
+                assert_eq!(port_nav(view), naming("Earth"), "queued, not shown");
+                assert_eq!(view.take_mission_texts().len(), 1);
+            }),
+            ("a ship purchase", |view| {
+                view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+            }),
+            ("an outfitter order changing the ïntf", |view| {
+                assert_eq!(view.outfit(BUY_TANK), Ok(()));
+                assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
+            }),
+        ];
+        let held: [(&str, Step); 3] = [
+            ("a trade", |view| {
+                assert_eq!(view.trade(BUY_FOOD), Ok(10));
+            }),
+            ("a recharge", |view| {
+                desk_reserve(view, nova_sim::Reserve::Fuel, 100.0);
+                assert!(view.recharge().is_ok());
+            }),
+            ("an outfitter order keeping the ïntf", |view| {
+                assert_eq!(view.outfit(BUY_PLAIN_TANK), Ok(()));
+            }),
+        ];
+        for (steps, shown) in [(&redraws[..], "Proxima"), (&held[..], "Earth")] {
+            for (what, step) in steps {
+                let mut view = docked_at_earth(port(), RuleSource::Engine);
+                run_set(&mut view, "M131");
+                view.settle_script();
+                assert_eq!(
+                    view.session().map(Session::nav_mode),
+                    Ok(NavMode::Stellar(Some(StellarId(140))))
+                );
+                assert_eq!(port_nav(&view), naming("Earth"), "{what}: held");
+                step(&mut view);
+                assert_eq!(port_nav(&view), naming(shown), "{what}");
+            }
+        }
+    }
+
+    /// [`docked_at_earth`] by the engine's reading, with `dialog` opened,
+    /// a landed `M131` run and settled inside it, and `dialog` closed.
+    fn m_inside(dialog: PortDialog) -> View {
+        m_inside_of(port(), dialog)
+    }
+
+    /// [`m_inside`] over `catalog`.
+    fn m_inside_of(catalog: FakeCatalog, dialog: PortDialog) -> View {
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        view.open_port_dialog();
+        run_set(&mut view, "M131");
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(140)))),
+            "{dialog:?}: written"
+        );
+        view.close_port_dialog(dialog);
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "{dialog:?}: restored"
+        );
+        view
+    }
+
+    /// [`port`] with a bar on Earth, a view of it landed there by the
+    /// engine's reading (as [`docked_at_earth`]), with `course` plotted
+    /// in flight first if given, and the bar opened.
+    fn in_the_bar(course: Option<i16>) -> View {
+        let mut catalog = port();
+        catalog.sites[0].flags |= StellarFlags::BAR;
+        let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
+        let mut view = FlightView::new(catalog).with_rules(rules);
+        if let Some(to) = course {
+            view.session
+                .as_mut()
+                .expect("flying")
+                .plot_course(SystemId(to))
+                .expect("a route");
+        }
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "the land key put mode 2 over any cue"
+        );
+        assert_eq!(port_nav(&view), naming("Earth"));
+        assert!(view.open_bar());
+        view
+    }
+
+    /// Clicks system `id` on the map open in port.
+    fn port_click(view: &mut View, id: i16) {
+        let at = on_map(view, id);
+        for pressed in [true, false] {
+            view.port_map_input(&Input::PointerButton {
+                button: crate::MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    /// The nav area showing Alpha Centauri (131), unexplored, in mode 3.
+    fn cueing_alpha() -> Vec<String> {
+        vec![
+            hud::NAV_HYPERSPACE.to_owned(),
+            hud::NAV_UNEXPLORED.to_owned(),
+        ]
+    }
+
+    #[test]
+    fn the_bars_map_closing_shows_the_maps_selection_and_puts_back_the_bars_nav() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        assert!(view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        port_click(&mut view, 131);
+        assert!(view.map_open(), "a click doesn't close it");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Hyperspace(Some(SystemId(131)))),
+            "the click cues the route"
+        );
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open(), "M closes it");
+        assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "the bar's nav put back"
+        );
+        assert_eq!(
+            view.session().map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(131)]),
+            "the course kept"
+        );
+        view.refresh_status();
+        assert_eq!(port_nav(&view), naming("Earth"), "the bar's close");
+    }
+
+    /// Only the bar's own map puts back the bar's nav: a map opened in
+    /// port some other way (as from the other port screens will be)
+    /// leaves the nav its click cued, with the bar's save still held,
+    /// even after the bar's own map has opened and closed.
+    #[test]
+    fn a_map_in_port_the_bar_did_not_open_leaves_the_bars_nav_saved() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open(), "the bar's map closed");
+        view.open_map();
+        port_click(&mut view, 131);
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open());
+        assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Hyperspace(Some(SystemId(131)))),
+            "the bar's nav not put back"
+        );
+        assert_eq!(
+            view.session().map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(131)]),
+            "the course kept"
+        );
+    }
+
+    #[test]
+    fn the_bars_map_key_repeat_or_release_leaves_it_open() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        view.port_map_input(&Input::Key {
+            key: MAP,
+            pressed: true,
+            repeat: true,
+        });
+        view.port_map_input(&key(MAP, false));
+        assert!(view.map_open());
+    }
+
+    /// The map's beeps are `_HandlePlayer`'s, around the map M opens in
+    /// flight (@0x6a809, @0x6a85a): the map opened in port makes neither.
+    #[test]
+    fn the_map_in_port_beeps_neither_as_it_opens_nor_as_it_closes() {
+        let mut view = in_the_bar(None);
+        view.take_sounds();
+        view.open_bar_map();
+        assert_eq!(map_sounds(&mut view), [], "the bar's map opened");
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), [], "the bar's map closed");
+        view.open_map();
+        view.close_map();
+        assert_eq!(map_sounds(&mut view), [], "another map in port");
+    }
+
+    /// Ours cues a route's first hop at the click ([`Session::plot_course`]),
+    /// so the port close's skipped cue (`_DoSystemMap` @0x13be2-0x13c0a)
+    /// shows only with a course plotted before the map opened, whose cue
+    /// the land key put mode 2 over.
+    #[test]
+    fn in_port_the_maps_close_cues_no_course() {
+        let mut view = in_the_bar(Some(131));
+        view.open_bar_map();
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open());
+        assert_eq!(port_nav(&view), naming("Earth"), "no cue drawn");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128))))
+        );
+        assert_eq!(
+            view.session().map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(131)]),
+            "the course kept"
+        );
+    }
+
+    #[test]
+    fn an_empty_outfitter_draws_a_nav_the_shipyard_left_marked() {
+        let mut view = m_inside_of(port(), PortDialog::Shipyard);
+        assert_eq!(port_nav(&view), naming("Proxima"), "held after the close");
+        view.empty_outfitter_returned();
+        assert_eq!(port_nav(&view), naming("Earth"), "the restore drawn");
+        run_set(&mut view, "M131");
+        view.settle_script();
+        view.empty_outfitter_returned();
+        assert_eq!(port_nav(&view), naming("Earth"), "nothing marked");
+    }
+
+    #[test]
+    fn a_landed_m_in_the_outfitter_exchange_or_computer_is_undone_and_shown_at_once() {
+        for dialog in [
+            PortDialog::Outfitter,
+            PortDialog::Exchange,
+            PortDialog::MissionComputer,
+        ] {
+            let view = m_inside(dialog);
+            assert_eq!(port_nav(&view), naming("Earth"), "{dialog:?}");
+        }
+    }
+
+    #[test]
+    fn a_landed_m_in_the_shipyard_is_undone_but_its_close_shows_it_until_the_next_draw_status() {
+        type Step = fn(&mut View);
+        let draws: [(&str, Step); 10] = [
+            ("a trade", |view| {
+                assert_eq!(view.trade(BUY_FOOD), Ok(10));
+            }),
+            ("a recharge", |view| {
+                desk_reserve(view, nova_sim::Reserve::Fuel, 100.0);
+                assert!(view.recharge().is_ok());
+            }),
+            ("an outfitter order", |view| {
+                assert_eq!(view.outfit(BUY_PLAIN_TANK), Ok(()));
+            }),
+            ("a counted outfitter order", |view| {
+                assert_eq!(view.outfit_counted(BUY_PLAIN_TANK, 1), Ok(1));
+            }),
+            ("an outfitter run", |view| {
+                assert_eq!(view.outfit_order(BUY_PLAIN_TANK, 1).run.done, 1);
+            }),
+            ("an outfitter run stopped after its first pass", |view| {
+                let run = view.outfit_order(BUY_PLAIN_TANK, 10_000).run;
+                assert!(run.done > 0, "{run:?}");
+                assert!(run.stopped.is_some(), "{run:?}");
+            }),
+            ("a counted order's Cancel", |view| {
+                assert_eq!(view.outfit_counted(BUY_PLAIN_TANK, 0), Ok(0));
+            }),
+            ("an outfitter run's Cancel", |view| {
+                let run = view.outfit_order(BUY_PLAIN_TANK, 0).run;
+                assert_eq!((run.done, run.stopped), (0, None));
+            }),
+            ("a ship purchase", |view| {
+                view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+            }),
+            ("a shop closing", FlightView::refresh_status),
+        ];
+        let refused: [(&str, Step); 8] = [
+            ("a refused trade", |view| {
+                let order = Order {
+                    row: 99,
+                    ..BUY_FOOD
+                };
+                assert!(view.trade(order).is_err());
+            }),
+            ("a refused recharge", |view| {
+                assert_eq!(view.recharge(), Err(RechargeRefusal::Full));
+            }),
+            ("a refused outfitter order", |view| {
+                assert!(view.outfit(UNKNOWN_OUTFIT).is_err());
+            }),
+            ("a refused counted outfitter order", |view| {
+                assert!(view.outfit_counted(UNKNOWN_OUTFIT, 1).is_err());
+            }),
+            ("a refused outfitter run", |view| {
+                assert_eq!(view.outfit_order(UNKNOWN_OUTFIT, 1).run.done, 0);
+            }),
+            ("a Cancel whose Buy fails its check", |view| {
+                assert_eq!(view.outfit_order(UNKNOWN_OUTFIT, 0).run.done, 0);
+            }),
+            (
+                "a counted order's Cancel whose Buy fails its check",
+                |view| {
+                    assert_eq!(view.outfit_counted(UNKNOWN_OUTFIT, 0), Ok(0));
+                },
+            ),
+            ("a Cancel whose Sell fails its check", |view| {
+                let sell = OutfitOrder {
+                    direction: Direction::Sell,
+                    ..BUY_PLAIN_TANK
+                };
+                assert_eq!(view.outfit_order(sell, 0).run.done, 0);
+            }),
+        ];
+        for dialog in [PortDialog::Shipyard, PortDialog::Hire] {
+            for (steps, shown) in [(&draws[..], "Earth"), (&refused[..], "Proxima")] {
+                for (what, step) in steps {
+                    let mut view = m_inside(dialog);
+                    assert_eq!(
+                        port_nav(&view),
+                        naming("Proxima"),
+                        "{dialog:?}, {what}: the close's"
+                    );
+                    step(&mut view);
+                    assert_eq!(port_nav(&view), naming(shown), "{dialog:?}, {what}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_redraw_clears_the_shipyards_nav_mark() {
+        type Step = fn(&mut View);
+        let redraws: [(&str, Step); 2] = [
+            ("a whole-bar redraw", FlightView::refresh_status),
+            ("a ship purchase", |view| {
+                view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+                let mut desk = view.pilot_desk().expect("flying");
+                desk.edit(PilotEdit::Credits(100_000)).expect("set");
+            }),
+        ];
+        let draws: [(&str, Step); 3] = [
+            ("a trade", |view| {
+                assert!(view.trade(BUY_FOOD).is_ok());
+            }),
+            ("a recharge", |view| {
+                desk_reserve(view, nova_sim::Reserve::Fuel, 100.0);
+                assert!(view.recharge().is_ok());
+            }),
+            ("an outfitter order", |view| {
+                assert_eq!(view.outfit(BUY_PLAIN_TANK), Ok(()));
+            }),
+        ];
+        // Ship 129 holds food too, and the desk refills the credits the
+        // purchase spent, so each draw after it goes through.
+        let catalog = || {
+            let mut catalog = port();
+            catalog.ships[0].fields.holds = 10;
+            catalog
+        };
+        for (redrawn, redraw) in &redraws {
+            for (drawn, draw) in &draws {
+                let mut view = m_inside_of(catalog(), PortDialog::Shipyard);
+                assert_eq!(port_nav(&view), naming("Proxima"), "the close's");
+                redraw(&mut view);
+                assert_eq!(port_nav(&view), naming("Earth"), "{redrawn}");
+                run_set(&mut view, "M131");
+                view.settle_script();
+                assert_eq!(port_nav(&view), naming("Earth"), "{redrawn}: held");
+                draw(&mut view);
+                assert_eq!(
+                    port_nav(&view),
+                    naming("Earth"),
+                    "{redrawn}, then {drawn}: the mark was cleared"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_mission_computers_close_redraws_the_whole_bar() {
+        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        run_set(&mut view, "M131");
+        view.settle_script();
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        assert_eq!(port_nav(&view), naming("Earth"), "held");
+        assert_ne!(view.reserves_shown().fuel.now, 100.0, "held");
+        view.open_port_dialog();
+        view.close_port_dialog(PortDialog::MissionComputer);
+        assert_eq!(
+            port_nav(&view),
+            naming("Proxima"),
+            "redrawn, though the restore changed nothing"
+        );
+        assert_eq!(view.reserves_shown().fuel.now, 100.0, "redrawn");
+    }
+
+    #[test]
+    fn by_the_engine_a_landed_n_shows_no_destination_at_the_next_redraw() {
+        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        run_set(&mut view, "N131");
+        view.settle_script();
+        assert_eq!(port_nav(&view), naming("Earth"), "held");
+        view.refresh_status();
+        assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
+    }
+
+    #[test]
+    fn a_comp_text_shows_the_landed_stellar_and_the_next_redraw_its_on_successs_move() {
+        let mut catalog = port();
+        catalog.missions = vec![MissionRecord {
+            travel_stel: 128,
+            on_success: nova_sim::Script::parse("M131"),
+            ..errand(130)
+        }];
+        catalog.mission_texts = vec![MissionTexts {
+            comp: Some("Done.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        run_set(&mut view, "S130");
+        view.take_off().expect("takes off");
+        view.settle_script();
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(140)))),
+            "OnSuccess ran"
+        );
+        assert_eq!(view.take_mission_texts().len(), 1);
+        assert_eq!(port_nav(&view), naming("Earth"), "as the text noted it");
+        view.refresh_status();
+        assert_eq!(port_nav(&view), naming("Proxima"));
+    }
+
+    #[test]
+    fn a_dialogs_redraw_shows_what_the_script_run_with_it_wrote() {
+        type Fit = fn(&mut FakeCatalog);
+        type Step = fn(&mut View);
+        let rows: [(&str, Fit, Step); 5] = [
+            (
+                "OnAccept",
+                |catalog| catalog.missions[0].on_accept = nova_sim::Script::parse("M131"),
+                |view| assert_eq!(view.accept_mission(MissionId(130)), Ok(0)),
+            ),
+            (
+                "OnRefuse",
+                |catalog| catalog.missions[0].on_refuse = nova_sim::Script::parse("M131"),
+                |view| assert_eq!(view.refuse_mission(MissionId(130)), Ok(())),
+            ),
+            (
+                "a RefuseText before OnRefuse",
+                |catalog| {
+                    catalog.missions[0].on_refuse = nova_sim::Script::parse("M131");
+                    catalog.mission_texts = vec![MissionTexts {
+                        refuse: Some("No.".to_owned()),
+                        ..MissionTexts::named(MissionId(130), "Run")
+                    }];
+                },
+                |view| {
+                    assert_eq!(view.refuse_mission(MissionId(130)), Ok(()));
+                    assert_eq!(view.take_mission_texts().len(), 1);
+                },
+            ),
+            (
+                "a BriefText after OnAccept",
+                |catalog| {
+                    catalog.missions[0].on_accept = nova_sim::Script::parse("M131");
+                    catalog.mission_texts = vec![MissionTexts {
+                        brief: Some("Go.".to_owned()),
+                        ..MissionTexts::named(MissionId(130), "Run")
+                    }];
+                },
+                |view| {
+                    assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+                    assert_eq!(view.take_mission_texts().len(), 1);
+                },
+            ),
+            (
+                "a ship's OnPurchase",
+                |catalog| {
+                    let ship = catalog
+                        .ships
+                        .iter_mut()
+                        .find(|ship| ship.id == ShipId(129))
+                        .expect("ship 129");
+                    ship.on_purchase = nova_sim::Script::parse("M131");
+                },
+                |view| {
+                    view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+                },
+            ),
+        ];
+        for (what, fit, step) in rows {
+            let mut catalog = port();
+            fit(&mut catalog);
+            let mut view = docked_at_earth(catalog, RuleSource::Engine);
+            step(&mut view);
+            assert_eq!(port_nav(&view), naming("Proxima"), "{what}");
+        }
+    }
+
+    #[test]
+    fn a_text_never_shows_over_a_later_redraw() {
+        let mut catalog = port();
+        catalog.missions[0].on_accept = nova_sim::Script::parse("M131");
+        catalog.mission_texts = vec![MissionTexts {
+            brief: Some("Go.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        run_set(&mut view, "M132");
+        view.refresh_status();
+        assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
+        assert_eq!(
+            view.take_mission_texts().len(),
+            1,
+            "the brief, noting Proxima"
+        );
+        assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
     }
 
     // The gauges while docked.
@@ -11480,7 +13355,7 @@ mod tests {
         assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
         assert_eq!(view.reserves_shown(), held, "landing's");
         assert_eq!(fuel_drawn(&view), landed, "drawn held");
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(view.reserves_shown(), view.reserves(), "the shop closed");
         assert_ne!(fuel_drawn(&view), landed);
     }
@@ -11503,7 +13378,7 @@ mod tests {
         let mut view = FlightView::new(outfitting());
         land_now(&mut view);
         desk_reserve(&mut view, Reserve::Fuel, 100.0);
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(view.reserves_shown().fuel.now, 100.0, "held at 100");
         desk_reserve(&mut view, Reserve::Shield, 10.0);
         assert_eq!(view.reserves_shown().shield.now, 40.0, "held full");
@@ -11529,8 +13404,24 @@ mod tests {
         view.buy_ship(ShipId(129), "Kestrel").expect("bought");
         assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
         assert_eq!(view.reserves_shown().fuel.max, 250.0, "the old ship's");
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(view.reserves_shown().fuel.max, 350.0, "the shipyard closed");
+    }
+
+    #[test]
+    fn a_purchase_redraws_the_whole_bar_before_it_buys() {
+        let mut view = FlightView::new(shipbuying());
+        land_now(&mut view);
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        assert_eq!(view.reserves_shown().fuel.now, 250.0, "held");
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
+        let shown = view.reserves_shown().fuel;
+        assert_eq!(
+            (shown.now, shown.max),
+            (100.0, 250.0),
+            "the prompt's close, before the purchase"
+        );
     }
 
     #[test]
@@ -11665,17 +13556,269 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_resumed_docked_holds_the_gauges_from_its_start() {
+    fn an_outfit_orders_m_after_its_h_waits_for_the_next_nav_redraw_and_before_it_shows_at_once() {
+        for (script, shown) in [("H130 M131", "Earth"), ("M131 H130", "Proxima")] {
+            let mut catalog = port();
+            catalog.outfits[0].on_purchase = nova_sim::Script::parse(script);
+            let mut view = docked_at_earth(catalog, RuleSource::Engine);
+            assert_eq!(view.outfit(BUY_TANK), Ok(()));
+            assert_eq!(
+                view.session().map(Session::nav_mode),
+                Ok(NavMode::Stellar(Some(StellarId(140)))),
+                "{script}: written"
+            );
+            assert_eq!(port_nav(&view), naming(shown), "{script}");
+            view.refresh_status();
+            assert_eq!(
+                port_nav(&view),
+                naming("Proxima"),
+                "{script}: the next nav redraw"
+            );
+        }
+    }
+
+    #[test]
+    fn an_outfit_order_changing_the_intf_and_back_redraws_the_bar_as_at_the_last_change() {
+        let mut catalog = port();
+        catalog.outfits[0].on_purchase = nova_sim::Script::parse("M131 H130 H129 G201");
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
+        assert_eq!(port_nav(&view), naming("Proxima"), "redrawn at the H");
+        assert_eq!(
+            view.reserves_shown().fuel.max,
+            view.reserves().fuel.max - 100.0,
+            "the gauges as at H129, before G201's tank"
+        );
+    }
+
+    #[test]
+    fn a_ship_purchases_on_purchase_intf_change_shows_the_gauges_before_the_fill() {
+        let mut catalog = port();
+        assert_eq!(catalog.ships[0].id, ShipId(129));
+        catalog.ships[0].on_purchase = nova_sim::Script::parse("H130");
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
+        let (shown, now) = (view.reserves_shown().fuel, view.reserves().fuel);
+        assert_eq!(shown.max, now.max, "ship 130's, under its ïntf");
+        assert!(shown.now < shown.max, "{shown:?}: not yet filled");
+        assert_eq!(now.now, now.max, "the fill");
+        assert_eq!(view.nav_shown(), view.nav_now(), "the purchase's own draw");
+    }
+
+    #[test]
+    fn a_ship_purchases_on_purchase_m_shows_in_its_nav_draw_over_the_gauges_before_the_fill() {
+        let mut catalog = port();
+        assert_eq!(catalog.ships[0].id, ShipId(129));
+        catalog.ships[0].on_purchase = nova_sim::Script::parse("H130 M131");
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
+        assert_eq!(
+            port_nav(&view),
+            naming("Proxima"),
+            "the purchase's own nav draw (@0x5f0b1)"
+        );
+        let (shown, now) = (view.reserves_shown().fuel, view.reserves().fuel);
+        assert_eq!(shown.max, now.max, "ship 130's, under its ïntf");
+        assert!(shown.now < shown.max, "{shown:?}: not yet filled");
+        assert_eq!(now.now, now.max, "the fill");
+    }
+
+    // The take-off's redraw before its deselect.
+
+    /// The nav area naming `name` in mode 2, as flight shows it.
+    fn flashing(name: &str) -> NavDisplay {
+        NavDisplay::Stellar(Some(name.to_owned()))
+    }
+
+    #[test]
+    fn the_take_off_after_a_landed_m_names_its_stellar_for_one_frame() {
+        type TakeOff = fn(&mut View);
+        let take_offs: [(&str, TakeOff); 2] = [
+            ("the take-off", |view| {
+                run_set(view, "M131");
+                view.settle_script();
+                assert_eq!(view.take_off(), Some(StellarId(128)));
+            }),
+            ("a Q", |view| {
+                run_set(view, "M131 Q25048");
+                assert_eq!(view.settle_script(), Some(StellarId(128)));
+            }),
+        ];
+        for (what, take_off) in take_offs {
+            let mut view = told(docked_at_earth(port(), RuleSource::Engine));
+            take_off(&mut view);
+            assert_eq!(
+                view.session().map(Session::nav_mode),
+                Ok(NavMode::Stellar(None)),
+                "{what}: let go"
+            );
+            assert_eq!(view.nav_shown(), flashing("Proxima"), "{what}: held");
+            view.tick(Duration::from_millis(1));
+            assert_eq!(
+                view.nav_shown(),
+                flashing("Proxima"),
+                "{what}: a frame within the tick"
+            );
+            view.tick(TICK);
+            assert_eq!(
+                view.nav_shown(),
+                NavDisplay::Stellar(None),
+                "{what}: a tick on"
+            );
+            let mut view = told(docked_at_earth(port(), RuleSource::Bible));
+            take_off(&mut view);
+            assert_eq!(
+                view.nav_shown(),
+                NavDisplay::Stellar(None),
+                "{what}: by the bible"
+            );
+        }
+    }
+
+    #[test]
+    fn the_take_offs_held_nav_shows_in_the_first_frame_drawn_after_it_whatever_the_rate() {
+        for fps in [120, 60, 30, 20] {
+            let frame = Duration::from_secs(1) / fps;
+            let mut view = told(docked_at_earth(port(), RuleSource::Engine));
+            run_set(&mut view, "M131");
+            view.settle_script();
+            view.elapsed = Duration::from_nanos(333_333_329); // ten ticks less 1 ns
+            assert_eq!(
+                crate::time::ticks(view.elapsed + Duration::from_nanos(1)),
+                10
+            );
+            assert_eq!(view.take_off(), Some(StellarId(128)));
+            view.tick(frame);
+            assert_eq!(
+                view.nav_shown(),
+                flashing("Proxima"),
+                "{fps} fps: the first frame drawn, though it crosses a tick"
+            );
+            view.tick(TICK);
+            assert_eq!(
+                view.nav_shown(),
+                NavDisplay::Stellar(None),
+                "{fps} fps: a tick on"
+            );
+        }
+    }
+
+    #[test]
+    fn a_take_off_with_nothing_let_go_holds_nothing() {
+        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        run_set(&mut view, "M132");
+        view.settle_script();
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.nav_shown(), NavDisplay::Stellar(None));
+        assert_eq!(view.nav_flash, None, "no flash to end");
+    }
+
+    #[test]
+    fn a_plain_take_off_names_the_landed_stellar_for_one_frame() {
+        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(None)),
+            "let go"
+        );
+        assert_eq!(view.nav_shown(), flashing("Earth"), "held");
+        view.tick(TICK);
+        assert_eq!(view.nav_shown(), flashing("Earth"), "the first frame");
+        view.tick(TICK);
+        assert_eq!(view.nav_shown(), NavDisplay::Stellar(None), "a tick on");
+        let mut view = docked_at_earth(port(), RuleSource::Bible);
+        view.take_off();
+        assert_eq!(view.nav_shown(), NavDisplay::Stellar(None), "by the bible");
+    }
+
+    #[test]
+    fn a_take_off_with_a_course_names_the_landed_stellar_over_the_cue_for_one_frame() {
+        let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
+        let mut view = FlightView::new(port()).with_rules(rules);
+        view.session
+            .as_mut()
+            .expect("flying")
+            .plot_course(SystemId(131))
+            .expect("a route");
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "the land key put mode 2 over the cue"
+        );
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Hyperspace(Some(SystemId(131)))),
+            "cued"
+        );
+        assert_eq!(view.nav_shown(), flashing("Earth"), "held over the cue");
+        view.tick(TICK);
+        assert_eq!(view.nav_shown(), flashing("Earth"), "the first frame");
+        view.tick(TICK);
+        assert!(
+            matches!(view.nav_shown(), NavDisplay::Hyperspace { .. }),
+            "a tick on: {:?}",
+            view.nav_shown()
+        );
+    }
+
+    #[test]
+    fn a_text_queued_in_the_take_offs_days_shows_over_its_held_nav() {
+        let mut catalog = port();
+        catalog.crons = vec![nova_sim::catalog::CronRecord {
+            id: nova_sim::catalog::CronId(128),
+            first_day: 0,
+            first_month: 0,
+            first_year: 0,
+            last_day: 0,
+            last_month: 0,
+            last_year: 0,
+            random: 100,
+            duration: 0,
+            pre_holdoff: 0,
+            post_holdoff: 0,
+            flags: 0,
+            enable_on: Test::default(),
+            on_start: nova_sim::Script::parse("S131"),
+            on_end: nova_sim::Script::default(),
+            contribute: 0,
+            require: 0,
+            news_govt: [-1; 4],
+            govt_news: [-1; 4],
+            ind_news: -1,
+        }];
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        run_set(&mut view, "M131");
+        view.settle_script();
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.take_mission_texts().len(), 1, "the cron's mission");
+        assert_eq!(view.nav_shown(), flashing("Proxima"), "under its text");
+        view.tick(TICK);
+        assert_eq!(view.nav_shown(), NavDisplay::Stellar(None));
+    }
+
+    #[test]
+    fn a_pilot_resumed_and_landed_holds_the_gauges_from_its_landing() {
         let pilot = {
             let mut view = FlightView::new(outfitting());
             land_now(&mut view);
             view.pilot().expect("flying").clone()
         };
         let mut view = FlightView::with_pilot(outfitting(), pilot);
-        assert!(view.take_landing().is_some(), "docked");
+        assert_eq!(view.take_landing(), None, "in flight");
+        land_now(&mut view);
         assert_eq!(view.outfit(BUY_TANK), Ok(()));
         assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
-        assert_eq!(view.reserves_shown().fuel.max, 250.0, "the start's");
+        assert_eq!(view.reserves_shown().fuel.max, 250.0, "the landing's");
     }
 
     #[test]
@@ -15861,6 +18004,9 @@ mod tests {
             (NEAREST_STELLAR_KEY, PlayerCommand::Nav),
             (NAV_OFF_KEY, PlayerCommand::Nav),
             (Key::Function(1), PlayerCommand::Nav),
+            (ZOOM_OUT_KEY, PlayerCommand::Nav),
+            (ZOOM_IN_KEY, PlayerCommand::Nav),
+            (ZOOM_IN_KEYPAD_KEY, PlayerCommand::Nav),
         ];
         for (k, command) in commands {
             assert_eq!(view.command_of(k), Some(command), "{k:?}");
@@ -17880,8 +20026,10 @@ mod tests {
     }
 
     /// [`boardable`] with ship 130 of `Cost` 10,000 (a wage of 100), and
-    /// a pilot holding `cash` whose fleet is one hired ship 130, docked
-    /// at stellar 128 when `docked`; its flight, its first tick done.
+    /// a pilot holding `cash` whose fleet is one hired ship 130, saved at
+    /// stellar 128 and landed there after its flight's first tick when
+    /// `docked`, the landing not yet taken; else its flight, its first
+    /// tick done.
     fn paying(cash: i64, docked: bool) -> View {
         let mut catalog = boardable();
         for record in &mut catalog.ships {
@@ -17904,6 +20052,9 @@ mod tests {
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
         view.tick(TICK);
+        if docked {
+            land_now(&mut view);
+        }
         view
     }
 
@@ -17928,22 +20079,22 @@ mod tests {
         assert_eq!(paid.pilot().map(Pilot::cash), Some(0));
     }
 
+    /// The greeting from Earth on the take-off of a docked [`paying`]
+    /// flight, its lead the one the fixture's scripted draws leave.
+    const PAYING_GREETING: &str = "Departing Earth on June 24, 1177 NC.";
+
     #[test]
     fn by_the_engine_an_escort_left_unpaid_at_take_off_defects_and_the_flight_says_so() {
         let mut view = paying(50, true);
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         assert_eq!(view.take_off(), Some(StellarId(128)));
-        let said = format!("Launching from Earth on June 24, 1177 NC.  {DEFECTED_ONE}");
+        let said = format!("{PAYING_GREETING}  {DEFECTED_ONE}");
         assert_eq!(view.message(), Some(said.as_str()), "after the greeting");
         assert_eq!(view.pilot().expect("flying").escorts(), []);
         let mut kept = paying(50, true)
             .with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, RuleSource::Bible));
         kept.take_off().expect("took off");
-        assert_eq!(
-            kept.message(),
-            Some("Launching from Earth on June 24, 1177 NC."),
-            "the greeting alone"
-        );
+        assert_eq!(kept.message(), Some(PAYING_GREETING), "the greeting alone");
         assert_eq!(kept.pilot().expect("flying").escorts().len(), 1);
     }
 
@@ -18446,7 +20597,7 @@ mod tests {
         let mut view = paying(50, true);
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         view.take_off().expect("takes off");
-        let said = format!("{EARTH_GREETING}  {DEFECTED_ONE}");
+        let said = format!("{PAYING_GREETING}  {DEFECTED_ONE}");
         assert_lasts(&mut view, &said, 240);
     }
 
@@ -18716,7 +20867,8 @@ mod tests {
     #[test]
     fn a_rebuild_that_changes_the_stellars_shown_lays_out_the_scene_again() {
         let mut view = FlightView::with_pilot(proxima_in_sol(), docked_pilot("Ada"));
-        view.take_landing();
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
         move_to(&mut view, 131, 140);
         view.tick(TICK);
         assert_eq!(shown_ids(&view), [StellarId(140)], "docked at it");
@@ -20879,14 +23031,17 @@ mod tests {
                 flags2,
                 ..site(300, (0.0, 0.0), StellarFlags::STATION)
             }]);
+            tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
             tap(&mut view, LAND);
             let refusal = gate_refusal_message(kind);
             assert_lasts(&mut view, &refusal, 250);
         }
-        let mut planet = flight_among(vec![site(300, (0.0, 0.0), 0)]);
+        let mut planet = flight_among(vec![site(128, (0.0, 0.0), 0)]);
+        tap(&mut planet, STELLAR_SLOT_KEYS[0][0]);
         tap(&mut planet, LAND);
-        assert_eq!(planet.message(), Some(HOSTILE_PLANET), "not a gate");
-        assert_lasts(&mut planet, HOSTILE_PLANET, 250);
+        let line =
+            "Your ship is unable to land on  Earth. The planet's environment is too hostile.";
+        assert_lasts(&mut planet, line, 250);
     }
 
     #[test]
@@ -21543,6 +23698,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_stellar_of_a_landing_blessed_government_is_yellow_on_the_radar() {
+        // `_ColorCodeStellar` @0xaab9: the government's landing blessing
+        // gives yellow whatever `MinStatus` says.
+        let earth = |on_start: &str| {
+            let base = outfitted(starting_with(on_start), &[(300, 1)]);
+            let mut sites = base.sites.clone();
+            sites[0].govt = Some(GovtId(140));
+            sites[0].min_status = 10;
+            let catalog = FakeCatalog {
+                ranks: vec![nova_sim::catalog::RankRecord {
+                    id: nova_sim::RankId(200),
+                    name: String::new(),
+                    weight: 0,
+                    affil_govt: Some(GovtId(140)),
+                    salary: 0,
+                    salary_cap: 0,
+                    contribute: 0,
+                    flags: nova_sim::rank::BLESSES_LANDING,
+                    conv_name: String::new(),
+                    short_name: String::new(),
+                    price_mod: 100,
+                }],
+                sites,
+                ..base
+            };
+            let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+            let mut view = FlightView::with_pilot(catalog, pilot);
+            // Begun, the ship sits at (50, 50), so Earth is drawn up and
+            // to the left of the radar's centre.
+            view.begin();
+            ticks(&mut view, 1);
+            radar_marks(&view)
+                .into_iter()
+                .find(|mark| matches!(mark, RadarMark::Oval { rect, .. } if *rect == IRect::around(924, 75, 1)))
+        };
+        let oval = |color| RadarMark::Oval {
+            rect: IRect::around(924, 75, 1),
+            color,
+        };
+        assert_eq!(earth("K200"), Some(oval(RadarColor::Yellow)));
+        assert_eq!(earth(""), Some(oval(RadarColor::Orange)), "unblessed");
+    }
+
     /// [`outfitting`] selling [`radar_outfits`] too, landed.
     fn landed_radar_outfitter() -> View {
         let mut catalog = outfitting();
@@ -22165,6 +24364,32 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        assert!(
+            (over.x - VIEW_CENTER.x).abs() > 64.0 || (over.y - VIEW_CENTER.y).abs() > 64.0,
+            "the NPC at {over:?} sits clear of the player's ship"
+        );
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(id));
+        view.take_sounds();
+        // The camera centres on the player, so its ship is drawn at the centre.
+        click(&mut view, VIEW_CENTER);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetCleared)]);
+    }
+
+    #[test]
+    fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
+        let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        view.take_sounds();
+        click(&mut view, VIEW_CENTER);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
     fn a_click_on_a_ship_targets_it_during_a_jump() {
         // A still NPC at (0, -750), where the ship flies out past.
         let mut catalog = trafficked(&[130], 1, 129, 3);
@@ -22504,5 +24729,994 @@ mod tests {
             ..catalog()
         };
         assert!(!FlightView::new(failed).hides_pointer());
+    }
+
+    // The floating map.
+
+    use crate::flight::floating;
+    use crate::galaxy::map::{CURRENT, DOT_SIZE, HYPER_SELECTED, LINK, ROUTE, ROUTE_WIDTH};
+    use nova_sim::mission::screens::mac_ticks;
+
+    /// The floating map's frame's centre, where Sol is drawn.
+    const FRAME_CENTRE: Point = Point::new(686.0, 278.0);
+    /// A point in the frame that is in no box, where [`with_sites`] puts
+    /// stellar 128.
+    const FRAME_MISS: Point = Point::new(700.0, 300.0);
+    /// Where [`with_sites`] puts stellar 129, outside the frame.
+    const OUTSIDE_FRAME: Point = Point::new(512.0, 284.0);
+
+    /// [`catalog`] with Proxima Near ([`FakeCatalog::near`]).
+    fn near() -> View {
+        FlightView::new(FakeCatalog {
+            near: true,
+            ..catalog()
+        })
+    }
+
+    /// [`near`]'s flight with Sol's stellars 128 under [`FRAME_MISS`] and
+    /// 129 under [`OUTSIDE_FRAME`], as the camera starts.
+    fn with_sites() -> View {
+        let view = FlightView::new(FakeCatalog {
+            near: true,
+            sites: vec![
+                site(128, (188.0, -84.0), StellarFlags::CAN_LAND),
+                site(129, (0.0, -100.0), StellarFlags::CAN_LAND),
+            ],
+            ..catalog()
+        });
+        assert_eq!(on_screen(&view, (188.0, -84.0)), FRAME_MISS);
+        assert_eq!(on_screen(&view, (0.0, -100.0)), OUTSIDE_FRAME);
+        view
+    }
+
+    /// The floating map's border lines in `list`: those in the
+    /// `FloatingMap` colour on the frame's edges, whatever their alpha.
+    fn floating_border(list: &DrawList) -> Vec<DrawCommand> {
+        let border = MENU_COLORS.border;
+        list.iter()
+            .filter(|command| {
+                matches!(command, DrawCommand::Line { from, color, .. }
+                    if (color.r, color.g, color.b) == (border.r, border.g, border.b)
+                        && from.x >= 558.0)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The alpha the floating map's border is drawn at, if it is drawn.
+    fn floating_alpha(view: &View) -> Option<u8> {
+        floating_border(&drawn(view))
+            .first()
+            .map(|command| match command {
+                DrawCommand::Line { color, .. } => color.a,
+                _ => unreachable!(),
+            })
+    }
+
+    /// Where the floating map draws system dots, in draw order.
+    fn floating_dots(view: &View) -> Vec<Point> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Dot { center, size, .. }
+                    if size == DOT_SIZE
+                        && floating::contains(floating::frame(VIEW_SIZE), center) =>
+                {
+                    Some(center)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where the floating map draws Proxima Near (134) at the zoom whose
+    /// scale is `scale`.
+    fn near_at(scale: f32) -> Point {
+        Point::new(686.0 + 40.0 * scale, 278.0 + 30.0 * scale)
+    }
+
+    fn sims(view: &mut View) -> Vec<SimSound> {
+        view.take_sounds()
+            .into_iter()
+            .filter_map(|sound| match sound {
+                Sound::Sim(sound) => Some(sound),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn holding_h_shows_the_floating_map_bordered_and_centred_on_sol() {
+        let mut view = flight();
+        assert_eq!(floating_border(&drawn(&view)), [], "down at first");
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.tick(TICK);
+        let list = drawn(&view);
+        let edge = |from: (f32, f32), to: (f32, f32)| DrawCommand::Line {
+            from: at(from.0, from.1),
+            to: at(to.0, to.1),
+            width: 1.0,
+            color: MENU_COLORS.border,
+        };
+        assert_eq!(
+            floating_border(&list),
+            [
+                edge((558.0, 150.0), (814.0, 150.0)),
+                edge((814.0, 150.0), (814.0, 406.0)),
+                edge((814.0, 406.0), (558.0, 406.0)),
+                edge((558.0, 406.0), (558.0, 150.0)),
+            ]
+        );
+        assert_eq!(floating_dots(&view), [FRAME_CENTRE], "Sol, at the centre");
+        assert!(
+            list.iter().any(|command| matches!(command,
+                DrawCommand::Line { color, .. } if *color == CURRENT)),
+            "the current system's mark round it"
+        );
+    }
+
+    #[test]
+    fn holding_h_keeps_it_full_and_letting_go_starts_the_fade() {
+        let mut view = flight();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.input(&held(HYPERSPACE_MODE_KEY));
+        for _ in 0..100 {
+            view.tick(TICK);
+        }
+        view.input(&key(HYPERSPACE_MODE_KEY, false));
+        view.tick(mac_ticks(118));
+        assert_eq!(floating_alpha(&view), Some(255), "shown again each frame");
+        view.tick(mac_ticks(1));
+        assert_eq!(floating_alpha(&view), Some(247), "31 of 32 at 119");
+        view.tick(mac_ticks(31));
+        assert_eq!(floating_alpha(&view), None, "faded out at 150");
+    }
+
+    #[test]
+    fn a_tap_of_h_shows_it_before_the_next_frame() {
+        let mut view = flight();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert_eq!(floating_alpha(&view), Some(255));
+        view.tick(mac_ticks(118));
+        assert_eq!(floating_alpha(&view), Some(255));
+        view.tick(mac_ticks(1));
+        assert_eq!(floating_alpha(&view), Some(247), "not shown again");
+    }
+
+    #[test]
+    fn in_double_time_the_fade_keeps_its_ticks() {
+        let mut view = flight().with_double_time(true);
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.tick(mac_ticks(118));
+        assert_eq!(floating_alpha(&view), Some(255));
+        view.tick(mac_ticks(1));
+        assert_eq!(floating_alpha(&view), Some(247));
+        view.tick(mac_ticks(31));
+        assert_eq!(floating_alpha(&view), None);
+    }
+
+    #[test]
+    fn h_held_through_a_jump_doesnt_show_it() {
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            view.input(&key(HYPERSPACE_MODE_KEY, true));
+            view.tick(TICK);
+            assert_eq!(floating_alpha(&view), None, "{stage}");
+        }
+    }
+
+    #[test]
+    fn backslash_held_in_mode_3_shows_it_through_a_jump() {
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            assert!(matches!(nav_mode(&view), NavMode::Hyperspace(_)), "{stage}");
+            view.input(&key(HYPER_SELECT_KEY, true));
+            assert_eq!(floating_alpha(&view), None, "{stage}: no press");
+            view.tick(mac_ticks(1));
+            assert_eq!(floating_alpha(&view), Some(255), "{stage}");
+        }
+    }
+
+    #[test]
+    fn backslash_held_out_of_mode_3_doesnt_show_it() {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        run_set(&mut view, "M132");
+        view.settle_script();
+        assert_eq!(system_of(&view), SystemId(132), "Barnard lists no links");
+        view.input(&key(HYPER_SELECT_KEY, true));
+        assert_eq!(nav_mode(&view), NavMode::Off);
+        view.tick(TICK);
+        assert_eq!(floating_alpha(&view), None);
+    }
+
+    #[test]
+    fn h_held_in_the_take_off_grace_shows_it() {
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        land_now(&mut view);
+        view.take_off().expect("takes off");
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        ticks(&mut view, 14);
+        assert!(!view.takes(PlayerCommand::Map), "still in the grace");
+        view.input(&key(HYPERSPACE_MODE_KEY, false));
+        view.tick(mac_ticks(118));
+        assert_eq!(floating_alpha(&view), Some(255), "held through the grace");
+    }
+
+    #[test]
+    fn h_held_once_exploded_doesnt_show_it() {
+        let mut view = exploded();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.tick(TICK);
+        assert_eq!(floating_alpha(&view), None);
+    }
+
+    #[test]
+    fn backslash_held_in_mode_3_once_exploded_doesnt_show_it() {
+        let mut view =
+            fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        tap(&mut view, MENU_CLOSE_KEY);
+        until_the_player_explodes(&mut view, |_| {});
+        view.tick(TICK);
+        assert!(matches!(nav_mode(&view), NavMode::Hyperspace(_)), "kept");
+        view.input(&key(HYPER_SELECT_KEY, true));
+        view.tick(TICK);
+        assert_eq!(floating_alpha(&view), None);
+    }
+
+    #[test]
+    fn it_hides_once_more_than_500_ticks_have_passed() {
+        let mut view = with_sites();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.tick(mac_ticks(500));
+        click(&mut view, FRAME_MISS);
+        assert_eq!(nav_target(&view), None, "still up at 500: swallowed");
+        view.tick(mac_ticks(1));
+        click(&mut view, FRAME_MISS);
+        assert_eq!(nav_target(&view), Some(StellarId(128)), "hidden at 501");
+    }
+
+    #[test]
+    fn return_hides_it_through_a_jump_too() {
+        let mut view = flight();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert_eq!(floating_alpha(&view), None);
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            tap(&mut view, HYPER_SELECT_KEY);
+            view.input(&key(HYPER_SELECT_KEY, true));
+            view.tick(TICK);
+            view.input(&key(HYPER_SELECT_KEY, false));
+            assert_eq!(floating_alpha(&view), Some(255), "{stage}");
+            tap(&mut view, MENU_CLOSE_KEY);
+            assert_eq!(floating_alpha(&view), None, "{stage}");
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_centre_selects_mode_3_with_nothing_and_beeps() {
+        let mut view = near();
+        plot(&mut view, 131);
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        view.take_sounds();
+        click(&mut view, FRAME_CENTRE);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+        assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
+        assert_eq!(course(&view), [SystemId(131)], "the course kept");
+    }
+
+    #[test]
+    fn a_click_in_a_links_box_selects_it_in_mode_3_and_beeps() {
+        let mut view = near();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+        view.take_sounds();
+        // Proxima Near, 40 right and 30 down at 16/9: (757.1, 331.3).
+        click(&mut view, at(757.0, 331.0));
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(134))));
+        assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
+    }
+
+    #[test]
+    fn away_from_the_origin_the_map_centres_on_the_current_system_and_clicks_follow() {
+        let mut view = near();
+        run_set(&mut view, "M134");
+        view.settle_script();
+        assert_eq!(system_of(&view), SystemId(134), "Proxima Near, at (40, 30)");
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        // Sol, 40 left and 30 up at 16/9: (614.9, 224.7).
+        let sol = Point::new(686.0 - 40.0 * (16.0 / 9.0), 278.0 - 30.0 * (16.0 / 9.0));
+        assert_eq!(
+            floating_dots(&view),
+            [FRAME_CENTRE, sol],
+            "Proxima Near at the centre, then Sol"
+        );
+        view.take_sounds();
+        click(&mut view, at(614.0, 224.0));
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(130))));
+        assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
+    }
+
+    #[test]
+    fn a_miss_in_the_frame_picks_nothing_and_plays_nothing() {
+        let mut view = with_sites();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.take_sounds();
+        click(&mut view, FRAME_MISS);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+        assert_eq!(view.take_sounds(), []);
+        click(&mut view, OUTSIDE_FRAME);
+        assert_eq!(
+            nav_target(&view),
+            Some(StellarId(129)),
+            "outside: a stellar"
+        );
+        let mut view = with_sites();
+        click(&mut view, FRAME_MISS);
+        assert_eq!(nav_target(&view), Some(StellarId(128)), "the map down");
+    }
+
+    #[test]
+    fn a_click_is_taken_while_the_map_is_faded_out() {
+        let mut view = with_sites();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.tick(mac_ticks(200));
+        assert_eq!(floating_alpha(&view), None, "faded out");
+        click(&mut view, FRAME_MISS);
+        assert_eq!(nav_target(&view), None, "swallowed");
+        view.take_sounds();
+        click(&mut view, FRAME_CENTRE);
+        assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
+    }
+
+    #[test]
+    fn a_hit_shows_the_map_again() {
+        let mut view = near();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.tick(mac_ticks(100));
+        click(&mut view, FRAME_CENTRE);
+        view.tick(mac_ticks(118));
+        assert_eq!(floating_alpha(&view), Some(255));
+        view.tick(mac_ticks(1));
+        assert_eq!(floating_alpha(&view), Some(247));
+    }
+
+    #[test]
+    fn a_click_in_the_frame_during_a_jump_selects_nothing() {
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            view.input(&key(HYPER_SELECT_KEY, true));
+            view.tick(TICK);
+            assert_eq!(floating_alpha(&view), Some(255), "{stage}");
+            let mode = nav_mode(&view);
+            view.take_sounds();
+            click(&mut view, FRAME_CENTRE);
+            assert_eq!(nav_mode(&view), mode, "{stage}");
+            assert!(
+                !sims(&mut view).contains(&SimSound::HyperSelected),
+                "{stage}"
+            );
+        }
+    }
+
+    #[test]
+    fn minus_zooms_out_a_step_with_snd_150() {
+        let mut view = near();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.take_sounds();
+        assert_eq!(floating_dots(&view), [near_at(16.0 / 9.0), FRAME_CENTRE]);
+        tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(floating_dots(&view), [near_at(4.0 / 3.0), FRAME_CENTRE]);
+        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::FloatingMapZoomed)]);
+        assert_eq!(ZOOM_OUT_KEY, Key::Char('-'));
+    }
+
+    #[test]
+    fn equals_and_keypad_plus_zoom_in_a_step() {
+        for k in [ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY] {
+            let mut view = near();
+            tap(&mut view, HYPERSPACE_MODE_KEY);
+            view.take_sounds();
+            tap(&mut view, k);
+            assert_eq!(floating_dots(&view)[0], near_at(64.0 / 27.0), "{k:?}");
+            assert_eq!(
+                view.take_sounds(),
+                [Sound::Ui(UiSound::FloatingMapZoomed)],
+                "{k:?}"
+            );
+        }
+        assert_eq!(ZOOM_IN_KEY, Key::Char('='));
+        assert_eq!(ZOOM_IN_KEYPAD_KEY, Key::Char('+'));
+    }
+
+    #[test]
+    fn a_zoom_at_its_limit_changes_nothing_and_says_nothing() {
+        let mut view = near();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        tap(&mut view, ZOOM_IN_KEY);
+        view.take_sounds();
+        tap(&mut view, ZOOM_IN_KEY);
+        assert_eq!(floating_dots(&view)[0], near_at(64.0 / 27.0));
+        assert_eq!(view.take_sounds(), []);
+        for _ in 0..6 {
+            tap(&mut view, ZOOM_OUT_KEY);
+        }
+        assert_eq!(floating_dots(&view)[0], near_at(27.0 / 64.0));
+        view.take_sounds();
+        tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(floating_dots(&view)[0], near_at(27.0 / 64.0));
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_zoom_key_does_nothing_while_another_key_is_held() {
+        for k in [
+            Key::Shift,
+            Key::Alt,
+            Key::Control,
+            Key::Command,
+            HYPERSPACE_MODE_KEY,
+            HYPER_SELECT_KEY,
+            NAV_OFF_KEY,
+            JUMP_KEY,
+            Key::Up,
+        ] {
+            let mut view = near();
+            tap(&mut view, HYPERSPACE_MODE_KEY);
+            view.input(&key(k, true));
+            view.take_sounds();
+            tap(&mut view, ZOOM_OUT_KEY);
+            assert_eq!(floating_dots(&view)[0], near_at(16.0 / 9.0), "{k:?}");
+            assert_eq!(view.take_sounds(), [], "{k:?}");
+            view.input(&key(k, false));
+            tap(&mut view, ZOOM_OUT_KEY);
+            assert_eq!(floating_dots(&view)[0], near_at(4.0 / 3.0), "{k:?} let go");
+        }
+    }
+
+    #[test]
+    fn a_zoom_key_does_nothing_with_the_map_down() {
+        let mut view = near();
+        tap(&mut view, ZOOM_OUT_KEY);
+        tap(&mut view, ZOOM_IN_KEY);
+        assert_eq!(view.take_sounds(), []);
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert_eq!(floating_dots(&view)[0], near_at(16.0 / 9.0));
+    }
+
+    #[test]
+    fn a_zoom_shows_the_map_again() {
+        let mut view = near();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.tick(mac_ticks(140));
+        tap(&mut view, ZOOM_OUT_KEY);
+        view.tick(mac_ticks(118));
+        assert_eq!(floating_alpha(&view), Some(255));
+    }
+
+    #[test]
+    fn zooms_are_taken_through_a_jump_and_refused_once_exploded() {
+        for mut view in through_a_jump(near) {
+            let stage = stage(&view);
+            view.input(&key(HYPER_SELECT_KEY, true));
+            view.tick(TICK);
+            view.input(&key(HYPER_SELECT_KEY, false));
+            view.take_sounds();
+            tap(&mut view, ZOOM_OUT_KEY);
+            assert!(
+                view.take_sounds()
+                    .contains(&Sound::Ui(UiSound::FloatingMapZoomed)),
+                "{stage}"
+            );
+            assert_eq!(view.floating.zoom(), 4, "{stage}");
+        }
+        let mut view = exploded();
+        view.floating.show(sixtieths(view.elapsed));
+        view.take_sounds();
+        tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(view.floating.zoom(), floating::START_ZOOM);
+        assert!(
+            !view
+                .take_sounds()
+                .contains(&Sound::Ui(UiSound::FloatingMapZoomed))
+        );
+    }
+
+    #[test]
+    fn the_map_is_drawn_after_the_double_time_icon_and_before_the_escort_menu() {
+        let mut view = escorted().with_double_time(true);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        let list = drawn(&view);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let icon = commands
+            .iter()
+            .position(|command| icon_in(20000..=20000)(command))
+            .expect("the double-time icon");
+        let border = floating_border(&list);
+        let map = commands
+            .iter()
+            .position(|command| **command == border[0])
+            .expect("the floating map");
+        let menu = commands
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::Line { color, .. } if *color == Color::BLACK)
+            })
+            .expect("the escort menu's black");
+        assert!(icon < map && map < menu, "{icon} < {map} < {menu}");
+    }
+
+    #[test]
+    fn the_floating_map_draws_the_sessions_selection_clipped_to_the_frame() {
+        let mut view = flight();
+        tap(&mut view, HYPER_SELECT_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(view.course_map().hyper_selection(), None, "never opened");
+        let list = drawn(&view);
+        let selected: Vec<(Point, Point)> = list
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Line {
+                    from, to, color, ..
+                } if color == HYPER_SELECTED => Some((from, to)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            selected,
+            [(at(693.0, 278.0), at(814.0, 278.0))],
+            "from the edge of Sol's mark to the frame's"
+        );
+        assert!(
+            !list.iter().any(|command| matches!(command,
+                DrawCommand::Line { color, .. } if *color == LINK)),
+            "the link under it is left out"
+        );
+    }
+
+    #[test]
+    fn the_floating_map_draws_the_sessions_course_as_it_is_now() {
+        let mut view = flight();
+        view.session
+            .as_mut()
+            .expect("flying")
+            .plot_course(SystemId(131))
+            .expect("a route");
+        assert_eq!(
+            view.course_map().route(),
+            [],
+            "the course map never shown it"
+        );
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        let list = drawn(&view);
+        let route: Vec<(Point, Point, f32)> = list
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Line {
+                    from,
+                    to,
+                    width,
+                    color,
+                } if color == ROUTE => Some((from, to, width)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            route,
+            [(at(693.0, 278.0), at(814.0, 278.0), ROUTE_WIDTH)],
+            "from the edge of Sol's mark to the frame's"
+        );
+        assert!(
+            !list.iter().any(|command| matches!(command,
+                DrawCommand::Line { color, .. } if *color == LINK)),
+            "the link under it is left out"
+        );
+    }
+
+    // Keys held across a jump's end, an Option release or a repair
+    // (`_HandlePlayer`'s latches 0xdee04, 0xdee48 and 0xdee44).
+
+    /// The times `view` raised `sound` since its sounds were last taken.
+    fn count(view: &mut View, sound: SimSound) -> usize {
+        sims(view).into_iter().filter(|&s| s == sound).count()
+    }
+
+    /// A flight on to Barnard's Star ([`FakeCatalog::onward`]) with a
+    /// course plotted to `to` and flown out, 300 ms into the jump's
+    /// streak, its sounds let go.
+    fn streaking_to(to: i16) -> View {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        plot(&mut view, to);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(300));
+        assert!(view.jump_effect().is_some());
+        view.take_sounds();
+        view
+    }
+
+    /// Ticks `view` through its arrival tick, asserting that no `sound`
+    /// was raised before or on it, then once more, giving how many times
+    /// that tick raised `sound`; then once more again, asserting it is not
+    /// raised a second time.
+    fn after_arrival(view: &mut View, sound: SimSound) -> (NavMode, usize, NavMode) {
+        tick_to_arrival(view);
+        assert_eq!(count(view, sound), 0, "not through the jump nor on arrival");
+        let arrived = nav_mode(view);
+        view.tick(TICK);
+        let acted = count(view, sound);
+        let after = nav_mode(view);
+        view.tick(TICK);
+        assert_eq!(count(view, sound), 0, "once only");
+        assert_eq!(nav_mode(view), after, "nothing more");
+        (arrived, acted, after)
+    }
+
+    #[test]
+    fn h_pressed_before_j_and_held_through_the_jump_acts_the_tick_after_arrival() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        jump_now(&mut view);
+        view.take_sounds();
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!(arrived, NavMode::Off, "the course flown");
+        assert_eq!(acted, 1);
+        assert_eq!(after, NavMode::Hyperspace(None));
+        assert_eq!(floating_alpha(&view), Some(255), "the map up");
+    }
+
+    #[test]
+    fn h_held_through_a_jump_that_cues_the_next_hop_only_beeps() {
+        let mut view = streaking_to(132);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!(arrived, NavMode::Hyperspace(Some(SystemId(132))));
+        assert_eq!((acted, after), (1, arrived), "the selection kept");
+    }
+
+    #[test]
+    fn h_first_pressed_during_the_jump_and_held_acts_after_arrival() {
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            view.input(&key(HYPERSPACE_MODE_KEY, true));
+            view.take_sounds();
+            let (_, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+            assert_eq!((acted, after), (1, NavMode::Hyperspace(None)), "{stage}");
+        }
+    }
+
+    #[test]
+    fn h_pressed_during_the_jump_and_let_go_before_arrival_does_nothing_after() {
+        let mut view = streaking_to(131);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(HYPERSPACE_MODE_KEY, false));
+        let (_, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!((acted, after), (0, NavMode::Off));
+    }
+
+    #[test]
+    fn nav_off_held_through_the_jump_turns_the_nav_off_after_arrival() {
+        let mut view = streaking_to(132);
+        view.input(&key(NAV_OFF_KEY, true));
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!(arrived, NavMode::Hyperspace(Some(SystemId(132))));
+        assert_eq!((acted, after), (1, NavMode::Off));
+    }
+
+    #[test]
+    fn option_backquote_turns_into_nav_off_when_option_is_let_go() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        view.input(&key(Key::Alt, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        ticks(&mut view, 3);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(count(&mut view, SimSound::NavSelected), 0, "Option held");
+        view.input(&key(Key::Alt, false));
+        assert_eq!(
+            count(&mut view, SimSound::NavSelected),
+            0,
+            "at the next frame"
+        );
+        view.tick(TICK);
+        assert_eq!(count(&mut view, SimSound::NavSelected), 1);
+        assert_eq!(nav_mode(&view), NavMode::Off);
+        ticks(&mut view, 2);
+        assert_eq!(count(&mut view, SimSound::NavSelected), 0, "once");
+    }
+
+    #[test]
+    fn h_held_blocks_a_press_of_nav_off() {
+        let mut view = flight();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.tick(TICK);
+        view.take_sounds();
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        assert_eq!(sims(&mut view), []);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+    }
+
+    #[test]
+    fn nav_off_held_blocks_a_press_of_h_which_still_shows_the_map() {
+        let mut view = flight();
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        view.take_sounds();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        assert_eq!(floating_alpha(&view), Some(255), "on the press's own frame");
+        view.tick(TICK);
+        assert_eq!(sims(&mut view), []);
+        assert_eq!(nav_mode(&view), NavMode::Off);
+    }
+
+    #[test]
+    fn a_key_of_the_block_let_go_frees_the_other_held_to_press_again() {
+        let mut view = flight();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        view.input(&key(HYPERSPACE_MODE_KEY, false));
+        view.tick(TICK);
+        view.take_sounds();
+        view.input(&key(NAV_OFF_KEY, false));
+        view.tick(TICK);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        assert_eq!(
+            count(&mut view, SimSound::NavSelected),
+            1,
+            "both up a frame"
+        );
+    }
+
+    #[test]
+    fn each_fresh_press_of_h_or_nav_off_acts_with_no_tick_between() {
+        for k in [HYPERSPACE_MODE_KEY, NAV_OFF_KEY] {
+            let mut view = flight();
+            tap(&mut view, k);
+            tap(&mut view, k);
+            assert_eq!(count(&mut view, SimSound::NavSelected), 2, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn h_and_nav_off_held_through_the_jump_act_once_together_after_arrival() {
+        let mut view = streaking_to(131);
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
+        assert_eq!(arrived, NavMode::Off);
+        assert_eq!((acted, after), (1, NavMode::Hyperspace(None)));
+    }
+
+    #[test]
+    fn option_backquote_held_lets_go_of_a_target_picked_the_next_tick() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        view.input(&key(Key::Alt, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        view.take_sounds();
+        tap(&mut view, NEAREST_KEY);
+        assert!(target_of(&view).is_some(), "Option-R picks");
+        view.take_sounds();
+        view.tick(TICK);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(count(&mut view, SimSound::TargetCleared), 1);
+    }
+
+    #[test]
+    fn another_key_pressed_while_option_backquote_is_held_leaves_the_target_to_the_tick() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        view.input(&key(Key::Alt, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        alt_tap(&mut view, NEAREST_KEY);
+        view.input(&key(Key::Alt, true));
+        let picked = target_of(&view);
+        assert!(picked.is_some());
+        tap(&mut view, Key::Char('z'));
+        assert_eq!(target_of(&view), picked, "no press of the block");
+    }
+
+    #[test]
+    fn option_backquote_held_blocks_h_but_not_its_map_nor_with_h_held_its_target() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        view.input(&key(Key::Alt, true));
+        view.input(&key(NAV_OFF_KEY, true));
+        view.tick(TICK);
+        view.take_sounds();
+        view.input(&key(HYPERSPACE_MODE_KEY, true));
+        assert_eq!(floating_alpha(&view), Some(255), "the map shown");
+        view.tick(TICK);
+        assert_eq!(count(&mut view, SimSound::NavSelected), 0, "H blocked");
+        assert_eq!(nav_mode(&view), NavMode::Off);
+        tap(&mut view, NEAREST_KEY);
+        assert!(target_of(&view).is_some());
+        view.tick(TICK);
+        assert!(target_of(&view).is_some(), "the latch held by H");
+    }
+
+    /// The system Hyper Select picks first from Alpha Centauri (131), the
+    /// first of its links.
+    fn first_link_of_131() -> NavMode {
+        let mut view = flight();
+        run_set(&mut view, "M131");
+        view.settle_script();
+        tap(&mut view, HYPER_SELECT_KEY);
+        nav_mode(&view)
+    }
+
+    #[test]
+    fn backslash_first_pressed_during_the_jump_and_held_acts_after_arrival() {
+        let first = first_link_of_131();
+        assert!(matches!(first, NavMode::Hyperspace(Some(_))));
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            view.input(&key(HYPER_SELECT_KEY, true));
+            view.take_sounds();
+            let (_, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
+            assert_eq!((acted, after), (1, first), "{stage}");
+            assert_eq!(floating_alpha(&view), Some(255), "{stage}: the map up");
+        }
+    }
+
+    #[test]
+    fn backslash_pressed_before_j_and_held_through_does_nothing_after() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        assert_eq!(count(&mut view, SimSound::HyperSelected), 1);
+        jump_now(&mut view);
+        view.take_sounds();
+        let (arrived, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
+        assert_eq!((acted, after), (0, arrived));
+    }
+
+    #[test]
+    fn backslash_let_go_and_pressed_again_during_the_jump_acts_after_arrival() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        jump_now(&mut view);
+        view.input(&key(HYPER_SELECT_KEY, false));
+        view.tick(TICK);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        view.take_sounds();
+        let (_, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
+        assert_eq!(acted, 1);
+        assert!(matches!(after, NavMode::Hyperspace(Some(_))));
+    }
+
+    /// Sets the player's condition in `view` to `to`.
+    fn condition(view: &mut View, to: Condition) {
+        let Ok(session) = &mut view.session else {
+            panic!("flying");
+        };
+        nova_sim::fixture::set_player_condition(session, to);
+    }
+
+    /// Ticks `view` once with the player held disabled.
+    fn tick_disabled(view: &mut View) {
+        condition(view, Condition::Disabled);
+        view.tick(TICK);
+    }
+
+    #[test]
+    fn j_held_into_a_disable_acts_again_on_the_first_intact_tick() {
+        let mut view = new_pilot(flight());
+        view.input(&key(JUMP, true));
+        assert_eq!(view.take_sounds(), [REFUSED]);
+        assert_eq!(view.message(), Some(NO_DESTINATION));
+        view.tick(TICK);
+        assert!(!view.take_sounds().contains(&REFUSED), "held: no repeat");
+        tick_disabled(&mut view);
+        view.message = None;
+        condition(&mut view, Condition::Intact);
+        view.tick(TICK);
+        assert_eq!(
+            view.take_sounds()
+                .iter()
+                .filter(|&&sound| sound == REFUSED)
+                .count(),
+            1
+        );
+        assert_eq!(view.message(), Some(NO_DESTINATION));
+        ticks(&mut view, 2);
+        assert!(!view.take_sounds().contains(&REFUSED), "once");
+    }
+
+    #[test]
+    fn j_first_pressed_while_disabled_and_held_jumps_on_the_first_intact_tick() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        condition(&mut view, Condition::Disabled);
+        view.input(&key(JUMP, true));
+        tick_disabled(&mut view);
+        tick_disabled(&mut view);
+        assert!(
+            !view.preparing_jump() && view.jump_effect().is_none(),
+            "silent"
+        );
+        condition(&mut view, Condition::Intact);
+        view.tick(TICK);
+        assert!(view.preparing_jump() || view.jump_effect().is_some());
+    }
+
+    #[test]
+    fn j_let_go_while_disabled_does_nothing_on_the_repair() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        condition(&mut view, Condition::Disabled);
+        view.input(&key(JUMP, false));
+        tick_disabled(&mut view);
+        condition(&mut view, Condition::Intact);
+        ticks(&mut view, 2);
+        assert!(!view.preparing_jump() && view.jump_effect().is_none());
+    }
+
+    #[test]
+    fn j_held_while_intact_is_refused_once() {
+        let mut view = new_pilot(flight());
+        view.input(&key(JUMP, true));
+        ticks(&mut view, 5);
+        let refused = view
+            .take_sounds()
+            .iter()
+            .filter(|&&sound| sound == REFUSED)
+            .count();
+        assert_eq!(refused, 1);
+    }
+
+    #[test]
+    fn j_held_through_a_jump_with_a_hop_to_go_does_not_begin_the_next() {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        plot(&mut view, 132);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        tick_to_arrival(&mut view);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(132))));
+        let arrival = view.message().map(str::to_owned);
+        ticks(&mut view, 3);
+        assert!(!view.preparing_jump());
+        assert_eq!(view.session().expect("flying").jumping(), None);
+        assert_eq!(view.message().map(str::to_owned), arrival, "nor refused");
+    }
+
+    #[test]
+    fn j_held_through_a_jump_does_nothing_after_arrival() {
+        let mut view = new_pilot(flight());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.preparing_jump());
+        view.take_sounds();
+        tick_to_arrival(&mut view);
+        view.take_sounds();
+        ticks(&mut view, 3);
+        assert!(!view.take_sounds().contains(&REFUSED));
+        assert!(!view.preparing_jump());
+        assert_eq!(view.session().expect("flying").jumping(), None);
     }
 }

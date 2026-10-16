@@ -557,15 +557,19 @@ mod tests {
     #[test]
     fn a_moves_dock_ends_a_warp_up_playing() {
         // The move docks by the entry table's `Reset::Dock`, not through
-        // a landing, so it ends the warp-ups itself (see `warp::WarpUps`).
+        // a landing, so it ends the warp-ups itself (see `warp::WarpUps`),
+        // for the session only: no landing in the original halts them,
+        // so it raises no halt.
         let catalog = atlas();
         let mut session = landed(&catalog);
         session.warp_ups.start(false, 364);
         session.warp_ups.start(true, 252);
+        session.take_sounds();
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
         assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.take_sounds(), [], "silently");
     }
 
     /// The original redraws the rolls only in its daily step
@@ -738,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_pilot_saved_flies_again_docked_at_the_new_stellar() {
+    fn a_moved_pilot_saved_flies_again_on_the_new_stellar() {
         let catalog = atlas();
         let mut session = landed(&catalog);
         session
@@ -747,9 +751,8 @@ mod tests {
         session.assert_docked_among_shown();
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
-        flown.assert_docked_among_shown();
         assert_eq!(flown.system(), SystemId(131));
-        assert_eq!(flown.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(50.0, 60.0));
     }
 
@@ -935,7 +938,8 @@ mod tests {
         let catalog = atlas();
         let flying =
             Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
-        for session in [landed(&catalog), flying] {
+        // Boxed: two sessions side by side outgrow clippy's stack-array limit.
+        for session in [Box::new(landed(&catalog)), Box::new(flying)] {
             for (to, refusal) in [
                 ((132, 140), RelocateRefusal::NoSystem),
                 ((999, 140), RelocateRefusal::NoSystem),
@@ -945,7 +949,7 @@ mod tests {
                 ((131, 142), RelocateRefusal::NotLandable),
                 ((131, 143), RelocateRefusal::NotLandable),
             ] {
-                assert_landing_refused(session.clone(), &catalog, to, refusal);
+                assert_landing_refused((*session).clone(), &catalog, to, refusal);
             }
         }
     }

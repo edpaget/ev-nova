@@ -617,7 +617,9 @@ impl Harness {
     fn steer(&mut self, out: bool) {
         let ship = self.ship();
         let outward = ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y;
-        let drifting_wrong = if out { outward < 0.0 } else { outward > 0.0 };
+        // A crawl, as a ship at rest off the centre can drift, isn't
+        // drifting wrong: Down would hold it there.
+        let drifting_wrong = if out { outward < -1e-3 } else { outward > 1e-3 };
         let facing = ship.position.length() == 0.0 || {
             let away = nova_sim::flight::heading_of(ship.position);
             let way = if out { away } else { away + 180.0 };
@@ -933,6 +935,47 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
         volume: AudioSettings::default().effects_volume,
     };
     assert_eq!(plays, [play(128), play(130)]);
+}
+
+/// The fixture has no `snd `s, so the warp-up's length is the engine's
+/// stand-in, far longer than the jump's effect: it still plays as the
+/// ship arrives, as stock 128 does. The arrival halts it, 128 then 129,
+/// before the warp-out, as `_HandlePlayer`'s warp end does (@0x6c6b7,
+/// @0x6c6d2, then 130 @0x6c706).
+#[test]
+fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
+    let audio = RecordingAudio::new();
+    let log = audio.log();
+    let mut harness = Harness::flying();
+    harness.app = harness
+        .app
+        .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
+    harness.press(Key::Char('m'));
+    let beta = harness.on_map(129);
+    harness.click(beta);
+    harness.press(Key::Char('m'));
+    harness.fly_out();
+    log.borrow_mut().clear();
+    harness.jump_into(129);
+    assert_eq!(harness.session().system(), SystemId(129));
+    let warp = |sound: nova_data::SoundId| (128..=130).contains(&sound.0);
+    let commands: Vec<AudioCommand> = log
+        .borrow()
+        .iter()
+        .copied()
+        .filter(|command| match *command {
+            AudioCommand::Play { sound, .. } | AudioCommand::Halt { sound } => warp(sound),
+            _ => false,
+        })
+        .collect();
+    let play = |id| AudioCommand::Play {
+        sound: nova_data::SoundId(id),
+        volume: AudioSettings::default().effects_volume,
+    };
+    let halt = |id| AudioCommand::Halt {
+        sound: nova_data::SoundId(id),
+    };
+    assert_eq!(commands, [play(128), halt(128), halt(129), play(130)]);
 }
 
 /// Fires every time, recording each percent it is asked.

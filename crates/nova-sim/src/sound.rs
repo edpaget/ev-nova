@@ -11,11 +11,10 @@ pub enum SimSound {
     /// The ship stopped thrusting: the player let go, or it landed or
     /// began a jump.
     ThrustStopped,
-    /// The ship landed, on a stellar with this landing sound, if any.
-    Landed {
-        /// The stellar's own landing sound.
-        stellar_sound: Option<SoundId>,
-    },
+    /// The ship landed. The stellar's own sound is its spaceport's
+    /// ambient sound, which the spaceport plays once it is frontmost, not
+    /// at touchdown (`_DoPortDialog` @0x5fa50, `_PortFilter` @0x4f041).
+    Landed,
     /// The ship took off.
     TookOff,
     /// The warp stage of a jump began out of double time, as the brake
@@ -34,10 +33,14 @@ pub enum SimSound {
     JumpBeganInDoubleTime,
     /// A jump ended in the next system: the warp-out, `snd ` 130
     /// (`_HandlePlayer` @0x6bbd3-0x6bc08; the hypergate @0x63e57 and the
-    /// wormhole @0x6443d play it too). The original may start it up to a
-    /// frame before the system switch, from the end of the warp-up
-    /// (`_WarpUpCallback` @0x31ff3, the fallback @0x6c62a-0x6c706); that
-    /// lag isn't visible to the player.
+    /// wormhole @0x6443d play it too). A jump's warp end first halts the
+    /// warp-ups, a [`SimSound::Halt`] of [`WARP_UP_HALTS`] just before it
+    /// (@0x6c6b7, @0x6c6d2); a gate or wormhole exit halts nothing. The
+    /// original's fallback end starts it a frame before the system switch
+    /// (@0x6c706); that lag isn't visible to the player. A jump's natural
+    /// end, both warp-ups finished, raises none while the last warp-out
+    /// still plays (@0x6bbe1-0x6bbe9; see
+    /// [`WarpOut`](crate::warp::WarpOut)).
     Arrived,
     /// The player became threatened: the Red Alert, `snd ` 370
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see
@@ -154,8 +157,8 @@ pub enum SimSound {
     /// of it, on any channel. A halted warp-up is over for the session's
     /// still-playing skip and the double-time switch too. The player's final explosion raises it with
     /// [`PLAYER_EXPLOSION_HALTS`]; the eject, a sabotage kill outfit going
-    /// off and a disabled player's jump collapse with [`WARP_UP_HALTS`],
-    /// 128 and 129.
+    /// off, a disabled player's jump collapse and a jump's arrival with
+    /// [`WARP_UP_HALTS`], 128 and 129.
     Halt(&'static [SoundId]),
     /// The player ejected from its disabled or dying ship, into the escape
     /// pod or an escape ship: `_escapePodSnd`, `snd ` 372 "Eject"
@@ -197,8 +200,10 @@ pub enum SimSound {
 /// (loaded @0x1c12f-0x1c14f), in the order the player's eject halts them
 /// after its [`SimSound::Ejected`] (`_HandlePlayer` @0x6f925-0x6f95a), a
 /// sabotage kill outfit halts them as it goes off (@0x695ea, @0x6960d),
-/// and a disabled player's jump collapse halts them before its
-/// [`SimSound::JumpCollapsed`] (@0x68a5c, @0x68a7f).
+/// a disabled player's jump collapse halts them before its
+/// [`SimSound::JumpCollapsed`] (@0x68a5c, @0x68a7f), and a jump's warp
+/// end halts them before its [`SimSound::Arrived`] (`_HandlePlayer`
+/// @0x6c6b7, @0x6c6d2, the warp-out @0x6c706).
 pub const WARP_UP_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
 
 /// The sounds the player's final explosion halts, in order:

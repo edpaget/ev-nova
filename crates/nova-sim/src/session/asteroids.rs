@@ -674,16 +674,18 @@ mod tests {
     }
 
     #[test]
-    fn a_session_starting_docked_places_no_field() {
+    fn a_pilot_saved_at_a_stellar_resumes_in_flight_and_places_its_field() {
+        // `_LoadPilotData` resumes over the stellar, in flight, and the
+        // main screen's entry places the field (@0x1a8cf).
         let catalog = rocky(catalog());
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.stellar = Some(StellarId(128));
         let mut session = Session::fly(&catalog, pilot)
             .expect("flies")
             .with_rules(other(RuleKey::AsteroidEntryField));
-        assert!(session.landed().is_some());
+        assert!(session.landed().is_none());
         session.settle_asteroid_field(&mut NeverFires);
-        assert_eq!(session.asteroids().count(), 0);
+        assert_eq!(kinds(&session), [0; 4]);
     }
 
     #[test]
