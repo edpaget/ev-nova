@@ -471,7 +471,7 @@ pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
     HookRules, InfoRow, InterfaceLoad, LandPress, MissionComputer, MissionInfo, MissionInfoPress,
-    MissionShown, MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote,
+    MissionShown, MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote, RefuseShown,
     RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules,
     StellarPick, TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
 };

@@ -106,6 +106,7 @@
 //! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
 //! | [`StartOutsideDialog`](RuleKey::StartOutsideDialog) | `start_outside_dialog` | an accept with no offer dialog open (an `S` outside `OnAccept` and `OnRefuse`, or an unrefusable offer with no text) leaves a destination that is the stellar docked at, or in flight the stellar target, unreached, and drops and refilters no offers; the unrefusable offer's caller then shifts the list as [`offer_shift`](RuleKey::OfferShift) reads it, which, the list left as it is, drops that offer itself under either reading of that key (`_DoMissionAccept` @0xa1fde, @0xa200b; `_OfferMissionFromPort` @0xa377d-0xa37a1; see [`mission`](crate::mission)) | every accept acts as if made from the offer dialog, so the unrefusable offer's accept drops and refilters the offers, and the engine's `offer_shift` then drops the next listed offer as well\* |
 //! | [`OfferShift`](RuleKey::OfferShift) | `offer_shift` | once an outside offer is answered, by an accept from the dialog, a refusal or the accept at once, unless the accept fails, the outside list loses the entry at the index the offer was found at, in the list as the answer left it: a dialog accept, whose own offer is dropped already, drops the next listed offer whatever its venue; a refusal whose `OnRefuse` refilters can leave the refused offer listed; the accept at once drops its own offer, or the next one too when `start_outside_dialog` reads otherwise (`_OfferMissionFromPort` @0xa377d-0xa37a1; see [`mission`](crate::mission)) | each answer drops only the answered offer, so the next offer is offered next\* |
+//! | [`DescMovieGlobals`](RuleKey::DescMovieGlobals) | `desc_movie_globals` | the movie checks read the last `dësc` loaded: a `STR#` text (no room, a cargo pickup with no space, the mission computer's refusal) plays that `dësc`'s after-movie once it closes, so inside an offer the offer's after-movie plays after the no-room text too; and the offer dialog's after-check reads what its answer left, so a `RefuseText`'s after-movie plays a second time and the offer's none (`_LoadDescription` @0x71895-0x718de, @0x71a5e-0x71a77; `_ShowTextDialog` @0x5b40b-0x5b44f; `_OfferOneMission` @0xa3580-0xa35b8) | each dialog plays only its own `dësc`'s movie: a `STR#` text none, and the offer dialog its own after-movie\* |
 //! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
 //! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
 //! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, or spöb 128 with none (@0xa14e8-0xa1518), and an accept in flight reaches no destination\* |
@@ -197,6 +198,7 @@
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
+//! `desc_movie_globals`,
 //! `pay_millions`,
 //! `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`, `mission_ally_index`,
@@ -1570,6 +1572,26 @@ rule_keys! {
     /// anything the Bible says (see the [`mission`](crate::mission)
     /// module's offers).
     OfferShift => "offer_shift",
+    /// Whose movie the `STR#` texts and the offer dialog's after-check
+    /// play. The original keeps the last `dësc` loaded's `MovieFile` and
+    /// `Flags` in globals (*0x3b52f4, *0x3b5644) that every
+    /// `_LoadDescription` overwrites (@0x71895-0x718de; a missing `dësc`
+    /// empties the name, @0x71a5e-0x71a77), and every movie check reads
+    /// them as they stand. By the engine, as it does: a `STR#` text (the
+    /// no-room text @0xa1bb2, the cargo-pickup text @0x982ff, the mission
+    /// computer's refusal @0xa3956), which loads no `dësc`, plays the last
+    /// one loaded's after-movie once it closes (`_ShowTextDialog`
+    /// @0x5b40b-0x5b44f, not gated on its third argument; the before-check
+    /// is, @0x5a76c), so inside an offer the offer's after-movie plays
+    /// after the no-room text and again after the dialog; and the offer
+    /// dialog's after-check (@0xa3580-0xa35b8) reads what the answer left,
+    /// so after a `RefuseText` it plays that `dësc`'s after-movie a second
+    /// time, or none, and never the offer's. By the other reading each
+    /// dialog plays only its own `dësc`'s movie: a `STR#` text none, and
+    /// the offer dialog its own after-movie. The Bible says nothing of it,
+    /// so the other reading is the intended behaviour, not anything the
+    /// Bible says (see [`Session::loaded_after_movie`](crate::Session::loaded_after_movie)).
+    DescMovieGlobals => "desc_movie_globals",
     /// How a mission text's `<PAY>` writes an amount of a million or
     /// more. By the engine, in millions to two places, truncated, as
     /// `_StrcatCommaNumber` (@0x8990-0x8aa3) writes it: "1.23M". By the
@@ -2583,7 +2605,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(79),
+            RuleKey::ALL.iter().rev().nth(80),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2600,7 +2622,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(78),
+            RuleKey::ALL.iter().rev().nth(79),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -2614,8 +2636,25 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(77),
+            RuleKey::ALL.iter().rev().nth(78),
             Some(&RuleKey::OfferShift)
+        );
+    }
+
+    #[test]
+    fn the_desc_movie_globals_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::DescMovieGlobals.key(), "desc_movie_globals");
+        assert_eq!(
+            RuleKey::from_key("desc_movie_globals"),
+            Some(RuleKey::DescMovieGlobals)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::DescMovieGlobals),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(77),
+            Some(&RuleKey::DescMovieGlobals)
         );
     }
 
@@ -3946,7 +3985,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(81),
+            RuleKey::ALL.iter().rev().nth(82),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -4091,6 +4130,7 @@ mod tests {
                 RuleKey::StartActiveMission,
                 RuleKey::StartOutsideDialog,
                 RuleKey::OfferShift,
+                RuleKey::DescMovieGlobals,
                 RuleKey::PayMillions,
                 RuleKey::MissionOrder,
                 RuleKey::PersonMissionStellar,

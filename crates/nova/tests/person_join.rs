@@ -1194,6 +1194,45 @@ fn a_persons_offer_over_flight_plays_its_after_movie_after_the_brief() {
 }
 
 #[test]
+fn a_persons_offer_refused_without_a_text_stays_under_its_after_movie_over_flight() {
+    let (mut game, projector) = hailed_with_movies(Knobs {
+        offer_movie: Some(0x0001),
+        ..PLAIN
+    });
+    assert_eq!(game.showing(), Showing::Offer);
+    game.tap(Key::Char('n'));
+    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(game.showing(), Showing::Movie);
+    assert!(
+        texts(&game.frame()).iter().any(|text| text == "Yes"),
+        "not hidden with no RefuseText (@0xa2e70-0xa2e78)"
+    );
+    game.frame();
+    game.frame();
+    assert_eq!(
+        log(&projector),
+        ["start Offer.mov", "stop"],
+        "the movie runs on"
+    );
+    assert_eq!(game.showing(), Showing::Flight);
+    assert!(
+        !texts(&game.frame()).iter().any(|text| text == "Yes"),
+        "disposed once it closed (@0xa361e)"
+    );
+}
+
+#[test]
+fn a_persons_offer_refused_with_a_text_is_hidden_under_it() {
+    let (mut game, _) = hailed_with_movies(TEXTED);
+    game.tap(Key::Char('n'));
+    assert_eq!(game.flight_text().as_deref(), Some("Your loss."));
+    assert!(
+        !texts(&game.frame()).iter().any(|text| text == "Yes"),
+        "hidden for its RefuseText (@0xa2e8e)"
+    );
+}
+
+#[test]
 fn an_offer_accepted_at_once_over_flight_plays_its_movie_before_its_brief() {
     let (mut game, projector) = hailed_with_movies(Knobs {
         mission_flags: 0x0004,

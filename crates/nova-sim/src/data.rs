@@ -565,6 +565,7 @@ impl PilotCatalog for GameData {
                     comp: raw(record.comp_text),
                     fail: raw(record.fail_text),
                     refuse: raw(record.refuse_text),
+                    refuse_named: record.refuse_text.is_some(),
                     load_cargo: raw(record.load_carg_text),
                     dump_cargo: raw(record.dump_cargo_text),
                     ship_done: raw(record.ship_done_text),
@@ -583,6 +584,7 @@ impl PilotCatalog for GameData {
                     movies: TextMovies {
                         offer: movie(offer),
                         brief: film(record.brief_text),
+                        quick_brief: film(record.quick_brief),
                         comp: film(record.comp_text),
                         fail: film(record.fail_text),
                         refuse: film(record.refuse_text),
@@ -4667,6 +4669,7 @@ mod tests {
                     comp: Some("Comp.".to_owned()),
                     fail: Some("Fail.".to_owned()),
                     refuse: Some("Refuse.".to_owned()),
+                    refuse_named: true,
                     load_cargo: Some("Load <CQ>.".to_owned()),
                     dump_cargo: Some("Dump.".to_owned()),
                     ship_done: Some("Done <SN>.".to_owned()),
@@ -4687,10 +4690,11 @@ mod tests {
                 MissionTexts::named(MissionId(131), "Plain run"),
                 MissionTexts {
                     accept_button: " ok".to_owned(),
+                    refuse_named: true,
                     ..MissionTexts::named(MissionId(132), "")
                 },
             ],
-            "each text carries its own dësc's graphic, none for a graphic of -1; -1 and a missing dësc (0 among them) are no text and no graphic; the undecodable mïsn is skipped"
+            "each text carries its own dësc's graphic, none for a graphic of -1; -1 and a missing dësc (0 among them) are no text and no graphic, a RefuseText naming a missing one still named; the undecodable mïsn is skipped"
         );
         assert_eq!(store(&[]).mission_texts(), []);
     }
@@ -4726,6 +4730,7 @@ mod tests {
             TextMovies {
                 offer: DescMovie::from_desc("Offer.mov", 0x0001),
                 brief: DescMovie::from_desc("Brief.mov", 0x0006),
+                quick_brief: None,
                 comp: movie("Comp.mov"),
                 fail: movie("Fail.mov"),
                 refuse: movie("Refuse.mov"),
@@ -4738,6 +4743,25 @@ mod tests {
         assert_eq!(
             texts[0].movies.offer.as_ref().map(|movie| movie.after),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn the_quick_briefs_movie_is_decoded() {
+        use nova_data::records::mission::Mission;
+        let data = store_named(&[
+            (
+                Mission::TYPE,
+                130,
+                Some("Filmed"),
+                texted([-1, 201, -1, -1, -1, -1, -1, -1], b"\0", b"\0"),
+            ),
+            (Desc::TYPE, 201, None, filmed("Quick.", "Quick.mov", 0x0001)),
+        ]);
+        assert_eq!(
+            data.mission_texts()[0].movies.quick_brief,
+            DescMovie::from_desc("Quick.mov", 0x0001),
+            "the info screen loads it (@0x9d89f)"
         );
     }
 

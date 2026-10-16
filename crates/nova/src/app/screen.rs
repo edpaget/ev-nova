@@ -478,7 +478,11 @@ pub struct AppScreen {
     /// The haggle dialog, over the comm dialog, while a price is asked.
     haggle: Option<HaggleDialog>,
     /// The offer dialog of a person hailed or boarded, over flight, until
-    /// it is answered.
+    /// it is answered; or, answered and not hidden, drawn under the
+    /// mission dialogs its answer opened until they close
+    /// ([`AppScreen::settle_offer`]). While mission dialogs are open over
+    /// it, it is neither ticked nor given input, so its movie waits for
+    /// theirs (`_PlayQTMovie` is modal).
     offer: Option<OfferDialog>,
     /// The mission texts and the mission info screen over flight, while
     /// one is open.
@@ -1012,13 +1016,6 @@ impl AppScreen {
         if self.comm.is_some() {
             return Showing::Comm;
         }
-        if let Some(offer) = &self.offer {
-            return if offer.playing() {
-                Showing::Movie
-            } else {
-                Showing::Offer
-            };
-        }
         if let Some(missions) = &self.missions {
             if missions.playing() {
                 return Showing::Movie;
@@ -1027,6 +1024,13 @@ impl AppScreen {
                 Showing::MissionText
             } else {
                 Showing::MissionInfo
+            };
+        }
+        if let Some(offer) = &self.offer {
+            return if offer.playing() {
+                Showing::Movie
+            } else {
+                Showing::Offer
             };
         }
         if self.plunder.is_some() {
@@ -1305,11 +1309,11 @@ impl AppScreen {
         if let Some(dialog) = &mut self.comm {
             return Some(dialog);
         }
-        if let Some(dialog) = &mut self.offer {
-            return Some(dialog);
-        }
         if let Some(dialogs) = &mut self.missions {
             return Some(dialogs);
+        }
+        if let Some(dialog) = &mut self.offer {
+            return Some(dialog);
         }
         if let Some(dialog) = &mut self.plunder {
             return Some(dialog);
@@ -1442,6 +1446,11 @@ impl AppScreen {
             missions.take_unclaimed();
             self.sounds.extend(missions.take_sounds());
             self.missions = None;
+            // The offer dialog left drawn under them is disposed of
+            // (`DisposeDialogNoFlash` @0xa361e).
+            if self.offer.as_ref().is_some_and(OfferDialog::answered) {
+                self.offer = None;
+            }
             self.fade_once_dialogs_close();
         }
     }
@@ -1558,6 +1567,14 @@ impl AppScreen {
     /// sounds, and flight resumes. The texts the answer queued show over
     /// flight at once, the offer's after-movie among them where the
     /// session queued it.
+    ///
+    /// The dialog is hidden for an accept from the dialog with a refuse
+    /// button (`_OfferOneMission` @0xa2df3) and for a refusal that showed
+    /// a `RefuseText` (@0xa2e8e). Otherwise, the one-button dialog's accept
+    /// (@0xa2f52-0xa2ff7) or a refusal with none, it stays drawn, answered
+    /// and inert, under the mission dialogs the answer opened, until they
+    /// have all closed (`DisposeDialogNoFlash` @0xa361e,
+    /// [`AppScreen::drop_closed_missions`]).
     fn settle_offer(&mut self) {
         let Some(dialog) = &mut self.offer else {
             return;
@@ -1570,18 +1587,25 @@ impl AppScreen {
             return;
         };
         let mission = dialog.prompt().mission;
+        let two_buttons = dialog.prompt().labels.refuse.is_some();
         self.sounds.extend(dialog.take_sounds());
-        self.offer = None;
         let flight = self.flight.as_mut().expect(ENTERED);
-        match choice {
+        let hidden = match choice {
             OfferChoice::Accept => {
                 let _ = flight.accept_mission(mission);
+                two_buttons
             }
-            OfferChoice::Refuse => {
-                let _ = flight.refuse_mission(mission);
-            }
+            OfferChoice::Refuse => flight
+                .refuse_mission(mission)
+                .is_ok_and(|shown| shown.offer_hidden),
+        };
+        if hidden {
+            self.offer = None;
         }
         self.show_mission_texts();
+        if self.missions.is_none() {
+            self.offer = None;
+        }
     }
 
     /// Opens the comm dialog on `view` over flight, which pauses: the
@@ -2816,6 +2840,9 @@ impl AppScreen {
             spaceport.show_computer_row(&row);
         }
         load_info_text(spaceport, flight);
+        if let Some(mission) = spaceport.take_offer_reload() {
+            flight.reload_offer_desc(mission);
+        }
     }
 
     /// The `dësc`s the spaceport's screens have shown, each loaded
@@ -2923,7 +2950,14 @@ impl AppScreen {
                     let _ = flight.accept_mission(mission);
                 }
                 OfferChoice::Refuse => {
-                    let _ = flight.refuse_mission(mission);
+                    // A `RefuseText` hides the dialog (@0xa2e8e); without
+                    // one it stays drawn under what the refusal shows.
+                    if flight
+                        .refuse_mission(mission)
+                        .is_ok_and(|shown| shown.offer_hidden)
+                    {
+                        spaceport.release_answered_offer();
+                    }
                 }
             }
             spaceport.show_mission_texts(flight.take_mission_texts());
@@ -3006,11 +3040,11 @@ impl AppScreen {
         if self.comm.is_some() {
             return self.comm_input(input);
         }
-        if self.offer.is_some() {
-            return self.offer_input(input);
-        }
         if self.missions.is_some() {
             return self.missions_input(input);
+        }
+        if self.offer.is_some() {
+            return self.offer_input(input);
         }
         if self.plunder.is_some() {
             return self.plunder_input(input);
@@ -3116,7 +3150,8 @@ fn open_bar_map(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameDa
 /// input that opened it.
 fn open_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
     if spaceport.take_mission_computer_request() {
-        spaceport.open_mission_computer(flight.open_mission_computer());
+        let computer = flight.open_mission_computer();
+        spaceport.open_mission_computer_after(computer, flight.loaded_after_movie());
     }
     if spaceport.take_hire_request()
         && let Some(list) = flight.escorts_for_hire()
@@ -3602,9 +3637,9 @@ impl Screen for AppScreen {
     /// opened over it.
     fn hides_pointer(&self) -> bool {
         match self.showing() {
-            Showing::Movie => match &self.offer {
-                Some(offer) => offer.hides_pointer(),
-                None => self.missions.as_ref().is_some_and(Screen::hides_pointer),
+            Showing::Movie => match &self.missions {
+                Some(missions) => missions.hides_pointer(),
+                None => self.offer.as_ref().is_some_and(Screen::hides_pointer),
             },
             Showing::Flight | Showing::Spaceport => self.shown().hides_pointer(),
             _ => false,
@@ -10674,6 +10709,7 @@ pub(super) mod tests {
         toggle_movies(&mut screen);
         create(&mut screen, "Ada");
         land_twice(&mut screen);
+        screen.tick(Duration::from_millis(16));
         assert_eq!(reeled(&reel), ["start Offer.mov"], "before the dialog");
         let (mut screen, reel) = filmed(0, "Job.", 0x0001, off);
         toggle_movies(&mut screen);
@@ -10703,12 +10739,168 @@ pub(super) mod tests {
     #[test]
     fn the_spaceports_offer_plays_its_before_movie_and_a_refusal_after_it_plays_none() {
         let (mut screen, reel) = landed_filmed(0, "Job.", 0, Prefs::default());
-        assert_eq!(reeled(&reel), ["start Offer.mov"]);
+        assert!(reeled(&reel).is_empty(), "staged until the spaceport ticks");
         screen.tick(Duration::from_millis(16));
+        assert_eq!(reeled(&reel), ["start Offer.mov"]);
         screen.tick(Duration::from_millis(16));
         screen.input(&key(Key::Char('n'), true));
         assert_eq!(active(&screen), []);
         assert_eq!(reeled(&reel), ["start Offer.mov", "stop"], "none after");
+    }
+
+    /// The router landed at Alpha Prime, whose spaceport offers mission
+    /// 130 of the `mïsn` bytes `mission`, its offer `dësc` "Job." naming
+    /// "Offer.mov" played after, with the `dësc`s `descs` too, movies
+    /// played through a new [`Reel`].
+    fn landed_offering(mission: &[u8], descs: &[(i16, Vec<u8>)]) -> (AppScreen, Rc<Reel>) {
+        let mut fork = game_data_fork(true, true, true, 100, b"", b"", None)
+            .resource(Mission::TYPE, 130, Some(b"Venue job"), mission)
+            .resource(
+                Desc::TYPE,
+                130 + 3872,
+                Some(b"Offer"),
+                &filmed_desc_of("Job.", "Offer.mov", 0x0001),
+            );
+        for (id, desc) in descs {
+            fork = fork.resource(Desc::TYPE, *id, None, desc);
+        }
+        let reel = Rc::new(Reel::default());
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(loaded(&fork))
+            .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
+            .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        (screen, reel)
+    }
+
+    fn ticked(screen: &mut AppScreen, ticks: usize) {
+        for _ in 0..ticks {
+            screen.tick(Duration::from_millis(16));
+        }
+    }
+
+    #[test]
+    fn a_no_room_text_replays_the_spaceport_offers_after_movie() {
+        let mut mission = venue_mission(SPACEPORT);
+        mission[0x10..0x12].copy_from_slice(&0_i16.to_be_bytes());
+        mission[0x12..0x14].copy_from_slice(&10_000_i16.to_be_bytes());
+        let (mut screen, reel) = landed_offering(&mission, &[]);
+        assert!(spaceport(&screen).offer_dialog().is_some());
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [], "no room for the cargo");
+        assert!(
+            spaceport(&screen).mission_text().is_some(),
+            "the no-room text"
+        );
+        assert!(reeled(&reel).is_empty(), "after it, not before");
+        screen.input(&key(Key::Enter, true));
+        ticked(&mut screen, 6);
+        assert_eq!(
+            reeled(&reel),
+            ["start Offer.mov", "stop", "start Offer.mov", "stop"],
+            "the STR# text's after-check reads the offer's (@0x5b40b), and the offer's \
+             after-check plays it again (@0xa3580)"
+        );
+    }
+
+    #[test]
+    fn a_refuse_texts_after_movie_plays_twice_and_the_offers_not_at_all() {
+        let mut mission = venue_mission(SPACEPORT);
+        mission[0x58..0x5A].copy_from_slice(&300_i16.to_be_bytes());
+        let (mut screen, reel) = landed_offering(
+            &mission,
+            &[(300, filmed_desc_of("No.", "Refuse.mov", 0x0001))],
+        );
+        screen.input(&key(Key::Char('n'), true));
+        assert!(
+            spaceport(&screen).mission_text().is_some(),
+            "the RefuseText"
+        );
+        assert!(
+            spaceport(&screen).offer_dialog().is_none(),
+            "the offer hidden for it (@0xa2e8e)"
+        );
+        screen.input(&key(Key::Enter, true));
+        ticked(&mut screen, 6);
+        assert_eq!(
+            reeled(&reel),
+            ["start Refuse.mov", "stop", "start Refuse.mov", "stop"],
+            "nothing reloads the offer after the refuse text (@0xa2eb5-0xa2f4d)"
+        );
+    }
+
+    fn texts_drawn(screen: &AppScreen) -> Vec<String> {
+        drawn(screen)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_refused_spaceport_offer_without_a_refuse_text_stays_drawn_under_its_after_movie() {
+        let (mut screen, reel) = landed_offering(&venue_mission(SPACEPORT), &[]);
+        assert!(texts_drawn(&screen).contains(&"Job.".to_owned()));
+        screen.input(&key(Key::Char('n'), true));
+        assert_eq!(reeled(&reel), ["start Offer.mov"]);
+        assert!(
+            texts_drawn(&screen).contains(&"Job.".to_owned()),
+            "not hidden (@0xa2e70-0xa2e78): under its after-movie until @0xa361e"
+        );
+        ticked(&mut screen, 3);
+        assert_eq!(reeled(&reel), ["start Offer.mov", "stop"]);
+        assert!(
+            !texts_drawn(&screen).contains(&"Job.".to_owned()),
+            "disposed"
+        );
+    }
+
+    #[test]
+    fn a_refuse_text_hides_the_spaceport_offer() {
+        let mut mission = venue_mission(SPACEPORT);
+        mission[0x58..0x5A].copy_from_slice(&300_i16.to_be_bytes());
+        let (mut screen, _) = landed_offering(&mission, &[(300, desc_of("No."))]);
+        screen.input(&key(Key::Char('n'), true));
+        let shown = texts_drawn(&screen);
+        assert!(
+            !shown.contains(&"Job.".to_owned()),
+            "hidden for its RefuseText (@0xa2e8e): {shown:?}"
+        );
+    }
+
+    #[test]
+    fn the_mission_computers_refusal_plays_the_last_descs_after_movie() {
+        let fork = game_data_fork(true, true, true, 100, b"", b"", None).resource(
+            Desc::TYPE,
+            128,
+            None,
+            &filmed_desc_of("A port.", "Port.mov", 0x0001),
+        );
+        let reel = Rc::new(Reel::default());
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(loaded(&fork))
+            .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
+            .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 11);
+        assert!(
+            spaceport(&screen).mission_text().is_some(),
+            "nothing available here"
+        );
+        assert!(reeled(&reel).is_empty());
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(
+            reeled(&reel),
+            ["start Port.mov"],
+            "the stellar's dësc was the last loaded (@0x5f96b), and the refusal's \
+             after-check reads it (@0xa3956, @0x5b40b)"
+        );
     }
 
     #[test]

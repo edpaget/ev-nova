@@ -5833,7 +5833,9 @@ pub(super) mod tests {
             );
         } else {
             assert_eq!(
-                session.refuse_mission(MissionId(140), &mut NeverFires),
+                session
+                    .refuse_mission(MissionId(140), &mut NeverFires)
+                    .map(|_| ()),
                 Ok(())
             );
         }
@@ -6023,7 +6025,9 @@ pub(super) mod tests {
         let mut session = hailing_ace(&catalog);
         session.target_fly_in.start();
         assert_eq!(
-            session.refuse_mission(MissionId(140), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(140), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         settle(&mut session, &catalog);

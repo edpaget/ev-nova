@@ -20,6 +20,11 @@
 //!   `ShipDoneText` as its ship goals are met (see the `mission_ships`
 //!   module), and an accept refused for want of room for its cargo; and,
 //!   in their places among them, an offer's movies ([`MissionShown`]).
+//!   The original keeps the last `dësc` loaded's movie in globals that
+//!   every movie check reads ([`RuleKey::DescMovieGlobals`]): the session
+//!   keeps it as each load is made ([`Session::load_description`]), so a
+//!   `STR#` text plays that `dësc`'s after-movie, and the offer dialog's
+//!   after-check reads what its answer left.
 //!   Each text notes the status bar as it is queued ([`TextBar`],
 //!   [`Session::text_bars`]), and each docked `C`, `E` or `H` how many
 //!   texts came before it ([`InterfaceLoad::texts`](super::InterfaceLoad::texts)),
@@ -30,6 +35,7 @@
 //! an accept is rdm:phase/missions/phase-15-accept-drops-next-offer.
 
 use super::Session;
+#[cfg(test)]
 use super::missions::TextSource;
 use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
@@ -40,6 +46,7 @@ use crate::mission::{
 use crate::navigation::NavMode;
 use crate::player_fate::PlayerCommand;
 use crate::reserves::Reserves;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
 
 /// One offer the mission computer lists.
@@ -141,7 +148,9 @@ impl MissionTextKind {
     }
 
     /// The movie of this text's `dësc` in `texts`. The no-room text is
-    /// `STR#` 2002's and loads no `dësc` (@0xa1b83-0xa1bb2), so it has none.
+    /// `STR#` 2002's and loads no `dësc` (@0xa1b83-0xa1bb2), so it has none
+    /// of its own: it plays the last one loaded's after-movie instead
+    /// ([`Session::loaded_after_movie`]).
     fn movie_of(self, texts: &MissionTexts) -> Option<DescMovie> {
         let movies = &texts.movies;
         match self {
@@ -172,8 +181,9 @@ pub struct MissionText {
     /// (`DLOG` 3004) for one above 127 (`_ShowTextDialog` @0x5a89a).
     pub graphic: Option<i16>,
     /// The movie its `dësc` names, played before or after its dialog
-    /// (`_ShowTextDialog` @0x5a76e-0x5a7ab, @0x5b40b-0x5b44f): none for a
-    /// text that is no `dësc`'s.
+    /// (`_ShowTextDialog` @0x5a76e-0x5a7ab, @0x5b40b-0x5b44f). A text that
+    /// is no `dësc`'s, a `STR#` text, carries the last `dësc` loaded's
+    /// after-movie instead, or none ([`Session::loaded_after_movie`]).
     pub movie: Option<DescMovie>,
 }
 
@@ -200,10 +210,12 @@ pub struct TextBar {
 /// which `_OfferOneMission` plays outside `_ShowTextDialog`, so in its own
 /// place among the texts: the before-movie ahead of the `BriefText` of an
 /// offer accepted at once (@0xa2273-0xa22ab), and the after-movie behind
-/// the texts the offer dialog's answer shows (@0xa3580-0xa35b8).
+/// the texts the offer dialog's answer shows (@0xa3580-0xa35b8), which is
+/// whatever the last `dësc` loaded names
+/// ([`RuleKey::DescMovieGlobals`](crate::RuleKey::DescMovieGlobals)).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MissionShown {
-    /// A text, with its own `dësc`'s movie.
+    /// A text, with its own `dësc`'s movie, or a `STR#` text's stale one.
     Text(MissionText),
     /// An offer's movie, played whatever its
     /// [`after`](DescMovie::after) flag says: the session has placed it.
@@ -328,23 +340,51 @@ impl Session {
     /// one played `after` the dialog or not, as asked.
     fn show_offer_movie(&mut self, mission: MissionId, after: bool) {
         if let Some(movie) = self
-            .mission_texts(mission)
-            .and_then(|texts| texts.movies.offer.clone())
+            .offer_movie(mission)
             .filter(|movie| movie.after == after)
         {
             self.shown_texts.push(MissionShown::Movie(movie));
         }
     }
 
-    /// Queues the after-movie of `mission`'s offer, once the offer
-    /// dialog's answer has queued its texts (`_OfferOneMission`
-    /// @0xa3580-0xa35b8): only for an offer the dialog showed, at a venue
-    /// or from a ship; the mission computer (`_DoMissionDialog`) plays
-    /// none.
+    /// The movie `mission`'s offer `dësc` names, if any.
+    fn offer_movie(&self, mission: MissionId) -> Option<DescMovie> {
+        self.mission_texts(mission)
+            .and_then(|texts| texts.movies.offer.clone())
+    }
+
+    /// Queues the after-movie the offer dialog of `mission` plays once its
+    /// answer has queued its texts (`_OfferOneMission` @0xa3580-0xa35b8):
+    /// only for an offer the dialog showed, at a venue or from a ship; the
+    /// mission computer (`_DoMissionDialog`) plays none. The check reads
+    /// the globals as the answer left them ([`RuleKey::DescMovieGlobals`]):
+    /// by the engine, the last `dësc` loaded's after-movie, which after an
+    /// accept is the offer's again (reloaded @0xa2e29), and after a
+    /// `RefuseText` that text's, as nothing reloads the offer after it
+    /// (@0xa2eb5-0xa2f4d); by the other reading the offer's own.
     pub(super) fn show_offer_after_movie(&mut self, mission: MissionId, venue: Venue) {
-        if venue != Venue::Computer {
-            self.show_offer_movie(mission, true);
+        if venue == Venue::Computer {
+            return;
         }
+        let movie = match self.rules.source_for(RuleKey::DescMovieGlobals) {
+            RuleSource::Engine => self.loaded_movie.clone(),
+            RuleSource::Bible => self.offer_movie(mission),
+        };
+        if let Some(movie) = movie.filter(|movie| movie.after) {
+            self.shown_texts.push(MissionShown::Movie(movie));
+        }
+    }
+
+    /// Loads `mission`'s offer `dësc` again, drawing on `chance`, as
+    /// `_OfferOneMission` does once the mission info screen opened over the
+    /// offer dialog closes (@0xa335c): the movie and the governments it
+    /// leaves are the offer's again. The text is drawn already, so it is
+    /// not filled.
+    pub fn reload_offer_desc(&mut self, mission: MissionId, chance: &mut dyn Chance) {
+        let texts = self.mission_texts(mission);
+        let raw = texts.and_then(|texts| texts.offer.clone());
+        let movie = texts.and_then(|texts| texts.movies.offer.clone());
+        let _ = self.load_description(raw.as_deref(), movie.as_ref(), chance);
     }
 
     /// Whether `mission`'s offer on the visit under way is answered in the
@@ -414,7 +454,7 @@ impl Session {
         }) else {
             return false;
         };
-        let raw = self.take_in(TextSource::Desc, &raw, chance);
+        let raw = self.load_description(Some(&raw), movie.as_ref(), chance);
         let text = match slot {
             Some(slot) => self.mission_text(slot, &raw),
             None => self.plain_text(&raw),
@@ -429,15 +469,19 @@ impl Session {
         true
     }
 
-    /// Queues `text`, `mission`'s `kind` text, to show as it is, with no
-    /// picture.
+    /// Queues `text`, `mission`'s `kind` text, a `STR#` text, to show as
+    /// it is, with no picture, and the last `dësc` loaded's after-movie
+    /// ([`Session::loaded_after_movie`]). The original reads the globals
+    /// as it shows the text, not as it is queued; the texts are modal and
+    /// shown in order, so no load comes between the two.
     pub(super) fn show_text(&mut self, kind: MissionTextKind, mission: MissionId, text: String) {
+        let movie = self.loaded_after_movie();
         self.queue_text(MissionText {
             kind,
             mission,
             text,
             graphic: None,
-            movie: None,
+            movie,
         });
     }
 
@@ -555,7 +599,8 @@ impl Session {
         let texts = self.mission_texts(mission);
         let name = texts.map_or("", |texts| texts.name.as_str()).to_owned();
         let raw = texts.and_then(|texts| texts.offer.clone());
-        let raw = self.load_description(raw.as_deref(), chance);
+        let movie = texts.and_then(|texts| texts.movies.offer.clone());
+        let raw = self.load_description(raw.as_deref(), movie.as_ref(), chance);
         Some(ComputerRow {
             mission,
             text: self.offer_text(mission, &raw)?,
@@ -570,10 +615,10 @@ impl Session {
     /// drawing on `chance`. `None` for a free slot.
     pub fn show_info_row(&mut self, slot: u8, chance: &mut dyn Chance) -> Option<String> {
         let active = self.pilot.missions.get(slot)?;
-        let raw = self
-            .mission_texts(active.mission)
-            .and_then(|texts| texts.quick_brief.clone());
-        let raw = self.load_description(raw.as_deref(), chance);
+        let texts = self.mission_texts(active.mission);
+        let raw = texts.and_then(|texts| texts.quick_brief.clone());
+        let movie = texts.and_then(|texts| texts.movies.quick_brief.clone());
+        let raw = self.load_description(raw.as_deref(), movie.as_ref(), chance);
         Some(self.mission_text(slot, &raw))
     }
 
@@ -658,15 +703,18 @@ impl Session {
             .mission_record(mission)
             .is_some_and(|record| record.flags & UNREFUSABLE == 0);
         let texts = self.mission_texts(mission);
-        let raw = texts.and_then(|texts| texts.offer.as_deref());
-        if !can_refuse && raw.is_none_or(str::is_empty) {
-            // The accept at once returns 1 once it succeeds (@0xa2311,
-            // @0xa368e), so `_OfferMissionFromPort` shifts the list
-            // (@0xa377d-0xa37a1), which `accept_offered` does
-            // (`Session::drop_offered`). Its before-movie plays first, as
-            // it comes before the empty-text check (@0xa2273-0xa22ec); the
-            // accept at once returns before the after-movie
-            // (@0xa230a-0xa231c).
+        let raw = texts.and_then(|texts| texts.offer.clone());
+        let movie = texts.and_then(|texts| texts.movies.offer.clone());
+        if !can_refuse && raw.as_deref().is_none_or(str::is_empty) {
+            // The offer `dësc` is loaded before the empty-text check
+            // (@0xa226e), so a no-room text reads its movie. The accept at
+            // once returns 1 once it succeeds (@0xa2311, @0xa368e), so
+            // `_OfferMissionFromPort` shifts the list (@0xa377d-0xa37a1),
+            // which `accept_offered` does (`Session::drop_offered`). Its
+            // before-movie plays first, as it comes before the empty-text
+            // check (@0xa2273-0xa22ec); the accept at once returns before
+            // the after-movie (@0xa230a-0xa231c).
+            let _ = self.load_description(raw.as_deref(), movie.as_ref(), chance);
             self.show_offer_movie(mission, false);
             let accepted = self.accept_offered(mission, chance);
             return VenueOffer::Accepted { mission, accepted };
@@ -677,9 +725,7 @@ impl Session {
             can_refuse,
         );
         let graphic = texts.and_then(|texts| texts.graphics.offer);
-        let movie = texts.and_then(|texts| texts.movies.offer.clone());
-        let raw = raw.map(str::to_owned);
-        let raw = self.load_description(raw.as_deref(), chance);
+        let raw = self.load_description(raw.as_deref(), movie.as_ref(), chance);
         VenueOffer::Prompt(OfferPrompt {
             mission,
             text: self.offer_text(mission, &raw).unwrap_or_default(),
@@ -746,7 +792,7 @@ mod tests {
     use crate::mission::screens::{BAR, NO_LABEL, OKAY_LABEL, OUTFITTER, SHIPYARD, TRADE_CENTER};
     use crate::mission::{AcceptError, ActiveMission, OfferLabels, SLOTS};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-    use crate::session::AbortError;
+    use crate::session::{AbortError, RefuseShown};
     use crate::sound::SimSound;
     use crate::testkit::{Draws, FakePilotCatalog, catalog, land_now, mission};
 
@@ -1616,6 +1662,7 @@ mod tests {
                 load_cargo: film("5", 0),
                 dump_cargo: film("6", 0),
                 ship_done: film("7", 0),
+                quick_brief: film("8", 0),
             },
             ..MissionTexts::named(MissionId(130), "Run")
         };
@@ -2121,8 +2168,9 @@ mod tests {
             .expect("refused");
         assert_eq!(
             queued(&mut session),
-            [shown(MissionTextKind::Refuse, 142), after()],
-            "refused: its RefuseText, then the after-movie"
+            [shown(MissionTextKind::Refuse, 142)],
+            "refused: its RefuseText, whose dësc names no movie, so the after-check \
+             (@0xa3580) finds none: nothing reloads the offer after it (@0xa2eb5-0xa2f4d)"
         );
         session
             .accept_mission(MissionId(144), &mut NeverFires)
@@ -2160,16 +2208,19 @@ mod tests {
         assert_eq!(
             queued(&mut session),
             [
-                MissionShown::Text(text(
-                    MissionTextKind::NoRoom,
-                    142,
-                    &AcceptRefusal::NoHolds.message()
-                )),
+                MissionShown::Text(MissionText {
+                    movie: film("After.mov", 0x0001),
+                    ..text(
+                        MissionTextKind::NoRoom,
+                        142,
+                        &AcceptRefusal::NoHolds.message()
+                    )
+                }),
                 after(),
             ],
-            "the no-room text (`_DoMissionAccept` @0xa1bb2), then the after-movie \
-             (`_OfferOneMission` sets -0x139 whatever the accept returns @0xa2e5e, @0xa2ff7, \
-             and @0xa3580 plays it)"
+            "the no-room text (`_DoMissionAccept` @0xa1bb2), with the offer's after-movie, \
+             the last dësc loaded (@0x5b40b), then the after-movie again (`_OfferOneMission` \
+             sets -0x139 whatever the accept returns @0xa2e5e, @0xa2ff7, and @0xa3580 plays it)"
         );
         let catalog = screens(vec![at_the_bar(142)], vec![filmed(142)]);
         let mut session = docked(&catalog);
@@ -3239,5 +3290,434 @@ mod tests {
             MissionInfoPress::NoActiveMissions
         );
         assert_eq!(none.take_sounds(), [SimSound::Refused]);
+    }
+
+    /// The rulebook with `desc_movie_globals` read by `source`.
+    fn globals(source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::DescMovieGlobals, source)
+    }
+
+    /// Mission `id`, offered at the bar, with cargo no hold can take.
+    fn heavy(id: i16) -> MissionRecord {
+        MissionRecord {
+            cargo_type: 0,
+            cargo_qty: 10_000,
+            ..at_the_bar(id)
+        }
+    }
+
+    /// Mission `id`'s texts, offering "Ferry." with the offer movie
+    /// `offer` and a `BriefText`.
+    fn offer_filmed(id: i16, offer: Option<DescMovie>) -> MissionTexts {
+        MissionTexts {
+            brief: Some(format!("Brief {id}.")),
+            movies: TextMovies {
+                offer,
+                ..TextMovies::default()
+            },
+            ..offering(id, "Ferry.", "", "")
+        }
+    }
+
+    /// The no-room text of mission `id`, for want of holds, with `movie`.
+    fn no_holds(id: i16, movie: Option<DescMovie>) -> MissionShown {
+        MissionShown::Text(MissionText {
+            movie,
+            ..text(
+                MissionTextKind::NoRoom,
+                id,
+                &AcceptRefusal::NoHolds.message(),
+            )
+        })
+    }
+
+    fn movie_shown(file: &str, flags: u16) -> MissionShown {
+        MissionShown::Movie(film(file, flags).expect("named"))
+    }
+
+    #[test]
+    fn a_loaded_desc_leaves_its_movie_and_a_missing_one_empties_it() {
+        let mut session = ranked(Vec::new(), Vec::new(), Rulebook::default());
+        let movie = film("Loaded.mov", 0x0001);
+        assert_eq!(session.loaded_movie, None, "a new session has loaded none");
+        let _ = session.load_description(
+            Some("Earlier: <PRK128> <SRK129>."),
+            movie.as_ref(),
+            &mut NeverFires,
+        );
+        assert_eq!(session.loaded_movie, movie);
+        let _ = session.load_description(None, film("Other.mov", 0).as_ref(), &mut NeverFires);
+        assert_eq!(
+            session.loaded_movie, None,
+            "a missing dësc empties the MovieFile (@0x71a67-0x71a77)"
+        );
+        assert_eq!(
+            session.plain_text("<PRK128>"),
+            "Ad",
+            "and keeps the governments (@0x71a5e skips @0x71926)"
+        );
+        let _ = session.load_description(Some("Plain."), None, &mut NeverFires);
+        assert_eq!(session.loaded_movie, None, "a dësc that names none");
+        let _ = session.load_description(Some("Again."), movie.as_ref(), &mut NeverFires);
+        let _ = session.peek_desc(Some("Peeked."));
+        assert_eq!(session.loaded_movie, movie, "peeking loads nothing");
+    }
+
+    #[test]
+    fn a_no_room_text_in_an_offer_replays_the_offers_after_movie() {
+        let catalog = screens(
+            vec![heavy(142)],
+            vec![offer_filmed(142, film("After.mov", 0x0001))],
+        );
+        let mut session = docked(&catalog);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        assert!(
+            session
+                .accept_mission(MissionId(142), &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(
+            queued(&mut session),
+            [
+                no_holds(142, film("After.mov", 0x0001)),
+                movie_shown("After.mov", 0x0001),
+            ],
+            "the STR# text's after-check (@0x5b40b) reads the offer's (@0xa226e), \
+             and the offer's after-check plays it again (@0xa3580)"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_the_no_room_text_plays_no_movie() {
+        let catalog = screens(
+            vec![heavy(142)],
+            vec![offer_filmed(142, film("After.mov", 0x0001))],
+        );
+        let mut session = docked(&catalog).with_rules(globals(RuleSource::Bible));
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        assert!(
+            session
+                .accept_mission(MissionId(142), &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(
+            queued(&mut session),
+            [no_holds(142, None), movie_shown("After.mov", 0x0001)]
+        );
+    }
+
+    #[test]
+    fn a_before_movie_never_follows_a_no_room_text() {
+        let catalog = screens(
+            vec![heavy(142)],
+            vec![offer_filmed(142, film("Before.mov", 0))],
+        );
+        let mut session = docked(&catalog);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        assert!(
+            session
+                .accept_mission(MissionId(142), &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(
+            queued(&mut session),
+            [no_holds(142, None)],
+            "a STR# text's before-check is gated off (@0x5a76c), and Flags 0 has no after-movie"
+        );
+    }
+
+    #[test]
+    fn an_offer_accepted_at_once_with_no_room_carries_its_after_movie() {
+        let unrefusable = MissionRecord {
+            flags: UNREFUSABLE,
+            ..heavy(142)
+        };
+        let catalog = screens(
+            vec![unrefusable],
+            vec![MissionTexts {
+                offer: Some(String::new()),
+                ..offer_filmed(142, film("After.mov", 0x0001))
+            }],
+        );
+        let mut session = docked(&catalog);
+        assert!(matches!(
+            session.next_offer(BAR, &mut NeverFires),
+            Some(VenueOffer::Accepted {
+                accepted: Err(_),
+                ..
+            })
+        ));
+        assert_eq!(
+            queued(&mut session),
+            [no_holds(142, film("After.mov", 0x0001))],
+            "the offer dësc is loaded before the empty-text check (@0xa226e), and the accept \
+             at once returns before the offer's after-check (@0xa230a-0xa231c)"
+        );
+    }
+
+    /// Mission 142's texts: offer movie `offer`, and a `RefuseText` whose
+    /// `dësc` names `refuse`.
+    fn refusing(offer: Option<DescMovie>, refuse: Option<DescMovie>) -> MissionTexts {
+        MissionTexts {
+            refuse: Some("No.".to_owned()),
+            refuse_named: true,
+            movies: TextMovies {
+                offer,
+                refuse,
+                ..TextMovies::default()
+            },
+            ..offering(142, "Ferry.", "", "")
+        }
+    }
+
+    fn refuse_shown(movie: Option<DescMovie>) -> MissionShown {
+        MissionShown::Text(MissionText {
+            movie,
+            ..text(MissionTextKind::Refuse, 142, "No.")
+        })
+    }
+
+    #[test]
+    fn a_refuse_texts_after_movie_stands_in_for_the_offers() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![refusing(film("A.mov", 0x0001), film("R.mov", 0x0001))],
+        );
+        for (source, last) in [
+            (RuleSource::Engine, movie_shown("R.mov", 0x0001)),
+            (RuleSource::Bible, movie_shown("A.mov", 0x0001)),
+        ] {
+            let mut session = docked(&catalog).with_rules(globals(source));
+            prompted(session.next_offer(BAR, &mut NeverFires));
+            session
+                .refuse_mission(MissionId(142), &mut NeverFires)
+                .expect("refused");
+            assert_eq!(
+                queued(&mut session),
+                [refuse_shown(film("R.mov", 0x0001)), last],
+                "{source:?}: nothing reloads the offer after the refuse text (@0xa2eb5-0xa2f4d)"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refuse_text_with_a_before_movie_leaves_the_offer_none() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![refusing(film("A.mov", 0x0001), film("R.mov", 0))],
+        );
+        let mut session = docked(&catalog);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        session
+            .refuse_mission(MissionId(142), &mut NeverFires)
+            .expect("refused");
+        assert_eq!(queued(&mut session), [refuse_shown(film("R.mov", 0))]);
+    }
+
+    #[test]
+    fn a_refuse_text_naming_a_missing_desc_empties_the_movie() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![MissionTexts {
+                refuse: None,
+                ..refusing(film("A.mov", 0x0001), None)
+            }],
+        );
+        let mut session = docked(&catalog);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        assert_eq!(
+            session.refuse_mission(MissionId(142), &mut NeverFires),
+            Ok(RefuseShown { offer_hidden: true }),
+            "the test is RefuseText != -1 (@0xa2e70)"
+        );
+        assert_eq!(
+            queued(&mut session),
+            [],
+            "the empty text shows nothing (@0x5a7b0), and the missing dësc emptied the \
+             MovieFile (@0xa2eb5, @0x71a67)"
+        );
+    }
+
+    #[test]
+    fn a_refuse_without_a_refuse_text_keeps_the_offer_shown() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![offer_filmed(142, film("A.mov", 0x0001))],
+        );
+        let mut session = docked(&catalog);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        assert_eq!(
+            session.refuse_mission(MissionId(142), &mut NeverFires),
+            Ok(RefuseShown {
+                offer_hidden: false
+            }),
+            "hidden only for a refuse text (@0xa2e8e)"
+        );
+        assert_eq!(queued(&mut session), [movie_shown("A.mov", 0x0001)]);
+    }
+
+    #[test]
+    fn a_refuse_with_a_refuse_text_hides_the_offer() {
+        let catalog = screens(vec![at_the_bar(142)], vec![refusing(None, None)]);
+        let mut session = docked(&catalog);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        assert_eq!(
+            session.refuse_mission(MissionId(142), &mut NeverFires),
+            Ok(RefuseShown { offer_hidden: true })
+        );
+    }
+
+    #[test]
+    fn an_accept_reloads_the_offer_desc() {
+        let mut session = ranked(
+            vec![at_the_bar(142)],
+            vec![MissionTexts {
+                brief: Some("Earlier: <PRK128> <SRK129>.".to_owned()),
+                movies: TextMovies {
+                    offer: film("A.mov", 0x0001),
+                    brief: film("B.mov", 0x0001),
+                    ..TextMovies::default()
+                },
+                ..offering(142, "Ferry.", "", "")
+            }],
+            Rulebook::default(),
+        );
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        session
+            .accept_mission(MissionId(142), &mut NeverFires)
+            .expect("accepted");
+        let shown = queued(&mut session);
+        assert!(
+            matches!(
+                &shown[..],
+                [
+                    MissionShown::Text(MissionText {
+                        kind: MissionTextKind::Brief,
+                        movie: Some(brief),
+                        ..
+                    }),
+                    MissionShown::Movie(offer),
+                ] if brief.file == "B.mov" && offer.file == "A.mov"
+            ),
+            "the offer dësc is reloaded after the accept (@0xa2e29), before the after-check: \
+             {shown:?}"
+        );
+        assert_eq!(
+            session.plain_text("<PRK128>"),
+            "<PRK128>",
+            "the reload leaves the offer's governments, none, where the BriefText left 129's"
+        );
+    }
+
+    #[test]
+    fn the_computers_no_room_text_reads_the_selected_rows_offer() {
+        let catalog = screens(
+            vec![MissionRecord {
+                cargo_type: 0,
+                cargo_qty: 10_000,
+                ..to_mars(144)
+            }],
+            vec![MissionTexts {
+                offer: Some("Ferry.".to_owned()),
+                movies: TextMovies {
+                    offer: film("M.mov", 0x0001),
+                    ..TextMovies::default()
+                },
+                ..MissionTexts::named(MissionId(144), "Run")
+            }],
+        );
+        let mut session = docked(&catalog);
+        let _ = session.show_computer_row(MissionId(144), &mut NeverFires);
+        assert!(
+            session
+                .accept_mission(MissionId(144), &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(
+            queued(&mut session),
+            [no_holds(144, film("M.mov", 0x0001))],
+            "the selected row's offer (@0x9f9bd); the computer has no after-check"
+        );
+    }
+
+    #[test]
+    fn the_info_row_loads_its_quick_brief_movie() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![MissionTexts {
+                quick_brief: Some("Quick.".to_owned()),
+                movies: TextMovies {
+                    quick_brief: film("Q.mov", 0x0001),
+                    ..TextMovies::default()
+                },
+                ..offering(142, "Ferry.", "", "")
+            }],
+        );
+        let mut session = docked(&catalog);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        session
+            .accept_mission(MissionId(142), &mut NeverFires)
+            .expect("accepted");
+        let _ = session.show_info_row(0, &mut NeverFires);
+        assert_eq!(session.loaded_movie, film("Q.mov", 0x0001));
+    }
+
+    #[test]
+    fn reloading_the_offer_desc_restores_its_movie() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![
+                MissionTexts {
+                    quick_brief: Some("Quick.".to_owned()),
+                    movies: TextMovies {
+                        quick_brief: film("Q.mov", 0x0001),
+                        ..TextMovies::default()
+                    },
+                    ..MissionTexts::named(MissionId(150), "Held")
+                },
+                offer_filmed(142, film("A.mov", 0x0001)),
+            ],
+        );
+        let mut session = docked(&catalog);
+        let offer = Offer {
+            mission: MissionId(150),
+            ..session.mission_offers(Venue::Outside)[0].clone()
+        };
+        let active = ActiveMission::accepted(&mission(150), &offer, session.date());
+        session.pilot.missions.fill(active);
+        prompted(session.next_offer(BAR, &mut NeverFires));
+        let _ = session.show_info_row(0, &mut NeverFires);
+        assert_eq!(
+            session.loaded_movie,
+            film("Q.mov", 0x0001),
+            "the QuickBrief's"
+        );
+        session.reload_offer_desc(MissionId(142), &mut NeverFires);
+        assert_eq!(
+            session.loaded_movie,
+            film("A.mov", 0x0001),
+            "the info screen's close reloads the offer (@0xa335c)"
+        );
+        session
+            .refuse_mission(MissionId(142), &mut NeverFires)
+            .expect("refused");
+        assert_eq!(queued(&mut session), [movie_shown("A.mov", 0x0001)]);
+    }
+
+    #[test]
+    fn loaded_after_movie_by_each_reading() {
+        for (source, flags, after) in [
+            (RuleSource::Engine, 0x0001, film("L.mov", 0x0001)),
+            (RuleSource::Engine, 0, None),
+            (RuleSource::Bible, 0x0001, None),
+        ] {
+            let mut session = docked(&screens(Vec::new(), Vec::new())).with_rules(globals(source));
+            let _ = session.load_description(
+                Some("Loaded."),
+                film("L.mov", flags).as_ref(),
+                &mut NeverFires,
+            );
+            assert_eq!(session.loaded_after_movie(), after, "{source:?} {flags}");
+        }
     }
 }

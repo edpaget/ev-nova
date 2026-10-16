@@ -418,7 +418,7 @@ pub use mission_screens::{
 };
 #[cfg(any(test, feature = "fixture"))]
 pub(crate) use missions::StopRefusal;
-pub use missions::{AbortError, NotOffered};
+pub use missions::{AbortError, NotOffered, RefuseShown};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{Departure, ScriptEffectRules, Settled};
@@ -441,10 +441,11 @@ use crate::board::{
     check_board,
 };
 use crate::catalog::{
-    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DudeId, GateSite, GovtId, JunkId,
-    LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId,
-    OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord,
-    StartError, StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, GateSite, GovtId,
+    JunkId, LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord,
+    OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId,
+    ShipRecord, StartError, StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog,
+    WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -1140,6 +1141,14 @@ pub struct Session {
     /// the crossed rank tags read them; never saved, as the original
     /// saves none of it.
     rank_govts: RankTagGovts,
+    /// The movie the last `dësc` loaded names: the original's `MovieFile`
+    /// and `Flags` globals (*0x3b52f4, *0x3b5644), which each
+    /// `_LoadDescription` overwrites (@0x71895-0x718de) and a missing
+    /// `dësc` empties (@0x71a5e-0x71a77), and which every movie check
+    /// reads as they stand ([`RuleKey::DescMovieGlobals`]). Written with
+    /// the governments above by [`Session::load_description`], so the two
+    /// can't drift; none at a new session, and never saved.
+    loaded_movie: Option<DescMovie>,
     /// The ship `<OSN>` names by the engine (`_offeringShipIndex`; see
     /// the `person_offers` module); never saved, and none at a new pilot
     /// or a load (`_InitMissions` @0x97bbf).
@@ -1542,6 +1551,7 @@ impl Session {
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
             rank_govts: RankTagGovts::NONE,
+            loaded_movie: None,
             offering_ship: None,
             avail_cache: BTreeMap::new(),
             leet: false,

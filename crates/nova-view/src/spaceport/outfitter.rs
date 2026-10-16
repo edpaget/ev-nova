@@ -681,6 +681,14 @@ impl OutfitterScreen {
         self.offering.as_mut()?.take_choice()
     }
 
+    /// Lets go of its offer dialog answered and left drawn, if any
+    /// ([`SpaceportView::release_answered_offer`](super::SpaceportView::release_answered_offer)).
+    pub fn release_answered_offer(&mut self) {
+        if let Some(offering) = &mut self.offering {
+            offering.release_answered();
+        }
+    }
+
     /// Its offers play their movies as `movies` says.
     pub fn set_offer_movies(&mut self, movies: Movies) {
         if let Some(offering) = &mut self.offering {

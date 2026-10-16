@@ -27,7 +27,11 @@
 //! An offer whose `dësc` names a movie ([`OfferPrompt::movie`]) plays it
 //! while movies are on ([`Movies`]): before the dialog
 //! (`_OfferOneMission` @0xa2273-0xa22ab), which is neither drawn nor
-//! given input until the movie ends ([`OfferDialog::with_movies`]). One
+//! given input until the movie ends ([`OfferDialog::with_movies`]). The
+//! movie begins on the dialog's first tick or input, which its holder
+//! gives only once no mission dialog covers it, as `_PlayQTMovie` is
+//! modal: an offer opened under a mission text waits for the text and its
+//! movie. One
 //! with `Flags` 0x0001 set plays after the answer has been acted on, its
 //! `BriefText` or `RefuseText` shown (@0xa3580-0xa35b8, after the accept
 //! @0xa2e06 and the refuse text @0xa2f04): the dialog plays none of it and
@@ -47,9 +51,19 @@
 //! press) asks for the mission info screen
 //! ([`OfferDialog::take_info_request`], @0x98e0c-0x98e2a, opened by
 //! `_OfferOneMission` @0xa3344), also before the letters; the dialog
-//! stays open under it. The original then reloads the offer's text
+//! stays open under it. The original then reloads the offer's `dësc`
 //! (`_LoadDescription` @0xa335c), which redraws what the info screen
-//! covered and changes nothing shown.
+//! covered and leaves its movie the last loaded again: the spaceport asks
+//! for that reload as the screen closes
+//! ([`SpaceportView::take_offer_reload`](super::SpaceportView::take_offer_reload)).
+//!
+//! The answer hides the dialog only for an accept from the dialog with a
+//! refuse button (@0xa2df3) or a refusal that showed a `RefuseText`
+//! (@0xa2e8e). Otherwise it stays drawn, answered and inert, under the
+//! mission dialogs the answer opened, its after-movie among them, until
+//! they have all closed (`DisposeDialogNoFlash` @0xa361e). The dialog
+//! makes no sound (`_TrackSingleMissionButtons` @0x28188 plays nothing,
+//! and its keys are silent), so none waits for the next input.
 //!
 //! A venue that offers missions (the bar, the spaceport, the trade
 //! center, the shipyard and the outfitter) holds its offers in a
@@ -260,21 +274,29 @@ impl OfferDialog {
     }
 
     /// This dialog with its offer's movie, as `movies` plays it: one that
-    /// plays before the dialog begins at once, and the dialog waits for
-    /// it. One that plays after the answer is the session's to queue. With
-    /// movies off, none.
+    /// plays before the dialog is staged, and begins on the dialog's first
+    /// tick or input, which its holder gives only once nothing covers it,
+    /// so it never shares the player with a mission text's movie
+    /// (`_PlayQTMovie` is modal); the dialog waits for it, drawing
+    /// nothing. One that plays after the answer is the session's to queue.
+    /// With movies off, none.
     #[must_use]
     pub fn with_movies(self, movies: &Movies) -> Self {
         let Some(movie) = self.prompt.movie.clone().filter(|movie| !movie.after) else {
             return self;
         };
         let mut dialog = self;
-        if let Some(mut stage) = movies.stage(&movie) {
-            stage.begin();
-            dialog.before = Some(stage);
-            dialog.settle_movie();
-        }
+        dialog.before = movies.stage(&movie);
         dialog
+    }
+
+    /// Begins the movie before the dialog if it has not begun, dropping
+    /// it at once if it cannot start.
+    fn begin_movie(&mut self) {
+        if let Some(stage) = &mut self.before {
+            stage.begin();
+        }
+        self.settle_movie();
     }
 
     /// Whether its movie plays before the dialog shows.
@@ -410,6 +432,7 @@ impl Screen for OfferDialog {
     /// Then Return, Enter and the labels' letters choose; everything else
     /// goes to the dialog. Once answered it takes nothing. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        self.begin_movie();
         if let Some(stage) = &mut self.before {
             stage.input(input);
             self.settle_movie();
@@ -419,8 +442,9 @@ impl Screen for OfferDialog {
         ScreenAction::None
     }
 
-    /// The movie before the dialog moves on.
+    /// The movie before the dialog begins, if it has not, and moves on.
     fn tick(&mut self, dt: Duration) {
+        self.begin_movie();
         if let Some(stage) = &mut self.before {
             stage.tick(dt);
             self.settle_movie();
@@ -487,6 +511,10 @@ pub(crate) struct VenueOffers {
     requested: bool,
     /// The offer dialog, while it is open.
     dialog: Option<OfferDialog>,
+    /// The offer dialog answered and not hidden, drawn and inert under
+    /// the mission dialogs its answer shows until they close or its holder
+    /// releases it ([`VenueOffers::release_answered`]).
+    answered: Option<OfferDialog>,
     /// The offer answered and its choice, until it is taken.
     choice: Option<(MissionId, OfferChoice)>,
     /// The movies the offers play, and whether they play.
@@ -512,6 +540,7 @@ impl VenueOffers {
             wait: Some(first),
             requested: false,
             dialog: None,
+            answered: None,
             choice: None,
             movies: Movies::none(),
             sounds: Vec::new(),
@@ -645,7 +674,12 @@ impl VenueOffers {
     }
 
     /// Keeps the offer dialog's sounds; answered, it closes, its choice
-    /// kept until taken.
+    /// kept until taken. An accept from the dialog with a refuse button
+    /// hides it (`_OfferOneMission` @0xa2df3). The one-button dialog's
+    /// accept does not (@0xa2f52-0xa2ff7), nor does a refusal, until its
+    /// holder knows it showed a `RefuseText` (@0xa2e8e): those stay drawn
+    /// under what the answer shows ([`VenueOffers::release_answered`]),
+    /// until `DisposeDialogNoFlash` (@0xa361e).
     fn settle_dialog(&mut self) {
         let Some(dialog) = &mut self.dialog else {
             return;
@@ -653,18 +687,38 @@ impl VenueOffers {
         self.sounds.extend(dialog.take_sounds());
         if let Some(choice) = dialog.take_choice() {
             self.choice = Some((dialog.prompt().mission, choice));
-            self.dialog = None;
+            let hidden = choice == OfferChoice::Accept && dialog.prompt().labels.refuse.is_some();
+            let answered = self.dialog.take();
+            if !hidden {
+                self.answered = answered;
+            }
         }
+    }
+
+    /// Lets go of the offer dialog answered and left drawn, if any: its
+    /// holder hides it for a refusal that showed a `RefuseText`, and
+    /// disposes of it once the mission dialogs over it have all closed.
+    pub(crate) fn release_answered(&mut self) {
+        self.answered = None;
+    }
+
+    /// The offer dialog answered and left drawn under what its answer
+    /// shows, if any.
+    #[cfg(test)]
+    pub(crate) fn answered(&self) -> Option<&OfferDialog> {
+        self.answered.as_ref()
     }
 
     /// The wait for the next offer runs down by `dt`; once it is out, and
     /// nothing is `covered` over the venue nor is the offer open, the venue
     /// asks. By the engine it runs down whatever covers the venue; by the
     /// other reading only while nothing does.
-    /// The offer dialog open ticks too, its movie moving on
-    /// ([`VenueOffers::tick_dialog`]).
+    /// The offer dialog open ticks too, its movie moving on, unless
+    /// something covers it ([`VenueOffers::tick_dialog`]).
     pub(crate) fn tick(&mut self, dt: Duration, covered: bool) {
-        self.tick_dialog(dt);
+        if !covered {
+            self.tick_dialog(dt);
+        }
         let covered = covered || self.dialog.is_some();
         if covered && self.clock == RuleSource::Bible {
             return;
@@ -680,8 +734,9 @@ impl VenueOffers {
         }
     }
 
-    /// Ticks the offer dialog, if it is open: its movie moves on, and the
-    /// keys pressed under a movie that ends can answer it, on that tick.
+    /// Ticks the offer dialog, if it is open: its movie begins or moves
+    /// on, and the keys pressed under a movie that ends can answer it, on
+    /// that tick. Its holder ticks it only while nothing covers it.
     pub(crate) fn tick_dialog(&mut self, dt: Duration) {
         if let Some(dialog) = &mut self.dialog {
             dialog.tick(dt);
@@ -689,8 +744,11 @@ impl VenueOffers {
         }
     }
 
-    /// Draws the offer dialog, if it is open.
+    /// Draws the offer dialog answered and left drawn, then the one open.
     pub(crate) fn draw(&self, list: &mut DrawList) {
+        if let Some(dialog) = &self.answered {
+            dialog.draw(list);
+        }
         if let Some(dialog) = &self.dialog {
             dialog.draw(list);
         }
@@ -1592,7 +1650,8 @@ mod tests {
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
         assert!(dialog.playing());
         assert!(!offer().playing());
-        assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
+        dialog.tick(Duration::ZERO);
+        assert_eq!(player.calls()[0], Call::Start("Offer.mov".to_owned()));
         assert!(
             texts(&dialog).is_empty(),
             "no dialog drawn: {:?}",
@@ -1652,7 +1711,11 @@ mod tests {
         assert!(player.calls().is_empty());
         let refusing = MockMoviePlayer::refusing();
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&refusing));
-        assert!(texts(&dialog).contains(&"Ferry this to Mars.".to_owned()));
+        dialog.tick(Duration::ZERO);
+        assert!(
+            texts(&dialog).contains(&"Ferry this to Mars.".to_owned()),
+            "on its first tick, as the movie begins"
+        );
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
@@ -1677,8 +1740,9 @@ mod tests {
         let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         offers.set_movies(movies(&player));
         offers.open(filmed(0), Rc::new(MonoMetrics), ButtonStyle::STOCK);
-        assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
+        assert!(player.calls().is_empty(), "staged");
         offers.tick(TICK, false);
+        assert_eq!(player.calls()[0], Call::Start("Offer.mov".to_owned()));
         assert!(
             offers
                 .dialog()
@@ -1709,6 +1773,102 @@ mod tests {
             "on the tick the movie ends"
         );
         assert!(offers.dialog().is_none(), "and the dialog closes");
+    }
+
+    #[test]
+    fn a_before_movie_begins_on_the_dialogs_first_tick_or_input() {
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
+        assert!(player.calls().is_empty(), "staged, not begun");
+        assert!(dialog.playing(), "the dialog waits for it");
+        assert!(drawn(&dialog).is_empty(), "drawing nothing");
+        dialog.tick(Duration::ZERO);
+        assert_eq!(player.calls()[0], Call::Start("Offer.mov".to_owned()));
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
+        dialog.input(&key(Key::Char('n')));
+        assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
+        dialog.tick(TICK);
+        dialog.tick(TICK);
+        assert_eq!(
+            dialog.take_choice(),
+            Some(OfferChoice::Refuse),
+            "the input that began it is kept for the dialog"
+        );
+    }
+
+    #[test]
+    fn a_before_movie_that_cannot_start_gives_its_first_input_to_the_dialog() {
+        let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&MockMoviePlayer::refusing()));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn a_covered_venue_offer_neither_ticks_nor_begins_its_movie() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        offers.set_movies(movies(&player));
+        offers.open(filmed(0), Rc::new(MonoMetrics), ButtonStyle::STOCK);
+        offers.tick(TICK, true);
+        assert!(
+            player.calls().is_empty(),
+            "a mission text over it plays alone: `_PlayQTMovie` is modal"
+        );
+        offers.tick(TICK, false);
+        assert_eq!(player.calls()[0], Call::Start("Offer.mov".to_owned()));
+    }
+
+    /// Answers `offers`' open dialog with `key`, taking the choice.
+    fn answer(offers: &mut VenueOffers, key_pressed: Key) -> Option<(MissionId, OfferChoice)> {
+        offers.input(&key(key_pressed), &mut Vec::new());
+        offers.take_choice()
+    }
+
+    fn drawn_offers(offers: &VenueOffers) -> Vec<String> {
+        let mut list = DrawList::new();
+        offers.draw(&mut list);
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_refused_offer_stays_drawn_and_inert_until_released() {
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        opened(&mut offers);
+        assert_eq!(
+            answer(&mut offers, Key::Char('n')),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+        assert!(offers.dialog().is_none(), "answered");
+        assert!(
+            offers.answered().is_some(),
+            "but not hidden (@0xa2e70-0xa2e78)"
+        );
+        assert!(drawn_offers(&offers).contains(&"Ferry this to Mars.".to_owned()));
+        offers.input(&key(Key::Enter), &mut Vec::new());
+        offers.tick(TICK, false);
+        assert_eq!(offers.take_choice(), None, "inert");
+        offers.release_answered();
+        assert!(drawn_offers(&offers).is_empty());
+    }
+
+    #[test]
+    fn an_accept_hides_the_two_button_dialog_and_not_the_one_button_one() {
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        opened(&mut offers);
+        assert!(answer(&mut offers, Key::Enter).is_some());
+        assert!(offers.answered().is_none(), "hidden (@0xa2df3)");
+        offers.open(prompt("OK", None), Rc::new(MonoMetrics), ButtonStyle::STOCK);
+        assert!(answer(&mut offers, Key::Enter).is_some());
+        assert!(
+            offers.answered().is_some(),
+            "the one-button dialog's accept hides nothing (@0xa2f52-0xa2ff7)"
+        );
     }
 
     /// The original's `_SingleMissionFilter` (@0x98d9a) maps Return, Escape

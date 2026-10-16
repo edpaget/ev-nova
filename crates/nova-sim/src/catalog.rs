@@ -992,6 +992,11 @@ pub struct MissionTexts {
     pub fail: Option<String>,
     /// Its `RefuseText`, shown as its offer is refused.
     pub refuse: Option<String>,
+    /// Whether its `RefuseText` is not -1, whether or not its `dësc` can
+    /// be read: what `_OfferOneMission` tests to hide the offer dialog
+    /// and load the refuse text (@0xa2e70), so one naming a missing
+    /// `dësc` hides the dialog and shows nothing.
+    pub refuse_named: bool,
     /// Its `LoadCargText`, shown as its cargo is loaded.
     pub load_cargo: Option<String>,
     /// Its `DumpCargoText`, shown as its cargo is unloaded.
@@ -1078,6 +1083,9 @@ pub struct TextMovies {
     pub offer: Option<DescMovie>,
     /// The `BriefText`'s.
     pub brief: Option<DescMovie>,
+    /// The `QuickBrief`'s, which the mission info screen loads for the
+    /// row selected (`_MissionInfoFilter` @0x9d89f) and never plays.
+    pub quick_brief: Option<DescMovie>,
     /// The `CompText`'s.
     pub comp: Option<DescMovie>,
     /// The `FailText`'s.
@@ -1105,6 +1113,7 @@ impl MissionTexts {
             comp: None,
             fail: None,
             refuse: None,
+            refuse_named: false,
             load_cargo: None,
             dump_cargo: None,
             ship_done: None,

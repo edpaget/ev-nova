@@ -75,7 +75,8 @@ use std::collections::BTreeMap;
 use super::Session;
 use super::mission_screens::MissionTextKind;
 use crate::catalog::{
-    AuxShip, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId, SystemId,
+    AuxShip, DescMovie, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId,
+    SystemId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
@@ -171,6 +172,18 @@ pub const fn slot_hook(slot: u8, hook: u8) -> SubscriptionId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("the mission is not offered here")]
 pub struct NotOffered;
+
+/// What a refusal from the offer dialog left shown
+/// ([`Session::refuse_mission`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RefuseShown {
+    /// Whether the offer dialog was hidden: only when the mission's
+    /// `RefuseText` is not -1 (`_OfferOneMission` @0xa2e70-0xa2e8e). One
+    /// not hidden stays drawn, answered, under the texts the refusal
+    /// queued and the after-movie, until they have all closed
+    /// (`DisposeDialogNoFlash` @0xa361e).
+    pub offer_hidden: bool,
+}
 
 /// Why [`Session::abort_mission`] aborted nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -459,8 +472,12 @@ impl Session {
     /// taken shows nothing and plays nothing (`_DoMissionAccept`
     /// @0xa1b32-0xa1b42).
     ///
-    /// The offer dialog's after-movie is queued behind whatever the accept
-    /// queued, refused or not ([`Session::show_offer_after_movie`]).
+    /// Then the offer `dësc` is loaded again, refused or not, as the offer
+    /// dialog reloads it after its accept (`_OfferOneMission` @0xa2e29,
+    /// @0xa2fd7) and the mission computer after its own (`_DoMissionDialog`
+    /// @0xa3bea, then @0xa3c32), and the offer dialog's after-movie is
+    /// queued behind whatever the accept queued
+    /// ([`Session::show_offer_after_movie`]).
     pub fn accept_mission(
         &mut self,
         mission: MissionId,
@@ -471,6 +488,7 @@ impl Session {
         let venue = self.offer_of(mission).map(|offer| offer.venue);
         let accepted = self.in_offer_dialog(|session| session.accept_offered(mission, chance));
         if let Some(venue) = venue {
+            self.reload_offer_desc(mission, chance);
             self.show_offer_after_movie(mission, venue);
         }
         accepted
@@ -521,6 +539,11 @@ impl Session {
     /// `person_offers` module). The offer dialog's after-movie is queued
     /// last ([`Session::show_offer_after_movie`]).
     ///
+    /// A `RefuseText` that is not -1 hides the dialog and is loaded
+    /// (@0xa2e70-0xa2eb5), even when its `dësc` is missing, which shows
+    /// nothing and empties the loaded movie. What it gives back says
+    /// whether the dialog was hidden ([`RefuseShown`]).
+    ///
     /// # Errors
     ///
     /// [`NotOffered`] for a mission not offered: in flight, any but the
@@ -529,13 +552,19 @@ impl Session {
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
-    ) -> Result<(), NotOffered> {
+    ) -> Result<RefuseShown, NotOffered> {
         self.interface_loads.clear();
         let offer = self.offer_of(mission).ok_or(NotOffered)?;
         let at = self.outside_position(&offer);
         let record = self.lifecycle_record(mission);
+        let offer_hidden = self
+            .mission_texts(mission)
+            .is_some_and(|texts| texts.refuse_named);
         // `RefuseText`, filled with no mission (index -1, @0xa2ec9).
-        self.show_mission_text(MissionTextKind::Refuse, mission, None, chance);
+        if !self.show_mission_text(MissionTextKind::Refuse, mission, None, chance) && offer_hidden {
+            // A missing `dësc` still loads (@0xa2eb5), emptying the movie.
+            let _ = self.load_description(None, None, chance);
+        }
         self.in_offer_dialog(|session| session.run_script(&record.on_refuse, chance));
         if offer.venue == Venue::Outside {
             self.drop_offered(mission, at);
@@ -544,7 +573,7 @@ impl Session {
         }
         self.end_ship_offer(false);
         self.show_offer_after_movie(mission, offer.venue);
-        Ok(())
+        Ok(RefuseShown { offer_hidden })
     }
 
     /// Where `offer` is listed among the outside offers, when it is one:
@@ -1458,16 +1487,40 @@ impl Session {
         }
     }
 
-    /// Loads `raw`, a `dësc` that may be missing, as `_LoadDescription`
-    /// (@0x717fe) loads one: taken in when there is one
-    /// ([`Session::take_in`]), and otherwise empty, changing nothing. A
-    /// missing one fails its `GetResource` (@0x71825) and only empties the
-    /// text (@0x71a5e-0x71a81), never reaching the reset
+    /// Loads `raw`, a `dësc` that may be missing, naming `movie`, as
+    /// `_LoadDescription` (@0x717fe) loads one: taken in when there is one
+    /// ([`Session::take_in`]), its movie the last loaded
+    /// ([`Session::loaded_after_movie`]; `MovieFile` and `Flags`
+    /// @0x71895-0x718de), and otherwise empty. A missing one fails its
+    /// `GetResource` (@0x71825) and only empties the text and the
+    /// `MovieFile` (@0x71a5e-0x71a81), never reaching the reset
     /// (@0x71926-0x71930), the parse (@0x71936) or the `l33t` letters, so
-    /// the governments the last text left are kept.
-    pub fn load_description(&mut self, raw: Option<&str>, chance: &mut dyn Chance) -> String {
+    /// the governments the last text left are kept. The `Flags` it leaves
+    /// stale are never read, as every movie check tests the name first.
+    pub fn load_description(
+        &mut self,
+        raw: Option<&str>,
+        movie: Option<&DescMovie>,
+        chance: &mut dyn Chance,
+    ) -> String {
+        self.loaded_movie = raw.and(movie).cloned();
         raw.map(|raw| self.take_in(TextSource::Desc, raw, chance))
             .unwrap_or_default()
+    }
+
+    /// The after-movie a `STR#` text plays once it closes, as
+    /// `_ShowTextDialog`'s after-check reads the globals the last
+    /// `_LoadDescription` left (@0x5b40b-0x5b44f), as
+    /// [`RuleKey::DescMovieGlobals`] reads it: by the engine, the last
+    /// `dësc` loaded's movie when its `Flags` 0x0001 is set; by the other
+    /// reading none. A `STR#` text is shown with `_ShowTextDialog`'s third
+    /// argument 0, which gates off the before-check alone (@0x5a76c).
+    #[must_use]
+    pub fn loaded_after_movie(&self) -> Option<DescMovie> {
+        match self.rules.source_for(RuleKey::DescMovieGlobals) {
+            RuleSource::Engine => self.loaded_movie.clone().filter(|movie| movie.after),
+            RuleSource::Bible => None,
+        }
     }
 
     /// `raw`, a `dësc` that may be missing, as loading it would give it
@@ -2985,7 +3038,9 @@ mod tests {
         ]);
         let (mut session, _) = watched(&catalog, Rulebook::default());
         assert_eq!(
-            session.refuse_mission(MissionId(140), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(140), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         assert!(session.control_bit(bit(22)));

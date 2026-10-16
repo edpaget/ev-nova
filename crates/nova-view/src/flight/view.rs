@@ -542,8 +542,8 @@ use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, ControlBits, Hailed, HireList,
     HireRefusal, HireTerms, Hired, InterfaceLoad, MissionBoardLine, MissionComputer, MissionId,
     MissionInfo, MissionInfoPress, MissionShown, News, NotOffered, OfferPrompt, PayNote,
-    PersonRules, PlayerInfo, SessionEvent, StellarIff, TagNames, TextBar, TutorialHint, VenueOffer,
-    ship_layer::SlotSprites,
+    PersonRules, PlayerInfo, RefuseShown, SessionEvent, StellarIff, TagNames, TextBar,
+    TutorialHint, VenueOffer, ship_layer::SlotSprites,
 };
 use nova_sim::{DrawnBox, DrawnShips};
 use nova_sim::{PlayerCommand, PlayerFate};
@@ -579,7 +579,7 @@ use crate::system::starfield;
 use crate::text::TextMetrics;
 use crate::time::{sixtieths, ticks};
 use crate::ui::PlunderShown;
-use crate::ui::catalog::DescriptionSource;
+use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::comm::grouped;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
@@ -4232,23 +4232,33 @@ impl<C: StatusBars> FlightView<C> {
     }
 }
 
-impl<C: DescriptionSource> FlightView<C> {
+impl<C: DescriptionSource + DescriptionGraphics> FlightView<C> {
     /// `dësc` `id`, loaded as `_LoadDescription` loads one for a screen
     /// that shows it now: read from the catalog, then taken in by the
     /// session ([`Session::load_description`]), its conditional text
     /// resolved for the pilot, the remembered rank governments reset and
-    /// parsed, and in the `l33t` mode its letters drawn on the flight's
-    /// chance. With a session that failed, only its conditional text is
-    /// resolved, for a new pilot ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)).
+    /// parsed, its movie the last loaded ([`FlightView::loaded_after_movie`]),
+    /// and in the `l33t` mode its letters drawn on the flight's chance.
+    /// With a session that failed, only its conditional text is resolved,
+    /// for a new pilot ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)).
     ///
     /// # Errors
     ///
-    /// Why the `dësc` cannot be read; the governments are kept, as a
-    /// missing one's are (@0x71a5e).
+    /// Why the `dësc` cannot be read; the governments are kept and the
+    /// movie emptied, as a missing one's are (@0x71a5e-0x71a77).
     pub fn load_description(&mut self, id: i16) -> Result<String, String> {
-        let raw = self.catalog.description(id)?;
+        let raw = match self.catalog.description(id) {
+            Ok(raw) => raw,
+            Err(reason) => {
+                if let Ok(session) = &mut self.session {
+                    let _ = session.load_description(None, None, &mut self.chance);
+                }
+                return Err(reason);
+            }
+        };
+        let movie = self.catalog.description_movie(id);
         Ok(match &mut self.session {
-            Ok(session) => session.load_description(Some(&raw), &mut self.chance),
+            Ok(session) => session.load_description(Some(&raw), movie.as_ref(), &mut self.chance),
             Err(_) => nova_sim::text_parse::conditional_text(
                 &raw,
                 nova_sim::control::Gate::FRESH.pilot,
@@ -5129,6 +5139,27 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// The after-movie a `STR#` text shown now plays, as
+    /// [`Session::loaded_after_movie`] gives it; none for a session that
+    /// failed.
+    #[must_use]
+    pub fn loaded_after_movie(&self) -> Option<nova_sim::DescMovie> {
+        self.session
+            .as_ref()
+            .ok()
+            .and_then(Session::loaded_after_movie)
+    }
+
+    /// Loads `mission`'s offer `dësc` again as the mission info screen
+    /// opened over its offer dialog closes, as
+    /// [`Session::reload_offer_desc`] does on the flight's chance; nothing
+    /// for a session that failed.
+    pub fn reload_offer_desc(&mut self, mission: MissionId) {
+        if let Ok(session) = &mut self.session {
+            session.reload_offer_desc(mission, &mut self.chance);
+        }
+    }
+
     /// The mission info's text of `slot`, selected and loaded, as
     /// [`Session::show_info_row`] gives it on the flight's chance; none
     /// for a session that failed.
@@ -5253,7 +5284,7 @@ impl<C> FlightView<C> {
     ///
     /// [`NotOffered`] when it is not offered; a session that failed offers
     /// nothing.
-    pub fn refuse_mission(&mut self, mission: MissionId) -> Result<(), NotOffered>
+    pub fn refuse_mission(&mut self, mission: MissionId) -> Result<RefuseShown, NotOffered>
     where
         C: StatusBars,
     {
@@ -7223,6 +7254,8 @@ mod tests {
         systems_read: RefCell<Vec<SystemId>>,
         /// The `dësc`s: none, by default.
         descriptions: Vec<(i16, String)>,
+        /// The movies the `dësc`s name: none, by default.
+        desc_movies: Vec<(i16, nova_sim::DescMovie)>,
         /// The commodities: none, by default.
         commodities: CommodityStrings,
         /// The planetary events: none, by default.
@@ -7389,6 +7422,7 @@ mod tests {
             ],
             systems_read: RefCell::default(),
             descriptions: Vec::new(),
+            desc_movies: Vec::new(),
             commodities: CommodityStrings::default(),
             disasters: Vec::new(),
             outfits: Vec::new(),
@@ -8076,6 +8110,19 @@ mod tests {
         }
     }
 
+    impl DescriptionGraphics for FakeCatalog {
+        fn description_graphic(&self, _: i16) -> Option<i16> {
+            None
+        }
+
+        fn description_movie(&self, id: i16) -> Option<nova_sim::DescMovie> {
+            self.desc_movies
+                .iter()
+                .find(|(found, _)| *found == id)
+                .map(|(_, movie)| movie.clone())
+        }
+    }
+
     /// [`catalog`] with `dësc`s 3000 "{b5 "set" "clear"}, sir.", 3001
     /// "<SRK128>" and 3002 "{G "<SRK128>" "x"}".
     fn described() -> FakeCatalog {
@@ -8119,6 +8166,43 @@ mod tests {
             "<SRK128>",
             "reset, and the string not chosen never scanned"
         );
+    }
+
+    #[test]
+    fn load_description_records_the_descs_movie() {
+        let movie = nova_sim::DescMovie::from_desc("Port.mov", 0x0001).expect("named");
+        let mut view = FlightView::new(FakeCatalog {
+            desc_movies: vec![(3000, movie.clone())],
+            ..described()
+        });
+        assert_eq!(view.loaded_after_movie(), None, "none loaded yet");
+        let _ = view.load_description(3000);
+        assert_eq!(
+            view.loaded_after_movie(),
+            Some(movie),
+            "a STR# text shown now plays it after (@0x5b40b)"
+        );
+        let _ = view.load_description(3001);
+        assert_eq!(view.loaded_after_movie(), None, "a dësc naming none");
+    }
+
+    #[test]
+    fn an_unreadable_desc_empties_it() {
+        let movie = nova_sim::DescMovie::from_desc("Port.mov", 0x0001).expect("named");
+        let mut view = FlightView::new(FakeCatalog {
+            desc_movies: vec![(3000, movie)],
+            ..described()
+        });
+        let _ = view.load_description(3001);
+        let _ = view.load_description(3000);
+        assert!(view.load_description(9999).is_err());
+        assert_eq!(
+            view.loaded_after_movie(),
+            None,
+            "as a missing dësc empties the MovieFile (@0x71a67-0x71a77)"
+        );
+        let srk = view.session().expect("flying").plain_text("<SRK128>");
+        assert_eq!(srk, "<SRK128>", "and keeps the governments 3000 left");
     }
 
     #[test]
@@ -13899,7 +13983,7 @@ mod tests {
             (
                 "OnRefuse",
                 |catalog| catalog.missions[0].on_refuse = nova_sim::Script::parse("M131"),
-                |view| assert_eq!(view.refuse_mission(MissionId(130)), Ok(())),
+                |view| assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(())),
             ),
             (
                 "a RefuseText before OnRefuse",
@@ -13911,7 +13995,7 @@ mod tests {
                     }];
                 },
                 |view| {
-                    assert_eq!(view.refuse_mission(MissionId(130)), Ok(()));
+                    assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
                     assert_eq!(view.take_mission_texts().len(), 1);
                     view.close_mission_text();
                 },
@@ -14133,7 +14217,7 @@ mod tests {
             });
             let before = view.reserves();
             stale_bar(&mut view);
-            assert_eq!(view.refuse_mission(MissionId(130)), Ok(()));
+            assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
             assert_eq!(view.take_mission_texts().len(), 1, "{script}");
             assert_eq!(view.reserves_shown(), before, "{script}: before OnRefuse");
             assert_eq!(port_nav(&view), naming("Earth"), "{script}");
@@ -14198,7 +14282,7 @@ mod tests {
             });
             let mut view = docked_at_earth(catalog, cadence);
             assert_eq!(bar_shown(&view), Some(700), "ship 128's");
-            assert_eq!(view.refuse_mission(MissionId(130)), Ok(()));
+            assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
             view
         };
         let landing = {
@@ -20244,7 +20328,7 @@ mod tests {
             "loaded through the session"
         );
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-        assert_eq!(view.refuse_mission(MissionId(131)), Ok(()));
+        assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
         let texts: Vec<_> = view
             .take_mission_texts()
             .into_iter()
@@ -20311,7 +20395,7 @@ mod tests {
         assert_ne!(view.reserves(), held);
         view.reserves_scene = Some(held);
         assert_eq!(view.reserves_shown(), held, "held");
-        assert_eq!(view.refuse_mission(MissionId(131)), Ok(()));
+        assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
         assert_eq!(view.reserves_shown(), view.reserves(), "refused docked");
         view.reserves_scene = Some(held);
         view.radar_scene = Some(stale.clone());
@@ -23218,7 +23302,7 @@ mod tests {
         let mut view = targeting_ace(offering(0, Some("Help?"), false));
         tap(&mut view, HAIL_KEY);
         view.take_offer().expect("offered");
-        assert_eq!(view.refuse_mission(MissionId(130)), Ok(()));
+        assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
         assert_eq!(
             view.refuse_mission(MissionId(130)),
             Err(NotOffered),
@@ -23274,7 +23358,11 @@ mod tests {
             let before = view.reserves();
             let nav = view.nav_shown();
             if refuse {
-                assert_eq!(view.refuse_mission(MissionId(130)), Ok(()), "{what}");
+                assert_eq!(
+                    view.refuse_mission(MissionId(130)).map(|_| ()),
+                    Ok(()),
+                    "{what}"
+                );
             } else {
                 assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
             }
@@ -23307,7 +23395,11 @@ mod tests {
         for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
             let mut view = offered_in_flight(RuleSource::Bible, unrefusable, refuse);
             if refuse {
-                assert_eq!(view.refuse_mission(MissionId(130)), Ok(()), "{what}");
+                assert_eq!(
+                    view.refuse_mission(MissionId(130)).map(|_| ()),
+                    Ok(()),
+                    "{what}"
+                );
             } else {
                 assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
             }

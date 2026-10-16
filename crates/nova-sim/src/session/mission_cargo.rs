@@ -772,6 +772,26 @@ mod tests {
         assert!(!aboard(&session, 0));
     }
 
+    #[test]
+    fn a_pickup_no_space_text_reads_the_last_desc_loaded() {
+        use crate::catalog::DescMovie;
+        let catalog = cargo_catalog(vec![round_trip(140, 2, 1)], vec![]);
+        let mut session = accepted(&catalog);
+        session.pilot.missions.get_mut(0).expect("held").cargo_tons = 21;
+        let movie = DescMovie::from_desc("Last.mov", 0x0001);
+        let _ = session.load_description(Some("Earlier."), movie.as_ref(), &mut NeverFires);
+        assert!(!session.pick_up_boarded_cargo(0));
+        assert_eq!(
+            session.take_texts_only(),
+            [MissionText {
+                movie,
+                ..text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)
+            }],
+            "the STR# text loads no dësc (@0x98292-0x982ff), so its after-check reads the \
+             last one loaded (@0x5b40b)"
+        );
+    }
+
     /// Makes rank 200 active outside any reset, as no set expression can,
     /// each resetting as it ends.
     fn grant_blessing_rank(session: &mut Session) {

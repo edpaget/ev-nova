@@ -1026,7 +1026,9 @@ mod tests {
         let before = session.npcs()[0].clone();
         let offer = session.ship_offer(MissionId(130)).cloned();
         assert_eq!(
-            session.refuse_mission(MissionId(130), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(130), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         assert!(session.control_bit(Bit::new(5).expect("a bit")));
@@ -1187,7 +1189,9 @@ mod tests {
         let mut session = alongside_ace(&catalog);
         let (first, _) = board(&mut session);
         assert_eq!(
-            session.refuse_mission(MissionId(130), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(130), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         assert!(!session.npcs()[0].boarded);
@@ -1201,7 +1205,9 @@ mod tests {
         let mut session = alongside_ace(&catalog);
         let _ = board(&mut session);
         assert_eq!(
-            session.refuse_mission(MissionId(130), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(130), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         assert!(session.pilot().gone(PersonId(600)), "refused");
@@ -1239,7 +1245,9 @@ mod tests {
         assert_eq!(osn(&session, RuleSource::Engine), "Ace", "while offering");
         assert_eq!(osn(&session, RuleSource::Bible), "Ace", "while offering");
         assert_eq!(
-            session.refuse_mission(MissionId(130), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(130), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         assert_eq!(
@@ -1287,7 +1295,9 @@ mod tests {
     fn by_the_engine_osn_reads_whoever_holds_the_hailed_ships_slot_now() {
         let (_, mut session) = offered(0);
         assert_eq!(
-            session.refuse_mission(MissionId(130), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(130), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         session.traffic.remove(NpcId(0));
@@ -1349,7 +1359,9 @@ mod tests {
         let _ = board(&mut session);
         assert_eq!(osn(&session, RuleSource::Engine), "Ace", "@0x65882");
         assert_eq!(
-            session.refuse_mission(MissionId(130), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(130), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         assert_eq!(osn(&session, RuleSource::Engine), "[Error]", "-1 @0x65a11");
