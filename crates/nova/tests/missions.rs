@@ -90,7 +90,14 @@
 //! refusing it leaves, or accepting it shows its `BriefText`, then
 //! leaves. An accept in the mission computer whose `OnAccept` is the `Q`
 //! shows its `BriefText`, then leaves. Without dialogs the landing
-//! leaves at once.
+//! leaves at once. A bar job whose deadline the take-off misses has the
+//! `BriefText` its `OnFailure` queues show over flight in the Done that
+//! leaves, before a frame.
+//!
+//! Screen-loaded `dësc`s: the Pad's and the bar's conditional text shows
+//! resolved on their first frame; the Pad's `<PRKnnn>`/`<SRKnnn>` cross
+//! the governments the computer's names read, until the bar's load
+//! resets them.
 
 use std::cell::RefCell;
 use std::io;
@@ -108,6 +115,7 @@ use nova_data::records::dialog_items::Ditl;
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
+use nova_data::records::rank::Rank;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -458,6 +466,41 @@ fn game_data_landing(
 /// [`game_data_landing`] over the resources `base` holds.
 fn game_data_over(
     run: &[u8],
+    bar_job: (Vec<u8>, &str),
+    run_offer: &str,
+    graphic: i16,
+    pad: &[u8],
+    base: ForkBuilder,
+    more: impl FnOnce(ForkBuilder) -> ForkBuilder,
+) -> Rc<GameData> {
+    game_data_named(
+        Named {
+            run: b"Run to <DST>;courier",
+            bar: "Smoke and quiet talk.",
+        },
+        run,
+        bar_job,
+        run_offer,
+        graphic,
+        pad,
+        base,
+        more,
+    )
+}
+
+/// The texts [`game_data_named`] gives the fixed resources: the run's
+/// name, mission 128's, and the bar's `dësc`, 10000.
+#[derive(Clone, Copy)]
+struct Named<'a> {
+    run: &'a [u8],
+    bar: &'a str,
+}
+
+/// [`game_data_over`] with the run and the bar `named`.
+#[allow(clippy::too_many_arguments)]
+fn game_data_named(
+    named: Named,
+    run: &[u8],
     (bar_job, bar_job_offer): (Vec<u8>, &str),
     run_offer: &str,
     graphic: i16,
@@ -474,7 +517,7 @@ fn game_data_over(
         .resource(Stellar::TYPE, 128, Some(b"Pad"), pad)
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
-        .resource(Mission::TYPE, 128, Some(b"Run to <DST>;courier"), run)
+        .resource(Mission::TYPE, 128, Some(named.run), run)
         .resource(
             Mission::TYPE,
             129,
@@ -503,7 +546,7 @@ fn game_data_over(
             &pictured_desc("Welcome aboard.", graphic),
         )
         .resource(Desc::TYPE, 203, None, &desc("Suit yourself."))
-        .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
+        .resource(Desc::TYPE, 10_000, None, &desc(named.bar))
         .resource(Desc::TYPE, 4000, None, &desc(run_offer))
         .resource(Desc::TYPE, 200, None, &desc("Off you go to <DST>."))
         .resource(Desc::TYPE, 201, None, &desc("Thanks from <DST>."))
@@ -1221,6 +1264,145 @@ fn the_mission_computers_selected_text_is_loaded_through_flight() {
         .lines()
         .concat();
     assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
+}
+
+/// Whether the frame drew `text`, and drew no conditional text left
+/// unresolved.
+fn shows_resolved(frame: &Frame, text: &str) -> bool {
+    let shown = texts(frame);
+    shown.contains(&text.to_owned()) && !shown.iter().any(|shown| shown.contains('{'))
+}
+
+#[test]
+fn a_landing_shows_the_spaceports_conditional_text_resolved_on_its_first_frame() {
+    let data = game_data_built(
+        &timed(mission(128, 200, 201)),
+        bar_job(),
+        "Take this to <DST>.",
+        |fork| {
+            fork.resource(
+                Desc::TYPE,
+                128,
+                None,
+                &desc("Welcome, {G \"sir\" \"ma'am\"}."),
+            )
+        },
+    );
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), data);
+    game.frame();
+    game.land();
+    let frame = game.frame();
+    assert!(
+        shows_resolved(&frame, "Welcome, sir."),
+        "the male reading: {:?}",
+        texts(&frame)
+    );
+}
+
+#[test]
+fn the_bars_desc_shows_its_conditional_text_resolved_on_its_first_frame() {
+    let data = game_data_named(
+        Named {
+            run: b"Run to <DST>;courier",
+            bar: "Smoke, {G \"sir\" \"ma'am\"}.",
+        },
+        &timed(mission(128, 200, 201)),
+        bar_job(),
+        "Take this to <DST>.",
+        -1,
+        &pad(),
+        ForkBuilder::new(),
+        |fork| fork,
+    );
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), data);
+    game.frame();
+    game.land();
+    game.click_port(BAR);
+    assert!(game.spaceport().open_bar().is_some(), "in the bar");
+    let frame = game.frame();
+    assert!(
+        shows_resolved(&frame, "Smoke, sir."),
+        "the male reading: {:?}",
+        texts(&frame)
+    );
+}
+
+/// A `ränk` affiliated with `govt`, its names `name`.
+fn rank(govt: i16, name: &str) -> Vec<u8> {
+    let mut bytes = vec![0; Rank::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x02, &[govt]);
+    for at in [0x18, 0x58] {
+        bytes[at..at + name.len()].copy_from_slice(name.as_bytes());
+    }
+    bytes
+}
+
+/// The run's row name in the mission computer, opened and then closed.
+fn computer_run_name(game: &mut Game) -> String {
+    game.click_port(MISSION_BBS);
+    let name = game
+        .spaceport()
+        .mission_computer()
+        .expect("open")
+        .computer()
+        .rows[0]
+        .name
+        .clone();
+    game.tap(Key::Escape);
+    assert!(game.spaceport().mission_computer().is_none(), "closed");
+    name
+}
+
+#[test]
+fn a_spaceport_desc_naming_srk_resets_the_governments_a_later_computer_row_reads() {
+    // Ranks 200 ("Cdr", of gövt 128) and 201 ("Ad", of 129), both held.
+    // The Pad's dësc and the run's offer text cross the governments the
+    // way the session's tests do; the bar's names no rank.
+    let crossed = "Earlier: <PRK128> <SRK129>.";
+    let data = game_data_named(
+        Named {
+            run: b"Run <PRK128>",
+            bar: "Smoke.",
+        },
+        &timed(mission(128, 200, 201)),
+        bar_job(),
+        crossed,
+        -1,
+        &pad(),
+        ForkBuilder::new(),
+        |fork| {
+            fork.resource(Desc::TYPE, 128, None, &desc(crossed))
+                .resource(Rank::TYPE, 200, None, &rank(128, "Cdr"))
+                .resource(Rank::TYPE, 201, None, &rank(129, "Ad"))
+        },
+    );
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&ada())).expect("a save");
+    save["ranks"] = serde_json::json!([200, 201]);
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &pilot, data);
+    game.frame();
+    game.land();
+
+    // The landing loaded the Pad's dësc, so the computer's names, munged
+    // before its text loads (@0xa0947), read the governments it left.
+    assert_eq!(computer_run_name(&mut game), "Run Ad");
+    assert_eq!(
+        computer_run_name(&mut game),
+        "Run Ad",
+        "the run's own text left them the same"
+    );
+
+    // The bar's screen load resets them (@0x71926-0x71930), and with no
+    // government remembered the tag is left as written (@0x9d53d-0x9d5a5).
+    game.click_port(BAR);
+    assert!(game.spaceport().open_bar().is_some(), "in the bar");
+    game.tap(Key::Escape);
+    assert!(game.spaceport().open_bar().is_none(), "left");
+    assert_eq!(computer_run_name(&mut game), "Run <PRK128>");
 }
 
 #[test]
@@ -2407,6 +2589,30 @@ fn a_q_leaves_take_off_settles_its_deadline_before_the_save_in_the_same_input() 
     assert_eq!(missions, [], "saved failed");
     game.key(Key::Enter, false);
     assert_eq!(store.writes(), writes + 2, "nothing left to save");
+}
+
+#[test]
+fn a_q_leaves_take_off_shows_the_text_its_deadline_queues_over_flight_before_a_frame() {
+    let store = MemoryPilots::new();
+    let (job, offer) = bar_job();
+    let job = fails_into(timed(job), b"S130\0");
+    let data = leaving_data(&leaving_run(), (job, offer));
+    let pilot = holding(
+        &ada(),
+        &[(0, 128, None, Some(128)), (1, 130, Some(0), None)],
+    );
+    let mut game = Game::with_data(&store, &pilot, data);
+    game.frame();
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+
+    // Done leaves; the take-off's TookOff fails the bar job's deadline,
+    // and the BriefText its OnFailure's S130 queues shows over flight in
+    // that input, before any frame.
+    game.key(Key::Enter, true);
+    assert_eq!(game.session().landed(), None, "left");
+    assert_eq!(game.showing(), Showing::MissionText);
+    assert_eq!(game.flight_text().as_deref(), Some("Welcome aboard."));
 }
 
 #[test]
