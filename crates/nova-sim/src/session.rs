@@ -376,6 +376,7 @@ mod hire;
 mod hooks;
 mod hover;
 mod jump_collapse;
+mod map;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_screens;

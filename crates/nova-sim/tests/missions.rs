@@ -238,6 +238,7 @@ impl PilotCatalog for Courier {
                 flags: StellarFlags::CAN_LAND,
                 flags2: 0,
                 govt: None,
+                min_status: 0,
             })
             .collect()
     }

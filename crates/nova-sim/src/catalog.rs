@@ -218,6 +218,10 @@ pub struct ListedStellar {
     pub flags2: u16,
     /// Its `Govt`, or `None` when it is independent.
     pub govt: Option<GovtId>,
+    /// Its `MinStatus`: what the galaxy map's colour code weighs the
+    /// player's record against (see [`iff`](crate::iff)'s "Systems on the
+    /// galaxy map").
+    pub min_status: i16,
 }
 
 /// A system's `Visibility`, raw from its `sÿst`: the galaxy refresh
@@ -2180,6 +2184,7 @@ mod tests {
                 flags: 0x01,
                 flags2: 0,
                 govt: None,
+                min_status: 0,
             }]
         }
 

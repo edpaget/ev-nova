@@ -1577,6 +1577,7 @@ mod tests {
             flags: 0,
             flags2: 0,
             govt: None,
+            min_status: 0,
         };
         let listed = [
             listed(128, &[1]),
@@ -1606,6 +1607,7 @@ mod tests {
             flags: 0,
             flags2: 0,
             govt: None,
+            min_status: 0,
         };
         let listed = [listed(128, &[1]), listed(130, &[2, 3]), listed(140, &[4])];
         assert_eq!(listers_of(&listed, StellarId(130)), ids(&[2, 3]));

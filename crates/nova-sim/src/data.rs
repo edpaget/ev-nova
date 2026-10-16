@@ -479,6 +479,7 @@ impl PilotCatalog for GameData {
                     flags: stellar.flags.bits(),
                     flags2: stellar.flags2.bits(),
                     govt: stellar.govt,
+                    min_status: stellar.min_status,
                 })
             })
             .collect()
@@ -2222,6 +2223,7 @@ mod tests {
                     flags: 0x21,
                     flags2: 0,
                     govt: Some(GovtId(140)),
+                    min_status: 0,
                 },
                 ListedStellar {
                     id: StellarId(129),
@@ -2229,6 +2231,7 @@ mod tests {
                     flags: 0x21,
                     flags2: 0x2000,
                     govt: None,
+                    min_status: 0,
                 },
             ],
             "by ID, each system once by ID; unlisted 130, missing 999, and 133 listed only \

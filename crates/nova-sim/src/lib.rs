@@ -98,6 +98,9 @@
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
 //!   `shïp` and its outfits' fuel scoops.
+//! - [`galaxy_map`]: what the galaxy map draws, as `_DrawMap` decides
+//!   it: the course, the links, the systems coloured by
+//!   `_ColorCodeSystem`, the arrows and the names ([`galaxy_map::draw_map`]).
 //! - [`gate`]: hypergates and wormholes: which a stellar is
 //!   ([`GateKind`]), where each leads, and how a ship comes out of one,
 //!   under the [`GateArrivalRule`] and [`WormholeRule`].
@@ -307,6 +310,7 @@ pub mod exploration;
 pub mod fixture;
 pub mod flight;
 pub mod fuel;
+pub mod galaxy_map;
 pub mod gate;
 pub mod gate_sprite;
 pub mod geometry;

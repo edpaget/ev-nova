@@ -547,7 +547,7 @@ impl Session {
     /// The Con slot the raw mode-3 selection `selected` stands in: the one
     /// noted as it was written, while it stands ([`NavSlot`]); else the
     /// first naming it; else the first whose system stands at its place.
-    fn selected_slot(&self, selected: SystemId) -> Option<usize> {
+    pub(super) fn selected_slot(&self, selected: SystemId) -> Option<usize> {
         if let Some(noted) = self.nav_slot
             && noted.system == self.pilot.system
             && noted.selected == selected
