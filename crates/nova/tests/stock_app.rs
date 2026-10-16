@@ -376,6 +376,7 @@ fn i_shows_the_stock_about_text() {
     assert_eq!(app.take_failures(), []);
     let about = app.screen().about().expect("open");
     assert!(about.lines().len() > 20, "{} lines", about.lines().len());
+    assert_no_tag_or_brace(about.lines());
     send(&mut app, key(Key::Down));
     assert_eq!(app.screen().about().expect("open").first_line(), 1);
     send(&mut app, key(Key::Enter));
@@ -538,6 +539,17 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     );
 }
 
+/// Asserts that no line of a shown `dësc` still holds a tag (`<REG>` in
+/// stock 32767) or conditional text, as `_LoadDescription` and
+/// `_MungeBriefing(0, -1)` leave none.
+fn assert_no_tag_or_brace(lines: &[String]) {
+    let left: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains('<') || line.contains('{'))
+        .collect();
+    assert_eq!(left, Vec::<&String>::new());
+}
+
 /// X on the main menu opens the stock `dësc` 32766 in "Desc Dialog" over
 /// it, as `_MainScreenKey` @0x1ac7e does, and Return closes it.
 #[test]
@@ -576,6 +588,7 @@ fn x_shows_the_stock_desc_32766_over_the_main_menu() {
     assert_eq!(app.screen().showing(), Showing::Note);
     let text = app.screen().about().expect("open");
     assert!(!text.lines().is_empty());
+    assert_no_tag_or_brace(text.lines());
     press(&mut app, Key::Enter);
     assert_eq!(app.screen().showing(), Showing::MainMenu);
 }

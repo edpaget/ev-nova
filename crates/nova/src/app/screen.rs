@@ -1181,23 +1181,18 @@ impl AppScreen {
     }
 
     /// Opens "Desc Dialog" on `dësc` `id` over the side shown, as
-    /// [`open_about`](Self::open_about) opens the About text. The main
-    /// menu's X text ([`MENU_X_TEXT`]) is first run through the briefing
-    /// munge as before any pilot is loaded, as `_MainScreenKey` runs
-    /// `_MungeBriefing(0, -1)` (@0x1aca2-0x1acb1) before
-    /// `_ShowTextDialog` ([`text_tags::expand_before_any_pilot`]). The
-    /// About text has its conditional text resolved as `_DoAboutBox`
-    /// loads it ([`about_words`]).
+    /// [`open_about`](Self::open_about) opens the About text. The About
+    /// text and the main menu's X text ([`MENU_X_TEXT`]) are first loaded
+    /// and munged as before any pilot is loaded ([`start_up_words`]), as
+    /// `_DoAboutBox` and `_MainScreenKey` do before `_ShowTextDialog`.
     fn open_text(&mut self, id: i16) {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
         let rules = nova_sim::text_parse::ParseRules::from_rulebook(&self.rules);
         let dialog = self.data.description(id).and_then(|text| {
-            let text = if id == MENU_X_TEXT {
-                text_tags::expand_before_any_pilot(&text, &*self.data)
-            } else if id == ABOUT_TEXT {
-                about_words(&text, rules)
+            let text = if id == MENU_X_TEXT || id == ABOUT_TEXT {
+                start_up_words(&text, &*self.data, rules)
             } else {
                 text
             };
@@ -3277,16 +3272,25 @@ fn desc_dialog(dialogs: &Dialogs, data: &GameData, text: &str) -> Result<DescDia
     ))
 }
 
-/// The about text `raw` as `_DoAboutBox` loads it (@0x16021): its
-/// conditional text resolved by `rules` for
+/// The about text or the main menu's X text `raw` as the original loads
+/// and munges it at start-up: `_LoadDescription` (about @0x16021, X
+/// @0x1ac9d) resolves its conditional text by `rules` for
 /// [`StartUpPilot`](nova_sim::control::StartUpPilot), with no rank
-/// governments and no draws, as the box has no flight. Its tags are left
-/// as written: the original's `_MungeBriefing` (@0x16035) reads the last
-/// pilot's globals, which
-/// rdm:phase/missions-fidelity/phase-35-text-substitution-second-left-outs
-/// covers.
-fn about_words(raw: &str, rules: nova_sim::text_parse::ParseRules) -> String {
-    nova_sim::text_parse::conditional_text(raw, &nova_sim::control::StartUpPilot, rules)
+/// governments and no draws, as there is no flight; then
+/// `_MungeBriefing(0, -1)` (about @0x16035, X @0x1acb1) fills its tags
+/// from the zeroed globals ([`text_tags::expand_before_any_pilot`]).
+/// After a flight the original reads the last pilot's globals instead
+/// (no `_ResetPlayer` after `_PlayGame`); the engine holds no pilot
+/// outside flight, which rdm:phase/main-screen/phase-3-game-in-progress
+/// builds.
+fn start_up_words(
+    raw: &str,
+    data: &(impl nova_sim::PilotCatalog + ?Sized),
+    rules: nova_sim::text_parse::ParseRules,
+) -> String {
+    let resolved =
+        nova_sim::text_parse::conditional_text(raw, &nova_sim::control::StartUpPilot, rules);
+    text_tags::expand_before_any_pilot(&resolved, data)
 }
 
 /// Flight shows only once it has been built.
@@ -4976,11 +4980,13 @@ pub(super) mod tests {
     #[test]
     fn the_about_text_reads_its_conditional_text_for_a_pilot_not_yet_loaded() {
         assert_eq!(
-            about_words(
+            start_up_words(
                 "By {G \"him\" \"her\"}{b1 \", set\" \"\"}{P30 \".\" \"!\"} <PN>",
+                &*data(),
                 nova_sim::text_parse::ParseRules::default()
             ),
-            "By her. <PN>"
+            "By her. ",
+            "conditional text first, then the tags (no pilot's name)"
         );
     }
 
@@ -4998,6 +5004,76 @@ pub(super) mod tests {
         open_about(&mut screen);
         assert_eq!(
             about(&screen).lines(),
+            ["Hi {x there"],
+            "the stray brace copied as written"
+        );
+    }
+
+    /// Game data holding only `dësc` `id` reading `text` and shïp 128,
+    /// "First", which `<PST>` names before any pilot.
+    fn start_up_text_only(id: i16, text: &str) -> Rc<GameData> {
+        loaded(
+            &ForkBuilder::new()
+                .resource(Desc::TYPE, id, None, &desc_of(text))
+                .resource(
+                    Ship::TYPE,
+                    128,
+                    Some(b"First"),
+                    &vec![0; Ship::SIZE.expect("fixed")],
+                ),
+        )
+    }
+
+    /// The lines main menu X shows over `data`, under `rules`.
+    fn x_lines(data: Rc<GameData>, rules: Rulebook) -> Vec<String> {
+        let store = MemoryPilots::new();
+        let mut screen = with_dialogs(data)
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+            .with_rules(rules);
+        screen.input(&key(Key::Char('x'), true));
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::Note);
+        about(&screen).lines().to_vec()
+    }
+
+    #[test]
+    fn the_about_text_fills_its_tags_as_before_any_pilot() {
+        let mut screen = with_dialogs(start_up_text_only(
+            ABOUT_TEXT,
+            "Registered to: <PN>, a <PST>, {G \"he\" \"she\"}.",
+        ));
+        open_about(&mut screen);
+        assert_eq!(
+            about(&screen).lines().join(" "),
+            "Registered to: , a First, she.",
+            "no pilot's name, ship 128's class, the gender's second reading"
+        );
+    }
+
+    #[test]
+    fn the_x_text_resolves_its_conditional_text_for_a_pilot_not_yet_loaded() {
+        assert_eq!(
+            x_lines(
+                start_up_text_only(MENU_X_TEXT, "Hi {G \"sir\" \"ma'am\"} <PST>"),
+                Rulebook::default()
+            ),
+            ["Hi ma'am First"]
+        );
+    }
+
+    #[test]
+    fn the_x_text_follows_the_apps_rulebook() {
+        let x_only = || start_up_text_only(MENU_X_TEXT, "Hi {x there");
+        assert_eq!(
+            x_lines(x_only(), Rulebook::default()),
+            ["Hi "],
+            "the engine's reading"
+        );
+        assert_eq!(
+            x_lines(
+                x_only(),
+                Rulebook::default().with_override(RuleKey::StrayTextBrace, RuleSource::Bible)
+            ),
             ["Hi {x there"],
             "the stray brace copied as written"
         );
@@ -6456,7 +6532,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_and_x_show_the_about_text_and_desc_32766_munged_before_any_pilot() {
+    fn a_and_x_show_the_about_text_and_desc_32766_both_munged_before_any_pilot() {
         let store = MemoryPilots::new();
         let mut screen = menu_with_dialogs(&store);
         screen.input(&key(Key::Char('a'), true));
@@ -6464,8 +6540,8 @@ pub(super) mod tests {
         assert_eq!(about(&screen).lines()[..2], ["line 0", "line 1"]);
         assert_eq!(
             about(&screen).lines()[2],
-            "line 2 <PN> <DST>",
-            "the About text is shown unmunged"
+            "line 2  [Error]",
+            "no pilot's name, no mission, as _DoAboutBox munges with index -1"
         );
         screen.input(&key(Key::Char('a'), false));
         screen.input(&key(Key::Enter, true));
