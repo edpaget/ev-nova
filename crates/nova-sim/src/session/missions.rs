@@ -4673,9 +4673,14 @@ mod tests {
         catalog
     }
 
-    /// The message the next settling leaves on.
+    /// The message the next settling leaves on: in flight, the
+    /// settling's; landed, the take-off's, the leave held to it.
     fn left_on(session: &mut Session, catalog: &FakePilotCatalog) -> Option<String> {
-        session.settle_script(catalog, &mut NeverFires).message
+        let settled = session.settle_script(catalog, &mut NeverFires);
+        if session.take_off(catalog, &mut NeverFires).is_some() {
+            return session.take_leave_message();
+        }
+        settled.message
     }
 
     const FILLED: &str = "Stock: off to Luna.";

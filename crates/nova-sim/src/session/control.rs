@@ -540,11 +540,8 @@ mod tests {
         assert!(session.pilot().has_explored(SystemId(131)), "X ran");
         let settled = session.settle_script(&catalog, &mut Scripted::default());
         assert_eq!(settled.moved, Some(SystemId(130)), "M and N queued");
-        assert_eq!(
-            settled.took_off,
-            Some(crate::catalog::StellarId(128)),
-            "Q queued"
-        );
+        assert!(session.leave_due(), "Q held");
+        let _ = session.take_off(&catalog, &mut Scripted::default());
         session.tick(crate::flight::Controls::default());
         assert!(
             session

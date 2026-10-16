@@ -12,7 +12,7 @@
 //! | both | @0x15807-0x1583e | every active ship whose parent is the player (+0x9a 0: its escorts and fighters out) takes the new system; the others keep the old one, and `_DoPlayGameWork` runs only the ships in the player's system, so they stay behind |
 //! | both, landed | | `_dockedPortMissions` is filled with -1, and that is all |
 //! | both, in flight | @0x158a4 | the shots, cargo boxes (here the entry table's `Reset::Boxes`), explosions, smoke and asteroids are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
-//! | `Q` | @0x15bee-0x15c6c | `_absquatulateStr` (0x1635a0) becomes one of `STR#` `xxx`'s strings, the raw ID, with no range check, drawn as `T` draws (`_GetRandomIndString`: `Rand(count) + 1`); only inside a mission's set expression (`_currentMissionIndexForSetParser` 0-15, set by `_EvalCurrentMissionBitSetString` @0x99a6b alone, and -1 after it @0x99a79) is it run through `_MungeBriefing(0, slot)` (@0x15c37-0x15c4b), so a hook's text, and `OnRefuse`'s, is shown as it is. A missing or empty list, or an empty pick, leaves it empty (strcpy over an earlier one) |
+//! | `Q` | @0x15bee-0x15c6c | `_absquatulateStr` (0x1635a0) becomes one of `STR#` `xxx`'s strings, the raw ID, with no range check, drawn as `T` draws (`_GetRandomIndString`: `Rand(count) + 1`); only inside a mission's set expression (`_currentMissionIndexForSetParser` 0-15, set by `_EvalCurrentMissionBitSetString` @0x99a6b alone, and -1 after it @0x99a79) is it run through `_MungeBriefing(0, slot)` (@0x15c37-0x15c4b), so a hook's text, and `OnRefuse`'s, is shown as it is. A missing or empty list, or an empty pick, leaves it empty (strcpy over an earlier one). Landed, it is held until the port's filter next runs, after every text and dialog over the port has closed (`_PortFilter` @0x4f047-0x4f063), and the take-off shows it (@0x63588-0x635e3); here [`Session::leave_due`] holds it for the take-off |
 //!
 //! Neither calls `_SetupShipsInSystem` or `_AutoSetExploration`, whose
 //! only callers are a new pilot, the main screen, the take-off and
@@ -46,7 +46,8 @@
 //! middle of something else (a record's hook) always queues.
 //! [`Session::settle_script`] is the story dispatcher's one dispatch
 //! point: it applies the moves, dispatches the story events raised, then
-//! applies a `Q`'s leave, until nothing is left. The scripts the
+//! applies a `Q`'s leave in flight (a landed one is held for the
+//! take-off), until nothing is left. The scripts the
 //! dispatcher runs nest, by [`RuleKey::StoryReentry`]'s engine reading:
 //! after each operator, their moves settle and the events raised
 //! dispatch before the next operator. The events a deferred script's
@@ -127,10 +128,19 @@
 //! - Landed, every port dialog's filter (`_BarFilter` @0x47a4b,
 //!   `_PortFilter` @0x4f041 and the others) closes on its next event, so
 //!   `Q` does not wait for the spaceport to close, it forces it closed;
-//!   the take-off then shows the message (`_DisplayComm` @0x635cf) in
-//!   place of its usual greeting, with no beep. Here
-//!   [`Session::settle_script`] takes off ([`Session::take_off`]) and
-//!   gives the message, for whoever shows the spaceport to close it.
+//!   but the texts and dialogs shown over the port (`_ShowTextDialog`,
+//!   an offer, the mission info screen) never read the string, so the
+//!   leave waits for them. The take-off then shows the message
+//!   (`_DisplayComm` @0x635cf) in place of its usual greeting, with no
+//!   beep, and clears it (@0x635e0). The landing clears it too, before
+//!   the port opens (@0x6332a-0x63335). Here [`Session::settle_script`]
+//!   holds a landed `Q` ([`Session::leave_due`]) for whoever shows the
+//!   spaceport to leave it once nothing shown over it holds the leave;
+//!   [`Session::take_off`] consumes it, giving its message once
+//!   ([`Session::take_leave_message`]), and the landing drops one still
+//!   pending. A held leave is not saved, as the original's pilot file
+//!   holds no such string, so a pilot saved at the landing reloads docked
+//!   with no `Q`.
 //! - In flight, the next frame beeps `_beepSnd[4]` (`_PlayGame`
 //!   @0x4654c) and shows the message: here the message, and
 //!   [`SimSound::ScriptMessage`].
@@ -187,7 +197,7 @@
 
 use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
-use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
+use crate::catalog::{PilotCatalog, SoundId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
 use crate::landing::is_dockable_destroyed_or_not;
@@ -252,8 +262,11 @@ pub(super) enum ScriptMove {
 pub(super) struct Queued {
     /// The moves, in order.
     pub(super) moves: Vec<ScriptMove>,
-    /// The message a `Q` leaves on: none for no `Q` pending.
+    /// The message a `Q` leaves on: none for no `Q` pending. Landed, it
+    /// is held to the take-off, as `_absquatulateStr` is.
     leave: Option<String>,
+    /// The message the last take-off left on, a held `Q`'s, until taken.
+    left_with: Option<String>,
     /// The mission sound a `P` holds to the next flight tick.
     pub(super) sound: Option<SoundId>,
 }
@@ -264,9 +277,8 @@ pub(super) struct Queued {
 pub struct Settled {
     /// The system the last move applied went to, if any did.
     pub moved: Option<SystemId>,
-    /// The stellar a `Q` made the ship take off from, if it was landed.
-    pub took_off: Option<StellarId>,
-    /// The message a `Q` shows, if it has one.
+    /// The message a `Q` in flight shows, if it has one. A landed `Q` is
+    /// held for the take-off instead ([`Session::leave_due`]).
     pub message: Option<String>,
 }
 
@@ -349,24 +361,55 @@ impl Session {
         }
     }
 
-    /// Applies a `Q`'s leave, if one is pending, noting it on `settled`:
-    /// whether one was.
-    pub(super) fn settle_leave(
-        &mut self,
-        catalog: &(impl TrafficCatalog + ?Sized),
-        chance: &mut (impl Chance + ?Sized),
-        settled: &mut Settled,
-    ) -> bool {
+    /// Applies a `Q`'s leave in flight, if one is pending, noting its
+    /// message on `settled`: whether one was. Landed, the leave is held,
+    /// as `_absquatulateStr` is, for whoever shows the spaceport to take
+    /// off once nothing it shows holds the leave ([`Session::leave_due`]),
+    /// and nothing is applied.
+    pub(super) fn settle_leave(&mut self, settled: &mut Settled) -> bool {
+        if self.landed.is_some() {
+            return false;
+        }
         let Some(text) = self.queued.leave.take() else {
             return false;
         };
         settled.message = Some(text).filter(|text| !text.is_empty());
-        if self.landed.is_some() {
-            settled.took_off = self.take_off(catalog, chance);
-        } else if settled.message.is_some() {
+        if settled.message.is_some() {
             self.sounds.push(SimSound::ScriptMessage);
         }
         true
+    }
+
+    /// Whether a `Q` run while landed waits for the take-off: every port
+    /// filter of the original leaves on its next call while
+    /// `_absquatulateStr` is set (`_PortFilter` @0x4f047-0x4f063 and the
+    /// others; see the module docs). The leave waits for the texts and
+    /// dialogs shown over the spaceport, which never read it.
+    #[must_use]
+    pub fn leave_due(&self) -> bool {
+        self.landed.is_some() && self.queued.leave.is_some()
+    }
+
+    /// The take-off's part of a held `Q`: it consumes the leave, keeping
+    /// its message, if it has one, for [`Session::take_leave_message`]
+    /// (`_PlayerLandOnStellar` @0x63588-0x635e3). A take-off with no `Q`
+    /// keeps none.
+    pub(super) fn depart(&mut self) {
+        self.queued.left_with = self.queued.leave.take().filter(|text| !text.is_empty());
+    }
+
+    /// The message the last take-off left on, a held `Q`'s, once: the
+    /// take-off line, shown in place of the take-off's greeting, with no
+    /// beep (`_DisplayComm` @0x635cf).
+    pub fn take_leave_message(&mut self) -> Option<String> {
+        self.queued.left_with.take()
+    }
+
+    /// The landing's part: a leave still pending is dropped
+    /// (`_PlayerLandOnStellar` clears `_absquatulateStr` before the port
+    /// opens, @0x6332a-0x63335).
+    pub(super) fn drop_leave(&mut self) {
+        self.queued.leave = None;
     }
 
     /// `P`: plays `sound`, held to the next flight tick or at once, as
@@ -488,8 +531,8 @@ impl Session {
 mod tests {
     use super::*;
     use crate::catalog::{
-        DudeId, DudeRecord, GovtId, HullRecord, LandingSite, ShipId, SoundId, StockWeapon,
-        SystemTraffic, WeaponId, WeaponRecord,
+        DudeId, DudeRecord, GovtId, HullRecord, LandingSite, ShipId, SoundId, StellarId,
+        StockWeapon, SystemTraffic, WeaponId, WeaponRecord,
     };
     use std::rc::Rc;
 
@@ -1407,33 +1450,75 @@ mod tests {
         chance.sides_asked
     }
 
+    /// Takes off from wherever `session` is landed, on a chance that
+    /// never fires.
+    fn take_off(session: &mut Session, catalog: &FakePilotCatalog) -> Option<StellarId> {
+        session.take_off(catalog, &mut NeverFires)
+    }
+
     #[test]
-    fn a_q_leave_passes_the_take_offs_day() {
+    fn a_landed_q_is_held_for_the_take_off_and_passes_its_day_there() {
         let catalog = moving();
         let mut session = told(landed(&catalog));
         let landed_on = session.date();
         run_rolling(&mut session, "Q25048", &[2]);
+        assert!(session.leave_due(), "due once run");
+        assert_eq!(settle(&mut session, &catalog), Settled::default());
+        assert_eq!(session.landed(), Some(StellarId(128)), "held");
+        assert!(session.leave_due(), "still due");
         assert_eq!(session.date(), landed_on, "nothing yet");
-        let settled = settle(&mut session, &catalog);
-        assert_eq!(settled.took_off, Some(StellarId(128)));
+        assert_eq!(session.take_sounds(), [], "no beep, no take-off");
+        assert!(!session.take_save_due());
+        assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
         assert_eq!(session.date(), landed_on.next_day());
+        assert!(!session.leave_due());
     }
 
     #[test]
-    fn a_landed_q_takes_off_with_a_message_drawn_from_its_list() {
+    fn the_take_off_gives_a_held_qs_message_once_with_no_beep() {
         let catalog = moving();
         let mut session = told(landed(&catalog));
         assert_eq!(run_rolling(&mut session, "Q25048", &[2]), [3]);
-        assert_eq!(session.landed(), Some(StellarId(128)), "nothing yet");
-        assert!(!session.take_save_due());
-        let settled = settle(&mut session, &catalog);
-        assert_eq!(settled.took_off, Some(StellarId(128)));
-        assert_eq!(settled.message.as_deref(), Some("Off you go, <PSN>."));
-        assert_eq!(settled.moved, None);
-        assert_eq!(session.landed(), None);
+        let _ = settle(&mut session, &catalog);
+        assert_eq!(
+            session.take_leave_message(),
+            None,
+            "not before the take-off"
+        );
+        assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
+        assert_eq!(
+            session.take_leave_message().as_deref(),
+            Some("Off you go, <PSN>.")
+        );
+        assert_eq!(session.take_leave_message(), None, "taken");
         assert_eq!(session.take_sounds(), [SimSound::TookOff], "no beep");
         assert!(session.take_save_due());
-        assert_eq!(settle(&mut session, &catalog), Settled::default(), "once");
+        assert_eq!(
+            settle(&mut session, &catalog),
+            Settled::default(),
+            "consumed"
+        );
+        assert_eq!(session.take_sounds(), [], "nothing left for flight");
+    }
+
+    #[test]
+    fn a_take_off_with_no_q_gives_no_message() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
+        assert_eq!(session.take_leave_message(), None);
+    }
+
+    #[test]
+    fn a_landing_drops_a_leave_still_pending_from_flight() {
+        let catalog = moving();
+        let mut session = told(flying(&catalog));
+        run_rolling(&mut session, "Q25048", &[0]);
+        land_now(&mut session).expect("lands");
+        assert!(!session.leave_due(), "the landing clears it");
+        assert_eq!(settle(&mut session, &catalog).message, None);
+        assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
+        assert_eq!(session.take_leave_message(), None);
     }
 
     #[test]
@@ -1442,11 +1527,12 @@ mod tests {
         let mut session = told(flying(&catalog));
         session.take_sounds();
         run_rolling(&mut session, "Q25048", &[0]);
+        assert!(!session.leave_due(), "in flight nothing is held");
         let settled = settle(&mut session, &catalog);
         assert_eq!(settled.message.as_deref(), Some("Go."));
-        assert_eq!(settled.took_off, None);
         assert_eq!(session.take_sounds(), [SimSound::ScriptMessage]);
         assert_eq!(session.landed(), None);
+        assert_eq!(settle(&mut session, &catalog), Settled::default(), "once");
     }
 
     #[test]
@@ -1460,6 +1546,7 @@ mod tests {
         ] {
             let mut session = told(landed(&catalog));
             assert_eq!(run_rolling(&mut session, text, rolls), sides, "{text}");
+            assert!(!session.leave_due(), "{text}");
             assert_eq!(settle(&mut session, &catalog), Settled::default(), "{text}");
             assert_eq!(session.landed(), Some(StellarId(128)), "{text}");
             assert_eq!(session.take_sounds(), [], "{text}");
@@ -1472,15 +1559,29 @@ mod tests {
     }
 
     #[test]
+    fn a_later_blank_q_cancels_a_held_leave() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        run_rolling(&mut session, "Q25048", &[0]);
+        let _ = settle(&mut session, &catalog);
+        assert!(session.leave_due());
+        run_rolling(&mut session, "Q25049", &[]);
+        let _ = settle(&mut session, &catalog);
+        assert!(!session.leave_due(), "cancelled");
+        assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
+        assert_eq!(session.take_leave_message(), None);
+    }
+
+    #[test]
     fn by_the_bible_a_blank_q_leaves_all_the_same_with_no_message() {
         let catalog = moving();
         let rules = Rulebook::default().with_override(RuleKey::BlankLeave, RuleSource::Bible);
         let mut session = told(landed(&catalog)).with_rules(rules);
         run_rolling(&mut session, "Q25049", &[]);
-        let settled = settle(&mut session, &catalog);
-        assert_eq!(settled.took_off, Some(StellarId(128)));
-        assert_eq!(settled.message, None);
-        assert_eq!(session.landed(), None);
+        assert_eq!(settle(&mut session, &catalog), Settled::default());
+        assert!(session.leave_due(), "held all the same");
+        assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
+        assert_eq!(session.take_leave_message(), None, "no message");
         let mut session = told(flying(&catalog)).with_rules(rules);
         session.take_sounds();
         run_rolling(&mut session, "Q25050", &[0]);
@@ -1488,8 +1589,13 @@ mod tests {
         assert_eq!(session.take_sounds(), [], "nothing to show");
         let mut session = told(landed(&catalog)).with_rules(rules);
         run_rolling(&mut session, "Q25048", &[1]);
-        let settled = settle(&mut session, &catalog);
-        assert_eq!(settled.message.as_deref(), Some("Leave now."), "as usual");
+        let _ = settle(&mut session, &catalog);
+        let _ = take_off(&mut session, &catalog);
+        assert_eq!(
+            session.take_leave_message().as_deref(),
+            Some("Leave now."),
+            "as usual"
+        );
     }
 
     #[test]
@@ -1499,25 +1605,12 @@ mod tests {
         run_rolling(&mut session, "M131 Q25048", &[0]);
         let settled = settle(&mut session, &catalog);
         assert_eq!(settled.moved, Some(SystemId(131)));
-        assert_eq!(settled.took_off, Some(StellarId(128)));
+        assert!(session.leave_due());
+        assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert_eq!(session.npcs().len(), 3, "131's ships");
-    }
-
-    #[test]
-    fn a_landed_q_takes_off_into_the_system_populated_afresh() {
-        let catalog = moving();
-        let mut session = told(landed(&catalog));
-        let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
-        assert_eq!(before.len(), 2, "130's ships before the landing");
-        run_rolling(&mut session, "Q25048", &[0]);
-        let settled = settle(&mut session, &catalog);
-        assert_eq!(settled.took_off, Some(StellarId(128)));
-        let after: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
-        assert_eq!(after.len(), 2, "130's ships afresh");
-        assert!(after.iter().all(|id| !before.contains(id)), "{after:?}");
     }
 
     // An out-of-range `N`, and every other out-of-range operator.
@@ -1716,11 +1809,13 @@ mod tests {
     }
 
     #[test]
-    fn a_landed_move_and_q_tell_the_system_changed_as_they_settle() {
+    fn a_landed_move_and_q_tell_the_system_changed_at_the_take_off() {
         let catalog = moving();
         let mut session = told(landed(&catalog));
         run_rolling(&mut session, "M131 Q25048", &[0]);
         let _ = settle(&mut session, &catalog);
+        assert_eq!(session.take_events(), [], "held");
+        let _ = take_off(&mut session, &catalog);
         assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
     }
 

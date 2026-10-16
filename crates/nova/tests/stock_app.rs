@@ -1,7 +1,9 @@
 //! App frames of the ship browser, the galaxy map and a system over the
 //! stock data, through the recording Gpu, a course plotted from flight,
-//! and HG-Kania entered for Tichel, and a new pilot offered the tutorial
-//! over the spaceport. Skips, passing, when `NOVA_DATA` is unset.
+//! and HG-Kania entered for Tichel, a new pilot offered the tutorial
+//! over the spaceport, and a storyline finale's texts shown over Earth's
+//! spaceport before its `Q` leaves. Skips, passing, when `NOVA_DATA` is
+//! unset.
 
 mod common;
 
@@ -609,5 +611,158 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
             .starts_with("As you wander around a spaceport for the first time"),
         "{}",
         offer.prompt().text
+    );
+}
+
+/// The app over the stock data in `dir`, with a pilot saved docked at
+/// Earth holding `mïsn` 474 with its cargo aboard, opened from the main
+/// menu; `None`, skipping, without the interface file.
+fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
+    use nova_sim::fixture::MemoryPilots;
+    use nova_sim::{Pilot, PilotKeeper, PilotStore};
+    use nova_view::menu::MenuChoice;
+
+    let interface = match nova_data::open_interface(dir) {
+        Ok(interface) => interface,
+        Err(error) => {
+            eprintln!("skipping: {error}");
+            return None;
+        }
+    };
+    let data = Rc::new(GameData::open(dir, None).expect("the stock data opens"));
+    let pilot = Pilot::new(data.as_ref(), "Finale").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(130);
+    save["stellar"] = serde_json::json!(128);
+    let earth = serde_json::json!({"stellar": 128, "system": 130});
+    save["missions"] = serde_json::json!([{
+        "slot": 0,
+        "mission": 474,
+        "destination": null,
+        "return": earth,
+        "cargo_type": 23,
+        "cargo_tons": 0,
+        "pay": 250_000,
+        "days_left": null,
+        "deadline": null,
+        "reached": false,
+        "goals_met": false,
+        "aboard": true,
+        "failed": null,
+        "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0, "uniform_type": null, "ship_done": false},
+        "aux": {"countdown": 0, "arrived": 0, "left": 0},
+    }]);
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let store = MemoryPilots::new();
+    let keeper = PilotKeeper::new(Box::new(store) as Box<dyn PilotStore>);
+    keeper.save(&docked).expect("saved");
+    let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
+    let screen = start_screen(Rc::clone(&data))
+        .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
+        .with_pilots(Some(keeper), metrics);
+    let mut driver = Driver {
+        app: App::new(&Window, data, screen),
+        gpu: RecordingGpu::new(),
+        clock: Duration::ZERO,
+    };
+    let open = driver
+        .app
+        .screen()
+        .main_menu()
+        .expect("the main menu")
+        .button(MenuChoice::OpenPilot)
+        .rect
+        .center();
+    driver.click(open);
+    driver.press(Key::Enter);
+    assert_eq!(driver.showing(), Showing::Spaceport, "resumed docked");
+    Some(driver)
+}
+
+/// A pilot saved docked at Earth (`spöb` 128, in Sol, 130) holding
+/// "Take Krane to Earth" (`mïsn` 474, a Federation finale) with Krane's
+/// cargo aboard resumes there, as a landing. The landing drops the cargo
+/// off, showing its `DumpCargoText` (`dësc` 8064), then completes the
+/// mission, showing its `CompText` (9076), both over the spaceport while
+/// the ship stays landed; its `OnSuccess`, `b89 b9995 b9500 M472 L129
+/// K149 Q25048`, holds a leave. Then Earth's own offer shows (`mïsn` 878,
+/// which cannot be refused, as `_OfferMissionFromPort` @0x5fc37 runs
+/// whatever is pending), and accepting it takes off, in S7evyn (472)
+/// where `M472` moved the pilot, the take-off line `STR#` 25048's one
+/// string.
+#[test]
+fn a_finales_texts_show_over_earths_spaceport_before_its_q_leaves() {
+    use nova_sim::MissionId;
+    use nova_view::spaceport::SpaceportView;
+
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let Some(mut driver) = resumed_at_earth_holding_krane(&dir) else {
+        return;
+    };
+    driver.redraw();
+    let port = |driver: &Driver| -> (String, Option<MissionId>) {
+        let port = driver.app.screen().spaceport_view().expect("the spaceport");
+        let text = port
+            .mission_text()
+            .map(|text| text.lines().join(" "))
+            .unwrap_or_default();
+        (
+            text,
+            port.offer_dialog().map(|offer| offer.prompt().mission),
+        )
+    };
+
+    let (text, _) = port(&driver);
+    assert!(
+        text.starts_with("As soon as you land Krane leads you"),
+        "DumpCargoText 8064 first: {text}"
+    );
+    let session = driver.flight().session().expect("a session");
+    assert!(session.landed().is_some(), "still landed");
+    assert_eq!(session.pilot().missions().iter().count(), 0, "474 done");
+    assert!(driver.flight().leave_due(), "the Q held");
+
+    driver.press(Key::Enter);
+    assert_eq!(
+        driver.showing(),
+        Showing::Spaceport,
+        "the CompText holds it"
+    );
+    let (text, _) = port(&driver);
+    assert!(
+        text.starts_with("\"Are you threatening me?\""),
+        "CompText 9076 next: {text}"
+    );
+
+    driver.press(Key::Enter);
+    assert_eq!(driver.showing(), Showing::Spaceport, "the offer holds it");
+    assert_eq!(port(&driver), (String::new(), Some(MissionId(878))));
+    assert!(
+        driver
+            .app
+            .screen()
+            .spaceport_view()
+            .is_some_and(SpaceportView::holds_leave)
+    );
+
+    driver.press(Key::Enter);
+    assert_eq!(driver.showing(), Showing::Flight, "took off");
+    let flight = driver.flight();
+    let session = flight.session().expect("a session");
+    assert_eq!(session.landed(), None);
+    let held: Vec<MissionId> = session
+        .pilot()
+        .missions()
+        .iter()
+        .map(|(_, active)| active.mission)
+        .collect();
+    assert_eq!(held, [MissionId(878)], "the offer accepted first");
+    assert_eq!(session.system(), SystemId(472), "where M472 moved it");
+    assert_eq!(
+        flight.message(),
+        Some("A mysterious force transports you to an unknown location...")
     );
 }

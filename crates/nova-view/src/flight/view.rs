@@ -2667,7 +2667,10 @@ impl<
     /// the stellar, not on its way from where it was, in the system a move
     /// made while landed went to, laid out afresh as the session tells
     /// ([`SessionEvent`]); it shows no message
-    /// from before the landing, but says how many hired escorts defected
+    /// from before the landing, but shows a held `Q`'s message, for
+    /// [`SCRIPT_MESSAGE_TICKS`], in place of the original's take-off
+    /// greeting (`_PlayerLandOnStellar` @0x63588-0x635e3), and then says
+    /// how many hired escorts defected
     /// for want of the take-off's pay ([`defection_message`]); the
     /// session has populated the system's traffic afresh
     /// ([`Session::take_off`]), so no frame draws the ships from before
@@ -2676,9 +2679,22 @@ impl<
     pub fn take_off(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
         let stellar = session.take_off(&self.catalog, &mut self.chance)?;
-        let said = self.took_off();
+        let mut said: Vec<(String, u16)> = session
+            .take_leave_message()
+            .into_iter()
+            .map(|text| (text, SCRIPT_MESSAGE_TICKS))
+            .collect();
+        said.extend(self.took_off());
         self.say_all(&said);
         Some(stellar)
+    }
+
+    /// Whether a `Q` run while landed waits for the take-off
+    /// ([`Session::leave_due`]): whoever shows the spaceport leaves it,
+    /// as its Leave does, once nothing shown over it holds the leave.
+    #[must_use]
+    pub fn leave_due(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::leave_due)
     }
 
     /// Catches the screen up with the session having taken off: the ship
@@ -2722,11 +2738,11 @@ impl<
 
     /// Settles what the set expressions run since queued, as
     /// [`Session::settle_script`] does, reading the catalog and drawing on
-    /// the flight's chance, and gives the stellar a `Q` made the ship take
-    /// off from, for the router to close its spaceport. A take-off is
-    /// caught up with as [`FlightView::take_off`] is, the `Q`'s message
-    /// shown before what the take-off's pay has to say. Otherwise the
-    /// screen catches up with what the session told ([`SessionEvent`]): a
+    /// the flight's chance. A `Q` run while landed never takes off here:
+    /// it is held ([`FlightView::leave_due`]) for the router to leave the
+    /// spaceport once nothing shown over it holds the leave, and
+    /// [`FlightView::take_off`] then shows its message. The screen
+    /// catches up with what the session told ([`SessionEvent`]): a
     /// move in flight lays out the system the ship is in afresh, even the
     /// same one, as the original kills its explosions and smoke, and how
     /// many fighters were abandoned, if any, is shown after a `Q`'s
@@ -2735,8 +2751,10 @@ impl<
     /// session's messages raised as it settled show at once, as a
     /// deadline missed on the take-off does, before a text dialog can
     /// pause flight; an arrival's waits for the arrival as on a tick.
-    pub fn settle_script(&mut self) -> Option<StellarId> {
-        let session = self.session.as_mut().ok()?;
+    pub fn settle_script(&mut self) {
+        let Ok(session) = self.session.as_mut() else {
+            return;
+        };
         let settled = session.settle_script(&self.catalog, &mut self.chance);
         let flying = session.landed().is_none();
         let mut said: Vec<(String, u16)> = settled
@@ -2744,9 +2762,7 @@ impl<
             .into_iter()
             .map(|text| (text, SCRIPT_MESSAGE_TICKS))
             .collect();
-        if settled.took_off.is_some() {
-            said.extend(self.took_off());
-        } else if self.catch_up().system && flying {
+        if self.catch_up().system && flying {
             let notes = self
                 .session
                 .as_mut()
@@ -2758,7 +2774,6 @@ impl<
         }
         self.say_all(&said);
         self.say_messages();
-        settled.took_off
     }
 
     /// Plays `effect` for the ship having come out of a gate, caught up
@@ -15965,21 +15980,25 @@ mod tests {
     fn a_q_in_flight_shows_its_message() {
         let mut view = told(flight());
         run_set(&mut view, "Q25048");
-        assert_eq!(view.settle_script(), None);
+        view.settle_script();
+        assert!(!view.leave_due());
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::ScriptMessage)]);
         assert_lasts(&mut view, "Off you go, <PSN>.", SCRIPT_MESSAGE_TICKS);
     }
 
     #[test]
-    fn a_landed_q_takes_off_and_shows_its_message() {
+    fn a_landed_q_waits_for_the_take_off_which_shows_its_message() {
         let mut view = told(landed_view());
         run_set(&mut view, "M131 Q25048");
-        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        view.settle_script();
         let session = view.session().expect("flying");
-        assert_eq!(session.landed(), None);
+        assert_eq!(session.landed(), Some(StellarId(128)), "held");
+        assert!(view.leave_due());
+        assert_eq!(view.message(), None, "nothing yet");
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert!(!view.leave_due());
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
-        assert_eq!(view.settle_script(), None, "settled");
         assert_lasts(&mut view, "Off you go, <PSN>.", 500);
     }
 
@@ -15988,9 +16007,18 @@ mod tests {
         let mut view = told(paying(50, true));
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         run_set(&mut view, "Q25048");
-        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        view.settle_script();
+        assert_eq!(view.take_off(), Some(StellarId(128)));
         let said = format!("Off you go, <PSN>.  {DEFECTED_ONE}");
         assert_lasts(&mut view, &said, 500);
+    }
+
+    #[test]
+    fn a_take_off_with_no_q_shows_no_leave_message() {
+        let mut view = told(landed_view());
+        assert!(!view.leave_due());
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.message(), None);
     }
 
     #[test]
@@ -15998,14 +16026,14 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
         let mut view = told(fighters_out()).with_rules(rules);
         run_set(&mut view, "Q25048 M131");
-        assert_eq!(view.settle_script(), None);
+        view.settle_script();
         assert_eq!(
             view.message(),
             Some("Off you go, <PSN>.  (Two fighters abandoned)")
         );
         assert_eq!(view.pilot().expect("flying").escorts(), []);
         view.message = None;
-        assert_eq!(view.settle_script(), None);
+        view.settle_script();
         assert_eq!(view.message(), None, "nothing more to tell");
     }
 
@@ -16691,7 +16719,7 @@ mod tests {
         settle_session(&mut view);
         view.tick(TICK);
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
-        assert_eq!(view.settle_script(), None);
+        view.settle_script();
         assert_eq!(view.message(), None, "no layout from this settling");
         let session = view.session.as_mut().expect("flying");
         assert_eq!(

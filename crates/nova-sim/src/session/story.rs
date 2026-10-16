@@ -205,8 +205,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     }
 
     fn settle_leave(&mut self) -> bool {
-        self.session
-            .settle_leave(self.catalog, &mut *self.chance, self.settled)
+        self.session.settle_leave(self.settled)
     }
 
     fn take_raised(&mut self) -> VecDeque<StoryEvent> {
@@ -1657,7 +1656,6 @@ mod tests {
             session.settle_script(&catalog, &mut NeverFires),
             Settled {
                 moved: Some(SystemId(131)),
-                took_off: None,
                 message: None,
             }
         );

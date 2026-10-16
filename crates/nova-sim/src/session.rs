@@ -3455,6 +3455,8 @@ impl Session {
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
         self.pilot.stellar = Some(stellar);
+        // `_PlayerLandOnStellar` clears `_absquatulateStr` (@0x63335).
+        self.drop_leave();
         self.bar_news = None;
         self.combat.clear();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
@@ -3546,6 +3548,9 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
         let stellar = self.landed.take()?;
+        // A held `Q`'s leave is consumed (@0x63588-0x635e3; see the
+        // `script_effects` module).
+        self.depart();
         let stay = std::mem::take(&mut self.stay);
         self.bar_news = None;
         let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;

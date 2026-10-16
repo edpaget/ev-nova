@@ -123,8 +123,11 @@
 //!   one day's wage (`_DoEscortPayment(1)` @0x4085a), reached also with
 //!   nothing sold (@0x40347, @0x405cf).
 //! - A `Q` sets `_absquatulateStr` (@0x15bee); `_PortFilter` then ends the
-//!   dialog (@0x4f060), and `_DoPortDialog` leaves by the same close
-//!   (@0x5fcc6-0x5fcd0, @0x60196, @0x601a0-0x6020e).
+//!   dialog (@0x4f060) on its next call, once the texts and dialogs shown
+//!   over the port have closed, and `_DoPortDialog` leaves by the same
+//!   close (@0x5fcc6-0x5fcd0, @0x60196, @0x601a0-0x6020e). Here the
+//!   session holds the leave ([`Session::leave_due`](crate::Session::leave_due))
+//!   and the take-off, through the port's Leave, carries it out.
 //!
 //! ## One landing
 //!
@@ -569,8 +572,12 @@
 //! catalog, so the events they raise wait there. It settles in a loop:
 //! the moves queued (and the `EnteredSystem` an `enter_system` they cause
 //! raises), then the next event raised, first in, first out, dispatched,
-//! and once none is left a `Q`'s leave, whose events dispatch in the same
-//! settling. The subscriptions' scripts run through the dispatcher's
+//! and once none is left a `Q`'s leave in flight, whose events dispatch
+//! in the same settling. A `Q` run while landed is held instead, as the
+//! original holds `_absquatulateStr`
+//! ([`Session::leave_due`](crate::Session::leave_due)): the take-off
+//! carries it out once the spaceport is left, and its events dispatch in
+//! the settling after it. The subscriptions' scripts run through the dispatcher's
 //! runner, which, after each operator handed to `apply_op`, settles the
 //! moves it queued, dispatches the events raised, depth first, and only
 //! then runs the next operator. So for the scripts the dispatcher runs,
@@ -677,7 +684,8 @@
 //!   as `day::Stay`, the stay's tally, counts: half as many days as
 //!   escorts sold or upgraded, rounded down; then a day if an outfit was
 //!   bought or sold, four if a ship was bought, and every take-off's own
-//!   day. A `Q` that ends the stay leaves the same way;
+//!   day. A `Q` that ends the stay is held to that take-off and leaves
+//!   the same way;
 //! - a mission's success or auto-abort: its `DatePostInc` (missions
 //!   phase 2).
 //!
@@ -1808,7 +1816,9 @@
 //!   and `M` and `N` in flight (@0x159a3, @0x159a8) are handled inside
 //!   `_EvalSetExp`, before its next operator. `Q` only sets
 //!   `_absquatulateStr` (@0x15bee); nothing between it and @0x15c6c leaves
-//!   the stellar.
+//!   the stellar. Landed, the port's filter leaves on it at its next call
+//!   (@0x4f047-0x4f063), after the landing's texts and dialogs; the
+//!   session holds it to the take-off.
 //!
 //! ## Checked for phase 4
 //!

@@ -61,6 +61,18 @@
 //! active missions."; with the run and the errand held, it opens the
 //! mission info screen over the paused flight, Abort there frees the
 //! run's slot, and Done goes back into flight.
+//!
+//! A `Q` that ends a landing: with the run's `OnSuccess` a `Q` of `STR#`
+//! 25048 ("Off you go."), landing at the Pad completes it, and its
+//! `CompText` shows over the spaceport while the ship stays landed; Done
+//! leaves, as the port's Leave does, the `Q`'s message the take-off line.
+//! The run's cargo dropped off there shows its `DumpCargoText` first; a
+//! failed bar job in a later slot shows its `FailText` after the
+//! `CompText`; a job offered at the spaceport shows after the texts, and
+//! refusing it leaves, or accepting it shows its `BriefText`, then
+//! leaves. An accept in the mission computer whose `OnAccept` is the `Q`
+//! shows its `BriefText`, then leaves. Without dialogs the landing
+//! leaves at once.
 
 use std::cell::RefCell;
 use std::io;
@@ -1601,4 +1613,249 @@ fn in_flight_i_opens_mission_info_and_abort_works_there() {
     game.tap(Key::Enter);
     assert_eq!(game.showing(), Showing::Flight);
     assert!(game.app.screen().flight_mission_info().is_none());
+}
+
+// A `Q` that ends a landing: held until the texts over the port close.
+
+use nova_data::records::string_list::StrList;
+
+/// A `STR#` of `strings`.
+fn str_list(strings: &[&str]) -> Vec<u8> {
+    let mut bytes = u16::try_from(strings.len())
+        .expect("few")
+        .to_be_bytes()
+        .to_vec();
+    for string in strings {
+        bytes.push(u8::try_from(string.len()).expect("short"));
+        bytes.extend(string.as_bytes());
+    }
+    bytes
+}
+
+/// `mission` with this raw `OnSuccess`.
+fn succeeds_into(mut mission: Vec<u8>, on_success: &[u8]) -> Vec<u8> {
+    mission[0x359..0x359 + on_success.len()].copy_from_slice(on_success);
+    mission
+}
+
+/// `mission` with this raw `OnAccept`.
+fn accepts_into(mut mission: Vec<u8>, on_accept: &[u8]) -> Vec<u8> {
+    mission[0x15B..0x15B + on_accept.len()].copy_from_slice(on_accept);
+    mission
+}
+
+/// `mission` with the `DumpCargoText` `dësc` 205.
+fn dumping(mut mission: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut mission, 0x3A, &[205]);
+    mission
+}
+
+/// `mission` with the `FailText` `dësc` 206.
+fn failing(mut mission: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut mission, 0x3E, &[206]);
+    mission
+}
+
+/// The run's `Q`: `STR#` 25048.
+const LEAVE: &[u8] = b"Q25048\0";
+
+/// The game data with this run and bar job, `STR#` 25048 holding "Off
+/// you go.", and the `dësc`s 205 ("Unloaded at <DST>.") and 206
+/// ("Failed.").
+fn leaving_data(run: &[u8], bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
+    game_data_built(run, bar_job, "Take this to <DST>.", |fork| {
+        fork.resource(StrList::TYPE, 25048, None, &str_list(&["Off you go."]))
+            .resource(Desc::TYPE, 205, None, &desc("Unloaded at <DST>."))
+            .resource(Desc::TYPE, 206, None, &desc("Failed."))
+    })
+}
+
+/// The run, going to the Pad and back, its `OnSuccess` the `Q`.
+fn leaving_run() -> Vec<u8> {
+    succeeds_into(mission(128, 200, 201), LEAVE)
+}
+
+/// `pilot` with `field` of the mission it lists `at` set to `value`, as
+/// its save lists them.
+fn with_mission_field(pilot: &Pilot, at: usize, field: &str, value: serde_json::Value) -> Pilot {
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(pilot)).expect("a save");
+    save["missions"][at][field] = value;
+    nova_sim::save::decode(&save.to_string()).expect("a pilot")
+}
+
+/// Ada holding the run in slot 0, at the Pad and back.
+fn running() -> Pilot {
+    holding(&ada(), &[(0, 128, None, Some(128))])
+}
+
+/// Whether the session holds a `Q`'s leave.
+fn leave_due(game: &Game) -> bool {
+    game.app.screen().flight_view().expect("flying").leave_due()
+}
+
+#[test]
+fn a_landing_qs_comp_text_shows_over_the_port_and_the_ship_leaves_once_it_closes() {
+    let store = MemoryPilots::new();
+    let data = leaving_data(&leaving_run(), bar_job());
+    let mut game = Game::with_data(&store, &running(), data);
+    game.frame();
+    let writes = store.writes();
+    game.land();
+
+    // The run completes, and its CompText shows over the spaceport.
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    assert_eq!(game.active(), []);
+    assert!(game.session().landed().is_some(), "still landed");
+    assert!(leave_due(&game));
+    assert_eq!(store.writes(), writes + 1, "the landing's save");
+    let shown = texts(&game.frame());
+    assert!(shown.contains(&"Thanks from Pad.".to_owned()), "{shown:?}");
+
+    // Done leaves, as the port's Leave does, the Q's message the
+    // take-off line.
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.session().landed(), None);
+    assert!(!leave_due(&game));
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+    assert_eq!(store.writes(), writes + 2, "and the take-off's");
+}
+
+#[test]
+fn a_landing_shows_the_cargo_dropped_off_then_the_comp_text_before_a_q_leaves() {
+    let store = MemoryPilots::new();
+    let data = leaving_data(&dumping(leaving_run()), bar_job());
+    let pilot = with_mission_field(&running(), 0, "aboard", true.into());
+    let pilot = with_mission_field(&pilot, 0, "cargo_tons", 1.into());
+    let mut game = Game::with_data(&store, &pilot, data);
+    game.frame();
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Unloaded at Pad."));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+#[test]
+fn a_later_slots_fail_text_shows_after_a_qs_comp_text_before_the_leave() {
+    let store = MemoryPilots::new();
+    let (job, offer) = bar_job();
+    let data = leaving_data(&leaving_run(), (failing(job), offer));
+    let pilot = holding(
+        &ada(),
+        &[(0, 128, None, Some(128)), (1, 130, None, Some(128))],
+    );
+    let pilot = with_mission_field(&pilot, 1, "failed", "operator".into());
+    let mut game = Game::with_data(&store, &pilot, data);
+    game.frame();
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.shown_text().as_deref(), Some("Failed."));
+    assert_eq!(game.active(), []);
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+/// Lands Ada, holding the run, where the bar job is offered at the
+/// spaceport, and closes the run's `CompText`: the job's offer shows.
+fn offered_after_the_comp_text(store: &MemoryPilots) -> Game {
+    let (job, offer) = bar_job();
+    let data = leaving_data(&leaving_run(), (at_venue(job, 3), offer));
+    let mut game = Game::with_data(store, &running(), data);
+    game.frame();
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Spaceport, "the offer holds it");
+    let shown = game
+        .spaceport()
+        .offer_dialog()
+        .map(|offer| offer.prompt().mission);
+    assert_eq!(shown, Some(MissionId(130)));
+    game
+}
+
+#[test]
+fn the_ports_offer_shows_after_the_texts_and_a_refusal_leaves() {
+    let store = MemoryPilots::new();
+    let mut game = offered_after_the_comp_text(&store);
+    game.tap(Key::Char('n'));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), []);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+#[test]
+fn the_ports_offer_accepted_shows_its_brief_text_then_leaves() {
+    let store = MemoryPilots::new();
+    let mut game = offered_after_the_comp_text(&store);
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.active(), [(0, MissionId(130))]);
+    assert_eq!(game.shown_text().as_deref(), Some("Welcome aboard."));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+#[test]
+fn an_accept_whose_on_accept_leaves_shows_its_brief_text_then_leaves() {
+    let store = MemoryPilots::new();
+    let run = accepts_into(mission(128, 200, 201), LEAVE);
+    let data = leaving_data(&run, bar_job());
+    let mut game = Game::with_data(&store, &ada(), data);
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.accept();
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
+    assert!(leave_due(&game));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), [(0, MissionId(128))]);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+#[test]
+fn without_dialogs_a_landing_q_leaves_in_the_landings_input() {
+    let store = MemoryPilots::new();
+    let data = leaving_data(&leaving_run(), bar_job());
+    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
+        .save(&running())
+        .expect("saved");
+    let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
+    let screen: AppScreen = start_screen(Rc::clone(&data))
+        .with_pilots(Some(keeper), Rc::new(MonoMetrics))
+        .with_chance(SharedChance::new(Rc::new(RefCell::new(Nothing))));
+    let mut game = Game {
+        app: App::new(&FakeWindow, data, screen),
+        gpu: RecordingGpu::new(),
+        frames: 0,
+    };
+    let at = game
+        .app
+        .screen()
+        .main_menu()
+        .expect("a main menu")
+        .button(MenuChoice::OpenPilot)
+        .rect
+        .center();
+    game.click(at);
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    game.frame();
+    game.tap(Key::Char('l'));
+    game.tap(Key::Char('l'));
+    assert_eq!(game.showing(), Showing::Flight, "left at once");
+    assert_eq!(game.active(), [], "the run completed");
+    assert_eq!(game.session().landed(), None);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
 }

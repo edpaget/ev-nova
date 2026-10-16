@@ -1287,6 +1287,40 @@ impl SpaceportView {
         self.dialogs.as_ref().is_some_and(MissionDialogs::is_open)
     }
 
+    /// Whether a dialog open over the spaceport or one of its screens
+    /// holds a `Q`'s leave: one whose filter never reads
+    /// `_absquatulateStr`, so the original leaves only once it closes.
+    /// Those are the mission texts (`_ShowTextDialog` @0x5a752) and the
+    /// outfitter's alert, an offer (`_OfferOneMission`), the mission info
+    /// and player info screens (`_DoMissionInfoDialog`,
+    /// `_DoPlayerInfoDialog`), the exchange's and the outfitter's
+    /// quantity (`_DoQuantityDialog` @0x5e25a, @0x5c1aa), the shipyard's
+    /// naming prompt (`_EVTextInputDialog` @0x5eb6c) and the bar's news
+    /// (`_DoNewsDialog` @0x491d7). The spaceport itself and the screens
+    /// over it close at once instead, their filters reading the string
+    /// first: `_PortFilter` @0x4f047, `_BarFilter` @0x47a51,
+    /// `_TradeFilter` @0x4e0b5, `_OutfitFilter` @0x58042, and
+    /// `_ShipyardFilter` @0x60452 (the shipyard and the bar's hire
+    /// screen) and `_MissionFilter` @0x9f7b2 (the mission computer).
+    #[must_use]
+    pub fn holds_leave(&self) -> bool {
+        if self.mission_dialogs_open()
+            || self.offer_dialog().is_some()
+            || self.player_info.is_some()
+        {
+            return true;
+        }
+        match &self.open {
+            Some(Open::Trade(screen)) => screen.quantity().is_some(),
+            Some(Open::Outfitter(screen)) => {
+                screen.quantity().is_some() || screen.alert_dialog().is_some()
+            }
+            Some(Open::Shipyard(screen)) => screen.naming().is_some(),
+            Some(Open::Bar(screen)) => screen.news_screen().is_some(),
+            Some(Open::Service(_) | Open::Computer(_)) | None => false,
+        }
+    }
+
     /// The stellar landed on.
     #[must_use]
     pub fn stellar(&self) -> StellarId {
@@ -4807,5 +4841,142 @@ mod tests {
             let mut view = refused_at(venue, RuleSource::Engine);
             assert!(!view.take_offer_restart(), "{venue}");
         }
+    }
+
+    // A `Q`'s leave held (`_absquatulateStr`; see `holds_leave`).
+
+    #[test]
+    fn the_spaceport_and_the_screens_whose_filters_leave_hold_no_leave() {
+        assert!(!earth().holds_leave());
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        assert!(view.mission_computer().is_some());
+        assert!(!view.holds_leave(), "the computer (`_MissionFilter`)");
+        let mut view = trading(Ok(trade_template()));
+        click_item(&mut view, 7);
+        assert!(view.open_trade().is_some());
+        assert!(!view.holds_leave(), "the exchange (`_TradeFilter`)");
+        let mut view = outfitting(Ok(outfit_template()));
+        click_item(&mut view, 8);
+        assert!(view.open_outfitter().is_some());
+        assert!(!view.holds_leave(), "the outfitter (`_OutfitFilter`)");
+        let mut view = shipbuying(Ok(shipyard_template()));
+        click_item(&mut view, 9);
+        assert!(view.open_shipyard().is_some());
+        assert!(!view.holds_leave(), "the shipyard (`_ShipyardFilter`)");
+        let mut view = drinking(true);
+        click_item(&mut view, 10);
+        assert!(!view.holds_leave(), "the bar (`_BarFilter`)");
+        view.input(&key(Key::Char('h')));
+        view.open_hire(hirelings(1, true));
+        assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
+        assert!(!view.holds_leave(), "the hire screen (`_ShipyardFilter`)");
+    }
+
+    #[test]
+    fn a_mission_text_holds_a_leave_until_its_done() {
+        let mut view = missioned();
+        let text = MissionText {
+            graphic: None,
+            kind: MissionTextKind::Comp,
+            mission: MissionId(130),
+            text: "Well done.".to_owned(),
+        };
+        view.show_mission_texts(vec![text.clone(), text]);
+        assert!(view.holds_leave());
+        done(&mut view);
+        assert!(view.holds_leave(), "the second");
+        done(&mut view);
+        assert!(!view.holds_leave());
+    }
+
+    #[test]
+    fn an_offer_and_the_mission_info_over_it_hold_a_leave() {
+        let mut view = missioned();
+        view.open_offer(offered());
+        assert!(view.holds_leave(), "the offer");
+        view.open_mission_info(actives(1));
+        assert!(view.holds_leave(), "the info over it");
+        view.input(&key(Key::Escape));
+        assert!(view.mission_info().is_none());
+        assert!(view.holds_leave(), "the offer still");
+        let mut view = missioned();
+        view.open_mission_info(actives(1));
+        assert!(view.holds_leave(), "the info alone");
+        view.input(&key(Key::Escape));
+        assert!(!view.holds_leave());
+    }
+
+    #[test]
+    fn the_player_info_holds_a_leave() {
+        let mut view = informed(missioned());
+        view.open_player_info(pilot_info());
+        assert!(view.holds_leave());
+        view.input(&key(Key::Escape));
+        assert!(!view.holds_leave());
+    }
+
+    #[test]
+    fn the_outfitters_alert_and_quantity_hold_a_leave() {
+        let mut view = outfitting(Ok(outfit_template()));
+        click_item(&mut view, 8);
+        view.alert_outfit(&alert());
+        assert!(view.holds_leave(), "the alert");
+        view.input(&key(Key::Escape));
+        assert!(!view.holds_leave());
+        view.input(&key(Key::Alt));
+        let buy = outfit_item(&view, 7);
+        click(&mut view, buy);
+        assert!(
+            view.open_outfitter()
+                .and_then(OutfitterScreen::quantity)
+                .is_some()
+        );
+        assert!(view.holds_leave(), "the quantity");
+        view.input(&key(Key::Enter));
+        assert!(!view.holds_leave());
+    }
+
+    #[test]
+    fn the_exchanges_quantity_holds_a_leave() {
+        let mut view = trading(Ok(trade_template()));
+        click_item(&mut view, 7);
+        view.input(&key(Key::Alt));
+        view.input(&key(Key::Char('b')));
+        assert!(view.open_trade().and_then(TradeScreen::quantity).is_some());
+        assert!(view.holds_leave());
+        view.input(&key(Key::Enter));
+        assert!(!view.holds_leave());
+    }
+
+    #[test]
+    fn the_shipyards_naming_prompt_holds_a_leave() {
+        let mut view = shipbuying(Ok(shipyard_template()));
+        click_item(&mut view, 9);
+        let buy = shipyard_item(&view, 7);
+        click(&mut view, buy);
+        view.open_ship_naming(&naming());
+        assert!(view.holds_leave());
+        let cancel = view
+            .open_shipyard()
+            .and_then(ShipyardScreen::naming)
+            .and_then(|prompt| prompt.dialog().item_bounds(6))
+            .expect("Cancel")
+            .center();
+        click(&mut view, cancel);
+        assert!(!view.holds_leave());
+    }
+
+    #[test]
+    fn the_bars_news_holds_a_leave() {
+        let mut view = drinking(true);
+        click_item(&mut view, 10);
+        let at = bar_item(&view, 3);
+        click(&mut view, at);
+        view.open_news(&the_news(), 9000);
+        assert!(view.holds_leave());
+        view.input(&key(Key::Escape));
+        assert!(!view.holds_leave());
     }
 }

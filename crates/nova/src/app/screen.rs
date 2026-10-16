@@ -74,7 +74,15 @@
 //! interface file's "Spaceport" dialog when the router has dialogs;
 //! without them the spaceport says why. The spaceport takes every input:
 //! Leave, Return and Escape take off, back into flight at the stellar,
-//! Tab and F do nothing, and I opens the mission info screen.
+//! Tab and F do nothing, and I opens the mission info screen. A `Q` run
+//! while landed (a mission's `OnSuccess` at the landing, an `OnAccept`,
+//! a purchase's hook) leaves the same way, once the texts and dialogs
+//! shown over the spaceport have closed: the landing's texts show over
+//! the spaceport first, then its offer, and the input that closes the
+//! last of them takes off, the `Q`'s message the take-off line. A screen
+//! open over the spaceport (the exchange, the outfitter, the shipyard,
+//! the bar and its hire screen, the mission computer) closes with it, as
+//! the original's filters close theirs.
 //!
 //! At a trade center, the spaceport's Trade Center opens the session's
 //! exchange, laid out by the interface file's "Trade" dialog. There a
@@ -1854,25 +1862,61 @@ impl AppScreen {
     }
 
     /// Settles what the set expressions run in flight or in the spaceport
-    /// queued ([`FlightView::settle_script`]): a `Q` that took off closes
-    /// the spaceport, as leaving it does, and a move while landed leaves it
-    /// open as it is. The mission texts queued show, and then the venues'
-    /// offers are served: a landing rolls the visit's offers as it
-    /// settles, so the spaceport's offer is asked for here, after the
-    /// texts the landing queued, as `_DoPortDialog` offers after
-    /// `_MissionLandCheck` (@0x5fbeb-0x5fc37), and before any input can
-    /// open a service.
+    /// queued ([`FlightView::settle_script`]); a move while landed leaves
+    /// the spaceport open as it is. The mission texts queued show over
+    /// it, and then the venues' offers are served: a landing rolls the
+    /// visit's offers as it settles, so the spaceport's offer is asked for
+    /// here, after the texts the landing queued, as `_DoPortDialog` offers
+    /// after `_MissionLandCheck` (@0x5fbeb-0x5fc37), and before any input
+    /// can open a service. Last, a `Q` run while landed leaves, once
+    /// nothing shown holds it ([`AppScreen::leave_if_due`]).
     fn settle_script(&mut self) {
-        let took_off = self.flight.as_mut().and_then(FlightView::settle_script);
-        if took_off.is_some() {
-            self.close_spaceport();
+        if let Some(flight) = self.flight.as_mut() {
+            flight.settle_script();
         }
         self.show_mission_texts();
         self.serve_offers();
+        self.leave_if_due();
+    }
+
+    /// Leaves the spaceport for a `Q` run while landed
+    /// ([`FlightView::leave_due`]), as its Leave does
+    /// ([`AppScreen::leave_port`]), unless a text or dialog shown over it
+    /// holds the leave ([`SpaceportView::holds_leave`]). The original's
+    /// port filters leave on their next call while `_absquatulateStr` is
+    /// set (`_PortFilter` @0x4f047-0x4f063, which chooses Leave,
+    /// @0x4f1ff), and the texts and dialogs over them never read it. As
+    /// this runs after every input and tick, the input that closes the
+    /// last of them leaves before a frame draws the spaceport bare. With
+    /// no spaceport open, the ship leaves at once.
+    fn leave_if_due(&mut self) {
+        if !self.flight.as_ref().is_some_and(FlightView::leave_due) {
+            return;
+        }
+        if self
+            .spaceport
+            .as_ref()
+            .is_some_and(SpaceportView::holds_leave)
+        {
+            return;
+        }
+        self.leave_port();
+    }
+
+    /// Leaves the spaceport: it closes and the ship takes off
+    /// ([`FlightView::take_off`]), the one path for the port's Leave and
+    /// a `Q`'s, as `_DoPortDialog` has one (@0x5fcd3, @0x601a0-0x6025e).
+    fn leave_port(&mut self) {
+        self.close_spaceport();
+        if let Some(flight) = self.flight.as_mut() {
+            flight.take_off();
+        }
     }
 
     /// Shows the mission texts the session queued: over the spaceport, if
-    /// it is open, and otherwise, in flight, over flight, which pauses
+    /// it is open, even when a `Q` has made a leave due, as the leave
+    /// waits for them ([`AppScreen::leave_if_due`]); and otherwise, in
+    /// flight, over flight, which pauses
     /// under them, as `_ShowTextDialog` (@0x5a752) shows them (a
     /// `BriefText` an `S` accepted, the texts of a person's offer
     /// accepted or refused over flight), first cancelling flight's
@@ -2278,8 +2322,7 @@ impl AppScreen {
         self.serve_descriptions();
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         if spaceport.left() {
-            self.close_spaceport();
-            self.flight.as_mut().expect(ENTERED).take_off();
+            self.leave_port();
             return ScreenAction::None;
         }
         self.serve_offers();
