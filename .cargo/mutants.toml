@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
+    # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
+    # `+ 360` in place of `mod 360` lands on the same heading.
+    "galaxy_map.rs:[0-9]+:[0-9]+: replace % with \\+ in arrow_head",
     # `_AdjustedAccel`'s sign tests (`launch_velocity`): a push of exactly
     # none adds none whichever branch it takes, so `push < 0.0` and
     # `push <= 0.0` (the first operand, column 24) cannot be told apart.

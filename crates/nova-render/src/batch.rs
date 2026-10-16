@@ -1477,6 +1477,72 @@ mod tests {
     }
 
     #[test]
+    fn a_clip_that_only_touches_or_misses_one_axis_draws_nothing() {
+        let mut list = DrawList::new();
+        let picture = DrawCommand::Picture {
+            image: ImageKey::picture(128),
+            top_left: at(10.0, 20.0),
+        };
+        // The 8 x 4 picture covers (10, 20)-(18, 24).
+        for clip in [
+            bounds(18.0, 0.0, 40.0, 40.0),
+            bounds(0.0, 24.0, 40.0, 40.0),
+            bounds(12.0, 30.0, 16.0, 40.0),
+            bounds(30.0, 21.0, 40.0, 23.0),
+        ] {
+            list.clipped(clip, picture.clone());
+        }
+        list.clipped(bounds(10.0, 0.0, 10.2, 40.0), text_at(at(1.0, 2.0)))
+            .clipped(bounds(0.0, 10.0, 40.0, 10.2), text_at(at(1.0, 2.0)));
+
+        let frame = render_one_with(images(), &list);
+
+        assert_eq!(frame.batches, [], "no area left, in pixels too");
+    }
+
+    fn text_at(origin: Point) -> DrawCommand {
+        DrawCommand::Text {
+            text: "Sol".to_owned(),
+            font: Font::Geneva,
+            origin,
+            size: 8.0,
+            wrap_width: None,
+            color: Color::WHITE,
+        }
+    }
+
+    #[test]
+    fn a_cropped_quad_keeps_its_place_on_the_page() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0)).clipped(
+            bounds(0.0, 0.0, 30.0, 40.0),
+            DrawCommand::Sprite {
+                image: ImageKey::sprite(200, 1),
+                center: at(30.0, 40.0),
+                tint: Color::WHITE,
+                blend: Blend::Normal,
+            },
+        );
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }] = frame.batches.as_slice() else {
+            panic!("one sprite batch: {frame:?}");
+        };
+        let page = 64.0;
+        // Frame 1 is at (6, 5) on the page, under the picture's shelf.
+        assert_eq!(
+            quads[1].uv,
+            Uv {
+                u0: 6.0 / page,
+                v0: 5.0 / page,
+                u1: 8.5 / page,
+                v1: 8.0 / page,
+            }
+        );
+    }
+
+    #[test]
     fn a_clipped_sprite_is_cropped_and_keeps_its_tint() {
         let mut list = DrawList::new();
         let tint = Color::rgba(255, 255, 255, 128);

@@ -49,8 +49,6 @@ use crate::rulebook::{RuleKey, RuleSource};
 
 /// How many entries `_missionSyst` holds.
 const MISSION_SYSTEMS: usize = 32;
-/// How many Con slots a system has, `Con1-Con16`.
-const CON_SLOTS: usize = 16;
 
 /// What the colour codes of one drawing read once: the blessing table and
 /// each system's listed stellars.
@@ -209,13 +207,12 @@ impl Session {
 
     /// The current system's Con slot selected in mode 3 (+0x6c), if any:
     /// the one the raw selection stands in (`Session::selected_slot`),
-    /// when it is one of the 16.
+    /// always one of the first 16.
     fn hyper_slot(&self) -> Option<usize> {
         let NavMode::Hyperspace(Some(selected)) = self.nav else {
             return None;
         };
         self.selected_slot(selected)
-            .filter(|&slot| slot < CON_SLOTS)
     }
 
     /// What the galaxy map draws now ([`galaxy_map::draw_map`]): on the
@@ -506,6 +503,9 @@ mod tests {
         let mut session = flown(&catalog, Rulebook::default());
         let slot = holding(&mut session, None, None);
         assert_eq!(session.map_mission_systems(), [], "no ships left");
+        let ships = &mut session.pilot.missions.get_mut(slot).expect("held").ships;
+        ships.system = ShipSystem::At(SystemId(133));
+        assert_eq!(session.map_mission_systems(), [], "none left there");
         let ships = &mut session.pilot.missions.get_mut(slot).expect("held").ships;
         ships.left = 2;
         ships.system = ShipSystem::FollowsPlayer;

@@ -17,16 +17,14 @@ use crate::flight::radar::IRect;
 use crate::geometry::{Bounds, Point};
 
 /// Whether the pixel at (`x`, `y`) is inside the oval inscribed in
-/// `rect`: its centre in the ellipse, on it included. Nothing is inside an
-/// empty rect.
+/// `rect`: its centre in the ellipse, on it included. Only the pixels of a
+/// rect, and their neighbours, are asked about, so an empty rect, which
+/// has none, has none inside.
 fn inside(rect: IRect, x: i32, y: i32) -> bool {
     let (width, height) = (
         i64::from(rect.right) - i64::from(rect.left),
         i64::from(rect.bottom) - i64::from(rect.top),
     );
-    if width <= 0 || height <= 0 {
-        return false;
-    }
     // Twice the pixel centre's offset from the oval's centre, scaled so
     // the test stays in whole numbers.
     let dx = 2 * (i64::from(x) - i64::from(rect.left)) + 1 - width;

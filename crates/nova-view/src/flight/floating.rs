@@ -1248,10 +1248,22 @@ mod tests {
         ] {
             map.text("Sol", origin, 10.0, None, RED);
         }
-        map.sprite(ImageKey::icon(15000), at(831.0, 200.0), Color::WHITE);
+        // 16 past the right edge, the bottom, the left and the top.
+        for center in [
+            at(831.0, 200.0),
+            at(600.0, 423.0),
+            at(541.0, 200.0),
+            at(600.0, 133.0),
+        ] {
+            map.sprite(ImageKey::icon(15000), center, Color::WHITE);
+        }
+        // Exactly the frame's width left of it, and a line ending on its top.
+        map.text("Sol", at(302.0, 200.0), 10.0, None, RED);
+        map.text("Sol", at(600.0, 138.0), 10.0, None, RED);
         assert_eq!(passed(&map, 32), []);
         let mut near = DrawList::new();
-        near.text("Sol", at(303.0, 140.0), 10.0, None, RED);
+        // Its line (12 high at size 10) reaching half a unit in.
+        near.text("Sol", at(303.0, 138.5), 10.0, None, RED);
         near.sprite(ImageKey::icon(15000), at(829.0, 200.0), Color::WHITE);
         assert_eq!(passed(&near, 32).len(), 2, "each reaches it");
     }
