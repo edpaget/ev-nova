@@ -64,7 +64,7 @@ use std::time::Duration;
 
 use nova_sim::hire::{HIRE_ESCORT, NONE_FOR_HIRE};
 use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
-use nova_sim::{DescMovie, HireList, MissionId, News, OfferPrompt, RuleSource, ShipId};
+use nova_sim::{HireList, MissionId, News, OfferPrompt, RuleSource, ShipId};
 
 use super::catalog::StellarId;
 use super::hire::HireScreen;
@@ -412,12 +412,6 @@ impl BarScreen {
     /// once.
     pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
         self.offering.as_mut()?.take_choice()
-    }
-
-    /// The answered offer's after-movie, once: whoever acts on the choice
-    /// plays it after the texts the answer shows.
-    pub fn take_offer_after_movie(&mut self) -> Option<DescMovie> {
-        self.offering.as_mut()?.take_after_movie()
     }
 
     /// Its offers play their movies as `movies` says.

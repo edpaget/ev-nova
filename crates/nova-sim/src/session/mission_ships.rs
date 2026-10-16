@@ -3015,7 +3015,7 @@ pub(super) mod tests {
     /// The kinds of the mission texts shown since last taken.
     fn shown(session: &mut Session) -> Vec<(MissionTextKind, String)> {
         session
-            .take_mission_texts()
+            .take_texts_only()
             .into_iter()
             .map(|shown| (shown.kind, shown.text))
             .collect()

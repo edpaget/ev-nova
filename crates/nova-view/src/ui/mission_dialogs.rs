@@ -24,14 +24,14 @@
 //! (@0x5b40b-0x5b44f; never for an empty text, which returns first). Each
 //! plays as [`MovieStage`] plays it, over the info screen, taking every
 //! input. A movie that ends on its own hands the keys pressed under it to
-//! what comes next. The movie [`MissionDialogs::play_movie`] queues alone
-//! is an offer's after-movie.
+//! what comes next. An offer's movie the session queued among the texts
+//! ([`MissionShown::Movie`]) plays in its place.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{DescMovie, MissionInfo, MissionText};
+use nova_sim::{DescMovie, MissionInfo, MissionShown};
 
 use crate::draw::DrawList;
 use crate::input::Input;
@@ -134,55 +134,60 @@ impl MissionDialogs {
 
     /// Queues each of `texts` to show in "Desc Dialog", in the variant
     /// its graphic picks, one after another as Done closes each, with its
-    /// movie before or after it. Without that variant's template the
+    /// movie before or after it, and each offer movie among them in the
+    /// place the session gave it. Without that variant's template the
     /// dialog is dropped, as the spaceport drops it, and its movies still
     /// play.
-    pub fn show_texts(&mut self, texts: Vec<MissionText>) {
-        self.show_descs(
-            texts
-                .into_iter()
-                .map(|text| DescShown {
+    pub fn show_texts(&mut self, texts: impl IntoIterator<Item = impl Into<MissionShown>>) {
+        for shown in texts {
+            match shown.into() {
+                MissionShown::Text(text) => self.queue_desc(&DescShown {
                     text: text.text,
                     graphic: text.graphic,
                     movie: text.movie,
-                })
-                .collect(),
-        );
+                }),
+                MissionShown::Movie(movie) => self.queue_movie(&movie),
+            }
+        }
+        self.settle();
     }
 
     /// Queues each of `texts`, a `dësc` with no mission behind it, to
     /// show as [`show_texts`](Self::show_texts) shows mission texts.
     pub fn show_descs(&mut self, texts: Vec<DescShown>) {
         for shown in texts {
-            let movie = |after: bool| shown.movie.as_ref().filter(|movie| movie.after == after);
-            if let Some(before) = movie(false).and_then(|movie| self.movies.stage(movie)) {
-                self.texts.push_back(Stage::Movie(before));
-            }
-            if shown.text.is_empty() {
-                continue;
-            }
-            if let Ok(dialog) = self.text.open(
-                &shown.text,
-                shown.graphic,
-                self.style,
-                Rc::clone(&self.metrics),
-            ) {
-                self.texts.push_back(Stage::Text(dialog));
-            }
-            if let Some(after) = movie(true).and_then(|movie| self.movies.stage(movie)) {
-                self.texts.push_back(Stage::Movie(after));
-            }
+            self.queue_desc(&shown);
         }
         self.settle();
     }
 
-    /// Queues `movie` alone, after whatever is queued, while movies are
-    /// on: an offer's after-movie, which plays after the texts its answer
-    /// showed (`_OfferOneMission` @0xa3580-0xa35b8).
-    pub fn play_movie(&mut self, movie: &DescMovie) {
+    /// Queues `shown`: its movie before it, its dialog (none for an empty
+    /// text, which plays no movie after), and its movie after it.
+    fn queue_desc(&mut self, shown: &DescShown) {
+        let movie = |after: bool| shown.movie.as_ref().filter(|movie| movie.after == after);
+        if let Some(before) = movie(false) {
+            self.queue_movie(before);
+        }
+        if shown.text.is_empty() {
+            return;
+        }
+        if let Ok(dialog) = self.text.open(
+            &shown.text,
+            shown.graphic,
+            self.style,
+            Rc::clone(&self.metrics),
+        ) {
+            self.texts.push_back(Stage::Text(dialog));
+        }
+        if let Some(after) = movie(true) {
+            self.queue_movie(after);
+        }
+    }
+
+    /// Queues `movie` after whatever is queued, while movies are on.
+    fn queue_movie(&mut self, movie: &DescMovie) {
         if let Some(stage) = self.movies.stage(movie) {
             self.texts.push_back(Stage::Movie(stage));
-            self.settle();
         }
     }
 
@@ -379,7 +384,7 @@ impl Screen for MissionDialogs {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::{InfoRow, MissionId, MissionTextKind};
+    use nova_sim::{InfoRow, MissionId, MissionText, MissionTextKind};
 
     use super::*;
     use crate::draw::DrawCommand;
@@ -988,17 +993,25 @@ mod tests {
     }
 
     #[test]
-    fn play_movie_queues_a_lone_movie_after_whatever_is_queued() {
+    fn an_offer_movie_queued_among_the_texts_plays_in_its_place_whatever_its_flag() {
         let player = MockMoviePlayer::playing((160, 120), 1);
         let mut dialogs = playing(&player);
-        dialogs.show_texts(vec![brief(128, "First.")]);
-        dialogs.play_movie(&DescMovie::from_desc("Offer.mov", 0x0001).expect("named"));
-        assert!(player.calls().is_empty(), "behind the text");
+        let offer =
+            |flags| MissionShown::Movie(DescMovie::from_desc("Offer.mov", flags).expect("named"));
+        dialogs.show_texts(vec![
+            MissionShown::Text(brief(128, "First.")),
+            offer(0x0001),
+            MissionShown::Text(brief(129, "Second.")),
+        ]);
+        assert!(player.calls().is_empty(), "behind the first text");
         dialogs.input(&key(Key::Enter));
         assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
+        assert_eq!(shown(&dialogs), None, "while it plays");
         dialogs.tick(TICK);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Second."), "then the next");
+        dialogs.input(&key(Key::Enter));
         assert!(!dialogs.is_open());
-        dialogs.play_movie(&DescMovie::from_desc("Offer.mov", 0).expect("named"));
+        dialogs.show_texts([offer(0)]);
         assert!(dialogs.is_open(), "alone, at once");
     }
 

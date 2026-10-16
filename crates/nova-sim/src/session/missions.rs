@@ -459,12 +459,20 @@ impl Session {
     /// refusal queued to show ([`MissionTextKind::NoRoom`]). Every slot
     /// taken shows nothing and plays nothing (`_DoMissionAccept`
     /// @0xa1b32-0xa1b42).
+    ///
+    /// The offer dialog's after-movie is queued behind whatever the accept
+    /// queued, refused or not ([`Session::show_offer_after_movie`]).
     pub fn accept_mission(
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Result<u8, AcceptError> {
-        self.in_offer_dialog(|session| session.accept_offered(mission, chance))
+        let venue = self.offer_of(mission).map(|offer| offer.venue);
+        let accepted = self.in_offer_dialog(|session| session.accept_offered(mission, chance));
+        if let Some(venue) = venue {
+            self.show_offer_after_movie(mission, venue);
+        }
+        accepted
     }
 
     /// Accepts `mission` as [`Session::accept_mission`] does, but with the
@@ -509,7 +517,8 @@ impl Session {
     /// (@0xa377d-0xa37a1, as [`RuleKey::OfferShift`] reads it), so an
     /// `OnRefuse` that refilters can leave it listed, and a mission
     /// computer's offer is dropped. Nothing is forgotten. An offer from a ship is answered (see the
-    /// `person_offers` module).
+    /// `person_offers` module). The offer dialog's after-movie is queued
+    /// last ([`Session::show_offer_after_movie`]).
     ///
     /// # Errors
     ///
@@ -532,6 +541,7 @@ impl Session {
             self.offers.drop_offer(mission);
         }
         self.end_ship_offer(false);
+        self.show_offer_after_movie(mission, offer.venue);
         Ok(())
     }
 
@@ -2718,7 +2728,7 @@ mod tests {
             .insert(crate::market::Good::Commodity(0), held);
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, catalog);
-        let _ = session.take_mission_texts();
+        let _ = session.take_texts_only();
         session
     }
 
@@ -2744,7 +2754,7 @@ mod tests {
                 "20 holds, 21 tons of {cargo_type}"
             );
             assert_eq!(
-                session.take_mission_texts(),
+                session.take_texts_only(),
                 [refusal_text(140, NO_HOLDS_TO_ACCEPT)]
             );
             assert!(!session.control_bit(bit(20)), "no OnAccept");
@@ -2764,7 +2774,7 @@ mod tests {
             "10 free, 11 tons"
         );
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [refusal_text(140, NO_SPACE_TO_ACCEPT)]
         );
         assert!(!session.control_bit(bit(20)));
@@ -2809,7 +2819,7 @@ mod tests {
         assert_eq!(held(&session), []);
         assert!(!session.control_bit(bit(20)));
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [refusal_text(140, NO_HOLDS_TO_ACCEPT)]
         );
         run(&mut session, "S141");
@@ -2830,7 +2840,7 @@ mod tests {
             Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
         );
         run(&mut session, "S140");
-        assert_eq!(session.take_mission_texts(), []);
+        assert_eq!(session.take_texts_only(), []);
     }
 
     #[test]

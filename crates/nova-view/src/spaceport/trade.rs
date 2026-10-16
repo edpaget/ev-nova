@@ -52,7 +52,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{DescMovie, Direction, Lot, Market, MissionId, OfferPrompt, Order, RuleSource};
+use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order, RuleSource};
 
 use super::layout::DONE_LABEL;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
@@ -305,12 +305,6 @@ impl TradeScreen {
     /// once.
     pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
         self.offering.as_mut()?.take_choice()
-    }
-
-    /// The answered offer's after-movie, once: whoever acts on the choice
-    /// plays it after the texts the answer shows.
-    pub fn take_offer_after_movie(&mut self) -> Option<DescMovie> {
-        self.offering.as_mut()?.take_after_movie()
     }
 
     /// Its offers play their movies as `movies` says.

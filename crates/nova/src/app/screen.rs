@@ -240,10 +240,10 @@ use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DescMovie, DisableRule,
-    HailOptions, HailView, HireTerms, LegalCode, MissionInfo, NovaAi, NovaBits, NovaBoarding,
-    NovaDisable, NovaHire, NovaLaw, NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper,
-    PilotStore, PointDefenceRule, RuleKey, Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
+    Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
+    HailView, HireTerms, LegalCode, MissionInfo, NovaAi, NovaBits, NovaBoarding, NovaDisable,
+    NovaHire, NovaLaw, NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore,
+    PointDefenceRule, RuleKey, Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -1193,9 +1193,6 @@ impl AppScreen {
         if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
             self.open_offer(prompt);
         }
-        if let Some(movie) = self.flight.as_mut().and_then(FlightView::take_offer_movie) {
-            self.play_over_flight(&movie);
-        }
         if self
             .flight
             .as_mut()
@@ -1349,9 +1346,8 @@ impl AppScreen {
     /// ends, on a tick): the player info screen opens over it; or the
     /// choice goes through flight, and the dialog closes, keeping its
     /// sounds, and flight resumes. The texts the answer queued show over
-    /// flight at once, and then the offer's after-movie plays, as
-    /// `_OfferOneMission` plays it once the accept or the refuse text is
-    /// over (@0xa3580-0xa35b8).
+    /// flight at once, the offer's after-movie among them where the
+    /// session queued it.
     fn settle_offer(&mut self) {
         let Some(dialog) = &mut self.offer else {
             return;
@@ -1364,7 +1360,6 @@ impl AppScreen {
             return;
         };
         let mission = dialog.prompt().mission;
-        let after = dialog.after_movie().cloned();
         self.sounds.extend(dialog.take_sounds());
         self.offer = None;
         let flight = self.flight.as_mut().expect(ENTERED);
@@ -1377,9 +1372,6 @@ impl AppScreen {
             }
         }
         self.show_mission_texts();
-        if let Some(movie) = after {
-            self.play_over_flight(&movie);
-        }
     }
 
     /// Opens the comm dialog on `view` over flight, which pauses: the
@@ -2008,6 +2000,7 @@ impl AppScreen {
     /// to the texts), as any dialog over flight does. Without dialogs,
     /// those in flight are dropped, as the spaceport drops them without
     /// its template. On any other side they stay queued in the session.
+    /// An offer's movies come in the places the session queued them.
     fn show_mission_texts(&mut self) {
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
             spaceport.show_mission_texts(flight.take_mission_texts());
@@ -2024,41 +2017,22 @@ impl AppScreen {
         else {
             return;
         };
-        self.show_over_flight(
-            texts
-                .into_iter()
-                .map(|text| DescShown {
-                    text: text.text,
-                    graphic: text.graphic,
-                    movie: text.movie,
-                })
-                .collect(),
-        );
+        self.over_flight(|missions| missions.show_texts(texts));
     }
 
     /// Shows `texts`, each a text and its `dësc`'s `Graphic`, over flight
-    /// in "Desc Dialog" of the variant each picks, one after another,
-    /// first cancelling flight's pointer gesture and letting go of its
-    /// keys (their releases will go to the texts), as any dialog over
-    /// flight does. Without dialogs they are dropped.
-    /// Plays `movie` over flight after whatever the mission dialogs show,
-    /// as [`AppScreen::show_over_flight`] shows texts: an offer's after-movie
-    /// once the texts its answer queued are queued, or a before-movie of a
-    /// person's offer accepted at once, before them.
-    fn play_over_flight(&mut self, movie: &DescMovie) {
-        if self.flight_missions().is_none() {
-            return;
-        }
-        let below = self.shown_mut();
-        below.cancel_pointer();
-        below.release_keys();
-        if let Some(missions) = &mut self.missions {
-            missions.play_movie(movie);
-        }
-        self.drop_closed_missions();
+    /// in "Desc Dialog" of the variant each picks, one after another, as
+    /// [`AppScreen::over_flight`] shows them. Without dialogs they are
+    /// dropped.
+    fn show_over_flight(&mut self, texts: Vec<DescShown>) {
+        self.over_flight(|missions| missions.show_descs(texts));
     }
 
-    fn show_over_flight(&mut self, texts: Vec<DescShown>) {
+    /// Queues what `show` queues on the mission dialogs over flight, first
+    /// cancelling flight's pointer gesture and letting go of its keys
+    /// (their releases will go to the dialogs), as any dialog over flight
+    /// does. Without dialogs nothing is queued.
+    fn over_flight(&mut self, show: impl FnOnce(&mut MissionDialogs)) {
         if self.flight_missions().is_none() {
             return;
         }
@@ -2066,7 +2040,7 @@ impl AppScreen {
         below.cancel_pointer();
         below.release_keys();
         if let Some(missions) = &mut self.missions {
-            missions.show_descs(texts);
+            show(missions);
         }
         self.drop_closed_missions();
     }
@@ -2546,10 +2520,7 @@ impl AppScreen {
         if let Some(venue) = spaceport.take_offer_request() {
             match flight.next_offer(venue) {
                 Some(VenueOffer::Prompt(prompt)) => spaceport.open_offer(prompt),
-                Some(VenueOffer::Accepted { movie, .. }) => {
-                    if let Some(movie) = movie {
-                        spaceport.play_movie(&movie);
-                    }
+                Some(VenueOffer::Accepted { .. }) => {
                     spaceport.show_mission_texts(flight.take_mission_texts());
                     spaceport.rearm_offers(flight.offer_gap());
                     refresh_spaceport(spaceport, flight);
@@ -2567,7 +2538,6 @@ impl AppScreen {
                 }
             }
             spaceport.show_mission_texts(flight.take_mission_texts());
-            spaceport.play_offer_after_movie();
             spaceport.rearm_offers(flight.offer_gap());
             refresh_spaceport(spaceport, flight);
         }

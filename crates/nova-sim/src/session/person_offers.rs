@@ -726,7 +726,6 @@ mod tests {
             Ok(Hailed::Offer(VenueOffer::Accepted {
                 mission: MissionId(130),
                 accepted: Ok(0),
-                movie: None,
             }))
         );
         assert_eq!(session.pilot().missions().missions(), [MissionId(130)]);
@@ -799,11 +798,7 @@ mod tests {
         assert!(!session.pilot().gone(PersonId(600)));
         assert_eq!(session.offer_rolls().roll(MissionId(130)), Some(0));
         assert_eq!(session.offer_text(MissionId(130), ""), None, "answered");
-        assert_eq!(
-            session.take_mission_texts().len(),
-            0,
-            "130 has no BriefText"
-        );
+        assert_eq!(session.take_texts_only().len(), 0, "130 has no BriefText");
     }
 
     #[test]
@@ -893,7 +888,7 @@ mod tests {
         );
         assert!(session.control_bit(Bit::new(5).expect("a bit")));
         let texts: Vec<String> = session
-            .take_mission_texts()
+            .take_texts_only()
             .into_iter()
             .map(|text| text.text)
             .collect();
@@ -922,7 +917,7 @@ mod tests {
         assert!(session.pilot().missions().missions().is_empty());
         assert_eq!(
             session
-                .take_mission_texts()
+                .take_texts_only()
                 .into_iter()
                 .map(|text| text.kind)
                 .collect::<Vec<_>>(),

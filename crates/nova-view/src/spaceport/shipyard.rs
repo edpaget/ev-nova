@@ -126,8 +126,8 @@ use std::time::Duration;
 
 use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_sim::{
-    DescMovie, MissionId, OfferPrompt, Rating, RuleSource, ShipId, ShipNaming, ShipRow, ShipSpecs,
-    Shipyard, StockLine,
+    MissionId, OfferPrompt, Rating, RuleSource, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard,
+    StockLine,
 };
 
 use super::catalog::SpaceportCatalog;
@@ -1098,12 +1098,6 @@ impl ShipyardScreen {
     /// once.
     pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
         self.offering.as_mut()?.take_choice()
-    }
-
-    /// The answered offer's after-movie, once: whoever acts on the choice
-    /// plays it after the texts the answer shows.
-    pub fn take_offer_after_movie(&mut self) -> Option<DescMovie> {
-        self.offering.as_mut()?.take_after_movie()
     }
 
     /// Its offers play their movies as `movies` says.

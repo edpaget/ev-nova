@@ -18,7 +18,8 @@
 //!   a mission's `BriefText`, `CompText`, `FailText` and `RefuseText`,
 //!   queued at the lifecycle's moments (see the `missions` module), its
 //!   `ShipDoneText` as its ship goals are met (see the `mission_ships`
-//!   module), and an accept refused for want of room for its cargo.
+//!   module), and an accept refused for want of room for its cargo; and,
+//!   in their places among them, an offer's movies ([`MissionShown`]).
 //!
 //! None of it is saved. The next outside offer the original drops after
 //! an accept is rdm:phase/missions/phase-15-accept-drops-next-offer.
@@ -169,6 +170,27 @@ pub struct MissionText {
     pub movie: Option<DescMovie>,
 }
 
+/// One thing the session queues to show, in order
+/// ([`Session::take_mission_texts`]): a mission text, or an offer's movie,
+/// which `_OfferOneMission` plays outside `_ShowTextDialog`, so in its own
+/// place among the texts: the before-movie ahead of the `BriefText` of an
+/// offer accepted at once (@0xa2273-0xa22ab), and the after-movie behind
+/// the texts the offer dialog's answer shows (@0xa3580-0xa35b8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MissionShown {
+    /// A text, with its own `dësc`'s movie.
+    Text(MissionText),
+    /// An offer's movie, played whatever its
+    /// [`after`](DescMovie::after) flag says: the session has placed it.
+    Movie(DescMovie),
+}
+
+impl From<MissionText> for MissionShown {
+    fn from(text: MissionText) -> Self {
+        Self::Text(text)
+    }
+}
+
 /// One active mission the mission info screen lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InfoRow {
@@ -252,10 +274,46 @@ impl Session {
         self.mission_texts.get(&id)
     }
 
-    /// The mission texts to show since they were last taken, in the order
-    /// they came.
-    pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
+    /// The mission texts and offer movies to show since they were last
+    /// taken, in the order they came.
+    pub fn take_mission_texts(&mut self) -> Vec<MissionShown> {
         std::mem::take(&mut self.shown_texts)
+    }
+
+    /// The mission texts to show since they were last taken, for a test
+    /// that queues no offer movie: it panics on one.
+    #[cfg(test)]
+    pub(crate) fn take_texts_only(&mut self) -> Vec<MissionText> {
+        self.take_mission_texts()
+            .into_iter()
+            .map(|shown| match shown {
+                MissionShown::Text(text) => text,
+                MissionShown::Movie(movie) => panic!("an offer movie: {movie:?}"),
+            })
+            .collect()
+    }
+
+    /// Queues `mission`'s offer movie to show next, when its `dësc` names
+    /// one played `after` the dialog or not, as asked.
+    fn show_offer_movie(&mut self, mission: MissionId, after: bool) {
+        if let Some(movie) = self
+            .mission_texts(mission)
+            .and_then(|texts| texts.movies.offer.clone())
+            .filter(|movie| movie.after == after)
+        {
+            self.shown_texts.push(MissionShown::Movie(movie));
+        }
+    }
+
+    /// Queues the after-movie of `mission`'s offer, once the offer
+    /// dialog's answer has queued its texts (`_OfferOneMission`
+    /// @0xa3580-0xa35b8): only for an offer the dialog showed, at a venue
+    /// or from a ship; the mission computer (`_DoMissionDialog`) plays
+    /// none.
+    pub(super) fn show_offer_after_movie(&mut self, mission: MissionId, venue: Venue) {
+        if venue != Venue::Computer {
+            self.show_offer_movie(mission, true);
+        }
     }
 
     /// Queues `mission`'s `kind` text to show, when it has one, taken in
@@ -283,26 +341,26 @@ impl Session {
             Some(slot) => self.mission_text(slot, &raw),
             None => self.plain_text(&raw),
         };
-        self.shown_texts.push(MissionText {
+        self.shown_texts.push(MissionShown::Text(MissionText {
             kind,
             mission,
             text,
             graphic,
             movie,
-        });
+        }));
         true
     }
 
     /// Queues `text`, `mission`'s `kind` text, to show as it is, with no
     /// picture.
     pub(super) fn show_text(&mut self, kind: MissionTextKind, mission: MissionId, text: String) {
-        self.shown_texts.push(MissionText {
+        self.shown_texts.push(MissionShown::Text(MissionText {
             kind,
             mission,
             text,
             graphic: None,
             movie: None,
-        });
+        }));
     }
 
     /// The mission computer of the stellar docked at (`_DoMissionDialog`
@@ -513,16 +571,13 @@ impl Session {
             // The accept at once returns 1 once it succeeds (@0xa2311,
             // @0xa368e), so `_OfferMissionFromPort` shifts the list
             // (@0xa377d-0xa37a1), which `accept_offered` does
-            // (`Session::drop_offered`).
-            let movie = texts
-                .and_then(|texts| texts.movies.offer.clone())
-                .filter(|movie| !movie.after);
+            // (`Session::drop_offered`). Its before-movie plays first, as
+            // it comes before the empty-text check (@0xa2273-0xa22ec); the
+            // accept at once returns before the after-movie
+            // (@0xa230a-0xa231c).
+            self.show_offer_movie(mission, false);
             let accepted = self.accept_offered(mission, chance);
-            return VenueOffer::Accepted {
-                mission,
-                accepted,
-                movie,
-            };
+            return VenueOffer::Accepted { mission, accepted };
         }
         let labels = offer_labels(
             texts.map_or("", |texts| texts.accept_button.as_str()),
@@ -774,7 +829,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off you go, captain.")],
             "the earlier <SRK129> is reset (@0x71926-0x71930)"
         );
@@ -1443,7 +1498,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [
                 MissionText {
                     graphic: Some(5008),
@@ -1534,7 +1589,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [
                 MissionText {
                     movie: film("No.mov", 0x0001),
@@ -1562,14 +1617,14 @@ mod tests {
         session
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
-        assert_eq!(session.take_mission_texts(), []);
+        assert_eq!(session.take_texts_only(), []);
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().get(0).is_none(), "completed");
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::Comp, 130, "Delivered to Luna.")]
         );
-        assert_eq!(session.take_mission_texts(), [], "taken");
+        assert_eq!(session.take_texts_only(), [], "taken");
     }
 
     #[test]
@@ -1589,7 +1644,7 @@ mod tests {
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().get(0).is_none(), "failed");
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::Fail, 130, "Failed at [Error].")]
         );
     }
@@ -1623,7 +1678,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [
                 text(MissionTextKind::Refuse, 130, "No trip to [Error]."),
                 text(MissionTextKind::Brief, 131, "Off to Mars."),
@@ -1649,7 +1704,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off to [Error].")],
             "its OnAccept aborted it, freeing the slot"
         );
@@ -1665,7 +1720,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_mission_texts(),
+            session.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off to Mars.")]
         );
     }
@@ -1696,7 +1751,7 @@ mod tests {
         run(&mut session, "F131");
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().iter().next().is_none());
-        assert_eq!(session.take_mission_texts(), []);
+        assert_eq!(session.take_texts_only(), []);
     }
 
     /// Mission `id`, offered at the bar, to Mars for 900.
@@ -1769,7 +1824,7 @@ mod tests {
     }
 
     #[test]
-    fn an_offer_accepted_at_once_carries_its_before_movie_and_never_its_after_movie() {
+    fn an_offer_accepted_at_once_queues_its_before_movie_and_never_its_after_movie() {
         let unrefusable = |id| MissionRecord {
             flags: UNREFUSABLE,
             ..at_the_bar(id)
@@ -1794,8 +1849,13 @@ mod tests {
             Some(VenueOffer::Accepted {
                 mission: MissionId(141),
                 accepted: Ok(0),
-                movie: film("Before.mov", 0x0004),
             }),
+        );
+        assert_eq!(
+            queued(&mut session),
+            [MissionShown::Movie(
+                film("Before.mov", 0x0004).expect("named")
+            )],
             "it plays before the empty-text check (@0xa2273-0xa22ec)"
         );
         assert_eq!(
@@ -1803,9 +1863,116 @@ mod tests {
             Some(VenueOffer::Accepted {
                 mission: MissionId(142),
                 accepted: Ok(1),
-                movie: None,
             }),
+        );
+        assert_eq!(
+            queued(&mut session),
+            [],
             "the accept at once returns before the after-movie (@0xa230a-0xa231c)"
+        );
+    }
+
+    /// Everything the session queued to show since it was last taken.
+    fn queued(session: &mut Session) -> Vec<MissionShown> {
+        session.take_mission_texts()
+    }
+
+    #[test]
+    fn an_offers_movies_are_queued_in_order_with_the_texts_its_answer_shows() {
+        let unrefusable = MissionRecord {
+            flags: UNREFUSABLE,
+            ..at_the_bar(141)
+        };
+        let filmed = |id, offer: &str, movie| MissionTexts {
+            brief: Some(format!("Brief {id}.")),
+            refuse: Some(format!("Refuse {id}.")),
+            movies: TextMovies {
+                offer: movie,
+                ..TextMovies::default()
+            },
+            ..offering(id, offer, "", "")
+        };
+        let catalog = screens(
+            vec![unrefusable, at_the_bar(142), to_mars(144)],
+            vec![
+                filmed(141, "", film("Before.mov", 0)),
+                filmed(142, "Ferry.", film("After.mov", 0x0001)),
+                filmed(144, "Ferry.", film("After.mov", 0x0001)),
+            ],
+        );
+        let shown = |kind, id| MissionShown::Text(text(kind, id, &format!("{kind:?} {id}.")));
+        let after = || MissionShown::Movie(film("After.mov", 0x0001).expect("named"));
+        let mut session = docked(&catalog);
+        assert!(matches!(
+            session.next_offer(BAR, &mut NeverFires),
+            Some(VenueOffer::Accepted { .. })
+        ));
+        assert_eq!(
+            queued(&mut session),
+            [
+                MissionShown::Movie(film("Before.mov", 0).expect("named")),
+                shown(MissionTextKind::Brief, 141),
+            ],
+            "accepted at once: the before-movie, then its BriefText (@0xa2273, @0xa230a)"
+        );
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(142), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(
+            queued(&mut session),
+            [shown(MissionTextKind::Brief, 142), after()],
+            "accepted from the dialog: its texts, then the after-movie (@0xa3580)"
+        );
+        let mut session = docked(&catalog);
+        session
+            .refuse_mission(MissionId(142), &mut NeverFires)
+            .expect("refused");
+        assert_eq!(
+            queued(&mut session),
+            [shown(MissionTextKind::Refuse, 142), after()],
+            "refused: its RefuseText, then the after-movie"
+        );
+        session
+            .accept_mission(MissionId(144), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(
+            queued(&mut session),
+            [shown(MissionTextKind::Brief, 144)],
+            "the mission computer plays no offer movie (`_DoMissionDialog` has none)"
+        );
+    }
+
+    #[test]
+    fn a_prompts_before_movie_is_left_to_the_dialog() {
+        let catalog = screens(
+            vec![at_the_bar(142)],
+            vec![MissionTexts {
+                brief: Some("Off.".to_owned()),
+                movies: TextMovies {
+                    offer: film("Before.mov", 0),
+                    ..TextMovies::default()
+                },
+                ..offering(142, "Ferry.", "", "")
+            }],
+        );
+        let mut session = docked(&catalog);
+        assert!(matches!(
+            session.next_offer(BAR, &mut NeverFires),
+            Some(VenueOffer::Prompt(_))
+        ));
+        assert_eq!(queued(&mut session), [], "the dialog plays it");
+        session
+            .accept_mission(MissionId(142), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(
+            queued(&mut session),
+            [MissionShown::Text(text(
+                MissionTextKind::Brief,
+                142,
+                "Off."
+            ))],
+            "played before the dialog, never again after it"
         );
     }
 
@@ -1906,7 +2073,6 @@ mod tests {
             Some(VenueOffer::Accepted {
                 mission: MissionId(141),
                 accepted: Ok(0),
-                movie: None,
             })
         );
         assert_eq!(session.pilot().missions().missions(), [MissionId(141)]);
@@ -2158,7 +2324,6 @@ mod tests {
                 Some(VenueOffer::Accepted {
                     mission: MissionId(141),
                     accepted: Ok(0),
-                    movie: None,
                 })
             );
             assert_eq!(outside(&session), left, "{dialog:?} {shift:?}");
@@ -2184,7 +2349,7 @@ mod tests {
                 session.accept_mission(MissionId(141), &mut NeverFires),
                 Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
             );
-            assert_eq!(session.take_mission_texts(), [], "{source:?}");
+            assert_eq!(session.take_texts_only(), [], "{source:?}");
             assert_eq!(session.take_sounds(), [], "{source:?}");
             assert_eq!(outside(&session), [141, 142, 143], "{source:?}");
             assert_eq!(
@@ -2229,7 +2394,6 @@ mod tests {
             Some(VenueOffer::Accepted {
                 mission: MissionId(141),
                 accepted: Err(AcceptError::Refused(AcceptRefusal::SlotsFull)),
-                movie: None,
             })
         );
         assert_eq!(

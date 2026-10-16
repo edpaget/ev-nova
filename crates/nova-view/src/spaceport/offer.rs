@@ -27,12 +27,13 @@
 //! An offer whose `dësc` names a movie ([`OfferPrompt::movie`]) plays it
 //! while movies are on ([`Movies`]): before the dialog
 //! (`_OfferOneMission` @0xa2273-0xa22ab), which is neither drawn nor
-//! given input until the movie ends ([`OfferDialog::with_movies`]); or,
-//! `Flags` 0x0001 set, after the answer has been acted on, its `BriefText`
-//! or `RefuseText` shown (@0xa3580-0xa35b8, after the accept @0xa2e06 and
-//! the refuse text @0xa2f04): the choice is taken at once, and whoever
-//! acts on it plays [`OfferDialog::after_movie`] after the texts the
-//! answer queued.
+//! given input until the movie ends ([`OfferDialog::with_movies`]). One
+//! with `Flags` 0x0001 set plays after the answer has been acted on, its
+//! `BriefText` or `RefuseText` shown (@0xa3580-0xa35b8, after the accept
+//! @0xa2e06 and the refuse text @0xa2f04): the dialog plays none of it and
+//! takes the choice at once, and the session queues that movie behind the
+//! texts the answer shows
+//! ([`MissionShown::Movie`](nova_sim::MissionShown::Movie)).
 //!
 //! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
 //! accept label's first letter accepts and, when the mission can be
@@ -73,7 +74,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{DescMovie, MissionId, OfferPrompt, RuleSource};
+use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -181,8 +182,6 @@ pub struct OfferDialog {
     sounds: Vec<Sound>,
     /// The movie played before the dialog, until it ends.
     before: Option<MovieStage>,
-    /// The movie to play after the answer, while movies are on.
-    after: Option<DescMovie>,
 }
 
 impl OfferDialog {
@@ -252,24 +251,19 @@ impl OfferDialog {
             picture,
             sounds: Vec::new(),
             before: None,
-            after: None,
         }
     }
 
     /// This dialog with its offer's movie, as `movies` plays it: one that
     /// plays before the dialog begins at once, and the dialog waits for
-    /// it; one that plays after the answer is
-    /// [`after_movie`](Self::after_movie). With movies off, neither.
+    /// it. One that plays after the answer is the session's to queue. With
+    /// movies off, none.
     #[must_use]
     pub fn with_movies(self, movies: &Movies) -> Self {
-        let Some(movie) = self.prompt.movie.clone() else {
+        let Some(movie) = self.prompt.movie.clone().filter(|movie| !movie.after) else {
             return self;
         };
         let mut dialog = self;
-        if movie.after {
-            dialog.after = movies.on().then_some(movie);
-            return dialog;
-        }
         if let Some(mut stage) = movies.stage(&movie) {
             stage.begin();
             dialog.before = Some(stage);
@@ -282,13 +276,6 @@ impl OfferDialog {
     #[must_use]
     pub fn playing(&self) -> bool {
         self.before.is_some()
-    }
-
-    /// The movie to play after the answer has been acted on and its texts
-    /// shown, if any.
-    #[must_use]
-    pub fn after_movie(&self) -> Option<&DescMovie> {
-        self.after.as_ref()
     }
 
     /// Drops the movie before the dialog once it has ended, handing what
@@ -511,8 +498,6 @@ pub(crate) struct VenueOffers {
     dialog: Option<OfferDialog>,
     /// The offer answered and its choice, until it is taken.
     choice: Option<(MissionId, OfferChoice)>,
-    /// The answered offer's after-movie, until it is taken.
-    after: Option<DescMovie>,
     /// The movies the offers play, and whether they play.
     movies: Movies,
     /// The offer dialog's sounds not yet handed on.
@@ -537,7 +522,6 @@ impl VenueOffers {
             requested: false,
             dialog: None,
             choice: None,
-            after: None,
             movies: Movies::none(),
             sounds: Vec::new(),
             clock: RuleSource::Engine,
@@ -618,12 +602,6 @@ impl VenueOffers {
         self.choice.take()
     }
 
-    /// The answered offer's after-movie, once: whoever acts on the choice
-    /// plays it after the texts the answer shows.
-    pub(crate) fn take_after_movie(&mut self) -> Option<DescMovie> {
-        self.after.take()
-    }
-
     /// Asks for the next offer after `gap`: by the engine, `gap` after the
     /// last ask (or restart), so a gap already past asks on the next tick
     /// nothing covers the venue; by the other reading, `gap` from now.
@@ -670,7 +648,7 @@ impl VenueOffers {
     }
 
     /// Keeps the offer dialog's sounds; answered, it closes, its choice
-    /// and after-movie kept until taken.
+    /// kept until taken.
     fn settle_dialog(&mut self) {
         let Some(dialog) = &mut self.dialog else {
             return;
@@ -678,7 +656,6 @@ impl VenueOffers {
         self.sounds.extend(dialog.take_sounds());
         if let Some(choice) = dialog.take_choice() {
             self.choice = Some((dialog.prompt().mission, choice));
-            self.after = dialog.after_movie().cloned();
             self.dialog = None;
         }
     }
@@ -787,8 +764,8 @@ pub(crate) mod fixture {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::RuleSource;
     use nova_sim::mission::OfferLabels;
+    use nova_sim::{DescMovie, RuleSource};
 
     use super::*;
     use crate::draw::DrawCommand;
@@ -1651,23 +1628,24 @@ mod tests {
             !dialog.answered(),
             "the N flushed, and the click's release went to no button"
         );
-        assert_eq!(dialog.after_movie(), None);
     }
 
     #[test]
-    fn an_offer_movie_with_flag_set_waits_for_the_answer() {
+    fn an_offer_movie_with_flag_set_is_left_to_the_session() {
         let player = MockMoviePlayer::playing((160, 120), 2);
         let mut dialog = dialog_of(filmed(0x0001)).with_movies(&movies(&player));
         assert!(player.calls().is_empty(), "not before the dialog");
         assert!(texts(&dialog).contains(&"Ferry this to Mars.".to_owned()));
-        assert_eq!(dialog.after_movie(), film(0x0001).as_ref());
         dialog.input(&key(Key::Enter));
         assert_eq!(
             dialog.take_choice(),
             Some(OfferChoice::Accept),
             "the choice comes at once: its texts play before the movie"
         );
-        assert!(player.calls().is_empty(), "the owner plays it after them");
+        assert!(
+            player.calls().is_empty(),
+            "the session queues it after them"
+        );
     }
 
     #[test]
@@ -1676,9 +1654,6 @@ mod tests {
         let off = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, false);
         let dialog = dialog_of(filmed(0)).with_movies(&off);
         assert!(texts(&dialog).contains(&"Ferry this to Mars.".to_owned()));
-        assert_eq!(dialog.after_movie(), None, "off: none after either");
-        let dialog = dialog_of(filmed(0x0001)).with_movies(&off);
-        assert_eq!(dialog.after_movie(), None);
         assert!(player.calls().is_empty());
         let refusing = MockMoviePlayer::refusing();
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&refusing));
@@ -1702,7 +1677,7 @@ mod tests {
     }
 
     #[test]
-    fn the_venues_offer_plays_its_movie_and_hands_out_its_after_movie_with_the_choice() {
+    fn the_venues_offer_plays_its_before_movie_and_hands_out_the_choice() {
         let player = MockMoviePlayer::playing((160, 120), 1);
         let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         offers.set_movies(movies(&player));
@@ -1721,12 +1696,6 @@ mod tests {
             offers.take_choice(),
             Some((MissionId(141), OfferChoice::Accept))
         );
-        assert_eq!(offers.take_after_movie(), None, "a before-movie");
-        offers.open(filmed(0x0001), Rc::new(MonoMetrics), ButtonStyle::STOCK);
-        offers.input(&key(Key::Enter), &mut sounds);
-        assert!(offers.take_choice().is_some());
-        assert_eq!(offers.take_after_movie(), film(0x0001));
-        assert_eq!(offers.take_after_movie(), None, "once");
     }
 
     #[test]

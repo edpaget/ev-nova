@@ -141,9 +141,11 @@ pub struct OfferPrompt {
     /// `dësc`. The view shows the picture variant of the dialog (`DLOG`
     /// 1020) for one above 127 (@0xa2344).
     pub graphic: Option<i16>,
-    /// The movie its offer `dësc` names: played before the dialog, or,
-    /// [`after`](DescMovie::after), after the texts its answer shows
-    /// (`_OfferOneMission` @0xa2273-0xa22ab, @0xa3580-0xa35b8).
+    /// The movie its offer `dësc` names: the dialog plays it before it
+    /// opens (`_OfferOneMission` @0xa2273-0xa22ab); one played
+    /// [`after`](DescMovie::after) the session queues after the texts the
+    /// answer shows (@0xa3580-0xa35b8; see
+    /// [`Session::take_mission_texts`](crate::Session::take_mission_texts)).
     pub movie: Option<DescMovie>,
 }
 
@@ -163,16 +165,13 @@ pub enum VenueOffer {
     Prompt(OfferPrompt),
     /// A mission that cannot be refused, with no offer text, was accepted
     /// at once, with no dialog (@0xa22ec-0xa231c): how the accept went.
+    /// Its offer's before-movie is queued ahead of the accept's texts
+    /// ([`Session::take_mission_texts`](crate::Session::take_mission_texts)).
     Accepted {
         /// The mission.
         mission: MissionId,
         /// The slot it went into, or why it was not accepted.
         accepted: Result<u8, AcceptError>,
-        /// The movie its offer `dësc` names, when it plays before the
-        /// dialog: it plays before the accept's texts, as the before-movie
-        /// comes before the empty-text check (@0xa2273-0xa22ec). The accept
-        /// at once returns before the after-movie (@0xa230a-0xa231c).
-        movie: Option<DescMovie>,
     },
 }
 

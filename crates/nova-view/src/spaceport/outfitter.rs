@@ -141,8 +141,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    DescMovie, Direction, LcNames, MissionId, OfferPrompt, OutfitId, OutfitOrder, OutfitRefusal,
-    OutfitRow, Outfitter, Reselection, RuleSource, SaleAlert,
+    Direction, LcNames, MissionId, OfferPrompt, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow,
+    Outfitter, Reselection, RuleSource, SaleAlert,
 };
 
 use super::catalog::SpaceportCatalog;
@@ -676,12 +676,6 @@ impl OutfitterScreen {
     /// once.
     pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
         self.offering.as_mut()?.take_choice()
-    }
-
-    /// The answered offer's after-movie, once: whoever acts on the choice
-    /// plays it after the texts the answer shows.
-    pub fn take_offer_after_movie(&mut self) -> Option<DescMovie> {
-        self.offering.as_mut()?.take_after_movie()
     }
 
     /// Its offers play their movies as `movies` says.

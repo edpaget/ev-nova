@@ -399,7 +399,7 @@ pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use mission_screens::{
     ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionInfoPress,
-    MissionText, MissionTextKind,
+    MissionShown, MissionText, MissionTextKind,
 };
 #[cfg(any(test, feature = "fixture"))]
 pub(crate) use missions::StopRefusal;
@@ -1044,7 +1044,7 @@ pub struct Session {
     ending: BTreeSet<u8>,
     /// The mission texts to show, until they are taken (see the
     /// `mission_screens` module); never saved.
-    shown_texts: Vec<MissionText>,
+    shown_texts: Vec<MissionShown>,
     /// The governments the last `<PRKnnn>` and `<SRKnnn>` taken in named
     /// (`_descRankGovt`; see the `missions` module's text sources), as
     /// the crossed rank tags read them; never saved, as the original
