@@ -6454,10 +6454,12 @@ impl<
     }
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
-    /// and coasts.
+    /// and coasts. [`MAP_KEY`] counts as let go too, so a key-down the
+    /// course map doesn't take no longer closes it.
     fn release_keys(&mut self) {
         self.held.clear();
         self.map.release_keys();
+        self.map_key_held = false;
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),
@@ -23667,6 +23669,24 @@ mod tests {
         assert!(view.map_open());
         tap(&mut view, LAND);
         assert!(view.map_open(), "M let go");
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_lets_go_of_the_map_key() {
+        // The window loses focus with M still down, so its release never
+        // arrives: the next key the map doesn't take leaves it open.
+        let mut view = flight();
+        view.input(&key(MAP, true));
+        assert!(view.map_open());
+        view.release_keys();
+        tap(&mut view, LAND);
+        assert!(view.map_open(), "in flight");
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        view.port_map_input(&held(MAP));
+        view.release_keys();
+        view.port_map_input(&key(Key::Tab, true));
+        assert!(view.map_open(), "in port");
     }
 
     #[test]
