@@ -2892,6 +2892,32 @@ mod tests {
     }
 
     #[test]
+    fn point_defences_burst_end_sets_its_timer_to_the_burst_reload_dropping_the_carry() {
+        // Reload 5 on 2 mounts, bursts of 2: an interval of 4 shots.
+        let record = WeaponRecord {
+            burst_count: 2,
+            burst_reload: 20,
+            ..defence(133, 9, 5, 0)
+        };
+        let mut armament = mounted(record, 2);
+        armament.mounts[0].burst = 3;
+        armament.mounts[0].reload = -0.5;
+        defend(
+            &mut armament,
+            &mut Supplies::none(),
+            &mut NeverFires,
+            Some((0.0, ShotId(1))),
+            &mut Vec::new(),
+        )
+        .expect("fires the burst's 4th shot");
+        assert_eq!(
+            (armament.mounts()[0].burst, armament.mounts()[0].reload),
+            (0, 20.0),
+            "the burst reload, not it and the carried -0.5 + 5 / 2"
+        );
+    }
+
+    #[test]
     fn point_defence_using_ammo_at_the_end_of_a_burst_spends_a_round_each_interval() {
         // `AmmoType` 27 is 155's rounds, and 0 is 128's.
         for (shooter, ammo_type, slot) in [
