@@ -14867,6 +14867,35 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_npcs_missile_is_jammed_by_the_players_class_governments_inherent_jamming() {
+        let mut catalog = jamming_catalog(blaster(), jammable(0), 0);
+        let mut class = catalog.ship_records[0].clone();
+        class.id = ShipId(128);
+        class.inherent_govt = Some(GovtId(151));
+        catalog.ship_records.push(class);
+        catalog.govts.push(GovtRecord {
+            inh_jam: [25, 0, 0, 0],
+            ..crate::testkit::govt(151)
+        });
+        for (roll, jammed) in [(76, true), (75, false)] {
+            let mut session = beside_an_npc(&catalog, AiType::Warship);
+            assert_eq!(session.pilot.ship, ShipId(128));
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.trigger = FIRE;
+            npc.target = Some(ShipRef::Player);
+            let heading = missile_after(
+                &mut session,
+                16,
+                Rules::default(),
+                &mut Ranged::of(&[(101, roll)]),
+            );
+            // 151's InhJam 25, with no jammer owned: jammed above 75.
+            let expected = if jammed { 0.0 } else { 353.0 };
+            assert!((heading - expected).abs() < 1e-4, "{roll}: {heading}");
+        }
+    }
+
+    #[test]
     fn a_missile_in_a_system_of_interference_circles_by_the_frame_its_tick_read() {
         let mut catalog = jamming_catalog(
             jammable(crate::combat::weapon::SENSOR_INTERFERENCE),
