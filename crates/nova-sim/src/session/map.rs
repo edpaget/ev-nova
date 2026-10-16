@@ -382,6 +382,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn each_legal_records_source_reads_its_own_record() {
+        let mut catalog = coloured();
+        catalog.star_map[1].govt = Some(GovtId(140));
+        for (legal, expected) in [
+            (RuleSource::Engine, SystemColorCode::Cleared),
+            (RuleSource::Bible, SystemColorCode::Hostile),
+        ] {
+            let rules = Rulebook::default().with_override(RuleKey::LegalRecords, legal);
+            let mut session = flown(&catalog, rules);
+            session.pilot.explore(SystemId(131));
+            session.pilot.set_legal_record(GovtId(140), -5);
+            session.pilot.set_system_record(SystemId(131), 10);
+            assert_eq!(
+                session.system_color_code(SystemId(131)),
+                expected,
+                "{legal:?}: the system's record 10, government 140's -5"
+            );
+        }
+    }
+
     /// [`coloured`] with 134 at 131's place, its head, hidden.
     fn shadowed() -> FakePilotCatalog {
         let mut catalog = coloured();
