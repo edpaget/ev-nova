@@ -114,7 +114,7 @@ impl Session {
         })?;
         self.sounds.push(SimSound::NavSelected);
         self.nav_fly_in.start();
-        self.nav = NavMode::Stellar(Some(picked));
+        self.set_nav(NavMode::Stellar(Some(picked)));
         self.dock = None;
         Some(Hover::Stellar(picked))
     }

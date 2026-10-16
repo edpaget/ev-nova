@@ -273,7 +273,7 @@ impl Session {
         // the tutorial, as at every flight start (`_ResetPlayer`
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
         // modules).
-        self.nav = crate::navigation::NavMode::Off;
+        self.set_nav(crate::navigation::NavMode::Off);
         self.dock = None;
         self.tutorial = crate::tutorial::Tutorial::SEASONED;
         self.secondary = None;

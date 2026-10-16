@@ -3693,7 +3693,7 @@ impl Session {
             ))
         } else {
             self.gate = None;
-            self.nav = NavMode::Off;
+            self.set_nav(NavMode::Off);
             Err(GateRefusal::NoLinks)
         }
     }
@@ -3753,7 +3753,7 @@ impl Session {
             self.messages.push(SimMessage::ExitedHypergate(system));
             system
         });
-        self.nav = NavMode::Off;
+        self.set_nav(NavMode::Off);
         entered
     }
 

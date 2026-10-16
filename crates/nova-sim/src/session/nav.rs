@@ -203,7 +203,8 @@ const CON_SLOTS: usize = 16;
 /// keeps it at +0x6c where ours keeps the system. A setter that knows the
 /// slot notes it ([`Session::cycle_map_selection`], [`Session::cue_course`]);
 /// it stands while the player is still in `system` and the raw selection
-/// is still `selected`, and a later cycle steps on from it.
+/// is still `selected`, and a later cycle steps on from it. Every other
+/// write of the nav forgets it ([`Session::set_nav`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct NavSlot {
     system: SystemId,
@@ -269,9 +270,28 @@ impl Session {
         jumps.contains(&selected).then_some(selected)
     }
 
+    /// Writes the nav mode and its selection, as each of the original's
+    /// setters writes +0x6a and +0x6c, and forgets the Con slot noted for
+    /// the old selection ([`NavSlot`]). A setter that writes mode 3 from a
+    /// slot it knows ([`Session::cycle_map_selection`],
+    /// [`Session::cue_course`]) notes that slot after. Every other one's
+    /// selection stands in the first slot naming it
+    /// ([`Session::selected_slot`]). The floating map's click writes that
+    /// slot, the first whose box it hits, as a repeated link's slots
+    /// share a box (@0x6a332 → @0x6a719). Hyper Select writes the slot it
+    /// steps to (@0x69cce), and ours, whose cycle visits each link once
+    /// ([`HyperSelectRule`]), stands it in that link's first slot, the
+    /// one the original steps to from any slot before it. The port
+    /// dialogs' and the bar's restores write mode 3 only after
+    /// [`Session::land_at`], which has no original.
+    pub(super) fn set_nav(&mut self, nav: NavMode) {
+        self.nav = nav;
+        self.nav_slot = None;
+    }
+
     /// Lets go of the selection and keeps the mode.
     pub(super) fn deselect(&mut self) {
-        self.nav = self.nav.deselected();
+        self.set_nav(self.nav.deselected());
     }
 
     /// A landed `M` (`first`) or `N` into `system` writes the selection
@@ -292,12 +312,12 @@ impl Session {
         if self.landed.is_none() || !self.galaxy.exists(system) {
             return;
         }
-        self.nav = match self.nav {
+        self.set_nav(match self.nav {
             NavMode::Stellar(_) if first => {
                 NavMode::Stellar(self.first_stellars.get(&system).copied())
             }
             mode => mode.deselected(),
-        };
+        });
     }
 
     /// Saves the nav mode and its selection as a port dialog opens, as the
@@ -313,7 +333,7 @@ impl Session {
     /// save is restored once.
     pub fn restore_port_nav(&mut self) {
         if let Some(saved) = self.port_nav.take() {
-            self.nav = saved;
+            self.set_nav(saved);
         }
     }
 
@@ -324,7 +344,7 @@ impl Session {
     /// same nav. With nothing saved it changes nothing.
     pub fn restore_bar_nav(&mut self) {
         if let Some(saved) = self.bar_nav {
-            self.nav = saved;
+            self.set_nav(saved);
         }
     }
 
@@ -345,7 +365,7 @@ impl Session {
             .jumps(self.pilot.system, self.hyperlinks)
             .contains(&hop)
         {
-            self.nav = NavMode::Hyperspace(Some(hop));
+            self.set_nav(NavMode::Hyperspace(Some(hop)));
             self.nav_slot = self.galaxy.same_place(hop).and_then(|place| {
                 let slot = self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))?;
                 Some(NavSlot {
@@ -376,10 +396,10 @@ impl Session {
         self.sounds.push(SimSound::NavSelected);
         self.dock = None;
         if nav_off {
-            self.nav = NavMode::Off;
+            self.set_nav(NavMode::Off);
         }
         if hyperspace && !matches!(self.nav, NavMode::Hyperspace(_)) {
-            self.nav = NavMode::Hyperspace(None);
+            self.set_nav(NavMode::Hyperspace(None));
             self.cue_course();
         }
         true
@@ -441,7 +461,7 @@ impl Session {
         self.sounds.push(SimSound::NavSelected);
         if !selected {
             self.nav_fly_in.start();
-            self.nav = NavMode::Stellar(Some(picked));
+            self.set_nav(NavMode::Stellar(Some(picked)));
             self.dock = None;
         }
         Some(picked)
@@ -485,7 +505,7 @@ impl Session {
         if self.hyper_select == HyperSelectRule::OneJumpCourse {
             self.pilot.course = vec![next];
         }
-        self.nav = NavMode::Hyperspace(Some(next));
+        self.set_nav(NavMode::Hyperspace(Some(next)));
         Some(next)
     }
 
@@ -606,7 +626,7 @@ impl Session {
                 .filter(|&slot| self.flags(slot))
                 .map(|slot| (at, slot))
         });
-        self.nav = NavMode::Hyperspace(next.map(|(_, selected)| selected));
+        self.set_nav(NavMode::Hyperspace(next.map(|(_, selected)| selected)));
         self.nav_slot = next.map(|(slot, selected)| NavSlot {
             system: self.pilot.system,
             slot,
@@ -626,7 +646,7 @@ impl Session {
         if self.jump.is_some() {
             return false;
         }
-        self.nav = NavMode::Hyperspace(link);
+        self.set_nav(NavMode::Hyperspace(link));
         self.sounds.push(SimSound::HyperSelected);
         true
     }
@@ -1501,6 +1521,35 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert!(hide(&mut session, &catalog, &[131, 133]));
         session
+    }
+
+    #[test]
+    fn a_map_cycle_after_hyper_select_steps_on_from_the_first_slot_naming_its_system() {
+        // `hub`'s 130 lists 134, 131, 131, 130, 999, 135. The cycle notes
+        // slot 2 for 131; Hyper Select comes back round to 131, writing
+        // slot 1 (@0x69cce), and the next cycle steps on to slot 2.
+        let mut session = Session::start(&hub()).expect("starts");
+        for _ in 0..3 {
+            cycle(&mut session);
+        }
+        assert_eq!(session.nav, hyperspace(131), "slot 2");
+        for expected in [135, 134, 131] {
+            assert_eq!(session.select_next_system(), Some(SystemId(expected)));
+        }
+        assert_eq!(cycle(&mut session), hyperspace(131), "slot 2, after slot 1");
+    }
+
+    #[test]
+    fn a_map_cycle_after_a_floating_map_click_steps_on_from_the_first_slot_naming_its_system() {
+        // The click writes the first slot whose box it hits
+        // (@0x6a332 → @0x6a719), and a repeated link's slots share a box.
+        let mut session = Session::start(&hub()).expect("starts");
+        for _ in 0..3 {
+            cycle(&mut session);
+        }
+        assert!(session.nav_off());
+        assert!(session.select_on_floating_map(Some(SystemId(131))));
+        assert_eq!(cycle(&mut session), hyperspace(131), "slot 2, after slot 1");
     }
 
     #[test]
