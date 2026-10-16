@@ -1454,6 +1454,14 @@ pub trait PilotCatalog {
     fn warp_sound_double_time(&self) -> Option<SoundLength> {
         None
     }
+    /// The length of the warp-out sound, `snd ` 130, which every
+    /// arrival plays and whose play state decides whether a jump's
+    /// natural end plays it again
+    /// ([`WarpOut`](crate::warp::WarpOut)); none when there is none or it
+    /// cannot be read, as by default.
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        None
+    }
     /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
     /// of `Flags` 0x0800 draws its ships' one type from at accept (see
     /// [`SpecialShips::uniform_type`](crate::mission::SpecialShips::uniform_type)).
@@ -1582,6 +1590,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).warp_sound_double_time()
     }
 
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        (**self).warp_out_sound()
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
     }
@@ -1704,6 +1716,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn warp_sound_double_time(&self) -> Option<SoundLength> {
         (**self).warp_sound_double_time()
+    }
+
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        (**self).warp_out_sound()
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -2076,6 +2092,14 @@ mod tests {
             })
         }
 
+        /// Two seconds at 11025 Hz.
+        fn warp_out_sound(&self) -> Option<SoundLength> {
+            Some(SoundLength {
+                frames: 22_050,
+                rate: 11_025,
+            })
+        }
+
         /// Düde 150 flies ship 128.
         fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
             (id == DudeId(150)).then(|| DudeRecord {
@@ -2126,6 +2150,7 @@ mod tests {
             format!("{:?}", catalog.buoy_strings()),
             format!("{:?}", catalog.warp_sound()),
             format!("{:?}", catalog.warp_sound_double_time()),
+            format!("{:?}", catalog.warp_out_sound()),
             format!("{:?}", catalog.mission_dude(DudeId(150))),
         ]
     }
@@ -2188,7 +2213,11 @@ mod tests {
             direct[32], "Some(SoundLength { frames: 22050, rate: 44100 })",
             "forwarded, not a default"
         );
-        assert!(direct[33].contains("ShipId(128), 40"), "{direct:?}");
+        assert_eq!(
+            direct[33], "Some(SoundLength { frames: 22050, rate: 11025 })",
+            "forwarded, not a default"
+        );
+        assert!(direct[34].contains("ShipId(128), 40"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

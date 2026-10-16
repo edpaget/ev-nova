@@ -90,8 +90,9 @@ use crate::traffic::{Leave, Traffic};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Entry {
     /// A hyperspace jump's arrival, having made `hops` hops along the
-    /// course.
-    Jump { hops: usize },
+    /// course, at its natural end, both warp-ups finished, or not, at its
+    /// fallback end (see [`Session::arrive`]).
+    Jump { hops: usize, natural_end: bool },
     /// Out of a hypergate or wormhole.
     Gate,
     /// `M` or `N`, landed or in flight.
@@ -334,7 +335,7 @@ impl Resets {
 pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets {
     let arrival = ScriptEffectRules::from_rulebook(rules).arrival == RuleSource::Bible;
     match how {
-        Entry::Jump { hops } => jump(hops),
+        Entry::Jump { hops, .. } => jump(hops),
         Entry::Gate => gate(),
         Entry::ScriptMove { landed: true } => script_move_landed(arrival),
         Entry::ScriptMove { landed: false } => script_move_in_flight(arrival, facts),
@@ -661,6 +662,9 @@ impl Session {
             self.landed = placement.stellar;
             self.bar_news = None;
             self.warp_ups.clear();
+            // The warp-out needs no clearing here: a relocation from
+            // flight docks after (`Session::land_at`), and one already
+            // landed has none playing, as landing ended it.
         }
         let scene_changed = self.set_player_system(system, sites, dock);
         if resets.has(Reset::Dock) {
@@ -915,6 +919,20 @@ impl Session {
         }
     }
 
+    /// Whether an arrival `how` plays the warp-out, `snd ` 130: a jump's
+    /// natural end only while it is not still playing (`_HandlePlayer`
+    /// @0x6bbe1-0x6bbe9); a jump's fallback end and a gate's or wormhole's
+    /// exit always (@0x6c706, @0x63e57, @0x6443d).
+    fn sounds_warp_out(&self, how: Entry) -> bool {
+        !matches!(
+            how,
+            Entry::Jump {
+                natural_end: true,
+                ..
+            }
+        ) || !self.warp_out.playing()
+    }
+
     /// Sounds and raises the arrival in `heard`'s system, as `resets`
     /// says, tells its event, if any ([`scene_event`]), and raises
     /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
@@ -932,7 +950,8 @@ impl Session {
             event,
             notes,
         } = heard;
-        if resets.has(Reset::ArrivalSound) {
+        if resets.has(Reset::ArrivalSound) && self.sounds_warp_out(how) {
+            self.warp_out.start(self.warp_out_sound);
             self.sounds.push(SimSound::Arrived);
         }
         if resets.has(Reset::ArrivalMessage) {
@@ -1015,7 +1034,14 @@ mod tests {
             );
             for f in [facts(true, false), facts(false, true)] {
                 assert_eq!(
-                    resets(Entry::Jump { hops }, &Rulebook::default(), f),
+                    resets(
+                        Entry::Jump {
+                            hops,
+                            natural_end: false
+                        },
+                        &Rulebook::default(),
+                        f
+                    ),
                     expected,
                     "{hops} {f:?}"
                 );
@@ -1175,7 +1201,10 @@ mod tests {
         let rows = |reading| {
             let rules = arrival(reading);
             [
-                Entry::Jump { hops: 1 },
+                Entry::Jump {
+                    hops: 1,
+                    natural_end: true,
+                },
                 Entry::Gate,
                 Entry::Relocate,
                 Entry::Rescue,
@@ -1209,8 +1238,20 @@ mod tests {
     #[test]
     fn each_way_in_is_the_entrance_its_story_event_names() {
         for (how, entrance) in [
-            (Entry::Jump { hops: 0 }, Entrance::Jump),
-            (Entry::Jump { hops: 3 }, Entrance::Jump),
+            (
+                Entry::Jump {
+                    hops: 0,
+                    natural_end: true,
+                },
+                Entrance::Jump,
+            ),
+            (
+                Entry::Jump {
+                    hops: 3,
+                    natural_end: false,
+                },
+                Entrance::Jump,
+            ),
             (Entry::Gate, Entrance::Gate),
             (
                 Entry::ScriptMove { landed: true },
@@ -1232,7 +1273,13 @@ mod tests {
         use SessionEvent::{StellarChanged, SystemChanged};
         for changed in [false, true] {
             for (how, event) in [
-                (Entry::Jump { hops: 1 }, Some(SystemChanged)),
+                (
+                    Entry::Jump {
+                        hops: 1,
+                        natural_end: false,
+                    },
+                    Some(SystemChanged),
+                ),
                 (Entry::Gate, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: false }, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: true }, None),

@@ -58,6 +58,9 @@ const WARP_UP_SOUND: i16 = 128;
 /// the warp's clock reads in double time (`_LoadSounds`
 /// @0x1c0b5-0x1c12d, `_WarpSoundDuration` @0x8210-0x8219).
 const WARP_UP_DOUBLE_SOUND: i16 = 129;
+/// The warp-out sound, `snd ` 130, which an arrival plays (`_LoadSounds`
+/// @0x1c152, `_HandlePlayer` @0x6bc08 and @0x6c706).
+const WARP_OUT_SOUND: i16 = 130;
 
 /// The length of `data`'s `snd ` `id` as `_ParseSndHeader` gives it: its
 /// frames and the whole part of its rate; none when it is missing or
@@ -638,6 +641,10 @@ impl PilotCatalog for GameData {
 
     fn warp_sound_double_time(&self) -> Option<SoundLength> {
         sound_length(self, WARP_UP_DOUBLE_SOUND)
+    }
+
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        sound_length(self, WARP_OUT_SOUND)
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
@@ -1872,6 +1879,40 @@ mod tests {
             data.warp_sound().map(|sound| sound.frames),
             Some(1000),
             "128 apart"
+        );
+    }
+
+    #[test]
+    fn the_warp_out_sound_is_snd_130s() {
+        let data = store(&[warp_up(1000), warp_up_as(130, 44_508)]);
+        assert_eq!(
+            data.warp_out_sound(),
+            Some(SoundLength {
+                frames: 44_508,
+                rate: 22_254
+            })
+        );
+        assert_eq!(
+            data.warp_sound().map(|sound| sound.frames),
+            Some(1000),
+            "128 apart"
+        );
+    }
+
+    #[test]
+    fn without_a_readable_snd_130_there_is_no_warp_out_sound() {
+        assert_eq!(store(&[]).warp_out_sound(), None);
+        assert_eq!(
+            store(&[warp_up(44_508), warp_up_as(129, 44_508)]).warp_out_sound(),
+            None,
+            "128 and 129 are not it"
+        );
+        let (ty, id, bytes) = warp_up_as(130, 44_508);
+        let broken = bytes[..bytes.len() - 10].to_vec();
+        assert_eq!(
+            store(&[(ty, id, broken)]).warp_out_sound(),
+            None,
+            "undecodable"
         );
     }
 

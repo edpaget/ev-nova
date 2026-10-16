@@ -37,7 +37,10 @@ pub enum SimSound {
     /// warp-ups, a [`SimSound::Halt`] of [`WARP_UP_HALTS`] just before it
     /// (@0x6c6b7, @0x6c6d2); a gate or wormhole exit halts nothing. The
     /// original's fallback end starts it a frame before the system switch
-    /// (@0x6c706); that lag isn't visible to the player.
+    /// (@0x6c706); that lag isn't visible to the player. A jump's natural
+    /// end, both warp-ups finished, raises none while the last warp-out
+    /// still plays (@0x6bbe1-0x6bbe9; see
+    /// [`WarpOut`](crate::warp::WarpOut)).
     Arrived,
     /// The player became threatened: the Red Alert, `snd ` 370
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see
