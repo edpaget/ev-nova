@@ -22,15 +22,20 @@
 //!   selected system. The map only records the request; its owner takes
 //!   it with [`GalaxyMap::take_entry`]. A click on the button is a press
 //!   and a release both on it.
-//! - Tab is the app's router's and Escape the navigator's.
+//! - On the viewer, Tab is the app's router's and Escape the
+//!   navigator's.
 //!
 //! The map has two modes ([`MapMode`]). The viewer ([`GalaxyMap::new`]),
 //! the developer path the app's Tab reaches, enters systems as above. The
 //! course map ([`GalaxyMap::course`]), opened from flight, plots the
-//! player's course instead: it has no "Enter system" button and Return
-//! does nothing, and a click that selects a system also makes it the
-//! destination, which the owner takes with
-//! [`GalaxyMap::take_destination`]. Either map draws the course it is
+//! player's course instead: it has no "Enter system" button, and a click
+//! that selects a system also makes it the destination, which the owner
+//! takes with [`GalaxyMap::take_destination`]. On it and the hypergate
+//! map, Tab or `\` (repeats too) asks the owner to cycle the selection
+//! ([`GalaxyMap::take_cycle`], Shift held stepping the hypergate map's
+//! back), and Return asks it to close the map
+//! ([`GalaxyMap::take_close`]), as the original's `_MapFilter` does
+//! (@0x13cdd-0x13f0f). Either map draws the course it is
 //! shown ([`GalaxyMap::show_course`]): the current system marked, and the
 //! route from it through each hop. Over the course, every map draws the
 //! link from the current system to the system selected in nav mode 3
@@ -194,6 +199,15 @@ pub struct MapMarks<'a> {
     pub selected: Option<SystemId>,
 }
 
+/// A Tab or `\` pressed on an in-flight map ([`GalaxyMap::take_cycle`]):
+/// the original's `_MapFilter` cycles the selection (@0x13d0c-0x13f0a).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapCycle {
+    /// Whether Shift was held, which steps the hypergate map's cycle back
+    /// (the event's modifiers 0x0200, @0x13ee4).
+    pub back: bool,
+}
+
 /// What the map is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapMode {
@@ -237,6 +251,19 @@ pub struct GalaxyMap {
     offered: Vec<SystemId>,
     /// The system selected in nav mode 3, as last shown.
     hyper_selection: Option<SystemId>,
+    /// Whether Shift is held.
+    shift: bool,
+    /// A Tab, `\` or Return on an in-flight map, not yet taken.
+    request: Option<Request>,
+}
+
+/// What a key on an in-flight map asks its owner for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Request {
+    /// Tab or `\`: cycle the selection.
+    Cycle(MapCycle),
+    /// Return: close the map.
+    Close,
 }
 
 impl GalaxyMap {
@@ -270,6 +297,8 @@ impl GalaxyMap {
             explored: None,
             offered: Vec::new(),
             hyper_selection: None,
+            shift: false,
+            request: None,
         }
     }
 
@@ -308,6 +337,43 @@ impl GalaxyMap {
         self.selected
             .take()
             .filter(|selected| offered.contains(selected))
+    }
+
+    /// Selects `pick` on the hypergate map, the pick its Tab / `\` cycle
+    /// made ([`MapCycle`]), as it is: a system the map doesn't draw, such
+    /// as a hidden one, or none, stays selected, so the next press steps
+    /// on from it, as `_MapFilter` writes `_selSystem` (@0x13dfd).
+    /// [`GalaxyMap::take_gate_choice`] still takes only an offered system.
+    pub fn select_gate(&mut self, pick: Option<SystemId>) {
+        self.selected = pick;
+        self.clicked = false;
+    }
+
+    /// Whether Tab or `\` was pressed on the course or hypergate map
+    /// since this was last taken, and whether Shift was held then; taking
+    /// it clears it. Its repeats count, as `_MapFilter` takes the
+    /// auto-key event too (@0x13cbf-0x13cd7). The viewer never asks.
+    pub fn take_cycle(&mut self) -> Option<MapCycle> {
+        match self.request {
+            Some(Request::Cycle(cycle)) => {
+                self.request = None;
+                Some(cycle)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether Return (or Enter) was pressed on the course or hypergate
+    /// map since this was last taken, asking to close it, as `_MapFilter`
+    /// gives item 1 on a key-down of either (@0x13cdd-0x13d07); taking it
+    /// clears it. Its repeats don't count. The viewer never asks: its
+    /// Return enters the system selected.
+    pub fn take_close(&mut self) -> bool {
+        let close = self.request == Some(Request::Close);
+        if close {
+            self.request = None;
+        }
+        close
     }
 
     /// Shows the player in `current` with `route` ahead: the systems still
@@ -422,6 +488,9 @@ impl GalaxyMap {
             Key::Down => self.view.pan(0.0, PAN_STEP),
             Key::Char('=' | '+') => self.view.zoom_in(),
             Key::Char('-') => self.view.zoom_out(),
+            Key::Tab | Key::Char('\\') if self.mode != MapMode::Viewer => {
+                self.request = Some(Request::Cycle(MapCycle { back: self.shift }));
+            }
             _ => {}
         }
     }
@@ -746,9 +815,18 @@ impl Screen for GalaxyMap {
                 repeat,
             } => {
                 if !repeat {
-                    self.enter();
+                    if self.mode == MapMode::Viewer {
+                        self.enter();
+                    } else {
+                        self.request = Some(Request::Close);
+                    }
                 }
             }
+            Input::Key {
+                key: Key::Shift,
+                pressed,
+                ..
+            } => self.shift = pressed,
             // Repeats too: holding a key keeps panning or zooming.
             Input::Key {
                 key, pressed: true, ..
@@ -798,6 +876,11 @@ impl Screen for GalaxyMap {
     fn cancel_pointer(&mut self) {
         self.press = None;
         self.armed = false;
+    }
+
+    /// Forgets Shift as held.
+    fn release_keys(&mut self) {
+        self.shift = false;
     }
 }
 
@@ -2459,6 +2542,83 @@ mod tests {
         map.offer_gates(ids(&[131]));
         let here = dot(&map, 128);
         assert_eq!(lines(&drawn(&map), GATE), [(here, here, GATE_WIDTH)]);
+    }
+
+    // Tab, `\` and Return on the in-flight maps.
+
+    #[test]
+    fn tab_and_backslash_ask_the_course_and_hypergate_maps_to_cycle_repeats_too() {
+        for mut map in [course_map(), gate_map()] {
+            assert_eq!(map.take_cycle(), None);
+            for k in [Key::Tab, Key::Char('\\')] {
+                map.input(&press(k));
+                assert_eq!(map.take_cycle(), Some(MapCycle { back: false }), "{k:?}");
+                assert_eq!(map.take_cycle(), None, "taken");
+                map.input(&held(k));
+                assert_eq!(map.take_cycle(), Some(MapCycle { back: false }), "a repeat");
+                map.input(&release(k));
+                assert_eq!(map.take_cycle(), None, "a release");
+            }
+            map.input(&press(Key::Shift));
+            map.input(&press(Key::Tab));
+            assert_eq!(map.take_cycle(), Some(MapCycle { back: true }), "Shift");
+            map.input(&release(Key::Shift));
+            map.input(&press(Key::Char('\\')));
+            assert_eq!(map.take_cycle(), Some(MapCycle { back: false }));
+            map.input(&press(Key::Shift));
+            map.release_keys();
+            map.input(&press(Key::Tab));
+            assert_eq!(
+                map.take_cycle(),
+                Some(MapCycle { back: false }),
+                "Shift let go"
+            );
+        }
+    }
+
+    #[test]
+    fn the_viewer_never_asks_to_cycle_or_close_and_return_still_enters() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        let view = *map.view();
+        for k in [Key::Tab, Key::Char('\\'), Key::Enter] {
+            map.input(&press(k));
+        }
+        assert_eq!(map.take_cycle(), None);
+        assert!(!map.take_close());
+        assert_eq!(map.take_entry(), Some(SystemId(129)));
+        assert_eq!(*map.view(), view);
+    }
+
+    #[test]
+    fn return_or_enter_asks_the_course_and_hypergate_maps_to_close_but_not_a_repeat() {
+        for mut map in [course_map(), gate_map()] {
+            assert!(!map.take_close());
+            map.input(&held(Key::Enter));
+            map.input(&release(Key::Enter));
+            assert!(!map.take_close(), "a repeat or a release");
+            map.input(&press(Key::Enter));
+            assert!(map.take_close());
+            assert!(!map.take_close(), "taken");
+            assert_eq!(map.take_entry(), None);
+        }
+    }
+
+    #[test]
+    fn a_gate_pick_is_selected_as_it_is_and_taken_only_when_offered() {
+        let mut map = gate_map();
+        map.select_gate(Some(SystemId(999)));
+        assert_eq!(map.selected(), Some(SystemId(999)), "not on the map");
+        assert_eq!(map.take_gate_choice(), None, "not offered");
+        let mut map = gate_map();
+        map.select_gate(Some(SystemId(130)));
+        assert_eq!(map.selected(), Some(SystemId(130)));
+        assert_eq!(map.take_gate_choice(), Some(SystemId(130)));
+        let mut map = gate_map();
+        click_on(&mut map, 129);
+        map.select_gate(None);
+        assert_eq!(map.selected(), None);
+        assert_eq!(map.take_gate_choice(), None);
     }
 
     // The session's galaxy.

@@ -221,7 +221,15 @@
 //!   of the flight keys. While it is open flight is paused, as in the
 //!   original, only the map is drawn and every input goes to it, except
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
-//!   router's Escape). It beeps as M opens it ([`UiSound::MapOpened`],
+//!   router's Escape), and so do Return and, while M is held, a key-down
+//!   the original's `_MapFilter` doesn't take (@0x13cdd-0x13d07,
+//!   @0x144db-0x14587). Tab or `\` on it (repeats too) cycles the
+//!   hyperspace selection through the current system's links
+//!   ([`Session::cycle_map_selection`]): the map draws the new selected
+//!   link and selects its system, and the nav area is redrawn at once; on
+//!   the hypergate map it steps the pick through the gate's destinations,
+//!   Shift stepping back ([`Session::hypergate_cycle`]); docked, it does
+//!   nothing. It beeps as M opens it ([`UiSound::MapOpened`],
 //!   `_beepSnd[2]`, `_HandlePlayer` @0x6a809) and as it closes
 //!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says
 //!   nothing, and the hypergate map neither opens nor closes with a beep.
@@ -510,6 +518,7 @@ use std::time::Duration;
 
 use nova_sim::Drawn as ShipDrawn;
 use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
+use nova_sim::gate::next_gate_pick;
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
@@ -561,7 +570,7 @@ use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
-use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMarks, MapMode};
+use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapCycle, MapMarks, MapMode};
 use crate::spaceport::PortDialog;
 use crate::spaceport::bar::MISSION_INFO_KEY;
 use crate::system::camera::{Camera, VIEW_SIZE};
@@ -2044,6 +2053,11 @@ pub struct FlightView<C> {
     map: GalaxyMap,
     /// Whether the course map is shown.
     map_open: bool,
+    /// Whether [`MAP_KEY`] is held while the map is shown, as
+    /// `_KeyCheck(prefs+0x12)` reads it for the map key's close
+    /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
+    /// its release, and again from any later press of it on the map.
+    map_key_held: bool,
     /// Whether the map shown is the bar's ([`FlightView::open_bar_map`]),
     /// whose close puts back the nav the bar opened with; cleared as the
     /// map closes ([`FlightView::close_map`]).
@@ -2344,6 +2358,7 @@ impl<
             catalog,
             map,
             map_open: false,
+            map_key_held: false,
             bar_map: false,
             jump: None,
             fade_in: None,
@@ -2962,6 +2977,15 @@ impl<
         }
     }
 
+    /// Opens the course map on a press of [`MAP_KEY`] in flight, held from
+    /// then on. `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
+    /// not the map's: the hypergate's map opens without it.
+    fn open_map_by_key(&mut self) {
+        self.ui_sounds.push(UiSound::MapOpened);
+        self.open_map();
+        self.map_key_held = true;
+    }
+
     /// Opens the course map from the bar, as `_DoBarDialog`'s item 8 does
     /// (@0x492a3-0x492b2), over the spaceport: in
     /// [`MapMode::Course`](crate::galaxy::MapMode::Course), as the bar
@@ -2991,21 +3015,126 @@ impl<
         }
     }
 
-    /// The map's input; a destination clicked on it becomes the session's
-    /// course, which the map then shows, with the hop it cues as the
-    /// system selected in nav mode 3.
+    /// The map's input, the rest of `_MapFilter` (@0x13c63-0x147ab) that
+    /// the map leaves to its owner:
+    ///
+    /// - A key-down (not a repeat) of a key the filter doesn't take
+    ///   ([`FlightView::map_filter_takes`]) while [`MAP_KEY`] is held
+    ///   closes the map ([`FlightView::close_map`]), as the map key's close
+    ///   reads the key held (@0x144db-0x14587). M's own press closes it
+    ///   before this, in flight and in port.
+    /// - A destination clicked on it becomes the session's course, which
+    ///   the map then shows, with the hop it cues as the system selected
+    ///   in nav mode 3.
+    /// - Tab or `\` cycles the selection ([`FlightView::cycle_map`]).
+    /// - Return closes the map ([`FlightView::close_map`]): with the close
+    ///   beep and the cue in flight, entering or cancelling the hypergate
+    ///   silently, and putting back the bar's nav in port, as M does.
     fn map_input(&mut self, input: &Input) {
-        self.map.input(input);
-        let Some(destination) = self.map.take_destination() else {
+        if let Input::Key {
+            key: MAP_KEY,
+            pressed,
+            ..
+        } = *input
+        {
+            self.map_key_held = pressed;
+        }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && self.map_key_held
+            && !self.map_filter_takes(key)
+        {
+            self.close_map();
             return;
-        };
-        if let Ok(session) = &mut self.session {
+        }
+        self.map.input(input);
+        if let Some(destination) = self.map.take_destination()
+            && let Ok(session) = &mut self.session
+        {
             // A failed plot clears the course, which the map then shows.
             let _ = session.plot_course(destination);
             self.map
                 .show_course(session.system(), &session.course_shown());
             self.map
                 .show_hyper_selection(session.nav_mode().hyperspace());
+        }
+        if let Some(cycle) = self.map.take_cycle() {
+            self.cycle_map(cycle);
+        }
+        if self.map.take_close() {
+            self.close_map();
+        }
+    }
+
+    /// Whether `_MapFilter` takes `key` before its map-key close, which a
+    /// key it takes never reaches (@0x13cdd-0x144d6): Return, Enter,
+    /// Escape, Tab and `\` (off a planet, @0x13d20), Space, B, C, `-`,
+    /// `=` and `+` (the keypad's too), the arrows, and F and S. The keys
+    /// later phases port are taken already, so none of them closes the
+    /// map. A modifier is taken too: a Mac sends no key-down for one
+    /// alone, so the filter never sees it.
+    fn map_filter_takes(&self, key: Key) -> bool {
+        let docked = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_some());
+        match key {
+            Key::Shift
+            | Key::Control
+            | Key::Alt
+            | Key::Command
+            | Key::CapsLock
+            | Key::Enter
+            | Key::Escape
+            | Key::Space
+            | Key::Left
+            | Key::Right
+            | Key::Up
+            | Key::Down => true,
+            Key::Tab => !docked,
+            Key::Char(c) => match c.to_ascii_lowercase() {
+                '\\' => !docked,
+                'b' | 'c' | '-' | '=' | '+' | 'f' | 's' => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// A Tab or `\` on the map ([`MapCycle`]), as `_MapFilter` takes it
+    /// off a planet (@0x13d0c-0x140d8). On the hypergate map, the map's
+    /// selection steps to the next of the pending hypergate's
+    /// destinations ([`Session::hypergate_cycle`],
+    /// [`next_gate_pick`](nova_sim::gate::next_gate_pick)), back with
+    /// Shift, held as it is so a hidden one steps on too; no nav mode is
+    /// written and nothing redraws, as the original's mode 4 is never
+    /// drawn (@0x13dd8-0x13ebd). On the course map, the session cycles
+    /// the hyperspace selection ([`Session::cycle_map_selection`]); the
+    /// map then draws the new selected link and selects the system the
+    /// original's `_selSystem` names (@0x1408c-0x140d8,
+    /// [`Session::map_preselection`]), and the nav area is redrawn at
+    /// once, as the filter runs `_DrawStatus` with nav marked
+    /// (`_statusRedraw[0]`, @0x13fb2-0x1406e). Docked, as on the bar's
+    /// map, nothing changes.
+    fn cycle_map(&mut self, cycle: MapCycle) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        if self.map.mode() == MapMode::Hypergate {
+            let destinations = session.hypergate_cycle(&self.catalog);
+            if let Some(pick) = next_gate_pick(&destinations, self.map.selected(), cycle.back) {
+                self.map.select_gate(pick);
+            }
+            return;
+        }
+        if session.cycle_map_selection() {
+            self.map
+                .show_hyper_selection(session.nav_mode().hyperspace());
+            self.map.preselect(session.map_preselection());
+            self.retake_nav();
         }
     }
 
@@ -3755,6 +3884,7 @@ impl<
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
+        self.map_key_held = false;
         let bar_map = std::mem::take(&mut self.bar_map);
         if self.map.mode() != MapMode::Hypergate {
             if let Ok(session) = &mut self.session
@@ -6124,10 +6254,7 @@ impl<
                 }
             }
             Some(MAP_KEY) => {
-                // `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
-                // not the map's: the hypergate's map opens without it.
-                self.ui_sounds.push(UiSound::MapOpened);
-                self.open_map();
+                self.open_map_by_key();
                 return ScreenAction::None;
             }
             Some(JUMP_KEY) => {
@@ -23268,6 +23395,306 @@ mod tests {
         tap(&mut view, MAP);
         assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "nothing new");
         assert_lasts(&mut view, HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS);
+    }
+
+    // Tab, `\`, Return and the map key on the in-flight maps (`_MapFilter`).
+
+    #[test]
+    fn tab_on_the_course_map_draws_the_next_link_and_selects_it() {
+        let mut view = FlightView::new(FakeCatalog {
+            fan: true,
+            ..catalog()
+        });
+        tap(&mut view, MAP);
+        for (k, expected) in [(Key::Tab, 131), (Key::Char('\\'), 132), (Key::Tab, 131)] {
+            view.input(&key(k, true));
+            assert!(view.map_open(), "{k:?}");
+            assert_eq!(
+                nav_mode(&view),
+                NavMode::Hyperspace(Some(SystemId(expected))),
+                "{k:?}"
+            );
+            let map = view.course_map();
+            assert_eq!(map.selected(), Some(SystemId(expected)));
+            assert_eq!(map.hyper_selection(), Some(SystemId(expected)));
+            assert_eq!(
+                hyper_selected_links(&view),
+                [(on_map(&view, 130), on_map(&view, expected))]
+            );
+            view.input(&key(k, false));
+        }
+        view.input(&held(Key::Tab));
+        assert_eq!(
+            nav_mode(&view),
+            NavMode::Hyperspace(Some(SystemId(132))),
+            "a repeat cycles too"
+        );
+    }
+
+    #[test]
+    fn tab_on_the_course_map_with_no_links_selects_none_and_the_map_selects_the_current_system() {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        run_set(&mut view, "M132");
+        view.settle_script();
+        assert_eq!(system_of(&view), SystemId(132), "Barnard lists no links");
+        tap(&mut view, MAP);
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+        assert_eq!(view.course_map().selected(), Some(SystemId(132)));
+        assert_eq!(view.course_map().hyper_selection(), None);
+        assert_eq!(hyper_selected_links(&view), []);
+    }
+
+    #[test]
+    fn tab_on_the_course_map_plays_no_sound() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        view.take_sounds();
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn tab_on_the_course_map_redraws_the_nav_area_at_once() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        let stale = NavDisplay::Stellar(Some("Stale".to_owned()));
+        let alpha = NavMode::Hyperspace(Some(SystemId(131)));
+        view.nav_scene = Some((alpha, stale.clone()));
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_mode(&view), alpha);
+        assert_eq!(view.nav_shown(), view.nav_now(), "redrawn");
+        assert_ne!(view.nav_shown(), stale);
+        tap(&mut view, MAP);
+        assert_eq!(nav_mode(&view), alpha, "no course to cue");
+        assert_eq!(nav(&view), cueing_alpha(), "shown once the map closes");
+    }
+
+    #[test]
+    fn closing_the_map_cues_the_courses_hop_over_a_tab_selection() {
+        let mut view = FlightView::new(FakeCatalog {
+            fan: true,
+            ..catalog()
+        });
+        plot(&mut view, 131);
+        tap(&mut view, MAP);
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(132))));
+        tap(&mut view, MAP);
+        assert_eq!(
+            nav_mode(&view),
+            NavMode::Hyperspace(Some(SystemId(131))),
+            "the close's cue (@0x13c16)"
+        );
+    }
+
+    /// [`gated`] with Alpha Reborn standing for a hidden Alpha Centauri,
+    /// and hypergate 300 linked to 310, in Alpha Centauri, and 320, in
+    /// Barnard: the hypergate map is open, offering Alpha Reborn and
+    /// Barnard.
+    fn at_a_shadowed_gate() -> View {
+        let mut view = FlightView::new(FakeCatalog {
+            reborn: true,
+            onward: true,
+            gates: vec![
+                gate_site(300, (0.0, 0.0), 0x1200, &[310, 320], 120),
+                gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
+                gate_site(320, (-50.0, 0.0), 0x1000, &[], 0),
+            ],
+            gate_listers: vec![
+                (SystemId(131), StellarId(310)),
+                (SystemId(132), StellarId(320)),
+            ],
+            ..gated()
+        });
+        change_galaxy(&mut view, hiding(131));
+        view.tick(TICK);
+        land_now(&mut view);
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+        view
+    }
+
+    #[test]
+    fn tab_on_the_hypergate_map_cycles_the_gates_destinations_shift_reversing_through_a_shadowed_system()
+     {
+        let mut view = at_a_shadowed_gate();
+        let nav = nav_mode(&view);
+        view.take_sounds();
+        // `_FindSystemFromStellar` gives hidden 131 for 310, its only
+        // lister, unresolved by place.
+        for expected in [131, 132, 131] {
+            tap(&mut view, Key::Tab);
+            assert_eq!(view.course_map().selected(), Some(SystemId(expected)));
+        }
+        view.input(&key(Key::Shift, true));
+        for expected in [132, 131] {
+            tap(&mut view, Key::Char('\\'));
+            assert_eq!(view.course_map().selected(), Some(SystemId(expected)));
+        }
+        view.input(&key(Key::Shift, false));
+        assert_eq!(nav_mode(&view), nav, "no nav mode written");
+        assert_eq!(view.course_map().hyper_selection(), None);
+        assert_eq!(view.take_sounds(), []);
+        tap(&mut view, MAP);
+        assert_eq!(
+            view.message(),
+            Some(HYPERGATE_CANCELLED),
+            "no link resolves to hidden 131 (@0x638cd-0x638ff)"
+        );
+        assert_eq!(system_of(&view), SystemId(130));
+    }
+
+    #[test]
+    fn closing_the_hypergate_map_on_a_tab_pick_enters_the_gate() {
+        let mut view = at_a_shadowed_gate();
+        tap(&mut view, Key::Tab);
+        tap(&mut view, Key::Tab);
+        assert_eq!(view.course_map().selected(), Some(SystemId(132)));
+        view.close_map();
+        assert_eq!(system_of(&view), SystemId(132));
+        assert_eq!(player(&view).position, Vec2::new(-50.0, 0.0), "at 320");
+    }
+
+    #[test]
+    fn tab_on_the_bars_map_changes_nothing() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        let selected = view.course_map().selected();
+        for k in [Key::Tab, Key::Char('\\')] {
+            view.port_map_input(&key(k, true));
+            view.port_map_input(&key(k, false));
+            assert!(view.map_open(), "{k:?}");
+            assert_eq!(
+                view.session().map(Session::nav_mode),
+                Ok(NavMode::Stellar(Some(StellarId(128)))),
+                "{k:?}"
+            );
+            assert_eq!(view.course_map().selected(), selected, "{k:?}");
+            assert_eq!(view.course_map().hyper_selection(), None, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn return_closes_the_course_map_with_the_close_beep_and_the_cue() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        tap(&mut view, NAV_OFF_KEY);
+        tap(&mut view, MAP);
+        view.take_sounds();
+        view.input(&held(Key::Enter));
+        assert!(view.map_open(), "a repeat doesn't close it");
+        tap(&mut view, Key::Enter);
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), [UiSound::MapClosed]);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+    }
+
+    #[test]
+    fn return_on_the_hypergate_map_enters_or_cancels_in_silence() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        view.take_sounds();
+        tap(&mut view, Key::Enter);
+        assert!(!view.map_open());
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+        assert_eq!(map_sounds(&mut view), []);
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        view.take_sounds();
+        tap(&mut view, Key::Enter);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(map_sounds(&mut view), []);
+    }
+
+    #[test]
+    fn return_closes_the_bars_map_and_puts_back_the_bars_nav() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        port_click(&mut view, 131);
+        view.take_sounds();
+        view.port_map_input(&key(Key::Enter, true));
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), []);
+        assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "the bar's nav put back"
+        );
+    }
+
+    #[test]
+    fn a_key_down_the_map_doesnt_take_closes_it_while_the_map_key_is_held() {
+        let mut view = flight();
+        view.input(&key(MAP, true));
+        assert!(view.map_open());
+        // Every key `_MapFilter` tests before the map key's close.
+        for k in [
+            Key::Tab,
+            Key::Char('\\'),
+            Key::Space,
+            Key::Char('b'),
+            Key::Char('c'),
+            Key::Char('-'),
+            Key::Char('='),
+            Key::Char('+'),
+            Key::Left,
+            Key::Right,
+            Key::Up,
+            Key::Down,
+            Key::Char('f'),
+            Key::Char('s'),
+        ] {
+            tap(&mut view, k);
+            assert!(view.map_open(), "{k:?}");
+        }
+        view.take_sounds();
+        view.input(&held(LAND));
+        assert!(view.map_open(), "a repeat never closes it");
+        view.input(&key(LAND, true));
+        assert!(!view.map_open(), "L with M held");
+        assert_eq!(map_sounds(&mut view), [UiSound::MapClosed]);
+        view.input(&key(LAND, false));
+        view.input(&key(MAP, false));
+        tap(&mut view, MAP);
+        assert!(view.map_open());
+        tap(&mut view, LAND);
+        assert!(view.map_open(), "M let go");
+    }
+
+    #[test]
+    fn a_modifier_is_no_key_down_and_never_closes_the_map() {
+        // A Mac sends no key-down for a modifier alone, so `_MapFilter`
+        // never sees one.
+        let mut view = flight();
+        view.input(&key(MAP, true));
+        for k in [
+            Key::Shift,
+            Key::Control,
+            Key::Alt,
+            Key::Command,
+            Key::CapsLock,
+        ] {
+            view.input(&key(k, true));
+            assert!(view.map_open(), "{k:?}");
+            view.input(&key(k, false));
+        }
+    }
+
+    #[test]
+    fn in_port_tab_with_the_map_key_held_closes_the_map() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        view.port_map_input(&held(MAP));
+        view.port_map_input(&key(Key::Tab, true));
+        assert!(!view.map_open(), "Tab falls through on a planet (@0x13d20)");
     }
 
     #[test]

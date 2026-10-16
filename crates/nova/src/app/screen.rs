@@ -66,7 +66,8 @@
 //! screen flight was entered from; it never quits.
 //!
 //! M and J are flight's own keys. M opens flight's course map, where a
-//! click sets the destination; Escape (or M) closes it, back into flight.
+//! click sets the destination and Tab or `\` cycles the hyperspace
+//! selection; Escape, Return (or M) closes it, back into flight.
 //! J jumps along the course. The Tab side's galaxy map stays the
 //! developer's viewer, which enters systems; play plots courses on the map
 //! opened from flight, which has no "Enter system" button.
@@ -4354,13 +4355,33 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn tab_f_and_i_do_nothing_on_the_flight_map() {
+    fn tab_cycles_the_flight_maps_selection_and_f_and_i_do_nothing() {
         let mut screen = with_dialogs(data());
         open_flight_map(&mut screen);
+        // Let go of M, whose hold would close the map on I (`_MapFilter`
+        // @0x144db-0x14587).
+        screen.input(&key(MAP, false));
+        let nav = |screen: &AppScreen| {
+            flight(screen)
+                .session()
+                .ok()
+                .map(nova_sim::Session::nav_mode)
+        };
+        assert_eq!(nav(&screen), Some(nova_sim::NavMode::Off));
         for k in [Key::Tab, Key::Char('f'), Key::Char('i')] {
             assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
             assert_eq!(screen.showing(), Showing::FlightMap, "{k:?}");
         }
+        let cycled = nav(&screen).expect("flying");
+        assert!(
+            matches!(cycled, nova_sim::NavMode::Hyperspace(_)),
+            "Tab cycled: {cycled:?}"
+        );
+        assert_eq!(
+            flight(&screen).course_map().hyper_selection(),
+            cycled.hyperspace(),
+            "the map shows it"
+        );
         assert!(screen.about().is_none());
     }
 
@@ -8040,6 +8061,27 @@ pub(super) mod tests {
         screen.input(&key(MAP, false));
         screen.input(&key(MAP, true));
         assert_eq!(screen.showing(), Showing::Spaceport, "M closes it too");
+    }
+
+    #[test]
+    fn tab_on_the_bars_map_changes_nothing() {
+        let mut screen = in_the_bar();
+        let nav = |screen: &AppScreen| {
+            flight(screen)
+                .session()
+                .ok()
+                .map(nova_sim::Session::nav_mode)
+        };
+        let landed = nav(&screen);
+        screen.input(&key(MAP, true));
+        screen.input(&key(MAP, false));
+        assert_eq!(screen.showing(), Showing::FlightMap);
+        for k in [Key::Tab, Key::Char('\\')] {
+            assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::FlightMap, "{k:?}");
+            assert_eq!(nav(&screen), landed, "{k:?}");
+        }
+        assert!(spaceport(&screen).open_bar().is_some(), "still in the bar");
     }
 
     #[test]

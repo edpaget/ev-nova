@@ -755,7 +755,8 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.frame();
     assert_eq!(date(&harness), (23, 6, 1177));
 
-    // M opens flight's map: no Enter button, and Return enters nothing.
+    // M opens flight's map: no Enter button, and Return enters nothing
+    // but closes the map, as the original's `_MapFilter` does.
     harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::FlightMap);
     let map = harness.frame();
@@ -763,6 +764,9 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     assert!(!shows(&map, ENTER_LABEL), "{:?}", texts(&map));
     assert_eq!(ENTER_LABEL, "Enter system (Return)");
     harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().system(), SystemId(128));
+    harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::FlightMap);
 
     // Clicking Gamma plots the course through Beta, drawn on the map.
