@@ -832,13 +832,20 @@ impl GalaxyMap {
         } else {
             (SYSTEM_INSET, 1)
         };
+        // Every system's oval is the same shape: rasterised once, about
+        // (0, 0), and moved to each.
+        let fill = oval_fill_pixels(around((0, 0), inset));
+        let frame = oval_frame_pixels(around((0, 0), inset), pen);
+        let moved = |pixels: &[(i32, i32)], (x, y): (i32, i32)| -> Vec<(i32, i32)> {
+            pixels.iter().map(|&(px, py)| (px + x, py + y)).collect()
+        };
         for system in &picture.systems {
             let Some(at) = pixel(system.id) else {
                 continue;
             };
             let rect = around(at, inset);
-            fill_pixels(list, &oval_fill_pixels(rect), Color::BLACK);
-            fill_pixels(list, &oval_frame_pixels(rect, pen), system.frame);
+            fill_pixels(list, &moved(&fill, at), Color::BLACK);
+            fill_pixels(list, &moved(&frame, at), system.frame);
             if system.red_arrow {
                 icon(
                     list,
