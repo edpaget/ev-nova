@@ -2217,8 +2217,13 @@ impl AppScreen {
     /// to the texts), as any dialog over flight does; flight hears of each
     /// as it closes or is dropped ([`AppScreen::drop_closed_missions`]).
     /// Without dialogs, those in flight are dropped, as the spaceport
-    /// drops them without its template; no offer dialog shows then, so
-    /// none holds the bar. On any other side they stay queued in the session.
+    /// drops them without its template, and flight hears of each text
+    /// dropped at once, as the mission dialogs count a dropped text
+    /// closed: the offer dialog still shows without dialogs, by its
+    /// fallback layout, so a person's offer answered over flight holds
+    /// the bar under its texts until then
+    /// ([`FlightView::close_mission_text`]). On any other side they stay
+    /// queued in the session.
     /// An offer's movies come in the places the session queued them.
     /// Over the spaceport, the texts it closed or dropped are told to
     /// flight first and last (`close_mission_texts`).
@@ -2240,6 +2245,16 @@ impl AppScreen {
         else {
             return;
         };
+        if self.flight_missions().is_none() {
+            let flight = self.flight.as_mut().expect("texts came from flight");
+            for _ in texts
+                .iter()
+                .filter(|shown| matches!(shown, nova_sim::MissionShown::Text(_)))
+            {
+                flight.close_mission_text();
+            }
+            return;
+        }
         self.over_flight(|missions| missions.show_texts(texts));
     }
 
@@ -12832,6 +12847,37 @@ pub(super) mod tests {
         assert_eq!(screen.showing(), Showing::Flight, "the brief dropped");
         let width = fuel_width(&drawn(&screen)).expect("some fuel");
         assert!(width > half, "live: {width}");
+    }
+
+    /// Whether `screen` draws `text`.
+    fn draws_text(screen: &AppScreen, text: &str) -> bool {
+        drawn(screen)
+            .iter()
+            .any(|command| matches!(command, DrawCommand::Text { text: t, .. } if t == text))
+    }
+
+    #[test]
+    fn without_dialogs_a_persons_brief_dropped_over_flight_lets_go_of_the_bar() {
+        let mut screen = AppScreen::new(briefing_person_offer_data()).with_behaviour(Rc::new(Idle));
+        fly(&mut screen);
+        edit(
+            &mut screen,
+            PilotEdit::Reserve(nova_sim::Reserve::Fuel, 150.0),
+        );
+        hail(&mut screen);
+        assert_eq!(screen.showing(), Showing::Offer, "its fallback layout");
+        let half = fuel_width(&drawn(&screen)).expect("some fuel");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight, "the brief dropped");
+        assert_eq!(active(&screen), [MissionId(128)], "accepted");
+        let width = fuel_width(&drawn(&screen)).expect("some fuel");
+        assert!(width > half, "the gauges live: {width}");
+        let hyperspace = nova_view::flight::hud::NAV_HYPERSPACE;
+        assert!(!draws_text(&screen, hyperspace), "not yet in mode 3");
+        // H, flight's hyperspace mode key.
+        screen.input(&key(Key::Char('h'), true));
+        screen.input(&key(Key::Char('h'), false));
+        assert!(draws_text(&screen, hyperspace), "the nav live");
     }
 
     #[test]
