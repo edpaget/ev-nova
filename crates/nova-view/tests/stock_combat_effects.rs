@@ -30,6 +30,7 @@ fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
     let scene = Scene {
         player: Point::new(0.0, 0.0),
         debris: true,
+        caps: false,
     };
     let event = CombatEvent::Exploded {
         at: Vec2::new(100.0, 50.0),

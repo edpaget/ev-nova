@@ -3126,12 +3126,14 @@ impl<
                     let player = point(session.player().position);
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
                     let chance = &mut self.effects_chance;
-                    self.effects.step(&dying, player, &self.looks, chance);
                     let debris = session.rules().source_for(RuleKey::ShipDebris);
+                    let caps = session.rules().source_for(RuleKey::CombatCaps);
                     let scene = Scene {
                         player,
                         debris: debris == RuleSource::Bible,
+                        caps: caps == RuleSource::Engine,
                     };
+                    self.effects.step(&dying, &scene, &self.looks, chance);
                     let shown = (&mut self.effects, &mut self.flashes);
                     show_combat(session, &scene, shown, &self.looks, chance);
                 }
@@ -16623,14 +16625,19 @@ mod tests {
     /// of `HitPartLife` 30, flown once at NPC 0 ahead: the flight on the
     /// tick its shot hits, and the NPC.
     fn hit_once() -> (View, ShipRef) {
+        hit_once_by(5, Rulebook::default())
+    }
+
+    /// [`hit_once`] with `particles` thrown off, by `rules`.
+    fn hit_once_by(particles: i16, rules: Rulebook) -> (View, ShipRef) {
         let mut catalog = armed(1, &[BLASTER]);
         catalog.weapons[0].energy_dmg = 1;
         catalog.weapons[0].explod_type = -1;
-        catalog.weapons[0].hit_particles = 5;
+        catalog.weapons[0].hit_particles = particles;
         catalog.weapons[0].hit_part_vel = 100;
         catalog.weapons[0].hit_part_life = 30;
         catalog.weapons[0].hit_part_color = 0x00FF_8000;
-        let mut view = fighting(catalog, &placed(750, 650, 180));
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_rules(rules);
         tap(&mut view, Key::Tab);
         let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
         view.input(&key(FIRE_KEY, true));
@@ -16661,6 +16668,19 @@ mod tests {
         let particles = view.effects().particles();
         assert_eq!(particles.len(), 5, "{particles:?}");
         assert!(particles.iter().all(|piece| piece.color == orange));
+    }
+
+    #[test]
+    fn under_the_combat_caps_a_hit_keeps_at_most_1024_particles() {
+        let (view, _) = hit_once_by(1100, Rulebook::default());
+        assert_eq!(
+            view.effects().particles().len(),
+            1100,
+            "uncapped by default"
+        );
+        let caps = Rulebook::default().with_override(RuleKey::CombatCaps, RuleSource::Engine);
+        let (view, _) = hit_once_by(1100, caps);
+        assert_eq!(view.effects().particles().len(), 1024);
     }
 
     #[test]
