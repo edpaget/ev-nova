@@ -47,8 +47,11 @@
 //! session's second pass ([`Session::tick_again`]) after the advance
 //! pass's calls, and steps the effects and
 //! drains the fight's events after it as after the advance pass
-//! (`_HandleExplods` runs on both, @0x444e1). The second pass says no
-//! quotes, gives no help and tells no comm. The mode is the screen's own
+//! (`_HandleExplods` runs on both, @0x444e1). The second pass answers
+//! its hits ([`Session::answer_strikes`]) and says the attack quotes they
+//! raise ([`Session::say_attack_quotes`]), as `_HandleShot` (@0x44385)
+//! runs on both passes; it rolls no hail quote, gives no help and tells
+//! no comm. The mode is the screen's own
 //! and outlives the hails, the map, the jumps and the sessions it flies;
 //! while it is on, `cïcn` 20000 is drawn at the top left over the Red
 //! Alert icon (see the `alert` module).
@@ -3043,7 +3046,8 @@ impl<
     /// `go_on` holds of the session before it: the ship's tick under the
     /// keys held, the traffic's, the quotes', the assistance's and the
     /// fight's, then the effects; in double time, the second pass
-    /// ([`Session::tick_again`]) and the effects again. Then says the comm
+    /// ([`Session::tick_again`]) with the answers to its hits and their
+    /// attack quotes, and the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
     /// system the session populated afresh. Flight and the warp's lead-in
     /// under the streak both step this way. The eject chord, the land key
@@ -3107,16 +3111,20 @@ impl<
                         session.tick_assistance(&*self.disable_rule);
                         notes.extend(session.take_comm());
                         session.tick_combat(rules, &mut self.chance);
-                        // The hit is answered, and the quote block runs,
-                        // before the frame is drawn, as `_HandleShot`
-                        // answers it (@0x44385) before `_HandleShip` and the
-                        // display pass. The second pass's strikes wait for
-                        // the next advance pass's answers (see the session's
-                        // `double_time` module).
-                        session.answer_strikes(&*self.behaviour);
-                        session.tick_quotes(&self.catalog, &mut self.chance);
-                        quotes.extend(session.take_quotes());
                     }
+                    // The pass's hits are answered before the frame is
+                    // drawn, as `_HandleShot` answers them (@0x44385)
+                    // before `_HandleShip` and the display pass, on both
+                    // passes. The advance pass then runs the quote block;
+                    // the second says only the attack quotes its answers
+                    // raise (`_ShowPersonHailQuote` @0x89ce1).
+                    session.answer_strikes(&*self.behaviour);
+                    if again {
+                        session.say_attack_quotes(&self.catalog);
+                    } else {
+                        session.tick_quotes(&self.catalog, &mut self.chance);
+                    }
+                    quotes.extend(session.take_quotes());
                     let player = point(session.player().position);
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
                     let chance = &mut self.effects_chance;
@@ -14335,6 +14343,100 @@ mod tests {
             shield = left(&hit);
         }
         panic!("never hit");
+    }
+
+    /// [`armed`] with blasters of 5 energy damage and hypergate 141 at
+    /// (0, -120), straight ahead of the player, `with` changes made.
+    fn gate_120_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
+        let mut catalog = armed(1, &[BLASTER]);
+        for weapon in &mut catalog.weapons {
+            weapon.energy_dmg = 5;
+        }
+        catalog.sites.push(LandingSite {
+            flags2: nova_sim::gate::HYPERGATE,
+            exit_angle: 90,
+            ..site(141, (0.0, -120.0), StellarFlags::CAN_LAND)
+        });
+        with(&mut catalog);
+        catalog
+    }
+
+    /// `catalog`'s flight in double time, `draws` bringing an arrival out
+    /// of gate 141, which answers a hit by taking its attacker; fired at
+    /// until the frame on which the first hit lands, which, as a copy of
+    /// the session run through each frame's passes shows, is that frame's
+    /// second pass. Until then the arrival is hidden in the gate.
+    fn hit_on_the_second_pass(catalog: FakeCatalog, draws: &[u32]) -> View {
+        let (_, chance) = scripted(draws);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Answering))
+            .with_double_time(true);
+        ticks(&mut view, 2);
+        let npc = |view: &View| view.session().expect("flying").npcs()[0].clone();
+        assert!(matches!(npc(&view).mode, Mode::Emerging { .. }));
+        let left = |npc: &nova_sim::Npc| npc.reserves.shield.now + npc.reserves.armor.now;
+        let shield = left(&npc(&view));
+        // Whether a frame from `session`, run on a copy, hits the NPC on
+        // its advance pass, and by the end of its second.
+        let passes = |session: &Session, catalog: &FakeCatalog| {
+            let mut copy = session.clone();
+            copy.tick(Controls::default());
+            copy.tick_traffic(catalog, &Answering, &mut NeverFires);
+            copy.tick_combat(Rules::default(), &mut NeverFires);
+            let advance = left(&copy.npcs()[0]) < shield;
+            copy.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            (advance, left(&copy.npcs()[0]) < shield)
+        };
+        view.input(&key(FIRE_KEY, true));
+        for frame in 0..60 {
+            let ahead = passes(view.session().expect("flying"), view.catalog());
+            view.tick(TICK);
+            if left(&npc(&view)) < shield {
+                assert_eq!(ahead, (false, true), "frame {frame}: the second pass's hit");
+                return view;
+            }
+            let mode = npc(&view).mode;
+            assert!(matches!(mode, Mode::Emerging { .. }), "{mode:?}");
+            assert_eq!(npc_tints(&drawn(&view)), [], "hidden");
+        }
+        panic!("never hit");
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_on_the_second_pass_is_drawn_on_the_frame_of_the_hit() {
+        // `_HandleShot` (@0x44385) runs on double time's second pass too,
+        // with `_DamageShip`'s reaction, so the hit is answered there,
+        // before the next frame is drawn. Setup brings nobody; then an
+        // arrival comes out of the gate, the third of the stellars.
+        let view = hit_on_the_second_pass(gate_120_ahead(|_| ()), &[0, 0, 6, 6, 0, 0, 0, 2]);
+        let mode = view.session().expect("flying").npcs()[0].mode;
+        assert!(matches!(mode, Mode::HeldAtGate { .. }), "{mode:?}");
+        assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE], "seen");
+    }
+
+    #[test]
+    fn a_person_the_player_hits_in_its_gate_on_the_second_pass_says_its_quote_on_that_frame() {
+        // `_DamageShip`'s reaction on the second pass turns it on the
+        // player, and `_AIMakeShipAttackPlayer` says its quote there
+        // (`_ShowPersonHailQuote` @0x89ce1), before the next frame.
+        let catalog = gate_120_ahead(|catalog| {
+            let ace = peopled();
+            catalog.persons = ace.persons;
+            catalog.persons[0].link_syst = -1;
+            catalog.persons[0].flags = nova_sim::person::QUOTE_ON_ATTACK;
+            catalog.strings = ace.strings;
+        });
+        // Setup's person roll comes up empty (`përs` 128); then Ace,
+        // `përs` 600, comes out of the gate, the third of the stellars.
+        let view = hit_on_the_second_pass(catalog, &[0, 0, 0, 0, 472, 0, 2]);
+        let npc = &view.session().expect("flying").npcs()[0];
+        assert!(
+            matches!(npc.mode, Mode::HeldAtGate { .. }),
+            "{:?}",
+            npc.mode
+        );
+        assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
     }
 
     /// `catalog` with hypergate 141 at (200, 100) in Sol, of 6 frames

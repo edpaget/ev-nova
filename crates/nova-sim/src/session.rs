@@ -2160,7 +2160,9 @@ impl Session {
     /// player queues its quote. The original answers a hit inside
     /// `_HandleShot` (@0x44385), before `_HandleShip`'s quotes and the
     /// display pass, so the frame drawn after the fight shows the answer;
-    /// a flight calls this right after [`Session::tick_combat`]. Whatever
+    /// a flight calls this right after [`Session::tick_combat`], and
+    /// after double time's second pass ([`Session::tick_again`]), as
+    /// `_HandleShot` runs on both passes. Whatever
     /// is left unanswered, [`Session::tick_traffic`] answers (as for a
     /// caller that never calls this). While the ship is landed or jumping,
     /// or before the system is set up, nothing is answered.
@@ -15582,6 +15584,40 @@ pub(super) mod tests {
             (vec!["Prepare to die!".to_owned()], true),
             "not when the hold is out"
         );
+    }
+
+    #[test]
+    fn the_attack_quotes_alone_are_said_with_the_beep_and_leave_the_quote_clock() {
+        // Double time's second pass says them (`_HandleShot` @0x44385 runs
+        // on both passes, `_ShowPersonHailQuote` @0x89ce1) without
+        // `_HandleShip`'s roll, whose clock ours moves once a frame.
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        let ticks = session.quote_clock.ticks;
+        session.say_attack_quotes(&catalog);
+        let said: Vec<String> = session
+            .take_quotes()
+            .into_iter()
+            .map(|quote| quote.text)
+            .collect();
+        assert_eq!(said, ["Prepare to die!"]);
+        assert!(session.take_sounds().contains(&SimSound::HailQuote));
+        assert_eq!(session.quote_clock.ticks, ticks, "the clock stands");
+        assert!(session.npcs()[0].person.expect("a person").quoted);
+        session.say_attack_quotes(&catalog);
+        assert!(session.take_quotes().is_empty(), "said once");
+    }
+
+    #[test]
+    fn the_attack_quotes_are_not_said_while_landed() {
+        let catalog = quoting_armed();
+        let mut session = hit_in_its_gate(&catalog);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        session.landed = Some(crate::catalog::StellarId(128));
+        session.say_attack_quotes(&catalog);
+        assert!(session.take_quotes().is_empty());
+        assert!(!session.take_sounds().contains(&SimSound::HailQuote));
     }
 
     #[test]

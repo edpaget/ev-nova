@@ -93,7 +93,7 @@ pub struct PersonQuote {
 /// which a quote shows, keeping any other from being said at random.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct QuoteClock {
-    ticks: u64,
+    pub(super) ticks: u64,
     quiet_until: u64,
 }
 
@@ -162,9 +162,7 @@ impl Session {
             return;
         }
         let lines = catalog.string_list(HAIL_QUOTES);
-        for id in self.traffic.take_attack_quotes() {
-            self.say_hail_quote(id, catalog, &lines);
-        }
+        self.say_queued_attack_quotes(catalog, &lines);
         let player_ai = self
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.inherent_ai);
@@ -219,6 +217,34 @@ impl Session {
             self.say_hail_quote(id, catalog, &lines);
         }
         self.quote_clock.ticks += 1;
+    }
+
+    /// Says each attack quote queued, with no draw, read from `catalog`
+    /// as [`Session::tick_quotes`] reads them, and nothing else: no hail
+    /// quote is rolled and the quote clock stands. Double time's second
+    /// pass calls this after answering its strikes
+    /// ([`Session::answer_strikes`]), as `_HandleShot` (@0x44385) runs
+    /// `_DamageShip`'s reaction, `_AIMakeShipAttackPlayer`'s
+    /// `_ShowPersonHailQuote` (@0x89ce1) among it, on both passes. While
+    /// the ship is landed nothing happens.
+    pub fn say_attack_quotes(&mut self, catalog: &(impl CommCatalog + ?Sized)) {
+        if self.landed.is_some() {
+            return;
+        }
+        let lines = catalog.string_list(HAIL_QUOTES);
+        self.say_queued_attack_quotes(catalog, &lines);
+    }
+
+    /// Says each attack quote queued, its line read from `catalog` or
+    /// `lines`.
+    fn say_queued_attack_quotes(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        lines: &[String],
+    ) {
+        for id in self.traffic.take_attack_quotes() {
+            self.say_hail_quote(id, catalog, lines);
+        }
     }
 
     /// NPC `id`'s person says its hail quote, its tags read, as

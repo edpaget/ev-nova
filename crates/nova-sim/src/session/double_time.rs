@@ -88,7 +88,23 @@
 //!   `_HandleAlertSprite` (@0x44518), which steps the Red Alert's blink.
 //!   So the second pass plays no mission sound, rolls no arrivals, decides
 //!   nothing, takes no scan, hails nothing and does not move the AI's
-//!   timer; strikes it raises wait for the next advance pass's answers.
+//!   timer.
+//! - The strikes the second pass raises are answered in that pass:
+//!   `_HandleShot` (0x35586-0x361ab) takes no pass argument and calls
+//!   `_DamageShip` (@0x35855, @0x36106), and neither reads `_doubleTime`,
+//!   so `_DamageShip`'s whole reaction block (@0x3b44d-0x3bf5e: target and
+//!   provocation, the gate's wait cut @0x3be6e-0x3be7c,
+//!   `_AIMakeShipAttackPlayer` @0x3be66 and its quote,
+//!   `_ShowPersonHailQuote` @0x89ce1) runs there as on the advance pass.
+//!   Its caller answers them after this pass
+//!   ([`Session::answer_strikes`]) and says the attack quotes
+//!   ([`Session::say_attack_quotes`]), before the frame is drawn. The
+//!   block plays no sound and tells no comm.
+//! - Known difference: `_HandleShip`'s hail-quote roll (`Rand(140)`
+//!   @0x33f31-0x33f9e) has no pass test either, so it rolls on both
+//!   passes; ours rolls once a frame ([`Session::tick_quotes`], advance
+//!   pass only; see
+//!   rdm:phase/system-traffic-fidelity/phase-33-double-time-second-pass-hail-quote-roll).
 //! - `_HandleBeams(arg)` (@0x4452f-0x4453d): on the second pass a beam
 //!   only ages (see [`GamePass`]).
 //! - The warp's clock is `TickCount` less the warp stage's stamp (see the
@@ -174,7 +190,9 @@ impl Session {
     /// pass's calls stand still; a jump that begins on it stops it there,
     /// and so does the escape pod's countdown running out on it, the
     /// rescue then due ([`Session::rescue_if_due`], which its caller asks
-    /// after this pass as after the advance pass's tick).
+    /// after this pass as after the advance pass's tick). Its caller
+    /// then answers the pass's strikes ([`Session::answer_strikes`]) and
+    /// says the attack quotes they raise ([`Session::say_attack_quotes`]).
     pub fn tick_again(
         &mut self,
         controls: Controls,
