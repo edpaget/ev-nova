@@ -11884,7 +11884,7 @@ mod tests {
     /// `record` with `AmmoType` -999.
     fn self_destructing(record: WeaponRecord) -> WeaponRecord {
         WeaponRecord {
-            ammo_type: SELF_DESTRUCT,
+            ammo_type: -999,
             ..record
         }
     }
@@ -11895,10 +11895,21 @@ mod tests {
         let npc = Ship::at(1, 0.0, 0.0)
             .armed(self_destructing(blaster()))
             .picking(128);
-        for shooter in [player, npc] {
+        // An escort's formation trigger, its turret at B ahead.
+        let formation = Ship {
+            trigger: Trigger {
+                turrets_only: true,
+                primary: true,
+                ..QUIET
+            },
+            ..Ship::at(1, 0.0, 0.0)
+                .armed(self_destructing(turret(4)))
+                .targeting(B)
+        };
+        for shooter in [player, npc, formation] {
             let id = shooter.id;
             let mut combat = Combat::default();
-            let mut ships = [shooter];
+            let mut ships = [shooter, Ship::at(2, 0.0, -3000.0)];
             tick(&mut combat, &mut ships, &NovaDisable);
             let reserves = ships[0].reserves;
             assert_eq!((reserves.shield.now, reserves.armor.now), (0.0, 0.0));
@@ -11911,6 +11922,23 @@ mod tests {
             assert_eq!(combat.shots().len(), 1, "the shot still flies");
             assert_eq!(combat.take_strikes(), [], "no strike: no one hit it");
         }
+        assert_eq!(SELF_DESTRUCT, -999);
+    }
+
+    #[test]
+    fn a_shot_spent_on_a_stellar_counts_among_the_tick_s_ended_shots() {
+        let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(planet_gun())];
+        let mut ended = Vec::new();
+        for _ in 0..7 {
+            tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
+            ships[0] = Ship::at(1, 0.0, 0.0);
+            if !combat.take_stellar_strikes().is_empty() {
+                ended.push(combat.ended_shots);
+            }
+        }
+        assert_eq!(ended, [1], "the tick it struck");
     }
 
     #[test]

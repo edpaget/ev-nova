@@ -16,6 +16,16 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The player's recoil gate by the engine (`Combat::fire_player`): a
+    # `Recoil` of exactly 0 pushes nothing whichever way `> 0.0` or
+    # `>= 0.0` reads it, as `ai_fire::recoil` gives no push for a weapon
+    # that does not recoil (`WeaponSpec::recoils`).
+    "combat/mod.rs:[0-9]+:[0-9]+: replace > with >= in Combat::fire_player",
+    # A burst's end spends one copy's worth unless its copies fire together
+    # (`Armament::burst_step`): copies that don't are one a call
+    # (`ai_fire::copies`), so `spawned` is 1 whichever branch `flags &
+    # SIMULTANEOUS == 0` (or its `|` mutant, always false) takes.
+    "combat/armament.rs:[0-9]+:[0-9]+: replace & with \\| in Armament::burst_step",
     # `_AdjustedAccel`'s sign tests (`launch_velocity`): a push of exactly
     # none adds none whichever branch it takes, so `push < 0.0` and
     # `push <= 0.0` (the first operand, column 24) cannot be told apart.
