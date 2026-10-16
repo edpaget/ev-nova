@@ -9,14 +9,22 @@
 //!   ([`ShieldFlash::hit`]).
 //! - Each frame, while the timer is above none, the ship's shield above
 //!   none and its class has a shield layer, the timer is first held down
-//!   to `L = trunc(shield × 32 / capacity)`, `L` above 32 taken as 32 and
-//!   `L` of 3 or below as 4, so a weak shield flashes faintly and briefly
-//!   and a recharging one never raises it again; the layer is drawn at
-//!   `max(trunc(timer), 1)`. Then the timer drops by 1 while it is above
-//!   none, drawn or not ([`ShieldFlash::step`]).
+//!   to `L = trunc(shield × 32 / base)`, where `base` is the class's own
+//!   `Shield` as loaded (the class record's +0x5c @0x2c8aa, not the
+//!   ship's capacity with its outfits, so a ship with shield outfits holds
+//!   it at 32). `L` above 32 is taken as 32 and `L` of 3 or below as 4, so
+//!   a weak shield flashes faintly and briefly and a recharging one never
+//!   raises it again; a quotient out of an `i32`'s range, as a `base` of
+//!   none gives, truncates to `i32::MIN` (`cvttss2si`) and so to 4. The
+//!   layer is drawn at `max(trunc(timer), 1)`. Then the timer drops by a
+//!   frame while it is above none, drawn or not ([`ShieldFlash::step`]):
+//!   the original's `_gSpeedMult`, 1 at the fixed step the engine runs.
 //!
-//! `_DamageShip` runs before `_HandleShipDisplay` in `_DoPlayGameWork`, so
-//! a hit is shown on the frame it lands, at its clamped level.
+//! An NPC's shot hits land before its `_HandleShipDisplay` in
+//! `_DoPlayGameWork`, so they show on the frame they land; a hit on the
+//! player, a beam's, and some shockwaves land after their ship's display
+//! and show a frame later
+//! ([`CombatEvent::Hit::late`](nova_sim::CombatEvent::Hit)).
 //!
 //! No ship's layer is drawn yet: the shän shield layer is
 //! rdm:phase/ship-handling-fidelity/phase-10's, which only has to supply
@@ -33,6 +41,27 @@ pub const FLASH_LEVELS: f32 = 32.0;
 /// The least level a weak shield holds the timer to: a share of 3 or
 /// below is taken as 4.
 pub const FLASH_FLOOR: f32 = 4.0;
+
+/// The level `shield` of a class's own `base` holds a flash to:
+/// `trunc(shield × 32 / base)` as `cvttss2si` takes it, `i32::MIN` out of
+/// an `i32`'s range, then at most 32 and, at 3 or below, 4.
+fn share(shield: f32, base: f32) -> f32 {
+    let quotient = shield * FLASH_LEVELS / base;
+    // Within an `i32`'s range by the test, whole once truncated.
+    #[allow(clippy::cast_possible_truncation)]
+    let level = if quotient.is_finite() && quotient.abs() < 2_147_483_648.0 {
+        quotient.trunc() as i32
+    } else {
+        i32::MIN
+    };
+    match level {
+        33.. => FLASH_LEVELS,
+        ..=3 => FLASH_FLOOR,
+        // 4-32: exact in an `f32`.
+        #[allow(clippy::cast_precision_loss)]
+        level => level as f32,
+    }
+}
 
 /// One ship's shield flash.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -53,21 +82,13 @@ impl ShieldFlash {
         }
     }
 
-    /// A frame, for a ship of `shield` and shield `capacity`, whose class
-    /// has a shield layer when `has_layer`: the level its layer is drawn
-    /// at, if it is drawn (see the module docs). The timer then drops by
-    /// 1 while it is above none.
-    pub fn step(&mut self, shield: f32, capacity: f32, has_layer: bool) -> Option<u8> {
+    /// A frame, for a ship of `shield` whose class's own `Shield` is
+    /// `base` and which has a shield layer when `has_layer`: the level its
+    /// layer is drawn at, if it is drawn (see the module docs). The timer
+    /// then drops by 1 while it is above none.
+    pub fn step(&mut self, shield: f32, base: f32, has_layer: bool) -> Option<u8> {
         let level = if self.timer > 0.0 && shield > 0.0 && has_layer {
-            let share = (shield * FLASH_LEVELS / capacity).trunc();
-            let share = if share > FLASH_LEVELS {
-                FLASH_LEVELS
-            } else if share <= FLASH_FLOOR - 1.0 {
-                FLASH_FLOOR
-            } else {
-                share
-            };
-            self.timer = self.timer.min(share);
+            self.timer = self.timer.min(share(shield, base));
             // At most 32 and at least 1: within a `u8`.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             Some(self.timer.trunc().max(1.0) as u8)
@@ -118,8 +139,24 @@ mod tests {
     }
 
     #[test]
-    fn a_shield_above_its_capacity_is_held_to_32() {
+    fn a_shield_above_its_classs_own_is_held_to_32() {
         assert_eq!(levels(250.0, 1), [Some(32)]);
+    }
+
+    #[test]
+    fn a_class_of_no_shield_of_its_own_holds_the_flash_to_4() {
+        let mut flash = ShieldFlash::default();
+        flash.hit(false);
+        assert_eq!(flash.step(50.0, 0.0, true), Some(4), "inf: i32::MIN");
+        let mut flash = ShieldFlash::default();
+        flash.hit(false);
+        assert_eq!(flash.step(50.0, -10.0, true), Some(4), "negative");
+        assert_eq!(share(1.0e9, 1.0), 4.0, "out of an i32's range");
+        assert_eq!(share(100.0, 100.0), 32.0);
+        assert_eq!(share(33.0, 32.0), 32.0, "33 held to 32");
+        assert_eq!(share(15.0, 120.0), 4.0, "exactly 4");
+        assert_eq!(share(16.0, 120.0), 4.0);
+        assert_eq!(share(19.0, 120.0), 5.0);
     }
 
     #[test]

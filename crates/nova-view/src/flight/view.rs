@@ -3132,20 +3132,8 @@ impl<
                         player,
                         debris: debris == RuleSource::Bible,
                     };
-                    for event in session.take_combat_events() {
-                        if let CombatEvent::Hit {
-                            ship,
-                            passes_shields,
-                            ..
-                        } = event
-                        {
-                            self.flashes.entry(ship).or_default().hit(passes_shields);
-                        }
-                        self.effects.apply(&event, &scene, &self.looks, chance);
-                    }
-                    // After the pass's hits, as `_DamageShip` runs before
-                    // `_HandleShipDisplay` in `_DoPlayGameWork`.
-                    step_flashes(&mut self.flashes, session);
+                    let shown = (&mut self.effects, &mut self.flashes);
+                    show_combat(session, &scene, shown, &self.looks, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {
@@ -5811,7 +5799,10 @@ impl<C> FlightView<C> {
     /// the layer shows it at [`ShieldFlash::step`]'s level.
     #[must_use]
     pub fn shield_flash(&self, ship: ShipRef) -> Option<f32> {
-        self.flashes.get(&ship).map(ShieldFlash::shown)
+        self.flashes
+            .get(&ship)
+            .map(ShieldFlash::shown)
+            .filter(|&shown| shown > 0.0)
     }
 
     /// The shots in flight, each where it is drawn: `alpha` of the way
@@ -6500,13 +6491,53 @@ fn point(v: Vec2) -> Point {
     Point::new(v.x, v.y)
 }
 
+/// Shows the fight's events `session` raised this pass in `scene`: each on
+/// `effects`, as `looks` says, drawing on `chance`, and each hit on its
+/// ship's flash among `flashes`, which then step a frame
+/// ([`step_flashes`]). An NPC's shot hits land before its
+/// `_HandleShipDisplay`, so they show this frame; a hit the original lands
+/// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
+/// next.
+fn show_combat(
+    session: &mut Session,
+    scene: &Scene,
+    (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
+    looks: &Looks,
+    chance: &mut dyn Chance,
+) {
+    let mut late = Vec::new();
+    for event in session.take_combat_events() {
+        if let CombatEvent::Hit {
+            ship,
+            passes_shields,
+            late: shown_late,
+            ..
+        } = event
+        {
+            if shown_late {
+                late.push((ship, passes_shields));
+            } else {
+                flashes.entry(ship).or_default().hit(passes_shields);
+            }
+        }
+        effects.apply(&event, scene, looks, chance);
+    }
+    step_flashes(flashes, session);
+    for (ship, passes_shields) in late {
+        flashes.entry(ship).or_default().hit(passes_shields);
+    }
+}
+
 /// Steps each ship's shield flash among `flashes` a frame by its shield
 /// in `session` ([`ShieldFlash::step`]), dropping the flashes of ships no
 /// longer in the system and those run out.
 ///
 /// No class has a shield layer yet: the shän shield layer is
 /// rdm:phase/ship-handling-fidelity/phase-10's, and no stock `shän` has
-/// one, so each flash only runs down.
+/// one, so each flash only runs down, and the base it is given, which
+/// only a drawn layer reads, is the ship's shield capacity for now. That
+/// phase passes the class's own loaded `Shield` (class +0x5c @0x2c8aa)
+/// with the layer.
 fn step_flashes(flashes: &mut BTreeMap<ShipRef, ShieldFlash>, session: &Session) {
     let shield = |ship: ShipRef| match ship {
         ShipRef::Player => Some(session.reserves().shield),
@@ -16630,6 +16661,35 @@ mod tests {
         let particles = view.effects().particles();
         assert_eq!(particles.len(), 5, "{particles:?}");
         assert!(particles.iter().all(|piece| piece.color == orange));
+    }
+
+    #[test]
+    fn a_beams_hit_flashes_the_npcs_shield_from_the_frame_after() {
+        let mut catalog = armed(1, &[UNDER]);
+        catalog.weapons[4].beam_length = 400;
+        catalog.weapons[4].energy_dmg = 1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        let shield = |view: &View| {
+            view.session().expect("flying").npcs()[0]
+                .reserves
+                .shield
+                .now
+        };
+        let full = shield(&view);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        let mut ticks = 0;
+        while shield(&view) == full {
+            assert!(ticks < 20, "never hit");
+            view.tick(TICK);
+            ticks += 1;
+        }
+        assert_eq!(view.shield_flash(npc), None, "shown the frame after");
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), Some(32.0));
     }
 
     /// [`armed`] with a blaster whose shots detonate after a tick.

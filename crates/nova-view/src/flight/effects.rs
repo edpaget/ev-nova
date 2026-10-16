@@ -10,7 +10,10 @@
 //!   last. A delayed one is hidden while its delay counts down by the same
 //!   advance a step. One whose sheet cannot be read is heard and lasts a
 //!   frame, unseen. At most [`MAX_EXPLOSIONS`] are kept: one more is
-//!   dropped.
+//!   dropped, though still heard, as `_CreateExplosion` plays its sound
+//!   whether `_SpawnExplod` found it a slot or not (@0x3f91a). The extras
+//!   take their slots first, so a size of 163 or more fills the pool
+//!   alone and the main one is lost, heard.
 //! - An explosion of a code of 1000 or more, with a size, first scatters
 //!   `trunc(0.04 x size)` explosions of `bööm` 129 within a quarter of the
 //!   size of it, delayed 4-11, and `trunc(0.16 x size)` of `bööm` 128
@@ -373,9 +376,10 @@ impl Effects {
                 self.spawn(LARGE_EXTRA, offset(at, x, y), delay as f32, looks);
             }
         }
-        if self.spawn(explosion.boom, at, 0.0, looks)
-            && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound)
-        {
+        // Heard whether or not the pool had room for it (`_CreateExplosion`
+        // @0x3f91a).
+        self.spawn(explosion.boom, at, 0.0, looks);
+        if let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
             self.sounds.push(heard(sound, at, player));
         }
     }
@@ -424,12 +428,11 @@ impl Effects {
             let mut off = || chance.below(2 * half) as f32 - half as f32;
             let (x, y) = (off(), off());
             let at = Point::new(ship.at.x + x, ship.at.y + y);
-            let spawned = self.spawn(explosion.boom, at, 0.0, looks);
+            // `_CreateExplosion(.., Rand(4) == 0)` @0x2decf: heard whether
+            // or not the pool had room for it.
+            self.spawn(explosion.boom, at, 0.0, looks);
             let audible = chance.below(4) == 0;
-            if spawned
-                && audible
-                && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound)
-            {
+            if audible && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
                 self.sounds.push(heard(sound, at, player));
             }
         }
@@ -698,7 +701,9 @@ mod tests {
             at(31.0, 0.0),
             "the 33rd dropped"
         );
-        assert_eq!(effects.take_sounds().len(), 32);
+        // `_CreateExplosion` plays the main one's sound whether or not
+        // `_SpawnExplod` found it a slot (@0x3f91a).
+        assert_eq!(effects.take_sounds().len(), 33, "the 33rd still heard");
         assert_eq!(MAX_EXPLOSIONS, 32);
     }
 
@@ -902,6 +907,22 @@ mod tests {
             "the first heard, the second not"
         );
         assert_eq!(BREAKUP_SPREAD, 0.25);
+    }
+
+    #[test]
+    fn a_breakup_explosion_with_no_room_is_still_heard() {
+        let mut effects = Effects::default();
+        for i in 0..32 {
+            exploded(&mut effects, 129, at(i as f32, 0.0));
+        }
+        effects.take_sounds();
+        let mut chance = Script::of(&[0, 0, 0, 0]);
+        effects.step(&[dying(30)], at(100.0, 0.0), &looks(), &mut chance);
+        assert!(
+            effects.explosions().iter().all(|e| e.boom == BoomId(129)),
+            "no room"
+        );
+        assert_eq!(effects.take_sounds().len(), 1, "heard");
     }
 
     #[test]
@@ -1156,6 +1177,7 @@ mod tests {
             weapon: Some(WeaponId(128)),
             at: Vec2::new(30.0, 40.0),
             passes_shields: false,
+            late: false,
         };
         effects.apply(&event, &scene(), &looks(), &mut chance);
         assert_eq!(effects, Effects::default());

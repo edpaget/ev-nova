@@ -357,8 +357,12 @@ pub enum CombatEvent {
     Particles(ParticleBurst),
     /// A hit landed on a ship and reached `_DamageShip`'s shield-flash
     /// write (@0x3bef9-0x3bf0c): a shot's direct hit, each ship its blast
-    /// reaches, a beam tick, or a death's shockwave. The escape pod and
-    /// every class after it take none ([`immune`]).
+    /// reaches, a beam tick, a death's shockwave, or a missile lock, which
+    /// does no damage but flashes its target's shield all the same
+    /// (@0x35855). Every path past `_DamageShip`'s entry guards reaches the
+    /// write, a breaking-up ship's too; the escape pod and every class
+    /// after it take none ([`immune`], @0x3a87c-0x3a882). The sabotage
+    /// bomb passes shields (@0x699b2) and raises none.
     Hit {
         /// The ship hit.
         ship: ShipRef,
@@ -372,6 +376,13 @@ pub enum CombatEvent {
         /// Whether its weapon passes shields (`Flags` 0x0020), which
         /// leaves the flash as it was.
         passes_shields: bool,
+        /// Whether the original shows its flash a frame later, the ship's
+        /// `_HandleShipDisplay` having run that frame before the hit: any
+        /// hit on the player, whose display comes first (@0x43e29); a
+        /// beam's, as `_HandleBeams` runs last (@0x4453d); and a
+        /// shockwave's on a ship before its wreck in the fight's order,
+        /// the original's ship table's.
+        late: bool,
     },
     /// A ship was destroyed: the view draws its explosion and debris.
     Destroyed {
@@ -1036,10 +1047,15 @@ impl Combat {
                     .map(|fighter| (fighter.ship, fighter.state.position)),
             );
             let damage = shockwave::damage(&hull);
+            let wreck_at = fighters.iter().position(|fighter| fighter.ship == wreck);
             for ship in reached {
-                let Some(fighter) = fighters.iter_mut().find(|fighter| fighter.ship == ship) else {
+                let Some(index) = fighters.iter().position(|fighter| fighter.ship == ship) else {
                     continue;
                 };
+                // A ship already shown this frame: the player, or one
+                // before the wreck in the table.
+                let late = ship == ShipRef::Player || wreck_at.is_some_and(|wreck| index < wreck);
+                let fighter = &mut fighters[index];
                 let condition = *fighter.condition;
                 let before = taken(fighter.reserves);
                 let hurt = !immune(fighter.ship_type);
@@ -1055,6 +1071,7 @@ impl Combat {
                     weapon: None,
                     at,
                     passes_shields: false,
+                    late,
                 });
                 if let Some(velocity) = impact::push(&fighter.body(), at, shockwave::IMPACT, None) {
                     self.shove(fighter, velocity);
@@ -1785,6 +1802,15 @@ impl Combat {
                 // (`spawnSubs` 1 @0x37678, 0 @0x37095).
                 (fuse == Fuse::Proximity).then_some(Some(ship))
             } else if shot.expired() {
+                // A shot of no life (`Count` 0 or below) never had the live
+                // tick that shows its sprite (@0x3596f-0x3598e), and
+                // `_HandleShot`'s end of life skips its sub-munitions, its
+                // detonation and its fizzle for a sprite not shown
+                // (@0x35f0a). Every other shot not shown at its end was
+                // used up already, and is not here.
+                if shot.weapon.lifetime == 0 {
+                    continue;
+                }
                 if shot.weapon.detonates() {
                     let blast = shot.blast(None);
                     self.explode_shot(&shot, &blast);
@@ -1958,6 +1984,7 @@ impl Combat {
                 weapon: landed.weapon,
                 at: landed.at,
                 passes_shields: landed.hit.passes_shields,
+                late: landed.ship == ShipRef::Player || beam,
             });
             if let Some(velocity) = impact::push(&fighter.body(), from, impact, source) {
                 self.shove(fighter, velocity);
@@ -10899,10 +10926,89 @@ mod tests {
                     weapon,
                     at,
                     passes_shields,
+                    ..
                 } => Some((ship, weapon, at, passes_shields)),
                 _ => None,
             })
             .collect()
+    }
+
+    /// Each hit raised among `events`: the ship, and whether the original
+    /// shows its flash a frame late.
+    fn lateness(events: &[CombatEvent]) -> Vec<(ShipRef, bool)> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Hit { ship, late, .. } => Some((ship, late)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_shots_hit_on_an_npc_shows_its_flash_that_frame_and_a_beams_the_next() {
+        let events = fight_once(blaster(), vec![Ship::at(2, 100.0, 0.0)], 8);
+        assert_eq!(lateness(&events), [(B, false)]);
+        let events = fight_once(laser(), vec![Ship::at(2, 100.0, 0.0)], 5);
+        assert_eq!(lateness(&events), [(B, true); 3]);
+    }
+
+    #[test]
+    fn any_hit_on_the_player_shows_its_flash_the_next_frame() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(blaster()),
+            Ship {
+                id: ShipRef::Player,
+                fleet: ShipRef::Player,
+                ..Ship::at(0, 100.0, 0.0)
+            },
+        ];
+        let mut events = Vec::new();
+        for _ in 0..8 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            events.extend(combat.take_events());
+        }
+        assert_eq!(lateness(&events), [(ShipRef::Player, true)]);
+    }
+
+    #[test]
+    fn a_shockwave_shows_its_flash_the_next_frame_on_a_ship_before_its_wreck() {
+        for (wreck_first, late) in [(true, false), (false, true)] {
+            let mut combat = Combat::default();
+            let wreck = wreck(WRECK, 200.0, 0.0, 0.0);
+            let near = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
+            let mut ships = if wreck_first {
+                [wreck, near]
+            } else {
+                [near, wreck]
+            };
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(
+                lateness(&combat.take_events()),
+                [(A, late)],
+                "wreck first: {wreck_first}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missile_lock_raises_a_hit_on_its_target_that_flashes_its_shield() {
+        let mut combat = Combat::default();
+        let mut ships = [player_with(missile()), far_b()];
+        let mut events = Vec::new();
+        for _ in 0..40 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            events.extend(combat.take_events());
+        }
+        assert_eq!(
+            raised(&events),
+            [(B, Some(WeaponId(134)), Vec2::new(5000.0, 0.0), false)],
+            "no damage, but passes no shields"
+        );
+        assert_eq!(lateness(&events), [(B, false)]);
     }
 
     /// Whether `a` and `b` are within a thousandth of a pixel.
@@ -11193,5 +11299,43 @@ mod tests {
             "{events:?}"
         );
         assert_eq!(fizzles(&events), []);
+    }
+
+    #[test]
+    fn a_shot_of_no_life_is_never_shown_so_ends_without_fizzle_detonation_or_release() {
+        let sub = WeaponRecord {
+            count: 50,
+            speed: 500,
+            ..weapon(148)
+        };
+        for (count, shown) in [(0, false), (-3, false), (1, true)] {
+            let record = WeaponRecord {
+                count,
+                sub_count: 2,
+                sub_type: Some(WeaponId(148)),
+                ..short_shot(1, 0)
+            };
+            let detonating = WeaponRecord {
+                flags: 0x8000,
+                ..record
+            };
+            let arsenal = Arsenal::new(&[record, detonating, sub], Vec::new());
+            for record in [record, detonating] {
+                let mut combat = Combat::default();
+                let mut ships = [Ship::at(1, 0.0, 0.0).armed(record)];
+                let mut events = Vec::new();
+                for _ in 0..3 {
+                    tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+                    ships[0].trigger = QUIET;
+                    events.extend(combat.take_events());
+                }
+                let ended = fizzles(&events).len() + sizes(&events).len();
+                assert_eq!(ended == 1, shown, "{count} {:#x}", record.flags);
+                let released = events
+                    .iter()
+                    .any(|event| matches!(event, CombatEvent::Fired { weapon, .. } if *weapon == WeaponId(148)));
+                assert_eq!(released, shown, "{count} {:#x}", record.flags);
+            }
+        }
     }
 }
