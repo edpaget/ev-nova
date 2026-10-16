@@ -1127,6 +1127,8 @@ mod tests {
                 CombatEvent::Exploded {
                     at,
                     explosion: crate::combat::weapon::Explosion::decode(3).expect("bööm 131"),
+                    // `_CreateExplosion(.., 0, 1)` @0xaf7f.
+                    size: 0.0,
                 },
             ]
         );

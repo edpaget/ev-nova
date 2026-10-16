@@ -16,6 +16,8 @@
 //!   session's combat events.
 //! - [`escorts`]: the escort menu, which picks the escorts a command goes
 //!   to, its look ([`EscortMenuLooks`]), and the message a command gives.
+//! - [`flash`]: a ship's shield flash, the timer a hit sets and the level
+//!   its shield layer shows.
 //! - [`floating`]: the floating map shown while H or `\` is held: its
 //!   frame, clock, zoom and click boxes, and the pass that clips and
 //!   fades it.
@@ -46,6 +48,7 @@ pub mod cursor;
 pub mod data;
 pub mod effects;
 pub mod escorts;
+pub mod flash;
 pub mod floating;
 pub mod hud;
 pub mod jump;

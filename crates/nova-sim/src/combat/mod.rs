@@ -313,12 +313,29 @@ pub enum CombatEvent {
         /// Where.
         at: Vec2,
     },
+    /// A shot ended its life without detonating, its weapon of an
+    /// `ExplodType` above none ([`WeaponSpec::fizzles`](weapon::WeaponSpec::fizzles)):
+    /// it fizzles out where it is, as `_SpawnExplod(x, y, 0, 0, 0)`
+    /// (`_HandleShot` @0x36149-0x36175), explosion type 0, unheard.
+    Fizzled {
+        /// Where.
+        at: Vec2,
+    },
     /// A shot or beam exploded where it hit, or a shot detonated.
     Exploded {
         /// Where.
         at: Vec2,
         /// Its explosion.
         explosion: Explosion,
+        /// Its size (`_CreateExplosion`'s fourth argument, @0x3f698): how
+        /// far an [`Explosion::extra`] one's extras scatter, and how many
+        /// there are. A weapon's hit, beam tick or detonation passes its
+        /// `BlastRadius` ([`WeaponSpec::blast_radius`](weapon::WeaponSpec::blast_radius),
+        /// wëap +0x18); every other explosion passes 0
+        /// ([`Combat::explode`]). The original's is signed, while the
+        /// loaded `BlastRadius` is floored at none: a negative size
+        /// scatters none either way.
+        size: f32,
     },
     /// A ship was disabled.
     Disabled {
@@ -334,9 +351,28 @@ pub enum CombatEvent {
         /// Its `Explode1`, if any.
         explosion: Option<Explosion>,
     },
-    /// Particles were thrown off: a shot's hit on an asteroid, or an
-    /// asteroid destroyed (see [`asteroid_hit`]).
+    /// Particles were thrown off: a shot's hit on a ship, an asteroid or a
+    /// stellar, a beam's on a ship, or an asteroid destroyed (see
+    /// [`asteroid_hit::hit_burst`]).
     Particles(ParticleBurst),
+    /// A hit landed on a ship and reached `_DamageShip`'s shield-flash
+    /// write (@0x3bef9-0x3bf0c): a shot's direct hit, each ship its blast
+    /// reaches, a beam tick, or a death's shockwave. The escape pod and
+    /// every class after it take none ([`immune`]).
+    Hit {
+        /// The ship hit.
+        ship: ShipRef,
+        /// The weapon whose shot, blast or beam it was; none for a
+        /// shockwave.
+        weapon: Option<WeaponId>,
+        /// Where it landed, loosely: where its shot met the ship, its
+        /// blast's centre, its beam's end, or the wreck whose shockwave
+        /// it was.
+        at: Vec2,
+        /// Whether its weapon passes shields (`Flags` 0x0020), which
+        /// leaves the flash as it was.
+        passes_shields: bool,
+    },
     /// A ship was destroyed: the view draws its explosion and debris.
     Destroyed {
         /// The ship.
@@ -401,9 +437,11 @@ pub const PD_FIRE_PRIORITY: u8 = 3;
 /// tick count from `life`'s first to its second. None takes on any
 /// source's velocity.
 ///
-/// Left out: the original's seventh argument, the constant 0x20, passed
-/// straight on to `_NewParticle` and not read here; it is
-/// rdm:phase/weapons-fidelity/phase-14-combat-presentation's.
+/// Left out: the original's argument after the colour (0x1c(%esp)),
+/// passed straight on to `_NewParticle` and not read here. Every burst
+/// the fight raises passes the constant 0x20, which the view draws
+/// opaque; only a shot's trail (@0x35ea6) passes another, and it is
+/// rdm:phase/weapons-fidelity/phase-24-shots-and-beams-drawn's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleBurst {
     /// Where it goes off.
@@ -678,6 +716,12 @@ struct Landed {
     /// The ship whose shot, blast or beam it was, if a ship launched it
     /// ([`Strike::by`]).
     by: Option<ShipRef>,
+    /// The weapon whose shot, blast or beam it was.
+    weapon: Option<WeaponId>,
+    /// Where it landed, loosely: where its shot
+    /// met the ship, its blast's centre, its beam's end, or, for a missile
+    /// lock, the ship.
+    at: Vec2,
     /// What it does.
     hit: Hit,
     /// Whether it was a shot's or beam's own hit ([`Strike::direct`]).
@@ -1005,6 +1049,13 @@ impl Combat {
                 if !hurt {
                     continue;
                 }
+                // `_DamageShip` @0x2da89 passes no pass-through flag.
+                self.events.push(CombatEvent::Hit {
+                    ship,
+                    weapon: None,
+                    at,
+                    passes_shields: false,
+                });
                 if let Some(velocity) = impact::push(&fighter.body(), at, shockwave::IMPACT, None) {
                     self.shove(fighter, velocity);
                 }
@@ -1702,7 +1753,7 @@ impl Combat {
                 self.hit_asteroid(&shot, &mut asteroids[index], at, fighters, queue);
                 continue;
             }
-            let (queue, blast, subs) = if let Some(Meeting { ship, at, fuse }) = met {
+            let subs = if let Some(Meeting { ship, at, fuse }) = met {
                 let queue = match fuse {
                     Fuse::Contact => &mut contacts,
                     Fuse::Proximity => &mut proximities,
@@ -1710,6 +1761,8 @@ impl Combat {
                 queue.push(Landed {
                     ship,
                     by: shot.attacker(),
+                    weapon: Some(shot.weapon.id),
+                    at,
                     hit: hit.decayed(shot.decay_steps(self.decay)),
                     direct: true,
                     intended: shot.aimed_at == Some(ship),
@@ -1722,47 +1775,28 @@ impl Combat {
                     ion: Some(Dose::of(&shot.weapon, None)),
                 });
                 shot.position = at;
+                let blast = shot.blast(Some(ship));
+                self.explode_shot(&shot, &blast);
+                // Once a hit, where the shot is (`_HandleShipHit`
+                // @0x36b44-0x36bae); the ships its blast reaches spray none.
+                self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
+                queue.extend(blasted(&shot, &blast, hit, sides.targets));
                 // Only the proximity pass releases sub-munitions
                 // (`spawnSubs` 1 @0x37678, 0 @0x37095).
-                let subs = (fuse == Fuse::Proximity).then_some(Some(ship));
-                (queue, Some(shot.blast(Some(ship))), subs)
+                (fuse == Fuse::Proximity).then_some(Some(ship))
             } else if shot.expired() {
-                let blast = shot.weapon.detonates().then(|| shot.blast(None));
-                let subs = shot.weapon.subs_on_expiry().then_some(shot.aimed_at);
-                (&mut expiries, blast, subs)
+                if shot.weapon.detonates() {
+                    let blast = shot.blast(None);
+                    self.explode_shot(&shot, &blast);
+                    expiries.extend(blasted(&shot, &blast, hit, sides.targets));
+                } else if shot.weapon.fizzles {
+                    self.events.push(CombatEvent::Fizzled { at: shot.position });
+                }
+                shot.weapon.subs_on_expiry().then_some(shot.aimed_at)
             } else {
                 kept.push(shot);
                 continue;
             };
-            if let Some(blast) = blast {
-                if let Some(explosion) = shot.weapon.explosion {
-                    self.events.push(CombatEvent::Exploded {
-                        at: blast.at,
-                        explosion,
-                    });
-                }
-                let reached = reached(&blast, sides.targets);
-                queue.extend(reached.into_iter().map(|ship| Landed {
-                    ship,
-                    by: shot.attacker(),
-                    hit,
-                    direct: false,
-                    intended: false,
-                    lock: false,
-                    push: Push {
-                        from: blast.at,
-                        impact: shot.weapon.impact,
-                        beam: false,
-                    },
-                    ion: Some(Dose::of(
-                        &shot.weapon,
-                        Some(Burst {
-                            centre: blast.at,
-                            radius: blast.radius,
-                        }),
-                    )),
-                }));
-            }
             if let Some(target) = subs {
                 released.push((shot, target));
             }
@@ -1779,6 +1813,28 @@ impl Combat {
             hits.extend(self.beam_hits(fighters, sides, pass.beam_damage()));
         }
         self.land(fighters, hits, rule);
+    }
+
+    /// `shot`'s explosion where `blast` goes off, if its weapon has one,
+    /// of its `BlastRadius` (`_CreateExplosion(.., ExplodType,
+    /// BlastRadius, 1)`, `_HandleShipHit` @0x36aa9, `_HandleShot`
+    /// @0x35f97).
+    fn explode_shot(&mut self, shot: &Shot, blast: &Blast) {
+        if let Some(explosion) = shot.weapon.explosion {
+            self.events.push(CombatEvent::Exploded {
+                at: blast.at,
+                explosion,
+                size: shot.weapon.blast_radius,
+            });
+        }
+    }
+
+    /// `weapon`'s hit particles at `at`, if it has any, their speed varied
+    /// by `variation` percent ([`asteroid_hit::hit_burst`]).
+    fn spray(&mut self, weapon: &weapon::WeaponSpec, at: Vec2, variation: u32) {
+        if let Some(particles) = weapon.hit_particles {
+            self.particles(asteroid_hit::hit_burst(at, &particles, variation));
+        }
     }
 
     /// Step 7's last pass: the hit each beam makes this tick among `sides`,
@@ -1808,6 +1864,8 @@ impl Combat {
             hits.push(Landed {
                 ship,
                 by: Some(beam.firer),
+                weapon: Some(beam.weapon.id),
+                at,
                 hit: Hit {
                     mass: hit.mass * factor,
                     energy: hit.energy * factor,
@@ -1824,7 +1882,16 @@ impl Combat {
                 ion: Some(Dose::of(&beam.weapon, None)),
             });
             if let Some(explosion) = beam.weapon.explosion {
-                self.events.push(CombatEvent::Exploded { at, explosion });
+                self.events.push(CombatEvent::Exploded {
+                    at,
+                    explosion,
+                    size: beam.weapon.blast_radius,
+                });
+            }
+            if let Some(particles) = beam.weapon.hit_particles {
+                let variation = asteroid_hit::BEAM_HIT_PART_VARIATION;
+                let burst = asteroid_hit::hit_burst(at, &particles, variation);
+                self.events.push(CombatEvent::Particles(burst));
             }
         }
         hits
@@ -1886,6 +1953,12 @@ impl Combat {
             if immune(fighter.ship_type) {
                 continue;
             }
+            self.events.push(CombatEvent::Hit {
+                ship: landed.ship,
+                weapon: landed.weapon,
+                at: landed.at,
+                passes_shields: landed.hit.passes_shields,
+            });
             if let Some(velocity) = impact::push(&fighter.body(), from, impact, source) {
                 self.shove(fighter, velocity);
             }
@@ -1976,11 +2049,13 @@ impl Combat {
     ) {
         let weapon = &shot.weapon;
         if let Some(explosion) = weapon.explosion {
-            self.events.push(CombatEvent::Exploded { at, explosion });
+            self.events.push(CombatEvent::Exploded {
+                at,
+                explosion,
+                size: weapon.blast_radius,
+            });
         }
-        if let Some(particles) = weapon.hit_particles {
-            self.particles(asteroid_hit::hit_burst(at, &particles));
-        }
+        self.spray(weapon, at, asteroid_hit::HIT_PART_VARIATION);
         if let Some(blast) = asteroid_hit::blast(shot, at) {
             let ships = fighters
                 .iter()
@@ -1993,6 +2068,8 @@ impl Combat {
             hits.extend(blast.reaches(ships).into_iter().map(|ship| Landed {
                 ship,
                 by: shot.attacker(),
+                weapon: Some(weapon.id),
+                at: blast.at,
                 hit,
                 direct: false,
                 intended: false,
@@ -2038,8 +2115,13 @@ impl Combat {
                 continue;
             };
             if let Some(explosion) = shot.weapon.explosion {
-                self.events.push(CombatEvent::Exploded { at, explosion });
+                self.events.push(CombatEvent::Exploded {
+                    at,
+                    explosion,
+                    size: shot.weapon.blast_radius,
+                });
             }
+            self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
             let target = &mut stellars[index];
             let damage = stellar::damage(&shot.weapon);
             target.strength -= damage;
@@ -2265,7 +2347,11 @@ impl Combat {
     /// `_CreateExplosion(.., 0, 1)` makes it, so no extra explosions
     /// scatter from it.
     pub(crate) fn explode(&mut self, at: Vec2, explosion: Explosion) {
-        self.events.push(CombatEvent::Exploded { at, explosion });
+        self.events.push(CombatEvent::Exploded {
+            at,
+            explosion,
+            size: 0.0,
+        });
     }
 
     /// Reports `burst`'s particles: a shot's hit on an asteroid's, or an
@@ -2573,6 +2659,8 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
     Some(Landed {
         ship,
         by: Some(ShipRef::Player),
+        weapon: Some(shot.weapon.id),
+        at: target.position,
         hit: Hit {
             cant_kill: true,
             cant_disable: true,
@@ -2588,6 +2676,37 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
         },
         ion: None,
     })
+}
+
+/// The hits `shot`'s `blast` lands, each of `hit`, on the ships among
+/// `targets` it [`reached`]: by the shot's attacker, neither direct nor
+/// intended, pushing from the blast's centre and ionizing over its circle.
+fn blasted(shot: &Shot, blast: &Blast, hit: Hit, targets: &[Target]) -> Vec<Landed> {
+    reached(blast, targets)
+        .into_iter()
+        .map(|ship| Landed {
+            ship,
+            by: shot.attacker(),
+            weapon: Some(shot.weapon.id),
+            at: blast.at,
+            hit,
+            direct: false,
+            intended: false,
+            lock: false,
+            push: Push {
+                from: blast.at,
+                impact: shot.weapon.impact,
+                beam: false,
+            },
+            ion: Some(Dose::of(
+                &shot.weapon,
+                Some(Burst {
+                    centre: blast.at,
+                    radius: blast.radius,
+                }),
+            )),
+        })
+        .collect()
 }
 
 /// The ships among `targets` still active, breaking up or not, that
@@ -3812,6 +3931,8 @@ mod tests {
             .map(|&hit| Landed {
                 ship: ship.id,
                 by: Some(A),
+                weapon: None,
+                at: Vec2::ZERO,
                 hit,
                 direct: true,
                 intended: true,
@@ -4123,7 +4244,7 @@ mod tests {
                     .take_events()
                     .into_iter()
                     .filter_map(|event| match event {
-                        CombatEvent::Exploded { at, explosion } => Some((at, explosion)),
+                        CombatEvent::Exploded { at, explosion, .. } => Some((at, explosion)),
                         _ => None,
                     })
                     .collect::<Vec<_>>(),
@@ -4402,7 +4523,7 @@ mod tests {
         let explosions: Vec<_> = events
             .iter()
             .filter_map(|event| match *event {
-                CombatEvent::Exploded { at, explosion } => Some((at, explosion)),
+                CombatEvent::Exploded { at, explosion, .. } => Some((at, explosion)),
                 _ => None,
             })
             .collect();
@@ -7220,7 +7341,7 @@ mod tests {
         events
             .iter()
             .filter_map(|event| match *event {
-                CombatEvent::Exploded { at, explosion } => Some((at, explosion)),
+                CombatEvent::Exploded { at, explosion, .. } => Some((at, explosion)),
                 _ => None,
             })
             .collect()
@@ -7484,7 +7605,8 @@ mod tests {
             combat.take_events(),
             [CombatEvent::Exploded {
                 at: Vec2::new(3.0, 4.0),
-                explosion: boom
+                explosion: boom,
+                size: 0.0,
             }]
         );
     }
@@ -10354,6 +10476,7 @@ mod tests {
                 CombatEvent::Exploded {
                     at,
                     explosion: Explosion::decode(2).expect("bööm 130"),
+                    size: 0.0,
                 },
                 CombatEvent::Particles(ParticleBurst {
                     at,
@@ -10469,7 +10592,7 @@ mod tests {
         assert_eq!(rocks[0].strength, 6);
         let seen = unfired(&events);
         assert_eq!(seen.len(), 1, "{seen:?}");
-        let CombatEvent::Exploded { at, explosion } = seen[0] else {
+        let CombatEvent::Exploded { at, explosion, .. } = seen[0] else {
             panic!("{seen:?}");
         };
         assert!((at - Vec2::new(100.0, 0.0)).length() < 1e-3, "{at:?}");
@@ -10664,5 +10787,411 @@ mod tests {
             .filter(|event| matches!(event, CombatEvent::ShotDown { .. }))
             .count();
         assert_eq!(downed, 0, "its shots spent on the asteroid");
+    }
+
+    // Hits and explosions (weapons-fidelity phase 14).
+
+    /// `record` exploding as Hellhound's do: `ExplodType` 1014, extras
+    /// about `bööm` 142, and a `BlastRadius` of 145.
+    fn hellhound(record: WeaponRecord) -> WeaponRecord {
+        WeaponRecord {
+            explod_type: 1014,
+            blast_radius: 145,
+            ..record
+        }
+    }
+
+    /// The size of each explosion among `events`, in order.
+    fn sizes(events: &[CombatEvent]) -> Vec<f32> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Exploded { size, .. } => Some(size),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The events of `ticks` ticks after A at the centre fires `record`
+    /// once to the right among `others`.
+    fn fight_once(record: WeaponRecord, others: Vec<Ship>, ticks: u32) -> Vec<CombatEvent> {
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
+        ships.extend(others);
+        let mut events = Vec::new();
+        for _ in 0..ticks {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            events.extend(combat.take_events());
+        }
+        events
+    }
+
+    #[test]
+    fn a_shots_contact_hit_explodes_at_its_blast_radius() {
+        let events = fight_once(hellhound(blaster()), vec![Ship::at(2, 100.0, 0.0)], 8);
+        assert_eq!(sizes(&events), [145.0], "{events:?}");
+    }
+
+    #[test]
+    fn a_shots_proximity_hit_explodes_at_its_blast_radius() {
+        // 16 + 30 reaches the path; 16 does not.
+        let events = fight_once(hellhound(fast_gun(30)), vec![Ship::at(2, 40.0, 30.0)], 1);
+        assert_eq!(sizes(&events), [145.0], "{events:?}");
+    }
+
+    #[test]
+    fn a_shot_detonating_at_its_end_explodes_at_its_blast_radius() {
+        let flak = WeaponRecord {
+            count: 3,
+            flags: 0x8000,
+            ..hellhound(blaster())
+        };
+        let events = fight_once(flak, Vec::new(), 4);
+        assert_eq!(sizes(&events), [145.0], "{events:?}");
+    }
+
+    #[test]
+    fn a_beams_hit_on_a_ship_explodes_at_its_blast_radius_every_tick() {
+        let events = fight_once(hellhound(laser()), vec![Ship::at(2, 100.0, 0.0)], 5);
+        assert_eq!(sizes(&events), [145.0; 3], "{events:?}");
+    }
+
+    #[test]
+    fn a_shots_hit_on_an_asteroid_explodes_at_its_blast_radius() {
+        let mut combat = Combat::default();
+        let mut rocks = [rock(0, 100.0, 0.0)];
+        let (_, events) = shoot_rocks(
+            &mut combat,
+            A,
+            hellhound(blaster()),
+            Vec::new(),
+            &mut rocks,
+            8,
+        );
+        assert_eq!(sizes(&events), [145.0], "{events:?}");
+    }
+
+    #[test]
+    fn a_planet_type_shots_hit_on_a_stellar_explodes_at_its_blast_radius() {
+        let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+        let (_, _, events, _) = shoot_once(
+            hellhound(planet_gun()),
+            Vec::new(),
+            &mut stellars,
+            &Arsenal::default(),
+            7,
+        );
+        assert_eq!(sizes(&events), [145.0], "{events:?}");
+    }
+
+    /// A hit raised among `events`: the ship, the weapon, where, and
+    /// whether it passes shields.
+    type Raised = (ShipRef, Option<WeaponId>, Vec2, bool);
+
+    /// The hits raised among `events`, in order.
+    fn raised(events: &[CombatEvent]) -> Vec<Raised> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Hit {
+                    ship,
+                    weapon,
+                    at,
+                    passes_shields,
+                } => Some((ship, weapon, at, passes_shields)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether `a` and `b` are within a thousandth of a pixel.
+    fn within(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-3
+    }
+
+    #[test]
+    fn a_shots_direct_hit_and_its_blast_raise_a_hit_on_each_ship_they_land_on() {
+        let shell = WeaponRecord {
+            explod_type: 0,
+            blast_radius: 30,
+            ..blaster()
+        };
+        let events = fight_once(
+            shell,
+            vec![Ship::at(2, 100.0, 0.0), Ship::at(3, 100.0, 25.0)],
+            6,
+        );
+        let hits = raised(&events);
+        let ships: Vec<ShipRef> = hits.iter().map(|hit| hit.0).collect();
+        assert_eq!(ships, [B, C], "the direct hit, then the blast: {hits:?}");
+        for (_, weapon, at, passes) in hits {
+            assert_eq!(weapon, Some(WeaponId(128)));
+            assert!(within(at, Vec2::new(84.0, 0.0)), "where it met B: {at:?}");
+            assert!(!passes);
+        }
+    }
+
+    #[test]
+    fn a_beam_raises_a_hit_at_its_end_every_tick_it_touches_a_ship() {
+        let events = fight_once(laser(), vec![Ship::at(2, 100.0, 0.0)], 5);
+        let hits = raised(&events);
+        assert_eq!(hits.len(), 3, "{hits:?}");
+        for (ship, weapon, at, passes) in hits {
+            assert_eq!((ship, weapon, passes), (B, Some(WeaponId(146)), false));
+            assert!(within(at, Vec2::new(85.0, 0.0)), "{at:?}");
+        }
+    }
+
+    #[test]
+    fn a_hit_of_a_weapon_that_passes_shields_says_so() {
+        let piercing = WeaponRecord {
+            flags: crate::combat::weapon::PASSES_SHIELDS,
+            ..blaster()
+        };
+        for (record, passes) in [(piercing, true), (blaster(), false)] {
+            let events = fight_once(record, vec![Ship::at(2, 100.0, 0.0)], 8);
+            let hits = raised(&events);
+            assert_eq!(hits.len(), 1, "{hits:?}");
+            assert_eq!(hits[0].3, passes);
+        }
+    }
+
+    #[test]
+    fn a_shockwave_raises_a_hit_of_no_weapon_at_the_wreck_on_each_ship_it_hurts() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            wreck(WRECK, 200.0, 0.0, 0.0),
+            holding(1, 40.0, 0.0, 100.0, 300.0, 300.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let hits = raised(&combat.take_events());
+        assert_eq!(hits, [(A, None, Vec2::ZERO, false)]);
+    }
+
+    #[test]
+    fn the_escape_pod_and_the_classes_after_it_raise_no_hit() {
+        let shell = WeaponRecord {
+            explod_type: 0,
+            blast_radius: 30,
+            ..blaster()
+        };
+        let after = ShipId(ESCAPE_POD_SHIP.0 + 1);
+        for ship_type in [ESCAPE_POD_SHIP, after] {
+            // A blast reaches it, and a beam the class after the pod.
+            let events = fight_once(
+                shell,
+                vec![
+                    Ship::at(4, 100.0, 0.0),
+                    pod(Ship::at(3, 100.0, 25.0), ship_type),
+                ],
+                6,
+            );
+            let ships: Vec<ShipRef> = raised(&events).iter().map(|hit| hit.0).collect();
+            assert_eq!(ships, [ShipRef::Npc(NpcId(4))], "{ship_type:?}");
+            let events = fight_once(laser(), vec![pod(Ship::at(2, 100.0, 0.0), after)], 5);
+            assert_eq!(raised(&events), [], "{ship_type:?}");
+            let mut combat = Combat::default();
+            let mut ships = [
+                wreck(WRECK, 200.0, 0.0, 0.0),
+                pod(holding(1, 40.0, 0.0, 100.0, 300.0, 300.0), ship_type),
+            ];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(raised(&combat.take_events()), [], "{ship_type:?}");
+        }
+    }
+
+    /// The bursts of particles among `events`, in order.
+    fn bursts(events: &[CombatEvent]) -> Vec<ParticleBurst> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Particles(burst) => Some(burst),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `record` throwing off [`rock_gun`]'s particles where it hits.
+    fn spraying(record: WeaponRecord) -> WeaponRecord {
+        let gun = rock_gun();
+        WeaponRecord {
+            hit_particles: gun.hit_particles,
+            hit_part_vel: gun.hit_part_vel,
+            hit_part_life: gun.hit_part_life,
+            hit_part_color: gun.hit_part_color,
+            ..record
+        }
+    }
+
+    /// [`rock_gun`]'s burst at `at`, its speed varied by `variation`.
+    fn sprayed(at: Vec2, variation: u32) -> ParticleBurst {
+        ParticleBurst {
+            at,
+            speed: (150.0_f64 * 0.01) as f32,
+            variation,
+            life: (30, 37),
+            color: 0x00FF_8000,
+            count: 5,
+            spread: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_shots_contact_hit_on_a_ship_sprays_its_particles_where_it_met_it() {
+        let events = fight_once(spraying(blaster()), vec![Ship::at(2, 100.0, 0.0)], 8);
+        let seen = bursts(&events);
+        assert_eq!(seen.len(), 1, "{events:?}");
+        assert!(within(seen[0].at, Vec2::new(84.0, 0.0)), "{:?}", seen[0]);
+        assert_eq!(seen[0], sprayed(seen[0].at, 20));
+    }
+
+    #[test]
+    fn a_shots_proximity_hit_on_a_ship_sprays_its_particles_where_the_shot_is() {
+        let events = fight_once(spraying(fast_gun(30)), vec![Ship::at(2, 40.0, 30.0)], 1);
+        let seen = bursts(&events);
+        assert_eq!(seen.len(), 1, "{events:?}");
+        let hits = raised(&events);
+        assert_eq!(seen[0], sprayed(hits[0].2, 20), "at the meeting");
+    }
+
+    #[test]
+    fn a_beam_tick_sprays_its_particles_at_its_end_varied_25_percent() {
+        let events = fight_once(spraying(laser()), vec![Ship::at(2, 100.0, 0.0)], 5);
+        let seen = bursts(&events);
+        assert_eq!(seen.len(), 3, "a burst a tick: {events:?}");
+        for burst in seen {
+            assert!(within(burst.at, Vec2::new(85.0, 0.0)), "{burst:?}");
+            assert_eq!(burst, sprayed(burst.at, 25));
+        }
+    }
+
+    #[test]
+    fn a_planet_type_shots_hit_on_a_stellar_sprays_its_particles() {
+        let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+        let (_, _, events, _) = shoot_once(
+            spraying(planet_gun()),
+            Vec::new(),
+            &mut stellars,
+            &Arsenal::default(),
+            7,
+        );
+        let seen = bursts(&events);
+        assert_eq!(seen.len(), 1, "{events:?}");
+        let at = explosions(&events)[0].0;
+        assert_eq!(seen[0], sprayed(at, 20), "where it exploded");
+    }
+
+    #[test]
+    fn a_weapon_without_hit_particles_sprays_none() {
+        let events = fight_once(blaster(), vec![Ship::at(2, 100.0, 0.0)], 8);
+        assert_eq!(raised(&events).len(), 1, "it hit");
+        assert_eq!(bursts(&events), []);
+        let events = fight_once(laser(), vec![Ship::at(2, 100.0, 0.0)], 5);
+        assert_eq!(bursts(&events), []);
+    }
+
+    #[test]
+    fn the_ships_a_blast_reaches_spray_no_particles_of_their_own() {
+        let shell = WeaponRecord {
+            explod_type: 0,
+            blast_radius: 30,
+            ..spraying(blaster())
+        };
+        let events = fight_once(
+            shell,
+            vec![Ship::at(2, 100.0, 0.0), Ship::at(3, 100.0, 25.0)],
+            6,
+        );
+        assert_eq!(raised(&events).len(), 2, "B hit, C blasted");
+        assert_eq!(bursts(&events).len(), 1, "{events:?}");
+    }
+
+    /// Where each shot fizzled among `events`, in order.
+    fn fizzles(events: &[CombatEvent]) -> Vec<Vec2> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Fizzled { at } => Some(at),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// [`blaster`] of `explod_type` living 3 ticks at 10 pixels a tick,
+    /// under `flags`.
+    fn short_shot(explod_type: i16, flags: u16) -> WeaponRecord {
+        WeaponRecord {
+            count: 3,
+            speed: 1000,
+            explod_type,
+            flags,
+            ..blaster()
+        }
+    }
+
+    #[test]
+    fn a_shot_that_ends_its_life_without_detonating_fizzles_where_it_is() {
+        for explod_type in [1, 500, 1014] {
+            let events = fight_once(short_shot(explod_type, 0), Vec::new(), 4);
+            let seen = fizzles(&events);
+            assert_eq!(seen.len(), 1, "{explod_type}: {events:?}");
+            assert!(within(seen[0], Vec2::new(30.0, 0.0)), "{seen:?}");
+            assert!(sizes(&events).is_empty(), "{explod_type}: no explosion");
+        }
+    }
+
+    #[test]
+    fn a_shot_of_explod_type_0_or_below_never_fizzles() {
+        for explod_type in [0, -1] {
+            let events = fight_once(short_shot(explod_type, 0), Vec::new(), 4);
+            assert_eq!(fizzles(&events), [], "{explod_type}");
+        }
+    }
+
+    #[test]
+    fn a_detonating_shot_explodes_and_does_not_fizzle() {
+        let events = fight_once(short_shot(1, 0x8000), Vec::new(), 4);
+        assert_eq!(fizzles(&events), []);
+        assert_eq!(sizes(&events).len(), 1, "it exploded");
+    }
+
+    #[test]
+    fn a_shot_that_hits_never_fizzles() {
+        let events = fight_once(
+            WeaponRecord {
+                explod_type: 1,
+                ..blaster()
+            },
+            vec![Ship::at(2, 100.0, 0.0)],
+            16,
+        );
+        assert_eq!(raised(&events).len(), 1, "it hit");
+        assert_eq!(fizzles(&events), []);
+    }
+
+    #[test]
+    fn a_missile_point_defence_destroys_never_fizzles() {
+        let [defender, attacker] = missile_attack(quad());
+        let missile = WeaponRecord {
+            speed: 500,
+            explod_type: 1,
+            ..missile()
+        };
+        let mut ships = [defender, attacker.armed(drawn(missile, 18))];
+        let mut combat = Combat::default();
+        let mut events = Vec::new();
+        for _ in 0..30 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[1].trigger = QUIET;
+            events.extend(combat.take_events());
+        }
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::ShotDown { .. })),
+            "{events:?}"
+        );
+        assert_eq!(fizzles(&events), []);
     }
 }

@@ -243,8 +243,8 @@ impl Explosion {
     }
 }
 
-/// The particles a weapon's hit on an asteroid throws off (see
-/// [`asteroid_hit`](super::asteroid_hit)): its `HitParticles`,
+/// The particles a weapon's hit throws off (see
+/// [`asteroid_hit::hit_burst`](super::asteroid_hit::hit_burst)): its `HitParticles`,
 /// `HitPartVel`, `HitPartLife` and `HitPartColor`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HitParticles {
@@ -286,6 +286,11 @@ pub struct WeaponSpec {
     pub inaccuracy: u32,
     /// The explosion where it hits or detonates, if any.
     pub explosion: Option<Explosion>,
+    /// Whether a shot of it that ends its life without detonating fizzles
+    /// out in `bööm` 128 where it is: its raw `ExplodType` above none
+    /// (`_HandleShot` @0x36149-0x36175), so a type of 64-999, which shows
+    /// no [`explosion`](Self::explosion), fizzles too.
+    pub fizzles: bool,
     /// How near a ship sets its shots off, in pixels.
     pub prox_radius: f32,
     /// How far its blast reaches, in pixels; none for no blast.
@@ -375,8 +380,8 @@ pub struct WeaponSpec {
     /// ([`WeaponRecord::frame`]): the box point defence meets missiles by
     /// ([`defence`](super::defence)).
     pub frame: Option<FrameSize>,
-    /// The particles its hit on an asteroid throws off; none without a
-    /// `HitParticles` above none.
+    /// The particles its hit on a ship, an asteroid or a stellar throws
+    /// off; none without a `HitParticles` above none.
     pub hit_particles: Option<HitParticles>,
 }
 
@@ -555,6 +560,7 @@ impl WeaponSpec {
             ammo_type: record.ammo_type,
             inaccuracy: count(record.inaccuracy),
             explosion: Explosion::decode(record.explod_type),
+            fizzles: record.explod_type > 0,
             prox_radius: ticks(record.prox_radius),
             blast_radius: ticks(record.blast_radius),
             beam_length: ticks(record.beam_length),
@@ -1522,6 +1528,26 @@ mod tests {
             (1064, None),
         ] {
             assert_eq!(Explosion::decode(raw), explosion, "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_weapon_fizzles_for_any_explod_type_above_none_shown_or_not() {
+        for (explod_type, fizzles) in [
+            (-1, false),
+            (0, false),
+            (1, true),
+            (63, true),
+            (64, true),
+            (999, true),
+            (1014, true),
+            (i16::MIN, false),
+        ] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                explod_type,
+                ..light_blaster()
+            });
+            assert_eq!(spec.fizzles, fizzles, "{explod_type}");
         }
     }
 

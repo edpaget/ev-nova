@@ -67,9 +67,15 @@ use crate::rulebook::RuleSource;
 /// (`_AdjustedAccel` and `_SpeedLimit`'s 2.0, @0x36921-0x36996).
 pub const PUSH_TOP_SPEED: f32 = 2.0;
 
-/// How far, in percent, a hit particle's speed varies either way
-/// (@0x366a0-0x36701).
+/// How far, in percent, a shot's hit particle's speed varies either way,
+/// on an asteroid (@0x366a0-0x36701), a ship (`_HandleShipHit`
+/// @0x36b44-0x36bae) or a stellar (`_CheckShotProximities`
+/// @0x3734d-0x373b4).
 pub const HIT_PART_VARIATION: u32 = 20;
+
+/// How far, in percent, a beam's hit particle's speed varies either way
+/// on a ship (the 0x19 of `_HandleBeams` @0x310eb-0x31152).
+pub const BEAM_HIT_PART_VARIATION: u32 = 25;
 
 /// A hit particle's most life over its least (the 1.25 @0xdd5c8).
 pub const HIT_PART_LIFE_SPAN: f64 = 1.25;
@@ -191,11 +197,15 @@ pub fn push(velocity: Vec2, heading: f32, impact: f32, mass: i16) -> Vec2 {
     speed_limit(pushed, PUSH_TOP_SPEED)
 }
 
-/// The burst of a hit's `particles` at `at` (@0x366a0-0x36701): their
-/// speed varied by [`HIT_PART_VARIATION`] percent, their life from
-/// `HitPartLife` to its whole × [`HIT_PART_LIFE_SPAN`], all at `at`.
+/// The burst of a hit's `particles` at `at`: their speed varied by
+/// `variation` percent, their life from `HitPartLife` to its whole ×
+/// [`HIT_PART_LIFE_SPAN`], all at `at`, as every hit's `_SpawnParticles`
+/// call passes them: a shot's on an asteroid (@0x366a0-0x36701), a ship
+/// (@0x36b44-0x36bae) or a stellar (@0x3734d-0x373b4), at
+/// [`HIT_PART_VARIATION`], and a beam's on a ship (@0x310eb-0x31152), at
+/// [`BEAM_HIT_PART_VARIATION`].
 #[must_use]
-pub fn hit_burst(at: Vec2, particles: &HitParticles) -> ParticleBurst {
+pub fn hit_burst(at: Vec2, particles: &HitParticles, variation: u32) -> ParticleBurst {
     // A whole `u32` times 1.25, truncated: within a `u32` for any life
     // an `i16` gives.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -203,7 +213,7 @@ pub fn hit_burst(at: Vec2, particles: &HitParticles) -> ParticleBurst {
     ParticleBurst {
         at,
         speed: particles.speed,
-        variation: HIT_PART_VARIATION,
+        variation,
         life: (particles.life, most),
         color: particles.color,
         count: particles.count,
@@ -508,7 +518,7 @@ mod tests {
         };
         let at = Vec2::new(5.0, -7.0);
         assert_eq!(
-            hit_burst(at, &particles),
+            hit_burst(at, &particles, HIT_PART_VARIATION),
             ParticleBurst {
                 at,
                 speed: 2.5,
@@ -523,8 +533,20 @@ mod tests {
             life: 3,
             ..particles
         };
-        assert_eq!(hit_burst(at, &short).life, (3, 3));
+        assert_eq!(hit_burst(at, &short, HIT_PART_VARIATION).life, (3, 3));
         assert_eq!(HIT_PART_LIFE_SPAN, 1.25);
+    }
+
+    #[test]
+    fn a_beams_burst_varies_its_speed_25_percent_with_a_shots_life() {
+        let particles = HitParticles {
+            count: 6,
+            speed: 2.5,
+            life: 30,
+            color: 0x00FF_8000,
+        };
+        let burst = hit_burst(Vec2::ZERO, &particles, BEAM_HIT_PART_VARIATION);
+        assert_eq!((burst.variation, burst.life), (25, (30, 37)));
     }
 
     /// A shot of `firer`'s weapon of `BlastRadius` `radius` and these

@@ -503,10 +503,15 @@ mod tests {
                 .take_combat_events()
                 .into_iter()
                 .filter_map(|event| match event {
-                    CombatEvent::Exploded { at, explosion } => Some((at, explosion)),
+                    CombatEvent::Exploded {
+                        at,
+                        explosion,
+                        size,
+                    } => Some((at, explosion, size)),
                     _ => None,
                 })
                 .collect();
+            // Of no size: `_CreateExplosion(.., 0, 1)` @0x698ef.
             let expected: Vec<_> = boom
                 .map(|boom| {
                     (
@@ -515,6 +520,7 @@ mod tests {
                             boom: BoomId(boom),
                             extra: false,
                         },
+                        0.0,
                     )
                 })
                 .into_iter()

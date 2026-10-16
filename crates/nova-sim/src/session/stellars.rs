@@ -1145,7 +1145,7 @@ mod tests {
 
     /// A planet-type gun firing every tick, 15 pixels a tick, doing 30
     /// mass and 20 energy damage and exploding in `bööm` 130 where it
-    /// hits.
+    /// hits, of a `BlastRadius` of 25.
     fn planet_gun() -> WeaponRecord {
         WeaponRecord {
             count: 30,
@@ -1154,6 +1154,7 @@ mod tests {
             energy_dmg: 20,
             flags2: PLANET_TYPE,
             explod_type: 2,
+            blast_radius: 25,
             ..weapon(128)
         }
     }
@@ -1219,14 +1220,23 @@ mod tests {
 
     /// The explosions among `events` of `bööm` `kind`, where each was.
     fn booms(events: &[CombatEvent], kind: i16) -> Vec<Vec2> {
+        sized_booms(events, kind)
+            .into_iter()
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// The explosions among `events` of `bööm` `kind`, where each was and
+    /// its size.
+    fn sized_booms(events: &[CombatEvent], kind: i16) -> Vec<(Vec2, f32)> {
         events
             .iter()
             .filter_map(|event| match *event {
-                CombatEvent::Exploded { at, explosion }
-                    if Some(explosion) == Explosion::decode(kind) =>
-                {
-                    Some(at)
-                }
+                CombatEvent::Exploded {
+                    at,
+                    explosion,
+                    size,
+                } if Some(explosion) == Explosion::decode(kind) => Some((at, size)),
                 _ => None,
             })
             .collect()
@@ -1532,8 +1542,16 @@ mod tests {
         let mut session = quiet(&catalog);
         assert_eq!(booms(&fire(&mut session, 2), 4), []);
         let events = fire(&mut session, 1);
-        assert_eq!(booms(&events, 4), [Vec2::new(30.0, -40.0)]);
-        assert_eq!(booms(&events, 2).len(), 1, "the shot's own");
+        assert_eq!(
+            sized_booms(&events, 4),
+            [(Vec2::new(30.0, -40.0), 0.0)],
+            "of no size, as `_CreateExplosion(.., 0, 1)` makes it"
+        );
+        let own: Vec<f32> = sized_booms(&events, 2)
+            .into_iter()
+            .map(|(_, size)| size)
+            .collect();
+        assert_eq!(own, [25.0], "the shot's own, of the gun's BlastRadius");
     }
 
     /// [`shooting`]'s session with the ship 200 pixels left of 128's

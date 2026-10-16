@@ -517,16 +517,17 @@ use nova_sim::traffic::gate_entry::enter_level;
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     ALERT_CICN, Allegiance, Assigned, Assignment, AsteroidCatalog, Behaviour, BoardRefusal,
-    Boarding, BoardingRule, Chance, ClassRow, CombatCatalog, CommCatalog, CommNote, Condition,
-    Controls, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal,
-    Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal,
-    LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal,
-    OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal,
-    Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming,
-    ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId,
-    StellarPick, Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog,
-    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    Boarding, BoardingRule, Chance, ClassRow, CombatCatalog, CombatEvent, CommCatalog, CommNote,
+    Condition, Controls, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep, GateKind,
+    GateRefusal, Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help,
+    JumpRefusal, LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires,
+    NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder,
+    OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule,
+    RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, ShipId,
+    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
+    StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal,
+    TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level,
+    lights_level,
 };
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
@@ -549,6 +550,7 @@ use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
     Toggled, escort_command_message, fighters_abandoned_message,
 };
+use super::flash::ShieldFlash;
 use super::floating::{self, FloatingMap, Hit};
 use super::hud::{self, HudState, NavDestination, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
@@ -2100,6 +2102,8 @@ pub struct FlightView<C> {
     effects: Effects,
     /// What the effects are rolled on.
     effects_chance: SharedChance,
+    /// Each ship's shield flash while its timer runs.
+    flashes: BTreeMap<ShipRef, ShieldFlash>,
     /// What the HUD's text is measured by, if anything.
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
@@ -2389,6 +2393,7 @@ impl<
             codes: BTreeMap::new(),
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
+            flashes: BTreeMap::new(),
             metrics: None,
             escort_menu: EscortMenu::default(),
             ui_sounds: Vec::new(),
@@ -3122,10 +3127,25 @@ impl<
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
                     let chance = &mut self.effects_chance;
                     self.effects.step(&dying, player, &self.looks, chance);
-                    let scene = Scene { player };
+                    let debris = session.rules().source_for(RuleKey::ShipDebris);
+                    let scene = Scene {
+                        player,
+                        debris: debris == RuleSource::Bible,
+                    };
                     for event in session.take_combat_events() {
+                        if let CombatEvent::Hit {
+                            ship,
+                            passes_shields,
+                            ..
+                        } = event
+                        {
+                            self.flashes.entry(ship).or_default().hit(passes_shields);
+                        }
                         self.effects.apply(&event, &scene, &self.looks, chance);
                     }
+                    // After the pass's hits, as `_DamageShip` runs before
+                    // `_HandleShipDisplay` in `_DoPlayGameWork`.
+                    step_flashes(&mut self.flashes, session);
                 }
             }
             if let Some(scene) = &mut self.scene {
@@ -3403,6 +3423,7 @@ impl<
         self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
+        self.flashes.clear();
         self.read_npc_sheets();
     }
 
@@ -3658,6 +3679,7 @@ impl<
                 self.pending_landing = Some(stellar);
                 self.message = None;
                 self.effects.clear();
+                self.flashes.clear();
                 self.redraw_status();
             }
             Ok(LandPress::AtGate {
@@ -5782,6 +5804,16 @@ impl<C> FlightView<C> {
         &self.effects
     }
 
+    /// `ship`'s shield-flash timer as the last frame showed it
+    /// ([`ShieldFlash::shown`]): 32 on the frame of a hit, then a frame
+    /// less each frame; none once it has run out, or with no hit. Once the
+    /// shän shield layer is drawn (rdm:phase/ship-handling-fidelity/phase-10),
+    /// the layer shows it at [`ShieldFlash::step`]'s level.
+    #[must_use]
+    pub fn shield_flash(&self, ship: ShipRef) -> Option<f32> {
+        self.flashes.get(&ship).map(ShieldFlash::shown)
+    }
+
     /// The shots in flight, each where it is drawn: `alpha` of the way
     /// from where it was a step ago, as the ships are.
     fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
@@ -6466,6 +6498,31 @@ fn placeholder_size() -> (u32, u32) {
 /// The simulation's `v` as a view point.
 fn point(v: Vec2) -> Point {
     Point::new(v.x, v.y)
+}
+
+/// Steps each ship's shield flash among `flashes` a frame by its shield
+/// in `session` ([`ShieldFlash::step`]), dropping the flashes of ships no
+/// longer in the system and those run out.
+///
+/// No class has a shield layer yet: the shän shield layer is
+/// rdm:phase/ship-handling-fidelity/phase-10's, and no stock `shän` has
+/// one, so each flash only runs down.
+fn step_flashes(flashes: &mut BTreeMap<ShipRef, ShieldFlash>, session: &Session) {
+    let shield = |ship: ShipRef| match ship {
+        ShipRef::Player => Some(session.reserves().shield),
+        ShipRef::Npc(id) => session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .map(|npc| npc.reserves.shield),
+    };
+    flashes.retain(|&ship, flash| {
+        let Some(gauge) = shield(ship) else {
+            return false;
+        };
+        flash.step(gauge.now, gauge.max, false);
+        flash.shown() > 0.0
+    });
 }
 
 /// The ships in `session` breaking up, each with its sprite's width from
@@ -16506,6 +16563,73 @@ mod tests {
             combat_sounds(&mut view).contains(&heard),
             "the explosion is heard: {heard:?}"
         );
+    }
+
+    #[test]
+    fn an_npc_destroyed_under_the_originals_debris_reading_scatters_none() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        let rules = Rulebook::default().with_override(RuleKey::ShipDebris, RuleSource::Engine);
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_rules(rules);
+        tap(&mut view, Key::Tab);
+        view.input(&key(FIRE_KEY, true));
+        for _ in 0..10 {
+            view.tick(TICK);
+            if view.session().expect("flying").npcs().is_empty() {
+                break;
+            }
+        }
+        assert!(view.session().expect("flying").npcs().is_empty());
+        let effects = view.effects();
+        assert_eq!(effects.explosions().len(), 1, "its Explode2 still");
+        assert_eq!(effects.explosions()[0].boom, BoomId(128));
+        assert_eq!(effects.particles(), [], "no debris");
+    }
+
+    /// [`armed`] with a blaster whose hits throw off 5 orange particles
+    /// of `HitPartLife` 30, flown once at NPC 0 ahead: the flight on the
+    /// tick its shot hits, and the NPC.
+    fn hit_once() -> (View, ShipRef) {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].energy_dmg = 1;
+        catalog.weapons[0].explod_type = -1;
+        catalog.weapons[0].hit_particles = 5;
+        catalog.weapons[0].hit_part_vel = 100;
+        catalog.weapons[0].hit_part_life = 30;
+        catalog.weapons[0].hit_part_color = 0x00FF_8000;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        for _ in 0..20 {
+            if view.shield_flash(npc).is_some() {
+                return (view, npc);
+            }
+            view.tick(TICK);
+        }
+        panic!("never hit: {:?}", view.session().expect("flying").npcs());
+    }
+
+    #[test]
+    fn an_npc_hit_flashes_its_shield_32_on_the_tick_of_the_hit_then_31() {
+        let (mut view, npc) = hit_once();
+        assert_eq!(view.shield_flash(npc), Some(32.0));
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), Some(31.0));
+        assert_eq!(view.shield_flash(ShipRef::Player), None, "not hit");
+    }
+
+    #[test]
+    fn a_hit_with_hit_particles_sprays_them_on_the_npc_in_its_colour() {
+        let (view, _) = hit_once();
+        let orange = crate::Color::rgba(0xFF, 0x80, 0x00, 255);
+        let particles = view.effects().particles();
+        assert_eq!(particles.len(), 5, "{particles:?}");
+        assert!(particles.iter().all(|piece| piece.color == orange));
     }
 
     /// [`armed`] with a blaster whose shots detonate after a tick.
