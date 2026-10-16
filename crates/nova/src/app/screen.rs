@@ -1425,13 +1425,22 @@ impl AppScreen {
         self.missions.as_mut()
     }
 
-    /// Drops the mission dialogs over flight once nothing is open,
-    /// keeping their sounds, and begins the death's fade if the hold
-    /// has expired ([`AppScreen::fade_once_dialogs_close`]).
+    /// Tells flight of each mission text over flight closed or dropped
+    /// since it was last told ([`MissionDialogs::take_texts_closed`]), so
+    /// it lets go of the bar a person's offer answered over flight holds
+    /// under them ([`FlightView::close_mission_text`]); then drops the
+    /// mission dialogs over flight once nothing is open, keeping their
+    /// sounds, and begins the death's fade if the hold has expired
+    /// ([`AppScreen::fade_once_dialogs_close`]).
     ///
     /// What was pressed under the last movie is dropped: flight reads its
     /// keys as held, and the router lets go of them as the dialogs open.
     fn drop_closed_missions(&mut self) {
+        if let (Some(missions), Some(flight)) = (&mut self.missions, &mut self.flight) {
+            for _ in 0..missions.take_texts_closed() {
+                flight.close_mission_text();
+            }
+        }
         if let Some(missions) = &mut self.missions
             && !missions.is_open()
         {
@@ -2205,9 +2214,11 @@ impl AppScreen {
     /// `BriefText` an `S` accepted, the texts of a person's offer
     /// accepted or refused over flight), first cancelling flight's
     /// pointer gesture and letting go of its keys (their releases will go
-    /// to the texts), as any dialog over flight does. Without dialogs,
-    /// those in flight are dropped, as the spaceport drops them without
-    /// its template. On any other side they stay queued in the session.
+    /// to the texts), as any dialog over flight does; flight hears of each
+    /// as it closes or is dropped ([`AppScreen::drop_closed_missions`]).
+    /// Without dialogs, those in flight are dropped, as the spaceport
+    /// drops them without its template; no offer dialog shows then, so
+    /// none holds the bar. On any other side they stay queued in the session.
     /// An offer's movies come in the places the session queued them.
     /// Over the spaceport, the texts it closed or dropped are told to
     /// flight first and last (`close_mission_texts`).
@@ -12518,6 +12529,11 @@ pub(super) mod tests {
     /// from a ship on every visit) in place of the comm dialog; the
     /// mission's offer text, `dësc` 4000, has `Graphic` [`SHOWN_GRAPHIC`].
     fn person_offer_data() -> Rc<GameData> {
+        loaded(&person_offer_fork(|_| {}))
+    }
+
+    /// [`person_offer_data`]'s fork, its `mïsn` 128 fitted by `fit`.
+    fn person_offer_fork(fit: impl FnOnce(&mut Vec<u8>)) -> ForkBuilder {
         let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
             for (i, value) in values.iter().enumerate() {
                 bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -12560,7 +12576,8 @@ pub(super) mod tests {
         put(&mut mission, 0x0A, &[100]);
         put(&mut mission, 0x34, &[-1]);
         put(&mut mission, 0x58, &[-1]);
-        let fork = ForkBuilder::new()
+        fit(&mut mission);
+        ForkBuilder::new()
             .resource(Ship::TYPE, 128, Some(b"First"), &ship(10))
             .resource(Ship::TYPE, 129, Some(b"Hauler"), &ship(3))
             .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
@@ -12575,8 +12592,80 @@ pub(super) mod tests {
                 128 + 3872,
                 Some(b"Offer"),
                 &pictured_desc_of("Ride along.", SHOWN_GRAPHIC),
-            );
-        loaded(&fork)
+            )
+    }
+
+    /// [`person_offer_data`] under the status bar ([`barred`]), where
+    /// `mïsn` 128's `BriefText` is `dësc` 5000, "Go.", and its `OnAccept`
+    /// is `G133`, a fuel tank of 100.
+    fn briefing_person_offer_data() -> Rc<GameData> {
+        let mut tank = booster_record(b"");
+        put_i16s(&mut tank, 0x02, &[0]);
+        put_i16s(&mut tank, 0x06, &[12, 100]);
+        let fork = person_offer_fork(|mission| {
+            put_i16s(mission, 0x34, &[5000]);
+            mission[0x15B..0x15F].copy_from_slice(b"G133");
+        })
+        .resource(Outfit::TYPE, 133, Some(b"Tank"), &tank)
+        .resource(Desc::TYPE, 5000, Some(b"Brief"), &desc_of("Go."));
+        loaded(&barred(fork))
+    }
+
+    /// [`PictureDialogs`] without "Desc Dialog" (3003, 3004): mission
+    /// texts are dropped as they come.
+    struct NoTextDialogs;
+
+    impl DialogResources for NoTextDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            if id == DESC_DIALOG || id == PICTURE_DESC_DIALOG {
+                return Err(format!("no DLOG {id}"));
+            }
+            PictureDialogs.dialog_template(id)
+        }
+    }
+
+    /// The router over [`briefing_person_offer_data`] with `dialogs`, in
+    /// the developer's flight, the tank half full, hailing the merchant:
+    /// its offer open.
+    fn hailing_briefer(dialogs: Rc<dyn DialogResources>) -> AppScreen {
+        let mut screen = AppScreen::new(briefing_person_offer_data())
+            .with_dialogs(dialogs, Rc::new(MonoMetrics))
+            .with_behaviour(Rc::new(Idle));
+        fly(&mut screen);
+        edit(
+            &mut screen,
+            PilotEdit::Reserve(nova_sim::Reserve::Fuel, 150.0),
+        );
+        hail(&mut screen);
+        assert_eq!(screen.showing(), Showing::Offer);
+        screen
+    }
+
+    #[test]
+    fn a_persons_brief_shows_over_flights_pre_accept_bar_until_it_closes() {
+        let mut screen = hailing_briefer(Rc::new(PictureDialogs));
+        let half = fuel_width(&drawn(&screen)).expect("some fuel");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::MissionText, "the brief");
+        assert_eq!(
+            fuel_width(&drawn(&screen)),
+            Some(half),
+            "the bar from before OnAccept's tank"
+        );
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight, "closed");
+        let width = fuel_width(&drawn(&screen)).expect("some fuel");
+        assert!(width > half, "live again, the tank's fuel too: {width}");
+    }
+
+    #[test]
+    fn a_persons_brief_dropped_over_flight_lets_go_of_the_bar() {
+        let mut screen = hailing_briefer(Rc::new(NoTextDialogs));
+        let half = fuel_width(&drawn(&screen)).expect("some fuel");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight, "the brief dropped");
+        let width = fuel_width(&drawn(&screen)).expect("some fuel");
+        assert!(width > half, "live: {width}");
     }
 
     #[test]

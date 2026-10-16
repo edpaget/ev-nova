@@ -4417,9 +4417,10 @@ impl<C> FlightView<C> {
     /// ours as the map closes) and on closing the comm dialog
     /// ([`FlightView::hang_up`]), the mission dialog
     /// ([`FlightView::accept_mission`], [`FlightView::refuse_mission`]) and
-    /// the text dialog ([`FlightView::take_mission_texts`]). In port the
-    /// mission dialog's and the text dialog's are held until the texts
-    /// they wait for close ([`FlightView::close_mission_text`]); this
+    /// the text dialog ([`FlightView::take_mission_texts`]). In port, and
+    /// for a person's offer answered over flight, the mission dialog's
+    /// and the text dialog's are held until the texts they wait for close
+    /// ([`FlightView::close_mission_text`]); this
     /// redraw drops any still held, so a text never shows over a later
     /// redraw.
     ///
@@ -4672,6 +4673,9 @@ impl<C> FlightView<C> {
     /// models, or the take-off lets go of it. The take-off's own held nav
     /// shows in flight whatever the mode, in the first frame drawn after
     /// it and to the end of that frame's tick ([`FlightView::took_off`]).
+    /// The snapshot shows in flight whatever the mode, too, while the
+    /// texts of a person's offer answered over flight show
+    /// ([`FlightView::answer_in_flight`]).
     fn nav_shown(&self) -> NavDisplay {
         let docked = self
             .session
@@ -4680,7 +4684,10 @@ impl<C> FlightView<C> {
         match &self.nav_scene {
             Some((_, shown))
                 if self.hud_waits()
-                    && (docked || self.nav_flash.is_some() || self.nav_mode_shown()) =>
+                    && (docked
+                        || !self.bar_steps.is_empty()
+                        || self.nav_flash.is_some()
+                        || self.nav_mode_shown()) =>
             {
                 shown.clone()
             }
@@ -5158,6 +5165,11 @@ impl<C> FlightView<C> {
     /// gauges and nav show as before `OnAccept`, or as its last `ïntf`
     /// change left them, as stock `mïsn` 197's and 320's do.
     ///
+    /// In flight, a person's offer is answered the same way
+    /// ([`FlightView::answer_in_flight`]): the bar is taken before the
+    /// accept and held under its texts, which show over it, and drawn
+    /// live again once the last has closed.
+    ///
     /// # Errors
     ///
     /// The [`AcceptError`] that applies; a session that failed offers
@@ -5167,18 +5179,41 @@ impl<C> FlightView<C> {
         C: StatusBars,
     {
         if !self.docked() {
-            let accepted = match &mut self.session {
-                Ok(session) => session.accept_mission(mission, &mut self.chance),
+            return self.answer_in_flight(|view| match &mut view.session {
+                Ok(session) => session.accept_mission(mission, &mut view.chance),
                 Err(_) => Err(AcceptError::NotOffered),
-            };
-            self.redraw_status();
-            return accepted;
+            });
         }
         self.redraw_before_answer(mission);
         self.run_docked(Then::Redraw, |view| match &mut view.session {
             Ok(session) => session.accept_mission(mission, &mut view.chance),
             Err(_) => Err(AcceptError::NotOffered),
         })
+    }
+
+    /// Answers a person's offer over flight with `answer`, as
+    /// `_OfferOneMission` does from a hail (@0x62293) or a boarding
+    /// (@0x65936). The dialog with a refuse button hides and redraws the
+    /// whole bar first (`_RefreshSAT` @0xa2df8 before the accept, @0xa2e93
+    /// before a refusal's `RefuseText`). The one-button dialog makes no
+    /// such redraw (@0xa2f52-0xa2fba), but flight doesn't tick under the
+    /// comm dialog, so the bar it last drew is the same, and ours redraws
+    /// for both. The answer's texts then show over that bar: the text
+    /// dialog's modal loop draws no bar (`_TextDialogFilter`, and
+    /// `_HandleStatus`'s only caller, `_DoPlayGameWork` @0x4403c, doesn't
+    /// run under it), so `OnAccept`'s writes, or `OnRefuse`'s, show only
+    /// from the text's close (@0xa1f13, @0xa2f09), then the dialog's own
+    /// redraw (@0xa365c), after which flight draws the gauges and nav live
+    /// again ([`FlightView::reserves_shown`], [`FlightView::nav_shown`]).
+    /// The texts' closes come from the app ([`FlightView::close_mission_text`]).
+    fn answer_in_flight<T>(&mut self, answer: impl FnOnce(&mut Self) -> T) -> T
+    where
+        C: StatusBars,
+    {
+        self.redraw_status();
+        let answered = answer(self);
+        self.stage_bar(Vec::new(), Then::Redraw);
+        answered
     }
 
     /// The offer dialog with a refuse button hides and redraws the whole
@@ -5209,7 +5244,10 @@ impl<C> FlightView<C> {
     /// shows over it (@0xa2f04), and its close redraws the bar as the text
     /// noted it (@0xa2f09), before `OnRefuse` (@0xa2f41), whose `C`, `E`
     /// or `H` changing the `ïntf` redraws at its operator; the dialog's
-    /// own redraw comes last ([`FlightView::stage_bar`]).
+    /// own redraw comes last ([`FlightView::stage_bar`]). A person's offer
+    /// refused over flight holds the bar the same way
+    /// ([`FlightView::answer_in_flight`]): under the `RefuseText`, it
+    /// shows as before the refusal.
     ///
     /// # Errors
     ///
@@ -5220,12 +5258,10 @@ impl<C> FlightView<C> {
         C: StatusBars,
     {
         if !self.docked() {
-            let refused = match &mut self.session {
-                Ok(session) => session.refuse_mission(mission, &mut self.chance),
+            return self.answer_in_flight(|view| match &mut view.session {
+                Ok(session) => session.refuse_mission(mission, &mut view.chance),
                 Err(_) => Err(NotOffered),
-            };
-            self.redraw_status();
-            return refused;
+            });
         }
         self.redraw_before_answer(mission);
         self.run_docked(Then::Redraw, |view| match &mut view.session {
@@ -5328,10 +5364,10 @@ impl<C> FlightView<C> {
     /// which a text queued in the take-off's days shows
     /// ([`FlightView::took_off`]). The dialog has then shown the held nav,
     /// and its closing redraws the bar, so the flash ends at the next tick
-    /// ([`NavFlash::UnderText`]). The pre-answer redraws of a person's
-    /// offer answered over flight (`_OfferOneMission` @0xa2df8, @0xa2e93)
-    /// are left out: filed as
-    /// rdm:phase/missions-fidelity/phase-39-docked-text-bar-left-outs.
+    /// ([`NavFlash::UnderText`]). The texts of a person's offer answered
+    /// over flight were staged as it was answered
+    /// ([`FlightView::answer_in_flight`]), so nothing is redrawn for them:
+    /// they show over the bar held from before the answer.
     pub fn take_mission_texts(&mut self) -> Vec<MissionShown>
     where
         C: StatusBars,
@@ -5350,8 +5386,10 @@ impl<C> FlightView<C> {
         let noted = session
             .text_nav()
             .filter(|_| session.texts_queued() > self.nav_texts);
+        let bars = session.text_bars();
+        let staged = !bars.is_empty() && bars.iter().all(|bar| bar.texts <= self.bars_staged);
         let texts = session.take_mission_texts();
-        if !texts.is_empty() {
+        if !texts.is_empty() && !staged {
             self.redraw_status();
             if let Some(noted) = noted {
                 self.nav_scene = Some((noted, self.nav_display(noted)));
@@ -5467,16 +5505,18 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// A docked mission text has closed, the first of those shown that
-    /// had not: the whole bar is redrawn as the text noted it as it was
-    /// queued ([`Session::text_bars`]), as the original's caller of
+    /// A mission text has closed, the first of those shown that had not:
+    /// the whole bar is redrawn as the text noted it as it was queued
+    /// ([`Session::text_bars`]), as the original's caller of
     /// `_ShowTextDialog` runs `_RefreshSAT` once it returns; then at each
     /// `C`, `E` or `H` run after it, before the next text, that changed
-    /// the `ïntf`, as at its operator; and, after the last text of a
-    /// dialog's answer, as the dialog redraws itself (see
-    /// [`FlightView::stage_bar`]). Nothing for a text whose redraws were
-    /// dropped by a whole-bar redraw since, or by leaving the dock, or for
-    /// one shown over flight.
+    /// the `ïntf`, as at its operator, the bar's graphic with it
+    /// ([`FlightView::follow_bar`]); and, after the last text of a run,
+    /// what the dialog or order that ran it draws then (see
+    /// [`FlightView::stage_bar`]). Docked, or for a person's offer
+    /// answered over flight ([`FlightView::answer_in_flight`]). Nothing
+    /// for a text whose redraws were dropped by a whole-bar redraw since,
+    /// or by leaving the dock, or for any other text shown over flight.
     pub fn close_mission_text(&mut self)
     where
         C: StatusBars,
@@ -5758,8 +5798,11 @@ impl<C> FlightView<C> {
     /// taken at their last redraw, as the original's port draws them
     /// only at its redraws (`_statusRedraw[1]` and `[4]`): an outfitter
     /// order or a ship purchase under the same `ïntf` leaves them as they
-    /// were (@0x5c59d, @0x5d324). In flight, by the other reading, or
-    /// before the first redraw, the gauges as they are now
+    /// were (@0x5c59d, @0x5d324). In flight the same while the texts of
+    /// a person's offer answered over flight show
+    /// ([`FlightView::answer_in_flight`]), as the text dialog's modal loop
+    /// draws no bar. Otherwise in flight, by the other reading, or before
+    /// the first redraw, the gauges as they are now
     /// ([`FlightView::reserves`]): flight's every frame marks them as
     /// they change.
     fn reserves_shown(&self) -> Reserves {
@@ -5768,7 +5811,7 @@ impl<C> FlightView<C> {
             .as_ref()
             .is_ok_and(|session| session.landed().is_some());
         match self.reserves_scene {
-            Some(held) if docked && self.hud_waits() => held,
+            Some(held) if (docked || !self.bar_steps.is_empty()) && self.hud_waits() => held,
             _ => self.reserves(),
         }
     }
@@ -23142,6 +23185,88 @@ mod tests {
             Err(NotOffered),
             "answered"
         );
+    }
+
+    /// How a person's offer is answered over flight: accepted or refused
+    /// in the dialog with a refuse button, or accepted in the one-button
+    /// dialog.
+    const FLIGHT_ANSWERS: [(&str, bool, bool); 3] = [
+        ("an accept", false, false),
+        ("a refusal", false, true),
+        ("a one-button accept", true, false),
+    ];
+
+    /// [`offering`] Ace's refusable (or `unrefusable`) mission 130, with
+    /// a `BriefText` and a `RefuseText`, whose `OnAccept` (or, `refuse`,
+    /// `OnRefuse`) is `G200`, a tank: hailed and its offer taken, in
+    /// flight, the HUD's cadence read as `cadence` says.
+    fn offered_in_flight(cadence: RuleSource, unrefusable: bool, refuse: bool) -> View {
+        let mut catalog = offering(0, Some("Help?"), unrefusable);
+        catalog.outfits = vec![shipbuying().outfits[0].clone()];
+        let script = nova_sim::Script::parse("G200");
+        let mission = &mut catalog.missions[0];
+        if refuse {
+            mission.on_refuse = script;
+        } else {
+            mission.on_accept = script;
+        }
+        let texts = &mut catalog.mission_texts[0];
+        texts.brief = Some("Go.".to_owned());
+        texts.refuse = Some("No.".to_owned());
+        let (_, chance) = scripted(&ACE[..4]);
+        let rules = Rulebook::default().with_override(RuleKey::HudCadence, cadence);
+        let mut view = FlightView::new(catalog)
+            .with_rules(rules)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        tap(&mut view, TARGET_KEY);
+        tap(&mut view, HAIL_KEY);
+        view.take_offer().expect("offered");
+        view
+    }
+
+    #[test]
+    fn an_offer_answered_over_flight_shows_its_text_over_the_pre_answer_bar() {
+        for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
+            let mut view = offered_in_flight(RuleSource::Engine, unrefusable, refuse);
+            let before = view.reserves();
+            if refuse {
+                assert_eq!(view.refuse_mission(MissionId(130)), Ok(()), "{what}");
+            } else {
+                assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
+            }
+            assert_eq!(
+                view.reserves().fuel.max,
+                before.fuel.max + 100.0,
+                "{what}: G200 ran"
+            );
+            let nav = view.nav_shown();
+            assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
+            assert_eq!(view.reserves_shown(), before, "{what}: under the text");
+            assert_eq!(view.nav_shown(), nav, "{what}: the nav held too");
+            view.close_mission_text();
+            assert_eq!(
+                view.reserves_shown(),
+                view.reserves(),
+                "{what}: live once it closed"
+            );
+            assert!(view.bar_steps.is_empty(), "{what}: let go");
+        }
+    }
+
+    #[test]
+    fn under_the_bible_cadence_flights_gauges_stay_live_under_an_offers_text() {
+        for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
+            let mut view = offered_in_flight(RuleSource::Bible, unrefusable, refuse);
+            if refuse {
+                assert_eq!(view.refuse_mission(MissionId(130)), Ok(()), "{what}");
+            } else {
+                assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
+            }
+            assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
+            assert_eq!(view.reserves_shown(), view.reserves(), "{what}: live");
+        }
     }
 
     #[test]
