@@ -88,7 +88,26 @@
 //!   `_HandleAlertSprite` (@0x44518), which steps the Red Alert's blink.
 //!   So the second pass plays no mission sound, rolls no arrivals, decides
 //!   nothing, takes no scan, hails nothing and does not move the AI's
-//!   timer; strikes it raises wait for the next advance pass's answers.
+//!   timer.
+//! - The strikes the second pass raises are answered in that pass:
+//!   `_HandleShot` (0x35586-0x361ab) takes no pass argument and calls
+//!   `_DamageShip` (@0x35855, @0x36106), and neither reads `_doubleTime`,
+//!   so `_DamageShip`'s whole reaction block (@0x3b44d-0x3bf5e: target and
+//!   provocation, the gate's wait cut @0x3be6e-0x3be7c,
+//!   `_AIMakeShipAttackPlayer` @0x3be66 and its quote,
+//!   `_ShowPersonHailQuote` @0x89ce1) runs there as on the advance pass.
+//!   Its caller answers them after this pass
+//!   ([`Session::answer_strikes`]) and says the attack quotes
+//!   ([`Session::tick_quotes_again`]), before the frame is drawn. The
+//!   block plays no sound and tells no comm.
+//! - `_HandleShip`'s hail-quote block (@0x33f0f-0x33fba) has no pass
+//!   test, so each eligible person draws `Rand(140)` on both passes
+//!   ([`Session::tick_quotes_again`], after the attack quotes). The
+//!   display timer (0x3b5020) is counted down only by `_HandleComm`
+//!   (@0x301ce-0x301de), on the advance pass, so after any quote on the
+//!   advance pass only a quote due now (forced, @0x33f65-0x33f6c) can
+//!   follow on the second; otherwise each frame's odds of a random quote
+//!   double. The quote clock moves once a frame, on the advance pass.
 //! - `_HandleBeams(arg)` (@0x4452f-0x4453d): on the second pass a beam
 //!   only ages (see [`GamePass`]).
 //! - The warp's clock is `TickCount` less the warp stage's stamp (see the
@@ -174,7 +193,10 @@ impl Session {
     /// pass's calls stand still; a jump that begins on it stops it there,
     /// and so does the escape pod's countdown running out on it, the
     /// rescue then due ([`Session::rescue_if_due`], which its caller asks
-    /// after this pass as after the advance pass's tick).
+    /// after this pass as after the advance pass's tick). Its caller
+    /// then answers the pass's strikes ([`Session::answer_strikes`]) and
+    /// runs the second-pass quote roll, the attack quotes they raise
+    /// first ([`Session::tick_quotes_again`]).
     pub fn tick_again(
         &mut self,
         controls: Controls,
