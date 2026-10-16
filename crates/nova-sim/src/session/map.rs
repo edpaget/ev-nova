@@ -557,6 +557,33 @@ mod tests {
     // The drawing.
 
     #[test]
+    fn the_drawing_pairs_links_as_the_rulebook_says() {
+        // 132 lists 131 one way; 131, lower, qualifies first.
+        let mut catalog = coloured();
+        catalog.star_map[2].links = vec![SystemId(131)];
+        for source in RuleSource::ALL {
+            let rules = Rulebook::default().with_override(RuleKey::MapLinkPairing, source);
+            let mut session = flown(&catalog, rules);
+            for system in [131, 132] {
+                session.pilot.explore(SystemId(system));
+            }
+            session.rework_known();
+            let links: Vec<(i16, i16)> = session
+                .map_drawing(None, &[])
+                .links
+                .iter()
+                .map(|link| (link.from.0, link.to.0))
+                .collect();
+            let one_way = links.contains(&(132, 131));
+            assert_eq!(
+                one_way,
+                source == RuleSource::Bible,
+                "{source:?}: {links:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_drawing_reads_the_sessions_known_set_course_and_rules() {
         let catalog = coloured();
         let mut session = flown(&catalog, Rulebook::default());
