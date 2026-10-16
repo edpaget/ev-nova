@@ -146,11 +146,6 @@
 //!   ours opens the map only from the bar, under which the bar's restore
 //!   overwrites that put-back unseen. Filed as
 //!   rdm:phase/hud-fidelity-followups/phase-1-map-key-from-the-other-port-screens.
-//! - Mission info opened from the outfitter (@0x5bf8d), the exchange
-//!   (@0x5e0d4), the shipyard (@0x5f48d), the ship description (@0x5b9f3)
-//!   or an offer (@0xa3344), whose close redraws (@0x9e769): ours opens it
-//!   only from the spaceport, the bar and the computer. Moved to
-//!   rdm:phase/missions-fidelity/phase-32-shop-mission-info-close-redraw.
 //! - Mission info's Abort with nothing selected (@0x9e51d-0x9e557): ours
 //!   greys Abort unless the selected mission can be aborted.
 //! - A screen whose dialog is missing: the original never shows the bar,
@@ -6756,6 +6751,155 @@ mod tests {
             close(&mut view);
             assert!(view.take_status_refresh(), "{what}");
             assert!(!view.take_status_refresh(), "{what}: once");
+        }
+    }
+
+    /// `view` with mission screens laid out by `info`: the shops' and
+    /// panels' fixtures come without them.
+    fn with_info(view: SpaceportView, info: Result<DialogTemplate, String>) -> SpaceportView {
+        view.with_missions(Ok(computer_template()), info, plain_offers(), plain_texts())
+    }
+
+    /// Each screen that opens mission info over itself: a view with it
+    /// open, given mission info laid out by `info`, and whether it is
+    /// still open.
+    type Opener = (
+        &'static str,
+        fn(Result<DialogTemplate, String>) -> SpaceportView,
+        fn(&SpaceportView) -> bool,
+    );
+
+    /// The outfitter (@0x5bf8d), the exchange (@0x5e0d4), the shipyard
+    /// and the hire screen (@0x5f48d), the ship description of each
+    /// (@0x5b9f3) and an offer over a venue (@0xa3344).
+    const INFO_OPENERS: [Opener; 7] = [
+        (
+            "the exchange",
+            |info| {
+                let mut view = with_info(venues(), info);
+                assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+                click_item(&mut view, 7);
+                view
+            },
+            |view| view.open_trade().is_some(),
+        ),
+        (
+            "the outfitter",
+            |info| {
+                let mut view = with_info(venues(), info);
+                assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+                click_item(&mut view, 8);
+                view
+            },
+            |view| view.open_outfitter().is_some(),
+        ),
+        (
+            "the shipyard",
+            |info| {
+                let mut view = with_info(venues(), info);
+                assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+                click_item(&mut view, 9);
+                view
+            },
+            |view| view.open_shipyard().is_some(),
+        ),
+        (
+            "the hire screen",
+            |info| hiring(with_info(drinking_with_info(), info)),
+            |view| view.open_bar().and_then(BarScreen::hire_screen).is_some(),
+        ),
+        (
+            "the shipyard's description",
+            |info| {
+                let mut view = with_info(shipbuying_with_info(), info);
+                click_item(&mut view, 9);
+                view.input(&key(INFO_KEY));
+                view
+            },
+            |view| {
+                view.open_shipyard()
+                    .is_some_and(|shipyard| shipyard.info_panel().is_some())
+            },
+        ),
+        (
+            "the hire screen's description",
+            |info| {
+                let mut view = hiring(with_info(drinking_with_info(), info));
+                view.input(&key(INFO_KEY));
+                view
+            },
+            |view| {
+                view.open_bar()
+                    .and_then(BarScreen::hire_screen)
+                    .and_then(HireScreen::info_panel)
+                    .is_some()
+            },
+        ),
+        (
+            "an offer over the bar",
+            |info| {
+                let mut view = with_info(venues(), info);
+                assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+                click_item(&mut view, 10);
+                view.tick(FIRST_OFFER_DELAY);
+                assert_eq!(view.take_offer_request(), Some(BAR));
+                view.open_offer(offered());
+                view
+            },
+            |view| view.offer_dialog().is_some(),
+        ),
+    ];
+
+    #[test]
+    fn mission_info_closing_over_each_opener_asks_for_a_status_refresh() {
+        for (what, open, still_open) in INFO_OPENERS {
+            for by_abort in [false, true] {
+                let what = format!("{what}, abort: {by_abort}");
+                let mut view = open(Ok(info_template()));
+                assert!(still_open(&view), "{what}: open");
+                view.input(&key(MISSION_INFO_KEY));
+                assert!(view.take_mission_info_request(), "{what}: asked");
+                view.open_mission_info(actives(if by_abort { 1 } else { 2 }));
+                assert!(view.mission_info().is_some(), "{what}");
+                assert!(!view.take_status_refresh(), "{what}: opening");
+                if by_abort {
+                    view.set_mission_info(actives(0));
+                } else {
+                    view.input(&key(Key::Escape));
+                }
+                assert!(view.mission_info().is_none(), "{what}: closed");
+                assert!(view.take_status_refresh(), "{what}");
+                assert!(!view.take_status_refresh(), "{what}: once");
+                assert!(still_open(&view), "{what}: the opener is back");
+                assert!(!view.take_status_refresh(), "{what}: not while it stays");
+            }
+        }
+    }
+
+    #[test]
+    fn mission_info_without_its_dialog_over_each_opener_asks_for_no_refresh() {
+        for (what, open, still_open) in INFO_OPENERS {
+            for by_abort in [false, true] {
+                let what = format!("{what}, abort: {by_abort}");
+                let mut view = open(Err("no DLOG 1012".to_owned()));
+                view.input(&key(MISSION_INFO_KEY));
+                assert!(view.take_mission_info_request(), "{what}: asked");
+                view.open_mission_info(actives(if by_abort { 1 } else { 2 }));
+                assert!(
+                    view.mission_info()
+                        .and_then(MissionInfoScreen::problem)
+                        .is_some(),
+                    "{what}"
+                );
+                if by_abort {
+                    view.set_mission_info(actives(0));
+                } else {
+                    view.input(&key(Key::Escape));
+                }
+                assert!(view.mission_info().is_none(), "{what}: closed");
+                assert!(!view.take_status_refresh(), "{what} (@0x9e20b)");
+                assert!(still_open(&view), "{what}: the opener is back");
+            }
         }
     }
 

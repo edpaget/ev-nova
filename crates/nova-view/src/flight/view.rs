@@ -4258,18 +4258,20 @@ impl<C> FlightView<C> {
     ///   @0xa395b), the same way.
     /// - The bar (@0x4945e), News (@0x48153), the ship description, the
     ///   shipyard's or the hire screen's (@0x5bac2), player info
-    ///   (@0x5a725) and mission info (@0x9e769), as the app hears from the
-    ///   spaceport; player info and mission info over flight too.
+    ///   (@0x5a725) and mission info (@0x9e769), whatever opened it (the
+    ///   spaceport, the bar, the computer, the outfitter, the exchange,
+    ///   the shipyard, the hire screen, either's ship description or an
+    ///   offer), as the app hears from the spaceport; player info and
+    ///   mission info over flight too.
     ///
     /// The shipyard's name prompt redraws the same way as it closes
     /// ([`FlightView::buy_ship`], [`FlightView::decline_ship`], @0x5eb73),
     /// and so does the bar's map in port ([`FlightView::close_map`],
     /// @0x13bc9). The closings the original redraws at that ours can't
     /// reach (the bar's Gamble text, the map from the other port screens,
-    /// mission info from the shops, the description or an offer,
     /// Preferences' menu command, the shops' faded text dialogs, an OS
-    /// update event) are recorded,
-    /// with their addresses, in the spaceport's module docs
+    /// update event) are recorded, with their addresses, in the
+    /// spaceport's module docs
     /// ([`crate::spaceport::view`]).
     pub fn refresh_status(&mut self) {
         self.redraw_status();

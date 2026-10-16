@@ -11388,6 +11388,49 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn mission_info_closing_over_the_outfitter_redraws_the_bar_held_under_it() {
+        /// [`VenueDialogs`] with the mission info screen.
+        struct InfoDialogs;
+
+        impl DialogResources for InfoDialogs {
+            fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+                if id == INFO_DIALOG {
+                    return Ok(mission_info_template());
+                }
+                VenueDialogs.dialog_template(id)
+            }
+        }
+
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(barred_briefing_data())
+            .with_dialogs(Rc::new(InfoDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        screen.input(&key(Key::Enter, true));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(130)], "accepted");
+        assert!(spaceport(&screen).mission_text().is_none(), "brief closed");
+        let full = fuel_width(&drawn(&screen)).expect("some fuel");
+        edit(
+            &mut screen,
+            PilotEdit::Reserve(nova_sim::Reserve::Fuel, 150.0),
+        );
+        click_port_item(&mut screen, 8);
+        assert!(spaceport(&screen).open_outfitter().is_some(), "open");
+        assert_eq!(fuel_width(&drawn(&screen)), Some(full), "held");
+        screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
+        screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, false));
+        assert!(spaceport(&screen).mission_info().is_some(), "info open");
+        assert_eq!(fuel_width(&drawn(&screen)), Some(full), "not as it opens");
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).mission_info().is_none(), "info closed");
+        assert!(spaceport(&screen).open_outfitter().is_some(), "still open");
+        let width = fuel_width(&drawn(&screen)).expect("some fuel");
+        assert!(width < full, "redrawn as it closes (@0x9e769): {width}");
+    }
+
+    #[test]
     fn a_fuel_tank_bought_in_port_leaves_the_bars_fuel_gauge_until_the_outfitter_closes() {
         let store = MemoryPilots::new();
         let mut screen = landed_outfitter_over(&store, barred_outfitting_data());
