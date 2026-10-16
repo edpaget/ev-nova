@@ -1003,7 +1003,8 @@ impl AppScreen {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        match about_dialog(dialogs, &self.data) {
+        let rules = nova_sim::text_parse::ParseRules::from_rulebook(&self.rules);
+        match about_dialog(dialogs, &self.data, rules) {
             Ok(dialog) => {
                 let below = self.shown_mut();
                 below.cancel_pointer();
@@ -2646,9 +2647,15 @@ fn load_info_text(holder: &mut impl MissionInfoHolder, flight: &mut FlightView<R
     }
 }
 
-fn about_dialog(dialogs: &Dialogs, data: &GameData) -> Result<DescDialog, String> {
+/// The About dialog over `data`'s about text, its conditional text read
+/// by `rules` ([`about_words`]).
+fn about_dialog(
+    dialogs: &Dialogs,
+    data: &GameData,
+    rules: nova_sim::text_parse::ParseRules,
+) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
-    let text = about_words(&data.description(ABOUT_TEXT)?);
+    let text = about_words(&data.description(ABOUT_TEXT)?, rules);
     Ok(DescDialog::new(
         &template,
         &text,
@@ -2658,46 +2665,15 @@ fn about_dialog(dialogs: &Dialogs, data: &GameData) -> Result<DescDialog, String
 }
 
 /// The about text `raw` as `_DoAboutBox` loads it (@0x16021): its
-/// conditional text resolved for [`StartUpPilot`], with no rank
+/// conditional text resolved by `rules` for
+/// [`StartUpPilot`](nova_sim::control::StartUpPilot), with no rank
 /// governments and no draws, as the box has no flight. Its tags are left
 /// as written: the original's `_MungeBriefing` (@0x16035) reads the last
 /// pilot's globals, which
 /// rdm:phase/missions-fidelity/phase-35-text-substitution-second-left-outs
 /// covers.
-fn about_words(raw: &str) -> String {
-    nova_sim::text_parse::conditional_text(
-        raw,
-        &StartUpPilot,
-        nova_sim::text_parse::ParseRules::default(),
-    )
-}
-
-/// The pilot the about box reads with none loaded: the original's
-/// globals as start-up leaves them zeroed, no bit set and gender 0,
-/// female; paid for, as the engine takes the game.
-#[derive(Debug)]
-struct StartUpPilot;
-
-impl nova_sim::control::PilotFacts for StartUpPilot {
-    fn bit(&self, _bit: nova_sim::Bit) -> bool {
-        false
-    }
-
-    fn gender(&self) -> nova_sim::Gender {
-        nova_sim::Gender::Female
-    }
-
-    fn paid(&self, _days: u16) -> bool {
-        true
-    }
-
-    fn has_outfit(&self, _outfit: nova_sim::OutfitId) -> bool {
-        false
-    }
-
-    fn explored(&self, _system: nova_sim::SystemId) -> bool {
-        false
-    }
+fn about_words(raw: &str, rules: nova_sim::text_parse::ParseRules) -> String {
+    nova_sim::text_parse::conditional_text(raw, &nova_sim::control::StartUpPilot, rules)
 }
 
 /// Flight shows only once it has been built.
@@ -4238,14 +4214,32 @@ pub(super) mod tests {
 
     #[test]
     fn the_about_text_reads_its_conditional_text_for_a_pilot_not_yet_loaded() {
-        use nova_sim::control::PilotFacts;
         assert_eq!(
-            about_words("By {G \"him\" \"her\"}{b1 \", set\" \"\"}{P30 \".\" \"!\"} <PN>"),
+            about_words(
+                "By {G \"him\" \"her\"}{b1 \", set\" \"\"}{P30 \".\" \"!\"} <PN>",
+                nova_sim::text_parse::ParseRules::default()
+            ),
             "By her. <PN>"
         );
-        let pilot = StartUpPilot;
-        assert!(!pilot.has_outfit(nova_sim::OutfitId(128)));
-        assert!(!pilot.explored(nova_sim::SystemId(128)));
+    }
+
+    #[test]
+    fn the_about_text_follows_the_apps_rulebook() {
+        let about_only = |text: &str| {
+            loaded(&ForkBuilder::new().resource(Desc::TYPE, ABOUT_TEXT, None, &desc_of(text)))
+        };
+        let mut screen = with_dialogs(about_only("Hi {x there"));
+        open_about(&mut screen);
+        assert_eq!(about(&screen).lines(), ["Hi "], "the engine's reading");
+        let mut screen = with_dialogs(about_only("Hi {x there")).with_rules(
+            Rulebook::default().with_override(RuleKey::StrayTextBrace, RuleSource::Bible),
+        );
+        open_about(&mut screen);
+        assert_eq!(
+            about(&screen).lines(),
+            ["Hi {x there"],
+            "the stray brace copied as written"
+        );
     }
 
     #[test]

@@ -165,6 +165,36 @@ impl PilotFacts for FreshPilot {
     }
 }
 
+/// The pilot as the original's globals read before any pilot is loaded,
+/// as the about box reads them (`_DoAboutBox` @0x16021): zeroed by
+/// start-up, so no bit is set and gender 0 is female; paid for, as the
+/// engine takes the game; owning nothing and having explored nowhere.
+/// Unlike [`Gate::FRESH`]'s new pilot, who is male.
+#[derive(Clone, Copy, Debug)]
+pub struct StartUpPilot;
+
+impl PilotFacts for StartUpPilot {
+    fn bit(&self, _bit: Bit) -> bool {
+        false
+    }
+
+    fn gender(&self) -> Gender {
+        Gender::Female
+    }
+
+    fn paid(&self, _days: u16) -> bool {
+        true
+    }
+
+    fn has_outfit(&self, _outfit: OutfitId) -> bool {
+        false
+    }
+
+    fn explored(&self, _system: SystemId) -> bool {
+        false
+    }
+}
+
 /// What running a set expression has to tell the player's side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptNote {
@@ -721,6 +751,16 @@ mod tests {
         assert!(fresh.allows(&Test::parse("p30")), "paid");
         assert!(!fresh.allows(&Test::parse("o130")), "owning nothing");
         assert!(!fresh.allows(&Test::parse("e128")), "explored nowhere");
+    }
+
+    #[test]
+    fn the_start_up_pilot_is_the_zeroed_globals_read_as_female_and_paid_for() {
+        let pilot = StartUpPilot;
+        assert!(!pilot.bit(Bit::new(1).expect("a bit")), "no bit is set");
+        assert_eq!(pilot.gender(), Gender::Female, "gender 0");
+        assert!(pilot.paid(30), "paid for");
+        assert!(!pilot.has_outfit(OutfitId(128)), "owning nothing");
+        assert!(!pilot.explored(SystemId(128)), "explored nowhere");
     }
 
     #[test]
