@@ -11441,6 +11441,172 @@ pub(super) mod tests {
         assert!(width < full, "redrawn as it closes (@0x9e769): {width}");
     }
 
+    /// [`VenueDialogs`] with the mission info screen and the bar.
+    struct InfoOverEveryOpener;
+
+    impl DialogResources for InfoOverEveryOpener {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            match id {
+                INFO_DIALOG => Ok(mission_info_template()),
+                BAR_DIALOG => Ok(bar_template()),
+                _ => VenueDialogs.dialog_template(id),
+            }
+        }
+    }
+
+    /// [`barred`] [`shipbuying_data`], its first ship for hire, where
+    /// Alpha Prime's spaceport offers mission 130, whose `OnAccept`,
+    /// `S131`, starts mission 131 too, each one's `OnAbort` `M129`, a
+    /// landed move that selects Beta Prime; and its bar offers mission
+    /// 129, listed before 130 so the accept's shift (`RuleKey::OfferShift`)
+    /// leaves it.
+    fn aborting_to_beta_data() -> Rc<GameData> {
+        let mut job = venue_mission(SPACEPORT);
+        job[0x15B..0x15F].copy_from_slice(b"S131");
+        job[0x557..0x55B].copy_from_slice(b"M129");
+        let mut next = venue_mission(SPACEPORT);
+        next[0x5C..0x5E].copy_from_slice(b"b9");
+        next[0x557..0x55B].copy_from_slice(b"M129");
+        let fork = barred(game_data_fork(true, true, true, 100, b"", b"", None))
+            .resource(Mission::TYPE, 130, Some(b"Venue job"), &job)
+            .resource(Mission::TYPE, 131, Some(b"Next job"), &next)
+            .resource(Mission::TYPE, 129, Some(b"Bar job"), &venue_mission(BAR))
+            .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &desc_of("Job."))
+            .resource(Desc::TYPE, 129 + 3872, Some(b"Offer"), &desc_of("Bar job."));
+        let mut built = fork.build();
+        let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
+        built.put_u16(first + 0x38A, 100);
+        loaded_bytes(built.bytes)
+    }
+
+    /// Whether `screen` draws "Beta Prime", which only the nav area can.
+    fn names_beta(screen: &AppScreen) -> bool {
+        drawn(screen).iter().any(
+            |command| matches!(command, DrawCommand::Text { text, .. } if text == "Beta Prime"),
+        )
+    }
+
+    /// A screen mission info opens over: what it is, how to open it on
+    /// the spaceport, and whether it is open.
+    type InfoOpener = (&'static str, fn(&mut AppScreen), fn(&SpaceportView) -> bool);
+
+    /// Each screen mission info opens over that redraws the bar as it
+    /// closes (@0x9e769), as [`aborting_to_beta_data`] lays them out.
+    const INFO_OPENERS: [InfoOpener; 7] = [
+        (
+            "the exchange",
+            |screen| click_port_item(screen, 7),
+            |port| port.open_trade().is_some(),
+        ),
+        (
+            "the outfitter",
+            |screen| click_port_item(screen, 8),
+            |port| port.open_outfitter().is_some(),
+        ),
+        (
+            "the shipyard",
+            |screen| click_port_item(screen, 9),
+            |port| port.open_shipyard().is_some(),
+        ),
+        (
+            "the shipyard's description",
+            |screen| {
+                click_port_item(screen, 9);
+                screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
+            },
+            |port| {
+                port.open_shipyard()
+                    .and_then(ShipyardScreen::info_panel)
+                    .is_some()
+            },
+        ),
+        (
+            "the hire screen",
+            |screen| {
+                click_port_item(screen, 10);
+                screen.input(&key(Key::Char('h'), true));
+            },
+            |port| port.open_bar().and_then(BarScreen::hire_screen).is_some(),
+        ),
+        (
+            "the hire screen's description",
+            |screen| {
+                click_port_item(screen, 10);
+                screen.input(&key(Key::Char('h'), true));
+                screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
+            },
+            |port| {
+                port.open_bar()
+                    .and_then(BarScreen::hire_screen)
+                    .and_then(nova_view::spaceport::HireScreen::info_panel)
+                    .is_some()
+            },
+        ),
+        (
+            "an offer over the bar",
+            |screen| {
+                click_port_item(screen, 10);
+                screen.tick(Duration::from_millis(300));
+                screen.tick(Duration::from_millis(300));
+                assert_eq!(
+                    offered_mission(
+                        spaceport(screen)
+                            .open_bar()
+                            .and_then(BarScreen::offer_dialog)
+                    ),
+                    Some(MissionId(129))
+                );
+            },
+            |port| port.open_bar().and_then(BarScreen::offer_dialog).is_some(),
+        ),
+    ];
+
+    #[test]
+    fn mission_info_closing_over_each_opener_shows_the_nav_its_abort_wrote() {
+        for (what, open, still_open) in INFO_OPENERS {
+            let store = MemoryPilots::new();
+            let mut screen = AppScreen::new(aborting_to_beta_data())
+                .with_dialogs(Rc::new(InfoOverEveryOpener), Rc::new(MonoMetrics))
+                .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+            create(&mut screen, "Ada");
+            land_twice(&mut screen);
+            screen.input(&key(Key::Enter, true));
+            assert_eq!(active(&screen).len(), 2, "{what}: both accepted");
+            open(&mut screen);
+            assert!(still_open(spaceport(&screen)), "{what}: open");
+            screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
+            screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, false));
+            let abort = spaceport(&screen)
+                .mission_info()
+                .and_then(MissionInfoScreen::dialog)
+                .and_then(|dialog| dialog.item_bounds(nova_view::spaceport::missions::ABORT_ITEM))
+                .expect("Abort")
+                .center();
+            click_on(&mut screen, abort);
+            assert_eq!(active(&screen).len(), 1, "{what}: one aborted");
+            assert_eq!(
+                flight(&screen).session().map(Session::nav_mode),
+                Ok(nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))),
+                "{what}: its M129 selected Beta Prime"
+            );
+            assert!(
+                spaceport(&screen).mission_info().is_some(),
+                "{what}: info open"
+            );
+            assert!(!names_beta(&screen), "{what}: held under it");
+            screen.input(&key(Key::Escape, true));
+            assert!(
+                spaceport(&screen).mission_info().is_none(),
+                "{what}: closed"
+            );
+            assert!(still_open(spaceport(&screen)), "{what}: still open");
+            assert!(
+                names_beta(&screen),
+                "{what}: redrawn as it closes (@0x9e769)"
+            );
+        }
+    }
+
     #[test]
     fn a_fuel_tank_bought_in_port_leaves_the_bars_fuel_gauge_until_the_outfitter_closes() {
         let store = MemoryPilots::new();
