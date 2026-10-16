@@ -14939,6 +14939,30 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_players_anti_interference_never_lessens_a_missiles_interference() {
+        let mut catalog = jamming_catalog(
+            jammable(crate::combat::weapon::SENSOR_INTERFERENCE),
+            blaster(),
+            0,
+        );
+        catalog.star_map[0].interference = 50;
+        catalog
+            .outfits
+            .push(outfit(241, &[(crate::iff::MOD_ANTI_INTERFERENCE, 50)]));
+        let mut session = beside_an_npc(&catalog, AiType::Warship);
+        session.pilot.outfits.insert(OutfitId(241), 1);
+        assert_eq!(session.interference(), 0, "the radar's is lessened");
+        session.target = Some(NpcId(0));
+        session.hold_trigger(FIRE);
+        session.tick_combat(Rules::default(), &mut Ranged::of(&[(100, 49)]));
+        assert_eq!(
+            session.shots()[0].jam,
+            crate::combat::projectile::Jam::Interfered,
+            "a roll of 50 against the system's raw 50"
+        );
+    }
+
+    #[test]
     fn a_beam_weapon_fires_beams() {
         let laser = WeaponRecord {
             guidance: 0,
