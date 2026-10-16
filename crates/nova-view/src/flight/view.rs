@@ -14058,6 +14058,108 @@ mod tests {
     }
 
     #[test]
+    fn a_landings_two_texts_each_close_to_their_own_bar_and_the_loads_before_the_next() {
+        let mut catalog = port();
+        catalog.missions = vec![
+            MissionRecord {
+                travel_stel: 128,
+                on_success: nova_sim::Script::parse("H130 G201"),
+                ..errand(130)
+            },
+            MissionRecord {
+                travel_stel: 128,
+                on_success: nova_sim::Script::parse("M131 H129"),
+                ..errand(131)
+            },
+        ];
+        catalog.mission_texts = vec![
+            MissionTexts {
+                comp: Some("A done.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "A")
+            },
+            MissionTexts {
+                comp: Some("B done.".to_owned()),
+                ..MissionTexts::named(MissionId(131), "B")
+            },
+        ];
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
+        run_set(&mut view, "S130 S131");
+        view.take_off().expect("takes off");
+        view.settle_script();
+        land_now(&mut view);
+        let landed = view.reserves_shown();
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::ship),
+            Ok(ShipId(129)),
+            "both OnSuccess ran"
+        );
+        assert_eq!(
+            view.take_mission_texts().len(),
+            2,
+            "A's CompText, then B's after A's OnSuccess"
+        );
+        assert_eq!(view.reserves_shown(), landed, "the landing's");
+        assert_eq!(landed.fuel.max, 250.0, "the landing's ship");
+        assert_eq!(port_nav(&view), naming("Earth"));
+        view.close_mission_text();
+        assert_eq!(
+            view.reserves_shown().fuel.max,
+            350.0,
+            "A's text as it noted the bar, then A's H130 as at its operator, \
+             before G201's tank"
+        );
+        assert_eq!(
+            port_nav(&view),
+            naming("Earth"),
+            "B's M and H come after B's text, and no dialog redraws"
+        );
+        view.close_mission_text();
+        assert_eq!(
+            retaken(&view),
+            WHOLE_BAR,
+            "B's text, then B's H129 after its M"
+        );
+        assert_eq!(port_nav(&view), naming("Proxima"));
+        assert!(view.bar_steps.is_empty());
+    }
+
+    #[test]
+    fn an_accepts_two_texts_close_to_their_own_bars_and_the_dialog_redraws_after_the_last() {
+        let mut view = docked_scripted(|catalog| {
+            let mission = &mut catalog.missions[1];
+            mission.cargo_type = 0;
+            mission.cargo_qty = 1;
+            mission.pickup_mode = 0;
+            mission.on_accept = nova_sim::Script::parse("M131");
+            catalog.mission_texts[0].load_cargo = Some("Loaded.".to_owned());
+        });
+        assert_eq!(view.accept_mission(MissionId(131)), Ok(0));
+        let queued = view.reserves();
+        assert_eq!(
+            view.take_mission_texts().len(),
+            2,
+            "the BriefText, then the LoadCargText"
+        );
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        view.close_mission_text();
+        assert_eq!(
+            view.reserves_shown(),
+            queued,
+            "the brief as it noted the bar, and no redraw of the dialog's yet"
+        );
+        assert_eq!(port_nav(&view), naming("Proxima"), "OnAccept's M");
+        view.close_mission_text();
+        assert_eq!(
+            retaken(&view),
+            WHOLE_BAR,
+            "the load's text, then the computer's redraw"
+        );
+        assert_eq!(view.reserves_shown().fuel.now, 100.0);
+        assert!(view.bar_steps.is_empty());
+    }
+
+    #[test]
     fn leaving_the_dock_drops_the_texts_pending_redraws() {
         let mut view = docked_scripted(|catalog| {
             catalog.missions[1].on_accept = nova_sim::Script::parse("M131");
