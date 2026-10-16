@@ -1906,11 +1906,18 @@ impl AppScreen {
     /// Leaves the spaceport: it closes and the ship takes off
     /// ([`FlightView::take_off`]), the one path for the port's Leave and
     /// a `Q`'s, as `_DoPortDialog` has one (@0x5fcd3, @0x601a0-0x6025e).
+    /// The take-off's events (the stay's `DayPassed`, `Explored`,
+    /// `TookOff`) settle at once ([`FlightView::settle_script`]), and the
+    /// mission texts they queue show over flight, so on either path they
+    /// are settled before the take-off's save and its first frame, as
+    /// `_PlayerLandOnStellar` runs them inside the take-off.
     fn leave_port(&mut self) {
         self.close_spaceport();
         if let Some(flight) = self.flight.as_mut() {
             flight.take_off();
+            flight.settle_script();
         }
+        self.show_mission_texts();
     }
 
     /// Shows the mission texts the session queued: over the spaceport, if

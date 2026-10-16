@@ -137,7 +137,10 @@
 //!   holds a landed `Q` ([`Session::leave_due`]) for whoever shows the
 //!   spaceport to leave it once nothing shown over it holds the leave;
 //!   [`Session::take_off`] consumes it, giving its message once
-//!   ([`Session::take_leave_message`]), and the landing drops one still
+//!   ([`Session::take_leave_message`]); whoever takes off settles again
+//!   at once, so the take-off's `DayPassed`, `Explored` and `TookOff`
+//!   dispatch before its save and its first frame, as the original runs
+//!   them inside the take-off. The landing drops a leave still
 //!   pending. A held leave is not saved, as the original's pilot file
 //!   holds no such string, so a pilot saved at the landing reloads docked
 //!   with no `Q`.

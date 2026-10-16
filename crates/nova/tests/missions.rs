@@ -1723,6 +1723,39 @@ fn a_landing_qs_comp_text_shows_over_the_port_and_the_ship_leaves_once_it_closes
 }
 
 #[test]
+fn a_q_leaves_take_off_settles_its_deadline_before_the_save_in_the_same_input() {
+    let store = MemoryPilots::new();
+    let (job, offer) = bar_job();
+    let data = leaving_data(&leaving_run(), (timed(job), offer));
+    let pilot = holding(
+        &ada(),
+        &[(0, 128, None, Some(128)), (1, 130, Some(0), None)],
+    );
+    let mut game = Game::with_data(&store, &pilot, data);
+    game.frame();
+    let writes = store.writes();
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    assert_eq!(game.active(), [(1, MissionId(130))], "not failed yet");
+
+    // Done leaves; the take-off's TookOff fails the bar job's deadline,
+    // in that input, before the take-off's save and the first frame,
+    // as the port's Leave does.
+    game.key(Key::Enter, true);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), [], "the deadline failed it");
+    assert_eq!(store.writes(), writes + 2, "the landing's and take-off's");
+    let missions: Vec<_> = saved(&store)
+        .missions()
+        .iter()
+        .map(|(slot, active)| (slot, active.mission))
+        .collect();
+    assert_eq!(missions, [], "saved failed");
+    game.key(Key::Enter, false);
+    assert_eq!(store.writes(), writes + 2, "nothing left to save");
+}
+
+#[test]
 fn a_landing_shows_the_cargo_dropped_off_then_the_comp_text_before_a_q_leaves() {
     let store = MemoryPilots::new();
     let data = leaving_data(&dumping(leaving_run()), bar_job());
