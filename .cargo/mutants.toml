@@ -204,4 +204,9 @@ exclude_re = [
     # `AnimDelay` for a bias above 1: with `>=`, a bias of exactly 1 takes
     # that branch too, and 1 x `AnimDelay` is `AnimDelay` anyway.
     "gate_sprite.rs:.*replace > with >= in GateAnimation::threshold",
+    # `_AIShipIsScooping` (goal 0x11): no goal the engine has scoops until
+    # rdm:phase/asteroids/phase-5-ai-mining adds the miner's, so both
+    # answer false for every NPC already. Phase 5 removes these two.
+    "ai/mod.rs:.*replace Goal::scooping -> bool with false",
+    "traffic/npc.rs:.*replace Npc::is_scooping -> bool with false",
 ]
