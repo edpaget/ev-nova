@@ -90,6 +90,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
 use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
 
 /// The offer dialog's `DLOG` (and `DITL`) ID.
@@ -125,6 +126,16 @@ pub struct OfferTemplates {
     pub picture: Result<DialogTemplate, String>,
 }
 
+impl VariantTemplates for OfferTemplates {
+    fn plain_template(&self) -> &Result<DialogTemplate, String> {
+        &self.plain
+    }
+
+    fn picture_template(&self) -> &Result<DialogTemplate, String> {
+        &self.picture
+    }
+}
+
 impl OfferTemplates {
     /// The template of the variant an offer whose `dësc` `Graphic` is
     /// `graphic` shows in, or why it is missing: 1020 above
@@ -135,11 +146,7 @@ impl OfferTemplates {
     ///
     /// Why that variant's template is missing.
     pub fn layout(&self, graphic: Option<i16>) -> Result<DialogTemplate, String> {
-        if shown_graphic(graphic).is_some() {
-            self.picture.clone()
-        } else {
-            self.plain.clone()
-        }
+        self.pick(graphic).1.clone()
     }
 }
 

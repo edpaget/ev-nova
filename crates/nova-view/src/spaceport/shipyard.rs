@@ -154,6 +154,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
 use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::picture_variant::{VariantTemplates, shown_graphic};
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 
@@ -409,15 +410,10 @@ impl InfoVariant {
 /// `exists` is asked only above 127.
 #[must_use]
 pub fn info_variant(graphic: Option<i16>, exists: impl Fn(i16) -> bool) -> InfoVariant {
-    match graphic {
-        Some(id) if id > LAST_UNSHOWN_GRAPHIC => {
-            if exists(id) {
-                InfoVariant::Picture(id)
-            } else {
-                InfoVariant::MissingPicture
-            }
-        }
-        _ => InfoVariant::Plain,
+    match shown_graphic(graphic) {
+        Some(id) if exists(id) => InfoVariant::Picture(id),
+        Some(_) => InfoVariant::MissingPicture,
+        None => InfoVariant::Plain,
     }
 }
 
@@ -431,15 +427,22 @@ pub struct InfoTemplates {
     pub picture: Result<DialogTemplate, String>,
 }
 
+impl VariantTemplates for InfoTemplates {
+    fn plain_template(&self) -> &Result<DialogTemplate, String> {
+        &self.plain
+    }
+
+    fn picture_template(&self) -> &Result<DialogTemplate, String> {
+        &self.picture
+    }
+}
+
 impl InfoTemplates {
     /// The template of `variant`'s dialog, if it is there.
     fn of(&self, variant: InfoVariant) -> Option<&DialogTemplate> {
-        let template = if variant.dialog() == SHIP_PICTURE_INFO_DIALOG {
-            &self.picture
-        } else {
-            &self.plain
-        };
-        template.as_ref().ok()
+        self.template(variant.dialog() == SHIP_PICTURE_INFO_DIALOG)
+            .as_ref()
+            .ok()
     }
 }
 

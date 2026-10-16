@@ -83,9 +83,10 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::desc::{BODY_COLOR, BODY_SIZE, shown_graphic};
+use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
 
 /// The bar dialog's `DLOG` (and `DITL`) ID.
@@ -109,6 +110,16 @@ pub struct BarTemplates {
     pub plain: Result<DialogTemplate, String>,
     /// The bar dialog with a picture ([`PICTURE_BAR_DIALOG`]).
     pub picture: Result<DialogTemplate, String>,
+}
+
+impl VariantTemplates for BarTemplates {
+    fn plain_template(&self) -> &Result<DialogTemplate, String> {
+        &self.plain
+    }
+
+    fn picture_template(&self) -> &Result<DialogTemplate, String> {
+        &self.picture
+    }
 }
 
 /// Leave's item.
@@ -262,13 +273,11 @@ impl BarScreen {
         let desc = bar_desc_id(stellar);
         let laid = layout.and_then(|(templates, metrics)| {
             let text = hiring.catalog.description(desc).unwrap_or_default();
-            let picture = shown_graphic(hiring.catalog.description_graphic(desc))
-                .filter(|&id| hiring.catalog.picture_exists(id));
-            let mut template = if picture.is_some() {
-                templates.picture
-            } else {
-                templates.plain
-            }?;
+            let (picture, template) = templates
+                .pick_loaded(hiring.catalog.description_graphic(desc), |id| {
+                    hiring.catalog.picture_exists(id)
+                });
+            let mut template = template.clone()?;
             for item in [LEAVE_ITEM, GAMBLE_ITEM, HOLOVID_ITEM, HIRE_ITEM] {
                 if let Some(found) = template.items.get_mut(item - 1) {
                     found.enabled = true;

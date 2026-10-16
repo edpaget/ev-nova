@@ -24,6 +24,7 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
+use super::picture_variant::VariantTemplates;
 use super::scroll_text::ScrollText;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
@@ -65,18 +66,7 @@ pub const DESC_PICTURE_ITEM: usize = 2;
 /// 8527, "Desc + pict" (0x214f @0x5a913).
 pub const PICTURE_FRAME: ImageKey = ImageKey::picture(8527);
 
-/// The highest `dësc` `Graphic` that shows no picture: the original shows
-/// one only above it (`cmpw $0x7f` in `_ShowTextDialog` @0x5a89a,
-/// `_OfferOneMission` @0xa2344, `_DoBarDialog` @0x48faa and
-/// `_DoShipyardDescription` @0x5b6db-0x5b6e4).
-pub const LAST_UNSHOWN_GRAPHIC: i16 = 127;
-
-/// The picture `graphic` shows: itself when above
-/// [`LAST_UNSHOWN_GRAPHIC`], else none.
-#[must_use]
-pub fn shown_graphic(graphic: Option<i16>) -> Option<i16> {
-    graphic.filter(|&id| id > LAST_UNSHOWN_GRAPHIC)
-}
+pub use super::picture_variant::{LAST_UNSHOWN_GRAPHIC, shown_graphic};
 
 /// Both "Desc Dialog" templates, or why each is missing: `DLOG` 3003's and
 /// `DLOG` 3004's.
@@ -88,8 +78,18 @@ pub struct DescTemplates {
     pub picture: Result<DialogTemplate, String>,
 }
 
+impl VariantTemplates for DescTemplates {
+    fn plain_template(&self) -> &Result<DialogTemplate, String> {
+        &self.plain
+    }
+
+    fn picture_template(&self) -> &Result<DialogTemplate, String> {
+        &self.picture
+    }
+}
+
 impl DescTemplates {
-    /// `text` in the variant `graphic` picks ([`shown_graphic`]), its
+    /// `text` in the variant `graphic` picks ([`VariantTemplates::pick`]), its
     /// button labelled in `style`, its text measured by `metrics`.
     ///
     /// # Errors
@@ -104,13 +104,12 @@ impl DescTemplates {
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Result<DescDialog, String> {
-        if let Some(id) = shown_graphic(graphic) {
-            let template = self.picture.as_ref().map_err(Clone::clone)?;
-            Ok(DescDialog::pictured(template, text, id, style, metrics))
-        } else {
-            let template = self.plain.as_ref().map_err(Clone::clone)?;
-            Ok(DescDialog::new(template, text, style, metrics))
-        }
+        let (shown, template) = self.pick(graphic);
+        let template = template.as_ref().map_err(Clone::clone)?;
+        Ok(match shown {
+            Some(id) => DescDialog::pictured(template, text, id, style, metrics),
+            None => DescDialog::new(template, text, style, metrics),
+        })
     }
 }
 
