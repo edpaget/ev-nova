@@ -90,7 +90,7 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 
 use crate::ai::Goal;
-use crate::catalog::{GovtId, PersonId, PersonRecord, SystemId, WeaponId};
+use crate::catalog::{self, GovtId, PersonId, PersonRecord, StringPatch, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::Condition;
@@ -103,7 +103,7 @@ use crate::rank::RankNames;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::text_tags::{self, NoNames, RankTagGovts, TagContext, TagRules};
-use crate::traffic::npc::{Mode, Npc, NpcPerson};
+use crate::traffic::npc::{Npc, NpcPerson};
 use crate::traffic::table::ShipKind;
 
 /// `Flags`: it holds a grudge once the player hits it.
@@ -202,6 +202,34 @@ pub const COMM_QUOTES: i16 = 7100;
 /// The hail quotes, `STR#` 7101 (0x1bbd @0x445d6).
 pub const HAIL_QUOTES: i16 = 7101;
 
+/// What a hail quote's `STR ` patch adds to its `HailQuote`: 4999 (0x1387
+/// @0x445b8), so `HailQuote` 1 is `STR ` 5000.
+pub const HAIL_QUOTE_PATCHES: i16 = 4999;
+
+/// The `STR ` that patches hail quote `hail_quote`
+/// (`_LoadPluginString(0x1387 + HailQuote)` @0x445b8-0x445c6), or none when
+/// the sum does not fit in 16 bits: the engine keeps wider numbers and
+/// looks up no `STR ` for it ([`catalog::patch_id`]).
+#[must_use]
+pub fn hail_quote_patch_id(hail_quote: i16) -> Option<i16> {
+    catalog::patch_id(hail_quote, HAIL_QUOTE_PATCHES)
+}
+
+/// The words of hail quote `hail_quote`, as `_ShowPersonHailQuote` reads
+/// them (@0x445b8-0x445e1): its `STR ` `patch`
+/// ([`hail_quote_patch_id`]), from any open file, base data or plug-in,
+/// when there is one; else line `hail_quote` of `lines` (`STR#` 7101,
+/// `GetIndString` @0x445e1), or an empty line for one it does not hold
+/// ([`catalog::patched_string`]).
+///
+/// An empty or unreadable `STR ` leaves the shared buffer (0x3b5570) as
+/// it last was in the original; the engine shows an empty line for it
+/// (see [`StringPatch::shown`]).
+#[must_use]
+pub fn hail_quote_text(hail_quote: i16, patch: StringPatch, lines: &[String]) -> String {
+    catalog::patched_string(hail_quote, patch, lines).unwrap_or_default()
+}
+
 /// What a rank tag reads with no rank to name and no string lists wired:
 /// stock `STR#` 2002 #341 (the Bible's word; see [`rank`](crate::rank)).
 pub const NO_RANK: &str = "captain";
@@ -293,7 +321,10 @@ pub enum Eligible {
 /// ([`Npc::threatens_player_among`]; `_IsThreatToPlayer` asked @0x33d38).
 #[must_use]
 pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView, npcs: &[Npc]) -> Eligible {
-    let flying = npc.mode == Mode::Flying
+    // A ship holding its course after its glide may speak: the quote's
+    // tests (@0x33bea-0x33f21) read its hyperspace state and goal, not
+    // its wait (+0x4c), and run before `_HandleShip` holds it (@0x34a54).
+    let flying = npc.arrived()
         && !matches!(
             npc.condition,
             Condition::Dying { .. } | Condition::Destroyed
@@ -326,6 +357,46 @@ pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView, npcs: &[N
         (true, false) => Eligible::Yes,
         (true, true) => Eligible::Now,
     }
+}
+
+/// Whether `npc`, turning on the player, says its person's hail quote at
+/// once, as `_AIMakeShipAttackPlayer` gates it (@0x89c50-0x89c9b): it was
+/// not `threatened` already (`_ExtendedIsThreatToPlayer` @0x89c53, asked
+/// before the goal changes; see [`Npc::threatens_player_extended`]), it flies a person
+/// (+0xc8d0, @0x89c60) of `Flags` 0x0010 (@0x89c8a), it is no mission's
+/// special ship (+0xc8d2, @0x89c71), it is not disabled (`_IsDisabled`
+/// @0x89c94, which reads its armour, so a ship breaking up is disabled
+/// too), and the player is not `player_dying` (`_IsDying` @0x89ca7). A
+/// person escorting the player is not the person: the original's joined
+/// ship is a mission ship.
+///
+/// It reads none of [`quote_eligible`]'s filters: not the `HailQuote`,
+/// "once", the grudge, liking, mission or leaving flags, the player's
+/// `InherentAI`, nor whether the person is gone for good; and it draws
+/// nothing.
+#[must_use]
+pub fn turns_with_quote(npc: &Npc, threatened: bool, player_dying: bool) -> bool {
+    !threatened
+        && !player_dying
+        && npc.condition == Condition::Intact
+        && npc.mission.is_none()
+        && npc.escort.is_none()
+        && npc
+            .person
+            .is_some_and(|person| person.flags & QUOTE_ON_ATTACK != 0)
+}
+
+/// What `_AIMakeShipAttackPlayer`'s quote gate reads of the player: whether
+/// it is dying (`_IsDying` @0x89ca7), and how it sees a ship
+/// (`_ExtendedIsThreatToPlayer`'s `_ShipVisibleToShip(ship, player)`
+/// @0x81bc6), from where it is and whether it scans for cloaked ships on
+/// screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GateView {
+    /// Whether the player is dying or destroyed.
+    pub player_dying: bool,
+    /// The player as it sees ships ([`cloak::visible`](crate::cloak::visible)).
+    pub observer: crate::cloak::Observer,
 }
 
 impl NpcPerson {
@@ -1603,10 +1674,20 @@ mod tests {
         };
         assert_eq!(eligible(&intact, quoting(0), jumping), Eligible::No);
         let arriving = Npc {
-            mode: Mode::JumpingIn { ticks_left: 3 },
+            mode: Mode::JumpingIn { tick: 0 },
             ..intact.clone()
         };
         assert_eq!(eligible(&arriving, quoting(0), VIEW), Eligible::No);
+        let coasting = Npc {
+            mode: Mode::Coasting { ticks_left: 30 },
+            ..intact.clone()
+        };
+        assert_eq!(
+            eligible(&coasting, quoting(0), VIEW),
+            eligible(&intact, quoting(0), VIEW),
+            "holding its course after its glide, it may speak"
+        );
+        assert_ne!(eligible(&coasting, quoting(0), VIEW), Eligible::No);
         for condition in [
             Condition::Dying {
                 ticks_left: 2,
@@ -1623,6 +1704,83 @@ mod tests {
         }
         assert_eq!([QUOTE_ODDS, HAIL_QUOTES as u32], [140, 7101]);
         assert_eq!([QUOTE_SHOWN_TICKS, QUOTE_GAP_TICKS], [420, 1350]);
+    }
+
+    /// A flying person of `QUOTE_ON_ATTACK` (and `more`), idle.
+    fn turning(more: u16) -> Npc {
+        Npc {
+            person: Some(quoting(QUOTE_ON_ATTACK | more)),
+            ..npc_of(Condition::Intact, IDLE)
+        }
+    }
+
+    #[test]
+    fn a_ship_turning_on_the_player_says_its_quote_as_ai_make_ship_attack_player_gates_it() {
+        assert!(turns_with_quote(&turning(0), false, false));
+        let no_flag = Npc {
+            person: Some(quoting(0)),
+            ..turning(0)
+        };
+        let marked = Npc {
+            mission: Some(crate::traffic::npc::MissionMark {
+                slot: 0,
+                behav: crate::mission::ships::ShipBehav::AttackPlayer,
+                formation: None,
+                order: None,
+            }),
+            ..turning(0)
+        };
+        let nobody = Npc {
+            person: None,
+            ..turning(0)
+        };
+        let escort = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..turning(0)
+        };
+        for (npc, why) in [
+            (&no_flag, "no 0x0010"),
+            (&marked, "a mission's special ship"),
+            (&nobody, "no person"),
+            (&escort, "the player's escort is not the person"),
+        ] {
+            assert!(!turns_with_quote(npc, false, false), "{why}");
+        }
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 2,
+                starting: false,
+            },
+            Condition::Destroyed,
+        ] {
+            let npc = Npc {
+                condition,
+                ..turning(0)
+            };
+            assert!(!turns_with_quote(&npc, false, false), "{condition:?}");
+        }
+        assert!(!turns_with_quote(&turning(0), true, false), "a threat");
+        assert!(
+            !turns_with_quote(&turning(0), false, true),
+            "the player dying"
+        );
+        // The gate reads none of `_HandleShip`'s filters.
+        let quoted = Npc {
+            person: Some(NpcPerson {
+                quoted: true,
+                hail_quote: 0,
+                ..quoting(QUOTE_ON_ATTACK | QUOTE_ONCE)
+            }),
+            ..turning(0)
+        };
+        assert!(turns_with_quote(&quoted, false, false), "once, said");
+        for more in [QUOTE_IF_GRUDGE, QUOTE_IF_LIKED, NOT_TO_WARSHIP] {
+            assert!(turns_with_quote(&turning(more), false, false), "{more:#x}");
+        }
     }
 
     /// Person 128 of `flags`, its mission's special ships `ship`.
@@ -1689,5 +1847,26 @@ mod tests {
                 "{flags:#x} {ship:?}"
             );
         }
+    }
+
+    // `_ShowPersonHailQuote`'s plug-in string (@0x445b8-0x445e1).
+
+    #[test]
+    fn a_hail_quotes_str_patch_wins_over_str_list_7101() {
+        use crate::catalog::StringPatch;
+        let lines = ["One".to_owned(), "Two".to_owned()];
+        let text = |hail_quote, patch| hail_quote_text(hail_quote, patch, &lines);
+        assert_eq!(text(2, StringPatch::Text("Patched".to_owned())), "Patched");
+        assert_eq!(text(2, StringPatch::Empty), "", "an empty STR");
+        assert_eq!(text(2, StringPatch::Unreadable), "", "an unreadable STR");
+        assert_eq!(text(2, StringPatch::Absent), "Two");
+        assert_eq!(text(1, StringPatch::Absent), "One");
+        assert_eq!(text(3, StringPatch::Absent), "", "out of range");
+        assert_eq!(text(0, StringPatch::Absent), "", "none");
+        assert_eq!(text(-1, StringPatch::Absent), "", "below");
+        assert_eq!(HAIL_QUOTE_PATCHES, 4999);
+        assert_eq!(hail_quote_patch_id(1), Some(5000), "0x1387 + 1 (@0x445b8)");
+        assert_eq!(hail_quote_patch_id(27_768), Some(i16::MAX));
+        assert_eq!(hail_quote_patch_id(27_769), None, "no 16-bit wrap");
     }
 }

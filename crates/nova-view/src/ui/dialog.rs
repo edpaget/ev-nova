@@ -15,7 +15,6 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
-use crate::sound::UiSound;
 use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
@@ -219,8 +218,6 @@ pub struct Dialog {
     /// The item a press is held on, by index, and its tracking.
     tracked: Option<usize>,
     tracker: ButtonTracker,
-    /// The sound the last input made on a button, until it is taken.
-    sound: Option<UiSound>,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -295,7 +292,6 @@ impl Dialog {
             focus: None,
             tracked: None,
             tracker: ButtonTracker::default(),
-            sound: None,
         }
     }
 
@@ -521,11 +517,11 @@ impl Dialog {
         let activated = self
             .tracker
             .track(self.hit_area(item), item.active(), input);
-        if let Some(sound) = self.tracker.take_sound()
-            && item.is_button()
-        {
-            self.sound = Some(sound);
-        }
+        // Silent under the pointer, as every one of the original's
+        // in-game and spaceport button trackers (`_TrackTextButtons`
+        // @0x26bb0 and its kin) plays nothing: only the main screen's
+        // `_TrackMainScreenButtons` @0x195b9 clicks.
+        let _ = self.tracker.take_sound();
         if !self.tracker.armed() {
             self.tracked = None;
         }
@@ -540,13 +536,6 @@ impl Dialog {
             min: Point::new(inner.min.x.max(outer.min.x), inner.min.y.max(outer.min.y)),
             max: Point::new(inner.max.x.min(outer.max.x), inner.max.y.min(outer.max.y)),
         }
-    }
-
-    /// The sound the last input made on a button, once: it going down
-    /// when pressed, and coming back up when let go. Other items, and
-    /// keyboard activations, are silent.
-    pub fn take_sound(&mut self) -> Option<UiSound> {
-        self.sound.take()
     }
 
     /// Abandons any click in progress without activating anything.
@@ -1394,7 +1383,6 @@ mod tests {
         ));
         let cancel = dialog.item_bounds(5).expect("Cancel").center();
         assert_eq!(click(&mut dialog, cancel), None);
-        assert_eq!(dialog.take_sound(), None, "it never goes down");
         assert_eq!(dialog.input(&key(Key::Escape)), None);
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Tab));
@@ -1505,49 +1493,23 @@ mod tests {
     }
 
     #[test]
-    fn clicking_a_button_sounds_it_going_down_then_coming_up() {
-        let mut dialog = dialog(&yes_no(), &[]);
-        let ok = dialog.item_bounds(1).expect("OK").center();
-        assert_eq!(dialog.take_sound(), None);
-        dialog.input(&press(ok));
-        assert_eq!(dialog.take_sound(), Some(UiSound::ButtonDown));
-        assert_eq!(dialog.take_sound(), None, "once");
-        assert_eq!(dialog.input(&release(ok)), Some(DialogEvent::Item(1)));
-        assert_eq!(dialog.take_sound(), Some(UiSound::ButtonUp));
-        assert_eq!(dialog.take_sound(), None, "once");
-        dialog.input(&press(ok));
-        dialog.take_sound();
-        assert_eq!(dialog.input(&release(at(0.0, 0.0))), None);
-        assert_eq!(
-            dialog.take_sound(),
-            Some(UiSound::ButtonUp),
-            "let go off it"
-        );
-    }
-
-    #[test]
-    fn clicking_anything_but_a_button_and_keys_are_silent() {
+    fn clicking_anything_but_a_button_activates_only_user_items() {
         let mut dialog = dialog(&desc_like(), &desc_roles("text"));
         let user = dialog.item_bounds(4).expect("item 4").center();
         assert_eq!(click(&mut dialog, user), Some(DialogEvent::Item(4)));
-        assert_eq!(dialog.take_sound(), None, "a role-less user item");
         let text = dialog.item_bounds(3).expect("item 3").center();
-        click(&mut dialog, text);
-        assert_eq!(dialog.take_sound(), None, "disabled text");
-        click(&mut dialog, at(199.0, 1.0));
-        assert_eq!(dialog.take_sound(), None, "empty space");
-        assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
-        assert_eq!(dialog.take_sound(), None, "Return");
+        assert_eq!(click(&mut dialog, text), None, "disabled text");
+        assert_eq!(click(&mut dialog, at(199.0, 1.0)), None, "empty space");
     }
 
+    /// `_TextDialogFilter` maps Return, Enter and Escape straight to an
+    /// item (@0x51fca-0x51fef).
     #[test]
-    fn cancelling_a_press_keeps_its_sound_and_makes_none() {
-        let mut dialog = dialog(&yes_no(), &[]);
-        let ok = dialog.item_bounds(1).expect("OK").center();
-        dialog.input(&press(ok));
-        dialog.cancel_pointer();
-        assert_eq!(dialog.take_sound(), Some(UiSound::ButtonDown));
-        dialog.input(&release(ok));
-        assert_eq!(dialog.take_sound(), None);
+    fn keys_activate_the_default_and_cancel_buttons() {
+        let mut dialog = dialog(&yes_no(), &[]).with_cancel(Some(5));
+        assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
+        assert_eq!(dialog.input(&key(Key::Tab)), None);
+        assert_eq!(dialog.input(&key(Key::Space)), Some(DialogEvent::Item(1)));
     }
 }

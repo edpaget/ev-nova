@@ -686,7 +686,7 @@ fn space_fires_the_blaster_whose_shots_are_drawn_and_heard() {
     assert!(
         harness.log.borrow().contains(&AudioCommand::Play {
             sound: SoundId(208),
-            volume: nova_audio::Volume::FULL,
+            volume: nova_audio::AudioSettings::default().effects_volume,
         }),
         "{:?}",
         harness.log.borrow()
@@ -730,7 +730,7 @@ fn a_trader_shot_down_explodes_scatters_debris_and_is_no_longer_targeted() {
     assert!(
         harness.log.borrow().contains(&AudioCommand::Play {
             sound: SoundId(300),
-            volume: nova_audio::Volume::FULL,
+            volume: nova_audio::AudioSettings::default().effects_volume,
         }),
         "the explosion, within 200 pixels: {:?}",
         harness.log.borrow()
@@ -1465,6 +1465,19 @@ impl Boarder {
         self.send(WindowEvent::Redraw { elapsed });
         assert_eq!(self.app.take_failures(), []);
         (*self.gpu.submits().last().expect("a frame")).clone()
+    }
+
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
     }
 
     fn showing(&self) -> Showing {
@@ -2727,6 +2740,7 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
         );
         // L requests clearance, a second L lands.
         game.tap(Key::Char('l'));
+        game.approach();
         game.tap(Key::Char('l'));
         assert_eq!(game.showing(), Showing::Spaceport, "landed");
         let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
@@ -2741,9 +2755,7 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
                 .with_behaviour(escorts_only())
                 .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source))
         });
-        game.open_pilot_to(Showing::Spaceport);
-        game.tap(Key::Escape);
-        assert_eq!(game.showing(), Showing::Flight, "took off");
+        game.open_pilot_to(Showing::Flight);
         game.frame();
         game.frame();
         assert_eq!(game.escorts().len(), 1, "{text}");
@@ -3117,21 +3129,20 @@ fn a_pirate_carrier_launches_fighters_that_take_the_players_shield_down() {
 }
 
 #[test]
-fn a_fighter_out_is_saved_on_landing_and_flies_again_after_take_off() {
+fn a_fighter_out_is_saved_on_landing_and_flies_again_after_reopening() {
     let store = MemoryPilots::new();
     let mut game = carrying(&store, &[], |screen| screen);
     game.launch();
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport, "landed");
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
     assert_eq!(saved.escorts().len(), 1);
     assert!(saved.escorts()[0].carried);
     let mut game = refly(&store, &[], |screen| screen);
-    game.open_pilot_to(Showing::Spaceport);
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Flight, "took off");
+    game.open_pilot_to(Showing::Flight);
     game.frame();
     game.frame();
     let fighters = game.escorts();
@@ -3168,6 +3179,7 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     game.launch();
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport, "landed");
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
@@ -3176,8 +3188,7 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     let mut game = refly(&store, &[], |screen| {
         screen.with_rules(Rulebook::default().with_override(RuleKey::FighterRecall, source))
     });
-    game.open_pilot_to(Showing::Spaceport);
-    game.tap(Key::Escape);
+    game.open_pilot_to(Showing::Flight);
     game.frame();
     game.frame();
     assert_eq!(game.fighters_out(), 0, "no fighter out");

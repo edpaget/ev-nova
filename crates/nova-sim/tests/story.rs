@@ -26,6 +26,21 @@ struct Home {
     lives: Vec<StellarLife>,
 }
 
+/// No asteroids anywhere.
+impl nova_sim::AsteroidCatalog for Home {
+    fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+        Vec::new()
+    }
+
+    fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+        Vec::new()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        [None; nova_sim::BOX_GRAPHICS]
+    }
+}
+
 /// Ungoverned; its one weapon, `wëap` 128, a planet-type gun firing
 /// every tick and doing 60 damage.
 impl CombatCatalog for Home {
@@ -60,6 +75,10 @@ impl CombatCatalog for Home {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            hit_particles: 0,
+            hit_part_life: 0,
+            hit_part_vel: 0,
+            hit_part_color: 0,
         }]
     }
 
@@ -140,7 +159,6 @@ impl PilotCatalog for Home {
             frame_size: Some((200, 200)),
             flags: StellarFlags::CAN_LAND,
             min_status: 0,
-            landing_sound: None,
             tech_level: 0,
             special_tech: [0; 8],
             govt: None,
@@ -152,6 +170,7 @@ impl PilotCatalog for Home {
             type_counts_frames: true,
             exit_angle: -1,
             tribute: 0,
+            animation: nova_sim::catalog::SiteAnimation::default(),
         }]
     }
 
@@ -161,6 +180,14 @@ impl PilotCatalog for Home {
 
     fn commodity_strings(&self) -> CommodityStrings {
         CommodityStrings::default()
+    }
+
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -264,6 +291,7 @@ fn a_registered_subscription_runs_its_script_as_the_landing_settles() {
     session.register_story(on_landing).expect("registers");
     let bit = Bit::new(42).expect("a bit");
     session.land().expect("selects");
+    session.tick(nova_sim::Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandPress::Outcome(LandOutcome::Landed(StellarId(128))))

@@ -11,6 +11,10 @@
 //!   come to each other's help, and which weapon they fire; the
 //!   player's escorts to [`EscortAi`], which flies them by their standing
 //!   orders; and an NPC carrier's fighters to [`CarriedAi`].
+//! - [`asteroid`]: a system's asteroid field: the 16 slots
+//!   ([`Asteroids`](asteroid::Asteroids)), how an asteroid spawns at the
+//!   field's edge or in place, how it drifts and spins, and when it is
+//!   culled.
 //! - [`bay`]: fighter bays: the fighters a bay holds ([`capacity`]), how
 //!   one is launched, the window it docks in ([`dock_window`]) with its
 //!   [`Carrier`], and what the flight is told of fighters abandoned
@@ -38,12 +42,16 @@
 //!   `crön`s the day's cron pass runs and the `ränk`s the pilot can hold; the
 //!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
 //!   traffic is spawned from; the [`CombatCatalog`] port, the `wëap`s,
-//!   each `shïp`'s combat fields and the `gövt`s ships fight by; and the
-//!   [`CommCatalog`] port, the string lists a hailed ship's words come
+//!   each `shïp`'s combat fields and the `gövt`s ships fight by; the
+//!   [`AsteroidCatalog`] port, the `röid`s and each `sÿst`'s asteroid
+//!   field; and the [`CommCatalog`] port, the string lists a hailed ship's words come
 //!   from.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
+//! - [`clearance`]: the dock request the land key makes
+//!   ([`DockRequest`]), its counter, and the dock approach that counts it
+//!   on every frame and greets the pilot ([`approach`]).
 //! - [`control`]: the control bits missions and storylines script with,
 //!   held as a [`ControlBitSet`] indexed by [`Bit`]; a record's parsed
 //!   control-bit [`Test`], and evaluating one against the [`PilotFacts`]
@@ -93,6 +101,8 @@
 //! - [`gate`]: hypergates and wormholes: which a stellar is
 //!   ([`GateKind`]), where each leads, and how a ship comes out of one,
 //!   under the [`GateArrivalRule`] and [`WormholeRule`].
+//! - [`gate_sprite`]: which frame a hypergate's sprite shows, opening
+//!   while a ship comes out of it and closing once none does.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
 //! - [`govt`]: the [`Governments`] and their relations: allies, enemies,
@@ -127,7 +137,8 @@
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
 //! - [`landing`]: what the land key does, [`land_or_select`]: request
-//!   clearance, then land (or, over a hypergate or wormhole, enter it);
+//!   clearance, then, once the dock approach has cleared the request,
+//!   land (or, over a hypergate or wormhole, enter it);
 //!   whether traffic control clears the pilot, [`cleared`]; whether the ship
 //!   can land, [`check_landing`],
 //!   each [`LandingRefusal`] in the order it applies; and the
@@ -267,6 +278,9 @@
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
+//! - [`tutorial`]: the new pilot's first-flight [`Tutorial`]: its hints
+//!   ([`TutorialHint`]), the take-off greeting and the newbie-only "No
+//!   destination".
 //! - [`wares`]: the rules the outfitter and the shipyard share: tech
 //!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
 //!   sweep and the rows' order.
@@ -274,13 +288,16 @@
 //!   duration, and when the warp's lead-in ends and scans are held.
 
 pub mod ai;
+pub mod asteroid;
 pub mod bay;
 pub mod blink;
 pub mod board;
 pub mod brackets;
+pub mod buoy;
 pub mod cargo_box;
 pub mod catalog;
 pub mod chance;
+pub mod clearance;
 pub mod cloak;
 pub mod clock;
 pub mod combat;
@@ -297,6 +314,7 @@ pub mod fixture;
 pub mod flight;
 pub mod fuel;
 pub mod gate;
+pub mod gate_sprite;
 pub mod geometry;
 pub mod glow;
 pub mod govt;
@@ -334,6 +352,7 @@ pub mod sabotage;
 pub mod save;
 pub mod saves;
 pub mod scan;
+pub mod scoop;
 pub mod self_repair;
 pub mod session;
 pub mod ship_change;
@@ -352,6 +371,8 @@ pub mod text_parse;
 pub mod text_tags;
 pub mod top_speed;
 pub mod traffic;
+pub mod trig;
+pub mod tutorial;
 pub mod wares;
 pub mod warp;
 
@@ -366,22 +387,24 @@ pub use board::{
     Plunder, PlunderView, Take, Taken,
 };
 pub use catalog::{
-    BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
-    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
-    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics,
-    TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
+    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DescMovie,
+    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite,
+    GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
+    ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife,
+    StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics, TextMovies, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
+pub use clearance::{Approach, DockKind, DockRequest, approach, approach_clears};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use combat::armament::{Armament, Trigger};
 pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
-pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
+pub use combat::{CombatEvent, Downed, GamePass, Rules, ShipRef, Sortie, Strike};
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
     SetExpr, SetOp, SetOpKind, Test, TestExpr,
@@ -411,15 +434,15 @@ pub use hyperspace::{
 };
 pub use iff::{RadarGear, ShipIff, StellarIff};
 pub use landing::{
-    Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
-    REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH,
-    check_landing, cleared, is_landable, land_or_select, landing_radius, landing_reach,
-    nearest_landable, services,
+    DockPress, DockSaid, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH,
+    OUT_OF_RANGE_FRAME_WIDTH, REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth,
+    UNLOADED_TYPE_WIDTH, check_landing, cleared, is_landable, land_or_select, landing_radius,
+    landing_reach, nearest_stellar, nearest_stellar_station, services, stellar_width,
 };
 pub use legal::{Crime, CrimeMap, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
-pub use navigation::{next_after, stellar_under};
+pub use navigation::{NavMode, next_after, stellar_under};
 pub use news::News;
 pub use outfit_effects::{OutfitRules, Rgb15};
 pub use outfitter::{
@@ -447,10 +470,10 @@ pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
-    HookRules, InfoRow, LandPress, MissionComputer, MissionInfo, MissionInfoPress, MissionShown,
-    MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote, RelocateRefusal,
-    ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules, StellarPick,
-    TAKEOFF_GRACE_TICKS, VenueOffer,
+    HookRules, InfoRow, InterfaceLoad, LandPress, MissionComputer, MissionInfo, MissionInfoPress,
+    MissionShown, MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote,
+    RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules,
+    StellarPick, TAKEOFF_GRACE_TICKS, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{
@@ -464,5 +487,6 @@ pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
-pub use traffic::{Traffic, World};
+pub use traffic::{Leave, Traffic, World};
+pub use tutorial::{Tutorial, TutorialHint};
 pub use wares::{ShownTons, TonUnit};

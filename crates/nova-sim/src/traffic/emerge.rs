@@ -9,33 +9,16 @@
 //!   `_SelectRandomStellarDest(ship, Rand(3) == 0, 0)` and keeps the pick
 //!   only when it is a hypergate or wormhole (`Flags2` 0x1000 or 0x2000,
 //!   @0x7fe9); otherwise the ship jumps in from hyperspace.
-//! - **The candidates.** `_SelectRandomStellarDest` (@0x805de) walks the
-//!   system's stellars. One is *ok* when it is landable
-//!   (`_StellarIsLandable` @0xa989, [`is_landable`]: a destroyed one only
-//!   when only landable destroyed, `Flags` 0x80, an intact one only
-//!   without it), its `xPos`
-//!   and `yPos` are each at most 999 with no lower bound (@0x80781), and
-//!   it is not hostile: both the ship and the stellar have a government,
-//!   and they are enemies (@0x807e2-0x80816). One with `Flags` 0x20
-//!   (uninhabited) that is no gate is *uninhabited* (@0x807c8). Then,
-//!   by the ship's government's `Flags2` (@0x80625-0x8065d):
-//!   - with [`PREFERS_WORMHOLES`] and an ok wormhole, among the ok
-//!     wormholes (@0x80947);
-//!   - else with [`PREFERS_HYPERGATES`] and an ok hypergate, among the
-//!     ok hypergates (@0x80989);
-//!   - else among the ok stellars that are not uninhabited, leaving out
-//!     wormholes without [`PREFERS_WORMHOLES`] and hypergates with
-//!     [`AVOIDS_HYPERGATES`] (@0x809cb, @0x80a30).
-//!
-//!   Each is a `Rand(16)` rejection loop over the slots: a uniform pick
-//!   among the candidates, here one `below(candidates)` draw, in the
-//!   system's stellar order. An independent ship has no switch, so its
+//! - **The candidates** are `_SelectRandomStellarDest`'s
+//!   ([`destination::candidates`] with [`Admit::All`]): the ok, inhabited
+//!   stellars that are no enemy's, the government's `Flags2` choosing
+//!   among the gates. An independent ship has no switch, so its
 //!   candidates are the ok, inhabited planets and stations and the ok
-//!   hypergates; never a wormhole.
-//! - **The `Rand(3) == 0` argument changes nothing** and is not drawn.
-//!   It only chooses whether step 4 (@0x809cb) runs before step 5
-//!   (@0x80a30), and whenever step 4 runs its test and its candidates are
-//!   step 5's. The original consumes the draw; this does not.
+//!   hypergates; never a wormhole. The pick among them is one
+//!   `below(candidates)` draw, in the system's stellar order.
+//! - **The `Rand(3) == 0` argument changes nothing** and is not drawn
+//!   (see [`destination`]). The original consumes the draw; this does
+//!   not.
 //! - **No draw without a gate.** When no candidate is a gate, the pick can
 //!   only end in a jump-in, so no draw is asked: a system with no ok gate
 //!   draws exactly as before gates were modelled.
@@ -65,24 +48,59 @@
 //!   player leads, made to come out of the exit gate after the player
 //!   (see [`session::gate_escorts`](crate::session)), starts at
 //!   [`LED_EXIT_SPEED`] instead: `_AIMakeShipEmergeFromHyperGate` sets
-//!   -15.0 for leader 0 and -30.0 otherwise (@0x895aa-0x895bd), so its
-//!   burst is the generic one from [`LED_BURST_TICK`].
+//!   -15.0 for leader 0 and -30.0 otherwise (@0x895aa-0x895bd), and the
+//!   burst slows from there at the same rate.
+//!
+//!   The slowing is sub-goal 0xa's -1.165 (`_LowLevelAIHandler`
+//!   @0x88114-0x8813d), the hyperspace glide's, not the emerge's own -3.0
+//!   (@0x895c4). `_DoPlayGameWork` runs the AI pass (`_AIDispatch`
+//!   @0x4429d) after the frame's spawns and before its `_HandleShip` pass
+//!   (@0x44483), and `_LowLevelAIHandler` zeroes +0x30 on every call
+//!   (@0x851f1), so the -3.0 is gone before the ship can move. Once the
+//!   wait is out, goal 0x15 becomes goal 8 (@0x8dd61-0x8dd93) and sub-goal
+//!   0xa (@0x8f3c8-0x8f3d9), whose block keeps the emerge's negative start
+//!   and sets +0x30 to -1.165 (@0x88136) before every tick of the burst.
+//!   Only a ship with AI type 0 or below, which `_AIDispatch` never runs
+//!   (@0x4427e-0x44286), would keep the -3.0; the engine has none.
 //! - **Drawn** (`_HandleShipDisplay` @0x2c090-0x2c18e): hidden while its
 //!   timer is above [`FADE_TICKS`], then fading in ([`emerge_level`]).
+//! - **Holding fire.** A ship coming out of a gate fires nothing while it
+//!   waits or bursts. The original holds no trigger from one frame to the
+//!   next: `_LowLevelAIHandler` clears the fire flag +0xba each frame
+//!   (@0x851f6) for an `_AIFire*` call to set again. While the wait runs
+//!   `_HandleShip` skips the fire step (@0x34a54-0x34a72, the step at
+//!   @0x34fcb), and `_AIEscortFireUnprovoked` (@0x85236) fires only at a
+//!   target, which the emerge has cleared (@0x89544). Once the wait is
+//!   out, `_HighLevelAIHandler` turns goal 0x15 into the jump-in goal 8
+//!   (@0x8dd61-0x8dd93) with sub-goal 0xa (@0x8f3c8-0x8f3d9), whose
+//!   `_LowLevelAIHandler` block calls no `_AIFire*` (@0x88114-0x88140).
+//!   Here no decision is due while it waits or bursts, and an arrival out
+//!   of a gate starts with no trigger; a ship sent to a gate from flight
+//!   has its trigger released and its target cleared there
+//!   ([`Npc::emerge_from_gate`](crate::traffic::npc::Npc::emerge_from_gate)).
+//!   One exception: a hit gives the waiting ship a target, and an escort
+//!   or fighter with an intact target then runs its point defence every
+//!   tick of the wait, as `_AIEscortFireUnprovoked` reaches
+//!   `_AIFireTurret` (@0x80e98, @0x80b0d); its trigger is released as it
+//!   bursts out. A hit by the player, or a Good Samaritan's answer, holds
+//!   the ship at its gate instead ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)):
+//!   seen and deciding, but still and firing only that point defence
+//!   until its wait is out.
 //!
 //! The radar and the shots do not read the emerging state: an emerging
 //! ship shows on the radar at its gate and can be hit.
 //!
-//! Not modelled: the `Rand(30) + 30` pause a leaderless ship takes after
-//! its burst (@0x34d5c-0x34d8b); the
-//! stellar the ship remembers (+0x92); a hypergate animating while a ship
-//! comes out of it (`_HandleStellarSprites` @0x2e8bd).
+//! - **Holding its course.** A ship with no lead then holds its course
+//!   for `Rand(30) + 30` ticks (@0x34d5c-0x34d8b), as after a glide in
+//!   from hyperspace: [`Mode::Coasting`](crate::traffic::npc::Mode::Coasting).
+//!
+//! Not modelled: the stellar the ship remembers (+0x92).
 
 use crate::catalog::{GovtId, LandingSite};
 use crate::chance::Chance;
 use crate::gate::GateKind;
-use crate::govt::{AVOIDS_HYPERGATES, Governments, PREFERS_HYPERGATES, PREFERS_WORMHOLES};
-use crate::landing::{StellarFlags, is_landable};
+use crate::govt::Governments;
+use crate::traffic::destination::{self, Admit};
 
 /// How many ticks a ship coming out of a gate waits there, hidden and
 /// still (the timer's 60.0, @0x89518).
@@ -101,15 +119,13 @@ pub const EXIT_SPEED: f32 = 30.0;
 /// A ship the player leads starts its burst at 15.0 rather than 30.0
 /// (`_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd, leader 0).
 pub const LED_EXIT_SPEED: f32 = 15.0;
-/// The tick of the generic burst at which a led ship's burst starts:
-/// [`exit_speed`]`(5)` is [`LED_EXIT_SPEED`] (@0x895aa-0x895bd).
-pub const LED_BURST_TICK: u32 = 5;
-/// How much slower each tick of leaving a gate is than the last (-3.0,
-/// @0x895c4).
-pub const EXIT_SLOWING: f32 = 3.0;
-/// How far a stellar may be from the centre, on each axis, to come out of
-/// (999, @0x80781-0x8078f): an upper bound only.
-pub const MAX_COORDINATE: f32 = 999.0;
+/// How much slower each tick of leaving a gate is than the last: sub-goal
+/// 0xa's -1.165 (`_LowLevelAIHandler` @0x88136), the hyperspace glide's
+/// [`JUMP_IN_SLOWING`](crate::traffic::spawn::JUMP_IN_SLOWING). The
+/// emerge's own -3.0 (@0x895c4) is dead: `_LowLevelAIHandler` zeroes
+/// +0x30 (@0x851f1) in the AI pass that follows the emerge in the same
+/// frame, and sets it to -1.165 before every tick of the burst.
+pub const EXIT_SLOWING: f32 = crate::traffic::spawn::JUMP_IN_SLOWING;
 /// The opacity [`emerge_level`] counts in: 32nds.
 pub const FULL_LEVEL: u8 = 32;
 
@@ -122,7 +138,7 @@ pub fn emerge_stellar<'s>(
     govts: &Governments,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<&'s LandingSite> {
-    let candidates = candidates(govt, sites, govts);
+    let candidates = destination::candidates(govt, sites, govts, Admit::All);
     if !candidates
         .iter()
         .any(|site| GateKind::of(site.flags2).is_some())
@@ -136,56 +152,18 @@ pub fn emerge_stellar<'s>(
         .filter(|site| GateKind::of(site.flags2).is_some())
 }
 
-/// The stellars among `sites` that `_SelectRandomStellarDest` picks among
-/// for a ship of `govt`, in order (see the module docs).
-fn candidates<'s>(
-    govt: Option<GovtId>,
-    sites: &'s [LandingSite],
-    govts: &Governments,
-) -> Vec<&'s LandingSite> {
-    let ok: Vec<&LandingSite> = sites
-        .iter()
-        .filter(|site| {
-            is_landable(site)
-                && site.position.x <= MAX_COORDINATE
-                && site.position.y <= MAX_COORDINATE
-                && !govts.npc_enemies(govt, site.govt)
-        })
-        .collect();
-    let of_kind = |kind| -> Vec<&'s LandingSite> {
-        ok.iter()
-            .copied()
-            .filter(|site| GateKind::of(site.flags2) == Some(kind))
-            .collect()
-    };
-    let wormholes = govts.flag2(govt, PREFERS_WORMHOLES);
-    if wormholes {
-        let found = of_kind(GateKind::Wormhole);
-        if !found.is_empty() {
-            return found;
-        }
-    }
-    if govts.flag2(govt, PREFERS_HYPERGATES) {
-        let found = of_kind(GateKind::Hypergate);
-        if !found.is_empty() {
-            return found;
-        }
-    }
-    let no_hypergates = govts.flag2(govt, AVOIDS_HYPERGATES);
-    ok.into_iter()
-        .filter(|site| match GateKind::of(site.flags2) {
-            None => site.flags & StellarFlags::UNINHABITED == 0,
-            Some(GateKind::Wormhole) => wormholes,
-            Some(GateKind::Hypergate) => !no_hypergates,
-        })
-        .collect()
-}
-
 /// How fast a ship leaving a gate moves on tick `tick` (from 0) of its
-/// burst.
+/// burst: from [`LED_EXIT_SPEED`] for a ship `led` out of the gate by the
+/// player, from [`EXIT_SPEED`] otherwise, [`EXIT_SLOWING`] slower each
+/// tick.
+///
+/// The original adds 1.165 to an f32 each frame (@0x34c2f-0x34c63), so
+/// its speed drifts from this closed form by about 1e-5 over a burst, a
+/// difference no player can see.
 #[must_use]
-pub fn exit_speed(tick: u32) -> f32 {
-    EXIT_SLOWING.mul_add(-(tick as f32), EXIT_SPEED)
+pub fn exit_speed(led: bool, tick: u32) -> f32 {
+    let start = if led { LED_EXIT_SPEED } else { EXIT_SPEED };
+    EXIT_SLOWING.mul_add(-(tick as f32), start)
 }
 
 /// How opaque a ship coming out of a gate with `ticks_left` of its wait
@@ -207,15 +185,19 @@ mod tests {
     use super::*;
     use crate::catalog::GovtRecord;
     use crate::gate::{HYPERGATE, WORMHOLE};
+    use crate::govt::{AVOIDS_HYPERGATES, PREFERS_HYPERGATES, PREFERS_WORMHOLES};
+    use crate::landing::StellarFlags;
     use crate::testkit::{Draws, govt, planet};
 
     #[test]
-    fn a_led_burst_is_the_generic_burst_from_its_fifth_tick() {
-        assert_eq!(exit_speed(LED_BURST_TICK), LED_EXIT_SPEED);
-        assert_eq!(
-            exit_speed(LED_BURST_TICK - 1),
-            LED_EXIT_SPEED + EXIT_SLOWING
-        );
+    fn a_led_burst_starts_at_15_and_slows_by_the_same_rate() {
+        assert_eq!(exit_speed(true, 0), 15.0);
+        assert!((exit_speed(true, 1) - 13.835).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_gate_burst_slows_as_the_hyperspace_glide_does() {
+        assert_eq!(EXIT_SLOWING, crate::traffic::spawn::JUMP_IN_SLOWING);
     }
 
     const SHIP: Option<GovtId> = Some(GovtId(128));
@@ -452,10 +434,10 @@ mod tests {
     }
 
     #[test]
-    fn leaving_a_gate_starts_at_30_and_slows_by_3_a_tick() {
-        assert_eq!(exit_speed(0), 30.0);
-        assert_eq!(exit_speed(1), 27.0);
-        assert_eq!(exit_speed(5), 15.0);
+    fn leaving_a_gate_starts_at_30_and_slows_by_1_165_a_tick() {
+        assert_eq!(exit_speed(false, 0), 30.0);
+        assert!((exit_speed(false, 1) - 28.835).abs() < 1e-4);
+        assert!((exit_speed(false, 10) - 18.35).abs() < 1e-4);
     }
 
     #[test]

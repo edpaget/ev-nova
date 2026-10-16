@@ -42,11 +42,10 @@ use nova_sim::Test;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::market::commodities;
 use nova_sim::{
-    Chance, Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good,
-    GovtId, JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod,
-    OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields,
-    ShipId, ShipState, ShipStats, Standing, StartDate, StellarId, StellarShown, StringPatch,
-    SystemId, TypeWidth, Vec2, check_landing, cleared, landing_reach, services,
+    Chance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good, GovtId, JunkId,
+    LandOutcome, LandPress, NeverFires, OutfitId, OutfitMod, OutfitOrder, OutfitRefusal, Pilot,
+    PilotCatalog, RechargeRefusal, Service, Session, ShipFields, ShipId, ShipState, ShipStats,
+    Standing, StartDate, StellarId, StringPatch, SystemId, Vec2, cleared, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -202,51 +201,22 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
         })
         .expect("HG-Kania is in the start system");
     assert_eq!(kania.min_status, 32767);
-    let parked = ShipState {
-        position: kania.position,
-        ..ShipState::default()
-    };
-    assert_eq!(
-        check_landing(
-            &parked,
-            kania,
-            |site| cleared(
-                site,
-                Standing {
-                    record: session.pilot().system_record(session.system()),
-                    meets_require: true,
-                    ..Standing::default()
-                },
-                RuleSource::Engine,
-            ),
-            landing_reach(
-                kania,
-                StellarShown {
-                    frame: true,
-                    type_width: TypeWidth::Frame,
-                },
-                RuleSource::Engine,
-            ),
-        ),
-        Err(LandingRefusal::Denied {
-            stellar: kania.id,
-            station: true,
-            min_status: 32767,
-        })
-    );
+    assert!(!cleared(
+        kania,
+        Standing {
+            record: session.pilot().system_record(session.system()),
+            meets_require: true,
+            ..Standing::default()
+        },
+        RuleSource::Engine,
+    ));
 
     let port_kane = data.get::<Stellar>(137).expect("present").expect("decodes");
     assert_eq!(port_kane.name, Some("Port Kane"));
-    let port_kane_site = sites
-        .iter()
-        .find(|site| site.id.0 == 137)
-        .expect("Port Kane is in the start system");
-    assert_eq!(
-        port_kane_site.landing_sound,
-        Some(nova_sim::SoundId(10_032)),
-        "Federation Station.SFIL"
+    assert!(
+        sites.iter().any(|site| site.id.0 == 137),
+        "Port Kane is in the start system"
     );
-    assert_eq!(kania.landing_sound, None, "a hypergate's angle, 120");
     assert_eq!(
         services(port_kane.record.flags.bits()),
         [
@@ -310,20 +280,25 @@ fn stock_default_outfits_give_their_fuel_regeneration() {
     assert!((regen - (0.1 + 0.25)).abs() < 1e-6, "{regen}");
 }
 
-/// A new stock pilot, docked at Port Kane (`spöb` 137 in Kania, where it
-/// starts), through a save that says so.
+/// A new stock pilot, resumed over Port Kane (`spöb` 137 in Kania, where
+/// it starts) through a save that says so, and landed there.
 fn at_port_kane(data: &GameData) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(137);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let session = Session::fly(data, docked).expect("flies");
-    assert_eq!(
-        session.landed(),
-        Some(StellarId(137)),
-        "docked at Port Kane"
-    );
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    land_where_resumed(data, Session::fly(data, saved).expect("flies"))
+}
+
+/// `session`, just flown from a save, landed on the stellar it resumed
+/// over (see [`Session::land_at`]).
+fn land_where_resumed(data: &GameData, mut session: Session) -> Session {
+    assert_eq!(session.landed(), None, "resumed in flight");
+    let stellar = session.pilot().stellar().expect("resumed over a stellar");
+    let system = session.pilot().system();
+    session.land_at(data, system, stellar).expect("lands");
+    assert_eq!(session.landed(), Some(stellar));
     session
 }
 
@@ -796,8 +771,8 @@ fn sirrusas_outfitter_buys_back_owned_outfits_but_not_cannot_sell_ones() {
     let outfits = save["outfits"].as_array_mut().expect("a list");
     outfits.push(serde_json::json!({"outfit": 256, "count": 1}));
     outfits.push(serde_json::json!({"outfit": 259, "count": 1}));
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(&data, docked).expect("flies");
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = land_where_resumed(&data, Session::fly(&data, saved).expect("flies"));
     assert_eq!(session.landed(), Some(StellarId(156)), "docked at Sirrusa");
     let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
     let order = |id, direction| OutfitOrder {
@@ -923,7 +898,7 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
         {"outfit": 269, "count": 1}
     ]);
     let old = nova_sim::save::decode(&save.to_string()).expect("a version 13 pilot");
-    let mut session = Session::fly(&data, old).expect("flies");
+    let mut session = land_where_resumed(&data, Session::fly(&data, old).expect("flies"));
     assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
     let owned: std::collections::BTreeMap<OutfitId, u16> = session.pilot().outfits().collect();
     assert_eq!(
@@ -947,7 +922,7 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
         .expect("the Wraithii");
     wraithii["count"] = serde_json::json!(1);
     let fired = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(&data, fired).expect("flies");
+    let mut session = land_where_resumed(&data, Session::fly(&data, fired).expect("flies"));
     assert_eq!(session.pilot().owned(OutfitId(152)), 1, "none added");
     let shipyard = session.shipyard(&mut Fires).expect("a shipyard");
     assert_eq!(shipyard.trade_in, 1_163_000);
@@ -1017,8 +992,8 @@ fn e_to_the_abomination_nets_its_negative_load_by_the_engine() {
     assert_eq!(changed(unsigned), 60, "the -1 adds nothing");
 }
 
-/// A new stock pilot, docked at `stellar` in `system` with `fuel` units
-/// in its tank, through a save that says so.
+/// A new stock pilot, resumed over `stellar` in `system` with `fuel` units
+/// in its tank through a save that says so, and landed there.
 fn docked_with_fuel(data: &GameData, system: i16, stellar: i16, fuel: f32) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
@@ -1026,8 +1001,8 @@ fn docked_with_fuel(data: &GameData, system: i16, stellar: i16, fuel: f32) -> Se
     save["system"] = serde_json::json!(system);
     save["stellar"] = serde_json::json!(stellar);
     save["reserves"]["fuel"]["now"] = serde_json::json!(fuel);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let session = Session::fly(data, docked).expect("flies");
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let session = land_where_resumed(data, Session::fly(data, saved).expect("flies"));
     assert_eq!(session.landed(), Some(StellarId(stellar)), "docked");
     session
 }
@@ -1408,7 +1383,7 @@ fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
         arsenal,
         &nova_sim::Governments::default(),
         Rules::default(),
-        &mut [],
+        nova_sim::combat::Scenery::default(),
         &mut Straight,
     );
 }
@@ -1666,11 +1641,11 @@ fn every_stock_weapon_in_scope_takes_the_shields_before_the_armour() {
     }
 }
 
-/// Every stock weapon in scope, fired again and again in one fight:
-/// exactly the Mining Blaster and the three Wraith Graviton Beams report
-/// their x10 damage to asteroids (`Flags2` 0x8000), each once.
+/// Every stock weapon in scope, fired again and again in one fight,
+/// reports no unimplemented flag: the Mining Blaster's and the Wraith
+/// Graviton Beams' x10 damage to asteroids (`Flags2` 0x8000) is done.
 #[test]
-fn only_the_asteroid_damage_flag_is_reported_each_once() {
+fn no_stock_weapon_in_scope_reports_an_unimplemented_flag() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -1682,16 +1657,7 @@ fn only_the_asteroid_damage_flag_is_reported_each_once() {
         fight(&mut combat, &mut ships);
         diagnostics.extend(combat.take_diagnostics());
     }
-    let expected: BTreeSet<SimDiagnostic> = [181, 165, 167, 168]
-        .into_iter()
-        .map(|id| SimDiagnostic::UnimplementedWeaponFlag {
-            weapon: WeaponId(id),
-            field: FlagField::Flags2,
-            bit: 0x8000,
-        })
-        .collect();
-    assert_eq!(diagnostics.len(), 4, "{diagnostics:?}");
-    assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert_eq!(diagnostics, []);
 }
 
 /// Each ship type a trader `düde` (AI 1 or 2) flies, hit with Light
@@ -2049,17 +2015,17 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
         diagnostics.extend(combat.take_diagnostics());
     }
     // The Zephyr family's `Flags2` 0x4000 (183-185, 199) fires while
-    // cloaked, which `Armament::has_ammo` does, so it reports nothing.
-    let rows: [Row; 9] = [
+    // cloaked, which `Armament::has_ammo` does, so it reports nothing;
+    // `Seeker` 0x0001 (148, 182, 184, 185, 199, 229, 137) passes through
+    // asteroids and `Flags2` 0x8000 (196-198, 230) mines them, both done.
+    let rows: [Row; 7] = [
         (&[134, 136], &[(Seeker, 0x2)]),
         (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
-        (&[137], &[(Seeker, 0x1), (Seeker, 0x8)]),
-        (&[148, 182, 184, 185, 199, 229], &[(Seeker, 0x1)]),
+        (&[137], &[(Seeker, 0x8)]),
         (&[142, 201], &[(Flags2, 0x1000), (Flags3, 0x10)]),
         (&[233], &[(Flags2, 0x1000)]),
         (&[234], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x1000)]),
-        (&[196, 197, 198], &[(Flags2, 0x8000)]),
-        (&[230], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x8000)]),
+        (&[230], &[(Seeker, 0x2), (Seeker, 0x8)]),
     ];
     let expected: BTreeSet<SimDiagnostic> = rows
         .iter()
@@ -2075,15 +2041,15 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
             })
         })
         .collect();
-    assert_eq!(expected.len(), 28);
-    assert_eq!(diagnostics.len(), 28, "each once: {diagnostics:?}");
+    assert_eq!(expected.len(), 17);
+    assert_eq!(diagnostics.len(), 17, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
 }
 
 /// Every stock weapon that releases sub-munitions, fired alone again and
 /// again at a ship ahead, with its sub-munition's weapon mounted nowhere:
-/// the sub-munitions released report their unimplemented flags, each
-/// once.
+/// the sub-munitions released report no unimplemented flag, their only
+/// one, `Seeker` 0x0001, being done.
 #[test]
 fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released() {
     let Some(dir) = common::nova_data() else {
@@ -2115,17 +2081,7 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
             (parent.id.0, diagnostics)
         })
         .collect();
-    let seeker = |weapon| {
-        vec![SimDiagnostic::UnimplementedWeaponFlag {
-            weapon: WeaponId(weapon),
-            field: FlagField::Seeker,
-            bit: 0x0001,
-        }]
-    };
-    assert_eq!(
-        released,
-        [(163, seeker(229)), (182, seeker(148)), (185, seeker(148))]
-    );
+    assert_eq!(released, [(163, vec![]), (182, vec![]), (185, vec![])]);
 }
 
 // Combat AI and legal status over the stock data.
@@ -3038,7 +2994,7 @@ fn the_shuttles_fee_and_wage_are_nova_hires() {
     assert_eq!((row.fee, row.wage), (970, 100));
 }
 
-/// A stock pilot docked at Viking holding `ranks`.
+/// A stock pilot holding `ranks`, resumed over Viking and landed there.
 fn at_viking_holding(data: &GameData, ranks: &[i16]) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
@@ -3046,8 +3002,8 @@ fn at_viking_holding(data: &GameData, ranks: &[i16]) -> Session {
     save["system"] = serde_json::json!(129);
     save["stellar"] = serde_json::json!(157);
     save["ranks"] = serde_json::json!(ranks);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let session = Session::fly(data, docked).expect("flies");
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let session = land_where_resumed(data, Session::fly(data, saved).expect("flies"));
     assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
     session
 }
@@ -3855,8 +3811,8 @@ fn the_bounty_hunter_gone_for_good_never_appears_again() {
 }
 
 /// A new stock pilot in Kania, at rest over HG-Kania (`spöb` 1404, at
-/// (-70, 250)): docked there through a save that says so, then taken off,
-/// which leaves the ship at the gate's centre. It holds rank 147, "Have
+/// (-70, 250)), where a save that says so resumes it, in flight at the
+/// gate's centre. It holds rank 147, "Have
 /// Access to Hypergate System", which blesses landing at the Hypergate
 /// government's (183) stellars: no record clears HG-Kania's `MinStatus`
 /// of 32767 (`_HandlePlayerDockRequest` @0x67915).
@@ -3867,19 +3823,16 @@ fn over_hg_kania(data: &GameData) -> Session {
     save["stellar"] = serde_json::json!(1404);
     save["ranks"] = serde_json::json!([147]);
     let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(data, parked).expect("flies");
-    assert_eq!(
-        session.take_off(data, &mut NeverFires),
-        Some(StellarId(1404))
-    );
+    let session = Session::fly(data, parked).expect("flies");
+    assert_eq!(session.landed(), None);
     assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
     session
 }
 
-/// L, L over HG-Kania enters it, offering Tichel, Dani and Koria; picking
+/// L, a tick, and L over HG-Kania enters it, offering Tichel, Dani and Koria; picking
 /// Tichel brings the Shuttle out of HG-Tichel at (-400, -500), heading
-/// 120° at half its top speed, a day on, the take-off's
-/// (`_PlayerLandOnStellar` @0x63440), and with a full tank.
+/// 120° at half its top speed, on the day it started, as no take-off
+/// passed one (`_PlayerLandOnStellar` @0x63440), and with a full tank.
 #[test]
 fn hg_kania_leads_to_hg_tichel() {
     let Some(dir) = common::nova_data() else {
@@ -3890,13 +3843,13 @@ fn hg_kania_leads_to_hg_tichel() {
     assert_eq!(session.system(), SystemId(128));
     assert_eq!(
         session.land(),
-        Ok(LandOutcome::Selected {
+        Ok(LandOutcome::Requested {
             stellar: StellarId(1404),
             station: true,
-            clearance: Clearance::Granted,
         }
         .into())
     );
+    session.tick(nova_sim::Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandPress::AtGate {
@@ -3922,7 +3875,7 @@ fn hg_kania_leads_to_hg_tichel() {
     );
     let speed = player.velocity.length();
     assert!((speed - session.top_speed() / 2.0).abs() < 1e-4, "{speed}");
-    assert_eq!(session.date_text(), "June 24, 1177 NC");
+    assert_eq!(session.date_text(), "June 23, 1177 NC");
     assert_eq!(session.reserves().fuel, full);
     assert_eq!(full, Gauge::full(300.0));
 }

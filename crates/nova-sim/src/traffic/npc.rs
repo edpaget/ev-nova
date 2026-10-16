@@ -5,13 +5,15 @@ use std::collections::BTreeMap;
 
 use crate::ai::Goal;
 use crate::bay::Carrier;
-use crate::catalog::{GovtId, PersonId, ShipId, WeaponId};
+use crate::catalog::{GovtId, PersonId, ShipId, StellarId, WeaponId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
+use crate::geometry::Vec2;
+use crate::market::Good;
 use crate::mission::ships::ShipBehav;
 use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
@@ -63,31 +65,90 @@ impl AiType {
 }
 
 /// Whether an NPC is still coming out of hyperspace, or of a hypergate or
-/// wormhole (see [`emerge`](crate::traffic::emerge)).
+/// wormhole (see [`emerge`](crate::traffic::emerge)), or entering one to
+/// leave (see [`gate_entry`](crate::traffic::gate_entry)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// Gliding in from hyperspace, for this many more ticks: no steering
+    /// Gliding in from hyperspace, on this tick of the glide (from 0), at
+    /// [`glide_speed`](crate::traffic::spawn::glide_speed): no steering
     /// and no decisions.
     JumpingIn {
-        /// The ticks of the glide left.
-        ticks_left: u32,
+        /// The tick of the glide.
+        tick: u32,
     },
     /// Waiting at the centre of the gate it comes out of, for this many
     /// more ticks: hidden, still, seen by no ship, and no decisions. An
     /// arrival out of a gate (see [`emerge`](crate::traffic::emerge)) and
     /// a mission ship following the player through one
     /// (`_AIMakeShipEmergeFromHyperGate`, goal 21; see the session's
-    /// `gate_follow` module) both wait so, untargetable and not drawn.
+    /// `gate_follow` module) both wait so, untargetable and not drawn,
+    /// with no target and no trigger held ([`Npc::emerge_from_gate`]):
+    /// it fires nothing here or in its burst, but for the point defence of
+    /// an escort or fighter given a target (see the traffic's tick).
+    ///
+    /// It answers a hit as a flying ship does: its hyperspace state +0x50,
+    /// which `_DamageShip` reads to skip a reaction (@0x3b4b0-0x3b4c2),
+    /// is -1.0 here (@0x89555), never above 0. It takes the attacker as
+    /// its target and the damage as provocation, and its wait is cut to
+    /// 20 (@0x3be6e-0x3be7c); it stays here, hidden, and keeps both
+    /// through its burst. A hit by the player holds it here instead
+    /// ([`Mode::HeldAtGate`]).
     Emerging {
         /// The ticks of the wait left.
         ticks_left: u32,
     },
+    /// Held where it waited in its gate, for this many more ticks, once
+    /// the player's hit (or a Good Samaritan's answer to the player) made
+    /// it attack the player there: `_AIMakeShipAttackPlayer` (@0x89d3e)
+    /// sets goal 4 whatever the goal, so it is no longer goal 0x15 and
+    /// `_ShipVisibleToShip` (@0x972d) sees it, it is targeted and drawn
+    /// unfaded, it lets go of the gate's sprite (@0x2e8bd-0x2e8d7), and
+    /// `_HighLevelAIHandler` never bursts it out (@0x8dd61). Its wait
+    /// +0x4c still runs: `_HandleShip` skips its steering, thrust and fire
+    /// (@0x34a54-0x34a72), so it holds still, and once the wait is out it
+    /// flies its goal from rest ([`Npc::hold_at_gate`]), with no burst:
+    /// its attack rewrites the burst word +0x34 the step it first thrusts
+    /// (see [`autopilot`](crate::traffic::autopilot)). Its decisions are
+    /// due through the hold, as goal 0x15 no longer skips the per-type AIs
+    /// (@0x8ff18-0x8ff20 → @0x8ff26-0x90016), but it fires only the point
+    /// defence of a waiting escort or fighter (see the traffic's tick).
+    HeldAtGate {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
     /// Bursting out of the gate along its heading, on this tick of the
-    /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed):
-    /// no steering and no decisions.
+    /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed)
+    /// from 30, or from 15 when [`led_out`](Npc::led_out): no steering and
+    /// no decisions. Tick 0 is the frame its wait runs out, its goal still
+    /// 0x15, so it still holds the gate's sprite open; from its first
+    /// moving tick it has goal 8 and is out of its gate (+0x6c = -1,
+    /// @0x8dd8a-0x8dd93), and lets go ([`Npc::holds_gate_open`]).
     LeavingGate {
         /// The tick of the burst.
         tick: u32,
+    },
+    /// Holding its course after its glide in or its burst out of a gate,
+    /// for this many more ticks: a ship with no lead
+    /// (`_HandleShip` @0x34d5c-0x34d8b, its AI wait +0x4c). It moves on at
+    /// the velocity the glide or burst left it, with no steering, thrust,
+    /// slowing, fire or decisions, but is seen, targeted and fought as a
+    /// flying ship is: its goal is 0, not 21, so `_ShipVisibleToShip`
+    /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`].
+    Coasting {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
+    /// Entering `gate`, the hypergate or wormhole it leaves the system
+    /// through, for this many more ticks: the original's sub-goal 0x17,
+    /// its wait +0x4c counting down (see
+    /// [`gate_entry`](crate::traffic::gate_entry)). It holds still and
+    /// fades out, and decides nothing, but is seen, targeted, fought and
+    /// hailed as a flying ship is ([`Npc::arrived`]).
+    EnteringGate {
+        /// The gate it enters.
+        gate: StellarId,
+        /// The ticks of the wait left.
+        ticks_left: u32,
     },
     /// Flying under its own controls.
     Flying,
@@ -190,6 +251,16 @@ pub struct Npc {
     /// Its `düde`'s `InfoTypes` flags, what it says when hailed (see
     /// [`hail`](crate::hail)); none for a fleet's ship.
     pub info_types: u16,
+    /// The commodities in its own hold and their tons: the original's
+    /// six commodity words at ship +0x7a, all cleared as it spawns
+    /// (`_GenericRandomShipSpawn` @0x3ccce-0x3cce5), of which a `flët`
+    /// with `Flags` 0x0001 fills one for its trader ships
+    /// ([`spawn::fleet`](crate::traffic::spawn::fleet)). The plunder never
+    /// offers it: boarding reads the `düde`'s `Booty` alone
+    /// (`_SetPlunderValues` @0x92222-0x92256). It holds all six, so a ton
+    /// scooped of another commodity is kept beside the first
+    /// ([`NpcHold`]).
+    pub cargo: NpcHold,
     /// Whether the player has paid it to spare it: it never targets the
     /// player again.
     pub spared: bool,
@@ -217,10 +288,18 @@ pub struct Npc {
     pub cloak_gear: CloakGear,
     /// Made to come out of a gate while the player led it, so its burst
     /// starts at [`LED_EXIT_SPEED`](crate::traffic::emerge::LED_EXIT_SPEED)
-    /// (`_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd). Read only as
-    /// its wait runs out: decided at the emerge, as the original decides
-    /// by the leader then.
+    /// (`_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd). Read through
+    /// its burst: decided at the emerge, as the original decides by the
+    /// leader then and fixes the burst's start speed (+0x34) there.
     pub led_out: bool,
+    /// The gate it is coming out of, from its emerge until its burst
+    /// starts: the original's travel stellar (+0x6c), which
+    /// `_AIMakeShipEmergeFromHyperGate` sets to the gate (@0x8954a) and
+    /// `_HighLevelAIHandler` sets to -1 in the pass that starts the burst
+    /// (@0x8dd93), or `_AIMakeShipAttackPlayer` as the ship is held at its
+    /// gate (@0x89d47). The gate's sprite opens while it waits
+    /// ([`Npc::holds_gate_open`]).
+    pub emerges_from: Option<StellarId>,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
@@ -230,6 +309,59 @@ pub struct Npc {
     /// original's +0xc8de). It forgets once intact, boarded or taken into
     /// the fleet again (see [`self_repair`](crate::self_repair)).
     pub former: Option<FormerEscort>,
+}
+
+/// The commodities 0-5 the original's ship records count.
+pub const NPC_COMMODITIES: usize = 6;
+
+/// An NPC's own hold: the tons of each commodity 0-5 it carries, the
+/// original's six commodity words at ship +0x7a. Its spawn fills one at
+/// most ([`NpcHold::of`]); a scoop adds a ton of any
+/// ([`scoop::npc_scoop`](crate::scoop::npc_scoop)). It holds no `jünk`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NpcHold {
+    tons: [u32; NPC_COMMODITIES],
+}
+
+impl NpcHold {
+    /// The hold a spawn gives: the one commodity its ship comes with, if
+    /// any. A `jünk`, or a commodity past 5, is dropped; the spawn never
+    /// gives either.
+    #[must_use]
+    pub fn of(cargo: Option<(Good, u32)>) -> Self {
+        let mut hold = Self::default();
+        if let Some((Good::Commodity(commodity), tons)) = cargo {
+            hold.add(commodity, tons);
+        }
+        hold
+    }
+
+    /// The tons of `commodity` it holds: none past commodity 5.
+    #[must_use]
+    pub fn tons(&self, commodity: u8) -> u32 {
+        self.tons.get(usize::from(commodity)).copied().unwrap_or(0)
+    }
+
+    /// Adds `tons` of `commodity`, saturating: nothing past commodity 5.
+    pub fn add(&mut self, commodity: u8, tons: u32) {
+        if let Some(held) = self.tons.get_mut(usize::from(commodity)) {
+            *held = held.saturating_add(tons);
+        }
+    }
+
+    /// The commodities it holds tons of, in commodity order, with the
+    /// tons.
+    pub fn held(&self) -> impl Iterator<Item = (Good, u32)> + '_ {
+        (0..NPC_COMMODITIES)
+            .zip(self.tons)
+            .filter(|&(_, tons)| tons > 0)
+            .map(|(commodity, tons)| {
+                // In 0..6.
+                #[allow(clippy::cast_possible_truncation)]
+                let commodity = commodity as u8;
+                (Good::Commodity(commodity), tons)
+            })
+    }
 }
 
 /// What marks an NPC as an active mission's special ship (see the
@@ -286,6 +418,14 @@ impl Npc {
     #[must_use]
     pub fn escorts_player(&self) -> bool {
         self.escort.is_some() || self.mission_escort()
+    }
+
+    /// Whether it is scooping up asteroid boxes, `_AIShipIsScooping`
+    /// (@0x88727): by its goal ([`Goal::scooping`]), so never until
+    /// rdm:phase/asteroids/phase-5-ai-mining.
+    #[must_use]
+    pub fn is_scooping(&self) -> bool {
+        self.goal.scooping()
     }
 
     /// Its top speed in flight, its `_ShipMaxSpeed`: its own handling's
@@ -399,14 +539,12 @@ impl Npc {
     /// government test; inspecting is no threat.
     ///
     /// This is only part of `_IsThreatToPlayer` @0x7f501, which also counts
-    /// a ship attacking one the player leads; every caller roadmap
-    /// player-led-ships ported asks [`Npc::threatens_player_among`]. It is
-    /// kept for roadmap hud-fidelity's radar IFF
-    /// ([`iff::ship_iff`](crate::iff::ship_iff)) and Red Alert, which build
-    /// on it, and that roadmap's phase 14 moves them and retires it. The
-    /// hail's [`threatened_by_enemy`](crate::hail::Hail::threatened_by_enemy)
-    /// and [`threats_to_player`](crate::hail::Hail::threats_to_player)
-    /// read it too.
+    /// a ship attacking one the player leads; every other caller, the
+    /// radar IFF and the Red Alert among them, asks
+    /// [`Npc::threatens_player_among`]. It is kept only for the hail's
+    /// [`threatened_by_enemy`](crate::hail::Hail::threatened_by_enemy)
+    /// and [`threats_to_player`](crate::hail::Hail::threats_to_player),
+    /// which still read it.
     #[must_use]
     pub fn threatens_player(&self) -> bool {
         self.threatens(ShipRef::Player)
@@ -452,10 +590,96 @@ impl Npc {
     ///
     /// Every modelled caller of `_IsThreatToPlayer` asks this, and so do
     /// the readers of `_ExtendedIsThreatToPlayer` @0x81b70, whose target
-    /// test has the same led clause (@0x81c2e-0x81c4a).
+    /// test has the same led clause (@0x81c2e-0x81c4a), but for the attack
+    /// quote's gate, which asks the whole of it
+    /// ([`Npc::threatens_player_extended`]).
     #[must_use]
     pub fn threatens_player_among(&self, npcs: &[Npc]) -> bool {
         self.threatens_player_or_led(|id| npcs.iter().any(|n| n.id == id && n.escorts_player()))
+    }
+
+    /// Whether it threatens the player as `_ExtendedIsThreatToPlayer`
+    /// (@0x81b70-0x81de5) asks it, reading which ships the player and it
+    /// lead from `npcs`, and `seen` saying whether the player sees it
+    /// (`_ShipVisibleToShip(ship, player)` @0x81bc6, which only the
+    /// session or its [`World`](crate::traffic::World) knows: a cloaked
+    /// ship is seen only by a player scanning for it in range, and a ship
+    /// waiting in its gate never, see [`cloak::visible`](crate::cloak::visible)).
+    ///
+    /// It is no threat when it is not intact (inactive, @0x81b82, or
+    /// `_IsDisabled`, @0x81b92), when the player leads it (+0x9a == 0,
+    /// @0x81b9f), when it has no target (+0x70 == -1, @0x81bad), or when it
+    /// is unseen. Otherwise it is a threat for any of:
+    ///
+    /// - **A stellar defender** (+0x8c != -1, @0x81bd3): not modelled, as
+    ///   the engine has no defence ships; rdm:task/planet-domination owns
+    ///   them.
+    /// - **The target clause**: it [threatens the player or a ship the
+    ///   player leads](Npc::threatens_player_or_led) by its goal's quarry,
+    ///   or its target ([`Npc::target`], the hit's, which
+    ///   `_DamageShip` sets before `_AIMakeShipAttackPlayer`, @0x3bcf6) is
+    ///   the player (@0x81be1) or a ship the player leads (@0x81c2e-0x81c4a)
+    ///   while its wait is not running ([`Npc::wait_running`], +0x4c,
+    ///   @0x81bed, @0x81c4f) and its goal is none the original leaves out
+    ///   ([`Goal::spares_player_threat`], @0x81bf3-0x81c28,
+    ///   @0x81c55-0x81c8a). @0x81c90-0x81cd7 repeats the led-target test,
+    ///   which changes nothing.
+    /// - **The escort clause** (@0x81cdd-0x81dcc): some ship in `npcs` it
+    ///   leads (+0x9a is its +0x86), whose wait is not running, intact,
+    ///   targets (or fights) the player (@0x81d33) or a ship the player
+    ///   leads (@0x81dae-0x81dbe). The goal read there is this ship's
+    ///   (`%esi` @0x81d38, @0x81d77), not the escort's, and this ship's own
+    ///   wait is not read.
+    ///
+    /// A ship gliding in ([`Mode::JumpingIn`]) or bursting out of its gate
+    /// ([`Mode::LeavingGate`]) runs no wait (`_HyperShipSpawn` sets only
+    /// +0x50, @0x42b16), so it is a threat once it targets the player. At
+    /// the burst's tick 0 the original's ship still has goal 0x15 and is
+    /// unseen; the engine's [`Npc::emerging`] treats that tick as out of
+    /// the gate, as every reader of the player's sight does.
+    ///
+    /// This is the predicate for `_AIMakeShipAttackPlayer`'s quote gate
+    /// ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote));
+    /// the hail's and the ranks' readers still ask
+    /// [`Npc::threatens_player_among`].
+    #[must_use]
+    pub fn threatens_player_extended(&self, npcs: &[Npc], seen: bool) -> bool {
+        let led = |id: NpcId| npcs.iter().any(|n| n.id == id && n.escorts_player());
+        let at_player = |ship: Option<ShipRef>| match ship {
+            Some(ShipRef::Player) => true,
+            Some(ShipRef::Npc(id)) => led(id),
+            None => false,
+        };
+        let has_target = self.target.is_some() || self.goal.quarry().is_some();
+        if !seen || self.condition != Condition::Intact || self.escorts_player() || !has_target {
+            return false;
+        }
+        let in_threat_goal = !self.goal.spares_player_threat();
+        let by_target = self.threatens_player_or_led(led)
+            || (!self.wait_running() && in_threat_goal && at_player(self.target));
+        let by_escort = in_threat_goal
+            && npcs.iter().any(|escort| {
+                escort.leader == Some(self.id)
+                    && escort.condition == Condition::Intact
+                    && !escort.wait_running()
+                    && (at_player(escort.target) || at_player(escort.goal.quarry()))
+            });
+        by_target || by_escort
+    }
+
+    /// Whether its AI wait (+0x4c) is running: waiting in its gate or
+    /// held at it, holding its course after its glide or burst, or
+    /// entering a gate to leave (see each [`Mode`]). Gliding in, bursting
+    /// out and flying, it has none.
+    #[must_use]
+    pub fn wait_running(&self) -> bool {
+        matches!(
+            self.mode,
+            Mode::Emerging { .. }
+                | Mode::HeldAtGate { .. }
+                | Mode::Coasting { .. }
+                | Mode::EnteringGate { .. }
+        )
     }
 
     /// Whether it is waiting at the gate it comes out of
@@ -465,6 +689,99 @@ impl Npc {
     #[must_use]
     pub fn emerging(&self) -> bool {
         matches!(self.mode, Mode::Emerging { .. })
+    }
+
+    /// Makes it come out of `gate`, waiting there `ticks_left` ticks
+    /// (`_AIMakeShipEmergeFromHyperGate` @0x89518): goal 0x15 and
+    /// sub-goal 0 ([`Mode::Emerging`], @0x89532-0x8953b), its travel
+    /// stellar the gate ([`Npc::emerges_from`], @0x8954a), no target
+    /// (+0x70 = -1, @0x89544), and its trigger released.
+    ///
+    /// The original holds no trigger from one frame to the next: each
+    /// frame `_LowLevelAIHandler` clears the fire flag +0xba (@0x851f6)
+    /// for an `_AIFire*` call to set again. A waiting ship's fire step is
+    /// skipped (`_HandleShip` @0x34a54-0x34a72), and its burst runs under
+    /// goal 8, sub-goal 0xa, which fires nothing (@0x8dd61-0x8dd93,
+    /// @0x8f3c8-0x8f3d9). No decision is due until it flies, so the
+    /// released trigger holds through both.
+    ///
+    /// The caller places it, gives it its heading and decides
+    /// [`Npc::led_out`].
+    pub fn emerge_from_gate(&mut self, gate: StellarId, ticks_left: u32) {
+        self.mode = Mode::Emerging { ticks_left };
+        self.emerges_from = Some(gate);
+        self.target = None;
+        self.trigger = Trigger::default();
+    }
+
+    /// Whether it holds `gate`'s sprite open (`_HandleStellarSprites`
+    /// @0x2e884-0x2e8d7): coming out of it, waiting or its wait just run
+    /// out ([`Mode::LeavingGate`] at tick 0)
+    /// (`_AIShipIsEmergingFromHypergate` @0x7e2e8, goal 0x15, with its
+    /// travel stellar +0x6c the gate), and neither disabled nor breaking
+    /// up (`_IsDisabled` @0x2e8a3). From its first burst tick it has goal 8
+    /// and +0x6c = -1 (@0x8dd8a-0x8dd93), so it lets go.
+    #[must_use]
+    pub fn holds_gate_open(&self, gate: StellarId) -> bool {
+        self.emerges_from == Some(gate)
+            && matches!(
+                self.mode,
+                Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 }
+            )
+            && self.condition == Condition::Intact
+    }
+
+    /// Holds it where it waits in its gate, attacking the player
+    /// ([`Mode::HeldAtGate`], its wait kept): `_AIMakeShipAttackPlayer`
+    /// sets goal 4, target the player and travel stellar +0x6c = -1
+    /// (@0x89d3e-0x89d4d), keeping sub-goal 0. A ship not waiting in a
+    /// gate is left as it is.
+    pub fn hold_at_gate(&mut self) {
+        if let Mode::Emerging { ticks_left } = self.mode {
+            self.mode = Mode::HeldAtGate { ticks_left };
+            self.emerges_from = None;
+            self.goal = Goal::Attack(ShipRef::Player);
+        }
+    }
+
+    /// Whether it is entering a gate to leave ([`Mode::EnteringGate`]):
+    /// `_AIShipIsEnteringHypergate` (@0x89502), which tests the sub-goal
+    /// 0x17 alone.
+    #[must_use]
+    pub fn entering_gate(&self) -> bool {
+        matches!(self.mode, Mode::EnteringGate { .. })
+    }
+
+    /// Whether it heads in to `gate`, at `at`, strictly inside `reach` of
+    /// it on both axes, holding its sprite open (`_HandleStellarSprites`
+    /// @0x2e8dd-0x2e9a2): intact (`_IsDisabled` @0x2e8a3), bound to land
+    /// on it or enter it (`_AIShipIsShipGoingToStellar` @0x895d6, goal 1
+    /// or 0x14 with its travel stellar the gate), whatever its mode.
+    #[must_use]
+    pub fn approaches_gate(&self, gate: StellarId, at: Vec2, reach: f32) -> bool {
+        let bound = matches!(self.goal, Goal::Land(to) | Goal::EnterGate(to) if to == gate);
+        let off = self.state.position - at;
+        bound && self.condition == Condition::Intact && off.x.abs() < reach && off.y.abs() < reach
+    }
+
+    /// Whether it is done coming into the system, there to be seen,
+    /// fought and hailed: [`Mode::Flying`], holding its course after its
+    /// glide or burst ([`Mode::Coasting`]), which the original's +0x4c
+    /// wait marks and goal 21 does not, held at its gate attacking the
+    /// player ([`Mode::HeldAtGate`], goal 4), or entering a gate
+    /// ([`Mode::EnteringGate`]): `_ShipVisibleToShip` tests goal 0x15
+    /// alone (@0x972d). A ship gliding in, waiting in its gate or
+    /// bursting out of it is not, though it answers hits all the same
+    /// (see [`Mode::Emerging`]).
+    #[must_use]
+    pub fn arrived(&self) -> bool {
+        matches!(
+            self.mode,
+            Mode::Flying
+                | Mode::Coasting { .. }
+                | Mode::HeldAtGate { .. }
+                | Mode::EnteringGate { .. }
+        )
     }
 }
 
@@ -675,11 +992,16 @@ mod tests {
                 };
                 assert!(!downed.threatens_player(), "{goal:?} {condition:?}");
             }
-            let arriving = Npc {
-                mode: Mode::JumpingIn { ticks_left: 2 },
-                ..npc.clone()
-            };
-            assert!(!arriving.threatens_player());
+            for mode in [
+                Mode::JumpingIn { tick: 0 },
+                Mode::Coasting { ticks_left: 30 },
+            ] {
+                let arriving = Npc {
+                    mode,
+                    ..npc.clone()
+                };
+                assert!(!arriving.threatens_player(), "{goal:?} {mode:?}");
+            }
         }
         for goal in [
             Goal::Inspect(ShipRef::Player),
@@ -743,8 +1065,9 @@ mod tests {
             assert!(!downed.threatens_player_or_led(led), "{condition:?}");
         }
         for mode in [
-            Mode::JumpingIn { ticks_left: 2 },
+            Mode::JumpingIn { tick: 0 },
             Mode::Emerging { ticks_left: 2 },
+            Mode::Coasting { ticks_left: 30 },
         ] {
             let arriving = Npc {
                 mode,
@@ -860,8 +1183,9 @@ mod tests {
                 assert!(!downed.threatens_npc_among(asker, &npcs), "{condition:?}");
             }
             for mode in [
-                Mode::JumpingIn { ticks_left: 2 },
+                Mode::JumpingIn { tick: 0 },
                 Mode::Emerging { ticks_left: 2 },
+                Mode::Coasting { ticks_left: 30 },
             ] {
                 let arriving = Npc {
                     mode,
@@ -905,7 +1229,7 @@ mod tests {
         let mut npc = crate::testkit::npc(1, ShipStats::default());
         npc.goal = Goal::Attack(ShipRef::Player);
         assert!(!npc.emerging());
-        npc.mode = Mode::JumpingIn { ticks_left: 2 };
+        npc.mode = Mode::JumpingIn { tick: 0 };
         assert!(!npc.emerging());
         npc.mode = Mode::Emerging { ticks_left: 2 };
         assert!(npc.emerging());
@@ -962,10 +1286,423 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_holds_the_gate_it_comes_out_of_open_while_it_waits_intact_and_lets_go_as_its_burst_starts()
+     {
+        let gate = StellarId(128);
+        let ship = |mode, condition| Npc {
+            mode,
+            condition,
+            emerges_from: Some(gate),
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        // Waiting, or its wait just run out (goal still 0x15).
+        for mode in [
+            Mode::Emerging { ticks_left: 3 },
+            Mode::LeavingGate { tick: 0 },
+        ] {
+            assert!(
+                ship(mode, Condition::Intact).holds_gate_open(gate),
+                "{mode:?}"
+            );
+            assert!(
+                !ship(mode, Condition::Intact).holds_gate_open(StellarId(129)),
+                "{mode:?}"
+            );
+            for condition in [
+                Condition::Disabled,
+                Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
+                Condition::Destroyed,
+            ] {
+                assert!(
+                    !ship(mode, condition).holds_gate_open(gate),
+                    "{mode:?} {condition:?}"
+                );
+            }
+        }
+        // Bursting it has goal 8 and +0x6c = -1 (@0x8dd8a-0x8dd93), so
+        // `_AIShipIsEmergingFromHypergate` (@0x7e2e8) no longer sees it,
+        // even with the gate still marked.
+        for mode in [
+            Mode::LeavingGate { tick: 1 },
+            Mode::LeavingGate { tick: 2 },
+            Mode::Coasting { ticks_left: 30 },
+            Mode::Flying,
+            Mode::JumpingIn { tick: 0 },
+        ] {
+            assert!(
+                !ship(mode, Condition::Intact).holds_gate_open(gate),
+                "{mode:?}"
+            );
+        }
+        let unmarked = Npc {
+            emerges_from: None,
+            ..ship(Mode::Emerging { ticks_left: 3 }, Condition::Intact)
+        };
+        assert!(!unmarked.holds_gate_open(gate));
+    }
+
+    #[test]
+    fn a_ship_made_to_emerge_from_a_gate_waits_there_with_no_target_and_its_trigger_released() {
+        let state = ShipState {
+            position: Vec2::new(10.0, -20.0),
+            velocity: Vec2::new(1.0, 2.0),
+            heading: 45.0,
+        };
+        let mut npc = Npc {
+            mode: Mode::Flying,
+            state,
+            trigger: Trigger {
+                primary: true,
+                ..Trigger::default()
+            },
+            target: Some(ShipRef::Player),
+            led_out: true,
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        npc.emerge_from_gate(StellarId(310), 40);
+        assert_eq!(npc.mode, Mode::Emerging { ticks_left: 40 });
+        assert_eq!(npc.emerges_from, Some(StellarId(310)));
+        assert_eq!(npc.target, None);
+        assert_eq!(npc.trigger, Trigger::default());
+        assert_eq!(npc.state, state, "the caller places it");
+        assert!(npc.led_out, "the caller decides it");
+    }
+
+    #[test]
+    fn a_ship_held_at_its_gate_is_arrived_and_seen_but_no_longer_emerging_or_holding_it_open() {
+        // `_AIMakeShipAttackPlayer` takes it out of goal 0x15 (@0x89d3e),
+        // which `_ShipVisibleToShip` (@0x972d) and the gate sprite
+        // (@0x2e8bd-0x2e8d7) test, but its wait +0x4c still runs, which
+        // `_IsThreatToPlayer` tests (@0x7f518).
+        let gate = StellarId(128);
+        let held = Npc {
+            mode: Mode::HeldAtGate { ticks_left: 12 },
+            goal: Goal::Attack(ShipRef::Player),
+            emerges_from: Some(gate),
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        assert!(held.arrived());
+        assert!(!held.emerging());
+        assert!(!held.holds_gate_open(gate));
+        assert!(!held.threatens_player_or_led(|_| true));
+        assert!(!held.threatens_player());
+    }
+
+    #[test]
+    fn a_ship_held_at_its_gate_keeps_its_wait_leaves_its_gate_and_attacks_the_player() {
+        let mut npc = Npc {
+            mode: Mode::Emerging { ticks_left: 17 },
+            emerges_from: Some(StellarId(310)),
+            target: Some(ShipRef::Player),
+            provoked: 4.0,
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        npc.hold_at_gate();
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 17 });
+        assert_eq!(npc.emerges_from, None, "+0x6c = -1 (@0x89d47)");
+        assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(npc.target, Some(ShipRef::Player));
+        assert_eq!(npc.provoked, 4.0);
+        let mut flying = Npc {
+            mode: Mode::LeavingGate { tick: 3 },
+            emerges_from: Some(StellarId(310)),
+            ..crate::testkit::npc(2, ShipStats::default())
+        };
+        let before = flying.clone();
+        flying.hold_at_gate();
+        assert_eq!(flying, before, "only a ship waiting in its gate is held");
+    }
+
+    #[test]
     fn only_the_traders_trade() {
         assert!(AiType::WimpyTrader.trades());
         assert!(AiType::BraveTrader.trades());
         assert!(!AiType::Warship.trades());
         assert!(!AiType::Interceptor.trades());
+    }
+
+    // `_ExtendedIsThreatToPlayer` (@0x81b70-0x81de5).
+
+    /// NPC `id` at rest, flying, intact and idle.
+    fn plain(id: u32) -> Npc {
+        crate::testkit::npc(id, ShipStats::default())
+    }
+
+    /// The player's hired escort, NPC `id`.
+    fn hired(id: u32) -> Npc {
+        Npc {
+            escort: Some(EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            }),
+            ..plain(id)
+        }
+    }
+
+    #[test]
+    fn a_flying_ship_targeting_the_player_threatens_player_extended_but_one_held_or_coasting_never_does()
+     {
+        let attacking = Npc {
+            goal: Goal::Attack(ShipRef::Player),
+            ..plain(1)
+        };
+        assert!(
+            attacking.threatens_player_extended(&[], true),
+            "goal 4, target 0"
+        );
+        let targeting = Npc {
+            target: Some(ShipRef::Player),
+            ..plain(1)
+        };
+        assert!(
+            targeting.threatens_player_extended(&[], true),
+            "the hit's target, set before `_AIMakeShipAttackPlayer`"
+        );
+        for mode in [
+            Mode::HeldAtGate { ticks_left: 20 },
+            Mode::Coasting { ticks_left: 30 },
+            Mode::Emerging { ticks_left: 60 },
+        ] {
+            for npc in [&attacking, &targeting] {
+                let waiting = Npc {
+                    mode,
+                    ..npc.clone()
+                };
+                assert!(!waiting.threatens_player_extended(&[], true), "{mode:?}");
+            }
+        }
+        for mode in [Mode::JumpingIn { tick: 3 }, Mode::LeavingGate { tick: 3 }] {
+            let coming = Npc {
+                mode,
+                ..targeting.clone()
+            };
+            assert!(
+                coming.threatens_player_extended(&[], true),
+                "{mode:?}: no wait"
+            );
+        }
+        let disabled = Npc {
+            condition: Condition::Disabled,
+            ..targeting.clone()
+        };
+        assert!(!disabled.threatens_player_extended(&[], true));
+        assert!(!plain(1).threatens_player_extended(&[], true));
+        let elsewhere = Npc {
+            target: Some(ShipRef::Npc(NpcId(5))),
+            ..plain(1)
+        };
+        assert!(!elsewhere.threatens_player_extended(&[], true));
+    }
+
+    #[test]
+    fn threatens_player_extended_reads_sight_the_wait_and_the_goal() {
+        let p = ShipRef::Player;
+        let targeting = Npc {
+            target: Some(p),
+            ..plain(1)
+        };
+        assert!(targeting.threatens_player_extended(&[], true));
+        assert!(
+            !targeting.threatens_player_extended(&[], false),
+            "unseen (@0x81bc6)"
+        );
+        let players_own = Npc {
+            target: Some(p),
+            ..hired(1)
+        };
+        assert!(
+            !players_own.threatens_player_extended(&[], true),
+            "led by the player (@0x81b9f)"
+        );
+        for mode in [
+            Mode::Emerging { ticks_left: 60 },
+            Mode::HeldAtGate { ticks_left: 20 },
+            Mode::Coasting { ticks_left: 30 },
+            Mode::EnteringGate {
+                gate: StellarId(300),
+                ticks_left: 4,
+            },
+        ] {
+            let waiting = Npc {
+                mode,
+                ..targeting.clone()
+            };
+            assert!(
+                !waiting.threatens_player_extended(&[], true),
+                "{mode:?}: its wait runs (@0x81bed)"
+            );
+        }
+        for goal in [
+            Goal::Inspect(p),
+            Goal::Assist(crate::ai::Help::Refuel),
+            Goal::Assist(crate::ai::Help::Repair),
+            Goal::Dock(ShipRef::Npc(NpcId(5))),
+            Goal::Follow(NpcId(5)),
+            Goal::Formation { guard: None },
+            Goal::Hold,
+        ] {
+            let spared = Npc {
+                goal,
+                ..targeting.clone()
+            };
+            assert!(
+                !spared.threatens_player_extended(&[], true),
+                "{goal:?} (@0x81bf3-0x81c28)"
+            );
+        }
+        let escort = hired(7);
+        let at_escort = Npc {
+            target: Some(ShipRef::Npc(NpcId(7))),
+            ..plain(1)
+        };
+        assert!(
+            at_escort.threatens_player_extended(&[at_escort.clone(), escort], true),
+            "a ship the player leads (@0x81c2e-0x81c4a)"
+        );
+        assert!(
+            !at_escort.threatens_player_extended(std::slice::from_ref(&at_escort), true),
+            "a ship nobody leads"
+        );
+    }
+
+    #[test]
+    fn threatens_player_extended_counts_a_lead_whose_escort_fights_the_player() {
+        // The escort clause (@0x81cdd-0x81dcc): the lead targets an NPC.
+        let p = ShipRef::Player;
+        let lead = Npc {
+            target: Some(ShipRef::Npc(NpcId(9))),
+            ..plain(1)
+        };
+        let wing = Npc {
+            leader: Some(NpcId(1)),
+            target: Some(p),
+            ..plain(2)
+        };
+        let threat = |lead: &Npc, wing: &Npc| {
+            lead.threatens_player_extended(&[lead.clone(), wing.clone()], true)
+        };
+        assert!(threat(&lead, &wing), "its escort targets the player");
+        assert!(
+            threat(
+                &lead,
+                &Npc {
+                    target: None,
+                    goal: Goal::Attack(p),
+                    ..wing.clone()
+                }
+            ),
+            "its escort attacks the player"
+        );
+        let at_led = Npc {
+            target: Some(ShipRef::Npc(NpcId(7))),
+            ..wing.clone()
+        };
+        assert!(
+            lead.threatens_player_extended(&[lead.clone(), at_led.clone(), hired(7)], true),
+            "its escort targets a ship the player leads"
+        );
+        assert!(
+            !threat(&lead, &at_led),
+            "its escort targets a ship nobody leads"
+        );
+        assert!(
+            threat(
+                &Npc {
+                    mode: Mode::Coasting { ticks_left: 30 },
+                    ..lead.clone()
+                },
+                &wing
+            ),
+            "the lead's own wait is not read"
+        );
+        let waiting_wing = Npc {
+            mode: Mode::Coasting { ticks_left: 30 },
+            ..wing.clone()
+        };
+        assert!(!threat(&lead, &waiting_wing), "its escort's wait runs");
+        let downed_wing = Npc {
+            condition: Condition::Disabled,
+            ..wing.clone()
+        };
+        assert!(!threat(&lead, &downed_wing), "its escort is disabled");
+        let inspecting = Npc {
+            goal: Goal::Inspect(ShipRef::Npc(NpcId(9))),
+            ..lead.clone()
+        };
+        assert!(
+            !threat(&inspecting, &wing),
+            "the lead's goal is read (@0x81d38)"
+        );
+        assert!(!threat(&plain(1), &wing), "the lead has no target");
+        let stranger = Npc {
+            leader: Some(NpcId(3)),
+            ..wing
+        };
+        assert!(!threat(&lead, &stranger), "another's escort");
+    }
+
+    fn hold(held: &NpcHold) -> Vec<(Good, u32)> {
+        held.held().collect()
+    }
+
+    #[test]
+    fn a_hold_starts_with_the_one_commodity_its_spawn_gives() {
+        let spawned = NpcHold::of(Some((Good::Commodity(3), 7)));
+        assert_eq!(spawned.tons(3), 7);
+        assert_eq!(hold(&spawned), [(Good::Commodity(3), 7)]);
+        assert_eq!(hold(&NpcHold::of(None)), []);
+        assert_eq!(NpcHold::of(None), NpcHold::default());
+    }
+
+    #[test]
+    fn a_hold_drops_a_junk_or_a_commodity_past_5_at_spawn() {
+        let junk = NpcHold::of(Some((Good::Junk(crate::catalog::JunkId(130)), 4)));
+        assert_eq!(junk, NpcHold::default());
+        let seventh = NpcHold::of(Some((Good::Commodity(6), 4)));
+        assert_eq!(seventh, NpcHold::default());
+        assert_eq!(seventh.tons(6), 0);
+        let sixth = NpcHold::of(Some((Good::Commodity(5), 4)));
+        assert_eq!(hold(&sixth), [(Good::Commodity(5), 4)]);
+    }
+
+    #[test]
+    fn a_ton_added_keeps_the_commodity_already_held() {
+        let mut held = NpcHold::of(Some((Good::Commodity(3), 7)));
+        held.add(1, 1);
+        assert_eq!((held.tons(3), held.tons(1)), (7, 1));
+        held.add(3, 2);
+        assert_eq!(
+            hold(&held),
+            [(Good::Commodity(1), 1), (Good::Commodity(3), 9)],
+            "in commodity order"
+        );
+    }
+
+    #[test]
+    fn a_ton_added_saturates_and_none_goes_past_commodity_5() {
+        let mut held = NpcHold::of(Some((Good::Commodity(0), u32::MAX - 1)));
+        held.add(0, 5);
+        assert_eq!(held.tons(0), u32::MAX);
+        let before = held;
+        held.add(6, 1);
+        held.add(u8::MAX, 1);
+        assert_eq!(held, before);
+        held.add(5, 1);
+        assert_eq!(held.tons(5), 1);
+    }
+
+    #[test]
+    fn the_held_commodities_skip_the_empty_ones() {
+        let mut held = NpcHold::default();
+        held.add(4, 2);
+        held.add(2, 0);
+        held.add(0, 3);
+        assert_eq!(
+            hold(&held),
+            [(Good::Commodity(0), 3), (Good::Commodity(4), 2)]
+        );
     }
 }

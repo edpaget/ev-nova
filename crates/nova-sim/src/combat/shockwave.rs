@@ -108,7 +108,7 @@ pub fn shove(
 
 /// `velocity` with each axis clamped to `top_speed` either way
 /// (`_SpeedLimit` @0x2af91).
-fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
+pub(crate) fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
     // Down to the top speed first, then up to its negative, as the
     // original tests them; `f32::clamp` would panic on a negative one.
     let clamp = |axis: f32| axis.min(top_speed).max(-top_speed);

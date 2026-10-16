@@ -558,6 +558,24 @@ mod tests {
         assert_eq!(session.take_messages(), []);
     }
 
+    #[test]
+    fn a_moves_dock_ends_a_warp_up_playing() {
+        // The move docks by the entry table's `Reset::Dock`, not through
+        // a landing, so it ends the warp-ups itself (see `warp::WarpUps`),
+        // for the session only: no landing in the original halts them,
+        // so it raises no halt.
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.warp_ups.start(false, 364);
+        session.warp_ups.start(true, 252);
+        session.take_sounds();
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.take_sounds(), [], "silently");
+    }
+
     /// The original redraws the rolls only in its daily step
     /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
     /// them: a move, passing no day, keeps them, and only the redraw due
@@ -702,8 +720,33 @@ mod tests {
         assert_eq!(session.npcs().len(), 3);
     }
 
+    /// `_ResetPlayer` disarms the timer (@0x1d73f), and relocation's
+    /// `TrafficStep::Reset` builds a fresh traffic, which holds it
+    /// disarmed. No flight can show it, as every take-off arms it again,
+    /// so it is checked as state.
     #[test]
-    fn a_moved_pilot_saved_flies_again_docked_at_the_new_stellar() {
+    fn a_relocation_disarms_an_armed_escort_strength_timer() {
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.arm_strength_timer(&mut NeverFires);
+        assert!(session.traffic.strength_armed(), "armed before the move");
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert!(!session.traffic.strength_armed(), "a move");
+        let mut session = landed(&catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert!(session.traffic.strength_armed(), "armed by the take-off");
+        session
+            .land_at(&catalog, SystemId(131), StellarId(140))
+            .expect("lands");
+        assert!(!session.traffic.strength_armed(), "a landing from flight");
+    }
+
+    #[test]
+    fn a_moved_pilot_saved_flies_again_on_the_new_stellar() {
         let catalog = atlas();
         let mut session = landed(&catalog);
         session
@@ -712,9 +755,8 @@ mod tests {
         session.assert_docked_among_shown();
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
-        flown.assert_docked_among_shown();
         assert_eq!(flown.system(), SystemId(131));
-        assert_eq!(flown.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(50.0, 60.0));
     }
 
@@ -964,7 +1006,8 @@ mod tests {
         let catalog = atlas();
         let flying =
             Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
-        for session in [landed(&catalog), flying] {
+        // Boxed: two sessions side by side outgrow clippy's stack-array limit.
+        for session in [Box::new(landed(&catalog)), Box::new(flying)] {
             for (to, refusal) in [
                 ((132, 140), RelocateRefusal::NoSystem),
                 ((999, 140), RelocateRefusal::NoSystem),
@@ -974,7 +1017,7 @@ mod tests {
                 ((131, 142), RelocateRefusal::NotLandable),
                 ((131, 143), RelocateRefusal::NotLandable),
             ] {
-                assert_landing_refused(session.clone(), &catalog, to, refusal);
+                assert_landing_refused((*session).clone(), &catalog, to, refusal);
             }
         }
     }
@@ -1058,7 +1101,7 @@ mod tests {
         assert_eq!(combat.shots().len(), 1);
         land_now(&mut session).expect("lands");
         session.combat = combat;
-        session.nav_target = Some(StellarId(129));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
         session.gate = Some(StellarId(129));
         session.stage_scene(session.npcs()[0].id);
         assert_eq!(session.fleet.len(), 2);

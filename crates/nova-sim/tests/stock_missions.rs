@@ -6,9 +6,11 @@
 //! name and offer text filled. Every `mïsn`'s texts fill every tag but the
 //! ranks'. A stock cargo mission loads its cargo as it is accepted, and
 //! landing at its destination unloads it, pays and runs its `OnSuccess`.
-//! The new pilot is offered the tutorial at the spaceport. The one mission
-//! `dësc` naming a movie is mission 906's offer, "\x01", after the dialog.
-//! Skips, passing, when `NOVA_DATA` is unset.
+//! The new pilot is offered the tutorial at the spaceport. Every finale's
+//! `M472` leaves the port after it, and each system's first stellar is
+//! the first of its landing sites. The one mission `dësc` naming a movie
+//! is mission 906's offer, "\x01", after the dialog. Skips, passing,
+//! when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -27,8 +29,9 @@ use nova_sim::{
     RuleSource, Session, StellarId, SystemId, is_landable,
 };
 
-/// A new stock pilot docked at the first landable stellar of its system,
-/// through a save that says so, flown and settled with every roll 1.
+/// A new stock pilot resumed over the first landable stellar of its
+/// system through a save that says so, flown, landed there and settled
+/// with every roll 1.
 fn docked_new_pilot(data: &GameData) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let site = data
@@ -39,8 +42,10 @@ fn docked_new_pilot(data: &GameData) -> Session {
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(site.id.0);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(data, docked).expect("flies");
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(data, saved).expect("flies");
+    let system = session.pilot().system();
+    session.land_at(data, system, site.id).expect("lands");
     assert_eq!(session.landed(), Some(site.id), "docked");
     let _ = session.settle_script(data, &mut NeverFires);
     session
@@ -332,7 +337,7 @@ fn a_stock_cargo_mission_loads_on_accept_and_completes_at_its_destination() {
     let cash = session.pilot().cash();
     let today = session.date();
 
-    // Docked at the destination, before the deadline.
+    // Landed at the destination, before the deadline.
     let destination = offer.destination.expect("a destination");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");
@@ -340,6 +345,10 @@ fn a_stock_cargo_mission_loads_on_accept_and_completes_at_its_destination() {
     save["system"] = serde_json::json!(destination.system.expect("a system").0);
     let there = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(&data, there).expect("flies");
+    let system = session.pilot().system();
+    session
+        .land_at(&data, system, destination.stellar)
+        .expect("lands");
     assert_eq!(session.landed(), Some(destination.stellar), "docked there");
     let _ = session.settle_script(&data, &mut NeverFires);
 
@@ -386,5 +395,46 @@ fn the_one_stock_mission_movie_is_906s_offer_after_its_dialog() {
             }
         )],
         "dësc 4778, Flags 1"
+    );
+}
+
+/// Every stock storyline finale that moves the player to `sÿst` 472 leaves
+/// the port after it (`Q`), so the landed `M`'s selection never reaches the
+/// port's bar in stock. And each system's first stellar, read without
+/// sprites, is the first of its landing sites: `spöb` 420 for 472.
+#[test]
+fn every_stock_m472_leaves_the_port_and_each_systems_first_stellar_is_its_first_site() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let missions = data.missions();
+    for id in [354, 381, 417, 474, 686, 712, 887] {
+        let record = missions
+            .iter()
+            .find(|record| record.id == MissionId(id))
+            .expect("a mïsn");
+        let ops = &record.on_success.tree().expect("OnSuccess parses").ops;
+        let moved = ops
+            .iter()
+            .position(|op| *op == SetOp::MoveTo(SystemId(472)))
+            .unwrap_or_else(|| panic!("mïsn {id} moves to 472"));
+        assert!(
+            ops[moved + 1..]
+                .iter()
+                .any(|op| matches!(op, SetOp::LeaveStellar(_))),
+            "mïsn {id} leaves after its M472"
+        );
+    }
+    let first = data.first_stellars();
+    let landing: Vec<_> = data
+        .star_map()
+        .iter()
+        .filter_map(|system| Some((system.id, data.landing_sites(system.id).first()?.id)))
+        .collect();
+    assert_eq!(first, landing);
+    assert!(
+        first.contains(&(SystemId(472), StellarId(420))),
+        "Our Spiel"
     );
 }

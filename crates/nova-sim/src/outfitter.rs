@@ -552,6 +552,11 @@ pub struct OutfitRun {
     /// What the order leaves the outfitter's selection at (see
     /// [`RuleKey::RelistedSelection`]).
     pub after: Reselection,
+    /// Whether the order's Buy or Sell button passed its own check
+    /// ([`Outfitter::can`]), so `_DoOutfitDialog` falls through its loop
+    /// to the buy's reset and draw (@0x5c2fc-0x5c2ff, @0x5c305, @0x5c5a1)
+    /// or the sale's draw (@0x5d328), however many passes went through.
+    pub button_passed: bool,
 }
 
 /// What an order leaves the outfitter's selection at, as

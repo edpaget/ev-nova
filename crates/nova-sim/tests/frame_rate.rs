@@ -14,6 +14,21 @@ use nova_sim::{
 /// One `chär` flying an agile ship from system 130.
 struct Pilot;
 
+/// No asteroids anywhere.
+impl nova_sim::AsteroidCatalog for Pilot {
+    fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+        Vec::new()
+    }
+
+    fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+        Vec::new()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        [None; nova_sim::BOX_GRAPHICS]
+    }
+}
+
 /// Unarmed and ungoverned.
 impl CombatCatalog for Pilot {
     fn weapons(&self) -> Vec<WeaponRecord> {
@@ -74,6 +89,14 @@ impl PilotCatalog for Pilot {
 
     fn commodity_strings(&self) -> CommodityStrings {
         CommodityStrings::default()
+    }
+
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {

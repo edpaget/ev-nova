@@ -20,8 +20,8 @@
 //! [`SalaryCap`](crate::rulebook::RuleKey::SalaryCap) rule; a change to
 //! the cash makes a save due.
 //!
-//! **Prices.** As the spaceport opens (a landing, a relocation that
-//! docks, and a load that resumes docked, which opens the port too), the
+//! **Prices.** As the spaceport opens (a landing, and a relocation that
+//! docks; a load opens none, resuming in flight), the
 //! session takes the active ranks and the docked stellar's government,
 //! never saved, as `_DoPortDialog` takes `_priceFluxMult`
 //! (@0x5f970-0x5fa04). It does so before the landing's mission land check
@@ -752,14 +752,19 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_pilot_resumed_docked_has_its_ranks_in_the_prices() {
+    fn a_pilot_resumed_takes_its_ranks_into_the_prices_at_its_first_landing() {
         let catalog = port(Vec::new());
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.ranks.insert(RankId(202));
         pilot.stellar = Some(crate::catalog::StellarId(128));
         let pilot = save::decode(&save::encode(&pilot)).expect("loads");
         let mut session = Session::fly(&catalog, pilot.clone()).expect("flies");
-        assert!(session.landed().is_some(), "resumed docked");
+        assert_eq!(
+            session.port_ranks,
+            super::PortRanks::default(),
+            "no spaceport opens on resuming"
+        );
+        land_now(&mut session).expect("lands");
         assert_eq!(
             prices(&mut session),
             ONE_RANK,
@@ -768,6 +773,7 @@ pub(super) mod tests {
         let mut own_only = Session::fly(&catalog, pilot)
             .expect("flies")
             .with_rules(reading(RuleKey::RankGovtReach, RuleSource::Bible));
+        land_now(&mut own_only).expect("lands");
         assert_eq!(
             prices(&mut own_only),
             UNRANKED,
@@ -1223,7 +1229,7 @@ pub(super) mod tests {
 
     // Landing.
 
-    use crate::landing::{Clearance, LandOutcome, LandingRefusal};
+    use crate::landing::{LandOutcome, LandingRefusal};
     use crate::session::LandPress;
 
     /// [`blessing_catalog`] whose planet 128 is of government 140,
@@ -1253,15 +1259,12 @@ pub(super) mod tests {
             .with_rules(rules)
     }
 
-    /// L's selection of planet 128 with `clearance`.
-    fn selected(clearance: Clearance) -> LandPress {
-        LandOutcome::Selected {
+    /// L's selection and request of planet 128, cleared.
+    const REQUESTED: Result<LandPress, LandingRefusal> =
+        Ok(LandPress::Outcome(LandOutcome::Requested {
             stellar: crate::catalog::StellarId(128),
             station: false,
-            clearance,
-        }
-        .into()
-    }
+        }));
 
     const LANDED: Result<LandPress, LandingRefusal> = Ok(LandPress::Outcome(LandOutcome::Landed(
         crate::catalog::StellarId(128),
@@ -1273,9 +1276,11 @@ pub(super) mod tests {
         min_status: 32767,
     });
 
-    /// L twice over planet 128.
+    /// L over planet 128, a tick for the dock approach, and L again.
     fn press_twice(session: &mut Session) -> [Result<LandPress, LandingRefusal>; 2] {
-        [session.land(), session.land()]
+        let first = session.land();
+        session.tick(crate::flight::Controls::default());
+        [first, session.land()]
     }
 
     #[test]
@@ -1284,35 +1289,68 @@ pub(super) mod tests {
         let mut unblessed = holding(&catalog, Rulebook::default(), &[]);
         assert_eq!(
             press_twice(&mut unblessed),
-            [Ok(selected(Clearance::Denied)), DENIED],
+            [DENIED, DENIED],
             "MinStatus 32767"
         );
         for source in RuleSource::ALL {
             let rules = reading(RuleKey::BlessingLanding, source);
             let mut session = holding(&catalog, rules, &[200]);
-            assert_eq!(
-                press_twice(&mut session),
-                [Ok(selected(Clearance::Granted)), LANDED],
-                "{source:?}"
-            );
+            assert_eq!(press_twice(&mut session), [REQUESTED, LANDED], "{source:?}");
         }
+    }
+
+    #[test]
+    fn the_blessing_clears_the_approach_with_no_require_test_by_either_reading() {
+        let catalog = guarded(0x4, 0);
+        for source in RuleSource::ALL {
+            let rules = reading(RuleKey::BlessingLanding, source);
+            for (ranks, greets) in [(&[][..], false), (&[200][..], true)] {
+                let mut session = holding(&catalog, rules, ranks);
+                session.dock = Some(crate::clearance::DockRequest {
+                    stellar: crate::catalog::StellarId(128),
+                    permission: crate::clearance::REQUESTED_NEAR,
+                });
+                session.take_messages();
+                session.tick(crate::flight::Controls::default());
+                assert_eq!(
+                    session
+                        .take_messages()
+                        .contains(&crate::message::SimMessage::DockCleared {
+                            stellar: crate::catalog::StellarId(128),
+                            kind: crate::clearance::DockKind::Planet,
+                        }),
+                    greets,
+                    "{source:?} {ranks:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_engine_the_blessing_is_requested_greeted_and_lands_past_require() {
+        let catalog = guarded(0x4, 0);
+        let mut engine = holding(&catalog, Rulebook::default(), &[200]);
+        assert_eq!(engine.land(), REQUESTED);
+        engine.take_messages();
+        engine.tick(crate::flight::Controls::default());
+        assert_eq!(
+            engine.take_messages(),
+            [crate::message::SimMessage::DockCleared {
+                stellar: crate::catalog::StellarId(128),
+                kind: crate::clearance::DockKind::Planet,
+            }]
+        );
+        assert_eq!(engine.land(), LANDED);
     }
 
     #[test]
     fn by_the_bible_the_blessing_does_not_get_past_require() {
         let catalog = guarded(0x4, 0);
         let mut engine = holding(&catalog, Rulebook::default(), &[200]);
-        assert_eq!(
-            press_twice(&mut engine),
-            [Ok(selected(Clearance::Granted)), LANDED],
-            "@0x679cd"
-        );
+        assert_eq!(press_twice(&mut engine), [REQUESTED, LANDED], "@0x679cd");
         let rules = reading(RuleKey::BlessingLanding, RuleSource::Bible);
         let mut bible = holding(&catalog, rules, &[200]);
-        assert_eq!(
-            press_twice(&mut bible),
-            [Ok(selected(Clearance::Denied)), DENIED]
-        );
+        assert_eq!(press_twice(&mut bible), [DENIED, DENIED]);
     }
 
     #[test]
@@ -1328,21 +1366,15 @@ pub(super) mod tests {
         let mut lacking = holding(&catalog, Rulebook::default(), &[]);
         assert_eq!(
             press_twice(&mut lacking),
-            [
-                Ok(selected(Clearance::Denied)),
-                Err(LandingRefusal::Denied {
-                    stellar: crate::catalog::StellarId(128),
-                    station: false,
-                    min_status: 0,
-                })
-            ],
+            [Err(LandingRefusal::Denied {
+                stellar: crate::catalog::StellarId(128),
+                station: false,
+                min_status: 0,
+            }); 2],
             "the record passes, Require does not (@0x67940)"
         );
         let mut contributing = holding(&catalog, Rulebook::default(), &[201]);
-        assert_eq!(
-            press_twice(&mut contributing),
-            [Ok(selected(Clearance::Granted)), LANDED]
-        );
+        assert_eq!(press_twice(&mut contributing), [REQUESTED, LANDED]);
     }
 
     /// A new pilot under [`guarded`]`(0x4, 0)` who took mission 140, of
@@ -1365,7 +1397,7 @@ pub(super) mod tests {
             let site = session.sites[stellar];
             session.player.position = site.position;
             session.player.velocity = crate::geometry::Vec2::ZERO;
-            session.nav_target = None;
+            session.nav = crate::navigation::NavMode::Off;
         };
         at(&mut session, 1);
         land_now(&mut session).expect("lands at 129");
@@ -1405,11 +1437,7 @@ pub(super) mod tests {
         ] {
             let mut session = on_mission(travel, back, None);
             assert_eq!(stops(&session), [[Some(travel), Some(back)]], "{why}");
-            assert_eq!(
-                press_twice(&mut session),
-                [Ok(selected(Clearance::Granted)), LANDED],
-                "{why}"
-            );
+            assert_eq!(press_twice(&mut session), [REQUESTED, LANDED], "{why}");
         }
     }
 
@@ -1422,7 +1450,7 @@ pub(super) mod tests {
                 assert_eq!(stops(&session), [[Some(travel), Some(back)]]);
                 assert_eq!(
                     press_twice(&mut session),
-                    [Ok(selected(Clearance::Granted)), LANDED],
+                    [REQUESTED, LANDED],
                     "{failed:?} ({travel}, {back}): no failure test in @0x67996-0x679c5"
                 );
             }
@@ -1433,28 +1461,14 @@ pub(super) mod tests {
     fn a_mission_elsewhere_does_not_clear_the_pilot() {
         let mut session = on_mission(129, 129, None);
         assert_eq!(stops(&session), [[Some(129), Some(129)]]);
-        assert_eq!(
-            press_twice(&mut session),
-            [
-                Ok(selected(Clearance::Denied)),
-                Err(LandingRefusal::Denied {
-                    stellar: crate::catalog::StellarId(128),
-                    station: false,
-                    min_status: 32767,
-                })
-            ]
-        );
+        assert_eq!(press_twice(&mut session), [DENIED, DENIED]);
     }
 
     #[test]
     fn a_dominated_stellar_clears_the_pilot() {
         let catalog = guarded(0, crate::market::DOMINATED);
         let mut session = holding(&catalog, Rulebook::default(), &[]);
-        assert_eq!(
-            press_twice(&mut session),
-            [Ok(selected(Clearance::Granted)), LANDED],
-            "@0x6792d"
-        );
+        assert_eq!(press_twice(&mut session), [REQUESTED, LANDED], "@0x6792d");
     }
 
     #[test]
@@ -1462,21 +1476,17 @@ pub(super) mod tests {
         let catalog = guarded(0, 0);
         let mut engine = holding(&catalog, Rulebook::default(), &[]);
         activate_unreset(&mut engine);
-        assert_eq!(engine.land(), Ok(selected(Clearance::Denied)));
-        assert_eq!(engine.land(), DENIED);
+        assert_eq!(press_twice(&mut engine), [DENIED, DENIED]);
         engine.jettison_cargo(false, &mut NeverFires);
-        assert_eq!(engine.land(), LANDED);
+        assert_eq!(press_twice(&mut engine), [REQUESTED, LANDED]);
         let mut live = holding(&catalog, live(), &[]);
         activate_unreset(&mut live);
-        assert_eq!(
-            press_twice(&mut live),
-            [Ok(selected(Clearance::Granted)), LANDED]
-        );
+        assert_eq!(press_twice(&mut live), [REQUESTED, LANDED]);
         let mut scripted = holding(&catalog, Rulebook::default(), &[]);
         run(&mut scripted, "K200");
         assert_eq!(
             press_twice(&mut scripted),
-            [Ok(selected(Clearance::Granted)), LANDED],
+            [REQUESTED, LANDED],
             "a K in space is taken as its expression ends"
         );
     }

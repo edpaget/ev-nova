@@ -1,6 +1,6 @@
 //! A hyperspace outfit through the whole app: synthetic game data (a
 //! `chär` with 25,000 credits flying a ship from Alpha, linked to Beta;
-//! Alpha's one planet, at its centre, an outfitter selling a Horizontal
+//! Alpha's one planet, where a new pilot starts, an outfitter selling a Horizontal
 //! Booster, `oütf` `ModType` 23 at -500 as in the stock data) and a
 //! synthetic interface file holding the stock "Create a new pilot:",
 //! "Spaceport" and "Outfit" dialogs, laid out by the real glyphon metrics,
@@ -167,11 +167,11 @@ fn system(x: i16, link: i16, stellar: i16) -> Vec<u8> {
     bytes
 }
 
-/// A landable planet at (`x`, 0) of graphic type `graphic_type`, with
+/// A landable planet at `(x, y)` of graphic type `graphic_type`, with
 /// `flags`, of tech level 2.
-fn stellar(x: i16, graphic_type: i16, flags: u32) -> Vec<u8> {
+fn stellar((x, y): (i16, i16), graphic_type: i16, flags: u32) -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[x, 0, graphic_type]);
+    put_i16s(&mut bytes, 0x00, &[x, y, graphic_type]);
     bytes[0x06..0x0A].copy_from_slice(&flags.to_be_bytes());
     put_i16s(&mut bytes, 0x0C, &[2]);
     put_i16s(&mut bytes, 0x14, &[-1]);
@@ -204,7 +204,8 @@ fn spin(image: i16) -> Vec<u8> {
 }
 
 /// Alpha (128) and Beta (129), linked, 100 apart on the map: Alpha Prime,
-/// at Alpha's centre, a bar, trade center and outfitter selling the
+/// at (50, 50), where a new pilot's ship starts, a bar, trade center and
+/// outfitter selling the
 /// booster; Beta Prime, at Beta's centre, with no services.
 fn game_data() -> Rc<GameData> {
     let mut resources = vec![
@@ -214,8 +215,8 @@ fn game_data() -> Rc<GameData> {
         (RLED, 2000, sheet(36, 1)),
         (System::TYPE, 128, system(0, 129, 128)),
         (System::TYPE, 129, system(100, 128, 129)),
-        (Stellar::TYPE, 128, stellar(0, 4, 0x2000_1047)),
-        (Stellar::TYPE, 129, stellar(0, 5, 0x01)),
+        (Stellar::TYPE, 128, stellar((50, 50), 4, 0x2000_1047)),
+        (Stellar::TYPE, 129, stellar((0, 0), 5, 0x01)),
         (Spin::TYPE, 1004, spin(1000)),
         (Spin::TYPE, 1005, spin(1001)),
         (RLED, 1000, sheet(1, 8)),
@@ -402,9 +403,10 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// the second lands.
+    /// a few frames let the dock approach clear it, and the second lands.
     fn land(&mut self) {
         self.press(KeyCode::KeyL);
+        self.approach();
         self.press(KeyCode::KeyL);
     }
 
@@ -474,6 +476,19 @@ impl Harness {
         assert_eq!(self.app.take_failures(), []);
         assert_eq!(self.app.take_warnings(), Vec::<String>::new());
         (*self.gpu.submits().last().expect("a frame")).clone()
+    }
+
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_millis(16 * self.frames);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
     }
 
     /// A new pilot named Ada, in flight.
@@ -610,8 +625,10 @@ impl Harness {
                 self.hold(&mut held, &[]);
                 return;
             }
+            // Drifting in at a crawl, as a ship at rest off the centre
+            // can, isn't moving in: Down would hold it there.
             let moving_in =
-                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < 0.0;
+                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < -1e-3;
             let facing_out = ship.position.length() == 0.0
                 || shortest_turn(ship.heading, heading_of(ship.position)).abs() < 1e-3;
             let codes = if moving_in && !facing_out {

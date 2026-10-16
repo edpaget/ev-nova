@@ -1,13 +1,21 @@
 //! The messages a flight session raises, as events: what happened, not
 //! the words. The view decides what each one says on the message line.
 
-use crate::catalog::{JunkId, OutfitId, ShipId, SystemId};
+use crate::catalog::{JunkId, OutfitId, ShipId, StellarId, SystemId};
+use crate::clearance::DockKind;
+use crate::tutorial::TutorialHint;
 
 /// Something a [`Session`](crate::Session) did that the player is told of.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SimMessage {
     /// A jump ended in this system, the last of a multi-jump.
     Arrived(SystemId),
+    /// A jump ended in a system whose message buoy shows this text, in
+    /// place of [`Arrived`](Self::Arrived) and the whole arrival line
+    /// (`_HandlePlayer` @0x6c25b-0x6c27a, `_DisplayMessage`
+    /// @0x5289-0x530e; see [`buoy`](crate::buoy)): the text ready to show,
+    /// empty for the original's empty line.
+    Buoy(String),
     /// The ship came out of a hypergate in this system.
     ExitedHypergate(SystemId),
     /// The ship passed through a wormhole into this system.
@@ -19,11 +27,26 @@ pub enum SimMessage {
     /// mission whose `Flags` lacks 0x0400 (`_MissionObjectivesCheck`
     /// @0x9ebd0-0x9ec53).
     DeadlineMissed,
+    /// The mission info key was pressed with no active mission whose
+    /// `Flags` lacks 0x0400: "No active missions.", `STR#` 2002 #354
+    /// (`_HandlePlayer` @0x7055c-0x705a8).
+    NoActiveMissions,
     /// A mission failed as one of its special ships was destroyed or
     /// disabled, for a mission whose `Flags` lacks 0x0400
     /// (`_HandleShipDisplay` @0x2db31-0x2dbab, `_DamageShip`
     /// @0x3aee8-0x3af62).
     MissionShipLost,
+    /// The player's ship was newly disabled: "Ship disabled.", `STR#`
+    /// 2002 #287 (`_DamageShip` @0x3b181; see the session's
+    /// `player_downed` module).
+    ShipDisabled,
+    /// The player's ship newly started to break up: "Ship destroyed.",
+    /// `STR#` 2002 #288 (`_DamageShip` @0x3b3b9).
+    ShipDestroyed,
+    /// The player's ship being disabled or breaking up failed its first
+    /// unfailed `Flags2` 0x0004 mission: "Mission failed.", `STR#` 2002
+    /// #284 (`_DamageShip` @0x3b0b6, @0x3b353), hidden or not.
+    DownedMissionFailed,
     /// Every ton of cargo was jettisoned (`_JettisonCargo` @0x3e354).
     CargoJettisoned,
     /// The cargo but the missions' was jettisoned (`_JettisonCargo`
@@ -84,6 +107,47 @@ pub enum SimMessage {
         /// The credits fined: none for no fine.
         fine: i64,
     },
+    /// An announced fleet arrived, showing this line of its `flët`'s
+    /// `Quote`, its '#'s filled with digits, empty when the list has none
+    /// (`_HyperSpawnFleet` @0x42607-0x426f4; see
+    /// [`quote`](crate::traffic::quote)).
+    FleetArrivalQuote(String),
+    /// The ship took off past the tutorial with no `Q` message: the
+    /// take-off greeting, "{lead} {the stellar} on {the date}."
+    /// (`_PlayerLandOnStellar` @0x635f7-0x63732; see
+    /// [`tutorial`](crate::tutorial)).
+    TookOff {
+        /// The stellar taken off from.
+        stellar: StellarId,
+        /// Which lead, 0-4: `STR#` 2002 #(55 + `lead`), rolled
+        /// `Rand(5)` (@0x63604).
+        lead: u16,
+    },
+    /// A first-flight tutorial hint (`_HandlePlayer` @0x7093d-0x70ea2; see
+    /// [`tutorial`](crate::tutorial)).
+    Tutorial(TutorialHint),
+    /// The land key requested docking away from the stellar, and traffic
+    /// control cleared it: the request's line, "… Begin initial
+    /// approach." (`_HandlePlayerDockRequest` @0x67a41-0x67c46; see
+    /// [`clearance`](crate::clearance)).
+    DockRequested {
+        /// The stellar.
+        stellar: StellarId,
+        /// How the line words it.
+        kind: DockKind,
+    },
+    /// The land key found the stellar uninhabited: "No response.", `STR#`
+    /// 2002 #53 (`_HandlePlayerDockRequest` @0x66b51-0x66bcd).
+    NoResponse,
+    /// The dock approach cleared the pilot: its greeting, "… cleared to
+    /// land." (`_HandlePlayerDockApproach` @0x64975-0x64e8e; see
+    /// [`clearance`](crate::clearance)).
+    DockCleared {
+        /// The stellar.
+        stellar: StellarId,
+        /// How the greeting words it.
+        kind: DockKind,
+    },
     /// The player ejected into an escape ship: "Escaping in" (`STR#` 2002
     /// #52), a space, the ship's shipyard long name and a full stop
     /// (`_HandlePlayer` @0x6f588-0x6f635).
@@ -126,8 +190,11 @@ impl SimMessage {
     /// frames its caller passes `_DisplayComm` (@0x90201).
     ///
     /// - [`Arrived`](Self::Arrived): 240 (`_HandlePlayer` @0x6c46d).
+    /// - [`Buoy`](Self::Buoy): 480 (`_DisplayMessage` @0x5300).
     /// - [`ExitedHypergate`](Self::ExitedHypergate): 360
     ///   (`_PlayerEnterHypergate` @0x63f1d).
+    /// - [`FleetArrivalQuote`](Self::FleetArrivalQuote): 360
+    ///   (`_HyperSpawnFleet` @0x426e9).
     /// - [`PassedWormhole`](Self::PassedWormhole): 240
     ///   (`_PlayerEnterWormhole` @0x645be).
     /// - [`MissionFailed`](Self::MissionFailed),
@@ -136,8 +203,14 @@ impl SimMessage {
     ///   240 (`_JettisonCargo` @0x3e17d, @0x3e3b0).
     /// - [`MissionShipLost`](Self::MissionShipLost): 240
     ///   (`_HandleShipDisplay` @0x2dbab, `_DamageShip` @0x3af62).
+    /// - [`ShipDisabled`](Self::ShipDisabled),
+    ///   [`ShipDestroyed`](Self::ShipDestroyed) and
+    ///   [`DownedMissionFailed`](Self::DownedMissionFailed): 240
+    ///   (`_DamageShip` @0x3b181, @0x3b3b9, @0x3b0b6, @0x3b353).
     /// - [`DeadlineMissed`](Self::DeadlineMissed): 240
     ///   (`_MissionObjectivesCheck` @0x9ec53).
+    /// - [`NoActiveMissions`](Self::NoActiveMissions): 240
+    ///   (`_HandlePlayer` @0x705a8).
     /// - [`MissionScanned`](Self::MissionScanned),
     ///   [`Smuggling`](Self::Smuggling),
     ///   [`IllegalJunk`](Self::IllegalJunk) and
@@ -146,6 +219,15 @@ impl SimMessage {
     /// - [`EscortRepaired`](Self::EscortRepaired) and
     ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
     ///   @0x33ba1).
+    /// - [`TookOff`](Self::TookOff): 240 (`_PlayerLandOnStellar`
+    ///   @0x63727).
+    /// - [`Tutorial`](Self::Tutorial): 512 (0x200, `_HandlePlayer`
+    ///   @0x70b8f, @0x70d28, @0x70ddf, @0x70e8d).
+    /// - [`DockRequested`](Self::DockRequested) and
+    ///   [`NoResponse`](Self::NoResponse): 250 (`_HandlePlayerDockRequest`
+    ///   @0x67c46, @0x66bcd).
+    /// - [`DockCleared`](Self::DockCleared): 250
+    ///   (`_HandlePlayerDockApproach` @0x64e8e).
     /// - [`EscapingIn`](Self::EscapingIn): 512 (`_HandlePlayer`
     ///   @0x6f62a).
     /// - [`Sabotaged`](Self::Sabotaged) and [`BombSetUp`](Self::BombSetUp):
@@ -157,7 +239,10 @@ impl SimMessage {
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
-            Self::ExitedHypergate(_) | Self::Sabotaged { .. } | Self::BombSetUp => 360,
+            Self::ExitedHypergate(_)
+            | Self::FleetArrivalQuote(_)
+            | Self::Sabotaged { .. }
+            | Self::BombSetUp => 360,
             Self::MissionScanned
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
@@ -167,11 +252,22 @@ impl SimMessage {
             | Self::PassedWormhole(_)
             | Self::MissionFailed
             | Self::DeadlineMissed
+            | Self::NoActiveMissions
             | Self::MissionShipLost
+            | Self::ShipDisabled
+            | Self::ShipDestroyed
+            | Self::DownedMissionFailed
             | Self::CargoJettisoned
-            | Self::NonMissionCargoJettisoned => 240,
-            Self::EscortRepaired | Self::FighterRepaired | Self::JumpCollapsed => 250,
-            Self::EscapingIn { .. } => 512,
+            | Self::NonMissionCargoJettisoned
+            | Self::TookOff { .. } => 240,
+            Self::EscortRepaired
+            | Self::FighterRepaired
+            | Self::JumpCollapsed
+            | Self::DockRequested { .. }
+            | Self::NoResponse
+            | Self::DockCleared { .. } => 250,
+            Self::Buoy(_) => 480,
+            Self::Tutorial(_) | Self::EscapingIn { .. } => 512,
         }
     }
 }
@@ -189,11 +285,17 @@ mod tests {
         };
         let cases = [
             (SimMessage::Arrived(SystemId(128)), 240),
+            (SimMessage::Buoy("Message Buoy: hello.".into()), 480),
             (SimMessage::ExitedHypergate(SystemId(128)), 360),
+            (SimMessage::FleetArrivalQuote("Hail 1".to_owned()), 360),
             (SimMessage::PassedWormhole(SystemId(128)), 240),
             (SimMessage::MissionFailed, 240),
             (SimMessage::DeadlineMissed, 240),
+            (SimMessage::NoActiveMissions, 240),
             (SimMessage::MissionShipLost, 240),
+            (SimMessage::ShipDisabled, 240),
+            (SimMessage::ShipDestroyed, 240),
+            (SimMessage::DownedMissionFailed, 240),
             (SimMessage::CargoJettisoned, 240),
             (SimMessage::NonMissionCargoJettisoned, 240),
             (SimMessage::MissionScanned, 400),
@@ -216,6 +318,30 @@ mod tests {
                     outfit: Some((OutfitId(261), false)),
                 },
                 360,
+            ),
+            (
+                SimMessage::TookOff {
+                    stellar: StellarId(128),
+                    lead: 2,
+                },
+                240,
+            ),
+            (SimMessage::Tutorial(TutorialHint::Hyperspace), 512),
+            (SimMessage::Tutorial(TutorialHint::FarEnough), 512),
+            (
+                SimMessage::DockRequested {
+                    stellar: StellarId(128),
+                    kind: DockKind::Planet,
+                },
+                250,
+            ),
+            (SimMessage::NoResponse, 250),
+            (
+                SimMessage::DockCleared {
+                    stellar: StellarId(128),
+                    kind: DockKind::Hypergate,
+                },
+                250,
             ),
             (
                 SimMessage::IllegalJunk {

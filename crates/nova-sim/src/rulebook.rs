@@ -122,6 +122,7 @@
 //! | [`ShipDoneOnce`](RuleKey::ShipDoneOnce) | `ship_done_once` | every time a mission's goals go from unmet to met, its `ShipDoneText` is shown and its `OnShipDone` runs, so an escort goal's run again each time its ships come back to the player (`_MissionObjectivesCheck` @0x9ec70-0x9ed87; see [`mission::goals`](crate::mission::goals)) | the moment's text, script and auto-abort happen only the first time\* |
 //! | [`SwapArrives`](RuleKey::SwapArrives) | `swap_arrives` | the ship swapped in for a person raises no arrived count and leaves the appear timer running, so for a `ShipStart` of 1 or more the timer still brings another ship in beside it (`_HandlePlayerCommunication` @0x6244b-0x6252f, `_EnterMoreShips` @0x437ec-0x43aa5; see [`mission::ships`](crate::mission::ships)) | the swapped ship counts as the timer's arrival: the timer stops, and for `ShipStart` 1 the arrived count goes up by one\* |
 //! | [`SmugglingShipName`](RuleKey::SmugglingShipName) | `smuggling_ship_name` | the smuggling notice names the scanner by the found mission's drawn ship name whenever that name is not empty, whoever the scanner is (`_ScanPlayer` @0x7e7ce; see [`scan`](crate::scan)) | by the mission's ship name only when the scanner is that mission's special ship, else by its class\* |
+//! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; docked, the bar holds between the port's redraws: the radar after an outfitter order, radar, nav and target on a ship purchase (everything on a new `ïntf`, @0x739bd), fuel on a recharge (@0x5fe05), everything as a shop closes (`_RefreshSAT`); see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`PaySlotOffset`](RuleKey::PaySlotOffset) | `pay_slot_offset` | a slot's `<PAY>` of a pay that is not cash, a fine or a charge reads the slot's byte offset, slot × 2,284 (`_MungeBriefing` @0x9cd2a-0x9cdb6; see [`text_tags`](crate::text_tags)) | it reads 0, as an offer's does\* |
 //! | [`MissionlessTags`](RuleKey::MissionlessTags) | `missionless_tags` | a text filled with no mission (a hail quote, a `RefuseText`) reads `"[Error]"` for each mission tag (`_MungeBriefing` @0x9c83f-0x9c843; see [`text_tags`](crate::text_tags)) | they are left as written\* |
 //! | [`PrkNnnName`](RuleKey::PrkNnnName) | `prk_nnn_name` | `<PRKnnn>` reads the rank's `ShortName`, as `<SRKnnn>` does (`_MungeBriefing` +0xde @0x9d1ef, @0x9d2d0; see [`text_tags`](crate::text_tags)) | its `ConvName`, "same as `<PRK>`" |
@@ -166,6 +167,17 @@
 //! | [`EjectVelocity`](RuleKey::EjectVelocity) | `eject_velocity` | as the player ejects, its new ship's x velocity takes the y velocity's value, the hulk keeping the true velocity, before the push of its top speed along its heading (`_HandlePlayer` @0x6f782-0x6f788; see [`escape`](crate::escape)) | the new ship keeps the velocity it had\* |
 //! | [`RescueArmor`](RuleKey::RescueArmor) | `rescue_armor` | the escape pod's rescue sets the armour to the shield capacity, `_ShipShieldCapacity` a second time (`_HandlePlayer` @0x690db-0x69100; see the session's `rescue` module), so it may stand above the armour's most | the armour is filled to its own capacity\* |
 //! | [`UnlistedStellar`](RuleKey::UnlistedStellar) | `unlisted_stellar` | a loaded pilot whose saved stellar no system lists resumes in the lowest system that exists, which needn't hold the stellar (`_LoadPilotData` @0x752d6-0x75318; see [`Session::load`](crate::Session::load)) | it keeps its saved system: **the default — a deliberate departure from the original**††††††††††† |
+//! | [`NewbieFuelRefusal`](RuleKey::NewbieFuelRefusal) | `newbie_fuel_refusal` | a newbie whose J has a hyperspace selection but too little fuel is told nothing, with no beep, as the jump key's newbie branch swallows it (`_HandlePlayer` @0x6b995-0x6b9a3; see [`tutorial`](crate::tutorial)) | "Insufficient energy for hyperspace jump." with `snd ` 153, as for any pilot\* |
+//! | [`MissingBuoyString`](RuleKey::MissingBuoyString) | `missing_buoy_string` | a hyperspace arrival whose system's buoy names an index `STR#` 1000 does not hold, with no `STR ` of it + 999, shows an empty line for 480 ticks in place of the arrival line (`_DisplayMessage` @0x52b3-0x52c7; see [`buoy`](crate::buoy)) | the arrival line, as for a system with no buoy\* |
+//! | [`PatrolUninhabited`](RuleKey::PatrolUninhabited) | `patrol_uninhabited` | an interceptor's patrol, picking plain stellars only, can pick an uninhabited one: the count that lets it pick needs an inhabited one, but the pick does not test for one (`_SelectRandomStellarDest` @0x808b6, @0x80911-0x80940; see [`destination`](crate::traffic::destination)) | it leaves uninhabited stellars out too\* |
+//! | [`GateExitCounts`](RuleKey::GateExitCounts) | `gate_exit_counts` | a mission ship that leaves through a hypergate or wormhole counts nothing, and comes back at the next setup: `_HandleShipDisplay` frees its slot (@0x2c078) without the end of a warp out's count (`_LowLevelAIHandler` @0x85960-0x859aa; see [`gate_entry`](crate::traffic::gate_entry)) | it is counted as one that jumped out\* |
+//! | [`MoveLeftBehind`](RuleKey::MoveLeftBehind) | `move_left_behind` | the ships an in-flight `M` or `N` leaves behind stay in the ship table until that frame's display pass frees them (`_EvalSetExp` @0x15807, @0x1590b; `_HandleShipDisplay` @0x2ded6-0x2dee7): through the next traffic tick they hold their berths and persons, a move back brings them back as they were, and no aux ship of theirs is given back ([`Traffic::retarget`](crate::Traffic::retarget)) | they are dropped at the move, their aux ships given back as a setup gives them back (`_DeleteAllComputerShips` @0x3bfce-0x3c028)\* |
+//! | [`SpawnReserve`](RuleKey::SpawnReserve) | `spawn_reserve` | a spawn searches only the slots below its reserve: the system's traffic, the fighters, the mission ships and the hired escorts stop at 55 NPCs, the old ship of a capture at 62 (`_GenericRandomShipSpawn` @0x3c8b1-0x3c8f0, @0x41ce9, @0x3d648, @0x3cd50, @0x3fe73, @0x41136; [`Traffic::free_berth`](crate::Traffic::free_berth)) | no slot is held back: each may take any of slots 1-63, as "Max Ships In System" is 64 |
+//! | [`ArrivalHits`](RuleKey::ArrivalHits) | `arrival_hits` | a ship gliding in, waiting in a gate or bursting out of one answers a hit as a flying ship does: it takes the attacker as its target and the damage as provocation, a wait in a gate is cut to 20, and the player's hit on a ship waiting in a gate holds it there, seen, attacking the player (`_DamageShip` @0x3b4b0-0x3b4c2, @0x3be66-0x3be7c; `_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d; see [`Traffic::tick_in`](crate::Traffic::tick_in)) | it ignores every hit until it has arrived\* |
+//! | [`HireNoSlot`](RuleKey::HireNoSlot) | `hire_no_slot` | a hire that finds no ship-table slot below the spawn reserve still takes the fee and draws the class's roll again, and no escort joins, as `_DoShipyardDialog` ignores `_SpawnEscort`'s -1 (@0x5f1f1-0x5f221; [`Session::hire`](crate::Session::hire)) | the hire is refused and nothing changes\* |
+//! | [`AsteroidEntryField`](RuleKey::AsteroidEntryField) | `asteroid_entry_field` | every way into a system kills the asteroid field, a jump's arrival as well, as each caller of `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc, @0x3fa05): the field fills one asteroid a tick from the edges (see [`asteroid`](crate::asteroid)) | a jump's arrival, and a session starting or loading in flight, keeps the field `_CreateAsteroids` places\* |
+//! | [`AsteroidRespawnRing`](RuleKey::AsteroidRespawnRing) | `asteroid_respawn_ring` | an asteroid spawned at the edge starts at least 0.7 × (half the play area + 128) out on both axes (`_SpawnAsteroid` @0x3a351-0x3a538; [`Ring::Original`](crate::asteroid::Ring::Original)), which can be on screen on a wide play area | just off the screen, inside the cull ([`Ring::Outside`](crate::asteroid::Ring::Outside))\* |
+//! | [`FuseIgnoresAsteroids`](RuleKey::FuseIgnoresAsteroids) | `fuse_ignores_asteroids` | every armed proximity fuse is set off by the first asteroid in reach, as no code reads `Flags2` 0x0004 (`_CheckShotProximities` @0x376ab-0x37758; [`AsteroidFuse::Original`](crate::combat::asteroid_hit::AsteroidFuse::Original)) | the fuse of a weapon with `Flags2` 0x0004 ignores asteroids: "proximity detonator ignores asteroids" ([`AsteroidFuse::Bible`](crate::combat::asteroid_hit::AsteroidFuse::Bible)) |
 //! | [`StellarIdentityRecord`](RuleKey::StellarIdentityRecord) | `stellar_identity_record` | two stellars are compared as the original's stellar records hold them: either ID outside 128..=2175 is identical to nothing, even itself (`_StellarsAreIdentical` @0xab51-0xab6c), a name keeps its full length but only its first 30 characters (`_LoadObjectData` @0x77310-0x7732a; compared @0xaba6-0xac74), and a `spöb` that doesn't load reads as a zeroed record at 0,0 with no name (see [`StellarMarks::identical`](crate::mission::StellarMarks::identical)) | as the `spöb`s are written: equal IDs are always identical, names are compared whole, and a missing `spöb` is identical only to itself\* |
 //! | [`OfferClock`](RuleKey::OfferClock) | `offer_clock` | a venue's next offer is due `30 + Rand(30)` ticks after its last ask (the bar's first 15 after it opens, and again 30 + Rand(30) after its hire screen opens), on wall time through the offer and every dialog or screen open over the venue; one that comes due while something is open over the venue is asked for on the first tick nothing does (`_BarFilter` @0x47be0-0x47c11, `_TradeFilter` @0x4e550-0x4e581, `_OutfitFilter` @0x589ce-0x58a01, `_ShipyardFilter` @0x60de5-0x60e21; `_MyModalDialog` @0x59fee; `_DoShipyardDialog` @0x5e74c-0x5e775) | the gap runs from the answer, and the wait stops while the offer, a venue's own dialog, the mission info or player info screen or a mission text is open\* |
 //! | [`CharacterStatusSpread`](RuleKey::CharacterStatusSpread) | `character_status_spread` | a new pilot's `chär` status spreads to every system of its government's allies, and negated to every system of its enemies (a xenophobe's to the independent ones too), and to the records with those governments (`_ActivateCharResource` @0x76dc0-0x76e6e; see [`legal::spread_statuses`](crate::legal::spread_statuses)) | each status is the record with its own government alone ("the player's initial legal status with the above governments") |
@@ -202,8 +214,11 @@
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor`,
-//! `stellar_identity_record`, `offer_clock` or
-//! `comm_quote`
+//! `stellar_identity_record`, `offer_clock`, `newbie_fuel_refusal`,
+//! `missing_buoy_string`, `patrol_uninhabited`, `gate_exit_counts`,
+//! `move_left_behind`, `arrival_hits`, `hire_no_slot`,
+//! `asteroid_entry_field`, `asteroid_respawn_ring`
+//! or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count` and `nebula_explore_once`
 //! ("the explored state of the nebulae isn't saved from game to game ...
@@ -960,7 +975,10 @@ rule_keys! {
     /// system filling only with arrivals over time; otherwise the move is
     /// an arrival, exploring the system and clearing the course at once,
     /// and in flight populating it at once, the fighters out kept or
-    /// abandoned as the fighter rules say. The Bible is silent here, so
+    /// abandoned as the fighter rules say. What becomes of the ships
+    /// left behind by the engine's reading is
+    /// [`RuleKey::MoveLeftBehind`]'s; by the other, populating drops
+    /// them. The Bible is silent here, so
     /// the other reading is the intended behaviour, not anything the
     /// Bible says (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
     MoveArrival => "move_arrival",
@@ -1814,7 +1832,12 @@ rule_keys! {
     /// target panel when `TickCount() % 45 == 0` (@0x4c8b9-0x4c8eb),
     /// every 45 engine ticks (90 Mac ticks, 1.5 s), at the next radar
     /// refresh once the target's whole shield or its ship type has
-    /// changed (@0x4c963-0x4c994), or at once on a change of target. By
+    /// changed (@0x4c963-0x4c994), or at once on a change of target.
+    /// Docked, the status bar holds between the port's redraws: the radar
+    /// after an outfitter order (@0x5c5a1, @0x5d328), the radar, nav and
+    /// target on a ship purchase (@0x5f0b1; everything under a new
+    /// `ïntf`, @0x739bd), the fuel gauge on a recharge (@0x5fe05), and
+    /// everything as a shop closes (`_RefreshSAT`). By
     /// the other reading, every frame. The target's blink keeps the engine's timing under both,
     /// as it is a feature, not a redraw artefact. The Bible says nothing
     /// of it, so the other reading is the obvious alternative, not
@@ -2125,6 +2148,136 @@ rule_keys! {
     /// starts undocked at the centre, and the load reports the repair
     /// ([`Session::load_repaired`](crate::Session::load_repaired)).
     UnlistedStellar => "unlisted_stellar",
+    /// Whether a newbie (see [`tutorial`](crate::tutorial)) whose J has a
+    /// hyperspace selection but too little fuel is told so. By the engine,
+    /// no: the jump key's newbie branch, which says "No destination" with
+    /// nothing selected, swallows the case with a selection
+    /// (`_HandlePlayer` @0x6b995-0x6b9a3), so the newbie gets no message
+    /// and no beep. By the other reading, "Insufficient energy for
+    /// hyperspace jump." and `snd ` 153, as for any pilot (@0x6ba72-
+    /// 0x6bab7). The Bible says nothing of it, so the other reading is the
+    /// intended behaviour, not anything the Bible says (see
+    /// [`Session::jump_refusal_told`](crate::Session::jump_refusal_told)).
+    NewbieFuelRefusal => "newbie_fuel_refusal",
+    /// What a hyperspace arrival in a system whose message buoy names an
+    /// index `STR#` 1000 does not hold (0, below 0 but −1, or past its
+    /// count), with no `STR ` of that index + 999, shows (see the
+    /// [`buoy`](crate::buoy) module). By the engine, the original's empty
+    /// line for 480 ticks in place of the arrival line, as
+    /// `_DisplayMessage`'s `GetIndString` gives an empty string
+    /// (@0x52b3-0x52c7): the two stock Nil'kol systems' 20003 shows it. By
+    /// the other reading, the arrival line and its fighters suffix, as for
+    /// a system with no buoy. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says.
+    MissingBuoyString => "missing_buoy_string",
+    /// Whether an interceptor's patrol can pick an uninhabited stellar
+    /// (see [`destination`](crate::traffic::destination)). `_InterceptorAI`
+    /// asks `_SelectRandomStellarDest` for plain stellars only
+    /// (@0x8d027-0x8d03a), which picks none unless one is inhabited
+    /// (@0x808b6). By the engine, the pick among them does not test for
+    /// an uninhabited one (@0x80911-0x80940), so it can be one. By the
+    /// other reading, uninhabited stellars are left out of the pick too.
+    /// The Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says.
+    PatrolUninhabited => "patrol_uninhabited",
+    /// Whether a mission ship that leaves the system through a hypergate
+    /// or wormhole counts, for the counts of [`RuleKey::LeftRespawn`]
+    /// (see [`gate_entry`](crate::traffic::gate_entry)). By the engine,
+    /// no: `_HandleShipDisplay` frees its slot as its fade ends (@0x2c078)
+    /// with no call, and only the end of a warp out counts
+    /// (`_LowLevelAIHandler` @0x85960-0x859aa), so it counts nothing and
+    /// comes back at the next setup. By the other reading, it counts as
+    /// one that jumped out. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says.
+    GateExitCounts => "gate_exit_counts",
+    /// What becomes of the ships an in-flight `M` or `N` leaves behind in
+    /// the system left: every ship the player does not lead (see
+    /// [`Traffic::retarget`](crate::Traffic::retarget)). By the engine,
+    /// they stay in the ship table until that frame's display pass frees
+    /// them: `_EvalSetExp` moves only the ships the player leads
+    /// (@0x15807-0x1583e, @0x1590b-0x1593d), and `_HandleShipDisplay`
+    /// frees a ship outside the player's system (@0x2ded6-0x2dee7),
+    /// counting nothing and giving nothing back. So through the next
+    /// traffic tick they hold their berths and their persons, a move back
+    /// before then brings them back as they were, and none of their aux
+    /// ships is given back to its mission. By the other reading they are
+    /// dropped at the move, each aux ship given back as a setup gives it
+    /// back (`_DeleteAllComputerShips` @0x3bfce-0x3c028). Only a move
+    /// that goes on in the new system reads it: by the other reading of
+    /// [`RuleKey::MoveArrival`] an in-flight move populates the system,
+    /// which drops every ship there. The Bible says nothing of it, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says.
+    MoveLeftBehind => "move_left_behind",
+    /// How many of the ship table's slots a spawn leaves free (see
+    /// [`Traffic::free_berth`](crate::Traffic::free_berth)). By the engine, as
+    /// `_GenericRandomShipSpawn(arg1, reserve)` searches only slots
+    /// 1..(63 - reserve) of its 64 (@0x3c8b1-0x3c8f0): the system's own
+    /// traffic (`düde` ships, persons, fleets and auxiliary ships), the
+    /// fighters launched, the mission ships (`_MissionDudeSpawn`) and the
+    /// hired escorts (`_SpawnEscort`) leave 8 free, so they stop at 55
+    /// NPCs (@0x41ce9, @0x421a5, @0x43297, @0x42990, @0x435a8, @0x40cba,
+    /// @0x3d648, @0x3cd50, @0x3fe73), and the old ship of a "Use As My Ship" capture leaves 1
+    /// (@0x41136). By the Bible, which gives "Max Ships In System" as 64
+    /// and holds none back, each may take any of slots 1-63.
+    SpawnReserve => "spawn_reserve",
+    /// Whether a ship still coming into the system answers a hit (see
+    /// [`Traffic::tick_in`](crate::Traffic::tick_in)). By the engine, as
+    /// `_DamageShip` drops a reaction only while the victim's hyperspace
+    /// state +0x50 is above 0 (@0x3b4b0-0x3b4c2), a ship jumping out, and
+    /// an arrival's is -1.0 or -999.0 (@0x89555, @0x82ece, @0x8f3c8): a
+    /// ship gliding in, waiting in a gate or bursting out takes the
+    /// attacker as its target and the damage as provocation, its wait in
+    /// a gate is cut to 20 (@0x3be6e-0x3be7c), and the player's hit on a
+    /// ship waiting in a gate holds it there attacking the player, seen
+    /// and targetable (`_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d), as a
+    /// Good Samaritan's answer does. By the other reading it ignores every
+    /// hit until it has arrived. The Bible says nothing of it, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says.
+    ArrivalHits => "arrival_hits",
+    /// What a hire does when it finds no ship-table slot below the spawn
+    /// reserve (see [`Session::hire`](crate::Session::hire)). By the
+    /// engine, as `_DoShipyardDialog` takes the fee and marks the pilot
+    /// changed before `_SpawnEscort` (@0x5f168-0x5f1df), ignores its -1
+    /// (@0x5f1f1) and draws the class's roll again (@0x5f20d-0x5f21a):
+    /// the fee is gone, the roll is drawn again and no escort joins, as
+    /// the original's escort is its slot. By the other reading the hire
+    /// is refused and nothing changes. The Bible says nothing of it, so
+    /// the other reading is the intended behaviour, not anything the Bible
+    /// says.
+    HireNoSlot => "hire_no_slot",
+    /// What a hyperspace arrival does with the asteroid field `_CreateAsteroids`
+    /// places (see the [`asteroid`](crate::asteroid) module). By the
+    /// engine, every entry kills the field: each caller of
+    /// `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc), so
+    /// `_HandleAsteroids` kills the placed field that same tick, and the
+    /// player sees an empty field fill one asteroid a tick from the edges.
+    /// By the other reading, `placed` in the settings, a jump's arrival
+    /// keeps the placed field, as does a session starting or loading in
+    /// flight; a gate, a move or a landing still kills it, as no caller of
+    /// theirs places one. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says.
+    AsteroidEntryField => "asteroid_entry_field",
+    /// Where an asteroid spawned at the field's edge starts (see
+    /// [`Ring`](crate::asteroid::Ring)). By the engine, as
+    /// `_SpawnAsteroid(true)` places it (@0x3a351-0x3a538): at least
+    /// 0.7 × (half the play area + 128) out on both axes, which on a
+    /// play area wider than the original's smallest can be on screen, so
+    /// an asteroid pops in. By the other reading, `outside` in the
+    /// settings, just off the screen and inside the cull, so it always
+    /// drifts on. The Bible says nothing of it, so the other reading is
+    /// the intended behaviour, not anything the Bible says.
+    AsteroidRespawnRing => "asteroid_respawn_ring",
+    /// Whether a weapon's `Flags2` 0x0004 keeps asteroids from setting off
+    /// its proximity fuse (see
+    /// [`asteroid_hit`](crate::combat::asteroid_hit)). By the engine, no
+    /// code reads the bit (`_CheckShotProximities` @0x376ab-0x37758 tests
+    /// only `Seeker` 0x0001, @0x37566-0x37575), so every armed fuse is
+    /// set off by the first asteroid in reach. By the Bible, "proximity
+    /// detonator ignores asteroids": the fuse of a weapon with the bit
+    /// passes asteroids by, though its shots still hit one they touch.
+    FuseIgnoresAsteroids => "fuse_ignores_asteroids",
     /// How two stellars' records are read when
     /// [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) counts
     /// them as one mission stop (see
@@ -2417,7 +2570,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(68),
+            RuleKey::ALL.iter().rev().nth(79),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2434,7 +2587,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(67),
+            RuleKey::ALL.iter().rev().nth(78),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -2448,7 +2601,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(66),
+            RuleKey::ALL.iter().rev().nth(77),
             Some(&RuleKey::OfferShift)
         );
     }
@@ -2488,7 +2641,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(65),
+            RuleKey::ALL.iter().rev().nth(76),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2510,7 +2663,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(64),
+            RuleKey::ALL.iter().rev().nth(75),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2535,7 +2688,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(63),
+            RuleKey::ALL.iter().rev().nth(74),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2561,7 +2714,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(62),
+            RuleKey::ALL.iter().rev().nth(73),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2581,7 +2734,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(61),
+            RuleKey::ALL.iter().rev().nth(72),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2598,7 +2751,7 @@ mod tests {
             Some(RuleKey::MissionAllyIndex)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(60),
+            RuleKey::ALL.iter().rev().nth(71),
             Some(&RuleKey::MissionAllyIndex)
         );
         assert_eq!(
@@ -2618,7 +2771,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(59),
+            RuleKey::ALL.iter().rev().nth(70),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2638,7 +2791,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(56),
+            RuleKey::ALL.iter().rev().nth(67),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2660,7 +2813,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(55),
+            RuleKey::ALL.iter().rev().nth(66),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2677,7 +2830,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -2694,7 +2847,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -2711,7 +2864,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::NonStrictSpeed)
         );
     }
@@ -2728,7 +2881,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::HunterBribe)
         );
     }
@@ -2745,7 +2898,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::ShipOverlap)
         );
     }
@@ -2762,7 +2915,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::QuadrantTurretArc)
         );
     }
@@ -2779,7 +2932,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::HiddenShips)
         );
     }
@@ -2796,7 +2949,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::HiddenShipHoverBox)
         );
     }
@@ -2817,7 +2970,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::BreakupStall)
         );
     }
@@ -2834,7 +2987,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::EjectVelocity)
         );
     }
@@ -2851,7 +3004,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::RescueArmor)
         );
     }
@@ -2872,8 +3025,192 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::UnlistedStellar)
+        );
+    }
+
+    #[test]
+    fn the_newbie_fuel_refusal_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::NewbieFuelRefusal.key(), "newbie_fuel_refusal");
+        assert_eq!(
+            RuleKey::from_key("newbie_fuel_refusal"),
+            Some(RuleKey::NewbieFuelRefusal)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::NewbieFuelRefusal),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(15),
+            Some(&RuleKey::NewbieFuelRefusal)
+        );
+    }
+
+    #[test]
+    fn the_missing_buoy_string_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::MissingBuoyString.key(), "missing_buoy_string");
+        assert_eq!(
+            RuleKey::from_key("missing_buoy_string"),
+            Some(RuleKey::MissingBuoyString)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MissingBuoyString),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(14),
+            Some(&RuleKey::MissingBuoyString)
+        );
+    }
+
+    #[test]
+    fn the_patrol_uninhabited_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PatrolUninhabited.key(), "patrol_uninhabited");
+        assert_eq!(
+            RuleKey::from_key("patrol_uninhabited"),
+            Some(RuleKey::PatrolUninhabited)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PatrolUninhabited),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(13),
+            Some(&RuleKey::PatrolUninhabited)
+        );
+    }
+
+    #[test]
+    fn the_gate_exit_counts_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::GateExitCounts.key(), "gate_exit_counts");
+        assert_eq!(
+            RuleKey::from_key("gate_exit_counts"),
+            Some(RuleKey::GateExitCounts)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::GateExitCounts),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(12),
+            Some(&RuleKey::GateExitCounts)
+        );
+    }
+
+    #[test]
+    fn the_spawn_reserve_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::SpawnReserve.key(), "spawn_reserve");
+        assert_eq!(
+            RuleKey::from_key("spawn_reserve"),
+            Some(RuleKey::SpawnReserve)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::SpawnReserve),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(10),
+            Some(&RuleKey::SpawnReserve)
+        );
+    }
+
+    #[test]
+    fn the_arrival_hits_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ArrivalHits.key(), "arrival_hits");
+        assert_eq!(
+            RuleKey::from_key("arrival_hits"),
+            Some(RuleKey::ArrivalHits)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ArrivalHits),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(9),
+            Some(&RuleKey::ArrivalHits)
+        );
+    }
+
+    #[test]
+    fn the_hire_no_slot_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::HireNoSlot.key(), "hire_no_slot");
+        assert_eq!(RuleKey::from_key("hire_no_slot"), Some(RuleKey::HireNoSlot));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::HireNoSlot),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(8), Some(&RuleKey::HireNoSlot));
+    }
+
+    #[test]
+    fn the_asteroid_entry_field_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AsteroidEntryField.key(), "asteroid_entry_field");
+        assert_eq!(
+            RuleKey::from_key("asteroid_entry_field"),
+            Some(RuleKey::AsteroidEntryField)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AsteroidEntryField),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(7),
+            Some(&RuleKey::AsteroidEntryField)
+        );
+    }
+
+    #[test]
+    fn the_asteroid_respawn_ring_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AsteroidRespawnRing.key(), "asteroid_respawn_ring");
+        assert_eq!(
+            RuleKey::from_key("asteroid_respawn_ring"),
+            Some(RuleKey::AsteroidRespawnRing)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AsteroidRespawnRing),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(6),
+            Some(&RuleKey::AsteroidRespawnRing)
+        );
+    }
+
+    #[test]
+    fn the_fuse_ignores_asteroids_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::FuseIgnoresAsteroids.key(),
+            "fuse_ignores_asteroids"
+        );
+        assert_eq!(
+            RuleKey::from_key("fuse_ignores_asteroids"),
+            Some(RuleKey::FuseIgnoresAsteroids)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::FuseIgnoresAsteroids),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(5),
+            Some(&RuleKey::FuseIgnoresAsteroids)
+        );
+    }
+
+    #[test]
+    fn the_move_left_behind_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::MoveLeftBehind.key(), "move_left_behind");
+        assert_eq!(
+            RuleKey::from_key("move_left_behind"),
+            Some(RuleKey::MoveLeftBehind)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MoveLeftBehind),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(11),
+            Some(&RuleKey::MoveLeftBehind)
         );
     }
 
@@ -2936,7 +3273,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(54), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(65), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2951,7 +3288,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(53),
+            RuleKey::ALL.iter().rev().nth(64),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -2968,7 +3305,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(52),
+            RuleKey::ALL.iter().rev().nth(63),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -2985,7 +3322,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(51),
+            RuleKey::ALL.iter().rev().nth(62),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -3002,7 +3339,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -3019,7 +3356,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(49),
+            RuleKey::ALL.iter().rev().nth(60),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -3036,7 +3373,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(59),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -3053,7 +3390,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(58),
             Some(&RuleKey::PaySlotOffset)
         );
     }
@@ -3070,7 +3407,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::MissionlessTags)
         );
     }
@@ -3084,7 +3421,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::PrkNnnName)
         );
     }
@@ -3101,7 +3438,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(55),
             Some(&RuleKey::CrossedRankTags)
         );
     }
@@ -3118,7 +3455,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::OfferingShipName)
         );
     }
@@ -3135,7 +3472,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(53),
             Some(&RuleKey::CachedAvailBits)
         );
     }
@@ -3149,7 +3486,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -3163,7 +3500,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -3176,7 +3513,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(58),
+            RuleKey::ALL.iter().rev().nth(69),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -3194,7 +3531,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -3211,7 +3548,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -3228,10 +3565,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(35), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(46), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -3246,7 +3583,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -3265,15 +3602,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(32),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -3290,7 +3627,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(30),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -3304,11 +3641,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(28),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -3329,11 +3666,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -3347,11 +3684,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(36),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::BlessingLanding)
         );
     }
@@ -3371,7 +3708,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::BlessingAlwaysAttacks)
         );
     }
@@ -3388,7 +3725,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(33),
             Some(&RuleKey::ExploredByPlace)
         );
     }
@@ -3405,7 +3742,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::RouteRewrite)
         );
     }
@@ -3422,7 +3759,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::NebulaExploreOnce)
         );
     }
@@ -3439,7 +3776,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(30),
             Some(&RuleKey::NebulaNewPilot)
         );
     }
@@ -3453,11 +3790,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::ScanOutfitsPastJunk)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::OutfitScanFine)
         );
     }
@@ -3587,7 +3924,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(70),
+            RuleKey::ALL.iter().rev().nth(81),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3792,6 +4129,17 @@ mod tests {
                 RuleKey::EjectVelocity,
                 RuleKey::RescueArmor,
                 RuleKey::UnlistedStellar,
+                RuleKey::NewbieFuelRefusal,
+                RuleKey::MissingBuoyString,
+                RuleKey::PatrolUninhabited,
+                RuleKey::GateExitCounts,
+                RuleKey::MoveLeftBehind,
+                RuleKey::SpawnReserve,
+                RuleKey::ArrivalHits,
+                RuleKey::HireNoSlot,
+                RuleKey::AsteroidEntryField,
+                RuleKey::AsteroidRespawnRing,
+                RuleKey::FuseIgnoresAsteroids,
                 RuleKey::StellarIdentityRecord,
                 RuleKey::OfferClock,
                 RuleKey::CharacterStatusSpread,

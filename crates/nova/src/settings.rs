@@ -108,7 +108,9 @@ impl From<GameSettings> for Saved {
 }
 
 impl From<Saved> for GameSettings {
-    /// Volumes out of range are clamped.
+    /// Volumes are clamped to what the levels reach: silent through full,
+    /// and the effects no louder than their top level's
+    /// ([`AudioSettings::capped`]).
     fn from(saved: Saved) -> Self {
         Self {
             audio: AudioSettings {
@@ -116,7 +118,8 @@ impl From<Saved> for GameSettings {
                 music: saved.music,
                 effects_volume: Volume::new(saved.effects_volume),
                 music_volume: Volume::new(saved.music_volume),
-            },
+            }
+            .capped(),
             hyperspace_effects: saved.hyperspace_effects,
             quicktime_movies: saved.quicktime_movies,
         }
@@ -143,8 +146,8 @@ impl<S: SettingsStore> SettingsKeeper<S> {
     /// Nothing saved gives the defaults, silently. Text that cannot be
     /// read, or is not settings (not JSON, or a field of the wrong type),
     /// gives the defaults and a warning naming the store's location. A
-    /// missing field takes its default, and volumes are clamped to silent
-    /// through full. Other fields, the game's other settings, are saved
+    /// missing field takes its default, and volumes are clamped to what
+    /// the levels reach. Other fields, the game's other settings, are saved
     /// back with each change.
     pub fn open(mut store: S) -> (Self, Option<String>) {
         let mut others = Others::new();
@@ -243,7 +246,7 @@ pub fn game_settings(
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_audio::recording::MemorySettings;
-    use nova_audio::settings::level_volume;
+    use nova_audio::settings::effects_level_volume;
     use nova_audio::{FileSettings, Volume};
     use nova_view::SoundPrefs;
 
@@ -395,8 +398,18 @@ mod tests {
     fn volumes_out_of_range_are_clamped() {
         let text = r#"{"effects_volume": 3.5, "music_volume": -1}"#;
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding(text));
-        assert_eq!(keeper.settings().audio.effects_volume, Volume::FULL);
+        assert_eq!(keeper.settings().audio.effects_volume, Volume::new(0.5));
         assert_eq!(keeper.settings().audio.music_volume, Volume::SILENT);
+    }
+
+    #[test]
+    fn an_effects_volume_above_the_top_level_loads_at_the_top_level() {
+        let text = r#"{"effects_volume": 1.0, "music_volume": 1.0}"#;
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().audio.effects_volume, Volume::new(0.5));
+        assert_eq!(keeper.settings().audio.music_volume, Volume::FULL);
+        assert_eq!(keeper.settings().audio.prefs().effects_level, 8);
     }
 
     #[test]
@@ -530,7 +543,7 @@ mod tests {
             hyperspace_effects: true,
             quicktime_movies: true,
         });
-        assert_eq!(changed.audio.effects_volume, level_volume(3));
+        assert_eq!(changed.audio.effects_volume, effects_level_volume(3));
         assert_eq!(changed.audio.music_volume, Volume::new(0.5));
         assert!(changed.hyperspace_effects);
         assert_eq!(GameSettings::default().prefs(), Prefs::default());

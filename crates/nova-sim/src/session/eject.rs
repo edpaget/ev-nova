@@ -150,9 +150,9 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
-use crate::combat::ShipRef;
 use crate::combat::armament::{Trigger, fit_stock, outfit_rounds};
 use crate::combat::hull::{Condition, ESCAPE_POD_SHIP};
+use crate::combat::{GamePass, ShipRef};
 use crate::escape::{
     ESCAPE_FLOOR, ESCAPE_ROLL, auto_eject_armed, escape_ship_type, has_auto_eject, has_escape_pod,
 };
@@ -164,7 +164,7 @@ use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::ship_layer::Slot;
 use crate::sound::{SimSound, WARP_UP_HALTS};
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::table;
 
 impl Session {
@@ -192,18 +192,24 @@ impl Session {
         };
         let auto = after.is_some_and(|after| auto_eject_armed(after, self.hull.death_delay));
         let klaxon = after.is_some_and(|after| after > 1);
-        self.try_eject(auto, hulk, klaxon, chance);
+        // The pass's move has collapsed any pre-jump of a player disabled
+        // or dying, so the collapse's clock is never read here.
+        self.try_eject(auto, hulk, klaxon, false, chance);
     }
 
-    /// The eject check after the fight, on the breakup's first tick (see
-    /// the module docs), drawing on `chance`.
-    pub(super) fn eject_on_breakup(&mut self, chance: &mut dyn Chance) {
+    /// The eject check after the fight on `pass`, on the breakup's first
+    /// tick (see the module docs), drawing on `chance`. It runs the next
+    /// pass's eject early, and with it that pass's collapse of a pre-jump
+    /// still on, whose clock reads as the next pass's: double time's
+    /// second pass after an advance pass in double time.
+    pub(super) fn eject_on_breakup(&mut self, pass: GamePass, chance: &mut dyn Chance) {
         if let Condition::Dying { starting: true, .. } = self.condition {
             let hulk = Condition::Dying {
                 ticks_left: self.hull.death_delay,
                 starting: true,
             };
-            self.try_eject(true, hulk, false, chance);
+            let again = pass == GamePass::Advance { double_time: true };
+            self.try_eject(true, hulk, false, again, chance);
         }
     }
 
@@ -218,12 +224,14 @@ impl Session {
     /// Ejects, leaving a hulk in `hulk`, when it is armed (`auto`, while
     /// auto-eject is, or the chord held) and the player can: an escape pod
     /// or ship, a free ship slot and a record of the class it flies. A
-    /// `klaxon` sounds first. Whether it ejected.
+    /// `klaxon` sounds first. A pre-jump still on collapses as on double
+    /// time's second pass when `again`. Whether it ejected.
     fn try_eject(
         &mut self,
         auto: bool,
         hulk: Condition,
         klaxon: bool,
+        again: bool,
         chance: &mut dyn Chance,
     ) -> bool {
         let armed = (auto && has_auto_eject(&self.pilot.outfits, &self.outfits))
@@ -240,21 +248,22 @@ impl Session {
         if klaxon {
             self.sounds.push(SimSound::Klaxon);
         }
-        self.eject(&old, hulk, chance);
+        self.eject(&old, hulk, again, chance);
         true
     }
 
     /// The eject itself, from a ship of class `old`, leaving a hulk in
-    /// `hulk` (see the module docs).
-    fn eject(&mut self, old: &ShipRecord, hulk: Condition, chance: &mut dyn Chance) {
-        self.collapse_jump();
+    /// `hulk` (see the module docs), a pre-jump still on collapsing as on
+    /// double time's second pass when `again`.
+    fn eject(&mut self, old: &ShipRecord, hulk: Condition, again: bool, chance: &mut dyn Chance) {
+        self.collapse_jump(again);
         let save_due = self.save_due;
         let hulk = self.traffic.add_npc(self.hulk(old, hulk));
         if let Some(slot) = self.npc(hulk).map(slot_of) {
             self.slot_sprites.frames.clone_frames(slot, old.id);
         }
         self.target = None;
-        self.nav_target = None;
+        self.deselect();
         self.secondary = None;
         self.ship_hook(old.id, ShipHook::Retire, chance);
         let escape = self.escape_ship();
@@ -298,7 +307,7 @@ impl Session {
         self.condition = Condition::Intact;
         self.stop_thrust();
         self.sounds.push(SimSound::Ejected);
-        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
+        self.halt_sounds(&WARP_UP_HALTS);
         self.save_due = save_due;
     }
 
@@ -365,6 +374,7 @@ impl Session {
             booty: 0,
             boarded: true,
             info_types: 0,
+            cargo: NpcHold::default(),
             spared: false,
             assisting: 0,
             carrier: None,
@@ -374,6 +384,7 @@ impl Session {
             cloak: crate::cloak::Cloak::default(),
             cloak_gear: kind.cloak,
             led_out: false,
+            emerges_from: None,
             self_repair: kind.self_repair,
             former: None,
         }
@@ -638,6 +649,10 @@ mod tests {
 
     const EJECTED: [SimSound; 2] = [SimSound::Ejected, SimSound::Halt(&WARP_UP_HALTS)];
 
+    /// The beeps of "Ship disabled." and "Ship destroyed." as a hit breaks
+    /// an intact player up (see the `player_downed` module).
+    const DOWNED: [SimSound; 2] = [SimSound::ShipDowned, SimSound::ShipDowned];
+
     fn in_the_pod(session: &Session) -> bool {
         session.pilot.ship == ESCAPE_POD_SHIP && session.pod.is_some()
     }
@@ -715,7 +730,11 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD, AUTO]);
         let sounds = to_the_breakup(&mut session, &catalog, false);
-        assert_eq!(sounds, EJECTED, "no klaxon");
+        assert_eq!(
+            sounds,
+            [DOWNED.as_slice(), EJECTED.as_slice()].concat(),
+            "the downed lines' beeps, and no klaxon"
+        );
         assert!(in_the_pod(&session));
         assert!(!matches!(session.condition, Condition::Dying { .. }));
         assert_eq!(
@@ -749,7 +768,7 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD]);
         let sounds = to_the_breakup(&mut session, &catalog, true);
-        assert_eq!(sounds, EJECTED);
+        assert_eq!(sounds, [DOWNED.as_slice(), EJECTED.as_slice()].concat());
         assert!(in_the_pod(&session));
         assert_eq!(
             hulk(&session).condition,
@@ -872,7 +891,7 @@ mod tests {
         let mut session = flying(&catalog, &[POD, KEPT, DROPPED]);
         let target = session.npcs()[0].id;
         session.target = Some(target);
-        session.nav_target = Some(crate::catalog::StellarId(128));
+        session.nav = crate::navigation::NavMode::Stellar(Some(crate::catalog::StellarId(128)));
         session.secondary = Some(WeaponId(128));
         let state = crate::flight::ShipState {
             position: Vec2::new(10.0, 20.0),
@@ -908,7 +927,7 @@ mod tests {
             session.player.velocity
         );
         assert_eq!(session.target, None);
-        assert_eq!(session.nav_target, None);
+        assert_eq!(session.nav_target(), None);
         assert_eq!(session.secondary, None);
         assert_eq!(session.condition, Condition::Intact);
         assert_eq!(session.pilot.reserves.fuel.now, fuel, "fuel untouched");
@@ -950,7 +969,7 @@ mod tests {
             }
         }
         let mut session = flying(&catalog, &[POD, AUTO]);
-        session.warp_sound = 9;
+        session.warp_sounds[0] = 9;
         session.jump = Some(BRAKING);
         session.take_messages();
         let sounds = to_the_breakup(&mut session, &catalog, false);
@@ -958,13 +977,22 @@ mod tests {
         assert_eq!(
             sounds,
             [
+                SimSound::ShipDowned,
+                SimSound::ShipDowned,
                 SimSound::Halt(&WARP_UP_HALTS),
                 SimSound::JumpCollapsed,
                 SimSound::Ejected,
                 SimSound::Halt(&WARP_UP_HALTS),
             ]
         );
-        assert_eq!(session.take_messages(), [SimMessage::JumpCollapsed]);
+        assert_eq!(
+            session.take_messages(),
+            [
+                SimMessage::ShipDisabled,
+                SimMessage::ShipDestroyed,
+                SimMessage::JumpCollapsed
+            ]
+        );
         assert_eq!(session.jump, None);
         // C is the old class's (2.08, `Flags` 0x0004), not the pod's.
         let speed = crate::warp::lead_in_speed(2, crate::warp::warp_factor(0x0004), 9);
@@ -986,7 +1014,7 @@ mod tests {
         // An escape ship's notice follows the collapse's.
         let catalog = escaping();
         let (mut session, sounds) = escaped(&catalog, &[], |session| {
-            session.warp_sound = 9;
+            session.warp_sounds[0] = 9;
             session.jump = Some(BRAKING);
         });
         assert_eq!(
@@ -1007,6 +1035,31 @@ mod tests {
                 SimSound::Halt(&WARP_UP_HALTS),
             ]
         );
+    }
+
+    #[test]
+    fn in_double_time_a_collapse_on_the_advance_passs_breakup_reads_the_second_passs_clock() {
+        // The eject on the breakup runs the next pass's eject early, and
+        // with it that pass's collapse: in double time the second pass, on
+        // which a braking ship's stamp is the frame's own, so t = 0 and the
+        // collapse gives no speed, where the next frame's reads 2.
+        let mut catalog = ejecting(100);
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(128) {
+                record.flags = 0x0004;
+            }
+        }
+        let w = crate::warp::warp_factor(0x0004);
+        assert!(crate::warp::lead_in_speed(0, w, 9) < 0.0);
+        assert!(crate::warp::lead_in_speed(2, w, 9) > 0.0);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        session.set_double_time_key(true);
+        session.warp_sounds[1] = 9;
+        session.jump = Some(BRAKING);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert_eq!(session.jump, None, "collapsed");
+        assert_eq!(hulk(&session).state.velocity, Vec2::ZERO, "no speed");
     }
 
     #[test]

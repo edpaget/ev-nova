@@ -52,7 +52,6 @@ use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
@@ -139,7 +138,6 @@ pub struct HireScreen {
     closed: bool,
     /// The `dësc` shown since this was last taken, to be loaded.
     description_request: Option<i16>,
-    sounds: Vec<Sound>,
 }
 
 impl HireScreen {
@@ -202,7 +200,6 @@ impl HireScreen {
             order: None,
             closed: false,
             description_request: None,
-            sounds: Vec::new(),
         };
         screen.select(0);
         screen
@@ -434,7 +431,7 @@ impl Screen for HireScreen {
             return ScreenAction::None;
         }
         if let Some(panel) = &mut self.panel {
-            if panel.input(input, &mut self.sounds) {
+            if panel.input(input) {
                 self.panel = None;
             }
             return ScreenAction::None;
@@ -462,7 +459,6 @@ impl Screen for HireScreen {
             self.select(index);
         } else if let Ok(laid) = &mut self.laid {
             let event = laid.dialog.input(input);
-            self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
             if let Some(DialogEvent::Item(item)) = event {
                 self.activate(item);
             }
@@ -512,11 +508,6 @@ impl Screen for HireScreen {
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
-    }
-
-    /// The buttons' sounds, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -1349,6 +1340,48 @@ mod tests {
         let debug = format!("{:?}", screen());
         for part in ["HireScreen", "ShipyardCatalog", "TextMetrics", "Ship 128"] {
             assert!(debug.contains(part), "{part}: {debug}");
+        }
+    }
+
+    /// A pointer click plays nothing: `_TrackEscortButtons` @0x27987 calls
+    /// no sound routine.
+    #[test]
+    fn pointer_click_is_silent_as_the_original() {
+        let mut screen = screen();
+        let hire = item(&screen, HIRE_ITEM).center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: hire,
+            });
+            assert_eq!(screen.take_sounds(), [], "pressed: {pressed}");
+        }
+        assert_eq!(screen.take_order(), Some(ShipId(128)), "it still hires");
+    }
+
+    /// The original's hire mode of `_DoShipyardDialog` maps keys in `_ShipyardFilter` @0x60449 to items with no click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [
+            Key::Right,
+            Key::Down,
+            Key::Left,
+            Key::Up,
+            HIRE_KEY,
+            INFO_KEY,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            let mut screen = screen();
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
     }
 }

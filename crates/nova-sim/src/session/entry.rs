@@ -12,7 +12,11 @@
 //!
 //! Every draw a caller makes on its chance comes before it enters the
 //! system; inside, only populating the system draws, after the ship is
-//! placed, the system explored and the fighters out dealt with.
+//! placed, the system explored and the fighters out dealt with, and then,
+//! by the other reading of
+//! [`RuleKey::AsteroidEntryField`](crate::RuleKey::AsteroidEntryField), a
+//! jump's arrival placing its asteroid field about the ship, so the frame
+//! drawn after the arrival shows it.
 //!
 //! Before any write, the system entered is resolved through the galaxy
 //! overlay, so the player is always in a visible system: the system
@@ -31,8 +35,7 @@
 //! spaceport keeps serving it, and the new system's wait for the
 //! take-off: after a landed `M` or `N`, after the overlay moves a landed
 //! player, after a relocation to a stellar of a system resolved to
-//! another, and for a pilot flown docked at a stellar of a hidden system at
-//! its place. A mover says only where the ship is docked ([`Dock`]).
+//! another. A mover says only where the ship is docked ([`Dock`]).
 //!
 //! Which of a system's stellars are shown is the galaxy's: those it holds
 //! by ownership or by the rescue ([`OverlaidGalaxy::shows`]), as
@@ -44,6 +47,21 @@
 //! changes and at each flight rebuild point ([`Session::reshow`]); a
 //! galaxy change between rebuild points reads the stellars shown again
 //! but never changes which are shown.
+//!
+//! **The ships left behind.** An in-flight `M` or `N` into another
+//! system takes along only the ships the player leads. By the engine
+//! reading of [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind)
+//! the rest stay in the ship table, out of the system, until the end of
+//! the next traffic tick ([`Traffic::retarget`]): the original's display
+//! pass frees them later in the frame (`_HandleShipDisplay`
+//! @0x2ded6-0x2dee7), so the one arrivals pass before it still sees
+//! their slots and persons. A move back before then brings them back;
+//! none of their aux ships is given back. They are never drawn, saved or
+//! counted toward `AvgShips`, and every setup and reset drops them. The
+//! engine settles every script after the frame's traffic tick, so a move
+//! the original makes after its arrivals pass (in `_AIDispatch`,
+//! `_HandleShot` or the ship loop) holds them through one pass more than
+//! the original would; none of it is drawn.
 //!
 //! The last step announces the arrival, and tells a view what to redraw
 //! ([`scene_event`], see the `events` module): measured against the
@@ -63,19 +81,21 @@ use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
-use crate::rulebook::{RuleSource, Rulebook};
+use crate::navigation::NavMode;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 #[cfg(doc)]
 use crate::story::OverlaidGalaxy;
 use crate::story::{Entrance, StoryEvent};
-use crate::traffic::Traffic;
+use crate::traffic::{Leave, Traffic};
 
 /// How the player enters a system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Entry {
     /// A hyperspace jump's arrival, having made `hops` hops along the
-    /// course.
-    Jump { hops: usize },
+    /// course, at its natural end, both warp-ups finished, or not, at its
+    /// fallback end (see [`Session::arrive`]).
+    Jump { hops: usize, natural_end: bool },
     /// Out of a hypergate or wormhole.
     Gate,
     /// `M` or `N`, landed or in flight.
@@ -179,7 +199,13 @@ pub(super) enum Reset {
     Explore,
     /// Where the ship last touched down becomes where it is placed.
     Touchdown,
-    /// The ship is docked at the placement's stellar.
+    /// The ship is docked at the placement's stellar. The warp-ups end
+    /// for the session, raising no halt: the relocation has no
+    /// counterpart in the original, and no landing there halts them
+    /// either (every `_warpUpSnd` reference: `_LoadSounds`, `_Bye`,
+    /// `_HandleShipDisplay`, `_PlayGame`, `_SwitchedOut` @0x4f3a3, the
+    /// jump collapse @0x68a42, sabotage @0x695d0, the warp stage
+    /// @0x6b617-0x6c6d2, the cheat key @0x6e4db and the eject @0x6f925).
     Dock,
     /// A held `P` sound is dropped.
     HeldSound,
@@ -187,8 +213,6 @@ pub(super) enum Reset {
     Jump,
     /// The thrust stops and the engine glow goes out.
     Thrust,
-    /// The navigation target is let go.
-    NavTarget,
     /// A gate's pending entry ends.
     GateEntry,
     /// The shots and beams in flight are left behind.
@@ -196,10 +220,21 @@ pub(super) enum Reset {
     /// The cargo boxes are cleared, as `_killBoxes` kills them
     /// (see the `cargo_boxes` module).
     Boxes,
+    /// The asteroid field is killed, as `_killAsteroids` kills it (see the
+    /// `asteroids` module).
+    Asteroids,
+    /// The asteroid field is placed afresh about the ship, as
+    /// `_CreateAsteroids` places it, and kept: a jump's arrival by the
+    /// other reading of
+    /// [`RuleKey::AsteroidEntryField`](crate::RuleKey::AsteroidEntryField)
+    /// (see the `asteroids` module).
+    PlaceAsteroids,
     /// The fight's strikes are forgotten.
     Strikes,
     /// The player's target is let go.
     Target,
+    /// The dock request is dropped (see the `clearance` module).
+    DockRequest,
     /// The boarding under way ends.
     Boarding,
     /// The hail under way ends.
@@ -226,11 +261,22 @@ pub(super) enum Reset {
     EmptyOffers,
     /// [`SimSound::Arrived`] sounds.
     ArrivalSound,
-    /// [`SimMessage::Arrived`] is raised.
+    /// [`SimMessage::Arrived`] is raised, or the system's message buoy,
+    /// [`SimMessage::Buoy`], in its place (see the `buoys` module).
     ArrivalMessage,
     /// The stellars shown are rebuilt, last: a rebuild point (see the
     /// `stellars` module).
     Rebuild,
+}
+
+/// What an entry tells as it announces the arrival: the system entered,
+/// the scene's event, if any ([`scene_event`]), and how many fighter notes
+/// stood before the entry queued its own.
+#[derive(Clone, Copy)]
+struct Heard {
+    system: SystemId,
+    event: Option<SessionEvent>,
+    notes: usize,
 }
 
 /// What becomes of the course.
@@ -247,6 +293,19 @@ pub(super) enum CourseStep {
     Clear,
 }
 
+/// What becomes of the player's nav mode and its selection (see the
+/// `nav` module), after the course's step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NavStep {
+    /// Neither is written.
+    Keep,
+    /// The selection is let go and the mode kept.
+    Deselect,
+    /// The nav system is turned off, then the course's next hop cued: a
+    /// hyperspace arrival (@0x6be25-0x6be2b, @0x6c4cd).
+    OffThenCue,
+}
+
 /// What becomes of the traffic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TrafficStep {
@@ -257,7 +316,10 @@ pub(super) enum TrafficStep {
     /// It goes on in the new system with the NPCs the player leads only
     /// (`Session::player_led`), the new
     /// system's ships coming with its arrivals over time
-    /// ([`Traffic::retarget`]).
+    /// ([`Traffic::retarget`]). The rest stay in the ship table through
+    /// the next traffic tick, nothing given back, or are dropped at once,
+    /// their aux ships given back, as
+    /// [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind) says.
     Retarget,
     /// It is emptied, the fleet with it, and the next traffic tick in
     /// flight populates the system.
@@ -269,14 +331,16 @@ pub(super) enum TrafficStep {
 pub(super) struct Resets {
     set: BTreeSet<Reset>,
     course: CourseStep,
+    nav: NavStep,
     traffic: TrafficStep,
 }
 
 impl Resets {
-    fn of(set: &[Reset], course: CourseStep, traffic: TrafficStep) -> Self {
+    fn of(set: &[Reset], course: CourseStep, nav: NavStep, traffic: TrafficStep) -> Self {
         Self {
             set: set.iter().copied().collect(),
             course,
+            nav,
             traffic,
         }
     }
@@ -291,8 +355,9 @@ impl Resets {
 /// `facts`: the table, a row for each way in.
 pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets {
     let arrival = ScriptEffectRules::from_rulebook(rules).arrival == RuleSource::Bible;
+    let placed = rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible;
     match how {
-        Entry::Jump { hops } => jump(hops),
+        Entry::Jump { hops, .. } => jump(hops, placed),
         Entry::Gate => gate(),
         Entry::ScriptMove { landed: true } => script_move_landed(arrival),
         Entry::ScriptMove { landed: false } => script_move_in_flight(arrival, facts),
@@ -309,9 +374,13 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
 /// afresh (`_missionRandom`, @0x1d7e3, @0x1d940); the system is explored
 /// (`_AutoSetExploration(system, 0, 1)` @0x690cb) and set up afresh
 /// (`_DeleteAllComputerShips` @0x68f69, `_SetupShipsInSystem` @0x69114);
-/// the course is cleared (`_hyperRoute` @0x1d6bb-0x1d6cd). It sounds and
+/// the course is cleared (`_hyperRoute` @0x1d6bb-0x1d6cd). The nav mode is
+/// left to the rescue, which turns it off as `_ResetPlayer` does
+/// (@0x1d4cd-0x1d4d5). It sounds and
 /// says nothing, and its stellars are rebuilt by the rescue itself, after
-/// its days (`_HandleStellarSystemVisibility` @0x69135).
+/// its days (`_HandleStellarSystemVisibility` @0x69135). It keeps the
+/// asteroid field, as `_ResetPlayer` sets no `_killAsteroids`
+/// (@0x1d8cd-0x1d8e2).
 fn rescue() -> Resets {
     Resets::of(
         &[
@@ -321,7 +390,6 @@ fn rescue() -> Resets {
             Reset::HeldSound,
             Reset::Jump,
             Reset::Thrust,
-            Reset::NavTarget,
             Reset::GateEntry,
             Reset::Combat,
             Reset::Boxes,
@@ -331,6 +399,7 @@ fn rescue() -> Resets {
             Reset::Hail,
         ],
         CourseStep::Clear,
+        NavStep::Keep,
         TrafficStep::Populate,
     )
 }
@@ -344,20 +413,35 @@ fn rescue() -> Resets {
 /// (@0x6c040-0x6c066). It drops the hops made, and an arrival that made
 /// none clears the course or drops its first hop as
 /// [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says
-/// (@0x6c472-0x6c4c6; see the `course` module); the jump's start already stopped the thrust, and every tick ends a gate's
-/// pending entry. Populating lets go of the strikes, the boarding, the
-/// hail and the target too. The caller arms the escort-strength timer
+/// (@0x6c472-0x6c4c6; see the `course` module); the jump's start
+/// already stopped the thrust, and every tick ends a gate's pending
+/// entry. The nav system is turned off as the arrival begins
+/// (@0x6be25-0x6be2b) and the course's next hop cued after its step
+/// (@0x6c4cd), so mode 3 comes back while hops remain. The asteroid
+/// field is killed (@0x6c4fc), or, `placed` (the other reading of
+/// [`RuleKey::AsteroidEntryField`](crate::RuleKey::AsteroidEntryField)),
+/// placed afresh as `_CreateAsteroids` places it (@0x6c51a). The arrival
+/// message is the system's buoy in place of the arrival line when it has
+/// one (@0x6c25b-0x6c27a; see the `buoys` module). The dock request is
+/// dropped (@0x6bfb5-0x6bfc4; see the `clearance` module). Populating
+/// lets go of the strikes, the boarding, the hail and the target too. The caller arms the escort-strength timer
 /// before entering, ahead of the jump's days ([`Session::arrive`]).
-fn jump(hops: usize) -> Resets {
+fn jump(hops: usize, placed: bool) -> Resets {
+    let asteroids = if placed {
+        Reset::PlaceAsteroids
+    } else {
+        Reset::Asteroids
+    };
     Resets::of(
         &[
             Reset::RedrawOffers,
             Reset::Stellar,
             Reset::Explore,
             Reset::HeldSound,
-            Reset::NavTarget,
+            Reset::DockRequest,
             Reset::Combat,
             Reset::Boxes,
+            asteroids,
             Reset::Strikes,
             Reset::Target,
             Reset::Boarding,
@@ -368,6 +452,7 @@ fn jump(hops: usize) -> Resets {
             Reset::Rebuild,
         ],
         CourseStep::Arrival { hops },
+        NavStep::OffThenCue,
         TrafficStep::Populate,
     )
 }
@@ -378,16 +463,20 @@ fn jump(hops: usize) -> Resets {
 /// stopped; the system is populated even when it is the one gone in,
 /// and the arrival sounds but raises no message of its own (the caller
 /// raises the gate's). The caller arms the escort-strength timer before
-/// entering, as a take-off does ([`Session::enter_wormhole`]).
+/// entering, as a take-off does ([`Session::enter_wormhole`]). The nav
+/// selection is let go and the mode kept, the take-off's tail that the
+/// gates join (@0x66edb-0x66f40, @0x674d2); the hypergate then turns the
+/// nav system off itself ([`Session::enter_hypergate`]). The asteroid
+/// field is killed (@0x63f47, @0x645f6).
 fn gate() -> Resets {
     Resets::of(
         &[
             Reset::Stellar,
             Reset::Explore,
             Reset::Thrust,
-            Reset::NavTarget,
             Reset::Combat,
             Reset::Boxes,
+            Reset::Asteroids,
             Reset::Strikes,
             Reset::Target,
             Reset::Boarding,
@@ -397,6 +486,7 @@ fn gate() -> Resets {
             Reset::Rebuild,
         ],
         CourseStep::Clear,
+        NavStep::Deselect,
         TrafficStep::Populate,
     )
 }
@@ -407,7 +497,11 @@ fn gate() -> Resets {
 /// system and stellar change, the offers are emptied (the stellar they
 /// were rolled at kept) and the stellars wait for the take-off. As an
 /// `arrival` (the Bible's reading of `MoveArrival`) the system is
-/// explored and the course cleared at once.
+/// explored and the course cleared at once. The nav is kept: the
+/// operator already wrote it, as `_EvalSetExp` does (`M` in mode 2 its
+/// destination's first stellar, @0x156f2-0x15705; otherwise the selection
+/// let go, @0x15733, @0x158fd; see the `nav` module), and the take-off
+/// lets go of it (@0x674d2).
 fn script_move_landed(arrival: bool) -> Resets {
     let mut set = vec![Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers];
     let course = if arrival {
@@ -416,7 +510,7 @@ fn script_move_landed(arrival: bool) -> Resets {
     } else {
         CourseStep::Keep
     };
-    Resets::of(&set, course, TrafficStep::None)
+    Resets::of(&set, course, NavStep::Keep, TrafficStep::None)
 }
 
 /// An `M` or `N` in flight (`_EvalSetExp` @0x158a4): the shots are
@@ -427,14 +521,17 @@ fn script_move_landed(arrival: bool) -> Resets {
 /// out dealt with and the system populated, even within the same
 /// system; otherwise only into another system does the traffic go on,
 /// with the ships the player leads alone (`_EvalSetExp` @0x15807,
-/// @0x1590b).
+/// @0x1590b), the rest left behind as
+/// [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind) says. The
+/// nav selection is let go and the mode kept (@0x157e3, @0x158fd). The
+/// asteroid field is killed (@0x158ca, @0x1598e).
 fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     let mut set = vec![
         Reset::Jump,
-        Reset::NavTarget,
         Reset::GateEntry,
         Reset::Combat,
         Reset::Boxes,
+        Reset::Asteroids,
         Reset::Strikes,
         Reset::Target,
         Reset::Boarding,
@@ -456,7 +553,7 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     } else {
         (CourseStep::Keep, TrafficStep::None)
     };
-    Resets::of(&set, course, traffic)
+    Resets::of(&set, course, NavStep::Deselect, traffic)
 }
 
 /// The developer tools' move of a landed pilot, and the walker's landing
@@ -465,7 +562,9 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
 /// the shops' rolls drawn afresh, and leaves the last system's traffic
 /// and scene behind; it keeps a held sound and the fighters out, and
 /// sounds nothing. The offers are emptied and their stellar forgotten, so
-/// the next landing rolls them.
+/// the next landing rolls them, and the nav selection is let go, the mode
+/// kept, as the other ways in let go of it. The asteroid field is killed,
+/// as every other move kills it.
 fn relocate() -> Resets {
     Resets::of(
         &[
@@ -475,10 +574,10 @@ fn relocate() -> Resets {
             Reset::Explore,
             Reset::Touchdown,
             Reset::Dock,
-            Reset::NavTarget,
             Reset::GateEntry,
             Reset::Combat,
             Reset::Boxes,
+            Reset::Asteroids,
             Reset::Strikes,
             Reset::Target,
             Reset::Boarding,
@@ -488,6 +587,7 @@ fn relocate() -> Resets {
             Reset::Rebuild,
         ],
         CourseStep::Clear,
+        NavStep::Deselect,
         TrafficStep::Reset,
     )
 }
@@ -567,6 +667,7 @@ impl Session {
             self.emit(SessionEvent::GalaxyChanged);
         }
         let system = resolved.to;
+        let left = self.pilot.system;
         let facts = EntryFacts {
             system_changed: system != self.pilot.system,
             jump_pending: self.jump.is_some(),
@@ -603,6 +704,11 @@ impl Session {
         if resets.has(Reset::Dock) {
             self.landed = placement.stellar;
             self.bar_news = None;
+            self.bar_nav = None;
+            self.warp_ups.clear();
+            // The warp-out needs no clearing here: a relocation from
+            // flight docks after (`Session::land_at`), and one already
+            // landed has none playing, as landing ended it.
         }
         let scene_changed = self.set_player_system(system, sites, dock);
         if resets.has(Reset::Dock) {
@@ -611,11 +717,22 @@ impl Session {
             // price.
             self.open_port_prices();
         }
+        // The fighter notes this entry queues, which a buoy drops.
+        let notes = self.fighter_notes.len();
         self.leave_behind(&resets);
         if resets.has(Reset::RedrawOffers) {
             self.offers.redraw(&mut &mut *chance);
         }
-        self.bring_in_traffic(resets.traffic, how.entrance(), catalog, chance);
+        self.bring_in_traffic(
+            resets.traffic,
+            how.entrance(),
+            (left, system),
+            catalog,
+            chance,
+        );
+        if resets.has(Reset::PlaceAsteroids) {
+            self.place_asteroids(chance);
+        }
         if resets.has(Reset::ShopRolls) {
             self.land_day_rolls();
             self.open_outfit_visit();
@@ -629,7 +746,12 @@ impl Session {
         if resets.has(Reset::EmptyOffers) {
             self.empty_offers();
         }
-        self.announce(how, &resets, system, scene_event(how, scene_changed));
+        let heard = Heard {
+            system,
+            event: scene_event(how, scene_changed),
+            notes,
+        };
+        self.announce(how, &resets, heard, stellars);
         // A jump's arrival raised its `Explored` before its days, at the
         // original's first nebula exploration (@0x6be12); a gate's or
         // wormhole's exit explores no nebula (`_PlayerEnterHypergate`
@@ -690,6 +812,7 @@ impl Session {
         );
         self.listed = listed;
         self.shown = system;
+        self.keep_gate_sprites();
     }
 
     /// Derives the stellars shown afresh from those their system lists, in
@@ -748,7 +871,9 @@ impl Session {
     }
 
     /// Lets go of what `resets` says of the system left: the held sound,
-    /// a jump, the thrust, the scene, and the fighters out.
+    /// a jump, the thrust, the nav selection (after the course's step and
+    /// in the system entered, which the cue reads), the scene, and the
+    /// fighters out.
     fn leave_behind(&mut self, resets: &Resets) {
         if resets.has(Reset::HeldSound) {
             self.queued.sound = None;
@@ -759,8 +884,13 @@ impl Session {
         if resets.has(Reset::Thrust) {
             self.stop_thrust();
         }
-        if resets.has(Reset::NavTarget) {
-            self.nav_target = None;
+        match resets.nav {
+            NavStep::Keep => {}
+            NavStep::Deselect => self.deselect(),
+            NavStep::OffThenCue => {
+                self.nav = NavMode::Off;
+                self.cue_course();
+            }
         }
         if resets.has(Reset::GateEntry) {
             self.gate = None;
@@ -771,11 +901,17 @@ impl Session {
         if resets.has(Reset::Boxes) {
             self.clear_boxes();
         }
+        if resets.has(Reset::Asteroids) {
+            self.kill_asteroids();
+        }
         if resets.has(Reset::Strikes) {
             self.strikes.clear();
         }
         if resets.has(Reset::Target) {
             self.target = None;
+        }
+        if resets.has(Reset::DockRequest) {
+            self.dock = None;
         }
         if resets.has(Reset::Boarding) {
             self.aboard = None;
@@ -789,13 +925,14 @@ impl Session {
     }
 
     /// Does `step` to the traffic of a system entered `how`, by a way in
-    /// whose enter-system hook is still to run, if any, reading `catalog`
-    /// and drawing on `chance` to populate: the only draw entering a
-    /// system makes.
+    /// whose enter-system hook is still to run, if any, going `from` one
+    /// system `to` another, reading `catalog` and drawing on `chance` to
+    /// populate: the only draw entering a system makes.
     fn bring_in_traffic<C, R>(
         &mut self,
         step: TrafficStep,
         how: Option<Entrance>,
+        (from, to): (SystemId, SystemId),
         catalog: &C,
         chance: &mut R,
     ) where
@@ -810,8 +947,17 @@ impl Session {
                 // Every ship the player leads, as `_EvalSetExp`
                 // (@0x15807-0x1583e, @0x1590b-0x1593d) carries.
                 let led: BTreeSet<_> = self.player_led().map(|npc| npc.id).collect();
-                self.give_back_aux_ships(&led);
-                self.traffic.retarget(table, &led);
+                // By the engine the rest stay in the ship table until the
+                // display pass frees them, nothing given back
+                // (`_HandleShipDisplay` @0x2ded6-0x2dee7).
+                let leave = if self.rules.source_for(RuleKey::MoveLeftBehind) == RuleSource::Engine
+                {
+                    Leave::Held { from, to }
+                } else {
+                    self.give_back_aux_ships(&led);
+                    Leave::Dropped
+                };
+                self.traffic.retarget(table, &led, leave);
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
@@ -823,22 +969,50 @@ impl Session {
         }
     }
 
-    /// Sounds and raises the arrival in `system`, as `resets` says, tells
-    /// `event`, if any ([`scene_event`]), and raises
+    /// Whether an arrival `how` plays the warp-out, `snd ` 130: a jump's
+    /// natural end only while it is not still playing (`_HandlePlayer`
+    /// @0x6bbe1-0x6bbe9); a jump's fallback end and a gate's or wormhole's
+    /// exit always (@0x6c706, @0x63e57, @0x6443d).
+    fn sounds_warp_out(&self, how: Entry) -> bool {
+        !matches!(
+            how,
+            Entry::Jump {
+                natural_end: true,
+                ..
+            }
+        ) || !self.warp_out.playing()
+    }
+
+    /// Sounds and raises the arrival in `heard`'s system, as `resets`
+    /// says, tells its event, if any ([`scene_event`]), and raises
     /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
-    /// names an entrance ([`Entry::entrance`]).
-    fn announce(
-        &mut self,
-        how: Entry,
-        resets: &Resets,
-        system: SystemId,
-        event: Option<SessionEvent>,
-    ) {
-        if resets.has(Reset::ArrivalSound) {
+    /// names an entrance ([`Entry::entrance`]). The arrival message is the
+    /// system's buoy, its strings read from `catalog`, or the arrival line
+    /// ([`Session::arrival_message`]); a buoy replaces the
+    /// abandoned-fighters suffix too, so it drops the fighter notes this
+    /// entry queued (see the `buoys` module).
+    fn announce<S>(&mut self, how: Entry, resets: &Resets, heard: Heard, catalog: &S)
+    where
+        S: PilotCatalog + ?Sized,
+    {
+        let Heard {
+            system,
+            event,
+            notes,
+        } = heard;
+        if resets.has(Reset::ArrivalSound) && self.sounds_warp_out(how) {
+            self.warp_out.start(self.warp_out_sound);
             self.sounds.push(SimSound::Arrived);
         }
         if resets.has(Reset::ArrivalMessage) {
-            self.messages.push(SimMessage::Arrived(system));
+            let message = self.arrival_message(system, catalog);
+            if matches!(message, SimMessage::Buoy(_)) {
+                self.fighter_notes.truncate(notes);
+            }
+            self.messages.push(message);
+            // The hyperspace arrival leaves the pilot past the tutorial
+            // (`_HandlePlayer` @0x6c002; see the `tutorial` module).
+            self.tutorial.jumped();
         }
         if let Some(event) = event {
             self.emit(event);
@@ -874,9 +1048,9 @@ mod tests {
     /// The scene every way in but a landed move lets go of, a gate's
     /// pending entry aside, and its stellars rebuilt.
     const SCENE: [Reset; 8] = [
-        Reset::NavTarget,
         Reset::Combat,
         Reset::Boxes,
+        Reset::Asteroids,
         Reset::Strikes,
         Reset::Target,
         Reset::Boarding,
@@ -898,6 +1072,7 @@ mod tests {
                         Reset::Stellar,
                         Reset::Explore,
                         Reset::HeldSound,
+                        Reset::DockRequest,
                         Reset::FightersOut,
                         Reset::ArrivalSound,
                         Reset::ArrivalMessage,
@@ -905,15 +1080,70 @@ mod tests {
                     ],
                 ),
                 CourseStep::Arrival { hops },
+                NavStep::OffThenCue,
                 TrafficStep::Populate,
             );
             for f in [facts(true, false), facts(false, true)] {
                 assert_eq!(
-                    resets(Entry::Jump { hops }, &Rulebook::default(), f),
+                    resets(
+                        Entry::Jump {
+                            hops,
+                            natural_end: false
+                        },
+                        &Rulebook::default(),
+                        f
+                    ),
                     expected,
                     "{hops} {f:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn placed_a_jump_places_the_asteroid_field_in_place_of_killing_it() {
+        let placed =
+            Rulebook::default().with_override(RuleKey::AsteroidEntryField, RuleSource::Bible);
+        let engine = resets(
+            Entry::Jump {
+                hops: 1,
+                natural_end: true,
+            },
+            &Rulebook::default(),
+            facts(true, false),
+        );
+        let row = resets(
+            Entry::Jump {
+                hops: 1,
+                natural_end: true,
+            },
+            &placed,
+            facts(true, false),
+        );
+        assert!(engine.has(Reset::Asteroids) && !engine.has(Reset::PlaceAsteroids));
+        assert!(row.has(Reset::PlaceAsteroids) && !row.has(Reset::Asteroids));
+        let mut swapped = engine.clone();
+        swapped.set.remove(&Reset::Asteroids);
+        swapped.set.insert(Reset::PlaceAsteroids);
+        assert_eq!(row, swapped, "nothing else changes");
+    }
+
+    #[test]
+    fn only_a_jumps_row_reads_asteroid_entry_field() {
+        let placed =
+            Rulebook::default().with_override(RuleKey::AsteroidEntryField, RuleSource::Bible);
+        for how in [
+            Entry::Gate,
+            Entry::Relocate,
+            Entry::Rescue,
+            Entry::ScriptMove { landed: true },
+            Entry::ScriptMove { landed: false },
+        ] {
+            assert_eq!(
+                resets(how, &placed, facts(true, false)),
+                resets(how, &Rulebook::default(), facts(true, false)),
+                "{how:?}"
+            );
         }
     }
 
@@ -932,6 +1162,7 @@ mod tests {
                 ],
             ),
             CourseStep::Clear,
+            NavStep::Deselect,
             TrafficStep::Populate,
         );
         for changed in [true, false] {
@@ -963,6 +1194,7 @@ mod tests {
                     ],
                 ),
                 CourseStep::Clear,
+                NavStep::Deselect,
                 TrafficStep::Reset,
             )
         );
@@ -970,9 +1202,11 @@ mod tests {
 
     #[test]
     fn a_rescue_clears_the_course_lets_go_of_the_scene_a_jump_and_a_held_sound_and_populates() {
+        // It keeps the asteroid field (@0x1d8cd-0x1d8e2), and rebuilds its
+        // stellars itself.
         let scene: Vec<Reset> = SCENE
             .into_iter()
-            .filter(|&reset| reset != Reset::Rebuild)
+            .filter(|&reset| reset != Reset::Rebuild && reset != Reset::Asteroids)
             .collect();
         let expected = Resets::of(
             &with(
@@ -988,6 +1222,7 @@ mod tests {
                 ],
             ),
             CourseStep::Clear,
+            NavStep::Keep,
             TrafficStep::Populate,
         );
         for f in [facts(true, false), facts(false, true)] {
@@ -1007,6 +1242,7 @@ mod tests {
             Resets::of(
                 &[Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers],
                 CourseStep::Keep,
+                NavStep::Keep,
                 TrafficStep::None,
             ),
             "by the engine"
@@ -1021,6 +1257,7 @@ mod tests {
                     Reset::EmptyOffers,
                 ],
                 CourseStep::Clear,
+                NavStep::Keep,
                 TrafficStep::None,
             ),
             "as an arrival"
@@ -1051,7 +1288,7 @@ mod tests {
                     };
                     assert_eq!(
                         resets(in_flight, &arrival(reading), facts(changed, pending)),
-                        Resets::of(&set, course, traffic),
+                        Resets::of(&set, course, NavStep::Deselect, traffic),
                         "{reading:?} changed {changed} pending {pending}"
                     );
                 }
@@ -1070,7 +1307,7 @@ mod tests {
                 }
                 assert_eq!(
                     resets(Entry::ScriptStay, &arrival(reading), facts(false, pending)),
-                    Resets::of(&set, CourseStep::Keep, TrafficStep::None),
+                    Resets::of(&set, CourseStep::Keep, NavStep::Deselect, TrafficStep::None),
                     "{reading:?} pending {pending}"
                 );
             }
@@ -1082,7 +1319,10 @@ mod tests {
         let rows = |reading| {
             let rules = arrival(reading);
             [
-                Entry::Jump { hops: 1 },
+                Entry::Jump {
+                    hops: 1,
+                    natural_end: true,
+                },
                 Entry::Gate,
                 Entry::Relocate,
                 Entry::Rescue,
@@ -1116,8 +1356,20 @@ mod tests {
     #[test]
     fn each_way_in_is_the_entrance_its_story_event_names() {
         for (how, entrance) in [
-            (Entry::Jump { hops: 0 }, Entrance::Jump),
-            (Entry::Jump { hops: 3 }, Entrance::Jump),
+            (
+                Entry::Jump {
+                    hops: 0,
+                    natural_end: true,
+                },
+                Entrance::Jump,
+            ),
+            (
+                Entry::Jump {
+                    hops: 3,
+                    natural_end: false,
+                },
+                Entrance::Jump,
+            ),
             (Entry::Gate, Entrance::Gate),
             (
                 Entry::ScriptMove { landed: true },
@@ -1140,7 +1392,13 @@ mod tests {
         use SessionEvent::{StellarChanged, SystemChanged};
         for changed in [false, true] {
             for (how, event) in [
-                (Entry::Jump { hops: 1 }, Some(SystemChanged)),
+                (
+                    Entry::Jump {
+                        hops: 1,
+                        natural_end: false,
+                    },
+                    Some(SystemChanged),
+                ),
                 (Entry::Gate, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: false }, Some(SystemChanged)),
                 (Entry::ScriptStay, Some(SystemChanged)),

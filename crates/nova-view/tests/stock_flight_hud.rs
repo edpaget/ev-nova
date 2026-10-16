@@ -248,6 +248,86 @@ fn a_grants_message_reads_its_stock_strings() {
     );
 }
 
+/// The dock request's line, its denials and the dock approach's greeting
+/// are built from `STR#` 2002 #53 and #65-#101, as the stock strings read.
+#[test]
+fn the_dock_requests_and_the_approachs_words_read_their_stock_strings() {
+    use nova_view::flight::view::{
+        BEGIN_APPROACH, CLEARED_FOR_HYPERGATE, CLEARED_TO_DOCK, CLEARED_TO_DOCK_LEAD,
+        CLEARED_TO_LAND, CLEARED_TO_LAND_LEAD, COMMENCE_FINAL_APPROACH, DOCKING_DENIED,
+        DOCKING_REQUEST_RECEIVED, DOCKMASTER_READS_YOU, HYPERGATE_DENIED, HYPERGATE_ENERGIZED,
+        HYPERGATE_ONLINE, LANDING_DENIED, LANDING_REQUEST_RECEIVED, NO_RESPONSE,
+        TRAFFIC_CONTROL_READS_YOU, WELCOME_TO, YOU_ARE_CLEARED_FOR_HYPERGATE,
+        YOU_ARE_CLEARED_TO_DOCK, YOU_ARE_CLEARED_TO_LAND, YOURE_CLEARED_FOR_HYPERGATE,
+    };
+    use nova_view::flight::view::{
+        DOCK_AT, HOSTILE_PLANET, HOSTILE_STATION, HYPERGATE_OFFLINE, LAND_ON, TOO_FAR_HYPERGATE,
+        TOO_FAR_PLANET, TOO_FAR_STATION, TOO_FAR_WORMHOLE, TOO_FAST_HYPERGATE, TOO_FAST_PLANET,
+        TOO_FAST_STATION, TOO_FAST_WORMHOLE, UNABLE_TO, WORMHOLE_TOO_HOT,
+    };
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(strings[52], NO_RESPONSE);
+    assert_eq!(
+        &strings[64..72],
+        [
+            TOO_FAR_HYPERGATE,
+            TOO_FAR_WORMHOLE,
+            TOO_FAR_STATION,
+            TOO_FAR_PLANET,
+            TOO_FAST_HYPERGATE,
+            TOO_FAST_WORMHOLE,
+            TOO_FAST_STATION,
+            TOO_FAST_PLANET,
+        ]
+    );
+    assert_eq!(
+        &strings[83..90],
+        [
+            UNABLE_TO,
+            HYPERGATE_OFFLINE,
+            WORMHOLE_TOO_HOT,
+            DOCK_AT,
+            LAND_ON,
+            HOSTILE_STATION,
+            HOSTILE_PLANET,
+        ]
+    );
+    assert_eq!(
+        &strings[73..83],
+        [
+            HYPERGATE_ENERGIZED,
+            HYPERGATE_ONLINE,
+            DOCKMASTER_READS_YOU,
+            DOCKING_REQUEST_RECEIVED,
+            TRAFFIC_CONTROL_READS_YOU,
+            LANDING_REQUEST_RECEIVED,
+            BEGIN_APPROACH,
+            HYPERGATE_DENIED,
+            DOCKING_DENIED,
+            LANDING_DENIED,
+        ]
+    );
+    assert_eq!(
+        &strings[90..101],
+        [
+            CLEARED_FOR_HYPERGATE,
+            YOURE_CLEARED_FOR_HYPERGATE,
+            YOU_ARE_CLEARED_FOR_HYPERGATE,
+            CLEARED_TO_DOCK_LEAD,
+            CLEARED_TO_DOCK,
+            YOU_ARE_CLEARED_TO_DOCK,
+            CLEARED_TO_LAND_LEAD,
+            CLEARED_TO_LAND,
+            YOU_ARE_CLEARED_TO_LAND,
+            COMMENCE_FINAL_APPROACH,
+            WELCOME_TO,
+        ]
+    );
+}
+
 /// The sabotage notices are built from `STR#` 2002 #38-#41, as the stock
 /// strings read.
 #[test]
@@ -302,12 +382,11 @@ fn a_scans_notices_read_their_stock_strings() {
 
 /// The cargo area's labels are `STR#` 2002 #19-#21 and #33, its rows'
 /// `STR#` 4003, and a mission's cargo names `STR#` 4002, as the stock
-/// strings read; the default bar's `CargoArea` has no room for the date
-/// under the cargo lines.
+/// strings read, in the default bar's `CargoArea`.
 #[test]
 fn the_cargo_area_reads_its_stock_strings_and_area() {
     use nova_view::flight::hud::{
-        CARGO_CREDITS, CARGO_FREE, CARGO_MULTIPLE, CARGO_SPECIAL, credits_label, date_line,
+        CARGO_CREDITS, CARGO_FREE, CARGO_MULTIPLE, CARGO_SPECIAL, credits_label,
     };
     let Some(data) = open() else {
         return;
@@ -337,7 +416,6 @@ fn the_cargo_area_reads_its_stock_strings_and_area() {
     let view = FlightView::new(&data);
     let bar = view.status_bar().expect("the stock status bar reads");
     assert_eq!(bar.layout.cargo, rect(8.0, 458.0, 184.0, 552.0));
-    assert_eq!(date_line(bar.layout.cargo, bar.layout.font_size), None);
 }
 
 #[test]
@@ -394,4 +472,34 @@ fn stock_stations_and_gates_are_squares_on_the_radar_and_the_rest_ovals() {
         stations > 0 && gates > 0 && ovals > 0,
         "{stations} {gates} {ovals}"
     );
+}
+
+/// The tutorial's hints are `STR#` 2002 #22-#28, #30 and #31, and the
+/// take-off greeting's words #55-#60, as the stock strings read.
+#[test]
+fn the_tutorial_and_the_greeting_read_their_stock_strings() {
+    use nova_view::flight::view::{
+        FAR_ENOUGH, NOTHING_OUT_HERE, TAKE_OFF_LEADS, TAKE_OFF_ON, TUTORIAL_DOCK,
+        TUTORIAL_HYPERSPACE, TUTORIAL_JUMP, TUTORIAL_LAND, TUTORIAL_LOOK_AROUND, TUTORIAL_MAP,
+        TUTORIAL_REQUEST,
+    };
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(
+        &strings[21..28],
+        [
+            TUTORIAL_DOCK,
+            TUTORIAL_LAND,
+            TUTORIAL_LOOK_AROUND,
+            TUTORIAL_REQUEST,
+            TUTORIAL_HYPERSPACE,
+            TUTORIAL_MAP,
+            TUTORIAL_JUMP
+        ]
+    );
+    assert_eq!(&strings[29..31], [FAR_ENOUGH, NOTHING_OUT_HERE]);
+    assert_eq!(&strings[54..59], TAKE_OFF_LEADS);
+    assert_eq!(strings[59], TAKE_OFF_ON);
 }

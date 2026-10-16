@@ -38,7 +38,8 @@
 //! the original's 1-in-50 chance against a player flying an enemy's ship
 //! (@0x8a930-0x8a9c3) is not modelled.
 //!
-//! **The target** ([`select_target`]): these steps in order, the first
+//! **The target** ([`select_target`], and [`pick_target`] with whether
+//! the pick turns the ship on the player): these steps in order, the first
 //! that gives one winning; "nearest" is by squared distance, a tie to the
 //! player and then the earlier NPC, and a ship breaking up or still
 //! jumping in is never one.
@@ -49,14 +50,18 @@
 //!    (see [`person`](crate::person)) picks the player, while it is in
 //!    the system and not breaking up, unless it spares it. It reads no
 //!    blessing: a blessing government's person with a grudge still takes
-//!    the player.
+//!    the player. It turns on the player through `_AIMakeShipAttackPlayer`
+//!    (the tail call @0x89f20), so its person may say its attack quote
+//!    ([`Pick::turns_on_player`]).
 //! 3. **A mission ship of `ShipBehav` 0** (@0x89f25-0x89f84, see
 //!    [`mission_hunt`]): while the player is in the system, the player,
 //!    or none when it is disabled or breaking up and the ship has no
 //!    destroying weapons (as `_WarshipAI` drops such a target in the same think,
 //!    @0x8bc8b-0x8bca9); no later step runs, so such a hunter never turns
 //!    on another ship while the player is here, and a paid-off one takes
-//!    the player again. It reads no blessing either. The `ShipBehav` 1
+//!    the player again. It reads no blessing either. It reaches the same
+//!    `_AIMakeShipAttackPlayer` call (@0x89f20), whose quote gate a
+//!    mission ship always fails (+0xc8d2, @0x89c71). The `ShipBehav` 1
 //!    branch (@0x89f86-0x89fef) never runs (see the session's
 //!    `mission_escorts` module).
 //! 4. **Out of ammunition** (@0x89ff4-0x8a006): a ship with no weapon,
@@ -66,7 +71,8 @@
 //! 5. **A xenophobe**: the nearest of the player (unless `Flags` 0x0040,
 //!    or S is G and L is above none; always with 0x0004; never while G
 //!    blesses the player, @0x8a1ae) and every NPC enemy not allied with it
-//!    and not of its own fleet.
+//!    and not of its own fleet. The player picked here is turned on
+//!    through `_AIMakeShipAttackPlayer` (@0x8a40e).
 //! 6. **Help allies** (@0x8a418): the ship T that the first other ship of
 //!    a government allied with its own (its own included) attacks or
 //!    flees from, when its own friend strength times its government's
@@ -74,12 +80,17 @@
 //!    ship it spares (below). This is how police come to a trader's
 //!    defence. While G blesses the player, an ally whose T is the player
 //!    or a ship the player leads is passed over, and the search goes on to
-//!    the next ally (@0x8a4e4-0x8a50e, then @0x8a5de).
+//!    the next ally (@0x8a4e4-0x8a50e, then @0x8a5de). It sets the target
+//!    and goal 4 itself (@0x8a5b0-0x8a5c1) and makes no
+//!    `_AIMakeShipAttackPlayer` call, even when T is the player, so no
+//!    attack quote comes of it.
 //! 7. **The player** when it is hostile, and **every NPC enemy**: the
 //!    nearest of them, each dropped when its friend strength is above the
 //!    ship's own times its `MaxOdds`, and a disabled NPC skipped unless
 //!    the ship has destroying weapons. The original's heaviest candidate
-//!    for a ship with escorts is a placeholder: nearest always.
+//!    for a ship with escorts is a placeholder: nearest always. The player
+//!    picked here is turned on through `_AIMakeShipAttackPlayer`
+//!    (@0x8ad31).
 //! 8. **Threats** (`_ExtendedIsThreatToShip` asked @0x8adb6): the
 //!    nearest NPC attacking, sniping at or fleeing from it or a ship it
 //!    leads ([`Npc::threatens_npc_among`]), other than one it spares. The
@@ -246,25 +257,57 @@ pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
 }
 
 /// The ship `npc` attacks among `around`, keeping `current` while it is
-/// live (see the module docs).
+/// live (see the module docs): [`pick_target`]'s ship.
 #[must_use]
 pub fn select_target(
     npc: &Npc,
     current: Option<ShipRef>,
     around: &Surroundings,
 ) -> Option<ShipRef> {
+    pick_target(npc, current, around).map(|pick| pick.ship)
+}
+
+/// The ship a warship or interceptor picks to attack ([`pick_target`]),
+/// and whether the pick turns it on the player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pick {
+    /// The ship it attacks.
+    pub ship: ShipRef,
+    /// Whether `_SelectWarshipTarget` calls `_AIMakeShipAttackPlayer` for
+    /// this pick: the player picked by a grudge (step 2, the tail call
+    /// @0x89f20), a `ShipBehav` 0 mission ship (step 3, the same call),
+    /// a xenophobe (step 5, @0x8a40e) or the hunt (step 7, @0x8ad31). The
+    /// player kept (step 1) or helped against (step 6, which sets the
+    /// target and goal 4 itself, @0x8a5b0-0x8a5ca) is no such call, and
+    /// neither is any NPC.
+    pub turns_on_player: bool,
+}
+
+/// [`select_target`]'s pick, with whether it turns `npc` on the player
+/// (see [`Pick`] and the module docs).
+#[must_use]
+pub fn pick_target(npc: &Npc, current: Option<ShipRef>, around: &Surroundings) -> Option<Pick> {
+    let kept = |ship| Pick {
+        ship,
+        turns_on_player: false,
+    };
+    // A pick that calls `_AIMakeShipAttackPlayer` when it is the player.
+    let called = |ship| Pick {
+        ship,
+        turns_on_player: ship == ShipRef::Player,
+    };
     let paid_off = |ship| ship == ShipRef::Player && npc.spared;
-    if let Some(kept) = current.filter(|&ship| around.live(ship) && !paid_off(ship)) {
-        return Some(kept);
+    if let Some(ship) = current.filter(|&ship| around.live(ship) && !paid_off(ship)) {
+        return Some(kept(ship));
     }
     let grudging = npc
         .person
         .is_some_and(|person| person.grudge && person.flags & GRUDGE != 0);
     if grudging && !npc.spared && around.live(ShipRef::Player) {
-        return Some(ShipRef::Player);
+        return Some(called(ShipRef::Player));
     }
     if let Some(attacks) = mission_hunt(npc, around) {
-        return attacks.then_some(ShipRef::Player);
+        return attacks.then_some(called(ShipRef::Player));
     }
     if fire::ammo_left(npc) == AmmoLeft::Dry {
         return None;
@@ -288,7 +331,7 @@ pub fn select_target(
             })
             .map(|other| ShipRef::Npc(other.id));
         if let Some(target) = nearest(npc, player.into_iter().chain(enemies), around) {
-            return Some(target);
+            return Some(called(target));
         }
     }
     let own = friend_strength(me, around) * govts.max_odds(npc.govt);
@@ -310,8 +353,8 @@ pub fn select_target(
                 && own >= friend_strength(foe, around))
             .then_some(foe)
         });
-    if helped.is_some() {
-        return helped;
+    if let Some(foe) = helped {
+        return Some(kept(foe));
     }
     let player = (hostile_to_player(npc, around) && !npc.spared).then_some(ShipRef::Player);
     let destroys = fire::destroys(npc);
@@ -326,13 +369,13 @@ pub fn select_target(
         .chain(enemies)
         .filter(|&ship| friend_strength(ship, around) <= own);
     if let Some(target) = nearest(npc, candidates, around) {
-        return Some(target);
+        return Some(called(target));
     }
     let threats = others()
         .filter(|other| other.threatens_npc_among(npc.id, around.npcs))
         .map(|other| ShipRef::Npc(other.id))
         .filter(|&ship| !spares(npc, ship, around));
-    nearest(npc, threats, around)
+    nearest(npc, threats, around).map(kept)
 }
 
 /// Whether `ship` is the player or a ship the player leads, among
@@ -595,6 +638,16 @@ mod tests {
         record: i16,
         blessing: Blessing,
     ) -> Option<ShipRef> {
+        xenophobe_pick(flags, system, record, blessing).map(|pick| pick.ship)
+    }
+
+    /// [`xenophobe_choice_blessed`], as [`pick_target`] gives it.
+    fn xenophobe_pick(
+        flags: u16,
+        system: Option<GovtId>,
+        record: i16,
+        blessing: Blessing,
+    ) -> Option<Pick> {
         let govts = Governments::new([
             GovtRecord {
                 flags: XENOPHOBIC | flags,
@@ -613,7 +666,7 @@ mod tests {
             record,
             ..Surroundings::new(&[], &npcs)
         };
-        select_target(&npcs[0], None, &around)
+        pick_target(&npcs[0], None, &around)
     }
 
     #[test]
@@ -814,8 +867,19 @@ mod tests {
         npcs: &[Npc],
         current: Option<ShipRef>,
         record: i16,
-        (x, y): (f32, f32),
+        at: (f32, f32),
     ) -> Option<ShipRef> {
+        chosen_pick(flags, npcs, current, record, at).map(|pick| pick.ship)
+    }
+
+    /// [`chosen`], as [`pick_target`] gives it.
+    fn chosen_pick(
+        flags: u16,
+        npcs: &[Npc],
+        current: Option<ShipRef>,
+        record: i16,
+        (x, y): (f32, f32),
+    ) -> Option<Pick> {
         let govts = govts(flags);
         let around = Surroundings {
             player: Some(player(x, y)),
@@ -824,7 +888,7 @@ mod tests {
             record,
             ..Surroundings::new(&[], npcs)
         };
-        select_target(&npcs[0], current, &around)
+        pick_target(&npcs[0], current, &around)
     }
 
     fn me() -> Npc {
@@ -931,7 +995,7 @@ mod tests {
         assert_eq!(chosen(0, &disabled, None, 0, NEAR), None);
         let mut arriving = disabled.clone();
         arriving[1].condition = Condition::Intact;
-        arriving[1].mode = Mode::JumpingIn { ticks_left: 3 };
+        arriving[1].mode = Mode::JumpingIn { tick: 0 };
         assert_eq!(chosen(0, &arriving, None, 0, NEAR), None);
         let mut gone_foe = arriving.clone();
         gone_foe[1].mode = Mode::Flying;
@@ -1052,7 +1116,7 @@ mod tests {
             starting: false,
         };
         let mut arriving = ship(3, ENEMY, 150.0, 0.0);
-        arriving.mode = Mode::JumpingIn { ticks_left: 3 };
+        arriving.mode = Mode::JumpingIn { tick: 0 };
         let mut emerging = ship(5, ENEMY, 120.0, 0.0);
         emerging.mode = Mode::Emerging { ticks_left: 3 };
         let npcs = [me(), dying, arriving, emerging, ship(4, RIVAL, 900.0, 0.0)];
@@ -1172,6 +1236,18 @@ mod tests {
         player_here: bool,
         blessing: Blessing,
     ) -> Option<ShipRef> {
+        grudge_pick(flags, grudge, spared, current, player_here, blessing).map(|pick| pick.ship)
+    }
+
+    /// [`grudge_target_blessed`], as [`pick_target`] gives it.
+    fn grudge_pick(
+        flags: u16,
+        grudge: bool,
+        spared: bool,
+        current: Option<ShipRef>,
+        player_here: bool,
+        blessing: Blessing,
+    ) -> Option<Pick> {
         let govts = govts(0);
         let mut grudger = ship(1, ME, 0.0, 0.0);
         grudger.spared = spared;
@@ -1198,7 +1274,7 @@ mod tests {
             system_govt: Some(ME),
             ..Surroundings::new(&[], &npcs)
         };
-        select_target(&npcs[0], current, &around)
+        pick_target(&npcs[0], current, &around)
     }
 
     #[test]
@@ -1306,6 +1382,17 @@ mod tests {
         condition: Condition,
         blessing: Blessing,
     ) -> Option<ShipRef> {
+        hunter_pick(destroying, spared, player_here, condition, blessing).map(|pick| pick.ship)
+    }
+
+    /// [`hunter_target_blessed`], as [`pick_target`] gives it.
+    fn hunter_pick(
+        destroying: bool,
+        spared: bool,
+        player_here: bool,
+        condition: Condition,
+        blessing: Blessing,
+    ) -> Option<Pick> {
         let govts = govts(0);
         let mut hunter = me();
         hunter.spared = spared;
@@ -1335,7 +1422,7 @@ mod tests {
             record: 30,
             ..Surroundings::new(&[], &npcs)
         };
-        select_target(&npcs[0], None, &around)
+        pick_target(&npcs[0], None, &around)
     }
 
     #[test]
@@ -1553,5 +1640,83 @@ mod tests {
         stranger.goal = Goal::Attack(n(1));
         let npcs = [me(), stranger];
         assert_eq!(chosen_blessed(&npcs, 0, NEAR, blessing_of(ME)), Some(n(2)));
+    }
+
+    // The quote call (`_AIMakeShipAttackPlayer`).
+
+    #[test]
+    fn a_grudge_a_xenophobe_and_the_hunt_turn_on_the_player_with_the_quote_call_but_helping_an_ally_does_not()
+     {
+        let turns = |ship| {
+            Some(Pick {
+                ship,
+                turns_on_player: true,
+            })
+        };
+        let keeps = |ship| {
+            Some(Pick {
+                ship,
+                turns_on_player: false,
+            })
+        };
+        let none = Blessing::NONE;
+        let grudge = crate::person::GRUDGE;
+        assert_eq!(
+            grudge_pick(grudge, true, false, None, true, none),
+            turns(P),
+            "a grudge (@0x89f20)"
+        );
+        assert_eq!(
+            hunter_pick(false, false, true, Condition::Intact, none),
+            turns(P),
+            "a ShipBehav 0 mission ship (@0x89f20)"
+        );
+        assert_eq!(
+            xenophobe_pick(0, Some(ME), 1000, none),
+            turns(P),
+            "a xenophobe's nearest (@0x8a40e)"
+        );
+        let wanted = [me(), ship(2, ENEMY, 300.0, 0.0), ship(3, RIVAL, 0.0, 200.0)];
+        assert_eq!(
+            chosen_pick(0, &wanted, None, -7, NEAR),
+            turns(P),
+            "the hunt's nearest (@0x8ad31)"
+        );
+        let mut kin = ship(3, ME, 2000.0, 0.0);
+        kin.goal = Goal::Attack(P);
+        let helping = [
+            me(),
+            ship(2, ALLY, 1000.0, 0.0),
+            kin,
+            ship(4, NEUTRAL, 3000.0, 0.0),
+        ];
+        assert_eq!(
+            chosen_pick(0, &helping, None, 0, NEAR),
+            keeps(P),
+            "helping an ally against the player (@0x8a5b0-0x8a5ca)"
+        );
+        assert_eq!(chosen_pick(0, &wanted, Some(P), -7, NEAR), keeps(P), "kept");
+        assert_eq!(
+            chosen_pick(0, &wanted, None, 0, NEAR),
+            keeps(n(3)),
+            "the hunt's NPC"
+        );
+        assert_eq!(
+            xenophobe_pick(0, Some(XENO), 1, none),
+            keeps(n(2)),
+            "a xenophobe's NPC"
+        );
+        assert_eq!(
+            grudge_pick(grudge, false, false, None, true, none),
+            keeps(n(2)),
+            "no grudge"
+        );
+        let mut threat = ship(2, NEUTRAL, 900.0, 0.0);
+        threat.goal = Goal::Attack(n(1));
+        assert_eq!(
+            chosen_pick(0, &[me(), threat], None, 0, NEAR),
+            keeps(n(2)),
+            "a threat"
+        );
     }
 }

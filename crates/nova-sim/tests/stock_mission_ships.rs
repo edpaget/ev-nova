@@ -24,8 +24,8 @@ const MISSION: i16 = 183;
 /// Sol.
 const SOL: SystemId = SystemId(130);
 
-/// A new stock pilot docked at the first landable stellar of its system,
-/// flown and settled.
+/// A new stock pilot resumed over the first landable stellar of its
+/// system, flown, landed there and settled.
 fn docked_new_pilot(data: &GameData) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let site = data
@@ -36,8 +36,10 @@ fn docked_new_pilot(data: &GameData) -> Session {
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(site.id.0);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(data, docked).expect("flies");
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(data, saved).expect("flies");
+    let system = session.pilot().system();
+    session.land_at(data, system, site.id).expect("lands");
     let _ = session.settle_script(data, &mut NeverFires);
     session
 }

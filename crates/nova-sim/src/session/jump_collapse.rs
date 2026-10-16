@@ -30,10 +30,11 @@
 //!   `_LoadSounds` (@0x1c0b5-0x1c12d) stores 350 (0x15e @0x1c0d2) and
 //!   then, when `snd ` 128 exists, its frames × 60 / the whole part of
 //!   its rate (`_ParseSndHeader`, `imull $0x3c`, `divl`), in Mac ticks;
-//!   stock 128 gives 364. The session's `warp_sound`
-//!   ([`warp::sound_duration`]). Entry [1], from `snd ` 129, is read only
-//!   in double-time mode, which the engine lacks
-//!   (rdm:phase/hud-fidelity/phase-20-audio-double-speed-warp).
+//!   stock 128 gives 364 ([`warp::sound_duration`]). In double time it
+//!   is entry [1], from `snd ` 129 (@0x8210-0x8219; stock 252). The
+//!   session's `warp_sound` ([`warp::warp_sound_duration`]). The term
+//!   stays −35/C in double time: only the move-off's is −52.5/C
+//!   ([`warp::move_off_speed`]).
 //!
 //! When s > 0 (@0x68976) the velocity is zeroed (@0x689b6, 0x689bf) and
 //! `_Accel` gives it min(s, `_ShipMaxSpeed`) (@0x6897e/0x6899d) along the
@@ -100,17 +101,26 @@ pub(crate) fn collapsed_velocity(velocity: Vec2, heading: f32, speed: f32, top: 
 }
 
 /// The Mac ticks of the warp clock as the collapse reads them, from the
-/// pre-jump's `warp` at the start of the tick: one tick while braking
-/// (the stamp is the previous frame's), and k ticks on the k-th tick
-/// after the warp start, whose own advance comes later in the tick.
-fn collapse_ticks(warp: Option<u32>) -> u32 {
-    warp::mac_ticks(warp.map_or(1, |ticks| ticks.saturating_add(1)))
+/// pre-jump's `warp` at the start of the pass. On the advance pass: one
+/// tick while braking (the stamp is the previous frame's), and k ticks on
+/// the k-th tick after the warp start, whose own advance comes later in
+/// the tick. On double time's second pass (`again`), the frame's advance
+/// pass has already moved the clock on: k ticks for a `warp` of k, and
+/// none while braking, the stamp the same frame's.
+fn collapse_ticks(warp: Option<u32>, again: bool) -> u32 {
+    let ticks = if again {
+        warp.unwrap_or(0)
+    } else {
+        warp.map_or(1, |ticks| ticks.saturating_add(1))
+    };
+    warp::mac_ticks(ticks)
 }
 
 impl Session {
     /// Collapses a pre-jump, as a disabled or dying player's does (see
-    /// the module docs): nothing without one.
-    pub(super) fn collapse_jump(&mut self) {
+    /// the module docs), on double time's second pass when `again`:
+    /// nothing without one.
+    pub(super) fn collapse_jump(&mut self, again: bool) {
         let Some(Jump::PreJump { warp, .. }) = self.jump else {
             return;
         };
@@ -118,9 +128,9 @@ impl Session {
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.flags);
         let speed = warp::lead_in_speed(
-            collapse_ticks(warp),
+            collapse_ticks(warp, again),
             warp::warp_factor(flags),
-            self.warp_sound,
+            self.warp_sound(),
         );
         self.player.velocity = collapsed_velocity(
             self.player.velocity,
@@ -130,7 +140,7 @@ impl Session {
         );
         self.jump = None;
         self.messages.push(SimMessage::JumpCollapsed);
-        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
+        self.halt_sounds(&WARP_UP_HALTS);
         self.sounds.push(SimSound::JumpCollapsed);
     }
 }
@@ -182,10 +192,18 @@ mod tests {
 
     #[test]
     fn the_clock_is_one_tick_while_braking_and_counts_from_the_warp_start() {
-        assert_eq!(collapse_ticks(None), 2, "the previous frame's stamp");
-        assert_eq!(collapse_ticks(Some(0)), 2);
-        assert_eq!(collapse_ticks(Some(4)), 10);
-        assert_eq!(collapse_ticks(Some(u32::MAX)), u32::MAX, "saturates");
+        assert_eq!(collapse_ticks(None, false), 2, "the previous frame's stamp");
+        assert_eq!(collapse_ticks(Some(0), false), 2);
+        assert_eq!(collapse_ticks(Some(4), false), 10);
+        assert_eq!(collapse_ticks(Some(u32::MAX), false), u32::MAX, "saturates");
+    }
+
+    #[test]
+    fn on_the_second_pass_the_clock_is_the_frames_already() {
+        assert_eq!(collapse_ticks(None, true), 0, "this frame's stamp");
+        assert_eq!(collapse_ticks(Some(0), true), 0);
+        assert_eq!(collapse_ticks(Some(4), true), 8);
+        assert_eq!(collapse_ticks(Some(u32::MAX), true), u32::MAX, "saturates");
     }
 
     // Through the session.
@@ -198,7 +216,7 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.warp_clock(), None, "braking");
-        session.warp_sound = duration;
+        session.warp_sounds[0] = duration;
         session.take_sounds();
         session.take_messages();
         session
@@ -244,7 +262,7 @@ mod tests {
     fn a_player_disabled_while_turning_collapses_on_the_clock_from_the_turns_start() {
         // At rest facing up, 90 degrees off east: J turns at once.
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
-        session.warp_sound = 25;
+        session.warp_sounds[0] = 25;
         session.begin_jump().expect("jumps");
         assert_eq!(
             session.take_sounds(),
@@ -341,7 +359,7 @@ mod tests {
     #[test]
     fn a_disabled_player_with_no_jump_collapses_nothing() {
         let mut session = bound_for_131(&catalog(), OUT, Vec2::new(1.0, 0.0), 0.0);
-        session.warp_sound = 9;
+        session.warp_sounds[0] = 9;
         disable_and_tick(&mut session);
         assert_eq!(session.take_messages(), []);
         assert_eq!(session.take_sounds(), []);

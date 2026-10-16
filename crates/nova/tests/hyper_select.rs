@@ -4,12 +4,13 @@
 //!
 //! Alpha (128) lists its hyperlinks in the Con order Epsilon (131), Beta
 //! (129), Gamma (130), not ascending; Delta (132) lists Alpha one way, and
-//! Epsilon links on to Zeta (133). Pressing `\` cycles the course through
-//! Alpha's own links in that order and wraps, each press a one-jump
-//! course the nav area shows as an unexplored system; Delta, linked only
+//! Epsilon links on to Zeta (133). Pressing `\` cycles the selection
+//! through Alpha's own links in that order and wraps, the nav area showing
+//! each as an unexplored system, and plots no course; Delta, linked only
 //! from its side, is never offered. J jumps to the system selected. With
 //! a course to Zeta plotted on the map, through Epsilon, the first `\`
-//! moves on to Beta, the link after the course's first hop.
+//! moves on to Beta, the link after the course's first hop, and keeps
+//! the course.
 
 use std::io;
 use std::path::Path;
@@ -35,7 +36,7 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
-use nova_sim::{Session, ShipState, SystemId};
+use nova_sim::{NavMode, Session, ShipState, SystemId};
 use nova_view::flight::FlightView;
 use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
 use nova_view::{MouseButton, Point};
@@ -406,19 +407,25 @@ fn ids(ids: &[i16]) -> Vec<SystemId> {
     ids.iter().copied().map(SystemId).collect()
 }
 
+/// System `id` selected in nav mode 3.
+fn selected(id: i16) -> NavMode {
+    NavMode::Hyperspace(Some(SystemId(id)))
+}
+
 #[test]
 fn backslash_cycles_alpha_s_listed_systems_in_con_order_then_wraps() {
     let mut game = Harness::flying();
     for expected in [131, 129, 130, 131] {
         game.press(KeyCode::Backslash);
-        assert_eq!(game.session().course(), ids(&[expected]));
+        assert_eq!(game.session().nav_mode(), selected(expected));
+        assert_eq!(game.session().course(), [], "no course plotted");
         assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED], "{expected}");
     }
     // A repeat does not cycle.
     game.key(KeyCode::Backslash, true, false);
     game.key(KeyCode::Backslash, true, true);
     game.key(KeyCode::Backslash, false, false);
-    assert_eq!(game.session().course(), ids(&[129]), "once a press");
+    assert_eq!(game.session().nav_mode(), selected(129), "once a press");
     assert_eq!(game.app.screen().showing(), Showing::Flight);
 }
 
@@ -427,7 +434,7 @@ fn the_selected_system_is_where_j_jumps() {
     let mut game = Harness::flying();
     game.press(KeyCode::Backslash);
     game.press(KeyCode::Backslash);
-    assert_eq!(game.session().course(), ids(&[129]));
+    assert_eq!(game.session().nav_mode(), selected(129));
     game.fly_out();
     game.jump_into(129);
     assert_eq!(game.session().system(), SystemId(129));
@@ -435,10 +442,11 @@ fn the_selected_system_is_where_j_jumps() {
 }
 
 #[test]
-fn with_a_course_plotted_backslash_moves_on_from_its_first_hop() {
+fn with_a_course_plotted_backslash_moves_on_from_its_first_hop_and_keeps_the_course() {
     let mut game = Harness::flying();
     game.plot(133);
     assert_eq!(game.session().course(), ids(&[131, 133]));
     game.press(KeyCode::Backslash);
-    assert_eq!(game.session().course(), ids(&[129]));
+    assert_eq!(game.session().nav_mode(), selected(129));
+    assert_eq!(game.session().course(), ids(&[131, 133]), "kept");
 }

@@ -86,6 +86,9 @@ pub struct MissionDialogs {
     /// Whether the mission info screen has closed since this was last
     /// taken.
     info_closed: bool,
+    /// Whether the mission info screen closed laid out since this was
+    /// last taken.
+    info_closed_laid_out: bool,
     /// What was pressed under a movie that ended with nothing after it,
     /// for what is beneath, until it is taken.
     unclaimed: Vec<Input>,
@@ -122,6 +125,7 @@ impl MissionDialogs {
             info: None,
             sounds: Vec::new(),
             info_closed: false,
+            info_closed_laid_out: false,
             unclaimed: Vec::new(),
         }
     }
@@ -236,8 +240,7 @@ impl MissionDialogs {
                     info.input(input);
                     self.sounds.extend(info.take_sounds());
                     if info.closed() {
-                        self.info = None;
-                        self.info_closed = true;
+                        self.close_info();
                     }
                 }
             }
@@ -267,8 +270,7 @@ impl MissionDialogs {
             screen.set_info(info);
             self.sounds.extend(screen.take_sounds());
             if screen.closed() {
-                self.info = None;
-                self.info_closed = true;
+                self.close_info();
             }
         }
     }
@@ -323,6 +325,31 @@ impl MissionDialogs {
         std::mem::take(&mut self.info_closed)
     }
 
+    /// Whether the mission info screen has closed laid out since this was
+    /// last asked, once each time: whoever flies the ship redraws the
+    /// whole status bar, as `_DoMissionInfoDialog` ends in `_RefreshSAT`
+    /// (@0x9e769) in flight as in port. Without its dialog the original
+    /// never shows it and redraws nothing (@0x9e20b).
+    pub fn take_info_closed_laid_out(&mut self) -> bool {
+        std::mem::take(&mut self.info_closed_laid_out)
+    }
+
+    /// Closes the mission info screen, noting its close
+    /// ([`MissionDialogs::take_info_closed`]), and, when it was laid out,
+    /// that too ([`MissionDialogs::take_info_closed_laid_out`]).
+    fn close_info(&mut self) {
+        if let Some(info) = self.info.take() {
+            self.info_closed = true;
+            self.info_closed_laid_out |= info.problem().is_none();
+        }
+    }
+
+    /// Whether a text or a movie is queued, the first shown.
+    #[must_use]
+    pub fn texts_queued(&self) -> bool {
+        !self.texts.is_empty()
+    }
+
     /// Whether a text, a movie or the mission info screen is open.
     #[must_use]
     pub fn is_open(&self) -> bool {
@@ -371,7 +398,9 @@ impl Screen for MissionDialogs {
         }
     }
 
-    /// The buttons' sounds, in order, of the dialogs open and closed.
+    /// The sounds, in order, of the dialogs open and closed. Their
+    /// buttons are silent under the pointer, as `_TrackTextButtons`
+    /// @0x26bb0 and `_TrackMissionInfoButtons` @0x2850e play nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -550,10 +579,7 @@ mod tests {
             .expect("Done")
             .center();
         click(&mut dialogs, done);
-        assert_eq!(
-            dialogs.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(dialogs.take_sounds(), []);
         assert_eq!(shown(&dialogs).as_deref(), Some("Second."));
         dialogs.input(&key(Key::Enter));
         assert_eq!(shown(&dialogs), None);
@@ -593,10 +619,7 @@ mod tests {
             .expect("Abort")
             .center();
         click(&mut dialogs, abort);
-        assert_eq!(
-            dialogs.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(dialogs.take_sounds(), []);
         assert_eq!(dialogs.take_abort(), Some(2));
         assert_eq!(dialogs.take_abort(), None, "once");
         dialogs.set_info(info());
@@ -638,6 +661,46 @@ mod tests {
             .lines()
             .join(" ");
         assert_eq!(text, "Loaded.");
+    }
+
+    #[test]
+    fn the_info_screens_close_is_told_once_when_it_was_laid_out() {
+        let mut dialogs = dialogs();
+        assert!(!dialogs.take_info_closed_laid_out(), "nothing open");
+        dialogs.open_info(info());
+        assert!(!dialogs.take_info_closed_laid_out(), "opening");
+        dialogs.input(&key(Key::Down));
+        assert!(!dialogs.take_info_closed_laid_out(), "still open");
+        dialogs.input(&key(Key::Enter));
+        assert!(dialogs.take_info_closed_laid_out(), "Done (@0x9e769)");
+        assert!(!dialogs.take_info_closed_laid_out(), "once");
+        dialogs.open_info(info());
+        dialogs.set_info(none());
+        assert!(
+            dialogs.take_info_closed_laid_out(),
+            "an abort leaving nothing"
+        );
+        let mut bare = MissionDialogs::new(
+            texts(Ok(text_template())),
+            Err("no DLOG 1012".to_owned()),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        );
+        bare.open_info(info());
+        bare.input(&key(Key::Escape));
+        assert!(bare.info().is_none());
+        assert!(bare.take_info_closed(), "closed all the same");
+        assert!(
+            !bare.take_info_closed_laid_out(),
+            "without its dialog (@0x9e20b)"
+        );
+        bare.open_info(info());
+        bare.set_info(none());
+        assert!(bare.take_info_closed());
+        assert!(
+            !bare.take_info_closed_laid_out(),
+            "without its dialog, by an abort"
+        );
     }
 
     #[test]

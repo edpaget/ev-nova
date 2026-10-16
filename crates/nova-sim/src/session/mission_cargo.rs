@@ -1328,6 +1328,24 @@ mod tests {
     }
 
     #[test]
+    fn a_scan_waits_for_the_advance_pass_in_double_time() {
+        let catalog = policed(vec![masked(140, 0x0006, 0x0020)], 500);
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        let mut chance = Draws::of(&[75]);
+        session.tick_traffic(&catalog, &LookedOver, &mut chance);
+        session.tick_again(
+            crate::flight::Controls::default(),
+            crate::Rules::default(),
+            &mut chance,
+        );
+        assert!(chance.asked.is_empty(), "not scanned on the second pass");
+        assert_eq!(held_missions(&session), [(0, 140)]);
+        session.tick_combat(crate::Rules::default(), &mut chance);
+        assert_eq!(chance.asked, [100], "scanned on the next advance pass");
+        assert_eq!(held_missions(&session), [], "ended");
+    }
+
+    #[test]
     fn a_scan_finding_a_0x0020_missions_cargo_fails_it_at_once() {
         let catalog = policed(vec![masked(140, 0x0006, 0x0020)], 500);
         let mut session = inspected(&catalog, &[140], Some(GovtId(128)));

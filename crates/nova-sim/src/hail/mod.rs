@@ -370,15 +370,23 @@ impl Answer {
 /// Why a hail went unanswered (`_HandlePlayerCommunication` @0x61f48).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HailRefusal {
-    /// There is no ship to hail: no ship target, or the player is landed,
-    /// jumping or breaking up. Nothing is said. (With no ship target the
-    /// original hails the navigation planet; that is not done here.)
+    /// There is nothing to hail: no ship target and no navigation
+    /// stellar, or Option held and no navigation stellar (@0x6206c), or
+    /// the player is landed, breaking up, or braking for or making a jump
+    /// (@0x61f87). Nothing is said.
     NoTarget,
-    /// "No response." (`STR#` 2002 #53): the target is disabled, or mute
-    /// (see [`Dispositions`]).
+    /// "No response." (`STR#` 2002 #53): the target is disabled, even
+    /// while still jumping in (@0x62610-0x62644), or mute (see
+    /// [`Dispositions`]), or an escape pod, the player's escort or not
+    /// ([`ESCAPE_POD_SHIP`](crate::combat::hull::ESCAPE_POD_SHIP),
+    /// @0x62145); or the navigation stellar hailed, with no ship target
+    /// or Option held, does not answer
+    /// ([`landing::answers_hail`](crate::landing::answers_hail)) or is
+    /// not shown in the system (@0x6261c).
     NoResponse,
     /// "Unable to send hail - target ship is entering hyperspace."
-    /// (`STR#` 2002 #54): the target is still jumping in.
+    /// (`STR#` 2002 #54): the target is still jumping in and not disabled
+    /// (@0x6264e-0x62676), mute or not.
     InHyperspace,
 }
 

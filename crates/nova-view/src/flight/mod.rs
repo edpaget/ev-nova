@@ -1,6 +1,7 @@
 //! The flight screen: the player's ship flying in its starting system.
 //!
 //! - [`alert`]: the Red Alert icon, drawn at the playfield's top-right.
+//! - [`asteroids`]: drawing the asteroid field.
 //! - [`boxes`]: drawing the cargo boxes a jettison leaves.
 //! - [`brackets`]: the corner brackets round the nav target and the ship
 //!   target, from the original's `cïcn` art.
@@ -15,6 +16,9 @@
 //!   session's combat events.
 //! - [`escorts`]: the escort menu, which picks the escorts a command goes
 //!   to, its look ([`EscortMenuLooks`]), and the message a command gives.
+//! - [`floating`]: the floating map shown while H or `\` is held: its
+//!   frame, clock, zoom and click boxes, and the pass that clips and
+//!   fades it.
 //! - [`jump`]: the hyperspace jump's [`JumpEffect`], the stars streaking
 //!   and the screen fading to white and back.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
@@ -31,6 +35,7 @@
 //! - [`weapons`]: drawing shots and beams.
 
 pub mod alert;
+pub mod asteroids;
 pub mod boxes;
 pub mod brackets;
 pub mod cadence;
@@ -39,6 +44,7 @@ pub mod cursor;
 pub mod data;
 pub mod effects;
 pub mod escorts;
+pub mod floating;
 pub mod hud;
 pub mod jump;
 mod pen;

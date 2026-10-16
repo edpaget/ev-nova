@@ -15,9 +15,9 @@
 //! while the fleet has no room (`_CanHireEscorts` @0x5795). Whoever holds
 //! the session answers with the list ([`BarScreen::open_hire`]): the hire
 //! screen ([`HireScreen`]) opens over the bar, or, with nothing for hire,
-//! the bar says so (`STR#` 2002 #224) in its text box in place of its
-//! text, until the next button is activated, as the spaceport shows a
-//! refusal. A ship the hire screen asks for is taken through the bar
+//! nothing opens, and `STR#` 2002 #224 shows in the text dialog over the
+//! spaceport, as `_DoShipyardDialog` shows it by `_ShowTextDialog`
+//! (@0x5e8ab → @0x5e8da). A ship the hire screen asks for is taken through the bar
 //! ([`BarScreen::take_hire`]), and after the hire the screen closes back
 //! to the bar ([`BarScreen::set_hire`]).
 //!
@@ -55,6 +55,14 @@
 //! there shows in the picture variant, `DLOG` 1021 (266 x 306), over
 //! `PICT` 8504, with the picture in item 8 above the text in item 7, as
 //! `_DoBarDialog` picks it (@0x48f96-0x4902e). No stock bar text has one.
+//! The map key ([`MAP_KEY`], a press, never a repeat) asks for the course
+//! map ([`BarScreen::take_map_request`]), as `_BarFilter`'s first key
+//! check answers item 8 (@0x47a6e-0x47a9b). It is no button, and it asks
+//! only while the bar is laid out and neither the news, the hire screen
+//! nor an offer has the input, as each of those has its own filter.
+//! Whoever holds the session opens flight's course map over the
+//! spaceport, and puts back the nav the bar opened with as it closes
+//! (`_DoBarDialog` @0x492a3-0x4930b).
 //!
 //! Leave, Return, Enter and Escape leave the bar. Without its dialog, the
 //! bar says why, and Return or Escape still leaves.
@@ -62,7 +70,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::hire::{HIRE_ESCORT, NONE_FOR_HIRE};
+use nova_sim::hire::HIRE_ESCORT;
 use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
 use nova_sim::{HireList, MissionId, News, OfferPrompt, RuleSource, ShipId};
 
@@ -75,6 +83,7 @@ use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::view::MAP_KEY;
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -202,10 +211,6 @@ struct Laid {
     /// [`BACKGROUND`].
     picture: Option<i16>,
     metrics: MetricsHandle,
-    /// The bar's text, to show again after a message.
-    text: String,
-    /// The message shown in its place, if any.
-    said: Option<&'static str>,
 }
 
 /// What the bar has asked whoever holds the session for.
@@ -220,6 +225,8 @@ struct Asks {
     player_info: bool,
     /// The visit's news: Holovid was pressed.
     news: bool,
+    /// The course map: [`MAP_KEY`] was pressed.
+    map: bool,
 }
 
 /// The bar of the stellar landed on.
@@ -291,7 +298,7 @@ impl BarScreen {
                 (
                     TEXT_ITEM,
                     Role::ScrollText {
-                        text: text.clone(),
+                        text,
                         font: Font::Geneva,
                         size: BODY_SIZE,
                         color: BODY_COLOR,
@@ -308,8 +315,6 @@ impl BarScreen {
                 dialog,
                 picture,
                 metrics: MetricsHandle(metrics),
-                text,
-                said: None,
             })
         });
         let description_request = laid.is_ok().then_some(desc);
@@ -467,12 +472,6 @@ impl BarScreen {
         self.laid.as_ref().err().map(String::as_str)
     }
 
-    /// The message shown in place of the bar's text, if any.
-    #[must_use]
-    pub fn message(&self) -> Option<&str> {
-        self.laid.as_ref().ok()?.said
-    }
-
     /// Whether the player has left the bar.
     #[must_use]
     pub fn closed(&self) -> bool {
@@ -495,10 +494,7 @@ impl BarScreen {
     pub fn show_description(&mut self, id: i16, text: &str) {
         if id == self.desc {
             if let Ok(laid) = &mut self.laid {
-                text.clone_into(&mut laid.text);
-                if laid.said.is_none() {
-                    laid.dialog.set_text(TEXT_ITEM, text);
-                }
+                laid.dialog.set_text(TEXT_ITEM, text);
             }
         } else if let Some(hire) = &mut self.hire {
             hire.show_description(id, text);
@@ -516,6 +512,13 @@ impl BarScreen {
     /// [`BarScreen::open_hire`].
     pub fn take_hire_request(&mut self) -> bool {
         std::mem::take(&mut self.asks.hire)
+    }
+
+    /// Whether [`MAP_KEY`] has asked for the course map since this was
+    /// last asked (`_BarFilter`'s item 8): whoever holds the session opens
+    /// it over the spaceport.
+    pub fn take_map_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.map)
     }
 
     /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
@@ -539,14 +542,13 @@ impl BarScreen {
     }
 
     /// Opens the hire screen over the bar on `list`; with nothing for
-    /// hire, the bar says so instead.
+    /// hire, nothing opens, and whoever shows the bar says so
+    /// ([`SpaceportView::open_hire`](super::SpaceportView::open_hire)).
     pub fn open_hire(&mut self, list: HireList) {
-        let Ok(laid) = &mut self.laid else {
+        let Ok(laid) = &self.laid else {
             return;
         };
         if list.rows.is_empty() {
-            laid.dialog.set_text(TEXT_ITEM, NONE_FOR_HIRE);
-            laid.said = Some(NONE_FOR_HIRE);
             // The hire dialog returns at once (`_DoShipyardDialog`
             // @0x5e8df), so the bar's reset after it runs.
             self.hire_closed = true;
@@ -579,7 +581,7 @@ impl BarScreen {
 
     /// Whether the hire screen has closed since this was last asked,
     /// once each time: after a hire ([`BarScreen::set_hire`]), on Cancel,
-    /// or when the bar said nothing is for hire in its place, each where
+    /// or when there was nothing for hire, each where
     /// the original's `_DoBarDialog` resets after the hire dialog returns
     /// (@0x49235).
     pub fn take_hire_closed(&mut self) -> bool {
@@ -596,18 +598,11 @@ impl BarScreen {
         }
     }
 
-    /// Asks for the ships for hire, if the fleet has room, showing the
-    /// bar's text again in place of a message.
+    /// Asks for the ships for hire, if the fleet has room.
     fn ask(&mut self) {
-        if !self.room {
-            return;
+        if self.room {
+            self.asks.hire = true;
         }
-        if let Ok(laid) = &mut self.laid
-            && laid.said.take().is_some()
-        {
-            laid.dialog.set_text(TEXT_ITEM, &laid.text);
-        }
-        self.asks.hire = true;
     }
 
     /// Activates dialog item `item`: Leave leaves, and Hire Escort and
@@ -676,6 +671,16 @@ impl Screen for BarScreen {
             }
             return ScreenAction::None;
         };
+        if *input
+            == (Input::Key {
+                key: MAP_KEY,
+                pressed: true,
+                repeat: false,
+            })
+        {
+            self.asks.map = true;
+            return ScreenAction::None;
+        }
         if let Input::Key {
             key,
             pressed: true,
@@ -701,7 +706,6 @@ impl Screen for BarScreen {
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
-        self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
         }
@@ -771,8 +775,9 @@ impl Screen for BarScreen {
         }
     }
 
-    /// The buttons' sounds, the hire screen's and the news' included, in
-    /// order.
+    /// The sounds of the hire screen, the news and the offer, in order.
+    /// The bar's own buttons are silent under the pointer, as
+    /// `_TrackBarButtons` @0x26fd5 plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -1067,7 +1072,6 @@ mod tests {
             "Gamble shown"
         );
         assert_eq!(screen.problem(), None);
-        assert_eq!(screen.message(), None);
     }
 
     #[test]
@@ -1116,28 +1120,6 @@ mod tests {
         click_item(&mut screen, HIRE_ITEM);
         screen.input(&key(Key::Char('h'), false));
         assert!(!screen.take_hire_request());
-    }
-
-    #[test]
-    fn with_nothing_for_hire_the_bar_says_so_until_the_next_button() {
-        let mut screen = bar();
-        click_item(&mut screen, HIRE_ITEM);
-        screen.open_hire(list(0));
-        assert!(screen.hire_screen().is_none());
-        assert_eq!(screen.message(), Some(NONE_FOR_HIRE));
-        let lines = |screen: &BarScreen| {
-            screen
-                .dialog()
-                .expect("laid out")
-                .scroll_text()
-                .expect("text")
-                .lines()
-                .join(" ")
-        };
-        assert_eq!(lines(&screen), NONE_FOR_HIRE);
-        click_item(&mut screen, HIRE_ITEM);
-        assert_eq!(screen.message(), None);
-        assert_eq!(lines(&screen), "dësc 10029.");
     }
 
     /// [`hiring`], with stock "Shipyard" (`DLOG` 1004) and plain
@@ -1371,14 +1353,12 @@ mod tests {
         assert!(screen.closed());
     }
 
-    const DOWN: Sound = Sound::Ui(crate::sound::UiSound::ButtonDown);
-    const UP: Sound = Sound::Ui(crate::sound::UiSound::ButtonUp);
-
+    /// `_TrackBarButtons` @0x26fd5 plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {
         let mut screen = bar();
         click_item(&mut screen, HIRE_ITEM);
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_sounds(), [], "taken");
         assert!(screen.take_hire_request());
         let at = screen
@@ -1396,11 +1376,12 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert!(!screen.take_hire_request(), "the click was abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
+    /// `_TrackEscortButtons` @0x27987 plays nothing under the pointer.
     #[test]
-    fn the_hire_screens_sounds_and_pointer_go_through_the_bar() {
+    fn the_hire_screens_pointer_goes_through_the_bar_silently() {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
@@ -1450,11 +1431,11 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_hire(), None, "the click was abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&button(true));
         screen.input(&button(false));
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
     #[test]
@@ -1662,8 +1643,9 @@ mod tests {
         );
     }
 
+    /// `_TrackSingleMissionButtons` @0x28188 plays nothing under the pointer.
     #[test]
-    fn the_offers_buttons_sound_and_its_pointer_goes_through_the_bar() {
+    fn the_offers_pointer_goes_through_the_bar_silently() {
         let mut screen = offering();
         screen.open_offer(prompt());
         let at = screen
@@ -1681,14 +1663,14 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_offer_choice(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&button(true));
         screen.input(&button(false));
         assert_eq!(
             screen.take_offer_choice(),
             Some((MissionId(141), OfferChoice::Refuse))
         );
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
     // The news.
@@ -2058,6 +2040,81 @@ mod tests {
                     .any(|(text, color)| text.contains("no DLOG 1013") && *color == Color::ERROR),
                 "{graphic:?}"
             );
+        }
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_map_on_a_press_only() {
+        let mut screen = bar();
+        assert!(!screen.take_map_request());
+        screen.input(&key(MAP_KEY, true));
+        assert!(!screen.take_map_request(), "a repeat");
+        screen.input(&Input::Key {
+            key: MAP_KEY,
+            pressed: false,
+            repeat: false,
+        });
+        assert!(!screen.take_map_request(), "a release");
+        screen.input(&key(MAP_KEY, false));
+        assert!(screen.take_map_request());
+        assert!(!screen.take_map_request(), "once");
+        assert!(!screen.take_hire_request());
+        assert!(!screen.take_news_request());
+        assert!(!screen.closed());
+
+        let mut screen = newsy();
+        screen.open_news(&news(), 9000);
+        screen.input(&key(MAP_KEY, false));
+        assert!(!screen.take_map_request(), "the news open");
+
+        let mut screen = bar();
+        screen.open_hire(list(2));
+        screen.input(&key(MAP_KEY, false));
+        assert!(!screen.take_map_request(), "the hire screen open");
+
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        screen.input(&key(MAP_KEY, false));
+        assert!(!screen.take_map_request(), "an offer open");
+
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::new(),
+            graphic: None,
+        });
+        let mut screen = BarScreen::new(
+            Err("no DLOG 1013".to_owned()),
+            StellarId(157),
+            hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        );
+        screen.input(&key(MAP_KEY, false));
+        assert!(!screen.take_map_request(), "without the bar's dialog");
+    }
+
+    /// `_BarFilter` @0x47a4b maps its keys to items with no click.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let keys = [
+            Key::Enter,
+            Key::Escape,
+            MISSION_INFO_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+        ]
+        .into_iter()
+        .chain(HIRE_KEYS)
+        .chain(NEWS_KEYS);
+        for k in keys {
+            let mut screen = bar();
+            screen.take_sounds();
+            screen.input(&key(k, false));
+            screen.input(&Input::Key {
+                key: k,
+                pressed: false,
+                repeat: false,
+            });
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
         }
     }
 }

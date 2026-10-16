@@ -163,12 +163,14 @@ use std::rc::Rc;
 
 use super::hire::Shared;
 use super::{ReservePolicy, Session, SessionEvent};
-use crate::catalog::{CommCatalog, OutfitId, ShipId, ShipRecord};
+use crate::catalog::{CommCatalog, GovtId, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
 use crate::combat::hull::{DisableRule, NovaDisable};
+use crate::navigation::NavMode;
 use crate::outfitter::{Hardpoints, OutfitFlags};
 use crate::pilot;
+use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::ship_change::{Fold, Limits, OutfitCarry, SET_OP_PERSISTENT, carried_outfits};
 use crate::strings::PatchedStrings;
@@ -176,6 +178,26 @@ use crate::strings::PatchedStrings;
 /// What the armour gains a step while the ship is disabled after a
 /// change (the constant @0xdd068).
 const ARMOR_BUMP: f32 = 1.0;
+
+/// A `C`, `E` or `H` run while docked, as the status bar sees it: the
+/// original's `_LoadIntfResource` call at the operator (@0x156c7, after
+/// the armour bump @0x15677-0x156c5). It asks for the `ïntf` of
+/// `government` (as [`Session::interface_government`] reads it), and
+/// when that is not the one loaded (`_currentIntf`, @0x73663-0x73672) it
+/// loads it and redraws the whole bar (`_RedrawStatus(1)`
+/// @0x739b6-0x739bd), drawing `nav` and `reserves` as they stood at the
+/// operator. Noted by `Session::change_ship`, taken by
+/// [`Session::take_interface_loads`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InterfaceLoad {
+    /// The government whose `Interface` the operator's load asks for.
+    pub government: Option<GovtId>,
+    /// The nav mode and selection at the operator.
+    pub nav: NavMode,
+    /// The shield, armour and fuel at the operator, after its armour
+    /// bump.
+    pub reserves: Reserves,
+}
 
 /// The disputed rules of the ship-change set operators that the session
 /// follows, projected from its rule set (see [`Session::with_rules`]):
@@ -410,6 +432,24 @@ impl Session {
         };
         self.become_class(&record, change, |_| {});
         self.bump_armor();
+        // `_LoadIntfResource` (@0x156c7), as the docked bar sees it: only
+        // the outfitter and the shipyard take these, and both are docked.
+        if self.landed.is_some() {
+            self.interface_loads.push(InterfaceLoad {
+                government: self.interface_government(),
+                nav: self.nav_mode(),
+                reserves: self.reserves(),
+            });
+        }
+    }
+
+    /// The `C`, `E` and `H` run while docked since the last outfit order
+    /// or ship purchase began, in order, each as the status bar's
+    /// `_LoadIntfResource` saw it at the operator ([`InterfaceLoad`]);
+    /// taking them empties the list. An order or a purchase that is
+    /// refused before it begins clears nothing.
+    pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
+        std::mem::take(&mut self.interface_loads)
     }
 
     /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
@@ -438,8 +478,9 @@ impl Session {
     /// picked evenly on `chance` as `_GetRandomIndString` (@0x72ef7) picks
     /// it: a roll of as many sides as the list holds. `None`, with no roll,
     /// for a missing or empty list; an empty string picked is given as
-    /// it is. The session's one port of that routine: the bar's news and
-    /// [`pick_string`](Self::pick_string) both draw through it.
+    /// it is. The session's one port of that routine: the bar's news, a
+    /// fleet's arrival quote and [`pick_string`](Self::pick_string) all
+    /// draw through it.
     pub(super) fn random_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
         let strings = self.strings.0.string_list(list);
         if strings.is_empty() {

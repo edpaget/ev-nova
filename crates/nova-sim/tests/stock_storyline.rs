@@ -92,8 +92,9 @@ fn docked_qualified_pilot(data: &GameData) -> Session {
     session
 }
 
-/// A new stock pilot, its save changed by `edit`, docked at the first
-/// landable stellar of its system, flown and settled with every roll 1.
+/// A new stock pilot, its save changed by `edit`, resumed over the first
+/// landable stellar of its system, flown, landed there and settled with
+/// every roll 1.
 fn docked_pilot(data: &GameData, edit: impl FnOnce(&mut serde_json::Value)) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let site = data
@@ -105,8 +106,10 @@ fn docked_pilot(data: &GameData, edit: impl FnOnce(&mut serde_json::Value)) -> S
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(site.id.0);
     edit(&mut save);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(data, docked).expect("flies");
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(data, saved).expect("flies");
+    let system = session.pilot().system();
+    session.land_at(data, system, site.id).expect("lands");
     assert_eq!(session.landed(), Some(site.id), "docked");
     let _ = session.settle_script(data, &mut NeverFires);
     session

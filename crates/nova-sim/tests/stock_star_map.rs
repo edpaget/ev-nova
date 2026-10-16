@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use nova_data::GameData;
 use nova_data::records::system::System;
+use nova_sim::buoy::{buoy_text, patch_id};
+use nova_sim::catalog::StringPatch;
 use nova_sim::landing::is_landable;
 use nova_sim::story::listers_of;
 use nova_sim::{
@@ -121,4 +123,42 @@ fn stock_hypergates_are_landing_sites_an_arrival_may_come_out_of() {
     assert!(is_landable(kania), "{:#x}", kania.flags);
     assert!(kania.position.x <= 999.0 && kania.position.y <= 999.0);
     assert_eq!(kania.exit_angle, 120);
+}
+
+/// 99 stock systems use buoys 1-19, which `STR#` 1000 (20 strings) holds,
+/// and no file holds a `'STR '`. The two Nil'kol systems, 209 and 546,
+/// name 20003: past the list, so the engine shows an empty line there.
+#[test]
+fn stock_buoys_show_str_1000_strings_but_nilkols_none() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let strings = data.buoy_strings();
+    assert_eq!(strings.len(), 20);
+    assert_eq!(strings[17], "Congratulations on finishing the game!!!");
+    let map = StarMap::with_hidden(data.star_map(), &BTreeSet::new(), CoLocated::Itself);
+    let mut shown = 0;
+    let mut past = Vec::new();
+    for id in map.systems() {
+        let Some(index) = map.buoy(id) else {
+            continue;
+        };
+        let patch = patch_id(index).map_or(StringPatch::Absent, |id| data.string_patch(id));
+        assert_eq!(patch, StringPatch::Absent, "{id:?}: no stock 'STR '");
+        match buoy_text(index, patch, &strings) {
+            Some(text) => {
+                assert!((1..=19).contains(&index), "{id:?}: {index}");
+                assert!(!text.is_empty(), "{id:?}");
+                shown += 1;
+            }
+            None => past.push((id, index)),
+        }
+    }
+    assert_eq!(shown, 99);
+    assert_eq!(
+        past,
+        [(SystemId(209), 20_003), (SystemId(546), 20_003)],
+        "Nil'kol"
+    );
 }

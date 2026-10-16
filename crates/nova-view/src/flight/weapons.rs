@@ -407,6 +407,7 @@ mod tests {
                 .collect(),
             booms: BTreeMap::new(),
             boxes: BTreeMap::new(),
+            asteroids: BTreeMap::new(),
             cursor: None,
         }
     }

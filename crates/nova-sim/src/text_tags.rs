@@ -86,7 +86,7 @@
 //!   says: by the engine, the original's `_offeringShipIndex`, which a
 //!   hail leaves set, so a later text names the person last hailed.
 
-use crate::catalog::{DateAffixes, GovtId, StellarId, SystemId};
+use crate::catalog::{DateAffixes, GovtId, PilotCatalog, ShipId, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::date::{GameDate, long_date_text};
 use crate::mission::{ActiveMission, Offer, Stop};
@@ -633,6 +633,62 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
     } else {
         filled
     }
+}
+
+/// `text` with its tags filled as `_MungeBriefing(0, -1)` fills them
+/// before any pilot is loaded, as the main screen's X does for `dësc`
+/// 32766 (@0x1aca2-0x1acb1): no offer and slot -1, so every mission tag
+/// is [`UNSET`].
+///
+/// The player tags read the original's globals as launch leaves them:
+/// `<PN>`, `<PNN>` and `<PSN>` empty (`_playerName`, `_playerNickname`,
+/// `_shipName`, zero-fill statics), the ranks the fallback ("captain",
+/// `_rankData` zero-filled), and `<REG>` empty. `<PST>` reads ship class 0
+/// (`_shipData` slot 0's +0x76, which `_InitObjects` @0x1c327 and
+/// `_ResetPlayer(1)` @0x1d446 both set to 0, `_InitEVNova` calling them
+/// @0x47252 and @0x4739a before `_DoMainScreen`): shïp 128's name in
+/// `ships`, or empty when `ships` has no shïp 128 that can be read (the
+/// engine's choice: the original is not read with it missing). `<OSN>` is
+/// [`UNSET`]: `_ResetPlayer` sets slot 0's +0xc8d0 to -1 (@0x1d4fb),
+/// which fails its `<= 0x3ff` check (@0x9cef5), so the tag keeps its
+/// start, `"[Error]"` (@0x9c295).
+#[must_use]
+pub fn expand_before_any_pilot(text: &str, ships: &(impl PilotCatalog + ?Sized)) -> String {
+    static NO_AFFIXES: DateAffixes = DateAffixes {
+        prefix: String::new(),
+        suffix: String::new(),
+    };
+    // With no deadline, `today` decides nothing.
+    let mission = GameDate::new(1177, 1, 1).map(|today| MissionTags {
+        values: MissionValues::default(),
+        cash: 0,
+        today,
+        date_affixes: &NO_AFFIXES,
+        pay_millions: RuleSource::Engine,
+        slot: None,
+    });
+    // Ship class 0 is shïp 128.
+    let ship_type = ships
+        .ships()
+        .into_iter()
+        .find(|ship| ship.id == ShipId(128))
+        .map(|ship| ship.name)
+        .unwrap_or_default();
+    let context = TagContext {
+        pilot: "",
+        ship_type: &ship_type,
+        ship_name: "",
+        person: None,
+        ranks: RankNames::none(),
+        mission,
+        // The `dësc` loads as any does, its rank-nnn governments reset and
+        // parsed from it; the tags read the engine's rules, and the
+        // `l33t` mode is not read here.
+        rank_govts: RankTagGovts::NONE.parsed(text),
+        leet: false,
+        rules: TagRules::default(),
+    };
+    expand(text, &context, &NoNames)
 }
 
 #[cfg(test)]
@@ -1649,5 +1705,55 @@ mod tests {
                 ..values()
             }
         );
+    }
+
+    // Before any pilot.
+
+    /// A catalog of `ships`, each named as given.
+    fn ships_named(ships: &[(i16, &str)]) -> crate::testkit::FakePilotCatalog {
+        let mut catalog = crate::testkit::catalog();
+        catalog.ship_records = ships
+            .iter()
+            .map(|&(id, name)| crate::catalog::ShipRecord {
+                name: name.to_owned(),
+                ..crate::testkit::ship(id, crate::testkit::FAST)
+            })
+            .collect();
+        catalog
+    }
+
+    #[test]
+    fn before_any_pilot_the_player_tags_read_empty_and_the_mission_tags_unset() {
+        let text = "<PN>|<PNN>|<PSN>|<PST>|<OSN>|<PRK>|<SRK>|<RRK>|<PRK128>|<REG>|\
+                    <DST>|<DSY>|<RST>|<RSY>|<CT>|<CQ>|<SN>|<DL>|<PAY>|<XYZ>";
+        let ships = ships_named(&[(128, "Shuttle")]);
+        assert_eq!(
+            expand_before_any_pilot(text, &ships),
+            "|||Shuttle|[Error]|captain|captain|captain|captain||\
+             [Error]|[Error]|[Error]|[Error]|[Error]|[Error]|[Error]|[Error]|[Error]|<XYZ>"
+        );
+    }
+
+    #[test]
+    fn before_any_pilot_the_ship_type_is_ship_class_0s_name() {
+        let ships = ships_named(&[(129, "Shuttle"), (128, "Pod"), (130, "Kestrel")]);
+        assert_eq!(expand_before_any_pilot("a <PST>.", &ships), "a Pod.");
+    }
+
+    #[test]
+    fn before_any_pilot_with_no_ship_128_the_ship_type_reads_empty() {
+        let ships = ships_named(&[(129, "Shuttle"), (130, "Kestrel")]);
+        assert_eq!(expand_before_any_pilot("a <PST>.", &ships), "a .");
+        assert_eq!(
+            expand_before_any_pilot("a <PST>.", &ships_named(&[])),
+            "a ."
+        );
+    }
+
+    #[test]
+    fn before_any_pilot_a_text_with_no_tags_is_as_written() {
+        let text = "Thanks for playing EV Nova!";
+        let ships = ships_named(&[(128, "Shuttle")]);
+        assert_eq!(expand_before_any_pilot(text, &ships), text);
     }
 }

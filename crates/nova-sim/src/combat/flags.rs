@@ -4,7 +4,8 @@
 //!
 //! A bit applies to every weapon unless the Bible limits it: to guided
 //! weapons (Guidance 1: `Flags` 0x0008 and 0x0080, `Flags2` 0x0008 and
-//! every `Seeker` bit), to turrets (3, 4 and 7-10: the blind spots,
+//! every `Seeker` bit but 0x0001, which the original reads on any
+//! guidance), to turrets (3, 4 and 7-10: the blind spots,
 //! `Flags` 0x1000-0x4000) or to beams (0, 3 and 10: `Flags2` 0x2000). A
 //! weapon a bit does not apply to is [`Status::NotApplicable`] for it.
 //!
@@ -124,8 +125,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x4000, Turret, Implemented),
     // Detonates at the end of its life.
     (Flags, 0x8000, Any, Implemented),
+    // Passes through asteroids, on any guidance (`asteroid_hit`).
+    (Seeker, 0x0001, Any, Implemented),
     // Guided weapons' behaviour.
-    (Seeker, 0x0001, Guided, Unimplemented),
     (Seeker, 0x0002, Guided, Unimplemented),
     (Seeker, 0x0008, Guided, Unimplemented),
     (Seeker, 0x0010, Guided, Unimplemented),
@@ -135,8 +137,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     // Cycling graphic: held on the first frame, stopped on the last.
     (Flags2, 0x0001, Any, Presentation),
     (Flags2, 0x0002, Any, Presentation),
-    // Proximity detonator ignores asteroids.
-    (Flags2, 0x0004, Any, Unimplemented),
+    // Proximity detonator ignores asteroids: read through
+    // `RuleKey::FuseIgnoresAsteroids` (`asteroid_hit`).
+    (Flags2, 0x0004, Any, Implemented),
     // Guided: proximity detonator set off by other ships.
     (Flags2, 0x0008, Guided, Implemented),
     // Submunitions aimed at the nearest target; none on expiry.
@@ -163,8 +166,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags2, 0x2000, Beam, Presentation),
     // Fires while cloaked, and nothing else does (`Armament::has_ammo`).
     (Flags2, 0x4000, Any, Implemented),
-    // x10 mass damage to asteroids.
-    (Flags2, 0x8000, Any, Unimplemented),
+    // x10 mass damage to asteroids (`asteroid_hit`). Beams meet
+    // asteroids only from rdm:phase/asteroids/phase-6-beams-on-asteroids.
+    (Flags2, 0x8000, Any, Implemented),
     // Ammo only at the end of a burst.
     (Flags3, 0x0001, Any, Implemented),
     // Translucent shots.
@@ -243,7 +247,7 @@ mod tests {
         (Flags, 0x2000, [NA, NA, NA, Implemented]),
         (Flags, 0x4000, [NA, NA, NA, Implemented]),
         (Flags, 0x8000, [Implemented; 4]),
-        (Seeker, 0x0001, [NA, NA, Unimplemented, NA]),
+        (Seeker, 0x0001, [Implemented; 4]),
         (Seeker, 0x0002, [NA, NA, Unimplemented, NA]),
         (Seeker, 0x0008, [NA, NA, Unimplemented, NA]),
         (Seeker, 0x0010, [NA, NA, Unimplemented, NA]),
@@ -252,7 +256,7 @@ mod tests {
         (Seeker, 0x8000, [NA, NA, Unimplemented, NA]),
         (Flags2, 0x0001, [Presentation; 4]),
         (Flags2, 0x0002, [Presentation; 4]),
-        (Flags2, 0x0004, [Unimplemented; 4]),
+        (Flags2, 0x0004, [Implemented; 4]),
         (Flags2, 0x0008, [NA, NA, Implemented, NA]),
         (Flags2, 0x0010, [Implemented; 4]),
         (Flags2, 0x0020, [Implemented; 4]),
@@ -265,7 +269,7 @@ mod tests {
         (Flags2, 0x1000, [Unimplemented; 4]),
         (Flags2, 0x2000, [NA, Presentation, NA, NA]),
         (Flags2, 0x4000, [Implemented; 4]),
-        (Flags2, 0x8000, [Unimplemented; 4]),
+        (Flags2, 0x8000, [Implemented; 4]),
         (Flags3, 0x0001, [Implemented; 4]),
         (Flags3, 0x0002, [Presentation; 4]),
         (Flags3, 0x0004, [Unimplemented; 4]),
@@ -330,8 +334,12 @@ mod tests {
         }
         for raw in [-1, 0, 2, 3, 4, 7, 8, 9, 10, 99] {
             let unguided = Guidance::decode(raw);
-            assert_eq!(status(Seeker, 0x0001, unguided), Some(NA), "{raw}");
+            assert_eq!(status(Seeker, 0x0002, unguided), Some(NA), "{raw}");
             assert_eq!(status(Flags, 0x0080, unguided), Some(NA), "{raw}");
+        }
+        for raw in [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 99] {
+            let any = Guidance::decode(raw);
+            assert_eq!(status(Seeker, 0x0001, any), Some(Implemented), "{raw}");
         }
     }
 
@@ -363,16 +371,13 @@ mod tests {
     }
 
     #[test]
-    fn stock_shaped_weapons_report_only_the_asteroid_damage_bit() {
+    fn stock_shaped_unguided_weapons_and_beams_report_nothing() {
         // The Light Blaster, Medium Blaster and Light Cannon: blast spares
         // the player, blind spots that do not apply, translucent shots.
         assert_eq!(unimplemented(&spec(-1, 0x6100, 0, 0x0002)), []);
         assert_eq!(unimplemented(&spec(-1, 0x0100, 0, 0x0002)), []);
         // The Mining Blaster: secondary, and x10 against asteroids.
-        assert_eq!(
-            unimplemented(&spec(-1, 0x0102, 0x8000, 0x0002)),
-            [(Flags2, 0x8000)]
-        );
+        assert_eq!(unimplemented(&spec(-1, 0x0102, 0x8000, 0x0002)), []);
         // The Raven Rocket and the Stellar Grenade.
         assert_eq!(unimplemented(&spec(6, 0x8002, 0, 0)), []);
         assert_eq!(unimplemented(&spec(6, 0x8003, 0, 0)), []);
@@ -381,10 +386,7 @@ mod tests {
         assert_eq!(unimplemented(&spec(0, 0x4010, 0x2200, 0)), []);
         assert_eq!(unimplemented(&spec(0, 0x6010, 0, 0)), []);
         // A Wraith Graviton Beam, and the Winter Tempest.
-        assert_eq!(
-            unimplemented(&spec(0, 0x0010, 0x8200, 0)),
-            [(Flags2, 0x8000)]
-        );
+        assert_eq!(unimplemented(&spec(0, 0x0010, 0x8200, 0)), []);
         assert_eq!(unimplemented(&spec(0, 0x0032, 0x0200, 0)), []);
     }
 
@@ -406,10 +408,7 @@ mod tests {
             seeker: 0x8001,
             ..weapon(131)
         });
-        assert_eq!(
-            unimplemented(&seeking),
-            [(Seeker, 0x0001), (Seeker, 0x8000)]
-        );
+        assert_eq!(unimplemented(&seeking), [(Seeker, 0x8000)]);
     }
 
     #[test]
@@ -444,10 +443,11 @@ mod tests {
             [(Flags2, 0x1000), (Flags3, 0x0010)]
         );
         // The Polaron Multi-Torp: point defence can't target it, and its
-        // sub-munitions seek the nearest; it fires while cloaked.
+        // sub-munitions seek the nearest; it fires while cloaked and passes
+        // through asteroids.
         assert_eq!(
             unimplemented(&guided(1, 0x0182, 0x0001, 0x4010, 0x0002)),
-            [(Seeker, 0x0001)]
+            []
         );
         // A rear-blind Fusion Pulse Turret that disables.
         assert_eq!(

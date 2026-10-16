@@ -282,7 +282,7 @@ mod tests {
     use nova_rsrc::{Fork, ForkReader};
 
     use nova_audio::recording::{MemorySettings, RecordingAudio};
-    use nova_audio::{AudioCommand, AudioSettings, SettingsStore, Volume};
+    use nova_audio::{AudioCommand, AudioSettings, SettingsStore};
 
     use crate::settings::{GameSettings, SettingsKeeper};
     use nova_view::Showing;
@@ -358,11 +358,11 @@ mod tests {
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
         let mut runner = runner.with_audio(core);
         let core = runner.audio.as_mut().expect("kept");
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         assert_eq!(
             *log.borrow(),
             [AudioCommand::StartMusic {
-                volume: Volume::FULL
+                volume: AudioSettings::default().music_volume
             }]
         );
     }

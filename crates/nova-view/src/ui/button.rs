@@ -233,7 +233,9 @@ impl ButtonTracker {
 
     /// The sound the last input made, once: [`UiSound::ButtonDown`] for a
     /// press that armed the button, [`UiSound::ButtonUp`] for the release
-    /// of an armed press, on the button or off it.
+    /// of an armed press, on the button or off it. Only the main menu
+    /// reports them (`_TrackMainScreenButtons` @0x195b9); every other
+    /// reader drops them, as the original's other trackers play nothing.
     pub fn take_sound(&mut self) -> Option<UiSound> {
         self.sound.take()
     }

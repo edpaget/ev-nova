@@ -95,6 +95,22 @@ pub fn contact(from: Vec2, to: Vec2, centre: Vec2, radius: f32) -> Option<f32> {
     (0.0..=1.0).contains(&t).then_some(t)
 }
 
+/// Which of `circles`, each an item with its centre and reach, the segment
+/// from `from` to `to` meets first, and where: the one of least
+/// [`contact`], the earlier of a tie; `from` itself for one it starts
+/// within.
+pub(super) fn nearest_contact<T>(
+    from: Vec2,
+    to: Vec2,
+    circles: impl IntoIterator<Item = (T, Vec2, f32)>,
+) -> Option<(T, Vec2)> {
+    circles
+        .into_iter()
+        .filter_map(|(item, centre, reach)| Some((contact(from, to, centre, reach)?, item)))
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(t, item)| (item, from + (to - from) * t))
+}
+
 /// A shot's number in its fight, never reused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShotId(pub u32);
@@ -239,6 +255,13 @@ impl Shot {
         guided && target.hittable_by(self.firer, self.fleet)
     }
 
+    /// Whether its proximity fuse is armed: it has flown past its
+    /// weapon's `ProxSafety` (@0x371fc-0x3721e, @0x3720e-0x3721e).
+    #[must_use]
+    pub fn fuse_armed(&self) -> bool {
+        self.age > self.weapon.prox_safety
+    }
+
     /// Whether it has flown its life.
     #[must_use]
     pub fn expired(&self) -> bool {
@@ -249,18 +272,29 @@ impl Shot {
     /// `was`, if any, and where it met it.
     #[must_use]
     pub fn hit(&self, was: Vec2, targets: &[Target]) -> Option<(ShipRef, Vec2)> {
-        targets
-            .iter()
-            .filter(|target| self.can_hit(target))
-            .filter_map(|target| {
-                let reach = target.radius + self.weapon.prox_radius;
-                Some((
-                    contact(was, self.position, target.position, reach)?,
-                    target.ship,
-                ))
-            })
-            .min_by(|(a, _), (b, _)| a.total_cmp(b))
-            .map(|(t, ship)| (ship, was + (self.position - was) * t))
+        self.met(was, targets, self.weapon.prox_radius)
+    }
+
+    /// The first of `targets` it can hit that it touched on its way here
+    /// from `was`, within the ship's hit radius alone, and where: what
+    /// [`Shot::hit`] finds without the weapon's `ProxRadius`, a contact
+    /// rather than the fuse.
+    #[must_use]
+    pub fn touches(&self, was: Vec2, targets: &[Target]) -> Option<(ShipRef, Vec2)> {
+        self.met(was, targets, 0.0)
+    }
+
+    /// The first of `targets` it can hit that it met on its way here from
+    /// `was`, within the ship's hit radius plus `beyond`, and where.
+    fn met(&self, was: Vec2, targets: &[Target], beyond: f32) -> Option<(ShipRef, Vec2)> {
+        nearest_contact(
+            was,
+            self.position,
+            targets
+                .iter()
+                .filter(|target| self.can_hit(target))
+                .map(|target| (target.ship, target.position, target.radius + beyond)),
+        )
     }
 
     /// Its blast where it is, hitting `direct` (or nothing, as it
@@ -343,6 +377,24 @@ mod tests {
             -4.0,
         );
         assert!((back.heading - 356.0).abs() < 1e-4, "{back:?}");
+    }
+
+    #[test]
+    fn a_shots_fuse_is_armed_once_it_has_flown_past_its_prox_safety() {
+        let mut shot = Shot::launch(
+            WeaponSpec::new(&WeaponRecord {
+                prox_safety: 3,
+                ..weapon(128)
+            }),
+            FIRER,
+            FIRER,
+            &state(0.0, 0.0, 0.0, 0.0, 0.0),
+            0.0,
+        );
+        for (age, armed) in [(0, false), (3, false), (4, true), (40, true)] {
+            shot.age = age;
+            assert_eq!(shot.fuse_armed(), armed, "{age}");
+        }
     }
 
     #[test]
@@ -555,6 +607,31 @@ mod tests {
             shot.hit(Vec2::ZERO, &[target(2, 50.0, 8.1, Condition::Intact)]),
             None
         );
+    }
+
+    #[test]
+    fn a_shot_touches_a_ship_within_its_radius_alone_not_its_fuses_reach() {
+        let shot = passing(3);
+        let fused = [target(2, 50.0, 7.9, Condition::Intact)];
+        assert!(shot.hit(Vec2::ZERO, &fused).is_some());
+        assert_eq!(shot.touches(Vec2::ZERO, &fused), None, "the fuse alone");
+        let touched = [
+            target(3, 80.0, 4.9, Condition::Intact),
+            target(2, 50.0, 4.9, Condition::Intact),
+        ];
+        let (ship, at) = shot.touches(Vec2::ZERO, &touched).expect("touched");
+        assert_eq!(ship, ShipRef::Npc(NpcId(2)), "the nearer along the way");
+        assert!(at.x > 48.0 && at.x < 50.0, "{at:?}");
+        let (_, from_20) = shot
+            .touches(Vec2::new(20.0, 0.0), &touched)
+            .expect("touched");
+        assert!(
+            (from_20.x - at.x).abs() < 1e-3 && from_20.y.abs() < 1e-3,
+            "met at the same point on a shorter way: {from_20:?}"
+        );
+        let mut own = touched[1];
+        own.ship = FIRER;
+        assert_eq!(shot.touches(Vec2::ZERO, &[own]), None, "never its firer");
     }
 
     #[test]
@@ -876,6 +953,32 @@ mod tests {
             at((10.0, -20.0), (10.0, 20.0), 5.0),
             Some(0.375),
             "across it"
+        );
+    }
+
+    #[test]
+    fn the_nearest_contact_is_the_first_met_and_a_tie_goes_to_the_earlier() {
+        let (was, now) = (Vec2::ZERO, Vec2::new(40.0, 0.0));
+        let circle = |name, x, r| (name, Vec2::new(x, 0.0), r);
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 30.0, 5.0), circle('a', 20.0, 5.0)]),
+            Some(('a', Vec2::new(15.0, 0.0))),
+            "the nearest along the way, whatever the order"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 20.0, 5.0), circle('a', 20.0, 5.0)]),
+            Some(('b', Vec2::new(15.0, 0.0))),
+            "a tie goes to the earlier"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 30.0, 5.0), circle('a', 2.0, 5.0)]),
+            Some(('a', was)),
+            "one it starts within, met where it was"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('a', 60.0, 5.0)]),
+            None,
+            "none on its way"
         );
     }
 }

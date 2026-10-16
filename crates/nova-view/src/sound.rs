@@ -1,9 +1,10 @@
 //! The sounds screens make, as events: what happened, not what to play.
 //! The audio side decides which `snd ` each one plays, if any.
 //!
-//! - [`UiSound`]: the interface's own, a button pressed and released,
-//!   the alert as something is refused, the news dialog's beeps, and the
-//!   beep of the player info refused.
+//! - [`UiSound`]: the interface's own, a main-menu button pressed and
+//!   released, the alert as something is refused, the news dialog's
+//!   beeps, the course map's beeps, and the beep of the player info
+//!   refused.
 //! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
 //! - [`Sound`]: any of them, as a screen reports it through
@@ -11,17 +12,71 @@
 //! - [`SoundPrefs`]: the player's sound preferences as the Preferences
 //!   dialog shows them, part of the [`Prefs`](crate::Prefs) a screen
 //!   reports through [`Screen::take_prefs`](crate::Screen::take_prefs).
+//!
+//! **A key that activates a button makes no sound**, but on the main
+//! menu. Return, Enter, Escape, Space on a focused button, or a dialog's
+//! or the spaceport's own letter keys raise neither [`UiSound::ButtonDown`]
+//! nor [`UiSound::ButtonUp`], as in the original: `_TextDialogFilter` maps Return, Enter and Escape straight
+//! to an item (@0x51fca-0x51fef) with no hilite, flash or sound;
+//! `_CommFilter`, `_PlanetCommFilter`, `_PlunderFilter`, `_ShipDescFilter`,
+//! `_PlayerInfoFilter` and `_MyModalDialog` call no sound routine; the
+//! dialogs run with the Toolbox's standard filter (`_DoNewPilotNameDialog`,
+//! `_DoQuantityDialog`, `_EVTextInputDialog`, `_EVNoteAlert`) only flash
+//! the button; and the Cocoa Preferences' `accept:` @0xcfe3a and
+//! `cancel:` @0xcff7c play nothing. The original's button clicks, snd 600
+//! and 601, belong to its main screen alone: `_TrackMainScreenButtons`
+//! @0x195b9 plays them under the pointer, and `_PlayMainScreenClickSound`
+//! @0x177af plays both, one after the other, for `_MainScreenKey`'s keys.
+//! So the main menu's shortcut keys raise [`UiSound::ButtonKeyed`], once,
+//! and their choice waits for the click to play. The spaceport's screens map their keys to
+//! items with no sound (`_PortFilter` @0x4f041, `_BarFilter` @0x47a4b,
+//! `_TradeFilter` @0x4e092, `_OutfitFilter` @0x58039, `_ShipyardFilter`
+//! @0x60449, `_MissionFilter` @0x9f7a9, `_MissionInfoFilter` @0x9d6e5,
+//! `_SingleMissionFilter` @0x98d9a).
+//!
+//! **A pointer click makes no sound either**, but on the main menu. Of the
+//! original's button trackers only `_TrackMainScreenButtons` @0x195b9
+//! plays a sound. The rest call no sound routine, so their buttons are
+//! silent under the pointer: the in-game dialogs' `_TrackTextButtons`
+//! @0x26bb0 (text dialogs, descriptions and the About box),
+//! `_TrackOkButton` @0x26d7a, `_TrackCommDialogButtons` @0x28eff,
+//! `_TrackPlanetCommDialogButtons` @0x28b28, `_TrackHaggleButtons`
+//! @0x27670, `_TrackPlunderButtons` @0x2732a, `_TrackCapAssignButtons`
+//! @0x291c7, `_TrackPlayerInfoButtons` @0x27c4d, `_TrackRaceButtons`
+//! @0x2689d and `_TrackMapButtons` @0x2aafa, and the spaceport's
+//! `_TrackPlanetButtons` @0x2996f, `_TrackBarButtons` @0x26fd5,
+//! `_TrackEscortButtons` @0x27987, `_TrackTradeButtons` @0x294cd,
+//! `_TrackOutfitButtons` @0x2a029, `_TrackShipyardButtons` @0x2a54e,
+//! `_TrackMissionButtons` @0x287f5, `_TrackMissionInfoButtons` @0x2850e
+//! and `_TrackSingleMissionButtons` @0x28188. Open Pilot is Navigation
+//! Services (`_MyOpenDocument` @0x731c5), which plays nothing either.
 
 pub use nova_sim::{SimSound, SoundId};
 
 /// A sound the interface makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiSound {
-    /// A button was pressed: the pointer went down on it.
+    /// A main-menu button was pressed: the pointer went down on it
+    /// (`_TrackMainScreenButtons` @0x195b9). Only the main menu's buttons
+    /// raise it; a key that activates a button never does (see the module
+    /// docs).
     ButtonDown,
-    /// A pressed button popped back up: the pointer was let go, on the
-    /// button or off it.
+    /// A pressed main-menu button popped back up: the pointer was let go,
+    /// on the button or off it (`_TrackMainScreenButtons` @0x195b9). Only
+    /// the main menu's buttons raise it; a key that activates a button
+    /// never does (see the module docs).
     ButtonUp,
+    /// A key activated a main-menu button: `_PlayMainScreenClickSound`
+    /// @0x177af, which plays snd 600, then 601 once 600 has ended. The
+    /// key's choice waits for that click: the main menu acts on it only
+    /// once the audio side says 600 has ended
+    /// ([`Screen::keyed_click_ended`](crate::Screen::keyed_click_ended)).
+    /// E clicks on its release, not its press.
+    ButtonKeyed,
+    /// Enter Ship was chosen on the main screen with no pilot loaded, or
+    /// a dying one: `_MainScreenChoice(3)` @0x1aa89-0x1aaac plays
+    /// `_beepSnd[3]`. E raises it after its click.
+    EnterRefused,
     /// The interface refused what was asked of it: the original's
     /// `SysBeep`.
     Alert,
@@ -38,11 +93,44 @@ pub enum UiSound {
     /// as it closes (@0x4814e).
     NewsClosed,
     /// The mission info screen opened: `_DoMissionInfoDialog` plays
-    /// `_beepSnd[1]` as it opens (`PlaySound` @0x9e1d5).
+    /// `_beepSnd[1]` (`snd ` 151) as it opens (@0x9e1d5), before its
+    /// dialog is loaded.
     MissionInfoOpened,
     /// The mission info screen closed: `_DoMissionInfoDialog` plays
-    /// `_beepSnd[2]` as it closes (@0x9e791).
+    /// `_beepSnd[2]` (`snd ` 152) as it closes (@0x9e791), after its
+    /// `_RefreshSAT`; without its dialog it returns before it (@0x9e20b).
     MissionInfoClosed,
+    /// A zoom key zoomed the floating map: `_HandlePlayer` plays
+    /// `_beepSnd[0]` (@0x7103a, @0x710bc).
+    FloatingMapZoomed,
+    /// M opened the course map in flight: `_HandlePlayer` plays
+    /// `_beepSnd[2]` before it calls `_DoSystemMap` (`PlaySound`
+    /// @0x6a809). The hypergate's map does not raise it.
+    MapOpened,
+    /// The course map closed in flight, by M or Escape: `_HandlePlayer`
+    /// plays `_beepSnd[0]` once `_DoSystemMap` returns (`PlaySound`
+    /// @0x6a85a). The hypergate's map does not raise it.
+    MapClosed,
+    /// The stellar's ambient sound, its `CustSndID` (128 and up), plays
+    /// while the spaceport is frontmost: `_PortFilter` @0x4f041 plays
+    /// `_planetSnd` (@0x4f0e8, @0x4f106), and so does a press on the
+    /// landscape (`_DoPortDialog`'s item 5, @0x5fe2a-0x5fe5e). The
+    /// spaceport decides when (see [`spaceport::ambient`]).
+    ///
+    /// [`spaceport::ambient`]: crate::spaceport::ambient
+    PortAmbient {
+        /// The `snd `.
+        sound: SoundId,
+        /// Whether it plays only if it is not still playing, the
+        /// original's `ST_IsSoundPlaying` check for a stellar whose
+        /// `Flags2` has 0x0010 (@0x4f0cd-0x4f0de): a looped ambient
+        /// sound. Otherwise it plays over whatever is playing.
+        until_stopped: bool,
+    },
+    /// The spaceport closed: its ambient sound stops, as `_DoPortDialog`
+    /// halts `_planetSnd` as the port closes (`ST_HaltSound`
+    /// @0x601d2-0x601eb), whatever closed it.
+    PortAmbientHalted(SoundId),
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from
@@ -67,8 +155,16 @@ pub enum Sound {
     Combat(CombatSound),
 }
 
-/// The loudest volume level; levels run from 0 (silent) to this.
-pub const MAX_LEVEL: u8 = 7;
+/// The loudest volume level; levels run from 0 (silent) to this. The
+/// original's Preferences stepper (`Keys.nib`) has `NSMaxValue` 8, and
+/// `-[EVPrefsDialogController setStatusForVolume:]` @0xd0059 labels all
+/// nine levels, 0 "No Bloody Noise" to 8 "Hoo Boy!".
+pub const MAX_LEVEL: u8 = 8;
+
+/// The level a player starts at, the original's "Normal": `_LoadPrefs`
+/// defaults a missing `Volume` to 4 (@0xcef6c-0xcef8f), as does the
+/// stepper's `NSValue` in `Keys.nib`.
+pub const DEFAULT_LEVEL: u8 = 4;
 
 /// The player's sound preferences, as the Preferences dialog shows them:
 /// sound effects and music on or off, and each one's volume level, 0
@@ -88,7 +184,7 @@ pub struct SoundPrefs {
 impl SoundPrefs {
     /// Whether the effects are quiet enough for the Red Alert to blink its
     /// icon: off, or at level 1 or less. The original's one `Volume` level
-    /// (0-7) blinks it at 1 or less (`_HandlePlayer` @0x68d04-0x68d15);
+    /// (0-8) blinks it at 1 or less (`_HandlePlayer` @0x68d04-0x68d15);
     /// here sound off stands for its 0.
     #[must_use]
     pub fn alert_quiet(self) -> bool {
@@ -97,13 +193,13 @@ impl SoundPrefs {
 }
 
 impl Default for SoundPrefs {
-    /// Sound and music on, both at the loudest level.
+    /// Sound and music on, both at [`DEFAULT_LEVEL`].
     fn default() -> Self {
         Self {
             sound: true,
             music: true,
-            effects_level: MAX_LEVEL,
-            music_level: MAX_LEVEL,
+            effects_level: DEFAULT_LEVEL,
+            music_level: DEFAULT_LEVEL,
         }
     }
 }
@@ -150,15 +246,16 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_everything_on_at_the_loudest_level() {
-        assert_eq!(MAX_LEVEL, 7);
+    fn the_default_is_everything_on_at_the_normal_level() {
+        assert_eq!(MAX_LEVEL, 8);
+        assert_eq!(DEFAULT_LEVEL, 4);
         assert_eq!(
             SoundPrefs::default(),
             SoundPrefs {
                 sound: true,
                 music: true,
-                effects_level: 7,
-                music_level: 7,
+                effects_level: 4,
+                music_level: 4,
             }
         );
     }

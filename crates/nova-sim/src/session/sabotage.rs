@@ -144,7 +144,7 @@ impl Session {
             self.jump = None;
         }
         let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
-        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
+        self.halt_sounds(&WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
         self.messages.push(if outfit.is_none() && self.leet {
             SimMessage::BombSetUp
