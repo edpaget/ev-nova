@@ -1794,7 +1794,7 @@ impl Combat {
             target.strength -= damage;
             self.stellar_strikes.push(StellarStrike {
                 stellar: target.stellar,
-                by: shot.firer,
+                by: shot.attacker(),
                 damage,
                 destroyed: stellar::shot_down(target.strength),
             });
@@ -1974,6 +1974,14 @@ impl Combat {
     #[must_use]
     pub fn shots(&self) -> &[Shot] {
         &self.shots
+    }
+
+    /// The shots in flight, to change as nothing in play does at will:
+    /// for a session test that needs a shot in a state only a rare draw
+    /// reaches.
+    #[cfg(test)]
+    pub(crate) fn shots_mut(&mut self) -> &mut [Shot] {
+        &mut self.shots
     }
 
     /// The beams being fired.
@@ -6726,7 +6734,7 @@ mod tests {
     fn strike(damage: i64, destroyed: bool) -> StellarStrike {
         StellarStrike {
             stellar: StellarId(128),
-            by: A,
+            by: Some(A),
             damage,
             destroyed,
         }
@@ -6762,6 +6770,33 @@ mod tests {
             "{seen:?}"
         );
         assert_eq!(Some(seen[0].1), Explosion::decode(2));
+    }
+
+    #[test]
+    fn a_shot_turned_on_its_firer_strikes_a_stellar_for_no_one() {
+        let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(planet_gun())];
+        tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
+        for shot in &mut combat.shots {
+            shot.source = Source::Other;
+            shot.target = Some(A);
+            shot.aimed_at = Some(A);
+        }
+        ships[0] = Ship::at(1, 0.0, 1000.0);
+        let mut strikes = Vec::new();
+        for _ in 0..6 {
+            tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
+            strikes.extend(combat.take_stellar_strikes());
+        }
+        assert_eq!(
+            strikes,
+            [StellarStrike {
+                by: None,
+                ..strike(14, false)
+            }],
+            "its source slot is no ship's (@0x374e1)"
+        );
     }
 
     #[test]
@@ -6942,7 +6977,7 @@ mod tests {
             [
                 strike(14, false),
                 StellarStrike {
-                    by: B,
+                    by: Some(B),
                     ..strike(14, true)
                 }
             ],

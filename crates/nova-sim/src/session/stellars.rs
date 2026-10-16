@@ -317,13 +317,14 @@ impl Session {
     /// its centre, destroyed with the countdown `Y` gives it, then its
     /// `OnDestroy`, drawing on `chance`, and destroyed with that countdown
     /// again whatever the script did. The player, and no other ship, is
-    /// convicted ten times of killing a ship of its government, as `law`
+    /// convicted, and only by a shot whose source is its ship (`by` none
+    /// for one turned on its firer, @0x374e1-0x374e7), ten times of killing a ship of its government, as `law`
     /// says, and loses the ranks that killing reaches (see
     /// [`rank`](crate::rank)'s **Crimes**).
     pub(super) fn shoot_down(
         &mut self,
         stellar: StellarId,
-        by: ShipRef,
+        by: Option<ShipRef>,
         law: &dyn LegalCode,
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -341,7 +342,7 @@ impl Session {
         self.run_on_destroy(stellar, &life.on_destroy, chance);
         self.set_stellar_state(stellar, Some(countdown));
         self.strength.remove(&stellar);
-        if by == ShipRef::Player {
+        if by == Some(ShipRef::Player) {
             let changes = law.penalties(Crime::Kill, site.govt, &self.govts);
             for _ in 0..STELLAR_KILLINGS {
                 legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
@@ -1063,6 +1064,7 @@ mod tests {
         GovtId, GovtRecord, HullRecord, Penalties, StockWeapon, WeaponId, WeaponRecord,
     };
     use crate::combat::armament::{MOD_WEAPON, Trigger};
+    use crate::combat::projectile::Source;
     use crate::combat::weapon::{Explosion, PLANET_TYPE};
     use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::geometry::Vec2;
@@ -1307,7 +1309,7 @@ mod tests {
         let fine = Fine::default();
         session.shoot_down(
             StellarId(128),
-            ShipRef::Npc(NpcId(1)),
+            Some(ShipRef::Npc(NpcId(1))),
             &fine,
             &mut NeverFires,
         );
@@ -1360,12 +1362,61 @@ mod tests {
         let mut session = ranked(shooting([life(128, 2)]));
         session.shoot_down(
             StellarId(128),
-            ShipRef::Npc(NpcId(1)),
+            Some(ShipRef::Npc(NpcId(1))),
             &NovaLaw::default(),
             &mut NeverFires,
         );
         assert_eq!(destroyed(&session, 128), Some(left(2)));
         assert_eq!(ranks_held(&session), [200, 201]);
+    }
+
+    /// [`ranked`]'s session, 128 taken to none by two shots, then shot
+    /// down by a third fired from 200 pixels left of it, which a jamming
+    /// draw has turned on its firer (`Source::Other`, aimed at the player)
+    /// in flight when `turned`. The player moves out of its way, as the
+    /// shot flies straight.
+    fn shot_down_from_afar(turned: bool) -> Session {
+        let mut session = ranked(shooting([life(128, 2)]));
+        let fine = Fine::default();
+        fire_by(&mut session, 2, &fine);
+        session.player = crate::flight::ShipState {
+            position: Vec2::new(30.0 - 200.0, -40.0),
+            velocity: Vec2::ZERO,
+            heading: 90.0,
+        };
+        fire_by(&mut session, 1, &fine);
+        assert_eq!(destroyed(&session, 128), None, "still in flight");
+        if turned {
+            for shot in session.combat.shots_mut() {
+                shot.source = Source::Other;
+                shot.target = Some(ShipRef::Player);
+                shot.aimed_at = Some(ShipRef::Player);
+            }
+        }
+        session.player.position.y += 1000.0;
+        for _ in 0..20 {
+            let rules = Rules {
+                law: &fine,
+                ..Rules::default()
+            };
+            session.tick_combat(rules, &mut NeverFires);
+        }
+        assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
+        session
+    }
+
+    #[test]
+    fn a_players_shot_turned_on_its_firer_shooting_a_stellar_down_convicts_no_one() {
+        let kept = shot_down_from_afar(false);
+        assert_eq!(kept.pilot().legal_record(GovtId(140)), -30);
+        assert_eq!(ranks_held(&kept), [201]);
+        let turned = shot_down_from_afar(true);
+        assert_eq!(
+            turned.pilot().legal_record(GovtId(140)),
+            0,
+            "its source is no ship (`_CheckShotProximities` @0x374e1-0x374e7)"
+        );
+        assert_eq!(ranks_held(&turned), [200, 201]);
     }
 
     #[test]

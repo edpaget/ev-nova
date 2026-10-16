@@ -36,8 +36,11 @@ pub struct StellarTarget {
 pub struct StellarStrike {
     /// The stellar hit.
     pub stellar: StellarId,
-    /// The ship whose shot it was.
-    pub by: ShipRef,
+    /// The ship whose shot it was ([`Shot::attacker`]): none for a shot
+    /// no ship launched, or one turned on its firer, whose source slot
+    /// `_CheckShotProximities` reads as no ship and convicts no one for
+    /// (@0x374e1-0x374e7).
+    pub by: Option<ShipRef>,
     /// The strength it took.
     pub damage: i64,
     /// Whether it shot the stellar down: its strength is below 0 now.
