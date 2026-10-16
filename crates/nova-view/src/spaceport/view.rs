@@ -5873,6 +5873,65 @@ mod tests {
         assert!(!offer_drawn(&view), "hidden for its RefuseText (@0xa2e8e)");
     }
 
+    /// [`venues`] playing movies on `player`, landed on and `venue`
+    /// opened, offering [`offered`], refused.
+    fn refused_over(venue: i16, player: &Rc<MockMoviePlayer>) -> SpaceportView {
+        let mut view = venues().with_movies(movies_of(player));
+        assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+        click_item(&mut view, venue_item(venue));
+        if view.take_outfitter_opened() {
+            view.set_opened_outfitter(tanks(1));
+        }
+        view.tick(FIRST_OFFER_DELAY);
+        assert_eq!(view.take_offer_request(), Some(venue));
+        view.open_offer(offered());
+        assert!(offer_drawn(&view), "{venue}: offered");
+        view.input(&key(Key::Char('n')));
+        assert_eq!(
+            view.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Refuse)),
+            "{venue}"
+        );
+        view
+    }
+
+    #[test]
+    fn each_venues_refused_offer_stays_drawn_under_its_after_movie_or_hides_for_a_refuse_text() {
+        for venue in OFFER_VENUES {
+            let player = MockMoviePlayer::playing((160, 120), 2);
+            let mut view = refused_over(venue, &player);
+            view.show_mission_texts([queued_movie("Offer.mov", 0x0001)]);
+            view.tick(ms(100));
+            assert_eq!(started(&player), ["Offer.mov"], "{venue}");
+            assert!(
+                offer_drawn(&view),
+                "{venue}: over the venue, not hidden (@0xa2e70-0xa2e78)"
+            );
+            for _ in 0..3 {
+                view.tick(ms(100));
+            }
+            assert!(!view.mission_dialogs_open(), "{venue}: the movie closed");
+            assert!(
+                !offer_drawn(&view),
+                "{venue}: disposed once the movie has closed (@0xa361e)"
+            );
+
+            let player = MockMoviePlayer::playing((160, 120), 2);
+            let mut view = refused_over(venue, &player);
+            assert!(offer_drawn(&view), "{venue}: drawn until released");
+            view.release_answered_offer();
+            assert!(
+                !offer_drawn(&view),
+                "{venue}: hidden for its RefuseText (@0xa2e8e)"
+            );
+            view.show_mission_texts(vec![MissionText {
+                movie: None,
+                ..filmed_comp()
+            }]);
+            assert!(!offer_drawn(&view), "{venue}: not under the text");
+        }
+    }
+
     #[test]
     fn an_accepted_offer_closes_at_once() {
         let mut view = missioned();
