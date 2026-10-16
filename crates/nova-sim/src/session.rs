@@ -414,7 +414,7 @@ pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use mission_screens::{
     ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionInfoPress,
-    MissionShown, MissionText, MissionTextKind,
+    MissionShown, MissionText, MissionTextKind, TextBar,
 };
 #[cfg(any(test, feature = "fixture"))]
 pub(crate) use missions::StopRefusal;
@@ -1154,10 +1154,10 @@ pub struct Session {
     /// How many mission texts have been queued, never reset (see the
     /// `mission_screens` module); never saved.
     texts_queued: u64,
-    /// The nav mode as the last text queued since they were last taken
-    /// was queued: what its dialog's redraw shows (see the
-    /// `mission_screens` module); never saved.
-    text_nav: Option<NavMode>,
+    /// The status bar as each text queued since they were last taken was
+    /// queued: what its caller's redraw shows as it closes (see the
+    /// `mission_screens` module's [`TextBar`]); never saved.
+    text_bars: Vec<TextBar>,
     /// The `C`, `E` and `H` run while docked since the last outfit order
     /// or ship purchase began, in order (see the `ship_change` module's
     /// [`InterfaceLoad`]); never saved.
@@ -1546,7 +1546,7 @@ impl Session {
             avail_cache: BTreeMap::new(),
             leet: false,
             texts_queued: 0,
-            text_nav: None,
+            text_bars: Vec::new(),
             interface_loads: Vec::new(),
             takeoff_nav: None,
             suppressed: BTreeSet::new(),
@@ -13640,6 +13640,127 @@ pub(super) mod tests {
             1,
             "a refusal clears nothing"
         );
+    }
+
+    // The docked loads ordered against the mission texts.
+
+    /// [`shipbuying`] with mission 130 at the computer, running
+    /// `on_accept`, `on_refuse` and `on_abort`, with a `BriefText` and a
+    /// `RefuseText`; docked and settled, so it is offered.
+    fn missioned(on_accept: &str, on_refuse: &str, on_abort: &str) -> Session {
+        let mut catalog = shipbuying();
+        catalog.missions = vec![MissionRecord {
+            on_accept: crate::control::Script::parse(on_accept),
+            on_refuse: crate::control::Script::parse(on_refuse),
+            on_abort: crate::control::Script::parse(on_abort),
+            ..crate::testkit::mission(130)
+        }];
+        catalog.mission_texts = vec![MissionTexts {
+            brief: Some("Go.".to_owned()),
+            refuse: Some("No.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
+        let mut session = outfitted(&catalog);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(
+            session
+                .mission_offers(crate::mission::Venue::Computer)
+                .len(),
+            1
+        );
+        session
+    }
+
+    #[test]
+    fn a_docked_load_notes_the_texts_queued_before_it() {
+        let mut session = missioned("H129", "", "");
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let loads = session.take_interface_loads();
+        let bars = session.text_bars().to_vec();
+        assert_eq!((loads.len(), bars.len()), (1, 1));
+        assert!(
+            loads[0].texts < bars[0].texts,
+            "OnAccept's H before the BriefText: {loads:?}, {bars:?}"
+        );
+        let mut session = missioned("", "H129", "");
+        session
+            .refuse_mission(MissionId(130), &mut NeverFires)
+            .expect("refused");
+        let loads = session.take_interface_loads();
+        let bars = session.text_bars().to_vec();
+        assert_eq!((loads.len(), bars.len()), (1, 1));
+        assert_eq!(
+            loads[0].texts, bars[0].texts,
+            "OnRefuse's H after the RefuseText, before any other"
+        );
+    }
+
+    #[test]
+    fn each_text_notes_the_bar_as_it_was_queued() {
+        let mut session = missioned("M131 G302", "", "");
+        let (nav, before) = (session.nav_mode(), session.reserves());
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let bars = session.text_bars().to_vec();
+        assert_eq!(bars.len(), 1);
+        assert_ne!(bars[0].nav, nav);
+        assert_eq!(bars[0].nav, session.nav_mode(), "M131's");
+        assert_eq!(
+            bars[0].reserves.shield.max,
+            before.shield.max + 50.0,
+            "G302's"
+        );
+        assert_eq!(session.text_nav(), Some(bars[0].nav), "the last text's nav");
+        assert_eq!(session.take_mission_texts().len(), 1);
+        assert_eq!(session.text_bars(), [], "taken with the texts");
+        assert_eq!(session.text_nav(), None);
+    }
+
+    #[test]
+    fn a_mission_accept_refuse_or_abort_clears_the_loads_before_it() {
+        type Step = fn(&mut Session);
+        let steps: [(&str, Step); 4] = [
+            ("an accept", |session| {
+                session
+                    .accept_mission(MissionId(130), &mut NeverFires)
+                    .expect("accepted");
+            }),
+            ("a refusal", |session| {
+                session
+                    .refuse_mission(MissionId(130), &mut NeverFires)
+                    .expect("refused");
+            }),
+            ("an abort", |session| {
+                session
+                    .accept_mission(MissionId(130), &mut NeverFires)
+                    .expect("accepted");
+                run_expr(session, "H128");
+                session.abort_mission(0, &mut NeverFires).expect("aborted");
+            }),
+            ("an offer asked for at a venue", |session| {
+                assert_eq!(
+                    session.next_offer(crate::mission::screens::BAR, &mut NeverFires),
+                    None
+                );
+            }),
+        ];
+        for (what, step) in steps {
+            let mut session = missioned("", "", "");
+            run_expr(&mut session, "H129");
+            step(&mut session);
+            assert_eq!(session.take_interface_loads(), [], "{what}");
+        }
+        let mut session = missioned("H128", "", "H129");
+        assert_eq!(
+            session.accept_mission(MissionId(130), &mut NeverFires),
+            Ok(0)
+        );
+        assert_eq!(session.take_interface_loads().len(), 1, "its own kept");
+        session.abort_mission(0, &mut NeverFires).expect("aborted");
+        assert_eq!(session.take_interface_loads().len(), 1, "OnAbort's kept");
     }
 
     #[test]

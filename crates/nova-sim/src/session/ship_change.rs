@@ -187,7 +187,9 @@ const ARMOR_BUMP: f32 = 1.0;
 /// loads it and redraws the whole bar (`_RedrawStatus(1)`
 /// @0x739b6-0x739bd), drawing `nav` and `reserves` as they stood at the
 /// operator. Noted by `Session::change_ship`, taken by
-/// [`Session::take_interface_loads`].
+/// [`Session::take_interface_loads`], with how many mission texts had been
+/// queued by then, so that a view can order the redraws against the texts
+/// a script queues around them ([`TextBar`](super::TextBar)).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InterfaceLoad {
     /// The government whose `Interface` the operator's load asks for.
@@ -197,6 +199,11 @@ pub struct InterfaceLoad {
     /// The shield, armour and fuel at the operator, after its armour
     /// bump.
     pub reserves: Reserves,
+    /// How many mission texts had been queued at the operator
+    /// ([`Session::texts_queued`]): it ran after each text whose
+    /// [`TextBar::texts`](super::TextBar::texts) is at most this, and
+    /// before the others.
+    pub texts: u64,
 }
 
 /// The disputed rules of the ship-change set operators that the session
@@ -432,19 +439,20 @@ impl Session {
         };
         self.become_class(&record, change, |_| {});
         self.bump_armor();
-        // `_LoadIntfResource` (@0x156c7), as the docked bar sees it: only
-        // the outfitter and the shipyard take these, and both are docked.
+        // `_LoadIntfResource` (@0x156c7), as the docked bar sees it.
         if self.landed.is_some() {
             self.interface_loads.push(InterfaceLoad {
                 government: self.interface_government(),
                 nav: self.nav_mode(),
                 reserves: self.reserves(),
+                texts: self.texts_queued,
             });
         }
     }
 
-    /// The `C`, `E` and `H` run while docked since the last outfit order
-    /// or ship purchase began, in order, each as the status bar's
+    /// The `C`, `E` and `H` run while docked since the last outfit order,
+    /// ship purchase, mission accept, refusal or abort, or offer asked for
+    /// at a venue began, in order, each as the status bar's
     /// `_LoadIntfResource` saw it at the operator ([`InterfaceLoad`]);
     /// taking them empties the list. An order or a purchase that is
     /// refused before it begins clears nothing.

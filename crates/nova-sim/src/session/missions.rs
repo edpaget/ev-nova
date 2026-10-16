@@ -466,6 +466,8 @@ impl Session {
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Result<u8, AcceptError> {
+        // A new run of docked scripts (see [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
         let venue = self.offer_of(mission).map(|offer| offer.venue);
         let accepted = self.in_offer_dialog(|session| session.accept_offered(mission, chance));
         if let Some(venue) = venue {
@@ -528,6 +530,7 @@ impl Session {
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Result<(), NotOffered> {
+        self.interface_loads.clear();
         let offer = self.offer_of(mission).ok_or(NotOffered)?;
         let at = self.outside_position(&offer);
         let record = self.lifecycle_record(mission);
@@ -593,6 +596,7 @@ impl Session {
     /// [`AbortError::NotActive`] for a free slot; [`AbortError::Refused`]
     /// when a check refuses, and then nothing runs.
     pub fn abort_mission(&mut self, slot: u8, chance: &mut dyn Chance) -> Result<(), AbortError> {
+        self.interface_loads.clear();
         let mission = self
             .pilot
             .missions

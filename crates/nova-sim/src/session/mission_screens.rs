@@ -20,6 +20,11 @@
 //!   `ShipDoneText` as its ship goals are met (see the `mission_ships`
 //!   module), and an accept refused for want of room for its cargo; and,
 //!   in their places among them, an offer's movies ([`MissionShown`]).
+//!   Each text notes the status bar as it is queued ([`TextBar`],
+//!   [`Session::text_bars`]), and each docked `C`, `E` or `H` how many
+//!   texts came before it ([`InterfaceLoad::texts`](super::InterfaceLoad::texts)),
+//!   so the view can redraw the bar as each text's caller does as the
+//!   text closes.
 //!
 //! None of it is saved. The next outside offer the original drops after
 //! an accept is rdm:phase/missions/phase-15-accept-drops-next-offer.
@@ -34,6 +39,7 @@ use crate::mission::{
 };
 use crate::navigation::NavMode;
 use crate::player_fate::PlayerCommand;
+use crate::reserves::Reserves;
 use crate::sound::SimSound;
 
 /// One offer the mission computer lists.
@@ -171,6 +177,24 @@ pub struct MissionText {
     pub movie: Option<DescMovie>,
 }
 
+/// The status bar as a mission text noted it as it was queued: what the
+/// whole-bar redraw its caller makes as it closes draws (`_RefreshSAT`
+/// right after `_ShowTextDialog`, e.g. @0xa1f13, @0xa0491, @0xa03d2,
+/// @0xa2f09), as the text is modal and nothing runs under it. Noted for
+/// each text, not for an offer's movie ([`Session::text_bars`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextBar {
+    /// Its place among the texts: [`Session::texts_queued`] once it was
+    /// queued. A [`InterfaceLoad`](super::InterfaceLoad) whose
+    /// [`texts`](super::InterfaceLoad::texts) is below it ran before the
+    /// text was queued.
+    pub texts: u64,
+    /// The nav mode and selection as it was queued.
+    pub nav: NavMode,
+    /// The shield, armour and fuel as it was queued.
+    pub reserves: Reserves,
+}
+
 /// One thing the session queues to show, in order
 /// ([`Session::take_mission_texts`]): a mission text, or an offer's movie,
 /// which `_OfferOneMission` plays outside `_ShowTextDialog`, so in its own
@@ -280,10 +304,10 @@ impl Session {
     }
 
     /// The mission texts and offer movies to show since they were last
-    /// taken, in the order they came. Taking them lets go of the nav
-    /// noted with them ([`Session::text_nav`]).
+    /// taken, in the order they came. Taking them lets go of the bars
+    /// noted with them ([`Session::text_bars`]).
     pub fn take_mission_texts(&mut self) -> Vec<MissionShown> {
-        self.text_nav = None;
+        self.text_bars.clear();
         std::mem::take(&mut self.shown_texts)
     }
 
@@ -323,6 +347,26 @@ impl Session {
         }
     }
 
+    /// Whether `mission`'s offer on the visit under way is answered in the
+    /// offer dialog with a refuse button: an outside offer that can be
+    /// refused (`Flags` 0x0004 clear; `_OfferOneMission`'s `0xdef8c`,
+    /// @0xa21e2-0xa21f7). That dialog hides and redraws the whole bar
+    /// before its accept (@0xa2df8) and before a refusal's `RefuseText`
+    /// (@0xa2e93). The one-button dialog redraws before neither
+    /// (@0xa2f52-0xa2fba), and the mission computer has no such redraw
+    /// (@0xa3b37-0xa3bb4). False for a mission not offered, and in flight,
+    /// where a ship's offer is answered over flight.
+    #[must_use]
+    pub fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
+        self.landed.is_some()
+            && self
+                .offer_of(mission)
+                .is_some_and(|offer| offer.venue != Venue::Computer)
+            && self
+                .mission_record(mission)
+                .is_some_and(|record| record.flags & UNREFUSABLE == 0)
+    }
+
     /// How many mission texts have been queued since the session started,
     /// never reset: a view that notes it at each of its redraws can tell
     /// whether the last text was queued after its last redraw.
@@ -331,15 +375,23 @@ impl Session {
         self.texts_queued
     }
 
+    /// The status bar as each mission text since they were last taken
+    /// was queued, in order, one for each text ([`TextBar`]): what each
+    /// text's caller redraws the whole bar with as it closes, where a
+    /// script run after it, such as an `OnSuccess` after the `CompText`
+    /// (@0xa048c, @0xa0491, then @0xa04f8), has written the bar since.
+    /// Taking the texts lets go of them.
+    #[must_use]
+    pub fn text_bars(&self) -> &[TextBar] {
+        &self.text_bars
+    }
+
     /// The nav mode ([`Session::nav_mode`]) as the last text since they
-    /// were last taken was queued, `None` with none: what that text's
-    /// dialog redraws the nav area with as it closes (`_ShowTextDialog`'s
-    /// `_RefreshSAT`), where a script run after it, such as an `OnSuccess`
-    /// after the `CompText` (@0xa048c, @0xa0491, then @0xa04f8), has
-    /// written the nav since.
+    /// were last taken was queued, `None` with none: the last of
+    /// [`Session::text_bars`]'s.
     #[must_use]
     pub fn text_nav(&self) -> Option<NavMode> {
-        self.text_nav
+        self.text_bars.last().map(|bar| bar.nav)
     }
 
     /// Queues `mission`'s `kind` text to show, when it has one, taken in
@@ -390,10 +442,14 @@ impl Session {
     }
 
     /// Queues `text` to show, counting it ([`Session::texts_queued`]) and
-    /// noting the nav mode as it is now ([`Session::text_nav`]).
+    /// noting the bar as it is now ([`Session::text_bars`]).
     fn queue_text(&mut self, text: MissionText) {
         self.texts_queued += 1;
-        self.text_nav = Some(self.nav_mode());
+        self.text_bars.push(TextBar {
+            texts: self.texts_queued,
+            nav: self.nav_mode(),
+            reserves: self.reserves(),
+        });
         self.shown_texts.push(MissionShown::Text(text));
     }
 
@@ -538,6 +594,8 @@ impl Session {
     /// found ([`RuleKey::OfferShift`](crate::RuleKey::OfferShift)), so an
     /// accept from the dialog drops the next outside offer too.
     pub fn next_offer(&mut self, loc: i16, chance: &mut dyn Chance) -> Option<VenueOffer> {
+        // A new run of docked scripts (see [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
         self.enter_offer_venue(loc);
         let candidates: Vec<Offer> = self
             .mission_offers(Venue::Outside)
@@ -2274,6 +2332,37 @@ mod tests {
             }
         );
         assert!(!prompt.can_refuse());
+    }
+
+    #[test]
+    fn only_an_outside_offer_that_can_be_refused_is_answered_in_the_two_button_dialog() {
+        let catalog = screens(
+            vec![
+                at_the_bar(141),
+                MissionRecord {
+                    flags: UNREFUSABLE,
+                    ..at_the_bar(142)
+                },
+                to_mars(143),
+            ],
+            vec![
+                offering(141, "Come along.", "", ""),
+                offering(142, "Come along.", "", ""),
+            ],
+        );
+        let mut session = docked(&catalog);
+        let answered = |session: &Session| {
+            [141, 142, 143, 144].map(|id| session.refusable_offer_dialog(MissionId(id)))
+        };
+        assert_eq!(
+            answered(&session),
+            [true, false, false, false],
+            "at the bar, then unrefusable, at the computer and not offered"
+        );
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(answered(&session), [false; 4], "in flight");
     }
 
     #[test]

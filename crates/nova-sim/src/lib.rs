@@ -473,7 +473,7 @@ pub use session::{
     HookRules, InfoRow, InterfaceLoad, LandPress, MissionComputer, MissionInfo, MissionInfoPress,
     MissionShown, MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote,
     RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules,
-    StellarPick, TAKEOFF_GRACE_TICKS, VenueOffer,
+    StellarPick, TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{
