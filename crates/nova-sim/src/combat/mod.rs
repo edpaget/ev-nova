@@ -1256,7 +1256,8 @@ impl Combat {
     }
 
     /// Has a player's weapon of negative `Recoil` push it as `source`
-    /// says (see `Combat::fire`): by default, the engine's, not at all.
+    /// says ([`RuleKey::PlayerForwardRecoil`](crate::RuleKey::PlayerForwardRecoil),
+    /// read in `Combat::fire_player`): by default, the engine's, not at all.
     pub fn set_player_forward_recoil(&mut self, source: RuleSource) {
         self.forward_recoil = source;
     }
