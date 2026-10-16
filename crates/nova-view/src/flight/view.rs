@@ -14439,8 +14439,11 @@ mod tests {
     }
 
     /// [`armed`] with blasters of 5 energy damage and hypergate 141 at
-    /// (0, -120), straight ahead of the player, `with` changes made.
-    fn gate_120_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
+    /// (0, -110), straight ahead of the player, `with` changes made. A shot
+    /// hits on the pass after the one it moves into its target on, and at
+    /// this distance that move falls on a frame's advance pass, so the hit
+    /// falls on its second.
+    fn gate_110_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
         let mut catalog = armed(1, &[BLASTER]);
         for weapon in &mut catalog.weapons {
             weapon.energy_dmg = 5;
@@ -14448,7 +14451,7 @@ mod tests {
         catalog.sites.push(LandingSite {
             flags2: nova_sim::gate::HYPERGATE,
             exit_angle: 90,
-            ..site(141, (0.0, -120.0), StellarFlags::CAN_LAND)
+            ..site(141, (0.0, -110.0), StellarFlags::CAN_LAND)
         });
         with(&mut catalog);
         catalog
@@ -14502,7 +14505,7 @@ mod tests {
         // with `_DamageShip`'s reaction, so the hit is answered there,
         // before the next frame is drawn. Setup brings nobody; then an
         // arrival comes out of the gate, the third of the stellars.
-        let view = hit_on_the_second_pass(gate_120_ahead(|_| ()), &[0, 0, 6, 6, 0, 0, 0, 2]);
+        let view = hit_on_the_second_pass(gate_110_ahead(|_| ()), &[0, 0, 6, 6, 0, 0, 0, 2]);
         let mode = view.session().expect("flying").npcs()[0].mode;
         assert!(matches!(mode, Mode::HeldAtGate { .. }), "{mode:?}");
         assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE], "seen");
@@ -14513,7 +14516,7 @@ mod tests {
         // `_DamageShip`'s reaction on the second pass turns it on the
         // player, and `_AIMakeShipAttackPlayer` says its quote there
         // (`_ShowPersonHailQuote` @0x89ce1), before the next frame.
-        let catalog = gate_120_ahead(|catalog| {
+        let catalog = gate_110_ahead(|catalog| {
             let ace = peopled();
             catalog.persons = ace.persons;
             catalog.persons[0].link_syst = -1;
