@@ -4,6 +4,8 @@
 
 use std::rc::Rc;
 
+use nova_sim::DescMovie;
+
 use super::button::ButtonStyle;
 use super::dialog::DialogTemplate;
 
@@ -29,6 +31,10 @@ pub trait DescriptionGraphics {
     /// `dësc` `id`'s `Graphic`, the `PICT` shown with it; none when it is
     /// -1, or the `dësc` is missing or does not decode.
     fn description_graphic(&self, id: i16) -> Option<i16>;
+    /// The movie `dësc` `id`'s `MovieFile` names, played as its `Flags`
+    /// say ([`DescMovie::from_desc`]); none when it names none, or the
+    /// `dësc` is missing or does not decode.
+    fn description_movie(&self, id: i16) -> Option<DescMovie>;
 }
 
 /// Borrowed dialog resources are dialog resources.
@@ -74,12 +80,20 @@ impl<T: DescriptionGraphics + ?Sized> DescriptionGraphics for &T {
     fn description_graphic(&self, id: i16) -> Option<i16> {
         (**self).description_graphic(id)
     }
+
+    fn description_movie(&self, id: i16) -> Option<DescMovie> {
+        (**self).description_movie(id)
+    }
 }
 
 /// Shared description graphics are description graphics.
 impl<T: DescriptionGraphics + ?Sized> DescriptionGraphics for Rc<T> {
     fn description_graphic(&self, id: i16) -> Option<i16> {
         (**self).description_graphic(id)
+    }
+
+    fn description_movie(&self, id: i16) -> Option<DescMovie> {
+        (**self).description_movie(id)
     }
 }
 
@@ -128,6 +142,14 @@ mod tests {
         fn description_graphic(&self, id: i16) -> Option<i16> {
             (id > 0).then_some(id + 1)
         }
+
+        fn description_movie(&self, id: i16) -> Option<DescMovie> {
+            DescMovie::from_desc(&format!("{id}.mov"), 0x0001)
+        }
+    }
+
+    fn movie(graphics: impl DescriptionGraphics, id: i16) -> Option<String> {
+        graphics.description_movie(id).map(|movie| movie.file)
     }
 
     fn graphic(graphics: impl DescriptionGraphics, id: i16) -> Option<i16> {
@@ -150,6 +172,12 @@ mod tests {
         assert_eq!(graphic(&Fake, 13000), Some(13001));
         assert_eq!(graphic(Rc::new(Fake), 14000), Some(14001));
         assert_eq!(graphic(Rc::new(Fake), -1), None);
+    }
+
+    #[test]
+    fn borrowed_and_shared_graphics_read_movies() {
+        assert_eq!(movie(&Fake, 13), Some("13.mov".to_owned()));
+        assert_eq!(movie(Rc::new(Fake), 14), Some("14.mov".to_owned()));
     }
 
     #[test]

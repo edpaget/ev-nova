@@ -640,6 +640,11 @@ mod tests {
                 .find(|(desc, _)| *desc == id)
                 .map(|(_, graphic)| *graphic)
         }
+
+        /// Names no movie: these screens never play one.
+        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+            None
+        }
     }
 
     fn art() -> Rc<FakeArt> {

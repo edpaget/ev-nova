@@ -75,6 +75,7 @@ pub mod geometry;
 pub mod image;
 pub mod input;
 pub mod menu;
+pub mod movie;
 pub mod navigator;
 pub mod preferences;
 pub mod screen;

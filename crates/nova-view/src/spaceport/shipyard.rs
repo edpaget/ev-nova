@@ -126,8 +126,8 @@ use std::time::Duration;
 
 use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_sim::{
-    MissionId, OfferPrompt, Rating, RuleSource, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard,
-    StockLine,
+    DescMovie, MissionId, OfferPrompt, Rating, RuleSource, ShipId, ShipNaming, ShipRow, ShipSpecs,
+    Shipyard, StockLine,
 };
 
 use super::catalog::SpaceportCatalog;
@@ -146,6 +146,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
+use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
@@ -1099,6 +1100,19 @@ impl ShipyardScreen {
         self.offering.as_mut()?.take_choice()
     }
 
+    /// The answered offer's after-movie, once: whoever acts on the choice
+    /// plays it after the texts the answer shows.
+    pub fn take_offer_after_movie(&mut self) -> Option<DescMovie> {
+        self.offering.as_mut()?.take_after_movie()
+    }
+
+    /// Its offers play their movies as `movies` says.
+    pub fn set_offer_movies(&mut self, movies: Movies) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_movies(movies);
+        }
+    }
+
     /// Asks for the next offer after `gap`.
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
@@ -1731,6 +1745,11 @@ mod tests {
                 .iter()
                 .find(|(desc, _)| *desc == id)
                 .map(|(_, graphic)| *graphic)
+        }
+
+        /// Names no movie: these screens never play one.
+        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+            None
         }
     }
 

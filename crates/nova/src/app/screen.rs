@@ -271,7 +271,7 @@ use nova_view::text::TextMetrics;
 use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
-use nova_view::ui::mission_dialogs::MissionDialogs;
+use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
 use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog};
 use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG};
@@ -1712,7 +1712,11 @@ impl AppScreen {
         let mut texts = Vec::new();
         for id in flight.sabotage_death_descs() {
             match flight.load_description(id) {
-                Ok(text) => texts.push((text, self.data.description_graphic(id))),
+                Ok(text) => texts.push(DescShown {
+                    text,
+                    graphic: self.data.description_graphic(id),
+                    movie: None,
+                }),
                 Err(reason) => self.warnings.push(format!(
                     "nova: cannot show the sabotage dësc {id}: {reason}"
                 )),
@@ -1739,7 +1743,11 @@ impl AppScreen {
         match loaded {
             Ok(text) => {
                 let graphic = self.data.description_graphic(id);
-                self.show_over_flight(vec![(text, graphic)]);
+                self.show_over_flight(vec![DescShown {
+                    text,
+                    graphic,
+                    movie: None,
+                }]);
             }
             Err(reason) => self
                 .warnings
@@ -1959,7 +1967,11 @@ impl AppScreen {
         self.show_over_flight(
             texts
                 .into_iter()
-                .map(|text| (text.text, text.graphic))
+                .map(|text| DescShown {
+                    text: text.text,
+                    graphic: text.graphic,
+                    movie: text.movie,
+                })
                 .collect(),
         );
     }
@@ -1969,7 +1981,7 @@ impl AppScreen {
     /// first cancelling flight's pointer gesture and letting go of its
     /// keys (their releases will go to the texts), as any dialog over
     /// flight does. Without dialogs they are dropped.
-    fn show_over_flight(&mut self, texts: Vec<(String, Option<i16>)>) {
+    fn show_over_flight(&mut self, texts: Vec<DescShown>) {
         if self.flight_missions().is_none() {
             return;
         }

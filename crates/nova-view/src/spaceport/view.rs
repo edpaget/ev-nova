@@ -106,10 +106,10 @@ use std::time::Duration;
 
 use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
 use nova_sim::{
-    ComputerRefusal, ComputerRow, HireList, Market, MissionComputer, MissionId, MissionInfo,
-    MissionText, News, OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo, RechargeRefusal,
-    Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel,
-    services,
+    ComputerRefusal, ComputerRow, DescMovie, HireList, Market, MissionComputer, MissionId,
+    MissionInfo, MissionText, News, OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo,
+    RechargeRefusal, Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard,
+    sells_fuel, services,
 };
 
 use super::bar::{BarScreen, BarTemplates, Hiring};
@@ -130,6 +130,7 @@ use crate::font::Font;
 use crate::geometry::Point;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
+use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
@@ -137,7 +138,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
-use crate::ui::mission_dialogs::MissionDialogs;
+use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
 use crate::ui::mission_info::is_mission_info_press;
 #[cfg(doc)]
 use crate::ui::player_info::PLAYER_INFO_KEY;
@@ -362,6 +363,10 @@ pub struct SpaceportView {
     /// How the venues' offer timers run
     /// ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)).
     offer_clock: RuleSource,
+    /// The movies the mission texts and offers play, and whether they play.
+    movies: Movies,
+    /// The after-movie of the offer last answered, until it is played.
+    offer_after: Option<DescMovie>,
     /// The mission texts, the first shown over everything, and the
     /// mission info screen under them, over whatever else is open: given
     /// with the mission screens, when the spaceport has its dialog.
@@ -467,6 +472,8 @@ impl SpaceportView {
             barkeeping: None,
             missioning: None,
             offer_clock: RuleSource::Engine,
+            movies: Movies::none(),
+            offer_after: None,
             dialogs: None,
             player_info_dialogs: None,
             player_info_requested: false,
@@ -919,18 +926,39 @@ impl SpaceportView {
         offer: OfferTemplates,
         text: DescTemplates,
     ) -> Self {
-        let dialogs =
-            self.port.as_ref().ok().map(|port| {
-                MissionDialogs::new(text, info, Rc::clone(&port.metrics.0), port.style)
-            });
+        let dialogs = self.port.as_ref().ok().map(|port| {
+            MissionDialogs::new(text, info, Rc::clone(&port.metrics.0), port.style)
+                .with_movies(self.movies.clone())
+        });
+        let mut landing = VenueOffers::asking(offer.clone());
+        landing.set_movies(self.movies.clone());
         Self {
             missioning: Some(Missioning {
                 computer,
-                landing: VenueOffers::asking(offer.clone()),
+                landing,
                 offer,
                 requested: false,
                 info_requested: false,
             }),
+            dialogs,
+            ..self
+        }
+    }
+
+    /// The spaceport with the mission texts' and offers' movies played as
+    /// `movies` says, over the spaceport and in each venue opened after it.
+    #[must_use]
+    pub fn with_movies(self, movies: Movies) -> Self {
+        let dialogs = self
+            .dialogs
+            .map(|dialogs| dialogs.with_movies(movies.clone()));
+        let missioning = self.missioning.map(|mut missioning| {
+            missioning.landing.set_movies(movies.clone());
+            missioning
+        });
+        Self {
+            missioning,
+            movies,
             dialogs,
             ..self
         }
@@ -1024,15 +1052,51 @@ impl SpaceportView {
 
     /// The offer the venue answered since this was last taken, and the
     /// choice made, once: the screen open's, or, with nothing open, the
-    /// spaceport's.
+    /// spaceport's. Its after-movie waits for
+    /// [`SpaceportView::play_offer_after_movie`].
     pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
-        match &mut self.open {
-            Some(Open::Bar(screen)) => screen.take_offer_choice(),
-            Some(Open::Trade(screen)) => screen.take_offer_choice(),
-            Some(Open::Outfitter(screen)) => screen.take_offer_choice(),
-            Some(Open::Shipyard(screen)) => screen.take_offer_choice(),
-            Some(Open::Service(_) | Open::Computer(_)) => None,
-            None => self.missioning.as_mut()?.landing.take_choice(),
+        let (choice, after) = match &mut self.open {
+            Some(Open::Bar(screen)) => {
+                (screen.take_offer_choice(), screen.take_offer_after_movie())
+            }
+            Some(Open::Trade(screen)) => {
+                (screen.take_offer_choice(), screen.take_offer_after_movie())
+            }
+            Some(Open::Outfitter(screen)) => {
+                (screen.take_offer_choice(), screen.take_offer_after_movie())
+            }
+            Some(Open::Shipyard(screen)) => {
+                (screen.take_offer_choice(), screen.take_offer_after_movie())
+            }
+            Some(Open::Service(_) | Open::Computer(_)) => (None, None),
+            None => {
+                let landing = &mut self.missioning.as_mut()?.landing;
+                (landing.take_choice(), landing.take_after_movie())
+            }
+        };
+        if choice.is_some() {
+            self.offer_after = after;
+        }
+        choice
+    }
+
+    /// Plays the after-movie of the offer last answered, if it has one,
+    /// after whatever is shown: whoever acts on the choice calls this once
+    /// it has shown the texts the answer queued, as `_OfferOneMission`
+    /// plays it once the accept or the refuse text is over
+    /// (@0xa3580-0xa35b8).
+    pub fn play_offer_after_movie(&mut self) {
+        if let Some(movie) = self.offer_after.take() {
+            self.play_movie(&movie);
+        }
+    }
+
+    /// Plays `movie` over the spaceport, after whatever is shown, while
+    /// movies are on: an offer's before-movie, when it was accepted at once
+    /// (`_OfferOneMission` @0xa2273-0xa22ab).
+    pub fn play_movie(&mut self, movie: &DescMovie) {
+        if let Some(dialogs) = &mut self.dialogs {
+            dialogs.play_movie(movie);
         }
     }
 
@@ -1064,7 +1128,11 @@ impl SpaceportView {
             Ok(computer) => computer,
             Err(refusal) => {
                 if let Some(dialogs) = &mut self.dialogs {
-                    dialogs.show_descs(vec![(refusal.message(), None)]);
+                    dialogs.show_descs(vec![DescShown {
+                        text: refusal.message(),
+                        graphic: None,
+                        movie: None,
+                    }]);
                 }
                 return;
             }
@@ -1413,6 +1481,7 @@ impl SpaceportView {
                 bar = bar
                     .with_offers(missioning.offer.clone())
                     .with_offer_clock(self.offer_clock);
+                bar.set_offer_movies(self.movies.clone());
             }
             barkeeping.opened = true;
             self.open = Some(Open::Bar(Box::new(bar)));
@@ -1474,6 +1543,18 @@ impl SpaceportView {
                 _ => Open::Service(ServiceScreen::new(service, port.style, metrics)),
             },
         );
+        self.give_offer_movies();
+    }
+
+    /// Gives the movies to the offers of the venue open.
+    fn give_offer_movies(&mut self) {
+        let movies = self.movies.clone();
+        match &mut self.open {
+            Some(Open::Trade(screen)) => screen.set_offer_movies(movies),
+            Some(Open::Outfitter(screen)) => screen.set_offer_movies(movies),
+            Some(Open::Shipyard(screen)) => screen.set_offer_movies(movies),
+            _ => {}
+        }
     }
 }
 
@@ -1498,6 +1579,7 @@ impl Screen for SpaceportView {
             if dialogs.take_info_closed() {
                 self.release_keys();
             }
+            self.pass_unclaimed();
             return ScreenAction::None;
         }
         if let Some(missioning) = &mut self.missioning
@@ -1545,10 +1627,19 @@ impl Screen for SpaceportView {
         ScreenAction::None
     }
 
+    /// The mission texts' movie moves on, and the spaceport's offer's.
     /// The screen open ticks; while a mission text, the mission info
     /// screen or the player info screen covers it, only its offer timer
     /// does, as covered.
     fn tick(&mut self, dt: Duration) {
+        if let Some(dialogs) = &mut self.dialogs {
+            dialogs.tick(dt);
+            self.sounds.extend(dialogs.take_sounds());
+        }
+        self.pass_unclaimed();
+        if let Some(missioning) = &mut self.missioning {
+            missioning.landing.tick_dialog(dt);
+        }
         let covered = self.mission_dialogs_open() || self.player_info.is_some();
         if let Some(open) = &mut self.open {
             if covered {
@@ -1614,9 +1705,29 @@ impl Screen for SpaceportView {
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
+
+    /// While a cinematic movie hides the cursor: a mission text's, or an
+    /// offer's.
+    fn hides_pointer(&self) -> bool {
+        self.dialogs.as_ref().is_some_and(Screen::hides_pointer)
+            || self.offer_dialog().is_some_and(Screen::hides_pointer)
+    }
 }
 
 impl SpaceportView {
+    /// Gives what was pressed under the last mission movie to what is
+    /// beneath it, as the original's queued events reach the next filter.
+    fn pass_unclaimed(&mut self) {
+        let unclaimed = self
+            .dialogs
+            .as_mut()
+            .map(MissionDialogs::take_unclaimed)
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.input(input);
+        }
+    }
+
     /// Draws the spaceport and the screen open over it.
     fn draw_below(&self, list: &mut DrawList) {
         // A service's placeholder takes the whole screen; the exchange and
@@ -2986,6 +3097,11 @@ mod tests {
 
     impl crate::ui::catalog::DescriptionGraphics for FakePort {
         fn description_graphic(&self, _id: i16) -> Option<i16> {
+            None
+        }
+
+        /// Names no movie: these screens never play one.
+        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
             None
         }
     }
@@ -4560,6 +4676,157 @@ mod tests {
             assert!(asks_player_info(&mut view), "{venue}");
             assert!(view.offer_dialog().is_some(), "{venue}: still open");
         }
+    }
+
+    // The offers' and the mission texts' movies.
+
+    use crate::movie::fixture::{Call, MockMoviePlayer};
+    use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
+
+    fn movies_of(player: &Rc<MockMoviePlayer>) -> Movies {
+        Movies::new(Rc::clone(player) as Rc<dyn MoviePlayer>, true)
+    }
+
+    fn filmed_offer(flags: u16) -> OfferPrompt {
+        OfferPrompt {
+            movie: DescMovie::from_desc("Offer.mov", flags),
+            ..offered()
+        }
+    }
+
+    fn offer_shown(view: &SpaceportView) -> bool {
+        view.offer_dialog().is_some_and(|offer| {
+            let mut list = DrawList::new();
+            offer.draw(&mut list);
+            list.iter().any(
+                |command| matches!(command, DrawCommand::Text { text, .. } if text == "Ferry this."),
+            )
+        })
+    }
+
+    #[test]
+    fn the_spaceports_offer_plays_its_before_movie_and_ticks_with_the_spaceport() {
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut view = missioned().with_movies(movies_of(&player));
+        view.open_offer(filmed_offer(0));
+        assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
+        assert!(!offer_shown(&view), "not until the movie ends");
+        view.tick(ms(100));
+        view.tick(ms(100));
+        assert!(offer_shown(&view));
+    }
+
+    #[test]
+    fn movies_given_before_the_mission_screens_reach_them_too() {
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut view = earth().with_movies(movies_of(&player)).with_missions(
+            Ok(computer_template()),
+            Ok(info_template()),
+            pictured_offers(),
+            pictured_texts(),
+        );
+        view.open_offer(filmed_offer(0));
+        view.show_mission_texts(vec![MissionText {
+            kind: MissionTextKind::Comp,
+            mission: MissionId(130),
+            text: "Well done.".to_owned(),
+            graphic: None,
+            movie: DescMovie::from_desc("Comp.mov", 0),
+        }]);
+        assert_eq!(
+            player.calls(),
+            [
+                Call::Start("Offer.mov".to_owned()),
+                Call::Start("Comp.mov".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn each_venues_offer_plays_its_movie() {
+        for venue in [BAR, TRADE_CENTER, OUTFITTER, SHIPYARD] {
+            let player = MockMoviePlayer::playing((160, 120), 1);
+            let mut view = venues().with_movies(movies_of(&player));
+            assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+            let item = match venue {
+                BAR => 10,
+                TRADE_CENTER => 7,
+                OUTFITTER => 8,
+                _ => 9,
+            };
+            click_item(&mut view, item);
+            view.tick(FIRST_OFFER_DELAY);
+            assert_eq!(view.take_offer_request(), Some(venue));
+            view.open_offer(filmed_offer(0));
+            assert_eq!(player.calls().len(), 1, "{venue}");
+            assert!(!offer_shown(&view), "{venue}");
+            view.tick(ms(100));
+            assert!(offer_shown(&view), "{venue}: the venue ticks it");
+            view.input(&key(Key::Enter));
+            view.open_offer(filmed_offer(0x0001));
+            view.input(&key(Key::Enter));
+            assert!(view.take_offer_choice().is_some(), "{venue}");
+            view.show_mission_texts(Vec::new());
+            view.play_offer_after_movie();
+            assert_eq!(player.calls().len(), 4, "{venue}: {:?}", player.calls());
+        }
+    }
+
+    #[test]
+    fn an_offers_after_movie_plays_after_the_texts_its_answer_shows() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut view = missioned().with_movies(movies_of(&player));
+        view.play_offer_after_movie();
+        assert!(!view.mission_dialogs_open(), "nothing answered yet");
+        view.open_offer(filmed_offer(0x0001));
+        assert!(offer_shown(&view), "the dialog first");
+        view.input(&key(Key::Enter));
+        assert_eq!(
+            view.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Accept))
+        );
+        view.show_mission_texts(vec![MissionText {
+            kind: MissionTextKind::Brief,
+            mission: MissionId(141),
+            text: "Go.".to_owned(),
+            graphic: None,
+            movie: None,
+        }]);
+        view.play_offer_after_movie();
+        assert!(player.calls().is_empty(), "after the brief");
+        done(&mut view);
+        assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
+        assert!(view.mission_dialogs_open(), "while it plays");
+        view.tick(ms(100));
+        assert!(!view.mission_dialogs_open());
+        view.play_offer_after_movie();
+        assert_eq!(player.calls().len(), 3, "once: {:?}", player.calls());
+    }
+
+    #[test]
+    fn a_movie_played_over_the_spaceport_holds_its_input_and_a_leave() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut view = missioned().with_movies(movies_of(&player));
+        view.play_movie(&DescMovie::from_desc("Accepted.mov", 0).expect("named"));
+        assert!(view.holds_leave());
+        view.input(&key(Key::Escape));
+        assert!(!view.left(), "the movie took the Escape");
+        view.tick(ms(100));
+        assert!(view.left(), "which reached the spaceport as it ended");
+    }
+
+    #[test]
+    fn a_cinematic_movie_over_the_spaceport_hides_the_pointer() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut view = missioned().with_movies(movies_of(&player));
+        assert!(!view.hides_pointer());
+        view.play_movie(&DescMovie::from_desc("Accepted.mov", 0x0004).expect("named"));
+        view.tick(MOVIE_FADE_FOR);
+        assert!(view.hides_pointer(), "a mission text's");
+        let mut view = missioned().with_movies(movies_of(&player));
+        view.open_offer(filmed_offer(0x0004));
+        view.tick(MOVIE_FADE_FOR);
+        assert!(view.hides_pointer(), "an offer's");
     }
 
     #[test]

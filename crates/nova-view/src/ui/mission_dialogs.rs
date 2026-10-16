@@ -16,17 +16,26 @@
 //! Each shows in the variant its `dësc`'s `Graphic` picks
 //! ([`DescTemplates::open`]): above 127, `DLOG` 3004 with the graphic, as
 //! every one of these callers allows a picture (`_ShowTextDialog`'s third
-//! argument 1). A `dësc`'s movie is
-//! rdm:phase/missions-fidelity/phase-28-mission-desc-movies.
+//! argument 1). An empty text shows no dialog (@0x5a7b0-0x5a7c7).
+//!
+//! A text whose `dësc` names a movie ([`DescMovie`]) plays it, while
+//! movies are on ([`Movies`]): before its dialog (@0x5a76e-0x5a7ab, even
+//! for an empty text), or, `Flags` 0x0001 set, after it closes
+//! (@0x5b40b-0x5b44f; never for an empty text, which returns first). Each
+//! plays as [`MovieStage`] plays it, over the info screen, taking every
+//! input. A movie that ends on its own hands the keys pressed under it to
+//! what comes next. The movie [`MissionDialogs::play_movie`] queues alone
+//! is an offer's after-movie.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{MissionInfo, MissionText};
+use nova_sim::{DescMovie, MissionInfo, MissionText};
 
 use crate::draw::DrawList;
 use crate::input::Input;
+use crate::movie::{MovieStage, Movies};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::spaceport::missions::MissionInfoScreen;
@@ -34,6 +43,27 @@ use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::desc::{DescDialog, DescTemplates};
 use crate::ui::dialog::DialogTemplate;
+
+/// A `dësc`'s text shown with no mission behind it: its text, its
+/// `Graphic` and its movie.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DescShown {
+    /// The text.
+    pub text: String,
+    /// Its `Graphic`, raw.
+    pub graphic: Option<i16>,
+    /// The movie it names.
+    pub movie: Option<DescMovie>,
+}
+
+/// One of the things shown one after another: a movie or a text.
+#[derive(Clone, Debug)]
+enum Stage {
+    /// A `dësc`'s movie.
+    Movie(MovieStage),
+    /// A text in "Desc Dialog".
+    Text(DescDialog),
+}
 
 /// The mission texts shown one after another, and the mission info
 /// screen, under them.
@@ -45,8 +75,10 @@ pub struct MissionDialogs {
     info_template: Result<DialogTemplate, String>,
     metrics: Rc<dyn TextMetrics>,
     style: ButtonStyle,
-    /// The texts to show, the front one shown.
-    texts: VecDeque<DescDialog>,
+    /// The texts and movies to show, the front one shown.
+    texts: VecDeque<Stage>,
+    /// The movies, and whether they play.
+    movies: Movies,
     /// The mission info screen, while it is open.
     info: Option<MissionInfoScreen>,
     /// The sounds since they were last taken.
@@ -54,6 +86,9 @@ pub struct MissionDialogs {
     /// Whether the mission info screen has closed since this was last
     /// taken.
     info_closed: bool,
+    /// What was pressed under a movie that ended with nothing after it,
+    /// for what is beneath, until it is taken.
+    unclaimed: Vec<Input>,
 }
 
 impl std::fmt::Debug for MissionDialogs {
@@ -83,34 +118,123 @@ impl MissionDialogs {
             metrics,
             style,
             texts: VecDeque::new(),
+            movies: Movies::none(),
             info: None,
             sounds: Vec::new(),
             info_closed: false,
+            unclaimed: Vec::new(),
         }
     }
 
+    /// These dialogs playing the texts' movies as `movies` says.
+    #[must_use]
+    pub fn with_movies(self, movies: Movies) -> Self {
+        Self { movies, ..self }
+    }
+
     /// Queues each of `texts` to show in "Desc Dialog", in the variant
-    /// its graphic picks, one after another as Done closes each. Without
-    /// that variant's template it is dropped, as the spaceport drops it.
+    /// its graphic picks, one after another as Done closes each, with its
+    /// movie before or after it. Without that variant's template the
+    /// dialog is dropped, as the spaceport drops it, and its movies still
+    /// play.
     pub fn show_texts(&mut self, texts: Vec<MissionText>) {
         self.show_descs(
             texts
                 .into_iter()
-                .map(|text| (text.text, text.graphic))
+                .map(|text| DescShown {
+                    text: text.text,
+                    graphic: text.graphic,
+                    movie: text.movie,
+                })
                 .collect(),
         );
     }
 
-    /// Queues each of `texts`, a `dësc`'s text and its `Graphic` with no
-    /// mission behind it, to show as [`show_texts`](Self::show_texts)
-    /// shows mission texts.
-    pub fn show_descs(&mut self, texts: Vec<(String, Option<i16>)>) {
-        for (text, graphic) in texts {
-            if let Ok(dialog) = self
-                .text
-                .open(&text, graphic, self.style, Rc::clone(&self.metrics))
-            {
-                self.texts.push_back(dialog);
+    /// Queues each of `texts`, a `dësc` with no mission behind it, to
+    /// show as [`show_texts`](Self::show_texts) shows mission texts.
+    pub fn show_descs(&mut self, texts: Vec<DescShown>) {
+        for shown in texts {
+            let movie = |after: bool| shown.movie.as_ref().filter(|movie| movie.after == after);
+            if let Some(before) = movie(false).and_then(|movie| self.movies.stage(movie)) {
+                self.texts.push_back(Stage::Movie(before));
+            }
+            if shown.text.is_empty() {
+                continue;
+            }
+            if let Ok(dialog) = self.text.open(
+                &shown.text,
+                shown.graphic,
+                self.style,
+                Rc::clone(&self.metrics),
+            ) {
+                self.texts.push_back(Stage::Text(dialog));
+            }
+            if let Some(after) = movie(true).and_then(|movie| self.movies.stage(movie)) {
+                self.texts.push_back(Stage::Movie(after));
+            }
+        }
+        self.settle();
+    }
+
+    /// Queues `movie` alone, after whatever is queued, while movies are
+    /// on: an offer's after-movie, which plays after the texts its answer
+    /// showed (`_OfferOneMission` @0xa3580-0xa35b8).
+    pub fn play_movie(&mut self, movie: &DescMovie) {
+        if let Some(stage) = self.movies.stage(movie) {
+            self.texts.push_back(Stage::Movie(stage));
+            self.settle();
+        }
+    }
+
+    /// Begins the movie in front, if one is; drops it once it has ended,
+    /// handing what was pressed under it to what comes next, until a
+    /// text, or a movie still playing, is in front.
+    fn settle(&mut self) {
+        while let Some(Stage::Movie(movie)) = self.texts.front_mut() {
+            movie.begin();
+            if !movie.ended() {
+                return;
+            }
+            let replay = movie.take_replay();
+            self.texts.pop_front();
+            for input in replay {
+                if self.is_open() {
+                    self.front_input(&input);
+                } else {
+                    self.unclaimed.push(input);
+                }
+            }
+        }
+    }
+
+    /// What was pressed under a movie that ended with nothing left open
+    /// here, once: it goes to what is beneath, as the original's queued
+    /// events reach the next event loop.
+    pub fn take_unclaimed(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.unclaimed)
+    }
+
+    /// Gives `input` to what is in front: the movie or text shown, or else
+    /// the mission info screen.
+    fn front_input(&mut self, input: &Input) {
+        match self.texts.front_mut() {
+            Some(Stage::Movie(movie)) => movie.input(input),
+            Some(Stage::Text(text)) => {
+                text.input(input);
+                self.sounds.extend(text.take_sounds());
+                if text.closed() {
+                    self.texts.pop_front();
+                }
+            }
+            None => {
+                if let Some(info) = &mut self.info {
+                    info.input(input);
+                    self.sounds.extend(info.take_sounds());
+                    if info.closed() {
+                        self.info = None;
+                        self.info_closed = true;
+                    }
+                }
             }
         }
     }
@@ -166,10 +290,13 @@ impl MissionDialogs {
         }
     }
 
-    /// The mission text shown, if any.
+    /// The mission text shown, if any: none while a movie plays.
     #[must_use]
     pub fn text(&self) -> Option<&DescDialog> {
-        self.texts.front()
+        match self.texts.front() {
+            Some(Stage::Text(text)) => Some(text),
+            _ => None,
+        }
     }
 
     /// The mission info screen, while it is open.
@@ -185,7 +312,7 @@ impl MissionDialogs {
         std::mem::take(&mut self.info_closed)
     }
 
-    /// Whether a text or the mission info screen is open.
+    /// Whether a text, a movie or the mission info screen is open.
     #[must_use]
     pub fn is_open(&self) -> bool {
         !self.texts.is_empty() || self.info.is_some()
@@ -193,50 +320,54 @@ impl MissionDialogs {
 }
 
 impl Screen for MissionDialogs {
-    /// The text shown takes every input until Done closes it; otherwise
-    /// the mission info screen does. It never quits.
+    /// The movie or text shown takes every input until it ends or Done
+    /// closes it; otherwise the mission info screen does. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Some(text) = self.texts.front_mut() {
-            text.input(input);
-            self.sounds.extend(text.take_sounds());
-            if text.closed() {
-                self.texts.pop_front();
-            }
-        } else if let Some(info) = &mut self.info {
-            info.input(input);
-            self.sounds.extend(info.take_sounds());
-            if info.closed() {
-                self.info = None;
-                self.info_closed = true;
-            }
-        }
+        self.front_input(input);
+        self.settle();
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The movie shown moves on; the rest wait on input.
+    fn tick(&mut self, dt: Duration) {
+        if let Some(Stage::Movie(movie)) = self.texts.front_mut() {
+            movie.tick(dt);
+            self.settle();
+        }
+    }
 
-    /// The mission info screen, then the text shown over it.
+    /// The mission info screen, then the text or movie shown over it.
     fn draw(&self, list: &mut DrawList) {
         if let Some(info) = &self.info {
             info.draw(list);
         }
-        if let Some(text) = self.texts.front() {
-            text.draw(list);
+        match self.texts.front() {
+            Some(Stage::Text(text)) => text.draw(list),
+            Some(Stage::Movie(movie)) => movie.draw(list),
+            None => {}
         }
     }
 
     fn cancel_pointer(&mut self) {
-        if let Some(text) = self.texts.front_mut() {
-            text.cancel_pointer();
-        } else if let Some(info) = &mut self.info {
-            info.cancel_pointer();
+        match self.texts.front_mut() {
+            Some(Stage::Text(text)) => text.cancel_pointer(),
+            Some(Stage::Movie(_)) => {}
+            None => {
+                if let Some(info) = &mut self.info {
+                    info.cancel_pointer();
+                }
+            }
         }
     }
 
     /// The buttons' sounds, in order, of the dialogs open and closed.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
+    }
+
+    /// While a cinematic movie hides the cursor.
+    fn hides_pointer(&self) -> bool {
+        matches!(self.texts.front(), Some(Stage::Movie(movie)) if movie.hides_cursor())
     }
 }
 
@@ -248,11 +379,14 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
+    use crate::movie::fixture::{Call, FRAME, MockMoviePlayer};
+    use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
     use crate::sound::UiSound;
     use crate::spaceport::missions::ABORT_ITEM;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::desc::DONE_ITEM;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+    use nova_sim::DescMovie;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -419,8 +553,8 @@ mod tests {
     fn plain_texts_show_one_after_another_and_close_on_done() {
         let mut dialogs = dialogs();
         dialogs.show_descs(vec![
-            ("Sabotaged.".to_owned(), None),
-            ("Again.".to_owned(), None),
+            shown_desc("Sabotaged.", None),
+            shown_desc("Again.", None),
         ]);
         assert!(dialogs.is_open());
         assert_eq!(shown(&dialogs).as_deref(), Some("Sabotaged."));
@@ -632,8 +766,8 @@ mod tests {
     fn a_desc_with_a_graphic_shows_in_3004() {
         let mut dialogs = dialogs();
         dialogs.show_descs(vec![
-            ("Sabotaged.".to_owned(), Some(200)),
-            ("Rescued.".to_owned(), Some(127)),
+            shown_desc("Sabotaged.", Some(200)),
+            shown_desc("Rescued.", Some(127)),
         ]);
         assert_eq!(widths(&mut dialogs), [(300.0, Some(200)), (200.0, None)]);
     }
@@ -682,5 +816,244 @@ mod tests {
         dialogs.set_info(none());
         assert!(dialogs.take_info_closed());
         assert!(!dialogs.take_info_closed(), "once");
+    }
+
+    fn shown_desc(text: &str, graphic: Option<i16>) -> DescShown {
+        DescShown {
+            text: text.to_owned(),
+            graphic,
+            movie: None,
+        }
+    }
+
+    fn film(flags: u16) -> Option<DescMovie> {
+        DescMovie::from_desc("Brief.mov", flags)
+    }
+
+    fn filmed(text: &str, flags: u16) -> MissionText {
+        MissionText {
+            movie: film(flags),
+            ..brief(128, text)
+        }
+    }
+
+    /// The dialogs, playing movies through `player`.
+    fn playing(player: &Rc<MockMoviePlayer>) -> MissionDialogs {
+        dialogs().with_movies(Movies::new(Rc::clone(player) as Rc<dyn MoviePlayer>, true))
+    }
+
+    const TICK: Duration = Duration::from_millis(100);
+
+    #[test]
+    fn a_movie_desc_with_flag_clear_plays_before_its_text() {
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("Briefed.", 0)]);
+        assert_eq!(player.calls(), [Call::Start("Brief.mov".to_owned())]);
+        assert!(dialogs.is_open());
+        assert_eq!(shown(&dialogs), None, "no text while the movie plays");
+        assert!(drawn(&dialogs).is_empty(), "the text is not drawn");
+        assert_eq!(player.drawn().len(), 1, "the movie is");
+        dialogs.input(&key(Key::Char('q')));
+        assert_eq!(shown(&dialogs), None, "the movie swallows input");
+        dialogs.tick(TICK);
+        dialogs.tick(TICK);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Briefed."));
+        dialogs.input(&key(Key::Enter));
+        assert!(!dialogs.is_open());
+        assert_eq!(
+            player.calls(),
+            [
+                Call::Start("Brief.mov".to_owned()),
+                Call::Advance,
+                Call::Advance,
+                Call::Stop
+            ]
+        );
+    }
+
+    #[test]
+    fn a_movie_desc_with_flag_set_plays_after_its_text() {
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("Briefed.", 0x0001)]);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Briefed."));
+        assert!(player.calls().is_empty(), "not before the text");
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(shown(&dialogs), None);
+        assert_eq!(player.calls(), [Call::Start("Brief.mov".to_owned())]);
+        assert!(dialogs.is_open(), "while the movie plays");
+        dialogs.tick(TICK);
+        assert!(dialogs.is_open());
+        dialogs.tick(TICK);
+        assert!(!dialogs.is_open(), "closed on the tick the movie ends");
+    }
+
+    #[test]
+    fn with_movies_off_no_movie_plays() {
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, false);
+        let mut dialogs = dialogs().with_movies(movies.clone());
+        dialogs.show_texts(vec![filmed("Before.", 0), filmed("After.", 0x0001)]);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Before."));
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&key(Key::Enter));
+        assert!(!dialogs.is_open());
+        assert!(player.calls().is_empty());
+        movies.set_on(true);
+        dialogs.show_texts(vec![filmed("Before.", 0)]);
+        assert_eq!(player.calls().len(), 1, "on again, as the preference says");
+    }
+
+    #[test]
+    fn without_a_player_no_movie_plays() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![filmed("Before.", 0)]);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Before."));
+    }
+
+    #[test]
+    fn a_movie_that_cannot_start_shows_the_text_at_once() {
+        let player = MockMoviePlayer::refusing();
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("Briefed.", 0)]);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Briefed."));
+        dialogs.input(&key(Key::Enter));
+        dialogs.show_texts(vec![filmed("After.", 0x0001)]);
+        dialogs.input(&key(Key::Enter));
+        assert!(!dialogs.is_open(), "the after-movie ends as it begins");
+        assert_eq!(player.calls().len(), 2);
+    }
+
+    #[test]
+    fn an_empty_text_shows_no_dialog_and_plays_its_before_movie_only() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("", 0x0001), brief(129, "")]);
+        assert!(
+            !dialogs.is_open(),
+            "no dialog, no after-movie (@0x5a7b0-0x5a7c7)"
+        );
+        assert!(player.calls().is_empty());
+        dialogs.show_texts(vec![filmed("", 0)]);
+        assert_eq!(player.calls(), [Call::Start("Brief.mov".to_owned())]);
+        dialogs.tick(TICK);
+        assert!(!dialogs.is_open(), "the before-movie alone");
+    }
+
+    #[test]
+    fn a_desc_shown_over_flight_plays_its_movie() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.show_descs(vec![DescShown {
+            movie: film(0),
+            ..shown_desc("Sabotaged.", None)
+        }]);
+        assert_eq!(shown(&dialogs), None);
+        dialogs.tick(TICK);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Sabotaged."));
+    }
+
+    #[test]
+    fn a_text_that_cannot_be_laid_out_still_plays_its_movies() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = MissionDialogs::new(
+            texts(Err("no DLOG 3003".to_owned())),
+            Ok(info_template()),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        )
+        .with_movies(Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true));
+        dialogs.show_texts(vec![filmed("Lost.", 0x0001)]);
+        assert_eq!(player.calls(), [Call::Start("Brief.mov".to_owned())]);
+    }
+
+    #[test]
+    fn play_movie_queues_a_lone_movie_after_whatever_is_queued() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![brief(128, "First.")]);
+        dialogs.play_movie(&DescMovie::from_desc("Offer.mov", 0x0001).expect("named"));
+        assert!(player.calls().is_empty(), "behind the text");
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
+        dialogs.tick(TICK);
+        assert!(!dialogs.is_open());
+        dialogs.play_movie(&DescMovie::from_desc("Offer.mov", 0).expect("named"));
+        assert!(dialogs.is_open(), "alone, at once");
+    }
+
+    #[test]
+    fn keys_pressed_during_a_movie_that_ends_on_its_own_reach_the_text_after_it() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("First.", 0), brief(129, "Second.")]);
+        dialogs.input(&key(Key::Escape));
+        dialogs.tick(TICK);
+        assert_eq!(
+            shown(&dialogs).as_deref(),
+            Some("Second."),
+            "the Escape queued under the movie closed the first text"
+        );
+    }
+
+    #[test]
+    fn keys_pressed_under_the_last_movie_are_left_for_what_is_beneath() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("Gone.", 0x0001)]);
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&key(Key::Escape));
+        assert!(dialogs.take_unclaimed().is_empty(), "not while it plays");
+        dialogs.tick(TICK);
+        assert!(!dialogs.is_open());
+        assert_eq!(dialogs.take_unclaimed(), [key(Key::Escape)]);
+        assert!(dialogs.take_unclaimed().is_empty(), "once");
+    }
+
+    #[test]
+    fn a_skipped_movie_flushes_what_was_pressed() {
+        let player = MockMoviePlayer::playing((160, 120), 10);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("First.", 0)]);
+        dialogs.input(&key(Key::Escape));
+        dialogs.input(&key(Key::Space));
+        assert_eq!(shown(&dialogs).as_deref(), Some("First."));
+    }
+
+    #[test]
+    fn a_movie_plays_over_the_info_screen() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.open_info(info());
+        dialogs.show_texts(vec![filmed("Over.", 0)]);
+        let mut list = DrawList::new();
+        dialogs.draw(&mut list);
+        let commands: Vec<_> = list.iter().collect();
+        let run = commands
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Text { text, .. } if text == "Run"))
+            .expect("the info screen");
+        let frame = commands
+            .iter()
+            .position(
+                |command| matches!(command, DrawCommand::Line { color, .. } if *color == FRAME),
+            )
+            .expect("the frame");
+        assert!(run < frame);
+        dialogs.cancel_pointer();
+        dialogs.tick(TICK);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Over."));
+    }
+
+    #[test]
+    fn a_cinematic_movie_hides_the_pointer() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        assert!(!dialogs.hides_pointer());
+        dialogs.show_texts(vec![filmed("Over.", 0x0004)]);
+        assert!(!dialogs.hides_pointer(), "not during the fade out");
+        dialogs.tick(MOVIE_FADE_FOR);
+        assert!(dialogs.hides_pointer());
     }
 }
