@@ -213,9 +213,13 @@ struct Knobs {
     mission_flags: u16,
     brief: i16,
     refuse: i16,
-    /// The `Flags` of mission 128's offer `dësc` 4000, empty, naming the
-    /// movie "Offer.mov": none without one.
+    /// The `Flags` of mission 128's offer `dësc` 4000, of
+    /// [`Knobs::offer_text`], naming the movie "Offer.mov": none without
+    /// one.
     offer_movie: Option<u16>,
+    /// The text of mission 128's offer `dësc` 4000: with no
+    /// [`Knobs::offer_movie`] and no text, there is no such `dësc`.
+    offer_text: &'static str,
     /// The `Flags` of the `BriefText`'s `dësc` 200, naming "Brief.mov".
     brief_movie: Option<u16>,
 }
@@ -228,6 +232,7 @@ const PLAIN: Knobs = Knobs {
     brief: -1,
     refuse: -1,
     offer_movie: None,
+    offer_text: "",
     brief_movie: None,
 };
 
@@ -423,7 +428,14 @@ fn game_data(knobs: Knobs) -> Rc<GameData> {
         )
         .resource(PICT, 700, Some(b"Status Bar"), &pict(194, 16, [66, 66, 66]));
     if let Some(flags) = knobs.offer_movie {
-        fork = fork.resource(Desc::TYPE, 4000, None, &filmed("", "Offer.mov", flags));
+        fork = fork.resource(
+            Desc::TYPE,
+            4000,
+            None,
+            &filmed(knobs.offer_text, "Offer.mov", flags),
+        );
+    } else if !knobs.offer_text.is_empty() {
+        fork = fork.resource(Desc::TYPE, 4000, None, &desc(knobs.offer_text));
     }
     for id in [8511, 5001, 5002] {
         fork = fork.resource(PICT, id, None, &pict(6, 5, [40, 40, 40]));
@@ -1219,6 +1231,43 @@ fn a_persons_offer_refused_without_a_text_stays_under_its_after_movie_over_fligh
         !texts(&game.frame()).iter().any(|text| text == "Yes"),
         "disposed once it closed (@0xa361e)"
     );
+}
+
+#[test]
+fn a_persons_unrefusable_offer_accepted_stays_drawn_under_its_brief_over_flight() {
+    let store = MemoryPilots::new();
+    let knobs = Knobs {
+        mission_flags: 0x0004,
+        offer_text: "Come along.",
+        ..TEXTED
+    };
+    let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::Offer, "one button, with a text");
+    let shown = texts(&game.frame());
+    assert!(shown.iter().any(|text| text == "Okay"), "{shown:?}");
+    assert!(!shown.iter().any(|text| text == "No"), "{shown:?}");
+    game.tap(Key::Enter);
+    assert_eq!(game.active(), [128]);
+    assert_eq!(game.showing(), Showing::MissionText);
+    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
+    let shown = texts(&game.frame());
+    assert!(
+        shown.iter().any(|text| text == "Okay"),
+        "the one-button dialog's accept leaves it drawn (@0xa2f52-0xa2ff7): {shown:?}"
+    );
+    assert!(shown.iter().any(|text| text == "Stay close."), "{shown:?}");
+    game.tap(Key::Enter);
+    assert_eq!(
+        game.flight_text(),
+        None,
+        "Return reaches the brief over the answered offer"
+    );
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.offered(), None, "disposed with it (@0xa361e)");
+    let shown = texts(&game.frame());
+    assert!(!shown.iter().any(|text| text == "Okay"), "{shown:?}");
 }
 
 #[test]

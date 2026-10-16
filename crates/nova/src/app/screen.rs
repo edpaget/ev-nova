@@ -10978,6 +10978,49 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_persons_offer_opened_over_a_mission_text_over_flight_waits_for_its_movie() {
+        let (mut screen, reel) = filmed(0, "Job.", 0, Prefs::default());
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        screen.open_offer(OfferPrompt {
+            mission: MissionId(130),
+            text: "Job.".to_owned(),
+            labels: nova_sim::mission::offer_labels("", "", true),
+            graphic: None,
+            movie: nova_sim::DescMovie::from_desc("Offer.mov", 0),
+        });
+        screen.show_over_flight(vec![DescShown {
+            text: "Well done.".to_owned(),
+            graphic: None,
+            movie: nova_sim::DescMovie::from_desc("Text.mov", 0),
+        }]);
+        ticked(&mut screen, 4);
+        assert_eq!(
+            reeled(&reel),
+            ["start Text.mov", "stop"],
+            "`_PlayQTMovie` is modal: the offer's movie waits for the text and its movie"
+        );
+        assert_eq!(screen.showing(), Showing::MissionText);
+        assert_eq!(
+            screen
+                .flight_mission_text()
+                .map(|text| text.lines().join(" "))
+                .as_deref(),
+            Some("Well done.")
+        );
+        screen.input(&key(Key::Enter, true));
+        assert!(screen.flight_mission_text().is_none(), "Return closes it");
+        assert_eq!(reeled(&reel), ["start Text.mov", "stop"]);
+        screen.tick(Duration::from_millis(16));
+        assert_eq!(
+            reeled(&reel),
+            ["start Text.mov", "stop", "start Offer.mov"],
+            "then the offer's, as its first tick comes"
+        );
+        assert_eq!(screen.showing(), Showing::Movie);
+    }
+
+    #[test]
     fn a_spaceport_offer_accepted_at_once_plays_its_movie() {
         let (screen, reel) = landed_filmed(0x0004, "", 0x0004, Prefs::default());
         assert_eq!(active(&screen), [MissionId(130)]);
