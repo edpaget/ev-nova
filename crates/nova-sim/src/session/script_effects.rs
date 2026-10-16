@@ -103,6 +103,21 @@
 //! as the fighter rules say and the system is populated
 //! ([`Session::populate`]).
 //!
+//! **An `N` out of range** (outside 128-2175) runs the move's tail with
+//! no move, by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
+//! as the original's range check (@0x158e3) jumps to that tail
+//! (@0x1593f) rather than past the operator. Landed, the offers are
+//! emptied (@0x15949-0x15967) and nothing else changes: no enter-system
+//! hook runs. In flight, the five scene flags are set, and
+//! `_HandleStellarSystemVisibility` and
+//! `_MissionHandlePlayerEnteredNewSystem` run (@0x1596e-0x159ad). Here
+//! the player's own system is entered again as a move within the system,
+//! the ship kept as it is, the pilot's stellar kept and no take-off hold
+//! set. That move is never an arrival, whatever
+//! [`ScriptEffectRules::arrival`] says, as it moves nowhere. It queues
+//! and settles as a move does. By the other reading it does nothing, as
+//! every other operator out of range does (see the `control` module).
+//!
 //! **`Qxxx`** draws its message when it runs, from
 //! the session's string lists ([`Session::with_strings`]; none by
 //! default), with a roll of as many sides as the list holds, as `T`
@@ -196,12 +211,16 @@ pub struct ScriptEffectRules {
     pub blank_leave: RuleSource,
     /// When `P`'s sound plays ([`RuleKey::ScriptSound`]).
     pub sound: RuleSource,
+    /// Whether an `N` out of range runs the move's tail
+    /// ([`RuleKey::OutOfRangeMove`]).
+    pub out_of_range_move: RuleSource,
 }
 
 impl ScriptEffectRules {
     /// The rules `rulebook` chooses: its [`RuleKey::MoveStarless`],
     /// [`RuleKey::MoveArrival`], [`RuleKey::MoveKeepFlag`],
-    /// [`RuleKey::BlankLeave`] and [`RuleKey::ScriptSound`] entries.
+    /// [`RuleKey::BlankLeave`], [`RuleKey::ScriptSound`] and
+    /// [`RuleKey::OutOfRangeMove`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -210,6 +229,7 @@ impl ScriptEffectRules {
             keep_flag: rulebook.source_for(RuleKey::MoveKeepFlag),
             blank_leave: rulebook.source_for(RuleKey::BlankLeave),
             sound: rulebook.source_for(RuleKey::ScriptSound),
+            out_of_range_move: rulebook.source_for(RuleKey::OutOfRangeMove),
         }
     }
 }
@@ -221,6 +241,9 @@ pub(super) enum ScriptMove {
     To(SystemId),
     /// `N`: to the system, keeping the position.
     KeepPosition(SystemId),
+    /// An `N` out of range, by [`ScriptEffectRules::out_of_range_move`]'s
+    /// engine reading: the move's tail with no move.
+    Stay,
 }
 
 /// What the set expressions left for later: the moves and the leave for
@@ -314,6 +337,10 @@ impl Session {
             let (system, keep) = match step {
                 ScriptMove::To(system) => (system, false),
                 ScriptMove::KeepPosition(system) => (system, true),
+                ScriptMove::Stay => {
+                    self.stay(catalog, chance);
+                    continue;
+                }
             };
             if catalog.system_exists(system) {
                 self.move_to(system, keep, catalog, chance);
@@ -379,6 +406,34 @@ impl Session {
         self.queued.leave = picked.or_else(|| {
             (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
         });
+    }
+
+    /// An `N` out of range: the move's tail, with no move (see the module
+    /// docs). Landed, the offers are emptied and nothing else changes;
+    /// in flight, the player's own system is entered again, the ship kept
+    /// as it is, as a move within the system that is never an arrival
+    /// ([`Entry::ScriptStay`]). It moves nowhere, so `settled.moved` is
+    /// left as it was.
+    fn stay(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if self.landed.is_some() {
+            self.empty_offers();
+            return;
+        }
+        let system = self.pilot.system;
+        let arrival = Arrival {
+            system,
+            sites: self.read_sites(catalog, system),
+            placement: Placement {
+                ship: ShipPlacement::Keep,
+                stellar: None,
+                hold: false,
+            },
+        };
+        self.enter_system(Entry::ScriptStay, arrival, catalog, catalog, chance);
     }
 
     /// Moves the player to `system`, keeping the position when `keep`
@@ -604,6 +659,7 @@ mod tests {
             keep_flag: RuleSource::Engine,
             blank_leave: RuleSource::Engine,
             sound: RuleSource::Engine,
+            out_of_range_move: RuleSource::Engine,
         };
         assert_eq!(ScriptEffectRules::default(), engine);
         assert_eq!(
@@ -647,6 +703,13 @@ mod tests {
             bible(RuleKey::ScriptSound),
             ScriptEffectRules {
                 sound: RuleSource::Bible,
+                ..engine
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::OutOfRangeMove),
+            ScriptEffectRules {
+                out_of_range_move: RuleSource::Bible,
                 ..engine
             }
         );
@@ -1455,6 +1518,157 @@ mod tests {
         let after: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
         assert_eq!(after.len(), 2, "130's ships afresh");
         assert!(after.iter().all(|id| !before.contains(id)), "{after:?}");
+    }
+
+    // An out-of-range `N`, and every other out-of-range operator.
+
+    /// The rules with `OutOfRangeMove` read as `reading`.
+    fn out_of_range(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::OutOfRangeMove, reading)
+    }
+
+    /// Runs `text` and settles its moves alone, the story events raised
+    /// left undispatched: those raised.
+    fn stayed(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        text: &str,
+    ) -> Vec<crate::story::StoryEvent> {
+        session.drop_raised();
+        run(session, text);
+        session.settle_moves(catalog, &mut NeverFires, &mut Settled::default());
+        session.assert_docked_among_shown();
+        session.story_raised()
+    }
+
+    #[test]
+    fn by_the_engine_a_landed_out_of_range_n_only_empties_the_offers() {
+        let catalog = moving();
+        for text in ["N5", "N2176", "n70000"] {
+            let mut session = landed(&catalog);
+            session.plot_course(SystemId(131)).expect("a route");
+            let _ = settle(&mut session, &catalog);
+            session.take_events();
+            let explored = session.pilot().explored.clone();
+            let course = session.course().to_vec();
+            let raised = stayed(&mut session, &catalog, text);
+            assert_eq!(raised, [], "{text}: no enter-system hook");
+            assert_eq!(session.system(), SystemId(130), "{text}");
+            assert_eq!(session.landed(), Some(StellarId(128)), "{text}");
+            assert_eq!(session.pilot().stellar, Some(StellarId(128)), "{text}");
+            assert_eq!(session.pilot().explored, explored, "{text}");
+            assert_eq!(session.course(), course, "{text}");
+            assert_eq!(session.take_events(), [], "{text}");
+            assert!(!session.hold_position, "{text}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_an_out_of_range_n_in_flight_enters_the_system_again_where_it_is() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.pilot.stellar = Some(StellarId(129));
+        session.hold_fire(true, false);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.shots().len(), 1);
+        session.player.position = Vec2::new(10.0, 10.0);
+        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.select_stellar(crate::session::StellarPick::Slot(0));
+        session.target = Some(NpcId(0));
+        session.gate = Some(StellarId(128));
+        session.strikes = session.combat.take_strikes();
+        session.stage_scene(NpcId(0));
+        session.take_events();
+        let npcs = session.npcs().to_vec();
+        let position = session.player().position;
+        let velocity = session.player().velocity;
+        let raised = stayed(&mut session, &catalog, "N9999");
+        assert_eq!(
+            raised,
+            [crate::story::StoryEvent::EnteredSystem {
+                system: SystemId(130),
+                how: crate::story::Entrance::ScriptMove { landed: false },
+            }]
+        );
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(session.player().position, position);
+        assert_eq!(session.player().velocity, velocity);
+        assert!(!session.hold_position, "no take-off hold");
+        assert_eq!(session.pilot().stellar, Some(StellarId(129)), "kept");
+        assert_eq!(session.shots(), []);
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.target, None);
+        assert_eq!(session.gate, None);
+        assert_eq!(session.strikes, []);
+        session.assert_scene_left("N9999");
+        assert_eq!(session.npcs(), npcs, "the traffic kept");
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn as_an_arrival_an_out_of_range_n_in_flight_is_still_no_arrival() {
+        let catalog = moving();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.escorts = vec![escort(129, false), escort(130, true)];
+        let mut session = flying_with(&catalog, pilot).with_rules(arrival(RuleSource::Bible));
+        session.plot_course(SystemId(132)).expect("a route");
+        let explored = session.pilot().explored.clone();
+        let course = session.course().to_vec();
+        let npcs: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        session.drop_raised();
+        run(&mut session, "N9999");
+        let mut chance = crate::testkit::Draws::default();
+        session.settle_moves(&catalog, &mut chance, &mut Settled::default());
+        assert_eq!(session.pilot().explored, explored, "not explored");
+        assert_eq!(session.course(), course, "the course kept");
+        assert_eq!(session.pilot().escorts().len(), 2, "the dry fighter kept");
+        assert_eq!(session.take_fighter_notes(), []);
+        let after: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(after, npcs, "not populated");
+        assert_eq!(chance.asked, Vec::<u32>::new(), "nothing drawn");
+        assert!(
+            !session
+                .story_raised()
+                .iter()
+                .any(|event| matches!(event, crate::story::StoryEvent::Explored { .. })),
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_an_out_of_range_n_does_nothing() {
+        let catalog = moving();
+        for mut session in [flying(&catalog), landed(&catalog)] {
+            session = session.with_rules(out_of_range(RuleSource::Bible));
+            let _ = settle(&mut session, &catalog);
+            session.take_events();
+            let before = session.clone();
+            run(&mut session, "N9999");
+            assert_eq!(settle(&mut session, &catalog), Settled::default());
+            assert_eq!(session, before);
+            assert!(!session.take_save_due());
+        }
+    }
+
+    #[test]
+    fn every_other_out_of_range_operator_does_nothing_and_the_rest_runs() {
+        let catalog = moving();
+        for reading in READINGS {
+            for mut session in [flying(&catalog), landed(&catalog)] {
+                session = session.with_rules(out_of_range(reading));
+                let _ = settle(&mut session, &catalog);
+                session.take_events();
+                let mut expected = session.clone();
+                run(&mut expected, "b7");
+                let _ = settle(&mut expected, &catalog);
+                run(
+                    &mut session,
+                    "M5 M2176 A5 F5 S5 G5 D5 C5 E5 H5 K5 L5 Y5 U5 X5 b10000 !b10000 ^b10000 b7",
+                );
+                assert_eq!(settle(&mut session, &catalog), Settled::default());
+                assert_eq!(session, expected, "{reading:?}");
+            }
+        }
     }
 
     // Events.

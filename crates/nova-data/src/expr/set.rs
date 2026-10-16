@@ -75,6 +75,21 @@ pub enum SetOp {
     LeaveStellar(StrListId),
     /// `Xxxx`: mark the system explored.
     Explore(SystemId),
+    /// An operator whose number is outside the range the original acts
+    /// on, kept so the sim can decide what it does. `_EvalSetExp`
+    /// (@0x150fc) checks each range as it runs the operator, never as it
+    /// reads it, and only that operator is skipped: the scan goes on to
+    /// the next (@0x15873). Every checked operator skips this way but `N`,
+    /// whose check (@0x158e3) jumps to the move's tail (@0x1593f) instead.
+    /// `P`, `T` and `Q` have no check; a missing number is still an
+    /// error.
+    OutOfRange {
+        /// Which operator it is: never `Random` or `OutOfRange`.
+        op: SetOpKind,
+        /// The number as written, in full: the original's 16-bit wrap is
+        /// not kept (@0x151d9).
+        value: u32,
+    },
 }
 
 /// Which operator a [`SetOp`] is, without its operand: each is the
@@ -104,6 +119,7 @@ pub enum SetOpKind {
     RenameShip,
     LeaveStellar,
     Explore,
+    OutOfRange,
 }
 
 /// How a set operator writes a bit.
@@ -230,6 +246,7 @@ impl SetOp {
             Self::RenameShip(_) => SetOpKind::RenameShip,
             Self::LeaveStellar(_) => SetOpKind::LeaveStellar,
             Self::Explore(_) => SetOpKind::Explore,
+            Self::OutOfRange { .. } => SetOpKind::OutOfRange,
         }
     }
 
@@ -308,13 +325,43 @@ fn after_op(cursor: &Cursor<'_>) -> ParseError {
 }
 
 /// Reads one operator other than `R`: `!bxxx`, `^bxxx`, or a letter and its
-/// number.
+/// number. A number outside a checked range reads as
+/// [`SetOp::OutOfRange`].
 fn op(cursor: &mut Cursor<'_>) -> Result<SetOp, ParseError> {
-    let build: fn(Bit) -> SetOp = match cursor.peek() {
-        Some(b'!') => SetOp::Clear,
-        Some(b'^') => SetOp::Toggle,
-        _ => return cursor.operand(letter_spec, ParseErrorKind::UnknownOperator),
+    let (kind, read) = match cursor.peek() {
+        Some(b'!') => (SetOpKind::Clear, negated(cursor, SetOp::Clear)),
+        Some(b'^') => (SetOpKind::Toggle, negated(cursor, SetOp::Toggle)),
+        letter => {
+            let kind = letter.and_then(|letter| checked(letter.to_ascii_uppercase()));
+            let read = cursor.operand(letter_spec, ParseErrorKind::UnknownOperator);
+            match kind {
+                Some(kind) => (kind, read),
+                None => return read,
+            }
+        }
     };
+    match read {
+        Err(ParseError {
+            kind: ParseErrorKind::NumberOutOfRange { value, .. },
+            ..
+        }) => Ok(SetOp::OutOfRange { op: kind, value }),
+        read => read,
+    }
+}
+
+/// The kind of the operator `letter` reads, when the original checks its
+/// number's range (see [`SetOp::OutOfRange`]).
+fn checked(letter: u8) -> Option<SetOpKind> {
+    letter_spec(letter)
+        .and_then(|spec| spec.range.map(|range| (spec.build, range)))
+        .filter(|(_, range)| *range != ANY)
+        .map(|(build, range)| build(*range.start()).kind())
+}
+
+/// Reads `!bxxx` or `^bxxx`, building it with `build`; the cursor is on
+/// the `!` or `^`. The cursor steps over the number even when it is out
+/// of range.
+fn negated(cursor: &mut Cursor<'_>, build: fn(Bit) -> SetOp) -> Result<SetOp, ParseError> {
     cursor.bump();
     if cursor.peek().map(|c| c.to_ascii_uppercase()) != Some(b'B') {
         return Err(cursor.error(ParseErrorKind::NegatedNonBit));
@@ -435,8 +482,83 @@ mod tests {
         assert_eq!(parse("!b12"), [SetOp::Clear(b(12))]);
         assert_eq!(parse("!B12"), [SetOp::Clear(b(12))]);
         assert_eq!(parse("^b12"), [SetOp::Toggle(b(12))]);
-        assert_eq!(fails("b10000"), err(1, range(10000, 0, 9999)));
-        assert_eq!(fails("!b10000"), err(2, range(10000, 0, 9999)));
+    }
+
+    fn out(op: SetOpKind, value: u32) -> SetOp {
+        SetOp::OutOfRange { op, value }
+    }
+
+    #[test]
+    fn a_bit_past_9999_is_skipped_as_out_of_range() {
+        assert_eq!(parse("b10000"), [out(SetOpKind::Set, 10000)]);
+        assert_eq!(parse("!B10000"), [out(SetOpKind::Clear, 10000)]);
+        assert_eq!(parse("^b65536"), [out(SetOpKind::Toggle, 65536)]);
+    }
+
+    #[test]
+    fn an_out_of_range_operand_keeps_its_full_value() {
+        assert_eq!(parse("n70000"), [out(SetOpKind::MoveKeepPosition, 70000)]);
+        assert_eq!(parse("M99999999999999"), [out(SetOpKind::MoveTo, u32::MAX)]);
+    }
+
+    #[test]
+    fn the_operators_after_an_out_of_range_one_still_parse() {
+        assert_eq!(
+            parse("N9999 b5 M200"),
+            [
+                out(SetOpKind::MoveKeepPosition, 9999),
+                SetOp::Set(b(5)),
+                SetOp::MoveTo(SystemId(200)),
+            ]
+        );
+        assert_eq!(
+            parse("N9999G128"),
+            [SetOp::GrantOutfit(OutfitId(128))],
+            "replaced as any other operator is"
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_operand_is_an_arm_of_random() {
+        assert_eq!(
+            parse("R(n5 b1)"),
+            [random(
+                out(SetOpKind::MoveKeepPosition, 5),
+                SetOp::Set(b(1))
+            )]
+        );
+        assert_eq!(
+            parse("R(b1 !b20000)"),
+            [random(SetOp::Set(b(1)), out(SetOpKind::Clear, 20000))]
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_operator_writes_no_bit_and_has_its_own_kind() {
+        let expr = SetExpr::parse("b10000 b1 R(b10001 ^b2) N5").expect("parses");
+        assert_eq!(expr.writes(), [(b(1), BitWrite::Set)]);
+        assert_eq!(expr.maybe_writes(), [(b(2), BitWrite::Toggle)]);
+        assert_eq!(
+            expr.reads().into_iter().map(Bit::get).collect::<Vec<_>>(),
+            [2]
+        );
+        assert_eq!(
+            expr.kinds().into_iter().collect::<Vec<_>>(),
+            [
+                SetOpKind::Set,
+                SetOpKind::Toggle,
+                SetOpKind::Random,
+                SetOpKind::OutOfRange,
+            ]
+        );
+        assert_eq!(out(SetOpKind::MoveTo, 1).kind(), SetOpKind::OutOfRange);
+    }
+
+    #[test]
+    fn a_missing_number_is_still_an_error_out_of_range_or_not() {
+        assert_eq!(fails("n"), err(1, K::MissingNumber));
+        assert_eq!(fails("!b"), err(2, K::MissingNumber));
+        assert_eq!(fails("R(n b1)"), err(3, K::MissingNumber));
     }
 
     #[test]
@@ -470,22 +592,29 @@ mod tests {
                 std::slice::from_ref(&op),
                 "{letter}"
             );
+            let kind = op.kind();
             assert_eq!(parse(&format!("{lower}{min}")), [op], "{lower}");
             assert!(
                 SetExpr::parse(&format!("{letter}{max}")).is_ok(),
                 "{letter}{max}"
             );
             let past = u32::from(max) + 1;
-            assert_eq!(
-                fails(&format!("{letter}{past}")),
-                err(1, range(past, min, max))
-            );
+            if max == 32767 {
+                // `P`, `T` and `Q` have no range check: the engine's IDs
+                // stop there.
+                assert_eq!(
+                    fails(&format!("{letter}{past}")),
+                    err(1, range(past, min, max))
+                );
+                continue;
+            }
+            let out = |value| [SetOp::OutOfRange { op: kind, value }];
+            assert_eq!(parse(&format!("{letter}{past}")), out(past), "{letter}");
+            assert_eq!(parse(&format!("{lower}{past}")), out(past), "{lower}");
             if min > 0 {
                 let below = u32::from(min) - 1;
-                assert_eq!(
-                    fails(&format!("{letter}{below}")),
-                    err(1, range(below, min, max))
-                );
+                assert_eq!(parse(&format!("{letter}{below}")), out(below), "{letter}");
+                assert_eq!(parse(&format!("{lower}{below}")), out(below), "{lower}");
             }
         }
     }

@@ -50,9 +50,10 @@ use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
 use crate::control::{
-    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, execute,
+    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, SetOpKind, execute,
 };
 use crate::pilot::{Gender, Pilot};
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_change::OutfitCarry;
 
 /// What a control-bit test reads about the session's pilot (see the module
@@ -186,9 +187,25 @@ impl Session {
             SetOp::StartMission(mission) => self.script_start(*mission, chance),
             SetOp::ActivateRank(rank) => self.activate_rank(*rank),
             SetOp::DeactivateRank(rank) => self.deactivate_rank(*rank),
+            SetOp::OutOfRange { op, .. } => self.out_of_range(*op),
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
             SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {}
+        }
+    }
+
+    /// An operator whose number is out of range (see
+    /// [`SetOp::OutOfRange`]). `_EvalSetExp` skips each such operator and
+    /// goes on to the next (@0x15873; C, E and H by @0x156e0, the bits by
+    /// their signed checks @0x1524a, @0x15271, @0x15298), but for `N`,
+    /// whose check (@0x158e3) runs the move's tail (@0x1593f): that queues
+    /// a stay by [`RuleKey::OutOfRangeMove`]'s engine reading, and does
+    /// nothing by the other.
+    fn out_of_range(&mut self, op: SetOpKind) {
+        if op == SetOpKind::MoveKeepPosition
+            && self.rules.source_for(RuleKey::OutOfRangeMove) == RuleSource::Engine
+        {
+            self.queued.moves.push(ScriptMove::Stay);
         }
     }
 

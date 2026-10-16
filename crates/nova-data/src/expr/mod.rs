@@ -123,9 +123,15 @@
 //!   0x15bee).
 //! - `Xxxx` mark system xxx explored (128-2175; 0x15c71).
 //!
-//! The original ignores an operator whose number is out of its range; this
-//! module rejects it, as it rejects a missing number (which the original
-//! reads as 0).
+//! The original checks each operator's range as it runs it, and skips only
+//! that operator out of range, the scan going on to the next (0x15873);
+//! `N`'s check (0x158e3) runs the move's tail instead (0x1593f). This
+//! module keeps such an operator as [`SetOp::OutOfRange`], its number in
+//! full (the original's 16-bit wrap is not kept), and leaves the sim to
+//! decide what it does. A bit above 9999 is out of range too (the bit
+//! checks are signed). `P`, `T` and `Q` are not checked, and a number past
+//! 32767 for them is rejected. A missing number is rejected (the original
+//! reads it as 0).
 //!
 //! `!` and `^` record their own pending operator, which a following `b`
 //! keeps, so they mean something only before `b`; this module rejects them

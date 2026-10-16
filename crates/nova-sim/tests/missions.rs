@@ -1,7 +1,8 @@
 //! A mission flown through a session, through the public API alone:
 //! accepted at one stellar, carried through a jump, and completed on
-//! landing at its destination, which pays it and frees its slot; and a
-//! cargo mission, its cargo loaded as it is accepted and unloaded there.
+//! landing at its destination, which pays it and frees its slot; a
+//! cargo mission, its cargo loaded as it is accepted and unloaded there;
+//! and a script's out-of-range `N`, which empties the offers.
 
 use nova_sim::catalog::{AuxShip, ListedStellar, MissionId, MissionRecord, MissionShip};
 use nova_sim::landing::StellarFlags;
@@ -9,8 +10,8 @@ use nova_sim::mission::Venue;
 use nova_sim::{
     Bit, CharacterStart, CombatCatalog, CommodityStrings, Controls, DateAffixes, DisasterRecord,
     GovtRecord, HullRecord, JunkRecord, LandOutcome, LandPress, LandingSite, NeverFires, OutfitId,
-    OutfitRecord, Pilot, PilotCatalog, Script, Session, ShipFields, ShipId, StarSystem, StartDate,
-    StartError, StellarId, SystemId, Test, Vec2, WeaponRecord,
+    OutfitRecord, Pilot, PilotCatalog, Script, Session, SetExpr, ShipFields, ShipId, StarSystem,
+    StartDate, StartError, StellarId, SystemId, Test, Vec2, WeaponRecord,
 };
 
 /// One `chär` flying a slow ship of 20 holds, a pixel a tick at most, from
@@ -372,4 +373,17 @@ fn a_cargo_missions_cargo_loads_on_accept_and_unloads_at_its_destination() {
         assert_eq!(session.pilot().cash(), cash + 900, "{drop_off}");
         assert_eq!(session.pilot().missions().iter().count(), 0, "{drop_off}");
     }
+}
+
+#[test]
+fn a_landed_scripts_out_of_range_n_empties_the_offers_and_the_rest_runs() {
+    let mut session = docked_at_128(&COURIER);
+    assert_eq!(session.mission_offers(Venue::Computer).len(), 1);
+    let script = SetExpr::parse("N9999 b40").expect("parses");
+    session.run_set(&script, &mut NeverFires);
+    let _ = session.settle_script(&COURIER, &mut NeverFires);
+    assert!(session.control_bit(Bit::new(40).expect("a bit")));
+    assert_eq!(session.mission_offers(Venue::Computer), []);
+    assert_eq!(session.landed(), Some(StellarId(128)));
+    assert_eq!(session.pilot().system(), SystemId(130));
 }

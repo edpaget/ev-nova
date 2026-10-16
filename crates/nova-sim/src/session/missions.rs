@@ -1898,6 +1898,30 @@ mod tests {
     }
 
     #[test]
+    fn a_landed_out_of_range_n_empties_the_offers_by_the_engine_alone() {
+        let catalog = offering();
+        for (reading, emptied) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut session = landed(&catalog, &mut NeverFires).with_rules(
+                crate::Rulebook::default().with_override(crate::RuleKey::OutOfRangeMove, reading),
+            );
+            assert!(!session.mission_offers(Venue::Computer).is_empty());
+            session.run_set(&SetExpr::parse("N9999").expect("parses"), &mut NeverFires);
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.system(), SystemId(130), "{reading:?}");
+            assert_eq!(
+                session.mission_offers(Venue::Computer).is_empty(),
+                emptied,
+                "{reading:?}"
+            );
+            assert_eq!(
+                session.offers.rolled_at(),
+                Some(StellarId(128)),
+                "{reading:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_relocation_empties_the_offers_and_forgets_their_stellar() {
         let catalog = offering();
         let mut session = landed(&catalog, &mut NeverFires);
