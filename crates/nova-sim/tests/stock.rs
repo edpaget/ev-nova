@@ -6389,3 +6389,96 @@ fn no_stock_weapon_is_a_bomb_or_a_starburst() {
     assert!(weapons.iter().all(|weapon| weapon.guidance != 5));
     assert!(weapons.iter().all(|weapon| weapon.sub_theta >= 0));
 }
+
+/// The events of `ticks` ticks after `ships[0]` fires once.
+fn events_of_one_shot(ships: &mut [Combatant], arsenal: &Arsenal, ticks: u32) -> Vec<CombatEvent> {
+    let mut combat = Combat::default();
+    let mut events = Vec::new();
+    for tick in 0..=ticks {
+        fight_with(&mut combat, ships, arsenal);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+        }
+        events.extend(combat.take_events());
+    }
+    events
+}
+
+/// The Hellhound (230: `ExplodType` 1014, `BlastRadius` 145) explodes
+/// with extras where it hits a Leviathan, of its `BlastRadius`, so its
+/// explosion scatters extras about it.
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_stock_hellhound_explodes_with_extras_of_its_blast_radius() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let hellhound = stock_weapon(&data, 230);
+    let explosion = hellhound.explosion.expect("an explosion");
+    assert!(explosion.extra, "{explosion:?}");
+    assert_eq!(hellhound.blast_radius, 145.0);
+    let mut ships = [
+        aiming(&hellhound),
+        target(&data, &arsenal, ShipId(131), 300.0),
+    ];
+    let events = events_of_one_shot(&mut ships, &arsenal, hellhound.lifetime);
+    let sizes: Vec<f32> = events
+        .iter()
+        .filter_map(|event| match *event {
+            CombatEvent::Exploded {
+                explosion: boom,
+                size,
+                ..
+            } if boom == explosion => Some(size),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sizes, [145.0], "{events:?}");
+}
+
+/// The stock shots that fizzle out in `bööm` 128 at the end of their
+/// life: those of an `ExplodType` above none that don't detonate.
+#[test]
+fn the_stock_shots_that_fizzle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let fizzling: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| {
+            spec.fizzles
+                && !spec.detonates()
+                && !spec.is_beam()
+                && spec.guidance != Guidance::FighterBay
+        })
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(
+        fizzling,
+        [
+            136, 137, 143, 144, 145, 156, 157, 158, 159, 162, 182, 183, 184, 185, 197, 199, 200,
+            219, 233
+        ]
+    );
+}
+
+/// 56 stock weapons throw off particles where they hit.
+#[test]
+fn fifty_six_stock_weapons_throw_off_hit_particles() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let spraying = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.hit_particles.is_some())
+        .count();
+    assert_eq!(spraying, 56);
+}
