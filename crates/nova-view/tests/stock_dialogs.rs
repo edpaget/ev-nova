@@ -435,6 +435,8 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         let music = prefs.music_volume().rects().bounds();
         assert_eq!(prefs.hyperspace_effects().label(), HYPERSPACE_EFFECTS_LABEL);
         assert!(prefs.hyperspace_effects().enabled(), "{}", path.display());
+        assert_eq!(prefs.quicktime_movies().label(), "QuickTime Movies");
+        assert!(prefs.quicktime_movies().enabled(), "{}", path.display());
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
         let name = path.display();
@@ -445,7 +447,11 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         );
         assert!(dialog.bounds().contains(music.min) && dialog.bounds().contains(music.max));
         // Nothing else is drawn where the music volume is.
-        for toggle in prefs.inert().iter().chain([prefs.hyperspace_effects()]) {
+        for toggle in prefs
+            .inert()
+            .iter()
+            .chain([prefs.hyperspace_effects(), prefs.quicktime_movies()])
+        {
             let rect = toggle.rect();
             let apart = rect.max.x <= music.min.x
                 || rect.min.x >= music.max.x
@@ -453,7 +459,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 || rect.min.y >= music.max.y;
             assert!(apart, "{name}: {}", toggle.label());
         }
-        assert_eq!(prefs.inert().len(), 10, "{name}");
+        assert_eq!(prefs.inert().len(), 9, "{name}: QuickTime Movies works");
     }
 }
 

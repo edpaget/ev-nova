@@ -6,7 +6,9 @@
 //! name and offer text filled. Every `mïsn`'s texts fill every tag but the
 //! ranks'. A stock cargo mission loads its cargo as it is accepted, and
 //! landing at its destination unloads it, pays and runs its `OnSuccess`.
-//! The new pilot is offered the tutorial at the spaceport. Skips, passing, when `NOVA_DATA` is unset.
+//! The new pilot is offered the tutorial at the spaceport. The one mission
+//! `dësc` naming a movie is mission 906's offer, "\x01", after the dialog.
+//! Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -356,4 +358,33 @@ fn a_stock_cargo_mission_loads_on_accept_and_completes_at_its_destination() {
     if let Some(bit) = bit {
         assert!(session.control_bit(bit), "OnSuccess set {bit:?}");
     }
+}
+
+#[test]
+fn the_one_stock_mission_movie_is_906s_offer_after_its_dialog() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let filmed: Vec<(MissionId, nova_sim::TextMovies)> = PilotCatalog::mission_texts(&data)
+        .into_iter()
+        .filter(|texts| texts.movies != nova_sim::TextMovies::default())
+        .map(|texts| (texts.id, texts.movies))
+        .collect();
+    assert_eq!(
+        filmed,
+        [(
+            MissionId(906),
+            nova_sim::TextMovies {
+                offer: Some(nova_sim::DescMovie {
+                    file: "\u{1}".to_owned(),
+                    after: true,
+                    double_size: false,
+                    cinematic: false,
+                }),
+                ..nova_sim::TextMovies::default()
+            }
+        )],
+        "dësc 4778, Flags 1"
+    );
 }
