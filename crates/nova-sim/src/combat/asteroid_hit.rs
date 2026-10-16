@@ -42,28 +42,21 @@
 //!   [`broken`]); otherwise, with an `Impact` and a `Mass` above none, it
 //!   is pushed (@0x36921-0x36996, [`push`]). The shot is always used up
 //!   (@0x3699b-0x369bc). The [`Combat`](super::Combat) tick runs it.
+//! - **The blast's hits** are `_DamageShip`'s (@0x36888) as a shot's own
+//!   blast passes them: by the shot's source, neither direct nor intended,
+//!   can't-kill as the shot is disable-only, and pushing each ship it
+//!   reaches by the weapon's `Impact` away from the blast's centre, with
+//!   no source gate ([`impact`](super::impact)); then `_IonizeShip`
+//!   (@0x368b7) ionizes it over the blast's circle ([`ion`](super::ion)).
 //!
 //! A broken asteroid is skipped by every later shot in the tick, as its
 //! hidden sprite is.
 //!
-//! Left out, from the blast:
-//!
-//! - `_DamageShip`'s impact push (@0x3a9b8-0x3ab84), for
-//!   rdm:phase/weapons-fidelity/phase-8-knockback-and-tractor-beams: the
-//!   blast (`_DamageShip` @0x36888) passes the weapon's `Impact` with the
-//!   shot's position and no source, so each ship it reaches is pushed
-//!   away from the blast centre, with no 50-px source gate. Until then
-//!   the blast damages the ships it reaches and pushes none.
-//! - `_IonizeShip` (@0x368b7), for
-//!   rdm:phase/weapons-fidelity/phase-9-ionizing-hits, which ionizes a
-//!   ship its blast reaches; until then the blast does its `_DamageShip`
-//!   part only.
-//!
 //! [`AsteroidType::radius`]: crate::asteroid::AsteroidType::radius
 
 use super::damage::Blast;
+use super::impact::speed_limit;
 use super::projectile::{Shot, nearest_contact};
-use super::shockwave::speed_limit;
 use super::weapon::{HitParticles, WeaponSpec};
 use super::{ParticleBurst, ShipRef};
 use crate::bay::launch_velocity;
@@ -74,9 +67,15 @@ use crate::rulebook::RuleSource;
 /// (`_AdjustedAccel` and `_SpeedLimit`'s 2.0, @0x36921-0x36996).
 pub const PUSH_TOP_SPEED: f32 = 2.0;
 
-/// How far, in percent, a hit particle's speed varies either way
-/// (@0x366a0-0x36701).
+/// How far, in percent, a shot's hit particle's speed varies either way,
+/// on an asteroid (@0x366a0-0x36701), a ship (`_HandleShipHit`
+/// @0x36b44-0x36bae) or a stellar (`_CheckShotProximities`
+/// @0x3734d-0x373b4).
 pub const HIT_PART_VARIATION: u32 = 20;
+
+/// How far, in percent, a beam's hit particle's speed varies either way
+/// on a ship (the 0x19 of `_HandleBeams` @0x310eb-0x31152).
+pub const BEAM_HIT_PART_VARIATION: u32 = 25;
 
 /// A hit particle's most life over its least (the 1.25 @0xdd5c8).
 pub const HIT_PART_LIFE_SPAN: f64 = 1.25;
@@ -198,11 +197,15 @@ pub fn push(velocity: Vec2, heading: f32, impact: f32, mass: i16) -> Vec2 {
     speed_limit(pushed, PUSH_TOP_SPEED)
 }
 
-/// The burst of a hit's `particles` at `at` (@0x366a0-0x36701): their
-/// speed varied by [`HIT_PART_VARIATION`] percent, their life from
-/// `HitPartLife` to its whole × [`HIT_PART_LIFE_SPAN`], all at `at`.
+/// The burst of a hit's `particles` at `at`: their speed varied by
+/// `variation` percent, their life from `HitPartLife` to its whole ×
+/// [`HIT_PART_LIFE_SPAN`], all at `at`, as every hit's `_SpawnParticles`
+/// call passes them: a shot's on an asteroid (@0x366a0-0x36701), a ship
+/// (@0x36b44-0x36bae) or a stellar (@0x3734d-0x373b4), at
+/// [`HIT_PART_VARIATION`], and a beam's on a ship (@0x310eb-0x31152), at
+/// [`BEAM_HIT_PART_VARIATION`].
 #[must_use]
-pub fn hit_burst(at: Vec2, particles: &HitParticles) -> ParticleBurst {
+pub fn hit_burst(at: Vec2, particles: &HitParticles, variation: u32) -> ParticleBurst {
     // A whole `u32` times 1.25, truncated: within a `u32` for any life
     // an `i16` gives.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -210,7 +213,7 @@ pub fn hit_burst(at: Vec2, particles: &HitParticles) -> ParticleBurst {
     ParticleBurst {
         at,
         speed: particles.speed,
-        variation: HIT_PART_VARIATION,
+        variation,
         life: (particles.life, most),
         color: particles.color,
         count: particles.count,
@@ -219,22 +222,22 @@ pub fn hit_burst(at: Vec2, particles: &HitParticles) -> ParticleBurst {
 }
 
 /// The blast of `shot`'s hit on an asteroid at `at` (@0x3670d-0x368ca):
-/// only a player's shot's, with a `BlastRadius` above none, from a weapon
-/// that is not planet-type; it hits no ship directly, and spares the
-/// player only by `Flags` 0x0100. The caller leaves planet-type ships out
-/// of those it may reach (@0x367a8).
+/// only a player's shot's (the player its [`Shot::attacker`]), with a
+/// `BlastRadius` above none, from a weapon that is not planet-type; it
+/// hits no ship directly, and spares the player only by `Flags` 0x0100.
+/// The caller leaves planet-type ships out of those it may reach
+/// (@0x367a8).
 #[must_use]
 pub fn blast(shot: &Shot, at: Vec2) -> Option<Blast> {
     let weapon = &shot.weapon;
-    (shot.firer == ShipRef::Player && weapon.blast_radius > 0.0 && !weapon.planet_type()).then(
-        || Blast {
-            at,
-            radius: weapon.blast_radius,
-            direct: None,
-            firer: ShipRef::Player,
-            spares_player: weapon.spares_player(),
-        },
-    )
+    let players = shot.attacker() == Some(ShipRef::Player);
+    (players && weapon.blast_radius > 0.0 && !weapon.planet_type()).then(|| Blast {
+        at,
+        radius: weapon.blast_radius,
+        direct: None,
+        firer: Some(ShipRef::Player),
+        spares_player: weapon.spares_player(),
+    })
 }
 
 /// What is left of an asteroid's `strength` after a hit of `weapon`: its
@@ -255,7 +258,9 @@ pub fn damaged(strength: i16, weapon: &WeaponSpec) -> i16 {
 mod tests {
     use super::*;
     use crate::catalog::WeaponRecord;
+    use crate::chance::NeverFires;
     use crate::combat::ShipRef;
+    use crate::combat::projectile::Guide;
     use crate::flight::ShipState;
     use crate::testkit::weapon;
 
@@ -283,7 +288,7 @@ mod tests {
             count: 30,
             ..record
         });
-        let was = shot.step(&[]);
+        let was = shot.step(&Guide::among(&[]), &mut NeverFires);
         (shot, was)
     }
 
@@ -513,7 +518,7 @@ mod tests {
         };
         let at = Vec2::new(5.0, -7.0);
         assert_eq!(
-            hit_burst(at, &particles),
+            hit_burst(at, &particles, HIT_PART_VARIATION),
             ParticleBurst {
                 at,
                 speed: 2.5,
@@ -528,8 +533,20 @@ mod tests {
             life: 3,
             ..particles
         };
-        assert_eq!(hit_burst(at, &short).life, (3, 3));
+        assert_eq!(hit_burst(at, &short, HIT_PART_VARIATION).life, (3, 3));
         assert_eq!(HIT_PART_LIFE_SPAN, 1.25);
+    }
+
+    #[test]
+    fn a_beams_burst_varies_its_speed_25_percent_with_a_shots_life() {
+        let particles = HitParticles {
+            count: 6,
+            speed: 2.5,
+            life: 30,
+            color: 0x00FF_8000,
+        };
+        let burst = hit_burst(Vec2::ZERO, &particles, BEAM_HIT_PART_VARIATION);
+        assert_eq!((burst.variation, burst.life), (25, (30, 37)));
     }
 
     /// A shot of `firer`'s weapon of `BlastRadius` `radius` and these
@@ -555,7 +572,7 @@ mod tests {
                 at,
                 radius: 30.0,
                 direct: None,
-                firer: ShipRef::Player,
+                firer: Some(ShipRef::Player),
                 spares_player: false,
             })
         );

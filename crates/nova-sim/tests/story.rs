@@ -65,6 +65,8 @@ impl CombatCatalog for Home {
             flags3: 0,
             decay: 0,
             beam_length: 0,
+            falloff: 0,
+            li_density: 0,
             burst_count: 0,
             burst_reload: 0,
             guided_turn: 0,
@@ -75,6 +77,12 @@ impl CombatCatalog for Home {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            recoil: 0,
+            exit_type: -1,
+            ionization: 0,
+            ionize_color: 0,
+            jam_vuln: [0; 4],
+            frame: None,
             hit_particles: 0,
             hit_part_life: 0,
             hit_part_vel: 0,
@@ -337,10 +345,14 @@ fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_a_later_dispatch_sees() {
         turrets_only: false,
         bays: false,
         point_defence: false,
+        keep: None,
     });
     for _ in 0..2 {
         session.tick_combat(Rules::default(), &mut NeverFires);
     }
+    // The second shot's first move is tested in the next tick's hit pass.
+    session.hold_trigger(Trigger::default());
+    session.tick_combat(Rules::default(), &mut NeverFires);
     assert!(
         session.galaxy().destroyed(StellarId(128)),
         "60 twice: shot down"

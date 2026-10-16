@@ -33,10 +33,16 @@
 //!   other ship only from any other weapon (`_AIFireMissile`
 //!   @0x812b4-0x812fb, see [`fire`](crate::ai::fire)). It dies in an
 //!   explosion of no size and makes no shockwave (`_HandleShipDisplay`
-//!   tests the flag @0x2d90d), and no shockwave pushes it (`_DamageShip`
-//!   @0x3aacb). The original's explosion size for one is a stale stack
+//!   tests the flag @0x2d90d), and nothing pushes it, neither a hit nor
+//!   a shockwave (`_DamageShip` @0x3aacb), nor holds it in a tractor beam
+//!   (`_HandleBeams` @0x31210). The original's explosion size for one is a stale stack
 //!   value (copied @0x2d900 from a local only 0x2d968 writes); the engine
 //!   reads it as none.
+//! - Its turret miss class ([`HullSpec::miss_class`], [`miss_class`]) is
+//!   80 for a Fighter-class ship, 90 for a Medium one and 100 for any
+//!   other, from its escort class: its turret and point-defence shots roll
+//!   1 to it, and a roll above it misses it while it is intact (see
+//!   [`sides`](super::sides)).
 //! - Its `KeyCarried` ([`HullSpec::key_carried`]) is the ship a weapon of
 //!   `Flags2` 0x0080 needs aboard (`_WeaponHasAmmo` @0xba07-0xba85, see
 //!   [`Armament::has_ammo`](super::armament::Armament::has_ammo)); none
@@ -44,9 +50,12 @@
 
 use std::fmt::Debug;
 
+use super::exits::ExitPoints;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{HullRecord, ShipId};
+use crate::escort::EscortClass;
+use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
 
@@ -104,6 +113,10 @@ pub const TOUGH_DISABLE_PERCENT: f64 = 10.0;
 pub const BLIND_SPOTS: u16 = 0x7000;
 /// The `shïp` `Flags` bit of a planet-type ship.
 pub const PLANET_TYPE: u16 = 0x0400;
+/// The `shïp` `Flags2` bit of a ship point defence fires on: "can be
+/// fired on by point defense" (class +0x9ea, `_HandleShipPointDefense`
+/// @0x3951d; see [`defence`](super::defence)).
+pub const PD_TARGET: u16 = 0x0008;
 /// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
 pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
@@ -112,6 +125,30 @@ pub const DEATH_SIZE_MASS: f32 = 100.0;
 pub const DEATH_SIZE_PER_TON: f32 = 0.075;
 /// The death explosion's size before the mass (the double @0xdd590).
 pub const DEATH_SIZE_BASE: f32 = 50.0;
+
+/// The turret miss class of a Fighter-class ship (`_LoadObjectData`
+/// @0x7a4c4).
+pub const FIGHTER_MISS_CLASS: u32 = 80;
+/// The turret miss class of a Medium ship (@0x7a4d1).
+pub const MEDIUM_MISS_CLASS: u32 = 90;
+/// The turret miss class of any heavier class, a Freighter's too
+/// (@0x7a4d6).
+pub const HEAVY_MISS_CLASS: u32 = 100;
+
+/// The turret miss class of a ship of escort class `class`, as
+/// `_LoadObjectData` sets class +0xa10 from its escort type +0xe
+/// (@0x7a4bb-0x7a4de): [`FIGHTER_MISS_CLASS`], [`MEDIUM_MISS_CLASS`], or
+/// [`HEAVY_MISS_CLASS`] for a Warship or a Freighter. Nothing else writes
+/// it, so it is never 0 or less, and `_SpawnShot`'s `Rand(100) + 1` for a
+/// class of 0 or less (@0x3e924-0x3e93c) is never reached.
+#[must_use]
+pub const fn miss_class(class: EscortClass) -> u32 {
+    match class {
+        EscortClass::Fighter => FIGHTER_MISS_CLASS,
+        EscortClass::Medium => MEDIUM_MISS_CLASS,
+        EscortClass::Warship | EscortClass::Freighter => HEAVY_MISS_CLASS,
+    }
+}
 
 /// A ship type's hull, in the simulation's units.
 // Each flag is one of the ship type's `Flags` bits, read on its own.
@@ -153,16 +190,45 @@ pub struct HullSpec {
     /// (see [`cloak::on_screen`](crate::cloak::on_screen)).
     pub sprite_height: Option<f32>,
     /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`]: it
-    /// dies with no shockwave and no shockwave pushes it.
+    /// dies with no shockwave, and no hit, shockwave or tractor beam
+    /// pushes or holds it.
     pub planet_type: bool,
+    /// Whether point defence fires on it, its `Flags2` [`PD_TARGET`],
+    /// when it fights the defender or its leader (see
+    /// [`defence::choose_ship`](super::defence::choose_ship)).
+    pub pd_target: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
+    /// Its class's top speed, in pixels a tick: its `Speed` alone, none of
+    /// its outfits' (the original's class +0x40, `_LoadObjectData`
+    /// @0x7a0db-0x7a0ef), as a hopeless chase compares them (see
+    /// [`odds`](crate::ai::odds)); none below none.
+    pub class_speed: f32,
+    /// How far its class's stock weapons reach, as `_AIInGunRange` asks
+    /// with no weapon named (@0x7fa2d-0x7faa8, see
+    /// [`fire::in_reach`](crate::ai::fire::in_reach)): the longest reach
+    /// among its stock slots of a count above none and a raw guidance of 8
+    /// or less, a beam (0 and 3) its length and 32, any other its range
+    /// ([`WeaponSpec::range`](super::weapon::WeaponSpec::range)) and 32,
+    /// truncated; none when it has no such weapon. Its person's and
+    /// outfits' weapons, its point defence and its bays never count. An
+    /// [`Arsenal`](super::armament::Arsenal) sets it.
+    pub stock_reach: Option<f32>,
     /// Whether it is hidden: its `Cost` is -1, and `_HandleShipDisplay`
     /// hides a ship of such a type and leaves its slot's layer as it was
     /// (@0x2b7f3 → @0x2cc6b; see
     /// [`ship_layer`](crate::ship_layer)).
     pub hidden: bool,
+    /// Its weapon exit points, from its `shän`; none without one, and its
+    /// shots and beams leave from its centre (see
+    /// [`exits`](super::exits)).
+    pub exits: Option<ExitPoints>,
+    /// Its turret miss class (the original's class +0xa10,
+    /// [`miss_class`]): the range a turret or point-defence shot it fires
+    /// rolls in, and the highest roll that hits it while it is intact (see
+    /// [`sides`](super::sides)).
+    pub miss_class: u32,
 }
 
 impl Default for HullSpec {
@@ -184,8 +250,13 @@ impl Default for HullSpec {
             sprite_size: None,
             sprite_height: None,
             planet_type: false,
+            pd_target: false,
             key_carried: None,
+            class_speed: 0.0,
+            stock_reach: None,
             hidden: false,
+            exits: None,
+            miss_class: miss_class(EscortClass::Freighter),
         }
     }
 }
@@ -212,8 +283,13 @@ impl HullSpec {
             sprite_size: size,
             sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
             planet_type: record.flags & PLANET_TYPE != 0,
+            pd_target: record.flags2 & PD_TARGET != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
+            class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
+            stock_reach: None,
             hidden: record.cost == HIDDEN_COST,
+            exits: record.exits.as_ref().and_then(ExitPoints::new),
+            miss_class: miss_class(record.escort_class),
         }
     }
 
@@ -267,10 +343,23 @@ pub enum Condition {
 }
 
 impl Condition {
-    /// Whether shots and beams can hit it: intact or disabled.
+    /// Whether it still stands: intact or disabled, neither breaking up
+    /// nor destroyed. A homing shot loses a target that no longer stands,
+    /// a turreted beam lets go of it, the AI no longer aims at it, and
+    /// only a standing ship regenerates its shields.
     #[must_use]
-    pub fn hittable(self) -> bool {
+    pub fn standing(self) -> bool {
         matches!(self, Self::Intact | Self::Disabled)
+    }
+
+    /// Whether its slot is active: anything but destroyed, breaking up
+    /// included (the original's +0xb8). Shots, beams and blasts reach
+    /// every active ship ([`sides`](super::sides)): `_ShotCanHitShip`,
+    /// `_HandleBeams`' filter and the blast pass test the slot alone, never
+    /// `_IsDying`.
+    #[must_use]
+    pub fn active(self) -> bool {
+        self != Self::Destroyed
     }
 }
 
@@ -339,7 +428,8 @@ impl DisableRule for NovaDisable {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{BoomId, ShipId};
+    use crate::catalog::{BoomId, ShipExits, ShipId};
+    use crate::combat::exits::ExitPoints;
     use crate::testkit::hull;
 
     fn armor(now: f32, max: f32) -> Gauge {
@@ -395,6 +485,38 @@ mod tests {
         }
         assert_eq!(DEFAULT_HIT_RADIUS, 16.0);
         assert_eq!(HullSpec::default().hit_radius, 16.0);
+    }
+
+    #[test]
+    fn hull_spec_reads_exit_points_in_simulation_units() {
+        let raw = ShipExits {
+            points: [
+                [(3, 10), (-3, 10), (3, 10), (-3, 10)],
+                [(0, 0); 4],
+                [(0, 0); 4],
+                [(0, 0); 4],
+            ],
+            z: [[-2; 4], [0; 4], [0; 4], [0; 4]],
+            up_compress: (100, 71),
+            down_compress: (100, 71),
+            frames: 36,
+        };
+        let shuttle = HullSpec::new(&HullRecord {
+            exits: Some(raw),
+            ..hull(128)
+        });
+        assert_eq!(shuttle.exits, ExitPoints::new(&raw));
+        assert!(shuttle.exits.is_some());
+        let without = HullSpec::new(&HullRecord {
+            exits: None,
+            ..hull(128)
+        });
+        assert_eq!(without.exits, None, "no shän");
+        assert_eq!(
+            HullSpec::default().exits,
+            None,
+            "a placeholder fires from its centre"
+        );
     }
 
     #[test]
@@ -525,6 +647,28 @@ mod tests {
     }
 
     #[test]
+    fn a_hull_point_defence_fires_on_has_its_flags2_0x0008() {
+        let target = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .pd_target
+        };
+        assert!(target(0x0008));
+        assert!(target(0x0089), "with other bits");
+        assert!(!target(0xfff7), "every other bit");
+        assert!(!target(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0008,
+            ..hull(167)
+        });
+        assert!(!flags.pd_target, "its Flags never");
+        assert!(!HullSpec::default().pd_target);
+        assert_eq!(PD_TARGET, 0x0008);
+    }
+
+    #[test]
     fn a_hull_is_hidden_when_its_cost_is_minus_one() {
         let hidden = HullSpec::new(&HullRecord {
             cost: -1,
@@ -536,6 +680,23 @@ mod tests {
             assert!(!shown.hidden, "cost {cost}");
         }
         assert!(!HullSpec::default().hidden);
+    }
+
+    #[test]
+    fn a_hulls_miss_class_is_80_90_or_100_by_its_escort_class() {
+        for (escort_class, miss_class) in [
+            (EscortClass::Fighter, 80),
+            (EscortClass::Medium, 90),
+            (EscortClass::Warship, 100),
+            (EscortClass::Freighter, 100),
+        ] {
+            let spec = HullSpec::new(&HullRecord {
+                escort_class,
+                ..hull(141)
+            });
+            assert_eq!(spec.miss_class, miss_class, "{escort_class:?}");
+        }
+        assert_eq!(HullSpec::default().miss_class, 100);
     }
 
     #[test]
@@ -582,6 +743,15 @@ mod tests {
     }
 
     #[test]
+    fn a_hulls_class_speed_is_its_speed_alone_in_pixels_a_tick() {
+        let of = |speed| HullSpec::new(&HullRecord { speed, ..hull(128) }).class_speed;
+        assert_eq!(of(350), 3.5);
+        assert_eq!(of(0), 0.0);
+        assert_eq!(of(-200), 0.0, "none below none");
+        assert_eq!(HullSpec::default().class_speed, 0.0);
+    }
+
+    #[test]
     fn a_ship_of_100_tons_or_more_dies_in_an_explosion_sized_by_its_mass() {
         let of = |mass| {
             HullSpec {
@@ -618,20 +788,36 @@ mod tests {
     }
 
     #[test]
-    fn intact_and_disabled_ships_can_be_hit_and_dying_or_destroyed_ones_cannot() {
-        assert!(Condition::Intact.hittable());
-        assert!(Condition::Disabled.hittable());
+    fn intact_and_disabled_ships_stand_and_dying_or_destroyed_ones_do_not() {
+        assert!(Condition::Intact.standing());
+        assert!(Condition::Disabled.standing());
         for starting in [false, true] {
             assert!(
                 !Condition::Dying {
                     ticks_left: 3,
                     starting
                 }
-                .hittable()
+                .standing()
             );
         }
-        assert!(!Condition::Destroyed.hittable());
+        assert!(!Condition::Destroyed.standing());
         assert_eq!(Condition::default(), Condition::Intact);
+    }
+
+    #[test]
+    fn every_ship_but_a_destroyed_one_is_active() {
+        assert!(Condition::Intact.active());
+        assert!(Condition::Disabled.active());
+        for starting in [false, true] {
+            assert!(
+                Condition::Dying {
+                    ticks_left: 3,
+                    starting
+                }
+                .active()
+            );
+        }
+        assert!(!Condition::Destroyed.active());
     }
 
     #[test]

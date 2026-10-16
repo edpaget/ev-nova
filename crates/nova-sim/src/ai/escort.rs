@@ -131,10 +131,7 @@ impl Behaviour for EscortAi {
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         match npc.goal {
-            Goal::Attack(_) => Trigger {
-                bays: false,
-                ..fire::trigger(npc, around, self.fire)
-            },
+            Goal::Attack(_) => fire::trigger_holding_fighters(npc, around, self.fire),
             // Keeping formation, `_LowLevelAIHandler` calls `_AIFireTurret`
             // only while the guard (+0x70) is within the box on both axes
             // (@0x8648e-0x864ad, @0x86666-0x86689).
@@ -259,7 +256,13 @@ mod tests {
     use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::{AiType, Mode};
 
-    /// A turret reaching 300 pixels (332 with the margin), and a gun.
+    /// A turret reaching 300 pixels (332 with the margin), and a gun, as
+    /// its class's stock weapons reach ([`HullSpec::stock_reach`]).
+    ///
+    /// [`HullSpec::stock_reach`]: crate::combat::hull::HullSpec::stock_reach
+    const STOCK_REACH: f32 = 332.0;
+
+    /// A turret reaching 300 pixels, and a gun.
     fn armed() -> Armament {
         Armament::new([
             (
@@ -291,6 +294,7 @@ mod tests {
         npc.govt = None;
         npc.class = EscortClass::Medium;
         npc.armament = armed();
+        npc.hull.stock_reach = Some(STOCK_REACH);
         npc.escort = Some(EscortDuty {
             formation: crate::escort::FormationSlot {
                 slot: 2,
@@ -379,6 +383,7 @@ mod tests {
         turrets_only: true,
         bays: false,
         point_defence: true,
+        keep: None,
     };
 
     #[test]
@@ -506,7 +511,7 @@ mod tests {
             "drawn among both"
         );
         let mut unarmed = kept;
-        unarmed.armament = Armament::default();
+        unarmed.hull.stock_reach = None;
         let npcs = [unarmed, pirate(2, 10.0, 0.0)];
         assert_eq!(
             decide(&npcs, (0.0, 0.0), &[0]).1,
@@ -833,6 +838,7 @@ mod tests {
             turrets_only: false,
             bays: false,
             point_defence: true,
+            keep: None,
         },
         drops_target: false,
     };
@@ -902,10 +908,12 @@ mod tests {
         };
         let strike = crate::combat::Strike {
             ship: n(1),
-            by: n(2),
+            by: Some(n(2)),
             damage: 10.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         assert_eq!(
             ENGINE.react(&npcs[0], &strike, &around),

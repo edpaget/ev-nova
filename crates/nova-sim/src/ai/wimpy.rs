@@ -165,10 +165,12 @@ mod tests {
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         let strike = Strike {
             ship: n(1),
-            by: n(2),
+            by: Some(n(2)),
             damage: 7.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         assert_eq!(
             WimpyTrader::default().react(&npcs[0], &strike, &around),

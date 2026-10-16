@@ -28,8 +28,9 @@
 //! ([`FlightView::with_behaviour`]; [`NovaAi`] by default), and then the
 //! fight ([`Session::tick_combat`]), its ships disabled as the screen's
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
-//! [`NovaDisable`] by default), their point defence engaging the
-//! missiles its [`PointDefenceRule`] calls hostile
+//! [`NovaDisable`] by default), their point defence engaging every
+//! missile fired at them, or by the other reading of the `pd_hostility`
+//! rule those its [`PointDefenceRule`] calls hostile
 //! ([`FlightView::with_point_defence_rule`]; [`Allegiance`] by default),
 //! and the player's crimes judged by its [`LegalCode`]
 //! ([`FlightView::with_law`]; [`NovaLaw`] by default). What could not be read of the looks
@@ -532,16 +533,17 @@ use nova_sim::traffic::gate_entry::enter_level;
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     ALERT_CICN, Allegiance, Assigned, Assignment, AsteroidCatalog, Behaviour, BoardRefusal,
-    Boarding, BoardingRule, Chance, ClassRow, CombatCatalog, CommCatalog, CommNote, Condition,
-    Controls, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal,
-    Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal,
-    LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal,
-    OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal,
-    Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming,
-    ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId,
-    StellarPick, Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog,
-    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    Boarding, BoardingRule, Chance, ClassRow, CombatCatalog, CombatEvent, CommCatalog, CommNote,
+    Condition, Controls, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep, GateKind,
+    GateRefusal, Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help,
+    JumpRefusal, LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires,
+    NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder,
+    OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule,
+    RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, ShipId,
+    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
+    StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal,
+    TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level,
+    lights_level,
 };
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
@@ -564,6 +566,7 @@ use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
     Toggled, escort_command_message, fighters_abandoned_message,
 };
+use super::flash::ShieldFlash;
 use super::floating::{self, FloatingMap, Hit};
 use super::hud::{self, HudState, NavDestination, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
@@ -2157,6 +2160,8 @@ pub struct FlightView<C> {
     effects: Effects,
     /// What the effects are rolled on.
     effects_chance: SharedChance,
+    /// Each ship's shield flash while its timer runs.
+    flashes: BTreeMap<ShipRef, ShieldFlash>,
     /// What the HUD's text is measured by, if anything.
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
@@ -2450,6 +2455,7 @@ impl<
             codes: BTreeMap::new(),
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
+            flashes: BTreeMap::new(),
             metrics: None,
             escort_menu: EscortMenu::default(),
             ui_sounds: Vec::new(),
@@ -3337,11 +3343,16 @@ impl<
                     let player = point(session.player().position);
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
                     let chance = &mut self.effects_chance;
-                    self.effects.step(&dying, player, &self.looks, chance);
-                    let scene = Scene { player };
-                    for event in session.take_combat_events() {
-                        self.effects.apply(&event, &scene, &self.looks, chance);
-                    }
+                    let debris = session.rules().source_for(RuleKey::ShipDebris);
+                    let caps = session.rules().source_for(RuleKey::CombatCaps);
+                    let scene = Scene {
+                        player,
+                        debris: debris == RuleSource::Bible,
+                        caps: caps == RuleSource::Engine,
+                    };
+                    self.effects.step(&dying, &scene, &self.looks, chance);
+                    let shown = (&mut self.effects, &mut self.flashes);
+                    show_combat(session, &scene, shown, &self.looks, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {
@@ -3628,6 +3639,7 @@ impl<
         self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
+        self.flashes.clear();
         self.read_npc_sheets();
     }
 
@@ -3883,6 +3895,7 @@ impl<
                 self.pending_landing = Some(stellar);
                 self.message = None;
                 self.effects.clear();
+                self.flashes.clear();
                 self.redraw_status();
             }
             Ok(LandPress::AtGate {
@@ -6025,6 +6038,19 @@ impl<C> FlightView<C> {
         &self.effects
     }
 
+    /// `ship`'s shield-flash timer as the last frame showed it
+    /// ([`ShieldFlash::shown`]): 32 on the frame of a hit, then a frame
+    /// less each frame; none once it has run out, or with no hit. Once the
+    /// shän shield layer is drawn (rdm:phase/ship-handling-fidelity/phase-10),
+    /// the layer shows it at [`ShieldFlash::step`]'s level.
+    #[must_use]
+    pub fn shield_flash(&self, ship: ShipRef) -> Option<f32> {
+        self.flashes
+            .get(&ship)
+            .map(ShieldFlash::shown)
+            .filter(|&shown| shown > 0.0)
+    }
+
     /// The shots in flight, each where it is drawn: `alpha` of the way
     /// from where it was a step ago, as the ships are.
     fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
@@ -6107,6 +6133,7 @@ impl<C> FlightView<C> {
                     start: shown(beam.start),
                     end: shown(beam.end),
                     weapon: beam.weapon.id,
+                    fade: beam.fade,
                 }
             })
             .collect()
@@ -6707,6 +6734,71 @@ fn placeholder_size() -> (u32, u32) {
 /// The simulation's `v` as a view point.
 fn point(v: Vec2) -> Point {
     Point::new(v.x, v.y)
+}
+
+/// Shows the fight's events `session` raised this pass in `scene`: each on
+/// `effects`, as `looks` says, drawing on `chance`, and each hit on its
+/// ship's flash among `flashes`, which then step a frame
+/// ([`step_flashes`]). An NPC's shot hits land before its
+/// `_HandleShipDisplay`, so they show this frame; a hit the original lands
+/// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
+/// next.
+fn show_combat(
+    session: &mut Session,
+    scene: &Scene,
+    (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
+    looks: &Looks,
+    chance: &mut dyn Chance,
+) {
+    let mut late = Vec::new();
+    for event in session.take_combat_events() {
+        if let CombatEvent::Hit {
+            ship,
+            passes_shields,
+            late: shown_late,
+            ..
+        } = event
+        {
+            if shown_late {
+                late.push((ship, passes_shields));
+            } else {
+                flashes.entry(ship).or_default().hit(passes_shields);
+            }
+        }
+        effects.apply(&event, scene, looks, chance);
+    }
+    step_flashes(flashes, session);
+    for (ship, passes_shields) in late {
+        flashes.entry(ship).or_default().hit(passes_shields);
+    }
+}
+
+/// Steps each ship's shield flash among `flashes` a frame by its shield
+/// in `session` ([`ShieldFlash::step`]), dropping the flashes of ships no
+/// longer in the system and those run out.
+///
+/// No class has a shield layer yet: the shän shield layer is
+/// rdm:phase/ship-handling-fidelity/phase-10's, and no stock `shän` has
+/// one, so each flash only runs down, and the base it is given, which
+/// only a drawn layer reads, is the ship's shield capacity for now. That
+/// phase passes the class's own loaded `Shield` (class +0x5c @0x2c8aa)
+/// with the layer.
+fn step_flashes(flashes: &mut BTreeMap<ShipRef, ShieldFlash>, session: &Session) {
+    let shield = |ship: ShipRef| match ship {
+        ShipRef::Player => Some(session.reserves().shield),
+        ShipRef::Npc(id) => session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .map(|npc| npc.reserves.shield),
+    };
+    flashes.retain(|&ship, flash| {
+        let Some(gauge) = shield(ship) else {
+            return false;
+        };
+        flash.step(gauge.now, gauge.max, false);
+        flash.shown() > 0.0
+    });
 }
 
 /// The ships in `session` breaking up, each with its sprite's width from
@@ -8410,7 +8502,7 @@ mod tests {
         view.tick(TICK / 2);
         assert_ne!(view.shown_heading(), player(&view).heading, "between");
         let frame = view.frame().expect("a sheet");
-        assert_eq!(frame, 15, "{}", view.shown_heading());
+        assert_eq!(frame, 14, "148.5, truncated: {}", view.shown_heading());
         let centre = view.camera().world_to_screen(view.shown_position());
         assert_eq!(
             ship_sprites(&view),
@@ -14528,7 +14620,7 @@ mod tests {
         ) -> nova_sim::Reaction {
             if strike.ship == nova_sim::ShipRef::Npc(npc.id) {
                 nova_sim::Reaction {
-                    target: Some(strike.by),
+                    target: strike.by,
                     provoked: strike.damage,
                     goal: None,
                 }
@@ -14582,8 +14674,11 @@ mod tests {
     }
 
     /// [`armed`] with blasters of 5 energy damage and hypergate 141 at
-    /// (0, -120), straight ahead of the player, `with` changes made.
-    fn gate_120_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
+    /// (0, -110), straight ahead of the player, `with` changes made. A shot
+    /// hits on the pass after the one it moves into its target on, and at
+    /// this distance that move falls on a frame's advance pass, so the hit
+    /// falls on its second.
+    fn gate_110_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
         let mut catalog = armed(1, &[BLASTER]);
         for weapon in &mut catalog.weapons {
             weapon.energy_dmg = 5;
@@ -14591,7 +14686,7 @@ mod tests {
         catalog.sites.push(LandingSite {
             flags2: nova_sim::gate::HYPERGATE,
             exit_angle: 90,
-            ..site(141, (0.0, -120.0), StellarFlags::CAN_LAND)
+            ..site(141, (0.0, -110.0), StellarFlags::CAN_LAND)
         });
         with(&mut catalog);
         catalog
@@ -14645,7 +14740,7 @@ mod tests {
         // with `_DamageShip`'s reaction, so the hit is answered there,
         // before the next frame is drawn. Setup brings nobody; then an
         // arrival comes out of the gate, the third of the stellars.
-        let view = hit_on_the_second_pass(gate_120_ahead(|_| ()), &[0, 0, 6, 6, 0, 0, 0, 2]);
+        let view = hit_on_the_second_pass(gate_110_ahead(|_| ()), &[0, 0, 6, 6, 0, 0, 0, 2]);
         let mode = view.session().expect("flying").npcs()[0].mode;
         assert!(matches!(mode, Mode::HeldAtGate { .. }), "{mode:?}");
         assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE], "seen");
@@ -14656,7 +14751,7 @@ mod tests {
         // `_DamageShip`'s reaction on the second pass turns it on the
         // player, and `_AIMakeShipAttackPlayer` says its quote there
         // (`_ShowPersonHailQuote` @0x89ce1), before the next frame.
-        let catalog = gate_120_ahead(|catalog| {
+        let catalog = gate_110_ahead(|catalog| {
             let ace = peopled();
             catalog.persons = ace.persons;
             catalog.persons[0].link_syst = -1;
@@ -15135,13 +15230,14 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
     }
 
     #[test]
     fn the_sessions_diagnostics_come_through_the_screen() {
-        let disabling = nova_sim::WeaponRecord {
+        let planet_type = nova_sim::WeaponRecord {
             id: nova_sim::WeaponId(181),
             reload: 20,
             count: 12,
@@ -15157,10 +15253,12 @@ mod tests {
             blast_radius: 6,
             flags: 0,
             seeker: 0,
-            flags2: 0x1000,
+            flags2: 0x0400,
             flags3: 0,
             decay: 0,
             beam_length: 0,
+            falloff: 0,
+            li_density: 0,
             burst_count: 0,
             burst_reload: 0,
             guided_turn: 0,
@@ -15171,6 +15269,12 @@ mod tests {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            recoil: 0,
+            exit_type: -1,
+            ionization: 0,
+            ionize_color: 0,
+            jam_vuln: [0; 4],
+            frame: None,
             hit_particles: 0,
             hit_part_life: 0,
             hit_part_vel: 0,
@@ -15179,6 +15283,7 @@ mod tests {
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
             flags: 0,
+            flags2: 0,
             death_delay: 0,
             explode1: -1,
             explode2: -1,
@@ -15193,10 +15298,13 @@ mod tests {
             strength: 0,
             key_carried: None,
             cost: 0,
+            speed: 0,
+            exits: None,
+            escort_class: nova_sim::EscortClass::Freighter,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
-            weapons: vec![disabling],
+            weapons: vec![planet_type],
             hulls: vec![hull],
             looks: vec![(181, Ok(WeaponLook::default()))],
             ..trafficked(&[130], 1, 129, 3)
@@ -15211,7 +15319,7 @@ mod tests {
             [Diagnostic::Sim(SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: nova_sim::WeaponId(181),
                 field: nova_sim::combat::flags::FlagField::Flags2,
-                bit: 0x1000
+                bit: 0x0400
             })]
         );
         ticks(&mut view, 30);
@@ -15295,6 +15403,8 @@ mod tests {
             flags3: 0,
             decay: 0,
             beam_length: 50,
+            falloff: 0,
+            li_density: 0,
             burst_count: 0,
             burst_reload: 0,
             guided_turn: 0,
@@ -15305,6 +15415,12 @@ mod tests {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            recoil: 0,
+            exit_type: -1,
+            ionization: 0,
+            ionize_color: 0,
+            jam_vuln: [0; 4],
+            frame: None,
             hit_particles: 0,
             hit_part_life: 0,
             hit_part_vel: 0,
@@ -15318,6 +15434,7 @@ mod tests {
         nova_sim::HullRecord {
             id: ShipId(id),
             flags: 0,
+            flags2: 0,
             death_delay: 0,
             explode1: -1,
             explode2: 0,
@@ -15335,6 +15452,9 @@ mod tests {
             strength: 0,
             key_carried: None,
             cost: 0,
+            speed: 0,
+            exits: None,
+            escort_class: nova_sim::EscortClass::Freighter,
         }
     }
 
@@ -15867,6 +15987,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
     }
@@ -15885,6 +16006,35 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_beams_fade_is_shown_as_the_session_counts_it() {
+        let mut catalog = armed(0, &[OVER]);
+        for weapon in &mut catalog.weapons {
+            if weapon.id == OVER {
+                *weapon = nova_sim::WeaponRecord {
+                    count: 1,
+                    reload: 100,
+                    decay: 1,
+                    falloff: 10,
+                    ..*weapon
+                };
+            }
+        }
+        let mut view = fighting(catalog, &[]);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        ticks(&mut view, 2);
+        let fade = view.session().expect("flying").beams()[0].fade;
+        assert!(fade > 0, "fading");
+        let shown: Vec<u32> = view
+            .shown_beams(&view.camera())
+            .iter()
+            .map(|beam| beam.fade)
+            .collect();
+        assert_eq!(shown, [fade]);
     }
 
     #[test]
@@ -16789,6 +16939,148 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_npc_destroyed_under_the_originals_debris_reading_scatters_none() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        let rules = Rulebook::default().with_override(RuleKey::ShipDebris, RuleSource::Engine);
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_rules(rules);
+        tap(&mut view, Key::Tab);
+        view.input(&key(FIRE_KEY, true));
+        for _ in 0..10 {
+            view.tick(TICK);
+            if view.session().expect("flying").npcs().is_empty() {
+                break;
+            }
+        }
+        assert!(view.session().expect("flying").npcs().is_empty());
+        let effects = view.effects();
+        assert_eq!(effects.explosions().len(), 1, "its Explode2 still");
+        assert_eq!(effects.explosions()[0].boom, BoomId(128));
+        assert_eq!(effects.particles(), [], "no debris");
+    }
+
+    /// [`armed`] with a blaster whose hits throw off 5 orange particles
+    /// of `HitPartLife` 30, flown once at NPC 0 ahead: the flight on the
+    /// tick its shot hits, and the NPC.
+    fn hit_once() -> (View, ShipRef) {
+        hit_once_by(5, Rulebook::default())
+    }
+
+    /// [`hit_once`] with `particles` thrown off, by `rules`.
+    fn hit_once_by(particles: i16, rules: Rulebook) -> (View, ShipRef) {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].energy_dmg = 1;
+        catalog.weapons[0].explod_type = -1;
+        catalog.weapons[0].hit_particles = particles;
+        catalog.weapons[0].hit_part_vel = 100;
+        catalog.weapons[0].hit_part_life = 30;
+        catalog.weapons[0].hit_part_color = 0x00FF_8000;
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_rules(rules);
+        tap(&mut view, Key::Tab);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        for _ in 0..20 {
+            if view.shield_flash(npc).is_some() {
+                return (view, npc);
+            }
+            view.tick(TICK);
+        }
+        panic!("never hit: {:?}", view.session().expect("flying").npcs());
+    }
+
+    #[test]
+    fn an_npc_hit_flashes_its_shield_32_on_the_tick_of_the_hit_then_31() {
+        let (mut view, npc) = hit_once();
+        assert_eq!(view.shield_flash(npc), Some(32.0));
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), Some(31.0));
+        assert_eq!(view.shield_flash(ShipRef::Player), None, "not hit");
+    }
+
+    #[test]
+    fn a_hit_with_hit_particles_sprays_them_on_the_npc_in_its_colour() {
+        let (view, _) = hit_once();
+        let orange = crate::Color::rgba(0xFF, 0x80, 0x00, 255);
+        let particles = view.effects().particles();
+        assert_eq!(particles.len(), 5, "{particles:?}");
+        assert!(particles.iter().all(|piece| piece.color == orange));
+    }
+
+    #[test]
+    fn under_the_combat_caps_a_hit_keeps_at_most_1024_particles() {
+        let (view, _) = hit_once_by(1100, Rulebook::default());
+        assert_eq!(
+            view.effects().particles().len(),
+            1100,
+            "uncapped by default"
+        );
+        let caps = Rulebook::default().with_override(RuleKey::CombatCaps, RuleSource::Engine);
+        let (view, _) = hit_once_by(1100, caps);
+        assert_eq!(view.effects().particles().len(), 1024);
+    }
+
+    #[test]
+    fn a_beams_hit_flashes_the_npcs_shield_from_the_frame_after() {
+        let mut catalog = armed(1, &[UNDER]);
+        catalog.weapons[4].beam_length = 400;
+        catalog.weapons[4].energy_dmg = 1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        let shield = |view: &View| {
+            view.session().expect("flying").npcs()[0]
+                .reserves
+                .shield
+                .now
+        };
+        let full = shield(&view);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        let mut ticks = 0;
+        while shield(&view) == full {
+            assert!(ticks < 20, "never hit");
+            view.tick(TICK);
+            ticks += 1;
+        }
+        assert_eq!(view.shield_flash(npc), None, "shown the frame after");
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), Some(32.0));
+    }
+
+    #[test]
+    fn a_destroyed_npcs_shield_flash_is_dropped() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].energy_dmg = 20;
+        catalog.weapons[0].mass_dmg = 20;
+        catalog.weapons[0].explod_type = -1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        let mut flashed = false;
+        for _ in 0..20 {
+            view.tick(TICK);
+            if view.session().expect("flying").npcs().is_empty() {
+                break;
+            }
+            flashed |= view.shield_flash(npc) == Some(32.0);
+        }
+        assert!(
+            view.session().expect("flying").npcs().is_empty(),
+            "destroyed"
+        );
+        assert!(flashed, "hit before it was destroyed");
+        assert_eq!(view.shield_flash(npc), None);
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), None, "nor on the next tick");
+    }
+
     /// [`armed`] with a blaster whose shots detonate after a tick.
     fn detonating() -> FakeCatalog {
         let mut catalog = armed(0, &[BLASTER]);
@@ -16797,11 +17089,13 @@ mod tests {
         catalog
     }
 
-    /// Fires one detonating shot, which explodes.
+    /// Fires one detonating shot, which explodes as its end of life comes,
+    /// the tick after its one move.
     fn detonate(view: &mut View) {
         view.input(&key(FIRE_KEY, true));
         view.tick(TICK);
         view.input(&key(FIRE_KEY, false));
+        view.tick(TICK);
         assert_eq!(view.effects().explosions().len(), 1);
     }
 
@@ -16826,6 +17120,55 @@ mod tests {
         arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(*view.effects(), Effects::default());
+    }
+
+    /// [`detonating`] with a blast of radius 100 doing 1 energy damage,
+    /// which reaches the player who fired it.
+    fn self_blasting() -> FakeCatalog {
+        let mut catalog = detonating();
+        catalog.weapons[0].blast_radius = 100;
+        catalog.weapons[0].energy_dmg = 1;
+        catalog
+    }
+
+    /// Fires one [`self_blasting`] shot and ticks until its blast flashes
+    /// the player's shield.
+    fn flash_the_player(view: &mut View) {
+        detonate(view);
+        for _ in 0..5 {
+            if view.shield_flash(ShipRef::Player).is_some() {
+                return;
+            }
+            view.tick(TICK);
+        }
+        panic!("the player was never hit: {:?}", player(view));
+    }
+
+    #[test]
+    fn landing_clears_the_shield_flashes() {
+        let mut catalog = self_blasting();
+        catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        let mut view = fighting(catalog, &[]);
+        flash_the_player(&mut view);
+        land_now(&mut view);
+        assert!(view.take_landing().is_some());
+        assert_eq!(view.shield_flash(ShipRef::Player), None);
+    }
+
+    #[test]
+    fn passing_through_a_wormhole_clears_the_shield_flashes() {
+        let holes = holed();
+        let catalog = FakeCatalog {
+            sites: holes.sites,
+            gates: holes.gates,
+            gate_listers: holes.gate_listers,
+            ..self_blasting()
+        };
+        let mut view = fighting(catalog, &[]);
+        flash_the_player(&mut view);
+        land_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(view.shield_flash(ShipRef::Player), None);
     }
 
     #[test]
@@ -17271,6 +17614,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
 
@@ -17296,17 +17640,25 @@ mod tests {
             (0.0, 0.0),
             StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
         )];
+        let sprite = |side| {
+            Some(nova_sim::FrameSize {
+                width: side,
+                height: side,
+            })
+        };
         catalog.weapons.push(nova_sim::WeaponRecord {
             reload: 5,
             count: 12,
             mass_dmg: 1,
             energy_dmg: 4,
+            frame: sprite(35),
             ..gun(QUAD, 0, 9, -1)
         });
         catalog.weapons.push(nova_sim::WeaponRecord {
             reload: 1000,
             count: 200,
             speed: 500,
+            frame: sprite(18),
             ..gun(IR, 0, 1, -1)
         });
         catalog.hulls = vec![hull_of(128, &[QUAD]), hull_of(129, &[IR])];
@@ -17327,21 +17679,28 @@ mod tests {
     #[test]
     fn the_fight_asks_the_point_defence_rule_given_each_step_in_flight() {
         let rule = Rc::new(Unalarmed::default());
-        let mut view = attacked(defending()).with_point_defence_rule(rule.clone());
+        let asking = Rulebook::default().with_override(RuleKey::PdHostility, RuleSource::Bible);
+        let mut view = attacked(defending())
+            .with_rules(asking)
+            .with_point_defence_rule(rule.clone());
         view.tick(TICK);
         assert_eq!(shots_of(&view, IR), 1, "fired at the player");
-        assert_eq!(rule.asked.get(), 1, "of the one missile");
+        assert_eq!(
+            rule.asked.get(),
+            0,
+            "after the player's point defence, which runs before the NPCs fire"
+        );
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3);
+        assert_eq!(rule.asked.get(), 2, "of the one missile, each step");
         assert_eq!(shots_of(&view, QUAD), 0, "never hostile");
         view.input(&key(MAP_KEY, true));
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3, "not while the map is open");
+        assert_eq!(rule.asked.get(), 2, "not while the map is open");
         view.input(&key(MAP_KEY, true));
         tap(&mut view, LAND);
         assert!(view.take_landing().is_some(), "one press, uninhabited");
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3, "not while landed");
+        assert_eq!(rule.asked.get(), 2, "not while landed");
     }
 
     #[test]
@@ -17400,6 +17759,7 @@ mod tests {
                 scan_fine: 0,
                 news_pic: -1,
                 require: 0,
+                inh_jam: [0; 4],
             }],
             ..catalog
         }
@@ -20006,6 +20366,7 @@ mod tests {
             scan_fine: fine,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         catalog.missions = vec![MissionRecord {
             cargo_type: 0,
@@ -21846,6 +22207,7 @@ mod tests {
             scan_fine: 0,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         for record in &mut catalog.ships {
             record.crew = 3;
@@ -24007,6 +24369,7 @@ mod tests {
             scan_fine: 0,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         // One ship of düde 128 (ship 129) attacking the player and
         // following it (`ShipSyst` -6).
@@ -24972,16 +25335,14 @@ mod tests {
 
     #[test]
     fn a_shot_detonating_on_the_second_pass_is_drawn_that_tick() {
-        let lasting_two = || {
-            let mut catalog = detonating();
-            catalog.weapons[0].count = 2;
-            fighting(catalog, &[])
-        };
-        let mut single = lasting_two();
+        // Its one move, on the advance pass, spends it; its end of life
+        // comes in the next pass's hit pass.
+        let lasting_one = || fighting(detonating(), &[]);
+        let mut single = lasting_one();
         single.input(&key(FIRE_KEY, true));
         single.tick(TICK);
         assert!(single.effects().explosions().is_empty(), "not yet");
-        let mut view = lasting_two().with_double_time(true);
+        let mut view = lasting_one().with_double_time(true);
         view.input(&key(FIRE_KEY, true));
         view.tick(TICK);
         assert_eq!(view.effects().explosions().len(), 1);

@@ -332,13 +332,14 @@ impl Session {
     /// its centre, destroyed with the countdown `Y` gives it, then its
     /// `OnDestroy`, drawing on `chance`, and destroyed with that countdown
     /// again whatever the script did. The player, and no other ship, is
-    /// convicted ten times of killing a ship of its government, as `law`
+    /// convicted, and only by a shot whose source is its ship (`by` none
+    /// for one turned on its firer, @0x374e1-0x374e7), ten times of killing a ship of its government, as `law`
     /// says, and loses the ranks that killing reaches (see
     /// [`rank`](crate::rank)'s **Crimes**).
     pub(super) fn shoot_down(
         &mut self,
         stellar: StellarId,
-        by: ShipRef,
+        by: Option<ShipRef>,
         law: &dyn LegalCode,
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -356,7 +357,7 @@ impl Session {
         self.run_on_destroy(stellar, &life.on_destroy, chance);
         self.set_stellar_state(stellar, Some(countdown));
         self.strength.remove(&stellar);
-        if by == ShipRef::Player {
+        if by == Some(ShipRef::Player) {
             let changes = law.penalties(Crime::Kill, site.govt, &self.govts);
             for _ in 0..STELLAR_KILLINGS {
                 legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
@@ -1135,6 +1136,7 @@ mod tests {
         GovtId, GovtRecord, HullRecord, Penalties, StockWeapon, WeaponId, WeaponRecord,
     };
     use crate::combat::armament::{MOD_WEAPON, Trigger};
+    use crate::combat::projectile::Source;
     use crate::combat::weapon::{Explosion, PLANET_TYPE};
     use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::geometry::Vec2;
@@ -1145,7 +1147,7 @@ mod tests {
 
     /// A planet-type gun firing every tick, 15 pixels a tick, doing 30
     /// mass and 20 energy damage and exploding in `bööm` 130 where it
-    /// hits.
+    /// hits, of a `BlastRadius` of 25.
     fn planet_gun() -> WeaponRecord {
         WeaponRecord {
             count: 30,
@@ -1154,13 +1156,15 @@ mod tests {
             energy_dmg: 20,
             flags2: PLANET_TYPE,
             explod_type: 2,
+            blast_radius: 25,
             ..weapon(128)
         }
     }
 
     /// [`catalog`] with `lives`, its ship carrying a [`planet_gun`]. The
-    /// ship starts over 128, so each shot hits 128 on the tick it is
-    /// fired: 128 of `Strength` 100 is shot down by the third.
+    /// ship starts over 128, so each shot hits 128 in the hit pass of the
+    /// tick after it is fired, testing its first move: 128 of `Strength`
+    /// 100 is shot down by the third.
     fn shooting(lives: impl IntoIterator<Item = StellarLife>) -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![planet_gun()],
@@ -1193,14 +1197,19 @@ mod tests {
         turrets_only: false,
         bays: false,
         point_defence: false,
+        keep: None,
     };
 
-    /// Fires every tick for `ticks` ticks under `law`, then lets go: the
+    /// Fires every tick for `ticks` ticks under `law`, then lets go for a
+    /// tick more, whose hit pass tests the last shot's first move: the
     /// fight's events.
     fn fire_by(session: &mut Session, ticks: u32, law: &dyn LegalCode) -> Vec<CombatEvent> {
         session.hold_trigger(FIRE);
         let mut events = Vec::new();
-        for _ in 0..ticks {
+        for tick in 0..=ticks {
+            if tick == ticks {
+                session.hold_trigger(Trigger::default());
+            }
             let rules = Rules {
                 law,
                 ..Rules::default()
@@ -1208,7 +1217,6 @@ mod tests {
             session.tick_combat(rules, &mut NeverFires);
             events.extend(session.take_combat_events());
         }
-        session.hold_trigger(Trigger::default());
         events
     }
 
@@ -1218,14 +1226,23 @@ mod tests {
 
     /// The explosions among `events` of `bööm` `kind`, where each was.
     fn booms(events: &[CombatEvent], kind: i16) -> Vec<Vec2> {
+        sized_booms(events, kind)
+            .into_iter()
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// The explosions among `events` of `bööm` `kind`, where each was and
+    /// its size.
+    fn sized_booms(events: &[CombatEvent], kind: i16) -> Vec<(Vec2, f32)> {
         events
             .iter()
             .filter_map(|event| match *event {
-                CombatEvent::Exploded { at, explosion }
-                    if Some(explosion) == Explosion::decode(kind) =>
-                {
-                    Some(at)
-                }
+                CombatEvent::Exploded {
+                    at,
+                    explosion,
+                    size,
+                } if Some(explosion) == Explosion::decode(kind) => Some((at, size)),
                 _ => None,
             })
             .collect()
@@ -1378,7 +1395,7 @@ mod tests {
         let fine = Fine::default();
         session.shoot_down(
             StellarId(128),
-            ShipRef::Npc(NpcId(1)),
+            Some(ShipRef::Npc(NpcId(1))),
             &fine,
             &mut NeverFires,
         );
@@ -1431,12 +1448,70 @@ mod tests {
         let mut session = ranked(shooting([life(128, 2)]));
         session.shoot_down(
             StellarId(128),
-            ShipRef::Npc(NpcId(1)),
+            Some(ShipRef::Npc(NpcId(1))),
             &NovaLaw::default(),
             &mut NeverFires,
         );
         assert_eq!(destroyed(&session, 128), Some(left(2)));
         assert_eq!(ranks_held(&session), [200, 201]);
+    }
+
+    /// [`ranked`]'s session, 128 taken to none by two shots, then shot
+    /// down by a third fired from 200 pixels left of it, which a jamming
+    /// draw has turned on its firer (`Source::Other`, aimed at the player)
+    /// in flight when `turned`. The player moves out of its way, as the
+    /// shot flies straight.
+    fn shot_down_from_afar(turned: bool) -> Session {
+        let mut session = ranked(shooting([life(128, 2)]));
+        let fine = Fine::default();
+        fire_by(&mut session, 2, &fine);
+        session.player = crate::flight::ShipState {
+            position: Vec2::new(30.0 - 200.0, -40.0),
+            velocity: Vec2::ZERO,
+            heading: 90.0,
+        };
+        session.hold_trigger(FIRE);
+        let rules = Rules {
+            law: &fine,
+            ..Rules::default()
+        };
+        session.tick_combat(rules, &mut NeverFires);
+        session.hold_trigger(Trigger::default());
+        // The player moves off, and the hit pass meets it where it stood a
+        // tick later, before the shot can turn on it.
+        session.player.position.y += 1000.0;
+        session.tick_combat(rules, &mut NeverFires);
+        assert_eq!(destroyed(&session, 128), None, "still in flight");
+        if turned {
+            for shot in session.combat.shots_mut() {
+                shot.source = Source::Other;
+                shot.target = Some(ShipRef::Player);
+                shot.aimed_at = Some(ShipRef::Player);
+            }
+        }
+        for _ in 0..20 {
+            let rules = Rules {
+                law: &fine,
+                ..Rules::default()
+            };
+            session.tick_combat(rules, &mut NeverFires);
+        }
+        assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
+        session
+    }
+
+    #[test]
+    fn a_players_shot_turned_on_its_firer_shooting_a_stellar_down_convicts_no_one() {
+        let kept = shot_down_from_afar(false);
+        assert_eq!(kept.pilot().legal_record(GovtId(140)), -30);
+        assert_eq!(ranks_held(&kept), [201]);
+        let turned = shot_down_from_afar(true);
+        assert_eq!(
+            turned.pilot().legal_record(GovtId(140)),
+            0,
+            "its source is no ship (`_CheckShotProximities` @0x374e1-0x374e7)"
+        );
+        assert_eq!(ranks_held(&turned), [200, 201]);
     }
 
     #[test]
@@ -1482,8 +1557,16 @@ mod tests {
         let mut session = quiet(&catalog);
         assert_eq!(booms(&fire(&mut session, 2), 4), []);
         let events = fire(&mut session, 1);
-        assert_eq!(booms(&events, 4), [Vec2::new(30.0, -40.0)]);
-        assert_eq!(booms(&events, 2).len(), 1, "the shot's own");
+        assert_eq!(
+            sized_booms(&events, 4),
+            [(Vec2::new(30.0, -40.0), 0.0)],
+            "of no size, as `_CreateExplosion(.., 0, 1)` makes it"
+        );
+        let own: Vec<f32> = sized_booms(&events, 2)
+            .into_iter()
+            .map(|(_, size)| size)
+            .collect();
+        assert_eq!(own, [25.0], "the shot's own, of the gun's BlastRadius");
     }
 
     /// [`shooting`]'s session with the ship 200 pixels left of 128's
@@ -2029,9 +2112,16 @@ mod tests {
         let mut session = quiet(&catalog);
         run(&mut session, "Y128");
         settle(&mut session, &catalog, "M130");
+        // A shot fired while it lies dead, which a frame samples dead.
+        session.hold_trigger(FIRE);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_trigger(Trigger::default());
+        assert!(session.dead_since_rebuild(StellarId(128)));
         run(&mut session, "U128");
         session.strength.insert(StellarId(128), 0);
-        fire(&mut session, 1);
+        // The next frame's hit pass shoots it down before the frame
+        // samples it.
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
         assert!(session.dead_since_rebuild(StellarId(128)));
     }

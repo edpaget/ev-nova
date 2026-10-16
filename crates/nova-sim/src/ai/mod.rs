@@ -355,7 +355,7 @@ impl<'a> Surroundings<'a> {
             ShipRef::Player => false,
             ShipRef::Npc(id) => self.npc(id).is_some_and(|npc| !npc.arrived()),
         };
-        !jumping_in && self.condition_of(ship).is_some_and(Condition::hittable)
+        !jumping_in && self.condition_of(ship).is_some_and(Condition::standing)
     }
 }
 
@@ -906,10 +906,12 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
             ship: ShipRef::Npc(NpcId(1)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 30.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         assert_eq!(
             Peaceful.react(&npcs[0], &strike, &around),

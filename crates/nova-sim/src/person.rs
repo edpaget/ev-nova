@@ -65,8 +65,9 @@
 //! and no `InfoTypes`. Each weapon slot naming a weapon with a record
 //! adds its `WeapCount` to the ship's count of it (a later slot naming
 //! the same weapon replaces the earlier), a count of none or less
-//! removing it, and its `AmmoLoad` to the rounds of its ammunition, never
-//! below none. A `ShieldMod` above 0 scales the shield and armour
+//! removing it, and its `AmmoLoad` to that weapon's own slot of rounds,
+//! signed, whatever its `AmmoType` (@0x40e5c-0x40eb5, see
+//! [`LauncherRounds`](crate::combat::armament::LauncherRounds)). A `ShieldMod` above 0 scales the shield and armour
 //! capacity by `ShieldMod` / 100 ([`RuleKey::ShieldMod`]: the Bible
 //! scales the shield only); below 0 the person is invincible, its shield
 //! and armour refilled every fight tick. `Flags2` 0x0001 starts it with
@@ -94,7 +95,7 @@ use crate::catalog::{self, GovtId, PersonId, PersonRecord, StringPatch, SystemId
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::Condition;
-use crate::combat::weapon::{Ammo, WeaponSpec};
+use crate::combat::weapon::WeaponSpec;
 use crate::control::{ControlBits, FreshPilot, Gate, NovaBits, PilotFacts, Test};
 use crate::govt::Governments;
 use crate::mission::ShipGoal;
@@ -535,17 +536,7 @@ pub fn fit(
             Some((_, carried)) => *carried += i32::from(count),
             None => counts.push((*spec, i32::from(count))),
         }
-        if let Ammo::Rounds(of) = spec.ammo {
-            let held = i64::from(rounds.get(&of).copied().unwrap_or(0)) + i64::from(ammo);
-            match u32::try_from(held) {
-                Ok(held) if held > 0 => {
-                    rounds.insert(of, held);
-                }
-                _ => {
-                    rounds.remove(&of);
-                }
-            }
-        }
+        rounds.add(weapon, i32::from(ammo));
     }
     let armament = Armament::new(
         counts
@@ -789,7 +780,8 @@ impl PersonWorld<'static> {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use crate::combat::armament::LauncherRounds;
+    use std::collections::BTreeSet;
 
     use super::*;
     use crate::catalog::{GovtRecord, PersonWeapon, RankId, RankRecord, WeaponRecord};
@@ -1135,14 +1127,14 @@ mod tests {
     }
 
     /// A ship carrying weapon A twice and launcher L once, with 10 rounds
-    /// of R.
+    /// on L and 10 on R, which it does not carry.
     fn armed() -> ShipKind {
         let arsenal = arsenal();
         let spec = |id: i16| *arsenal.weapon(WeaponId(id)).expect("armed");
         ShipKind {
             stats: ShipStats::new(FAST, &[]),
             armament: Armament::new([(spec(128), 2), (spec(129), 1)]),
-            rounds: BTreeMap::from([(WeaponId(130), 10)]),
+            rounds: LauncherRounds::from([(WeaponId(129), 10), (WeaponId(130), 10)]),
             ..ShipKind::default()
         }
     }
@@ -1204,28 +1196,45 @@ mod tests {
     }
 
     #[test]
-    fn a_persons_ammunition_adds_to_the_rounds_never_below_none() {
+    fn a_persons_ammunition_loads_its_own_launcher() {
         let kind = armed();
         let rounds = |slots: &[PersonWeapon]| fitted(&kind, slots).rounds;
         assert_eq!(
             rounds(&[slot(129, 1, 50)]),
-            BTreeMap::from([(WeaponId(130), 60)])
+            LauncherRounds::from([(WeaponId(129), 60), (WeaponId(130), 10)]),
+            "launcher L's own slot, not R's, its ammunition's"
         );
-        assert_eq!(rounds(&[slot(129, 0, -10)]), BTreeMap::new());
-        let bare = ShipKind {
-            rounds: BTreeMap::new(),
-            ..armed()
-        };
-        let person = PersonRecord {
-            weapons: vec![slot(129, 0, -1)],
-            ..person(128, 128)
-        };
-        let (kind, ..) = fit(&bare, &person, &arsenal(), ENGINE, false);
-        assert_eq!(kind.rounds, BTreeMap::new(), "none, not negative");
         assert_eq!(
             rounds(&[slot(128, 1, 5)]),
-            BTreeMap::from([(WeaponId(130), 10)]),
-            "a weapon firing no rounds holds none"
+            LauncherRounds::from([(WeaponId(128), 5), (WeaponId(129), 10), (WeaponId(130), 10)]),
+            "a weapon firing no rounds gets its load too"
+        );
+    }
+
+    #[test]
+    fn a_persons_ammunition_adds_signed_to_the_launchers_slot() {
+        let kind = armed();
+        let rounds = |slots: &[PersonWeapon]| fitted(&kind, slots).rounds;
+        assert_eq!(
+            rounds(&[slot(129, 0, -15)]).slot(WeaponId(129)),
+            -5,
+            "below none, as the original's `addw` leaves it"
+        );
+        assert_eq!(rounds(&[slot(129, 0, -10)]).slot(WeaponId(129)), 0);
+        assert_eq!(
+            rounds(&[slot(131, 1, -1)]).slot(WeaponId(131)),
+            -1,
+            "a slot of its own for a weapon not carried"
+        );
+        assert_eq!(
+            rounds(&[slot(999, 1, 7)]),
+            armed().rounds,
+            "no record: ignored"
+        );
+        assert_eq!(
+            rounds(&[slot(129, 0, 5), slot(129, 0, 2)]).slot(WeaponId(129)),
+            12,
+            "a later slot for the same weapon replaces the earlier"
         );
     }
 

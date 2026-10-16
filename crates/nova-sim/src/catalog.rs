@@ -16,6 +16,7 @@ pub use nova_data::{
 
 use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
+use crate::escort::EscortClass;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::warp::SoundLength;
@@ -1124,6 +1125,11 @@ pub struct WeaponRecord {
     pub decay: i16,
     /// Its `BeamLength`, in pixels.
     pub beam_length: i16,
+    /// Its `Falloff`: how fast a beam's corona fades, and how long a
+    /// decaying beam fades for.
+    pub falloff: i16,
+    /// Its `LiDensity`: above none for a lightning beam.
+    pub li_density: i16,
     /// Its `BurstCount`.
     pub burst_count: i16,
     /// Its `BurstReload`, in ticks.
@@ -1158,6 +1164,34 @@ pub struct WeaponRecord {
     pub hit_part_vel: i16,
     /// Its `HitPartColor`, `00RRGGBB`.
     pub hit_part_color: u32,
+    /// Its `Recoil`: the push its firer takes away from its heading, over
+    /// the firer's mass; none at 0 or -1.
+    pub recoil: i16,
+    /// Its `ExitType`: which of its ship's exit points it fires from, 0
+    /// to 3; any other value fires from the centre.
+    pub exit_type: i16,
+    /// Its `Ionization`: the ion charge it adds to a ship it hits.
+    pub ionization: i16,
+    /// Its `IonizeColor`, `00RRGGBB`.
+    pub ionize_color: u32,
+    /// Its `JamVuln1-4`: each jamming type's share, in percent, that a
+    /// shot rolls its vulnerability to at launch (see
+    /// [`jamming`](crate::combat::jamming)).
+    pub jam_vuln: [i16; 4],
+    /// The frame size of its shots' sprite, the sheet of `spïn` 3000 +
+    /// its `Graphic`, which point defence meets missiles by (see
+    /// [`defence`](crate::combat::defence)); none for a `Graphic` below
+    /// 0 or a sheet that cannot be read.
+    pub frame: Option<FrameSize>,
+}
+
+/// A sprite frame's size, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameSize {
+    /// Its width.
+    pub width: u32,
+    /// Its height.
+    pub height: u32,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`
@@ -1172,6 +1206,24 @@ pub struct StockWeapon {
     pub ammo: i16,
 }
 
+/// A ship class's weapon exit points, raw from its `shän` (see
+/// [`exits`](crate::combat::exits)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShipExits {
+    /// Each `ExitType`'s four (x, y) points, in pixels from the centre with
+    /// the ship facing up: `GunPosX/Y`, `TurretPosX/Y`, `GuidedPosX/Y` and
+    /// `BeamPosX/Y`, in that order.
+    pub points: [[(i16, i16); 4]; 4],
+    /// Each point's z offset, in the same order: `GunPosZ` to `BeamPosZ`.
+    pub z: [[i16; 4]; 4],
+    /// `UpCompressX` and `UpCompressY`, in percent.
+    pub up_compress: (i16, i16),
+    /// `DnCompressX` and `DnCompressY`, in percent.
+    pub down_compress: (i16, i16),
+    /// `FramesPer`: the frames in a turn.
+    pub frames: i16,
+}
+
 /// What a ship class fights with and how it dies, raw from its `shïp` and
 /// its `shän`: the [`combat`](crate::combat) rules decide what the values
 /// mean.
@@ -1181,6 +1233,8 @@ pub struct HullRecord {
     pub id: ShipId,
     /// Its `Flags`.
     pub flags: u16,
+    /// Its `Flags2`.
+    pub flags2: u16,
     /// Its `DeathDelay`, in ticks.
     pub death_delay: i16,
     /// Its `Explode1`, encoded.
@@ -1205,6 +1259,16 @@ pub struct HullRecord {
     /// Its `Cost`, raw: -1 hides a ship of the type (see
     /// [`HullSpec::hidden`](crate::combat::hull::HullSpec::hidden)).
     pub cost: i32,
+    /// Its `Speed`, raw (see
+    /// [`HullSpec::class_speed`](crate::combat::hull::HullSpec::class_speed)).
+    pub speed: i16,
+    /// Its `shän`'s weapon exit points, or `None` when it has no `shän`
+    /// that can be read.
+    pub exits: Option<ShipExits>,
+    /// Its escort class, from its `EscortType`, `InherentAI` and `Mass`
+    /// ([`EscortClass::of`]), which sets which turret shots miss it (see
+    /// [`HullSpec::miss_class`](crate::combat::hull::HullSpec::miss_class)).
+    pub escort_class: EscortClass,
 }
 
 /// A government's penalties for crimes against its ships, raw from its
@@ -1265,6 +1329,10 @@ pub struct GovtRecord {
     /// stellar it governs (`gövt` +0x54; `_PlayerMeetsRequirements`
     /// @0x776f, read by `_HandlePlayerDockRequest` @0x67940-0x6796b).
     pub require: u64,
+    /// Its `InhJam1-4`: the jamming of each type its ships' classes take
+    /// through their `InherentGovt` (`gövt` runtime +0x56; see
+    /// [`jamming`](crate::combat::jamming)).
+    pub inh_jam: [i16; 4],
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each

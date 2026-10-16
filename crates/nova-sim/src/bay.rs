@@ -204,6 +204,18 @@ mod tests {
     }
 
     #[test]
+    fn a_push_against_the_top_speeds_share_always_gains() {
+        // `_AdjustedAccel` @0x2aec2-0x2aeee tests an axis only while its
+        // push and its share of the top speed point the same way: a
+        // negative push (a recoil below -1) gains whatever the velocity.
+        let push = facing(0.0) * -4.0;
+        let fast = launch_velocity(Vec2::new(0.0, 30.0), 0.0, -4.0, 10.0);
+        assert!((fast.y - (30.0 + push.y)).abs() < 1e-5, "{fast:?}");
+        let slow = launch_velocity(Vec2::new(0.0, -30.0), 0.0, -4.0, 10.0);
+        assert!((slow.y - (-30.0 + push.y)).abs() < 1e-5, "{slow:?}");
+    }
+
+    #[test]
     fn a_push_that_crosses_the_top_speed_is_not_clamped() {
         let v = launch_velocity(Vec2::new(0.0, -8.0), 0.0, 4.0, 10.0);
         assert!((v.y + 12.0).abs() < 1e-5, "{v:?}");

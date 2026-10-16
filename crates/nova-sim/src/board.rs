@@ -36,9 +36,12 @@
 //! @0x7a6a5-0x7a6d3; `_SetPlunderValues` @0x92430-0x92481) and a
 //! draw of as many more (the original draws `Rand(7)` until it hits a
 //! named commodity, and would loop for ever on a booty naming none; here
-//! a booty with no commodity bit gives no cargo); all the rounds of one
-//! of its ammunitions the player can fire, other than a fighter bay's;
-//! and a draw of a tenth of its `Fuel`, in tens. A person (see
+//! a booty with no commodity bit gives no cargo); all the rounds on one
+//! of its launchers (its own slot of them, see
+//! [`LauncherRounds`](crate::combat::armament::LauncherRounds)) that a
+//! weapon the player carries fires ([`player_fires`]), other than a
+//! guidance-99 weapon's, one drawn evenly among them (the original draws
+//! `Rand(256)` until it lands on one, @0x9251a-0x92564); and a draw of a tenth of its `Fuel`, in tens. A person (see
 //! [`person`](crate::person)) has no `düde`, so no booty and no cargo;
 //! the credits on board are its `Credits` as the
 //! [`BoardingRule::person_credits`] says ([`RuleKey::PersonCredits`]):
@@ -114,6 +117,7 @@ use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::aim::angle_off;
 use crate::combat::hull::Condition;
+use crate::combat::weapon::{FIRST_AMMO_WEAPON, WeaponSpec};
 use crate::flight::ShipState;
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::market::{Good, hold_tons};
@@ -194,21 +198,50 @@ pub const THRESHOLD_SPREAD: u32 = 26;
 /// The energy on board is a draw of a tenth of the `Fuel`, in tens.
 pub const ENERGY_STEP: u32 = 10;
 
-/// The rounds of one ammunition a boarded ship holds, as the plunder
-/// sees them.
+/// The rounds on one of a boarded ship's launchers, its slot of
+/// [`LauncherRounds`](crate::combat::armament::LauncherRounds), as the
+/// plunder sees them (`_SetPlunderValues` @0x924c1-0x92513).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeldRounds {
-    /// The weapon they are the rounds of.
-    pub ammo: WeaponId,
+    /// The weapon whose slot they are.
+    pub slot: WeaponId,
     /// How many it holds.
     pub rounds: u32,
-    /// Whether a fighter bay (guidance 99) fires them: its fighters,
-    /// which cannot be plundered.
+    /// Whether that weapon is of guidance 99, a fighter bay's: its
+    /// fighters, which cannot be plundered.
     pub bay: bool,
-    /// The ammunition outfit the player can take them as: one whose
-    /// rounds a weapon the player carries fires. `None` when the player
-    /// cannot use them.
+    /// The ammunition outfit the player can take them as: the one of
+    /// lowest ID naming the slot's weapon. `None` when no weapon the
+    /// player carries fires them ([`player_fires`]).
     pub outfit: Option<OutfitId>,
+}
+
+/// Whether the player, carrying `carried`, fires the rounds of a boarded
+/// ship's launcher `launcher`, as `_PlayerCanUseAmmoType` (@0x5896-0x5905)
+/// walks the player's weapons by ascending ID: a weapon whose raw
+/// `AmmoType` is the launcher's index (its ID less 128) fires them; a
+/// fighter bay (guidance 99) answers at once by the engine, yes when its
+/// `AmmoType` is the launcher's and no otherwise, and is passed by when it
+/// doesn't fire them by the other reading, as `bays` says
+/// ([`RuleKey::PlunderAmmoBays`]).
+#[must_use]
+pub fn player_fires(launcher: &WeaponSpec, carried: &[WeaponSpec], bays: RuleSource) -> bool {
+    let mut carried: Vec<&WeaponSpec> = carried.iter().collect();
+    carried.sort_by_key(|spec| spec.id);
+    let index = launcher.id.0 - FIRST_AMMO_WEAPON;
+    for spec in carried {
+        if spec.guidance_99() {
+            if spec.ammo_type == launcher.ammo_type {
+                return true;
+            }
+            if bays == RuleSource::Engine {
+                return false;
+            }
+        } else if spec.ammo_type == index {
+            return true;
+        }
+    }
+    false
 }
 
 /// What a boarded ship has on board to roll its plunder from: its
@@ -1215,11 +1248,56 @@ mod tests {
         }
     }
 
-    /// Rounds of weapon `ammo`: `rounds` of them, usable as outfit
-    /// `outfit`, from a fighter bay or not.
-    fn held(ammo: i16, rounds: u32, bay: bool, outfit: Option<i16>) -> HeldRounds {
+    /// A player's weapon `id` of raw `guidance` and `AmmoType`.
+    fn carrying(id: i16, guidance: i16, ammo_type: i16) -> WeaponSpec {
+        WeaponSpec::new(&crate::catalog::WeaponRecord {
+            guidance,
+            ammo_type,
+            ..crate::testkit::weapon(id)
+        })
+    }
+
+    #[test]
+    fn the_player_fires_a_launchers_rounds_with_a_weapon_whose_ammo_type_is_its_index() {
+        let storm = carrying(161, 9, 27);
+        let hail = carrying(155, 7, 27);
+        let on_161 = carrying(162, -1, 33);
+        for bays in [RuleSource::Engine, RuleSource::Bible] {
+            assert!(!player_fires(&storm, &[hail], bays), "155 fires 155's");
+            assert!(player_fires(&hail, &[hail], bays));
+            assert!(player_fires(&storm, &[hail, on_161], bays));
+            assert!(!player_fires(&storm, &[], bays));
+        }
+    }
+
+    #[test]
+    fn a_players_bay_answers_at_once_by_the_engine_and_is_passed_by_otherwise() {
+        let hail = carrying(155, 7, 27);
+        let viper = carrying(150, 99, 144);
+        let odd = carrying(149, 99, 5);
+        assert!(!player_fires(&hail, &[hail, viper], RuleSource::Engine));
+        assert!(player_fires(&hail, &[hail, viper], RuleSource::Bible));
+        assert!(
+            !player_fires(&hail, &[odd, hail], RuleSource::Engine),
+            "a bay of any ammo type"
+        );
+        let after = carrying(156, 99, 144);
+        assert!(
+            player_fires(&hail, &[after, hail], RuleSource::Engine),
+            "a bay of higher ID comes after"
+        );
+        let launching = carrying(170, -1, 144);
+        assert!(
+            player_fires(&launching, &[viper], RuleSource::Engine),
+            "a bay of the launcher's own ammo type allows it"
+        );
+    }
+
+    /// Rounds on weapon `slot`: `rounds` of them, usable as outfit
+    /// `outfit`, a fighter bay's or not.
+    fn held(slot: i16, rounds: u32, bay: bool, outfit: Option<i16>) -> HeldRounds {
         HeldRounds {
-            ammo: WeaponId(ammo),
+            slot: WeaponId(slot),
             rounds,
             bay,
             outfit: outfit.map(OutfitId),

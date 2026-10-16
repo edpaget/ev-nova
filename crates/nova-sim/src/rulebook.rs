@@ -167,6 +167,23 @@
 //! | [`AsteroidEntryField`](RuleKey::AsteroidEntryField) | `asteroid_entry_field` | every way into a system kills the asteroid field, a jump's arrival as well, as each caller of `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc, @0x3fa05): the field fills one asteroid a tick from the edges (see [`asteroid`](crate::asteroid)) | a jump's arrival, and a session starting or loading in flight, keeps the field `_CreateAsteroids` places\* |
 //! | [`AsteroidRespawnRing`](RuleKey::AsteroidRespawnRing) | `asteroid_respawn_ring` | an asteroid spawned at the edge starts at least 0.7 × (half the play area + 128) out on both axes (`_SpawnAsteroid` @0x3a351-0x3a538; [`Ring::Original`](crate::asteroid::Ring::Original)), which can be on screen on a wide play area | just off the screen, inside the cull ([`Ring::Outside`](crate::asteroid::Ring::Outside))\* |
 //! | [`FuseIgnoresAsteroids`](RuleKey::FuseIgnoresAsteroids) | `fuse_ignores_asteroids` | every armed proximity fuse is set off by the first asteroid in reach, as no code reads `Flags2` 0x0004 (`_CheckShotProximities` @0x376ab-0x37758; [`AsteroidFuse::Original`](crate::combat::asteroid_hit::AsteroidFuse::Original)) | the fuse of a weapon with `Flags2` 0x0004 ignores asteroids: "proximity detonator ignores asteroids" ([`AsteroidFuse::Bible`](crate::combat::asteroid_hit::AsteroidFuse::Bible)) |
+//! | [`PlayerPassThrough`](RuleKey::PlayerPassThrough) | `player_pass_through` | the whole player side passes through ships of `gövt` `Flags` 0x0008 and `düde` `Booty` 0x0100, a player-side firer of `Flags` 0x0040 hits nothing, the player's and its direct escorts' shots pass through `Flags` 0x0040 ships, and a `Booty` 0x0100 ship's fire (or its led ships' of no `düde`) passes through every ship allied with the player (`_ShotCanHitShip` @0x4496d-0x44a4e, @0x44ad2-0x44b2f; `_HandleBeams` @0x30c3c-0x30cf2; see [`sides`](crate::combat::sides)) | the player alone: its own shots pass through those ships, its beams through the 0x0040 and 0x0100 ones, and a 0x0100 ship's own fire through the player |
+//! | [`ShotDecay`](RuleKey::ShotDecay) | `shot_decay` | a decaying shot loses a point of its direct hit's mass and energy damage every `Decay` + 1 ticks, each floored at none, its blasts whole (`_HandleShot` @0x35eb2-0x35efc, `_HandleShipHit` @0x36add-0x36afd; see [`DecayStep`](crate::combat::projectile::DecayStep)) | every `Decay` ticks |
+//! | [`PlunderAmmoBays`](RuleKey::PlunderAmmoBays) | `plunder_ammo_bays` | a fighter bay the player carries, of a fighter other than the launcher's `AmmoType`, ends the search for a weapon that fires a boarded ship's rounds, so none are offered when it comes before every such weapon by ID (`_PlayerCanUseAmmoType` @0x58bb-0x58df; see [`board::player_fires`](crate::board::player_fires)) | the bay is passed by\* |
+//! | [`AiSpendWithoutShot`](RuleKey::AiSpendWithoutShot) | `ai_spend_without_shot` | every copy of an NPC's pick that has its ammunition spends its round or fuel whether or not it spawns: a turret with its target in a blind spot or outside the box of its reach, a quadrant turret out of its arc, a missile or turret with no target, a bomb, and a fighter bay kept as the pick, which drains a fighter a frame with no launch (`_FireAIShipWeapon` @0x88cd8-0x88dac; see [`Armament::fire_pick`](crate::combat::armament::Armament::fire_pick)) | only a copy that spawns spends\* |
+//! | [`ExitCompression`](RuleKey::ExitCompression) | `exit_compression` | a weapon exit point takes its `shän`'s up compression when, turned to the frame its ship is drawn on, it lies up the screen, and the down one otherwise, so an exit behind a ship facing up takes the down one (`_ModifyShotStartPosition2` @0x717d-0x71f2; see [`exits`](crate::combat::exits)) | by the heading: up for 0-90 and 270-359, down for 91-269 (the Bible's `UpCompressX`) |
+//! | [`PdExitStep`](RuleKey::PdExitStep) | `pd_exit_step` | each point-defence shot moves its cursor on two exits, one in `_SpawnShot` and one as it is set back to the centre and placed again, so a ship's point defence fires from every other exit (`_HandleShipPointDefense` @0x396e5, @0x39707-0x3976c; see [`Combat`](crate::combat::Combat)) | one exit a shot, each in turn\* |
+//! | [`BeamHitTest`](RuleKey::BeamHitTest) | `beam_hit_test` | a beam hits the nearest ship whose centre lies in its cone: within its `BeamLength` plus half the ship's radius trunc(0.66 × its sprite's width), and trunc(10r / 32) degrees of its heading, the hit ending trunc(dist − 0.2 × width) along it (`_HandleBeams` @0x30dde-0x31051; see [`beam`](crate::combat::beam)) | the first ship whose hit circle its segment meets, ending where it meets it\* |
+//! | [`BeamConeQuirks`](RuleKey::BeamConeQuirks) | `beam_cone_quirks` | the cone's angle test is the plain difference of the whole-degree bearing and the jittered heading, with no 0/360 wrap, so a beam at 2° misses a ship at 358° (`_HandleBeams` @0x30ec4-0x30edd); the asteroid pass takes its "nearest" asteroid by the ship of the same index's distance (@0x317f2-0x3180c; asteroids phase 6) | the angle wraps, and the nearest asteroid is by its own distance: **the default — a deliberate departure from the original**†††††††††††† |
+//! | [`BombRocketLaunch`](RuleKey::BombRocketLaunch) | `bomb_rocket_launch` | an NPC's freefall bomb (5) and rocket (6), an escort's too, leave at its ship's velocity and its `Speed` along its heading, broadside with a negative `Inaccuracy`; only the player's bomb takes 0.8 of its ship's velocity, and its rocket its ship's (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a; see [`BombLaunch`](crate::combat::projectile::BombLaunch)) | every ship's bomb at 0.8 of its ship's velocity, and its rocket at its ship's |
+//! | [`PdHostility`](RuleKey::PdHostility) | `pd_hostility` | point defence fires at a missile aimed at its ship or its leader whoever fired it, with no hostility test; the collision side meets any missile it touches, and with no missile the ship branch fires at a ship by its own threat tests, under both readings (`_HandleShipPointDefense` @0x393b1-0x3969d; see [`defence`](crate::combat::defence)) | only at a missile whose firer the fight's point-defence rule calls hostile, Nova's by fleets and alliances\* |
+//! | [`JamHalving`](RuleKey::JamHalving) | `jam_halving` | a government of `Flags` 0x0080 halves the whole jamming of every NPC of it, its class government's `InhJam` and its default items' jammers, toward zero before the 0-100 clamp, whatever its AI type (`_ShipECM` @0x3ccf-0x3cef; see [`jamming`](crate::combat::jamming)) | only a freighter's (AI type 1 or 2), and only its `InhJam` share |
+//! | [`SeekerLockAngle`](RuleKey::SeekerLockAngle) | `seeker_lock_angle` | a `Seeker` 0x4000 missile drops its lock on a target within ±249 pixels on each axis whose truncated bearing less its heading, absolute and mod 360 with no fold, is above 45, so one heading 355 drops it at a bearing of 5 (`_HandleShotGuidance` @0x323ac-0x323ed; see [`LockAngle`](crate::combat::projectile::LockAngle)) | the short way round: **the default — a deliberate departure from the original**††††††††††††† |
+//! | [`ShipDebris`](RuleKey::ShipDebris) | `ship_debris` | a destroyed ship scatters no debris: `_HandleShipDisplay` sets off only its `Explode2` (@0x2d7ef-0x2dee7), with no `_SpawnParticles` call on the death branch | the view's `DEBRIS_COUNT` pieces of debris: **the default — a deliberate departure from the original**†††††††††††††† |
+//! | [`QuadrantTurretBlindSpots`](RuleKey::QuadrantTurretBlindSpots) | `quadrant_turret_blind_spots` | the player's quadrant turrets (7 and 8) test no blind spot: a 7 or 8 fires at a target in its arc whatever its weapon's or its ship's blind-spot flags, while a 3 or 4 holds fire in one (`_FirePlayerWeapon` @0x62aeb-0x62c38; see [`aim`](crate::combat::aim)); an escort's formation trigger tests them under both readings, as `_AIFireTurret` picks its turrets (@0x80d0b) | a blind spot holds a 7 or 8 as it holds a 3 or 4 (the Bible: "Turreted weapon has a blind spot") |
+//! | [`PlayerForwardRecoil`](RuleKey::PlayerForwardRecoil) | `player_forward_recoil` | a player's weapon recoils only for a `Recoil` above none (`_FirePlayerWeapon` @0x62eb2-0x62eb5, a signed `jle`), so a negative one pushes it nowhere (see [`Combat`](crate::combat::Combat)) | a negative `Recoil` but -1 pushes the player forward, as an NPC's does (the Bible: "Negative values thrust the ship forwards") |
+//! | [`CombatCaps`](RuleKey::CombatCaps) | `combat_caps` | 128 shots (`_SpawnShot` @0x3e5a3-0x3e5d5), 64 beams (`_SpawnBeam` @0x4505e), 32 explosions (`_SpawnExplod` @0x3f615-0x3f68e) and 1024 particles (`_InitParticles(0x400)` @0x22170-0x2217f, `_NewParticle` @0xc5054, @0xc5092), each failing quietly: a shot or beam finding no slot still spends, sounds, recoils and reloads; point defence's shot spends nothing; a release stops; an explosion is still heard; a particle of no life holds its count until the pool clears (see [`Combat`](crate::combat::Combat) and the view's `effects`) | nothing is capped: **the default — a deliberate departure from the original**††††††††††††††† |
+//! | [`ProximityFuse`](RuleKey::ProximityFuse) | `proximity_fuse` | a ship sets off an armed fuse at the end of the shot's move only: the first ship in slot order, the player first, within trunc(`ProxRadius` + 0.333 × its sprite's width) of the shot in whole pixels, each coordinate truncated, the hit at the shot (`_CheckShotProximities` @0x37549-0x376a5; see [`Shot::fused`](crate::combat::projectile::Shot::fused)) | swept along the move against each ship's hit radius plus `ProxRadius`, the first met along it taking the hit where the move entered its reach\* |
 //! | [`MapCycleStart`](RuleKey::MapCycleStart) | `map_cycle_start` | the galaxy map's Tab / `\` cycle, started in mode 2, starts after the link slot the selected stellar's index (its ID less 128) names when that is 0-15, and at the first slot otherwise, as `_MapFilter` steps +0x6c on from the stellar's index (@0x13f77-0x13fa6; [`Session::cycle_map_selection`](crate::Session::cycle_map_selection)) | outside mode 3 the cycle starts at the first slot, as Hyper Select does (@0x69c98)\* |
 //! | [`MapLinkPairing`](RuleKey::MapLinkPairing) | `map_link_pairing` | the galaxy map draws a link a qualifying system lists only when its far end isn't flagged yet, each system flagged after its links, by ascending ID, so a link listed only by the higher of its two systems, after the lower one qualified, is never drawn (`_DrawMap`'s `_doneFlag` @0xe9da-0xebd2; see [`galaxy_map`](crate::galaxy_map)) | every link a qualifying system lists is drawn once\* |
 //!
@@ -196,8 +213,11 @@
 //! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor`,
 //! `newbie_fuel_refusal`, `missing_buoy_string`, `patrol_uninhabited`,
 //! `gate_exit_counts`, `move_left_behind`, `arrival_hits`, `hire_no_slot`,
-//! `asteroid_entry_field`, `asteroid_respawn_ring`, `map_cycle_start`,
-//! `map_link_pairing` or `comm_quote`
+//! `asteroid_entry_field`, `asteroid_respawn_ring`, `plunder_ammo_bays`,
+//! `ai_spend_without_shot`, `pd_exit_step`, `beam_hit_test`,
+//! `pd_hostility`, `ship_debris`, `combat_caps`, `proximity_fuse` (it
+//! gives only "this number of pixels of proximity radius"),
+//! `map_cycle_start`, `map_link_pairing` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count` and `nebula_explore_once`
 //! ("the explored state of the nebulae isn't saved from game to game ...
@@ -409,7 +429,11 @@
 //! [`rank`](crate::rank)).
 //!
 //! †††††††† `cron_zero_duration_holdoff` and `cron_post_holdoff`, with
-//! `breakup_stall` (††††††††††) and `unlisted_stellar` (†††††††††††), are the only keys whose default is the
+//! `breakup_stall` (††††††††††), `unlisted_stellar` (†††††††††††) and
+//! `beam_cone_quirks` (††††††††††††), `seeker_lock_angle`
+//! (†††††††††††††), `ship_debris` (††††††††††††††) and `combat_caps`
+//! (†††††††††††††††), are the only keys
+//! whose default is the
 //! other reading, not the engine's ([`RuleKey::default_source`]): for
 //! the two cron keys the user decided so on 2026-10-11, so
 //! that the rare border-change storylines of stock crons 184, 185 and
@@ -434,6 +458,33 @@
 //! that doesn't hold the stellar the pilot was saved at, while the saved
 //! system is where the pilot last was. `STR#` 140 #52 warns of the
 //! missing data under both readings. The Bible says nothing of it.
+//! †††††††††††† `beam_cone_quirks` follows the other reading by default too:
+//! the user decided so on 2026-10-15. The original's plain angle test
+//! makes a beam pointing just right of up miss a ship just left of it,
+//! and the asteroid pass's ship-index compare picks an asteroid by the
+//! wrong distance; the other reading is the cone without either. The
+//! Bible says nothing of the cone.
+//!
+//! ††††††††††††† `seeker_lock_angle` follows the other reading by default too, as
+//! the beam cone's analogous 0/360 seam does: the original's lock test
+//! takes no short way round, so a `Seeker` 0x4000 missile heading just
+//! left of up drops its lock on a target just right of it, dead ahead.
+//! The other reading is the Bible's "Loses lock if target not directly
+//! ahead". No stock weapon sets 0x4000.
+//!
+//! †††††††††††††† `ship_debris` follows the other reading by default too:
+//! the debris a destroyed ship scatters is the engine's own extra, which
+//! the original never draws, kept by the user's decision of 2026-10-16
+//! (weapons-fidelity phase 14). The Bible says nothing of it; the
+//! engine's reading draws a ship's `Explode2` alone, as the original does.
+//!
+//! ††††††††††††††† `combat_caps` follows the other reading by default too, by the
+//! user's decision 7 for the weapons-fidelity roadmap: the caps are the
+//! 2002 engine's fixed table sizes, not a game rule. Under them a busy
+//! fight loses shots the player hears fired and pays for, and drops
+//! explosions and sparks the player would otherwise see; no stock
+//! mission, crön or storyline relies on a shot failing. The Bible says
+//! nothing of them; the engine's reading restores the original's tables.
 //!
 //! # Adding a rule
 //!
@@ -2116,6 +2167,195 @@ rule_keys! {
     /// detonator ignores asteroids": the fuse of a weapon with the bit
     /// passes asteroids by, though its shots still hit one they touch.
     FuseIgnoresAsteroids => "fuse_ignores_asteroids",
+    /// Who counts as the player where a government's or a `düde`'s flags
+    /// let shots and beams pass through (see
+    /// [`sides`](crate::combat::sides)). By the engine, the whole player
+    /// side: player-side fire (the player, its escorts and their fighters)
+    /// passes through ships of a government of `Flags` 0x0008 and of a
+    /// `düde` of `Booty` 0x0100, a player-side firer of a government of
+    /// `Flags` 0x0040 hits nothing, the player's and its direct escorts'
+    /// shots pass through ships of a government of `Flags` 0x0040, and a
+    /// `Booty` 0x0100 ship's fire, or that of a ship of no `düde` led by
+    /// one, passes through every ship allied with the player
+    /// (`_ShotCanHitShip` @0x4496d-0x44a4e, @0x44ad2-0x44b2f;
+    /// `_HandleBeams` @0x30c3c-0x30cf2). By the Bible ("Player's shots
+    /// won't hit ships of this govt"; "Never attacks player (also,
+    /// player's weapons can't hit them)"; "can't be hit by the player and
+    /// their shots can't hit the player"), the player alone: its own
+    /// shots pass through all three, its beams through the 0x0040 and
+    /// `Booty` 0x0100 ships, and a `Booty` 0x0100 ship's own fire passes
+    /// through the player.
+    PlayerPassThrough => "player_pass_through",
+    /// How often a decaying shot (`wëap` `Decay` above 0) loses a point
+    /// of its direct hit's mass and energy damage (see
+    /// [`DecayStep`](crate::combat::projectile::DecayStep)). By the
+    /// engine, every `Decay` + 1 ticks, as `_HandleShot` takes a step only
+    /// once its count is above `Decay` (@0x35eb2-0x35efc). By the Bible
+    /// ("Remove one point of mass & energy damage every time this number
+    /// of frames goes by"), every `Decay` ticks. Either way the steps come
+    /// off the direct hit alone, each floored at none (`_HandleShipHit`
+    /// @0x36add-0x36afd); a blast takes the weapon's whole damage.
+    ShotDecay => "shot_decay",
+    /// Whether a fighter bay the player carries ends the search for a
+    /// weapon that fires a boarded ship's rounds (see
+    /// [`board::player_fires`](crate::board::player_fires)). By the engine,
+    /// as `_PlayerCanUseAmmoType` walks the player's weapons by ID
+    /// (@0x5896-0x5905): a bay (guidance 99) answers at once, yes when its
+    /// `AmmoType` is the launcher's and no otherwise, so a bay of lower ID
+    /// than every weapon firing the rounds hides them from the plunder. By
+    /// the other reading, a bay that doesn't fire them is passed by. The
+    /// Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says.
+    PlunderAmmoBays => "plunder_ammo_bays",
+    /// Whether a copy of an NPC's pick that spawns nothing still spends
+    /// (see [`Armament::fire_pick`](crate::combat::armament::Armament::fire_pick)).
+    /// By the engine, as `_FireAIShipWeapon` spends each copy that has its
+    /// ammunition before it asks whether anything spawned
+    /// (@0x88cd8-0x88dac): a turret holding fire, a missile with no
+    /// target, a bomb, and a fighter bay kept as the pick (which spawns
+    /// nothing, so drains a fighter a frame) all spend. By the other
+    /// reading, only a copy that spawns spends. The Bible says nothing of
+    /// it, so the other reading is the intended behaviour, not anything
+    /// the Bible says.
+    AiSpendWithoutShot => "ai_spend_without_shot",
+    /// Which of its `shän`'s compressions a weapon exit point takes (see
+    /// [`exits`](crate::combat::exits)). By the engine, as
+    /// `_ModifyShotStartPosition2` chooses it after turning the point
+    /// (@0x717d-0x71f2): the up compression when the turned point lies up
+    /// the screen, its y below 0, and the down one otherwise, so an exit
+    /// behind a ship facing up takes the down one. By the Bible ("If the
+    /// ship is pointing generally up (heading is 0-90 or 270-359) then
+    /// UpCompressX/Y are used"), by the heading of the frame the ship is
+    /// drawn on. The two differ for exits behind or beside the ship.
+    ExitCompression => "exit_compression",
+    /// How many exits a ship's point-defence shot moves its cursor on (see
+    /// [`Combat`](crate::combat::Combat)). By the engine, two: the shot
+    /// `_HandleShipPointDefense` spawns takes an exit in `_SpawnShot`
+    /// (@0x396e5), is set back to the ship's centre, and takes the next
+    /// (@0x39707-0x3976c), so a ship's point defence fires from every
+    /// other exit. By the other reading, one, so it fires from each exit
+    /// in turn. The Bible says nothing of it, so the other reading is the
+    /// intended behaviour, not anything the Bible says.
+    PdExitStep => "pd_exit_step",
+    /// How a beam finds the ship it hits (see
+    /// [`beam`](crate::combat::beam)). By the engine, the cone
+    /// (`_HandleBeams` @0x30dde-0x31051): the nearest ship whose centre is
+    /// within the beam's `BeamLength` plus half its radius r, trunc(0.66
+    /// × its sprite's width), and within trunc(10r / 32) degrees of the
+    /// beam's heading, the hit ending trunc(dist − 0.2 × width) along the
+    /// beam. By the other reading, the beam's segment against each ship's
+    /// hit circle, the first it meets, ending where it meets it. The
+    /// Bible says nothing of it, so the other reading is the engine's
+    /// earlier choice, not anything the Bible says.
+    BeamHitTest => "beam_hit_test",
+    /// Whether the beam cone keeps the original's quirks (see
+    /// [`beam`](crate::combat::beam)). By the engine, the angle test is
+    /// the plain difference of the ship's whole-degree bearing and the
+    /// beam's heading as its jitter left it, with no 0/360 wrap
+    /// (@0x30ec4-0x30edd), so a beam at 2 degrees, or at -2 after its
+    /// jitter, misses a ship at 358; and the asteroid pass takes its
+    /// "nearest" asteroid by the distance of the ship of the same index
+    /// (@0x317f2-0x3180c), which asteroids phase 6 reads from this key.
+    /// By the other reading, the angle wraps and the nearest asteroid is
+    /// by its own distance. The other reading is the default (see the
+    /// module docs).
+    BeamConeQuirks => "beam_cone_quirks",
+    /// How a ship's freefall bombs (guidance 5) and rockets (6) leave it
+    /// (see [`BombLaunch`](crate::combat::projectile::BombLaunch)). By the
+    /// engine, as `_SpawnShot` launches them: the player's bomb at 0.8 of
+    /// its ship's velocity (@0x3e73a-0x3e783) and its rocket at its ship's,
+    /// but an NPC's, an escort's too, at its ship's velocity and its
+    /// `Speed` along its heading, broadside with a negative `Inaccuracy`,
+    /// as any other guidance (`-0x41`, the source above 0,
+    /// @0x3ede8-0x3ee0a). By the Bible ("launched at 80% of the ship's
+    /// current velocity"; "launched straight ahead, accelerates to its
+    /// maximum velocity"), every ship's as the player's.
+    BombRocketLaunch => "bomb_rocket_launch",
+    /// Which missiles a ship's point defence chooses to fire at (see
+    /// [`defence::choose`](crate::combat::defence::choose)). By the engine,
+    /// with no hostility test: a missile not lost, that point defence can
+    /// target, aimed at the ship or at its leader, whoever fired it
+    /// (`_HandleShipPointDefense` @0x393b1-0x394bd). By the other reading,
+    /// only one whose firer the fight's
+    /// [`PointDefenceRule`](crate::combat::defence::PointDefenceRule) also
+    /// calls hostile, as Nova's
+    /// [`Allegiance`](crate::combat::defence::Allegiance) does by fleets
+    /// and governments' alliances. It covers the choice of a missile
+    /// alone: a point-defence shot meets any missile its sprite touches
+    /// under both readings (`_PointDefenseCollisionHandler`
+    /// @0x37776-0x3785d), and with no missile to fire at, point defence
+    /// fires at a ship by the original's own threat tests under both
+    /// readings, as the ship branch has no government test
+    /// ([`defence::choose_ship`](crate::combat::defence::choose_ship),
+    /// @0x394ce-0x3969d), and no reading anyone would choose fires at
+    /// friends.
+    /// The Bible says nothing of it, so the other reading is the engine's
+    /// earlier choice, not anything the Bible says.
+    PdHostility => "pd_hostility",
+    /// Whose jamming a government of `Flags` 0x0080 halves (see
+    /// [`jamming`](crate::combat::jamming)). By the engine, as `_ShipECM`
+    /// halves the sum toward zero before its clamp for every NPC of it,
+    /// whatever its AI type (@0x3ccf-0x3cef): its class government's
+    /// `InhJam` and its default items' jammers alike. By the Bible
+    /// ("Freighters (i.e. `AiTypes` 1 and 2) for this particular government
+    /// have 50% of the standard `InherentJam` value for warships (`AiType` 3)
+    /// of the same government"), only a freighter's, and only its `InhJam`
+    /// share. The player is never halved.
+    JamHalving => "jam_halving",
+    /// How a `Seeker` 0x4000 homing shot measures how far off ahead a
+    /// target within its ±249-pixel box is (see
+    /// [`LockAngle`](crate::combat::projectile::LockAngle)). By the
+    /// engine, as `_HandleShotGuidance` reads it (@0x323ac-0x323ed): the
+    /// truncated bearing less the heading, absolute and mod 360 with no
+    /// fold, so a shot heading 355 at a bearing of 5 is 350 off and drops
+    /// its lock. By the other reading (the Bible: "Loses lock if target not
+    /// directly ahead"), the short way round. Either way it drops its lock
+    /// above 45. The other reading is the default (see the module docs).
+    SeekerLockAngle => "seeker_lock_angle",
+    /// Whether a destroyed ship scatters debris particles (the view's
+    /// `effects` module). By the engine, none: `_HandleShipDisplay` sets
+    /// off only its `Explode2` (@0x2d7ef-0x2dee7), and no
+    /// `_SpawnParticles` call is on its death branch. By the other
+    /// reading, the engine's own debris, a burst of pieces carried on with
+    /// the ship's velocity. The other reading is the default (see the
+    /// module docs).
+    ShipDebris => "ship_debris",
+    /// Whether the player's quadrant turrets (guidance 7 and 8) test their
+    /// blind spots ([`aim`](crate::combat::aim::aim)). By the engine, never:
+    /// `_FirePlayerWeapon` fires a 7 or 8 at a target in its arc whatever
+    /// the weapon's or the ship's blind-spot flags (@0x62aeb-0x62c38),
+    /// though it tests them for 3 and 4 (@0x629fe, @0x62a94). By the other
+    /// reading, the Bible's "Turreted weapon has a blind spot", a blind
+    /// spot holds a 7 or 8 as it holds a 3 or 4. An escort's formation
+    /// trigger tests them under both, as `_AIFireTurret` picks its turrets
+    /// (@0x80d0b), and an NPC's pick tests none under both, as
+    /// `_FireAIShipWeapon` fires it.
+    QuadrantTurretBlindSpots => "quadrant_turret_blind_spots",
+    /// Whether a player's weapon of negative `Recoil` pushes it forward
+    /// (`Combat::fire_player`). By the engine, no: `_FirePlayerWeapon`
+    /// recoils only for a `Recoil` above none (@0x62eb2-0x62eb5, a signed
+    /// `jle`). By the other reading, the Bible's "Negative values thrust
+    /// the ship forwards", any `Recoil` but 0 and -1 pushes it, a negative
+    /// one forward, as an NPC's does (`_FireAIShipWeapon` @0x88ee2). No
+    /// stock weapon's `Recoil` is other than 0 or -1.
+    PlayerForwardRecoil => "player_forward_recoil",
+    /// Whether the original's fixed tables cap a fight (see the module
+    /// docs). By the engine, 128 shots, 64 beams, 32 explosions and 1024
+    /// particles, each failing quietly ([`Combat`](crate::combat::Combat),
+    /// the view's `effects`). By the other reading, nothing is capped. The
+    /// other reading is the default (see the module docs).
+    CombatCaps => "combat_caps",
+    /// How an armed proximity fuse is set off by a ship (see
+    /// [`projectile`](crate::combat::projectile)). By the engine, a point
+    /// test at the end of each move: the first ship in slot order, the
+    /// player first, within trunc(`ProxRadius` + a third of its sprite's
+    /// width) of the shot in whole pixels, the hit at the shot
+    /// (`_CheckShotProximities` @0x37549-0x376a5). By the other reading,
+    /// swept along the move against each ship's hit radius plus
+    /// `ProxRadius`, the ship met first along it taking the hit where the
+    /// move entered its reach, so a fast fused shot can be set off by a
+    /// ship it passes between two points.
+    ProximityFuse => "proximity_fuse",
     /// Where the galaxy map's Tab / `\` cycle of the hyperspace selection
     /// starts outside mode 3 ([`Session::cycle_map_selection`](crate::Session::cycle_map_selection)).
     /// By the engine, `_MapFilter` steps +0x6c on from what it holds
@@ -2157,16 +2397,21 @@ impl RuleKey {
     }
 
     /// The source this rule follows when the settings choose none: the
-    /// engine's, but for the two cron holdoff keys, the breakup stall and
-    /// the unlisted stellar, which follow the other reading as recorded departures from the
-    /// original (see the module docs).
+    /// engine's, but for the two cron holdoff keys, the breakup stall, the
+    /// unlisted stellar, the beam cone quirks, the seeker lock angle, the
+    /// ship debris and the combat caps, which follow the other reading as
+    /// recorded departures from the original (see the module docs).
     #[must_use]
     pub const fn default_source(self) -> RuleSource {
         match self {
             Self::CronZeroDurationHoldoff
             | Self::CronPostHoldoff
             | Self::BreakupStall
-            | Self::UnlistedStellar => RuleSource::Bible,
+            | Self::UnlistedStellar
+            | Self::BeamConeQuirks
+            | Self::SeekerLockAngle
+            | Self::ShipDebris
+            | Self::CombatCaps => RuleSource::Bible,
             _ => RuleSource::Engine,
         }
     }
@@ -2182,8 +2427,9 @@ pub struct Rulebook {
 }
 
 /// Every rule following its own default, overriding none: the engine's,
-/// but for the two cron holdoff keys, the breakup stall and the unlisted
-/// stellar. (Written out, as `Default` derives
+/// but for the two cron holdoff keys, the breakup stall, the beam cone
+/// quirks, the seeker lock angle, the ship debris, the combat caps and the
+/// unlisted stellar. (Written out, as `Default` derives
 /// only for arrays of up to 32 rules.)
 impl Default for Rulebook {
     fn default() -> Self {
@@ -2234,8 +2480,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_rule_follows_its_default_the_engines_but_the_cron_holdoffs_the_breakup_stall_and_the_unlisted_stellar()
-     {
+    fn every_rule_follows_its_default_the_engines_but_the_recorded_departures() {
         assert_eq!(RuleSource::default(), RuleSource::Engine);
         let rulebook = Rulebook::default();
         assert_eq!(rulebook.global_source(), None);
@@ -2253,7 +2498,11 @@ mod tests {
                 RuleKey::CronZeroDurationHoldoff,
                 RuleKey::CronPostHoldoff,
                 RuleKey::BreakupStall,
-                RuleKey::UnlistedStellar
+                RuleKey::UnlistedStellar,
+                RuleKey::BeamConeQuirks,
+                RuleKey::SeekerLockAngle,
+                RuleKey::ShipDebris,
+                RuleKey::CombatCaps
             ]
         );
     }
@@ -2365,7 +2614,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(67),
+            RuleKey::ALL.iter().rev().nth(84),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2405,7 +2654,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(66),
+            RuleKey::ALL.iter().rev().nth(83),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -2427,7 +2676,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(65),
+            RuleKey::ALL.iter().rev().nth(82),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -2452,7 +2701,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(64),
+            RuleKey::ALL.iter().rev().nth(81),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2478,7 +2727,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(63),
+            RuleKey::ALL.iter().rev().nth(80),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2498,7 +2747,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(62),
+            RuleKey::ALL.iter().rev().nth(79),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2518,7 +2767,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(61),
+            RuleKey::ALL.iter().rev().nth(78),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2538,7 +2787,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(58),
+            RuleKey::ALL.iter().rev().nth(75),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2560,7 +2809,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(57),
+            RuleKey::ALL.iter().rev().nth(74),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2577,7 +2826,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -2594,7 +2843,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -2611,7 +2860,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::NonStrictSpeed)
         );
     }
@@ -2628,7 +2877,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::HunterBribe)
         );
     }
@@ -2645,7 +2894,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::ShipOverlap)
         );
     }
@@ -2662,7 +2911,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(36),
             Some(&RuleKey::QuadrantTurretArc)
         );
     }
@@ -2679,7 +2928,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::HiddenShips)
         );
     }
@@ -2696,7 +2945,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::HiddenShipHoverBox)
         );
     }
@@ -2717,7 +2966,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(33),
             Some(&RuleKey::BreakupStall)
         );
     }
@@ -2734,7 +2983,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::EjectVelocity)
         );
     }
@@ -2751,7 +3000,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::RescueArmor)
         );
     }
@@ -2772,7 +3021,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(30),
             Some(&RuleKey::UnlistedStellar)
         );
     }
@@ -2789,7 +3038,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::NewbieFuelRefusal)
         );
     }
@@ -2806,7 +3055,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::MissingBuoyString)
         );
     }
@@ -2823,7 +3072,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::PatrolUninhabited)
         );
     }
@@ -2840,7 +3089,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::GateExitCounts)
         );
     }
@@ -2857,7 +3106,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::SpawnReserve)
         );
     }
@@ -2874,7 +3123,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::ArrivalHits)
         );
     }
@@ -2887,7 +3136,10 @@ mod tests {
             Rulebook::default().source_for(RuleKey::HireNoSlot),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(5), Some(&RuleKey::HireNoSlot));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(22),
+            Some(&RuleKey::HireNoSlot)
+        );
     }
 
     #[test]
@@ -2902,7 +3154,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::AsteroidEntryField)
         );
     }
@@ -2919,7 +3171,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::AsteroidRespawnRing)
         );
     }
@@ -2939,8 +3191,333 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::FuseIgnoresAsteroids)
+        );
+    }
+
+    #[test]
+    fn the_move_left_behind_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::MoveLeftBehind.key(), "move_left_behind");
+        assert_eq!(
+            RuleKey::from_key("move_left_behind"),
+            Some(RuleKey::MoveLeftBehind)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MoveLeftBehind),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(25),
+            Some(&RuleKey::MoveLeftBehind)
+        );
+    }
+
+    #[test]
+    fn the_player_pass_through_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PlayerPassThrough.key(), "player_pass_through");
+        assert_eq!(
+            RuleKey::from_key("player_pass_through"),
+            Some(RuleKey::PlayerPassThrough)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PlayerPassThrough),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(18),
+            Some(&RuleKey::PlayerPassThrough)
+        );
+    }
+
+    #[test]
+    fn the_shot_decay_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ShotDecay.key(), "shot_decay");
+        assert_eq!(RuleKey::from_key("shot_decay"), Some(RuleKey::ShotDecay));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ShotDecay),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::ShotDecay),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(17), Some(&RuleKey::ShotDecay));
+    }
+
+    #[test]
+    fn the_plunder_ammo_bays_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PlunderAmmoBays.key(), "plunder_ammo_bays");
+        assert_eq!(
+            RuleKey::from_key("plunder_ammo_bays"),
+            Some(RuleKey::PlunderAmmoBays)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PlunderAmmoBays),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::PlunderAmmoBays),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(16),
+            Some(&RuleKey::PlunderAmmoBays)
+        );
+    }
+
+    #[test]
+    fn the_ai_spend_without_shot_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AiSpendWithoutShot.key(), "ai_spend_without_shot");
+        assert_eq!(
+            RuleKey::from_key("ai_spend_without_shot"),
+            Some(RuleKey::AiSpendWithoutShot)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AiSpendWithoutShot),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::AiSpendWithoutShot),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(15),
+            Some(&RuleKey::AiSpendWithoutShot)
+        );
+    }
+
+    #[test]
+    fn the_exit_compression_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ExitCompression.key(), "exit_compression");
+        assert_eq!(
+            RuleKey::from_key("exit_compression"),
+            Some(RuleKey::ExitCompression)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ExitCompression),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::ExitCompression),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(14),
+            Some(&RuleKey::ExitCompression)
+        );
+    }
+
+    #[test]
+    fn the_pd_exit_step_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PdExitStep.key(), "pd_exit_step");
+        assert_eq!(RuleKey::from_key("pd_exit_step"), Some(RuleKey::PdExitStep));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PdExitStep),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::PdExitStep),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(13),
+            Some(&RuleKey::PdExitStep)
+        );
+    }
+
+    #[test]
+    fn the_beam_hit_test_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::BeamHitTest.key(), "beam_hit_test");
+        assert_eq!(
+            RuleKey::from_key("beam_hit_test"),
+            Some(RuleKey::BeamHitTest)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::BeamHitTest),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::BeamHitTest),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(12),
+            Some(&RuleKey::BeamHitTest)
+        );
+    }
+
+    #[test]
+    fn the_bomb_rocket_launch_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::BombRocketLaunch.key(), "bomb_rocket_launch");
+        assert_eq!(
+            RuleKey::from_key("bomb_rocket_launch"),
+            Some(RuleKey::BombRocketLaunch)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::BombRocketLaunch),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::BombRocketLaunch),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(10),
+            Some(&RuleKey::BombRocketLaunch)
+        );
+    }
+
+    #[test]
+    fn the_pd_hostility_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PdHostility.key(), "pd_hostility");
+        assert_eq!(
+            RuleKey::from_key("pd_hostility"),
+            Some(RuleKey::PdHostility)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PdHostility),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::PdHostility),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(9),
+            Some(&RuleKey::PdHostility)
+        );
+    }
+
+    #[test]
+    fn the_jam_halving_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::JamHalving.key(), "jam_halving");
+        assert_eq!(RuleKey::from_key("jam_halving"), Some(RuleKey::JamHalving));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::JamHalving),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::JamHalving),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(8), Some(&RuleKey::JamHalving));
+    }
+
+    #[test]
+    fn the_seeker_lock_angle_rule_is_found_by_its_key_and_defaults_to_the_fix() {
+        assert_eq!(RuleKey::SeekerLockAngle.key(), "seeker_lock_angle");
+        assert_eq!(
+            RuleKey::from_key("seeker_lock_angle"),
+            Some(RuleKey::SeekerLockAngle)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::SeekerLockAngle),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Engine).source_for(RuleKey::SeekerLockAngle),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(7),
+            Some(&RuleKey::SeekerLockAngle)
+        );
+    }
+
+    #[test]
+    fn the_ship_debris_rule_is_found_by_its_key_and_defaults_to_the_engines_debris() {
+        assert_eq!(RuleKey::ShipDebris.key(), "ship_debris");
+        assert_eq!(RuleKey::from_key("ship_debris"), Some(RuleKey::ShipDebris));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ShipDebris),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Engine).source_for(RuleKey::ShipDebris),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(6), Some(&RuleKey::ShipDebris));
+    }
+
+    #[test]
+    fn the_quadrant_turret_blind_spots_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::QuadrantTurretBlindSpots.key(),
+            "quadrant_turret_blind_spots"
+        );
+        assert_eq!(
+            RuleKey::from_key("quadrant_turret_blind_spots"),
+            Some(RuleKey::QuadrantTurretBlindSpots)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::QuadrantTurretBlindSpots),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::QuadrantTurretBlindSpots),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(5),
+            Some(&RuleKey::QuadrantTurretBlindSpots)
+        );
+    }
+
+    #[test]
+    fn the_player_forward_recoil_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::PlayerForwardRecoil.key(), "player_forward_recoil");
+        assert_eq!(
+            RuleKey::from_key("player_forward_recoil"),
+            Some(RuleKey::PlayerForwardRecoil)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PlayerForwardRecoil),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::PlayerForwardRecoil),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(4),
+            Some(&RuleKey::PlayerForwardRecoil)
+        );
+    }
+
+    #[test]
+    fn the_combat_caps_rule_is_found_by_its_key_and_defaults_to_no_caps() {
+        assert_eq!(RuleKey::CombatCaps.key(), "combat_caps");
+        assert_eq!(RuleKey::from_key("combat_caps"), Some(RuleKey::CombatCaps));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::CombatCaps),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Engine).source_for(RuleKey::CombatCaps),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::CombatCaps));
+    }
+
+    #[test]
+    fn the_proximity_fuse_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ProximityFuse.key(), "proximity_fuse");
+        assert_eq!(
+            RuleKey::from_key("proximity_fuse"),
+            Some(RuleKey::ProximityFuse)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ProximityFuse),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Bible).source_for(RuleKey::ProximityFuse),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::ProximityFuse)
         );
     }
 
@@ -2976,19 +3553,23 @@ mod tests {
     }
 
     #[test]
-    fn the_move_left_behind_rule_is_found_by_its_key_and_reads_the_engine() {
-        assert_eq!(RuleKey::MoveLeftBehind.key(), "move_left_behind");
+    fn the_beam_cone_quirks_rule_is_found_by_its_key_and_defaults_to_the_fix() {
+        assert_eq!(RuleKey::BeamConeQuirks.key(), "beam_cone_quirks");
         assert_eq!(
-            RuleKey::from_key("move_left_behind"),
-            Some(RuleKey::MoveLeftBehind)
+            RuleKey::from_key("beam_cone_quirks"),
+            Some(RuleKey::BeamConeQuirks)
         );
         assert_eq!(
-            Rulebook::default().source_for(RuleKey::MoveLeftBehind),
+            Rulebook::default().source_for(RuleKey::BeamConeQuirks),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Engine).source_for(RuleKey::BeamConeQuirks),
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
-            Some(&RuleKey::MoveLeftBehind)
+            RuleKey::ALL.iter().rev().nth(11),
+            Some(&RuleKey::BeamConeQuirks)
         );
     }
 
@@ -3000,7 +3581,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(56), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(73), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -3015,7 +3596,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(55),
+            RuleKey::ALL.iter().rev().nth(72),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -3032,7 +3613,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(54),
+            RuleKey::ALL.iter().rev().nth(71),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -3049,7 +3630,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(53),
+            RuleKey::ALL.iter().rev().nth(70),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -3066,7 +3647,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(52),
+            RuleKey::ALL.iter().rev().nth(69),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -3083,7 +3664,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(51),
+            RuleKey::ALL.iter().rev().nth(68),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -3100,7 +3681,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(67),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -3114,7 +3695,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(49),
+            RuleKey::ALL.iter().rev().nth(66),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -3128,7 +3709,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(65),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -3141,7 +3722,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(60),
+            RuleKey::ALL.iter().rev().nth(77),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -3159,7 +3740,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(63),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -3176,7 +3757,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(62),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -3193,10 +3774,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(43), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(60), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -3211,7 +3792,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(42),
+            RuleKey::ALL.iter().rev().nth(59),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -3230,15 +3811,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(58),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -3255,7 +3836,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(55),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -3269,11 +3850,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(53),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -3294,11 +3875,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(35),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -3312,11 +3893,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(50),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(32),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::BlessingLanding)
         );
     }
@@ -3336,7 +3917,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(48),
             Some(&RuleKey::BlessingAlwaysAttacks)
         );
     }
@@ -3353,7 +3934,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(30),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::ExploredByPlace)
         );
     }
@@ -3370,7 +3951,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::RouteRewrite)
         );
     }
@@ -3387,7 +3968,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(28),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::NebulaExploreOnce)
         );
     }
@@ -3404,7 +3985,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::NebulaNewPilot)
         );
     }
@@ -3418,11 +3999,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::ScanOutfitsPastJunk)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::OutfitScanFine)
         );
     }
@@ -3546,7 +4127,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(69),
+            RuleKey::ALL.iter().rev().nth(86),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3752,6 +4333,23 @@ mod tests {
                 RuleKey::AsteroidEntryField,
                 RuleKey::AsteroidRespawnRing,
                 RuleKey::FuseIgnoresAsteroids,
+                RuleKey::PlayerPassThrough,
+                RuleKey::ShotDecay,
+                RuleKey::PlunderAmmoBays,
+                RuleKey::AiSpendWithoutShot,
+                RuleKey::ExitCompression,
+                RuleKey::PdExitStep,
+                RuleKey::BeamHitTest,
+                RuleKey::BeamConeQuirks,
+                RuleKey::BombRocketLaunch,
+                RuleKey::PdHostility,
+                RuleKey::JamHalving,
+                RuleKey::SeekerLockAngle,
+                RuleKey::ShipDebris,
+                RuleKey::QuadrantTurretBlindSpots,
+                RuleKey::PlayerForwardRecoil,
+                RuleKey::CombatCaps,
+                RuleKey::ProximityFuse,
                 RuleKey::MapCycleStart,
                 RuleKey::MapLinkPairing
             ]
@@ -3787,6 +4385,7 @@ mod tests {
             RuleKey::from_key("unlisted_stellar"),
             Some(RuleKey::UnlistedStellar)
         );
+        assert_eq!(RuleKey::PlayerPassThrough.key(), "player_pass_through");
         for rule in RuleKey::ALL {
             assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
         }

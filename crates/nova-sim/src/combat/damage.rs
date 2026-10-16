@@ -5,39 +5,48 @@
 //! the `EV Nova` executable):
 //!
 //! - A weapon that passes through shields takes its mass damage off the
-//!   armour, ignoring its energy damage and leaving the shields as they
-//!   are.
-//! - Any other takes its energy damage (when it has any) off the shields,
-//!   then, only if they are then down (at or below none), its mass damage
-//!   off the armour. While the shields hold, mass damage never reaches the
-//!   armour, and energy damage keeps draining a shield that is down.
-//! - Either way the shield is then kept above [`SHIELD_FLOOR`] of what it
-//!   holds below none, so a shield driven negative must first recharge up
-//!   through none.
+//!   armour (@0x3ab8c-0x3abfb), ignoring its energy damage and leaving
+//!   the shields as they are.
+//! - Any other takes its energy damage off the shields, then, only if
+//!   they are then down (at or below none), its mass damage off the
+//!   armour (@0x3ac00-0x3ac81). While the shields hold, mass damage never
+//!   reaches the armour, and energy damage keeps draining a shield that
+//!   is down. A shield it leaves down is kept above [`SHIELD_FLOOR`] of
+//!   what it holds below none (@0x3ac86-0x3acbd), so a shield driven
+//!   negative must first recharge up through none.
+//! - Damage at or below none is skipped, on either path (@0x3ab9b,
+//!   @0x3ac08, @0x3ac38): it never heals.
 //! - A ship type that holds no armour (stock `shïp` 895, plug-in or test
 //!   data) has none to lose: its armour is never taken below none.
 //! - A blast reaches every ship within the square `radius` on each side of
 //!   it, but the one hit directly and the firer, unless the firer is the
 //!   player and the weapon's blast does not spare the player.
 //!
-//! **Spared hits** ([`apply_spared`]). `_DamageShip`'s arguments +0x28 and
-//! +0x2c keep a hit from destroying or newly disabling its ship, on
-//! either path (shields first, or armour-direct):
+//! **Spared hits** ([`take`]). `_DamageShip`'s arguments +0x28 and +0x2c
+//! ([`Hit::cant_kill`], [`Hit::cant_disable`]) each keep a hit, on its
+//! own, from destroying or newly disabling its ship, on either path
+//! (shields first, or armour-direct):
 //!
 //! - **It never destroys** (+0x28: @0x3ac3a-0x3ac64 after the shield
 //!   path, @0x3abd6 on the armour-direct one): armour above none that the
-//!   hit takes to none or below is left at [`SPARED_ARMOR`].
+//!   hit takes to none or below is left at [`SPARED_ARMOR`]; armour
+//!   already at none or below takes it unfloored. A disable-only weapon's
+//!   shots, blasts and beams carry it (`Flags2` 0x1000), and the
+//!   shockwave and sabotage bombs.
 //! - **It never newly disables** (+0x2c, @0x3acc2-0x3ad4a): a ship not
 //!   disabled before the hit (`_IsDisabled` @0x3a9ad) that is after it
 //!   has its armour set to what a self-repair leaves
-//!   ([`repaired_armor`], the same 0.3333, 0.1 and 1.0). That clears the
-//!   disabled line only while the ship holds 33,333 armour or less: a
-//!   non-`TOUGH` hull that holds more is left disabled, and counts as
-//!   newly disabled.
+//!   ([`repaired_armor`], the same 0.3333, 0.1 and 1.0). `_IsDisabled`
+//!   reads armour at none or below as disabled, so a killing blow is
+//!   reset too. That clears the disabled line only while the ship holds
+//!   33,333 armour or less: a non-`TOUGH` hull that holds more is left
+//!   disabled, and counts as newly disabled. The shockwave and sabotage
+//!   bombs carry it.
 //!
 //! The caller says whether the ship was disabled before the hit: a
 //! shockwave reads it from the ship's condition, a sabotage bomb from its
-//! armour.
+//! armour, and a weapon's hit from both (see
+//! [`Combat`](super::Combat)'s steps 3 and 8).
 
 use super::ShipRef;
 use super::hull::{DisableRule, HullSpec};
@@ -63,42 +72,79 @@ pub struct Hit {
     pub energy: f32,
     /// Whether it passes through shields.
     pub passes_shields: bool,
+    /// Whether it never destroys its ship (`_DamageShip`'s arg +0x28): a
+    /// disable-only weapon's (see the module docs' **Spared hits**).
+    pub cant_kill: bool,
+    /// Whether it never newly disables its ship (`_DamageShip`'s arg
+    /// +0x2c).
+    pub cant_disable: bool,
 }
 
 impl Hit {
-    /// A full hit from `weapon`.
+    /// A full hit from `weapon`, which may kill and disable: whether it
+    /// is disable-only is its shot's or beam's to say
+    /// ([`Shot::disable_only`](super::projectile::Shot::disable_only)).
     #[must_use]
     pub fn of(weapon: &WeaponSpec) -> Self {
         Self {
             mass: weapon.mass_damage,
             energy: weapon.energy_damage,
             passes_shields: weapon.passes_shields(),
+            ..Self::default()
         }
     }
 }
 
-/// Takes `hit` off `reserves` (see the module docs).
+impl Hit {
+    /// The hit with `steps` of decay taken off its mass and its energy,
+    /// each floored at none, as `_HandleShipHit` takes a shot's steps off
+    /// its direct hit (@0x36add-0x36afd); with no steps, the hit as it is.
+    #[must_use]
+    pub fn decayed(self, steps: u32) -> Self {
+        if steps == 0 {
+            return self;
+        }
+        // Steps are ticks of a shot's life, far within an `f32`'s whole
+        // numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let steps = steps as f32;
+        Self {
+            mass: (self.mass - steps).max(0.0),
+            energy: (self.energy - steps).max(0.0),
+            ..self
+        }
+    }
+}
+
+/// Takes `hit` off `reserves` with neither of its floors (see the module
+/// docs): what [`take`] does to a hit that may kill and disable.
 pub fn apply(reserves: &mut Reserves, hit: Hit) {
     let shield = &mut reserves.shield;
     if hit.passes_shields {
-        reserves.armor.now -= hit.mass;
-    } else {
-        shield.now -= hit.energy.max(0.0);
-        if shield.now <= 0.0 {
+        if hit.mass > 0.0 {
             reserves.armor.now -= hit.mass;
         }
+    } else {
+        if hit.energy > 0.0 {
+            shield.now -= hit.energy;
+        }
+        if shield.now <= 0.0 {
+            if hit.mass > 0.0 {
+                reserves.armor.now -= hit.mass;
+            }
+            shield.now = shield.now.max(-SHIELD_FLOOR * shield.max);
+        }
     }
-    shield.now = shield.now.max(-SHIELD_FLOOR * shield.max);
     if reserves.armor.max <= 0.0 {
         reserves.armor.now = reserves.armor.now.max(0.0);
     }
 }
 
-/// Takes `hit` off `reserves` as [`apply`] does, with the floors that keep
-/// it from destroying or newly disabling the ship of `hull`, which
-/// `was_disabled` before it or not (see the module docs' **Spared
-/// hits**); `rule` says when a ship is disabled.
-pub fn apply_spared(
+/// Takes `hit` off `reserves` as [`apply`] does, with each floor it
+/// carries (see the module docs' **Spared hits**): it is on the ship of
+/// `hull`, which `was_disabled` before it or not, and `rule` says when a
+/// ship is disabled.
+pub fn take(
     reserves: &mut Reserves,
     hit: Hit,
     hull: &HullSpec,
@@ -108,10 +154,10 @@ pub fn apply_spared(
     let whole = reserves.armor.now > 0.0;
     apply(reserves, hit);
     let armor = &mut reserves.armor;
-    if whole && armor.now <= 0.0 {
+    if hit.cant_kill && whole && armor.now <= 0.0 {
         armor.now = SPARED_ARMOR;
     }
-    if !was_disabled && disabled(*armor, hull, rule) {
+    if hit.cant_disable && !was_disabled && disabled(*armor, hull, rule) {
         armor.now = repaired_armor(armor.max, hull.tough);
     }
 }
@@ -131,8 +177,10 @@ pub struct Blast {
     pub radius: f32,
     /// The ship hit directly, which it leaves alone.
     pub direct: Option<ShipRef>,
-    /// The ship that fired it.
-    pub firer: ShipRef,
+    /// The ship that fired it, which it spares; none for a shot no ship
+    /// launched, whose blast spares no one (the blast pass skips the
+    /// source slot, @0x35fd5-0x36003, and -1 is none).
+    pub firer: Option<ShipRef>,
     /// Whether it spares the player who fired it.
     pub spares_player: bool,
 }
@@ -160,7 +208,7 @@ impl Blast {
 
     /// Whether it may hurt `ship`, as far as who fired it goes.
     fn may_hurt(&self, ship: ShipRef) -> bool {
-        ship != self.firer || (ship == ShipRef::Player && !self.spares_player)
+        Some(ship) != self.firer || (ship == ShipRef::Player && !self.spares_player)
     }
 }
 
@@ -194,9 +242,46 @@ mod tests {
             mass,
             energy: 0.0,
             passes_shields: true,
+            cant_kill: true,
+            cant_disable: true,
         };
-        apply_spared(&mut reserves, hit, &hull, &NovaDisable, was_disabled);
+        take(&mut reserves, hit, &hull, &NovaDisable, was_disabled);
         (reserves.shield.now, reserves.armor.now)
+    }
+
+    #[test]
+    fn a_decayed_hit_loses_its_steps_off_mass_and_energy_each_floored_at_none() {
+        let hit = Hit {
+            mass: 10.0,
+            energy: 3.0,
+            passes_shields: true,
+            cant_kill: true,
+            cant_disable: false,
+        };
+        assert_eq!(
+            hit.decayed(4),
+            Hit {
+                mass: 6.0,
+                energy: 0.0,
+                ..hit
+            }
+        );
+        assert_eq!(hit.decayed(0), hit);
+        let negative = Hit {
+            mass: -2.0,
+            energy: -1.0,
+            ..hit
+        };
+        assert_eq!(negative.decayed(0), negative, "no step, no floor");
+        assert_eq!(
+            negative.decayed(1),
+            Hit {
+                mass: 0.0,
+                energy: 0.0,
+                ..hit
+            },
+            "a step floors even what it did not take"
+        );
     }
 
     #[test]
@@ -232,6 +317,141 @@ mod tests {
         assert_eq!(SPARED_ARMOR, 1.0);
     }
 
+    /// What `hit` leaves of 50 of 100 shields and `armor` of 300 armour,
+    /// taken by [`take`] on a hull `tough` or not that `was_disabled` or
+    /// not.
+    fn taken(armor: f32, hit: Hit, tough: bool, was_disabled: bool) -> (f32, f32) {
+        let mut reserves = Reserves {
+            shield: Gauge {
+                now: 50.0,
+                max: 100.0,
+            },
+            armor: Gauge {
+                now: armor,
+                max: 300.0,
+            },
+            fuel: Gauge::full(100.0),
+        };
+        let hull = HullSpec {
+            tough,
+            ..HullSpec::default()
+        };
+        take(&mut reserves, hit, &hull, &NovaDisable, was_disabled);
+        (reserves.shield.now, reserves.armor.now)
+    }
+
+    /// A hit of `mass` armour damage and 60 shield damage, through the
+    /// shields or not, that can't kill.
+    fn cant_kill(mass: f32, passes_shields: bool) -> Hit {
+        Hit {
+            mass,
+            energy: 60.0,
+            passes_shields,
+            cant_kill: true,
+            cant_disable: false,
+        }
+    }
+
+    #[test]
+    fn a_cant_kill_hit_leaves_armour_it_would_take_to_none_at_1() {
+        assert_eq!(
+            taken(100.0, cant_kill(450.0, true), false, true),
+            (50.0, SPARED_ARMOR),
+            "armour-direct"
+        );
+        assert_eq!(
+            taken(100.0, cant_kill(100.0, false), false, false),
+            (-10.0, SPARED_ARMOR),
+            "shields first, to exactly none, and not reset to the repair share"
+        );
+        assert_eq!(
+            taken(100.0, cant_kill(30.0, true), false, true),
+            (50.0, 70.0),
+            "a survivable hit is taken whole"
+        );
+        assert_eq!(
+            taken(-5.0, cant_kill(30.0, false), false, true),
+            (-10.0, -35.0),
+            "a ship already at none or below takes it unfloored"
+        );
+    }
+
+    /// A hit of `mass` armour damage through the shields that can't
+    /// disable.
+    fn cant_disable(mass: f32) -> Hit {
+        Hit {
+            mass,
+            energy: 0.0,
+            passes_shields: true,
+            cant_kill: false,
+            cant_disable: true,
+        }
+    }
+
+    #[test]
+    fn a_cant_disable_hit_alone_sets_a_newly_disabled_intact_ship_back_to_the_repair_share() {
+        let (_, armor) = taken(300.0, cant_disable(250.0), false, false);
+        assert_eq!(armor, repaired_armor(300.0, false));
+        let gauge = Gauge {
+            now: armor,
+            max: 300.0,
+        };
+        assert!(!NovaDisable.disabled(gauge, &HullSpec::default()));
+        assert_eq!(taken(300.0, cant_disable(290.0), true, false), (50.0, 31.0));
+        assert_eq!(
+            taken(300.0, cant_disable(400.0), false, false).1,
+            repaired_armor(300.0, false),
+            "a killing blow disables too (`_IsDisabled` reads armour at none as disabled)"
+        );
+        assert_eq!(
+            taken(90.0, cant_disable(30.0), false, true),
+            (50.0, 60.0),
+            "an already disabled ship is left as the hit leaves it"
+        );
+        assert_eq!(
+            taken(90.0, cant_disable(100.0), false, true),
+            (50.0, -10.0),
+            "and may be killed"
+        );
+        assert_eq!(
+            taken(300.0, cant_disable(100.0), false, false),
+            (50.0, 200.0),
+            "a hit that doesn't disable is taken whole"
+        );
+    }
+
+    #[test]
+    fn damage_at_or_below_none_is_skipped() {
+        let heal = |passes_shields| Hit {
+            mass: -20.0,
+            energy: -20.0,
+            passes_shields,
+            ..Hit::default()
+        };
+        let mut down = full();
+        down.shield.now = -1.0;
+        down.armor.now = 7.0;
+        assert_eq!(after(down, &[heal(false)]), (-1.0, 7.0), "shields first");
+        assert_eq!(after(down, &[heal(true)]), (-1.0, 7.0), "armour-direct");
+    }
+
+    #[test]
+    fn a_shield_passing_hit_leaves_a_shield_below_its_floor_as_it_is() {
+        let mut sunk = full();
+        sunk.shield.now = -9.0;
+        let through = Hit {
+            mass: 5.0,
+            passes_shields: true,
+            ..Hit::default()
+        };
+        assert_eq!(after(sunk, &[through]), (-9.0, 40.0));
+        assert_eq!(
+            after(sunk, &[hit(5.0, 0.0)]),
+            (-3.0, 40.0),
+            "the shield path floors it"
+        );
+    }
+
     /// 30 of 30 shields and 45 of 45 armour, with fuel.
     fn full() -> Reserves {
         Reserves::full(30.0, 45.0, 300.0)
@@ -241,7 +461,7 @@ mod tests {
         Hit {
             mass,
             energy,
-            passes_shields: false,
+            ..Hit::default()
         }
     }
 
@@ -291,6 +511,7 @@ mod tests {
             mass: 12.0,
             energy: 12.0,
             passes_shields: true,
+            ..Hit::default()
         };
         assert_eq!(after(full(), &[through]), (30.0, 33.0));
         let mut down = full();
@@ -346,8 +567,11 @@ mod tests {
             Hit {
                 mass: 12.0,
                 energy: 8.0,
-                passes_shields: true
-            }
+                passes_shields: true,
+                cant_kill: false,
+                cant_disable: false,
+            },
+            "its weapon's disable-only is the shot's or beam's to pass"
         );
     }
 
@@ -360,7 +584,7 @@ mod tests {
             at: Vec2::new(100.0, 100.0),
             radius: 10.0,
             direct,
-            firer,
+            firer: Some(firer),
             spares_player,
         }
     }

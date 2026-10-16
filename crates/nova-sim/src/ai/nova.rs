@@ -327,10 +327,12 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
             ship: ShipRef::Player,
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         for (npc, mark) in npcs.iter().zip(&marks) {
             let ship = mark.ship();
@@ -397,10 +399,12 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
             ship: ShipRef::Player,
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         for npc in &npcs {
             assert_eq!(
@@ -682,10 +686,12 @@ mod tests {
         };
         let hit = Strike {
             ship: ShipRef::Npc(NpcId(1)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         [&npcs[1], &npcs[2]].map(|npc| ai.react(npc, &hit, &around).goal)
     }
@@ -782,10 +788,12 @@ mod tests {
         );
         let strike = Strike {
             ship: ShipRef::Npc(NpcId(1)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 1.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 7.0);
         assert_eq!(
@@ -839,10 +847,12 @@ mod tests {
         assert_eq!(ai.trigger(&npcs[0], &around).only, Some(WeaponId(9)));
         let strike = Strike {
             ship: ShipRef::Npc(NpcId(1)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 1.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 9.0);
         assert!(mark.asked.borrow().is_empty(), "not its type's");

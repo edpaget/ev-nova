@@ -211,9 +211,9 @@ impl Session {
             return;
         }
         self.move_traffic_again(&mut *chance);
-        self.tick_asteroids(&mut *chance);
         self.before_fight(rules, &mut &mut *chance);
-        self.fight(GamePass::Again, rules, chance);
+        self.fight(GamePass::Again, rules, &mut *chance);
+        self.tick_asteroids(chance);
     }
 
     /// The traffic's part of the second pass, drawing on `chance`: the NPCs
@@ -839,7 +839,8 @@ mod tests {
             session
                 .strikes
                 .iter()
-                .any(|strike| strike.by == ShipRef::Player && strike.ship == ShipRef::Npc(NpcId(0))),
+                .any(|strike| strike.by == Some(ShipRef::Player)
+                    && strike.ship == ShipRef::Npc(NpcId(0))),
             "kept for the advance pass's answers: {:?}",
             session.strikes
         );

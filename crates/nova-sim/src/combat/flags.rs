@@ -66,6 +66,8 @@ enum Scope {
     Turret,
     /// Beams (Guidance 0, 3 and 10).
     Beam,
+    /// Weapons that fire shots: any but a beam or a fighter bay.
+    Shots,
 }
 
 impl Scope {
@@ -86,12 +88,13 @@ impl Scope {
                 guidance,
                 Guidance::Beam | Guidance::TurretBeam | Guidance::PointDefenceBeam
             ),
+            Self::Shots => !Self::Beam.covers(guidance) && guidance != Guidance::FighterBay,
         }
     }
 }
 
 use FlagField::{Flags, Flags2, Flags3, Seeker};
-use Scope::{Any, Beam, Guided, Turret};
+use Scope::{Any, Beam, Guided, Shots, Turret};
 use Status::{Implemented, Presentation, Unimplemented};
 
 /// Every documented bit: its field, the bit, which weapons it applies to,
@@ -109,7 +112,8 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x0010, Any, Presentation),
     // Passes through shields.
     (Flags, 0x0020, Any, Implemented),
-    // Copies fire simultaneously.
+    // Copies fire simultaneously: an NPC's pick (`Armament::fire_pick`);
+    // the player's is weapons-fidelity phase 15, so it is still reported.
     (Flags, 0x0040, Any, Unimplemented),
     // Homing: point defence can't target it.
     (Flags, 0x0080, Guided, Implemented),
@@ -129,11 +133,13 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Seeker, 0x0001, Any, Implemented),
     // Guided weapons' behaviour.
     (Seeker, 0x0002, Guided, Unimplemented),
-    (Seeker, 0x0008, Guided, Unimplemented),
-    (Seeker, 0x0010, Guided, Unimplemented),
+    // Confused by sensor interference; turns away when jammed.
+    (Seeker, 0x0008, Guided, Implemented),
+    (Seeker, 0x0010, Guided, Implemented),
     (Seeker, 0x0020, Guided, Unimplemented),
-    (Seeker, 0x4000, Guided, Unimplemented),
-    (Seeker, 0x8000, Guided, Unimplemented),
+    // Loses its lock off ahead; may turn on its firer.
+    (Seeker, 0x4000, Guided, Implemented),
+    (Seeker, 0x8000, Guided, Implemented),
     // Cycling graphic: held on the first frame, stopped on the last.
     (Flags2, 0x0001, Any, Presentation),
     (Flags2, 0x0002, Any, Presentation),
@@ -160,8 +166,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags2, 0x0400, Any, Unimplemented),
     // Not selectable or shown out of ammo.
     (Flags2, 0x0800, Any, Presentation),
-    // Disables but never destroys.
-    (Flags2, 0x1000, Any, Unimplemented),
+    // Disables but never destroys: its shots, blasts and beams can't kill
+    // (`Shot::disable_only`, `Beam::disable_only`, `damage::take`).
+    (Flags2, 0x1000, Any, Implemented),
     // Beam drawn under ships.
     (Flags2, 0x2000, Beam, Presentation),
     // Fires while cloaked, and nothing else does (`Armament::has_ammo`).
@@ -173,11 +180,13 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags3, 0x0001, Any, Implemented),
     // Translucent shots.
     (Flags3, 0x0002, Any, Presentation),
-    // One shot at a time.
-    (Flags3, 0x0004, Any, Unimplemented),
-    // Fires from the exit point nearest the target.
-    (Flags3, 0x0010, Any, Unimplemented),
-    // Exclusive.
+    // One shot at a time (`Combat::tick`'s hold); only `_HandleShot`
+    // reads it, so no beam does.
+    (Flags3, 0x0004, Shots, Implemented),
+    // Fires from the exit point nearest the target (`exits`).
+    (Flags3, 0x0010, Any, Implemented),
+    // Exclusive: an NPC's pick (`Armament::fire_pick`); the player's is
+    // weapons-fidelity phase 15, so it is still reported.
     (Flags3, 0x0020, Any, Unimplemented),
 ];
 
@@ -249,11 +258,11 @@ mod tests {
         (Flags, 0x8000, [Implemented; 4]),
         (Seeker, 0x0001, [Implemented; 4]),
         (Seeker, 0x0002, [NA, NA, Unimplemented, NA]),
-        (Seeker, 0x0008, [NA, NA, Unimplemented, NA]),
-        (Seeker, 0x0010, [NA, NA, Unimplemented, NA]),
+        (Seeker, 0x0008, [NA, NA, Implemented, NA]),
+        (Seeker, 0x0010, [NA, NA, Implemented, NA]),
         (Seeker, 0x0020, [NA, NA, Unimplemented, NA]),
-        (Seeker, 0x4000, [NA, NA, Unimplemented, NA]),
-        (Seeker, 0x8000, [NA, NA, Unimplemented, NA]),
+        (Seeker, 0x4000, [NA, NA, Implemented, NA]),
+        (Seeker, 0x8000, [NA, NA, Implemented, NA]),
         (Flags2, 0x0001, [Presentation; 4]),
         (Flags2, 0x0002, [Presentation; 4]),
         (Flags2, 0x0004, [Implemented; 4]),
@@ -266,14 +275,14 @@ mod tests {
         (Flags2, 0x0200, [Presentation; 4]),
         (Flags2, 0x0400, [Unimplemented; 4]),
         (Flags2, 0x0800, [Presentation; 4]),
-        (Flags2, 0x1000, [Unimplemented; 4]),
+        (Flags2, 0x1000, [Implemented; 4]),
         (Flags2, 0x2000, [NA, Presentation, NA, NA]),
         (Flags2, 0x4000, [Implemented; 4]),
         (Flags2, 0x8000, [Implemented; 4]),
         (Flags3, 0x0001, [Implemented; 4]),
         (Flags3, 0x0002, [Presentation; 4]),
-        (Flags3, 0x0004, [Unimplemented; 4]),
-        (Flags3, 0x0010, [Unimplemented; 4]),
+        (Flags3, 0x0004, [Implemented, NA, Implemented, Implemented]),
+        (Flags3, 0x0010, [Implemented; 4]),
         (Flags3, 0x0020, [Unimplemented; 4]),
     ];
 
@@ -393,22 +402,21 @@ mod tests {
     #[test]
     fn every_unimplemented_bit_set_is_listed_in_the_tables_order() {
         assert_eq!(
-            unimplemented(&spec(-1, 0x0048, 0x1080, 0x0024)),
-            [
-                (Flags, 0x0040),
-                (Flags2, 0x1000),
-                (Flags3, 0x0004),
-                (Flags3, 0x0020),
-            ],
+            unimplemented(&spec(-1, 0x0048, 0x0480, 0x0034)),
+            [(Flags, 0x0040), (Flags2, 0x0400), (Flags3, 0x0020),],
             "the guided-only 0x0008 left out"
         );
         assert_eq!(unimplemented(&spec(-1, 0, 0, 0)), []);
         let seeking = WeaponSpec::new(&WeaponRecord {
             guidance: 1,
-            seeker: 0x8001,
+            seeker: 0xc03b,
             ..weapon(131)
         });
-        assert_eq!(unimplemented(&seeking), [(Seeker, 0x8000)]);
+        assert_eq!(
+            unimplemented(&seeking),
+            [(Seeker, 0x0002), (Seeker, 0x0020)],
+            "asteroids, jamming, interference and the 0x4000 lock are done"
+        );
     }
 
     #[test]
@@ -438,10 +446,7 @@ mod tests {
         );
         // The Ion Cannon: a looped, rear-blind turreted beam that disables
         // and fires from the exit point nearest the target.
-        assert_eq!(
-            unimplemented(&guided(3, 0x4010, 0, 0x1200, 0x0011)),
-            [(Flags2, 0x1000), (Flags3, 0x0010)]
-        );
+        assert_eq!(unimplemented(&guided(3, 0x4010, 0, 0x1200, 0x0011)), []);
         // The Polaron Multi-Torp: point defence can't target it, and its
         // sub-munitions seek the nearest; it fires while cloaked and passes
         // through asteroids.
@@ -450,10 +455,7 @@ mod tests {
             []
         );
         // A rear-blind Fusion Pulse Turret that disables.
-        assert_eq!(
-            unimplemented(&guided(4, 0x4001, 0, 0x1200, 0x0002)),
-            [(Flags2, 0x1000)]
-        );
+        assert_eq!(unimplemented(&guided(4, 0x4001, 0, 0x1200, 0x0002)), []);
         // The Nanites turret's Seeker bit does not apply to it.
         assert_eq!(unimplemented(&guided(4, 0x0021, 0x0001, 0x0010, 0)), []);
     }

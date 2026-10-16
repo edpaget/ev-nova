@@ -815,6 +815,7 @@ impl Behaviour for Attacking {
             turrets_only: false,
             bays: false,
             point_defence: false,
+            keep: None,
         }
     }
 
@@ -837,12 +838,14 @@ impl PointDefenceRule for Unalarmed {
 }
 
 /// The app in flight with the player carrying the Quad and the trader,
-/// 200 pixels above it, firing the IR Missile at it, the router as
-/// `router` makes it.
+/// 205 pixels above it, firing the IR Missile at it, the router as
+/// `router` makes it. The player's point defence fires the tick after
+/// the missile, as `_HandlePlayer` runs before the NPCs fire, and its
+/// 3-pixel shots end a move on the missile's, 160 above.
 fn defending(router: impl FnOnce(AppScreen) -> AppScreen) -> Harness {
     Harness::flying_over(
         data_arming(&[133], &[134]),
-        &[6, 6, 0, 0, 750, 550, 180],
+        &[6, 6, 0, 0, 750, 545, 180],
         |screen| router(screen.with_behaviour(Rc::new(Attacking))),
     )
 }
@@ -865,16 +868,29 @@ fn the_players_point_defence_shoots_down_the_traders_missile() {
 }
 
 #[test]
-fn the_routers_point_defence_rule_decides_for_the_flight() {
+fn the_routers_point_defence_rule_decides_for_the_flight_by_the_other_reading() {
     let rule = Rc::new(Unalarmed::default());
     let given: Rc<dyn PointDefenceRule> = rule.clone();
-    let mut harness = defending(|screen| screen.with_point_defence_rule(given));
+    let asking = nova_sim::Rulebook::default()
+        .with_override(nova_sim::RuleKey::PdHostility, nova_sim::RuleSource::Bible);
+    let mut harness = defending(|screen| screen.with_point_defence_rule(given).with_rules(asking));
     harness.until(|harness| missiles(harness) == 1);
     for _ in 0..20 {
         harness.frame();
     }
     assert!(rule.asked.get() > 0);
     assert_eq!(missiles(&harness), 1, "never hostile, never shot down");
+}
+
+#[test]
+fn by_the_engine_the_routers_point_defence_rule_is_never_asked() {
+    let rule = Rc::new(Unalarmed::default());
+    let given: Rc<dyn PointDefenceRule> = rule.clone();
+    let mut harness = defending(|screen| screen.with_point_defence_rule(given));
+    harness.until(|harness| missiles(harness) == 1);
+    harness.until(|harness| missiles(harness) == 0);
+    assert_eq!(rule.asked.get(), 0);
+    assert_eq!(harness.session().reserves().shield.now, 30.0, "shot down");
 }
 
 // Patrolled, by Nova's AI and law.

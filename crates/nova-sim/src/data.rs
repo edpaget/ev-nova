@@ -29,7 +29,7 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, Record, stellar_spin_id};
+use nova_data::{GameData, Record, shot_spin_id, stellar_spin_id};
 use nova_rsrc::ResType;
 
 use crate::asteroid::KINDS;
@@ -38,15 +38,16 @@ use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
-    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite,
-    GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId,
+    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, FrameSize,
+    GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId,
     MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId, StellarLife,
-    StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
+    ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
     TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
+use crate::escort::EscortClass;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::nebula;
@@ -909,6 +910,18 @@ fn shown_resource_name(name: &str) -> &str {
     shown.trim_end_matches([' ', ';'])
 }
 
+/// The frame size of the sprite a shot of `Graphic` `graphic` is drawn
+/// with in `data`, its `spïn` as the original clones it
+/// ([`shot_spin_id`]): none for a `Graphic` below 0, a missing `spïn` or a
+/// sheet that cannot be read.
+fn shot_frame(data: &GameData, graphic: i16) -> Option<FrameSize> {
+    let sheet = data.spin_sheet(shot_spin_id(graphic)?).ok()?.sheet;
+    Some(FrameSize {
+        width: sheet.frame_width(),
+        height: sheet.frame_height(),
+    })
+}
+
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
 impl CombatCatalog for GameData {
@@ -936,6 +949,8 @@ impl CombatCatalog for GameData {
                     flags3: record.flags3.bits(),
                     decay: record.decay,
                     beam_length: record.beam_length,
+                    falloff: record.falloff,
+                    li_density: record.li_density,
                     burst_count: record.burst_count,
                     burst_reload: record.burst_reload,
                     guided_turn: record.guided_turn,
@@ -946,6 +961,12 @@ impl CombatCatalog for GameData {
                     sub_limit: record.sub_limit,
                     max_ammo: record.max_ammo,
                     prox_safety: record.prox_safety,
+                    recoil: record.recoil,
+                    exit_type: record.exit_type,
+                    ionization: record.ionization,
+                    ionize_color: record.ionize_color,
+                    jam_vuln: record.jam_vuln,
+                    frame: shot_frame(self, record.graphic),
                     hit_particles: record.hit_particles,
                     hit_part_life: record.hit_part_life,
                     hit_part_vel: record.hit_part_vel,
@@ -959,15 +980,18 @@ impl CombatCatalog for GameData {
         self.records::<Ship>()
             .filter_map(|(id, ship)| {
                 let record = ship.ok()?.record;
-                let (size, height) = match self.get::<ShipAnim>(id) {
-                    Some(Ok(anim)) => {
-                        (Some(anim.record.base_x_size), Some(anim.record.base_y_size))
-                    }
-                    _ => (None, None),
+                let (size, height, exits) = match self.get::<ShipAnim>(id) {
+                    Some(Ok(anim)) => (
+                        Some(anim.record.base_x_size),
+                        Some(anim.record.base_y_size),
+                        Some(ship_exits(anim.record)),
+                    ),
+                    _ => (None, None, None),
                 };
                 Some(HullRecord {
                     id: ShipId(id),
                     flags: record.flags.bits(),
+                    flags2: record.flags2.bits(),
                     death_delay: record.death_delay,
                     explode1: record.explode1,
                     explode2: record.explode2,
@@ -978,6 +1002,13 @@ impl CombatCatalog for GameData {
                     strength: record.strength,
                     key_carried: record.key_carried,
                     cost: record.cost,
+                    speed: record.speed,
+                    exits,
+                    escort_class: EscortClass::of(
+                        record.escort_type,
+                        record.inherent_ai,
+                        record.mass,
+                    ),
                 })
             })
             .collect()
@@ -1009,6 +1040,7 @@ impl CombatCatalog for GameData {
                     scan_fine: record.scan_fine,
                     news_pic: record.news_pic,
                     require: record.require.bits(),
+                    inh_jam: record.inh_jam,
                 })
             })
             .collect()
@@ -1156,6 +1188,28 @@ fn stock_weapons(ship: &Ship) -> Vec<StockWeapon> {
         .collect()
 }
 
+/// A `shän`'s weapon exit points, compression and `FramesPer`, raw.
+fn ship_exits(anim: &ShipAnim) -> ShipExits {
+    let pairs = |xs: [i16; 4], ys: [i16; 4]| std::array::from_fn(|i| (xs[i], ys[i]));
+    ShipExits {
+        points: [
+            pairs(anim.gun_pos_x, anim.gun_pos_y),
+            pairs(anim.turret_pos_x, anim.turret_pos_y),
+            pairs(anim.guided_pos_x, anim.guided_pos_y),
+            pairs(anim.beam_pos_x, anim.beam_pos_y),
+        ],
+        z: [
+            anim.gun_pos_z,
+            anim.turret_pos_z,
+            anim.guided_pos_z,
+            anim.beam_pos_z,
+        ],
+        up_compress: (anim.up_compress_x, anim.up_compress_y),
+        down_compress: (anim.dn_compress_x, anim.dn_compress_y),
+        frames: anim.frames_per,
+    }
+}
+
 /// A `shän`'s `BlinkMode` and `BlinkValA`–`D`, raw.
 impl From<&ShipAnim> for Blink {
     fn from(anim: &ShipAnim) -> Self {
@@ -1285,9 +1339,9 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, DisasterId, GateSite, GovtId,
-        GovtRecord, HullRecord, JunkId, Penalties, StarSystem, StartDate, StellarId, StockWeapon,
-        SystemVisibility, WeaponId, WeaponRecord,
+        AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, DisasterId, FrameSize, GateSite,
+        GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipExits, StarSystem, StartDate,
+        StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test, TestExpr};
@@ -3458,12 +3512,16 @@ mod tests {
         bytes[0x1C..0x1E].copy_from_slice(&0x6102_u16.to_be_bytes());
         bytes[0x1E..0x20].copy_from_slice(&0x0021_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x22, &[100]);
-        put_i16s(&mut bytes, 0x30, &[300]);
+        put_i16s(&mut bytes, 0x30, &[300, 2, 9]);
         bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x56, &[12, 2]);
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
+        put_i16s(&mut bytes, 0x5E, &[40, 0, 7, 0]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
-        put_i16s(&mut bytes, 0x68, &[4, 70, 6]);
+        put_i16s(&mut bytes, 0x68, &[4, 70, 6, 3]);
+        put_i16s(&mut bytes, 0x4A, &[-40]);
+        bytes[0x72..0x76].copy_from_slice(&0x0034_c2ff_u32.to_be_bytes());
         put_i16s(&mut bytes, 0x4C, &[12, 45, 300]);
         bytes[0x52..0x56].copy_from_slice(&0x0012_3456_u32.to_be_bytes());
         bytes
@@ -3496,6 +3554,8 @@ mod tests {
             flags3: 0x0003,
             decay: 100,
             beam_length: 300,
+            falloff: 9,
+            li_density: 3,
             burst_count: 60,
             burst_reload: 30,
             guided_turn: 70,
@@ -3506,6 +3566,12 @@ mod tests {
             sub_limit: 2,
             max_ammo: 6,
             prox_safety: 8,
+            recoil: 12,
+            exit_type: 2,
+            ionization: -40,
+            ionize_color: 0x0034_c2ff,
+            jam_vuln: [40, 0, 7, 0],
+            frame: None,
             hit_particles: 12,
             hit_part_life: 45,
             hit_part_vel: 300,
@@ -3517,6 +3583,42 @@ mod tests {
             "by ID, the undecodable one left out"
         );
         assert_eq!(store(&[]).weapons(), []);
+    }
+
+    /// [`weapon_bytes`] of `Graphic` `graphic`.
+    fn drawn_as(graphic: i16) -> Vec<u8> {
+        let mut bytes = weapon_bytes();
+        put_i16s(&mut bytes, 0x0E, &[graphic]);
+        bytes
+    }
+
+    #[test]
+    fn a_wëaps_shots_carry_the_frame_size_of_spin_3000_plus_its_graphic() {
+        let data = store(&[
+            (Weapon::TYPE, 128, drawn_as(3)),
+            (Weapon::TYPE, 129, drawn_as(-1)),
+            (Weapon::TYPE, 130, drawn_as(4)),
+            (Weapon::TYPE, 131, drawn_as(5)),
+            (Spin::TYPE, 2999, spin(2000)),
+            (Spin::TYPE, 3003, spin(2000)),
+            (Spin::TYPE, 3005, spin(2001)),
+            (RLED, 2000, sheet(10, 30)),
+        ]);
+        let frames: Vec<Option<FrameSize>> =
+            data.weapons().iter().map(|record| record.frame).collect();
+        assert_eq!(
+            frames,
+            [
+                Some(FrameSize {
+                    width: 10,
+                    height: 30
+                }),
+                None,
+                None,
+                None
+            ],
+            "spïn 3003's; none for Graphic -1, no spïn 3004, and spïn 3005's missing sheet"
+        );
     }
 
     #[test]
@@ -3567,9 +3669,10 @@ mod tests {
             (ShipAnim::TYPE, 128, anim(24, 40)),
             (ShipAnim::TYPE, 131, short(anim(30, 30))),
         ]);
-        let record = |id, size, height| HullRecord {
+        let record = |id, size, height, exits| HullRecord {
             id: ShipId(id),
             flags: 0x0130,
+            flags2: 0,
             death_delay: 60,
             explode1: 4,
             explode2: 1005,
@@ -3596,17 +3699,88 @@ mod tests {
             strength: 325,
             key_carried: Some(ShipId(140)),
             cost: -1,
+            speed: 2,
+            exits,
+            escort_class: EscortClass::Fighter,
         };
         assert_eq!(
             data.hulls(),
             [
-                record(128, Some(24), Some(40)),
-                record(130, None, None),
-                record(131, None, None)
+                record(128, Some(24), Some(40), Some(ShipExits::default())),
+                record(130, None, None, None),
+                record(131, None, None, None)
             ],
             "by ID, the undecodable shïp left out; without a shän that can be read, no size"
         );
         assert_eq!(store(&[]).hulls(), []);
+    }
+
+    #[test]
+    fn a_hull_carries_its_shäns_exit_points_compression_and_frames() {
+        let mut bytes = anim(24, 24);
+        put_i16s(&mut bytes, 0x34, &[64]);
+        put_i16s(&mut bytes, 0x48, &[3, -3, 4, -4, 10, 11, 12, 13]);
+        put_i16s(&mut bytes, 0x58, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        put_i16s(&mut bytes, 0x68, &[-1, -2, -3, -4, -5, -6, -7, -8]);
+        put_i16s(&mut bytes, 0x78, &[20, 0, -20, 0, 0, 30, 0, -30]);
+        put_i16s(&mut bytes, 0x88, &[100, 71, 0, -5]);
+        put_i16s(&mut bytes, 0x90, &[-2, -2, -2, -2, 0, 1, 2, 3]);
+        put_i16s(&mut bytes, 0xA0, &[4, 5, 6, 7, 25, 0, -25, 0]);
+        let data = store(&[(Ship::TYPE, 128, armed()), (ShipAnim::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.hulls()[0].exits,
+            Some(ShipExits {
+                points: [
+                    [(3, 10), (-3, 11), (4, 12), (-4, 13)],
+                    [(1, 5), (2, 6), (3, 7), (4, 8)],
+                    [(-1, -5), (-2, -6), (-3, -7), (-4, -8)],
+                    [(20, 0), (0, 30), (-20, 0), (0, -30)],
+                ],
+                z: [[-2; 4], [0, 1, 2, 3], [4, 5, 6, 7], [25, 0, -25, 0]],
+                up_compress: (100, 71),
+                down_compress: (0, -5),
+                frames: 64,
+            })
+        );
+    }
+
+    #[test]
+    fn a_hull_carries_its_shïps_flags2() {
+        let flagged = |flags2: u16| {
+            let mut bytes = ship(1, 2, 3);
+            bytes[0x62..0x64].copy_from_slice(&flags2.to_be_bytes());
+            store(&[(Ship::TYPE, 128, bytes)]).hulls()[0].flags2
+        };
+        assert_eq!(flagged(0x0008), 0x0008);
+        assert_eq!(flagged(0x0080), 0x0080);
+        assert_eq!(flagged(0x8801), 0x8801);
+    }
+
+    /// The hull of a `shïp` of `EscortType` `escort_type`, `InherentAI`
+    /// `inherent_ai` and `Mass` `mass`, as the combat catalog reads it.
+    fn classed(escort_type: i16, inherent_ai: i16, mass: i16) -> crate::combat::hull::HullSpec {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x3E, &[mass]);
+        put_i16s(&mut bytes, 0x42, &[inherent_ai]);
+        put_i16s(&mut bytes, 0x732, &[escort_type]);
+        let hulls = store(&[(Ship::TYPE, 128, bytes)]).hulls();
+        crate::combat::hull::HullSpec::new(&hulls[0])
+    }
+
+    #[test]
+    fn a_hulls_miss_class_comes_from_its_escort_type_or_one_worked_out() {
+        let miss =
+            |escort_type, inherent_ai, mass| classed(escort_type, inherent_ai, mass).miss_class;
+        // Worked out from the mass for an `EscortType` outside 0-3.
+        for (mass, class) in [(49, 80), (50, 90), (199, 90), (200, 100)] {
+            assert_eq!(miss(-1, 3, mass), class, "mass {mass}");
+        }
+        assert_eq!(miss(-1, 2, 10), 100, "a freighter by its InherentAI");
+        // Named directly, whatever the mass.
+        for (escort_type, class) in [(0, 80), (1, 90), (2, 100), (3, 100)] {
+            assert_eq!(miss(escort_type, 3, 500), class, "{escort_type}");
+            assert_eq!(miss(escort_type, 1, 10), class, "{escort_type}");
+        }
     }
 
     /// A `gövt` with every field the combat catalog reads set to something
@@ -3624,6 +3798,7 @@ mod tests {
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
         put_i16s(&mut bytes, 0xAE, &[9001]);
         bytes[0x54..0x5C].copy_from_slice(&0x8000_0000_0000_0021_u64.to_be_bytes());
+        put_i16s(&mut bytes, 0x5C, &[25, 0, -3, 0]);
         bytes
     }
 
@@ -3668,6 +3843,7 @@ mod tests {
             scan_fine: -5,
             news_pic: 9001,
             require: 0x8000_0000_0000_0021,
+            inh_jam: [25, 0, -3, 0],
         };
         assert_eq!(
             data.governments(),
