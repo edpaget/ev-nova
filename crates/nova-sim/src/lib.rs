@@ -346,6 +346,7 @@ pub mod sabotage;
 pub mod save;
 pub mod saves;
 pub mod scan;
+pub mod scoop;
 pub mod self_repair;
 pub mod session;
 pub mod ship_change;
@@ -378,7 +379,7 @@ pub use board::{
     Plunder, PlunderView, Take, Taken,
 };
 pub use catalog::{
-    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BoomId, CharacterStart,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
     CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
     GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar, MissionId,

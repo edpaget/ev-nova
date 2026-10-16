@@ -52,7 +52,7 @@ use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
@@ -467,7 +467,7 @@ fn fighter(
         booty: 0,
         boarded: false,
         info_types: 0,
-        cargo: None,
+        cargo: NpcHold::default(),
         spared: false,
         assisting: 0,
         carrier: Some(carrier),

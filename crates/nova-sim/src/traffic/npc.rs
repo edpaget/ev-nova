@@ -251,14 +251,16 @@ pub struct Npc {
     /// Its `düde`'s `InfoTypes` flags, what it says when hailed (see
     /// [`hail`](crate::hail)); none for a fleet's ship.
     pub info_types: u16,
-    /// The commodity in its own hold and its tons, if any: the original's
+    /// The commodities in its own hold and their tons: the original's
     /// six commodity words at ship +0x7a, all cleared as it spawns
     /// (`_GenericRandomShipSpawn` @0x3ccce-0x3cce5), of which a `flët`
     /// with `Flags` 0x0001 fills one for its trader ships
     /// ([`spawn::fleet`](crate::traffic::spawn::fleet)). The plunder never
     /// offers it: boarding reads the `düde`'s `Booty` alone
-    /// (`_SetPlunderValues` @0x92222-0x92256).
-    pub cargo: Option<(Good, u32)>,
+    /// (`_SetPlunderValues` @0x92222-0x92256). It holds all six, so a ton
+    /// scooped of another commodity is kept beside the first
+    /// ([`NpcHold`]).
+    pub cargo: NpcHold,
     /// Whether the player has paid it to spare it: it never targets the
     /// player again.
     pub spared: bool,
@@ -307,6 +309,59 @@ pub struct Npc {
     /// original's +0xc8de). It forgets once intact, boarded or taken into
     /// the fleet again (see [`self_repair`](crate::self_repair)).
     pub former: Option<FormerEscort>,
+}
+
+/// The commodities 0-5 the original's ship records count.
+pub const NPC_COMMODITIES: usize = 6;
+
+/// An NPC's own hold: the tons of each commodity 0-5 it carries, the
+/// original's six commodity words at ship +0x7a. Its spawn fills one at
+/// most ([`NpcHold::of`]); a scoop adds a ton of any
+/// ([`scoop::npc_scoop`](crate::scoop::npc_scoop)). It holds no `jünk`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NpcHold {
+    tons: [u32; NPC_COMMODITIES],
+}
+
+impl NpcHold {
+    /// The hold a spawn gives: the one commodity its ship comes with, if
+    /// any. A `jünk`, or a commodity past 5, is dropped; the spawn never
+    /// gives either.
+    #[must_use]
+    pub fn of(cargo: Option<(Good, u32)>) -> Self {
+        let mut hold = Self::default();
+        if let Some((Good::Commodity(commodity), tons)) = cargo {
+            hold.add(commodity, tons);
+        }
+        hold
+    }
+
+    /// The tons of `commodity` it holds: none past commodity 5.
+    #[must_use]
+    pub fn tons(&self, commodity: u8) -> u32 {
+        self.tons.get(usize::from(commodity)).copied().unwrap_or(0)
+    }
+
+    /// Adds `tons` of `commodity`, saturating: nothing past commodity 5.
+    pub fn add(&mut self, commodity: u8, tons: u32) {
+        if let Some(held) = self.tons.get_mut(usize::from(commodity)) {
+            *held = held.saturating_add(tons);
+        }
+    }
+
+    /// The commodities it holds tons of, in commodity order, with the
+    /// tons.
+    pub fn held(&self) -> impl Iterator<Item = (Good, u32)> + '_ {
+        (0..NPC_COMMODITIES)
+            .zip(self.tons)
+            .filter(|&(_, tons)| tons > 0)
+            .map(|(commodity, tons)| {
+                // In 0..6.
+                #[allow(clippy::cast_possible_truncation)]
+                let commodity = commodity as u8;
+                (Good::Commodity(commodity), tons)
+            })
+    }
 }
 
 /// What marks an NPC as an active mission's special ship (see the
@@ -363,6 +418,14 @@ impl Npc {
     #[must_use]
     pub fn escorts_player(&self) -> bool {
         self.escort.is_some() || self.mission_escort()
+    }
+
+    /// Whether it is scooping up asteroid boxes, `_AIShipIsScooping`
+    /// (@0x88727): by its goal ([`Goal::scooping`]), so never until
+    /// rdm:phase/asteroids/phase-5-ai-mining.
+    #[must_use]
+    pub fn is_scooping(&self) -> bool {
+        self.goal.scooping()
     }
 
     /// Its top speed in flight, its `_ShipMaxSpeed`: its own handling's
@@ -1579,5 +1642,67 @@ mod tests {
             ..wing
         };
         assert!(!threat(&lead, &stranger), "another's escort");
+    }
+
+    fn hold(held: &NpcHold) -> Vec<(Good, u32)> {
+        held.held().collect()
+    }
+
+    #[test]
+    fn a_hold_starts_with_the_one_commodity_its_spawn_gives() {
+        let spawned = NpcHold::of(Some((Good::Commodity(3), 7)));
+        assert_eq!(spawned.tons(3), 7);
+        assert_eq!(hold(&spawned), [(Good::Commodity(3), 7)]);
+        assert_eq!(hold(&NpcHold::of(None)), []);
+        assert_eq!(NpcHold::of(None), NpcHold::default());
+    }
+
+    #[test]
+    fn a_hold_drops_a_junk_or_a_commodity_past_5_at_spawn() {
+        let junk = NpcHold::of(Some((Good::Junk(crate::catalog::JunkId(130)), 4)));
+        assert_eq!(junk, NpcHold::default());
+        let seventh = NpcHold::of(Some((Good::Commodity(6), 4)));
+        assert_eq!(seventh, NpcHold::default());
+        assert_eq!(seventh.tons(6), 0);
+        let sixth = NpcHold::of(Some((Good::Commodity(5), 4)));
+        assert_eq!(hold(&sixth), [(Good::Commodity(5), 4)]);
+    }
+
+    #[test]
+    fn a_ton_added_keeps_the_commodity_already_held() {
+        let mut held = NpcHold::of(Some((Good::Commodity(3), 7)));
+        held.add(1, 1);
+        assert_eq!((held.tons(3), held.tons(1)), (7, 1));
+        held.add(3, 2);
+        assert_eq!(
+            hold(&held),
+            [(Good::Commodity(1), 1), (Good::Commodity(3), 9)],
+            "in commodity order"
+        );
+    }
+
+    #[test]
+    fn a_ton_added_saturates_and_none_goes_past_commodity_5() {
+        let mut held = NpcHold::of(Some((Good::Commodity(0), u32::MAX - 1)));
+        held.add(0, 5);
+        assert_eq!(held.tons(0), u32::MAX);
+        let before = held;
+        held.add(6, 1);
+        held.add(u8::MAX, 1);
+        assert_eq!(held, before);
+        held.add(5, 1);
+        assert_eq!(held.tons(5), 1);
+    }
+
+    #[test]
+    fn the_held_commodities_skip_the_empty_ones() {
+        let mut held = NpcHold::default();
+        held.add(4, 2);
+        held.add(2, 0);
+        held.add(0, 3);
+        assert_eq!(
+            hold(&held),
+            [(Good::Commodity(0), 3), (Good::Commodity(4), 2)]
+        );
     }
 }

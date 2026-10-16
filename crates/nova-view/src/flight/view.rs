@@ -6153,6 +6153,10 @@ mod tests {
         fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
             self.asteroid_fields.clone()
         }
+
+        fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+            [None; nova_sim::BOX_GRAPHICS]
+        }
     }
 
     /// The traffic, düdes and persons given; no fleets.

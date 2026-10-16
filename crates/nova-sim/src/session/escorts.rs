@@ -114,7 +114,7 @@ use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::self_repair::FormerEscort;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
@@ -254,7 +254,7 @@ impl Session {
             booty: 0,
             boarded: false,
             info_types: 0,
-            cargo: None,
+            cargo: NpcHold::default(),
             spared: false,
             assisting: 0,
             carrier,

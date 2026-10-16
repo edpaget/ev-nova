@@ -164,7 +164,7 @@ use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::ship_layer::Slot;
 use crate::sound::{SimSound, WARP_UP_HALTS};
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::table;
 
 impl Session {
@@ -374,7 +374,7 @@ impl Session {
             booty: 0,
             boarded: true,
             info_types: 0,
-            cargo: None,
+            cargo: NpcHold::default(),
             spared: false,
             assisting: 0,
             carrier: None,

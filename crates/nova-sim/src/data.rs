@@ -36,15 +36,15 @@ use crate::asteroid::KINDS;
 use crate::blink::Blink;
 use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
-    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, CharacterStart,
-    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DisasterId,
-    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
-    MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
-    PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord,
-    SiteAnimation, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark,
-    StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId,
-    WeaponRecord, loaded_mod_val,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
+    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite,
+    GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
+    ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
+    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -55,6 +55,10 @@ use crate::warp::SoundLength;
 /// The `spïn` of asteroid type 0's master sprite: type `n`'s is 800 +
 /// `n` (`_LoadSprites` @0x20bb7).
 pub const FIRST_ASTEROID_SPIN: i16 = 800;
+
+/// The `spïn` of box graphic 0's master sprite: graphic `n`'s is 500 +
+/// `n`, the box masters `_InitSprites` loads (500-504).
+pub const FIRST_BOX_SPIN: i16 = 500;
 
 /// The first `röid`, asteroid type 0's.
 const FIRST_ROID: i16 = 128;
@@ -1016,6 +1020,17 @@ impl AsteroidCatalog for GameData {
                 })
             })
             .collect()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        std::array::from_fn(|graphic| {
+            // In 0..5.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let spin_id = FIRST_BOX_SPIN + graphic as i16;
+            self.spin_sheet(spin_id)
+                .ok()
+                .map(|spin| (spin.sheet.frame_width(), spin.sheet.frame_height()))
+        })
     }
 
     fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
@@ -2460,6 +2475,23 @@ mod tests {
                     ..AsteroidTypeRecord::default()
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn the_box_frame_sizes_are_spins_500_to_504s_where_a_sheet_reads() {
+        let data = store(&[
+            (Spin::TYPE, 501, spin_tiled(1501, 6, 6)),
+            (RLED, 1501, sheet(22, 18)),
+            // Frames, but no sheet to size them.
+            (Spin::TYPE, 503, spin_tiled(1503, 6, 6)),
+            // Past the five box graphics.
+            (Spin::TYPE, 505, spin_tiled(1505, 6, 6)),
+            (RLED, 1505, sheet(30, 30)),
+        ]);
+        assert_eq!(
+            data.box_frame_sizes(),
+            [None, Some((22, 18)), None, None, None]
         );
     }
 

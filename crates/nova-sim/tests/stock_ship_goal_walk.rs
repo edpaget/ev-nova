@@ -723,6 +723,10 @@ impl nova_sim::AsteroidCatalog for Probed<'_> {
     fn asteroid_fields(&self) -> Vec<cat::AsteroidFieldRecord> {
         nova_sim::AsteroidCatalog::asteroid_fields(self.data)
     }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        nova_sim::AsteroidCatalog::box_frame_sizes(self.data)
+    }
 }
 
 impl CombatCatalog for Probed<'_> {

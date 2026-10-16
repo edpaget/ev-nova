@@ -7,6 +7,7 @@
 //!   some system holds asteroids.
 //! - Every stock `röid`'s fragment types name a type that reads, and some
 //!   `röid` yields boxes of a kept `YieldType`.
+//! - Every asteroid box graphic, 1-4, sizes its frame from `spïn` 501-504.
 
 mod common;
 
@@ -82,4 +83,19 @@ fn every_stock_fragment_type_reads_and_some_asteroid_yields_boxes() {
         }),
         "some asteroid yields boxes"
     );
+}
+
+#[test]
+fn every_asteroid_box_graphic_sizes_its_frame() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let sizes = data.box_frame_sizes();
+    for graphic in 1..=4 {
+        assert!(
+            sizes[graphic].is_some_and(|(width, height)| width > 0 && height > 0),
+            "graphic {graphic}: {sizes:?}"
+        );
+    }
 }

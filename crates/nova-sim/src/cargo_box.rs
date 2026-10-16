@@ -48,16 +48,18 @@
 //! Boxes are never saved.
 //!
 //! Spawning the scoopable boxes is
-//! rdm:phase/asteroids/phase-2-shoot-and-break-asteroids's. Left out:
-//! their pickup (rdm:phase/asteroids/phase-4-scoopable-boxes) and the AI
-//! that steers for them (rdm:phase/asteroids/phase-5-ai-mining); the
-//! player's wrap shift; and the sprite murk.
+//! rdm:phase/asteroids/phase-2-shoot-and-break-asteroids's; their pickup
+//! is [`scoop`](crate::scoop)'s ([`CargoBoxes::take_touching`]). Left
+//! out: the AI that steers for them
+//! (rdm:phase/asteroids/phase-5-ai-mining); the player's wrap shift; and
+//! the sprite murk.
 //!
 //! [`Jettisoned::total`]: crate::mission::cargo::Jettisoned::total
 
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
+use crate::scoop::{BoxFrames, touches};
 
 /// The most boxes in space at once: the table's 64 slots.
 pub const MAX_BOXES: usize = 64;
@@ -111,8 +113,9 @@ pub struct CargoBox {
     pub graphic: u16,
     /// Whether it can be scooped up: only an asteroid's box.
     pub scoopable: bool,
-    /// What it holds: an asteroid's `YieldType`, a commodity 0-6 or a
-    /// `jünk` 1000-1127; none for a jettisoned box.
+    /// What it holds: an asteroid's `YieldType`, a commodity 0-5 or a
+    /// `jünk` 1000-1127, as a scoop reads it ([`haul`](crate::scoop::haul)),
+    /// though any value is kept; none for a jettisoned box.
     pub contents: Option<i16>,
 }
 
@@ -268,6 +271,34 @@ impl CargoBoxes {
         }
     }
 
+    /// Whether any box is scoopable: the original's `_miningBoxesActive`,
+    /// which gates the scoop's collision (see [`scoop`](crate::scoop)).
+    #[must_use]
+    pub fn any_scoopable(&self) -> bool {
+        self.boxes.iter().any(|cargo_box| cargo_box.scoopable)
+    }
+
+    /// Takes the first scoopable box, in table order, that a ship's disc,
+    /// `radius` about `at`, touches by its graphic's frame in `frames`
+    /// ([`touches`]); none when no scoopable box does. A jettisoned box is
+    /// never taken.
+    ///
+    /// The box leaves the table at once. The original sets its life to −1
+    /// and hides its sprite (@0x37119-0x3712e), and the next
+    /// `_HandleBoxes` kills it, so no frame is drawn with it either way.
+    pub fn take_touching(&mut self, at: Vec2, radius: f32, frames: &BoxFrames) -> Option<CargoBox> {
+        let index = self.boxes.iter().position(|cargo_box| {
+            cargo_box.scoopable
+                && touches(
+                    at,
+                    radius,
+                    cargo_box.position,
+                    frames.half(cargo_box.graphic),
+                )
+        })?;
+        Some(self.boxes.remove(index))
+    }
+
     /// Empties the table: every box is gone.
     pub fn clear(&mut self) {
         self.boxes.clear();
@@ -303,6 +334,7 @@ pub(crate) fn accel(angle: i32, magnitude: f32) -> Vec2 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::scoop::BoxFrames;
     use crate::testkit::Scripted;
 
     fn close(a: Vec2, b: Vec2) -> bool {
@@ -577,6 +609,54 @@ mod tests {
         ] {
             assert_eq!(one(life, 0, 0).boxes()[0].fade(), fade, "{life}");
         }
+    }
+
+    /// A table of a jettisoned box at the origin, then scoopable boxes
+    /// of graphic 1 holding each of `contents` at each of `at`.
+    fn with_scoopable(at: &[(f32, f32)], contents: &[i16]) -> CargoBoxes {
+        let mut boxes = one(100.0, 0, 0);
+        boxes.boxes[0].position = Vec2::ZERO;
+        for (&(x, y), &held) in at.iter().zip(contents) {
+            boxes.spawn_scoopable(Vec2::new(x, y), Some(held), 1, &mut Scripted::default());
+        }
+        boxes
+    }
+
+    #[test]
+    fn only_a_scoopable_box_makes_the_table_scoopable() {
+        assert!(!CargoBoxes::default().any_scoopable());
+        assert!(!one(100.0, 0, 0).any_scoopable(), "a jettisoned box");
+        assert!(with_scoopable(&[(50.0, 0.0)], &[1]).any_scoopable());
+    }
+
+    #[test]
+    fn a_disc_takes_the_first_scoopable_box_it_touches_and_leaves_the_rest() {
+        let frames = BoxFrames::default();
+        let mut boxes = with_scoopable(&[(90.0, 0.0), (5.0, 0.0), (-5.0, 0.0)], &[0, 1, 2]);
+        let taken = boxes.take_touching(Vec2::ZERO, 10.0, &frames);
+        assert_eq!(taken.map(|made| made.contents), Some(Some(1)));
+        assert_eq!(
+            boxes
+                .boxes()
+                .iter()
+                .map(|made| made.contents)
+                .collect::<Vec<_>>(),
+            [None, Some(0), Some(2)],
+            "the jettisoned box under the disc is left, and the order kept"
+        );
+        let taken = boxes.take_touching(Vec2::ZERO, 10.0, &frames);
+        assert_eq!(taken.map(|made| made.contents), Some(Some(2)));
+        assert_eq!(boxes.take_touching(Vec2::ZERO, 10.0, &frames), None);
+        assert_eq!(boxes.boxes().len(), 2);
+    }
+
+    #[test]
+    fn a_disc_touches_a_box_by_its_graphics_frame() {
+        // Graphic 1 is 40 across: the box at 45 is 25 from its edge.
+        let frames = BoxFrames::new([None, Some((40, 40)), None, None, None]);
+        let mut boxes = with_scoopable(&[(45.0, 0.0)], &[3]);
+        assert_eq!(boxes.take_touching(Vec2::ZERO, 24.0, &frames), None);
+        assert!(boxes.take_touching(Vec2::ZERO, 25.0, &frames).is_some());
     }
 
     #[test]

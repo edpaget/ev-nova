@@ -132,7 +132,7 @@ use crate::mission::ships::ShipBehav;
 use crate::person::{self, GateView, PersonWorld, derelict_armor};
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
-use npc::{AiType, Mode, Npc, NpcId, NpcPerson};
+use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
 use table::{SpawnPerson, SpawnTable};
@@ -1436,7 +1436,7 @@ impl Traffic {
                 booty: ship.booty,
                 boarded: ship.boarded,
                 info_types: ship.info_types,
-                cargo: ship.cargo,
+                cargo: NpcHold::of(ship.cargo),
                 spared: false,
                 assisting: 0,
                 carrier: None,
@@ -4870,9 +4870,9 @@ mod tests {
             traffic
                 .npcs()
                 .iter()
-                .map(|npc| npc.cargo)
+                .map(|npc| npc.cargo.held().collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
-            [Some((crate::market::Good::Commodity(2), 9)), None]
+            [vec![(crate::market::Good::Commodity(2), 9)], vec![]]
         );
     }
 

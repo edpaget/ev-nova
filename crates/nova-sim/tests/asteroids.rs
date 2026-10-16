@@ -1,10 +1,13 @@
 //! An asteroid field through a flight session, headless: a system holding
 //! asteroids, entered through the real session construction, fills from
 //! the field's edge one asteroid a pass, each of a type its `AstTypes`
-//! sets, and the player's gun breaks them into boxes and fragments.
+//! sets, the player's gun breaks them into boxes and fragments, and the
+//! player's scoop takes a box into the hold.
 
 use nova_sim::combat::Rules;
 use nova_sim::combat::armament::{MOD_WEAPON, Trigger};
+use nova_sim::market::Good;
+use nova_sim::scoop::MOD_ASTEROID_SCOOP;
 use nova_sim::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, CharacterStart, CombatCatalog,
     CombatEvent, CommodityStrings, Controls, DateAffixes, DisasterRecord, GovtRecord, HullRecord,
@@ -14,10 +17,12 @@ use nova_sim::{
 };
 
 /// One `chär` flying an average ship from system 130, which has no
-/// stellars and holds 4 asteroids of type 0, `röid` 128; armed with
-/// outfit 250's gun when `armed`.
+/// stellars and holds 4 asteroids of type 0, `röid` 128, its ship
+/// holding 20 tons; armed with outfit 250's gun when `armed`, and with
+/// outfit 251's asteroid scoop when `scoop`.
 struct Pilot {
     armed: bool,
+    scoop: bool,
 }
 
 /// Ungoverned; its one weapon, `wëap` 128, a gun 20 pixels a tick for 40
@@ -107,6 +112,10 @@ impl AsteroidCatalog for Pilot {
             types: 0x0001,
         }]
     }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        [None, Some((22, 22)), None, None, None]
+    }
 }
 
 impl PilotCatalog for Pilot {
@@ -124,42 +133,27 @@ impl PilotCatalog for Pilot {
             speed: 300,
             accel: 300,
             maneuver: 60,
+            holds: 20,
             ..ShipFields::default()
         })
     }
 
     fn default_outfits(&self, _id: ShipId) -> Vec<(OutfitId, u16)> {
+        let mut outfits = Vec::new();
         if self.armed {
-            vec![(OutfitId(250), 1)]
-        } else {
-            Vec::new()
+            outfits.push((OutfitId(250), 1));
         }
+        if self.scoop {
+            outfits.push((OutfitId(251), 1));
+        }
+        outfits
     }
 
     fn outfits(&self) -> Vec<OutfitRecord> {
-        vec![OutfitRecord {
-            id: OutfitId(250),
-            name: "Gun".to_owned(),
-            short_name: "Gun".to_owned(),
-            disp_weight: 0,
-            mass: 1,
-            tech_level: 1,
-            max: 10,
-            flags: 0,
-            cost: 1000,
-            mods: [(MOD_WEAPON, 128), (0, 0), (0, 0), (0, 0)],
-            contribute: 0,
-            require: 0,
-            require_govt: -1,
-            buy_random: 100,
-            availability: Test::default(),
-            item_class: 0,
-            lc_name: "gun".to_owned(),
-            lc_plural: "guns".to_owned(),
-            scan_mask: 0,
-            on_purchase: Script::default(),
-            on_sell: Script::default(),
-        }]
+        vec![
+            outfit(250, "Gun", (MOD_WEAPON, 128)),
+            outfit(251, "Scoop", (MOD_ASTEROID_SCOOP, 0)),
+        ]
     }
 
     fn ships(&self) -> Vec<nova_sim::ShipRecord> {
@@ -255,9 +249,40 @@ impl PilotCatalog for Pilot {
     }
 }
 
+/// Outfit `id`, named `name`, with the one mod `modifier`.
+fn outfit(id: i16, name: &str, modifier: (i16, i16)) -> OutfitRecord {
+    OutfitRecord {
+        id: OutfitId(id),
+        name: name.to_owned(),
+        short_name: name.to_owned(),
+        disp_weight: 0,
+        mass: 1,
+        tech_level: 1,
+        max: 10,
+        flags: 0,
+        cost: 1000,
+        mods: [modifier, (0, 0), (0, 0), (0, 0)],
+        contribute: 0,
+        require: 0,
+        require_govt: -1,
+        buy_random: 100,
+        availability: Test::default(),
+        item_class: 0,
+        lc_name: name.to_lowercase(),
+        lc_plural: format!("{}s", name.to_lowercase()),
+        scan_mask: 0,
+        on_purchase: Script::default(),
+        on_sell: Script::default(),
+    }
+}
+
 #[test]
 fn a_system_holding_asteroids_fills_one_a_pass_from_the_edge() {
-    let mut session = Session::start(&Pilot { armed: false }).expect("starts");
+    let mut session = Session::start(&Pilot {
+        armed: false,
+        scoop: false,
+    })
+    .expect("starts");
     assert_eq!(session.landed(), None);
     assert_eq!(session.asteroids().count(), 0);
     let mut chance = NeverFires;
@@ -275,9 +300,21 @@ fn a_system_holding_asteroids_fills_one_a_pass_from_the_edge() {
     assert!(session.asteroids().all(|asteroid| asteroid.kind == 0));
 }
 
-#[test]
-fn the_players_gun_breaks_an_asteroid_into_scoopable_boxes_a_fragment_and_its_explosion() {
-    let mut session = Session::start(&Pilot { armed: true }).expect("starts");
+/// The gun's trigger, held or let go.
+fn trigger(primary: bool) -> Trigger {
+    Trigger {
+        primary,
+        secondary: None,
+        only: None,
+        turrets_only: false,
+        bays: false,
+        point_defence: false,
+    }
+}
+
+/// Turns `session`'s ship to face the field's first asteroid and fires
+/// until it breaks, for 40 combat ticks at most: the combat events seen.
+fn break_an_asteroid(session: &mut Session) -> Vec<CombatEvent> {
     // An edge spawn drawing nothing lies 0.7 × 431 out on both axes,
     // down and to the right, at rest: turn to face it, within the 6
     // degrees its 48-pixel radius spans 426 pixels off.
@@ -297,14 +334,7 @@ fn the_players_gun_breaks_an_asteroid_into_scoopable_boxes_a_fragment_and_its_ex
     }
     let heading = session.player().heading;
     assert!((132.0..=138.0).contains(&heading), "{heading}");
-    session.hold_trigger(Trigger {
-        primary: true,
-        secondary: None,
-        only: None,
-        turrets_only: false,
-        bays: false,
-        point_defence: false,
-    });
+    session.hold_trigger(trigger(true));
     let mut events = Vec::new();
     for _ in 0..40 {
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -313,6 +343,17 @@ fn the_players_gun_breaks_an_asteroid_into_scoopable_boxes_a_fragment_and_its_ex
             break;
         }
     }
+    events
+}
+
+#[test]
+fn the_players_gun_breaks_an_asteroid_into_scoopable_boxes_a_fragment_and_its_explosion() {
+    let mut session = Session::start(&Pilot {
+        armed: true,
+        scoop: false,
+    })
+    .expect("starts");
+    let events = break_an_asteroid(&mut session);
     let boxes = session.cargo_boxes();
     assert!(!boxes.is_empty(), "an asteroid broke: {events:?}");
     assert!(
@@ -332,4 +373,71 @@ fn the_players_gun_breaks_an_asteroid_into_scoopable_boxes_a_fragment_and_its_ex
         session.asteroids().any(|asteroid| asteroid.kind == 1),
         "a fragment of röid 129"
     );
+}
+
+/// The controls that steer `ship` for `to`: turning while more than 4
+/// degrees off its bearing, thrusting while within 30.
+fn steer_for(ship: &nova_sim::ShipState, to: nova_sim::Vec2) -> Controls {
+    let off = to - ship.position;
+    let bearing = off.x.atan2(-off.y).to_degrees().rem_euclid(360.0);
+    let turn = (bearing - ship.heading + 540.0).rem_euclid(360.0) - 180.0;
+    Controls {
+        thrust: turn.abs() < 30.0,
+        turn: if turn > 4.0 {
+            Turn::Right
+        } else if turn < -4.0 {
+            Turn::Left
+        } else {
+            Turn::None
+        },
+        reverse: false,
+    }
+}
+
+/// The scoopable boxes in `session`'s space.
+fn scoopable(session: &Session) -> usize {
+    session
+        .cargo_boxes()
+        .iter()
+        .filter(|made| made.scoopable)
+        .count()
+}
+
+#[test]
+fn the_players_gun_breaks_an_asteroid_and_the_scoop_takes_its_box_into_the_hold() {
+    let mut session = Session::start(&Pilot {
+        armed: true,
+        scoop: true,
+    })
+    .expect("starts");
+    let events = break_an_asteroid(&mut session);
+    assert!(scoopable(&session) > 0, "an asteroid broke: {events:?}");
+    assert_eq!(session.pilot().held(Good::Commodity(2)), 0);
+    session.hold_trigger(trigger(false));
+    // The shots still in flight break the asteroids the field brings in
+    // where the first was, so more boxes may drop there as the ship flies.
+    let mut before = 0;
+    for _ in 0..1000 {
+        let Some(target) = session
+            .cargo_boxes()
+            .iter()
+            .find(|made| made.scoopable)
+            .map(|made| made.position)
+        else {
+            break;
+        };
+        let controls = steer_for(session.player(), target);
+        before = scoopable(&session);
+        session.tick(controls);
+        if session.pilot().held(Good::Commodity(2)) > 0 {
+            break;
+        }
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+    assert_eq!(
+        session.pilot().held(Good::Commodity(2)),
+        1,
+        "a ton of the röid's YieldType"
+    );
+    assert_eq!(scoopable(&session), before - 1, "the box scooped is gone");
 }

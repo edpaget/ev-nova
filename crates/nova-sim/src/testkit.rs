@@ -5,14 +5,14 @@ use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, CharacterStart,
-    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DisasterRecord,
-    DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId,
-    NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
+    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord,
+    JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts,
+    NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
+    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemTraffic,
+    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -27,7 +27,7 @@ use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
 use crate::session::LandPress;
 use crate::session::Session;
 use crate::stats::ShipStats;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::warp::SoundLength;
 
 /// A canned first `chär`, ships and systems; records the ships asked
@@ -127,6 +127,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) asteroid_types: Vec<AsteroidTypeRecord>,
     /// Every system's asteroid field: none, by default.
     pub(crate) asteroid_fields: Vec<AsteroidFieldRecord>,
+    /// Each box graphic's frame size: none, by default.
+    pub(crate) box_frames: [Option<(u32, u32)>; BOX_GRAPHICS],
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -533,7 +535,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         booty: 0,
         boarded: false,
         info_types: 0,
-        cargo: None,
+        cargo: NpcHold::default(),
         spared: false,
         assisting: 0,
         carrier: None,
@@ -625,6 +627,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         warp_sound_double_time: None,
         asteroid_types: Vec::new(),
         asteroid_fields: Vec::new(),
+        box_frames: [None; BOX_GRAPHICS],
     }
 }
 
@@ -971,6 +974,10 @@ impl AsteroidCatalog for FakePilotCatalog {
 
     fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
         self.asteroid_fields.clone()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        self.box_frames
     }
 }
 

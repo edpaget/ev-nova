@@ -800,6 +800,9 @@ pub struct Session {
     asteroids: crate::asteroid::Asteroids,
     /// Every asteroid type, by kind, read when the session starts.
     asteroid_types: Rc<[crate::asteroid::AsteroidType; crate::asteroid::KINDS]>,
+    /// Each box graphic's frame size, read when the session starts, which
+    /// a scoop tests ships against (see [`scoop`](crate::scoop)).
+    box_frames: crate::scoop::BoxFrames,
     /// Every system's asteroid field, read when the session starts; a
     /// system not here holds none.
     asteroid_fields: BTreeMap<SystemId, crate::asteroid::FieldSpec>,
@@ -1366,6 +1369,7 @@ impl Session {
             asteroid_types: Rc::new(crate::asteroid::AsteroidType::table(
                 &catalog.asteroid_types(),
             )),
+            box_frames: crate::scoop::BoxFrames::new(catalog.box_frame_sizes()),
             asteroid_fields: asteroids::fields(&catalog.asteroid_fields()),
             asteroid_kill: None,
             // A session started or loaded in flight, as `_DoNewPilot`
@@ -1744,6 +1748,7 @@ impl Session {
         }
         self.tutorial_tick(frame);
         self.brackets_tick();
+        self.scoop_boxes();
         self.boxes_tick();
         if self.pod.is_some() {
             self.pod_tick();
@@ -19961,7 +19966,7 @@ pub(super) mod tests {
         // A `Flags` 0x0001 fleet's trader: no düde, so no booty, and its
         // random cargo in its hold.
         trader.booty = 0;
-        trader.cargo = Some((Good::Commodity(3), 7));
+        trader.cargo = crate::traffic::npc::NpcHold::of(Some((Good::Commodity(3), 7)));
         let boarding = session.board(
             &NovaLaw::default(),
             &NovaBoarding::default(),
@@ -19972,8 +19977,8 @@ pub(super) mod tests {
         };
         assert_eq!(view.cargo, None, "_SetPlunderValues reads the Booty alone");
         assert_eq!(
-            session.npcs()[0].cargo,
-            Some((Good::Commodity(3), 7)),
+            session.npcs()[0].cargo.held().collect::<Vec<_>>(),
+            [(Good::Commodity(3), 7)],
             "still in its hold"
         );
     }

@@ -1,11 +1,15 @@
 //! The session's side of [`cargo_box`](crate::cargo_box): the boxes a
 //! jettison drops behind the player and its trader escorts
-//! ([`Session::jettison_cargo`]), stepped each flight tick, and cleared
-//! on every system change and landing. They are never saved.
+//! ([`Session::jettison_cargo`]), scooped up ([`scoop`](crate::scoop)),
+//! stepped each flight tick, and cleared on every system change and
+//! landing. They are never saved.
 
 use super::Session;
 use crate::cargo_box::{CargoBox, escort_share};
 use crate::chance::Chance;
+use crate::market::Good;
+use crate::scoop::{Haul, Scooper, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop};
+use crate::ship_layer::disabled;
 
 impl Session {
     /// The cargo boxes in space (see [`cargo_box`](crate::cargo_box)).
@@ -54,6 +58,97 @@ impl Session {
         }
     }
 
+    /// The player's scoop flag (ship +0xc3, see
+    /// [`scoop::player_scoops`](crate::scoop::player_scoops)): it owns an
+    /// asteroid scoop and the fleet's holds ([`Session::capacity`]) are
+    /// past the cargo it holds ([`Pilot::total_cargo`](crate::pilot::Pilot::total_cargo)).
+    ///
+    /// Read live. The original keeps the flag from the last
+    /// `_ResetPlayerPrecalcedValues` (14 callers, the scoop itself among
+    /// them), and the only time that shows is a jünk step in flight
+    /// (`market::step_junk` in `fly_player`), which can fill or free the
+    /// hold with no reset: the original then still scoops one box into a
+    /// hold the step just filled, or passes over one it just freed room
+    /// for, until the next reset. The engine reads the hold as it is.
+    #[must_use]
+    pub fn player_scoops(&self) -> bool {
+        crate::scoop::player_scoops(
+            has_asteroid_scoop(&self.pilot.outfits, &self.outfits),
+            self.capacity(),
+            self.pilot.total_cargo(),
+        )
+    }
+
+    /// Scoops up the asteroid boxes the ships touch, as `_DoPlayGameWork`
+    /// collides `_boxLayer` with the ship layer (@0x43e46-0x43e70) before
+    /// `_HandleBoxes` (@0x444f0), on both passes (see
+    /// [`scoop`](crate::scoop)):
+    ///
+    /// 1. Nothing unless a box is scoopable, `_miningBoxesActive`. The
+    ///    original's flag reflects the previous frame's `_HandleBoxes`
+    ///    (@0x2df8e-0x2dfa1, @0x2e26c-0x2e283); read live, a box this
+    ///    frame's asteroid break drops is scoopable a pass sooner, and the
+    ///    boxes that expired last step are gone. No frame is drawn in
+    ///    between, so the player never sees the difference.
+    /// 2. The player, unless disabled or breaking up (the player is never
+    ///    led, so that alone is its layer test), takes each box its disc
+    ///    touches while its scoop flag holds ([`Session::player_scoops`]),
+    ///    testing the flag again before each, as the original recomputes
+    ///    it after each scoop: a hold with a ton free takes one box. Each
+    ///    box adds its [`haul`] and resets the precalced values
+    ///    (@0x371ac), an empty one's included.
+    /// 3. Then each NPC, in NPC order, that is scooping
+    ///    ([`Npc::is_scooping`](crate::traffic::npc::Npc::is_scooping))
+    ///    and in the ship layer ([`npc_in_ship_layer`]) takes every box
+    ///    its disc touches ([`npc_scoop`]).
+    ///
+    /// *Ordering against the original.* The positions tested are those at
+    /// this point of the pass, before this pass's player move and after
+    /// the last traffic tick; a pass's difference in when an overlap is
+    /// caught crosses no boundary the player sees. The player tests before
+    /// the NPCs and each box is taken once, where the original's order
+    /// follows `SpriteWorld`'s layer history. There is no sound and no
+    /// message, and the HUD's cargo area is drawn afresh each frame, so
+    /// the status redraw flag (@0x37199) needs no counterpart.
+    pub(super) fn scoop_boxes(&mut self) {
+        if !self.boxes.any_scoopable() {
+            return;
+        }
+        if !disabled(self.condition) {
+            while self.player_scoops() {
+                let Some(taken) = self.boxes.take_touching(
+                    self.player.position,
+                    self.hull.hit_radius,
+                    &self.box_frames,
+                ) else {
+                    break;
+                };
+                let good = match haul(taken.contents, Scooper::Player) {
+                    Haul::Commodity(commodity) => Some(Good::Commodity(commodity)),
+                    Haul::Junk(junk) => Some(Good::Junk(junk)),
+                    Haul::Nothing => None,
+                };
+                if let Some(good) = good {
+                    let tons = self.pilot.cargo.entry(good).or_insert(0);
+                    *tons = tons.saturating_add(1);
+                }
+                self.reset_precalced();
+            }
+        }
+        let (boxes, frames) = (&mut self.boxes, &self.box_frames);
+        for npc in self.traffic.npcs_mut() {
+            if npc.is_scooping() && npc_in_ship_layer(npc) {
+                npc_scoop(
+                    boxes,
+                    frames,
+                    npc.state.position,
+                    npc.hull.hit_radius,
+                    &mut npc.cargo,
+                );
+            }
+        }
+    }
+
     /// Steps the cargo boxes one tick (see
     /// [`CargoBoxes::step`](crate::cargo_box::CargoBoxes::step)): every flight tick, whatever the player's
     /// state, as `_DoPlayGameWork` runs `_HandleBoxes` (@0x444f0).
@@ -76,20 +171,25 @@ mod tests {
     use crate::SimSound;
     use crate::ai::Peaceful;
     use crate::catalog::{HullRecord, ShipId, ShipRecord, StellarId, SystemId};
+    use crate::catalog::{JunkId, OutfitId};
     use crate::chance::NeverFires;
     use crate::combat::hull::Condition;
     use crate::control::SetExpr;
     use crate::flight::Controls;
+    use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
-    use crate::market::Good;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
+    use crate::scan::Latches;
+    use crate::scoop::MOD_ASTEROID_SCOOP;
     use crate::session::tests::{at_gate, gated};
+    use crate::stats::ShipStats;
     use crate::testkit::{
         FAST, FakePilotCatalog, Scripted, begin_jump_now, carrying, catalog, fly_out, hull,
-        land_now, mission, ship,
+        land_now, mission, npc, outfit, ship,
     };
+    use crate::traffic::npc::{Npc, NpcHold};
 
     /// The warship escort's ship type: `InherentAI` 3, 60 tons of holds.
     const WARSHIP: ShipId = ShipId(150);
@@ -371,5 +471,216 @@ mod tests {
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert!(session.cargo_boxes().is_empty());
+    }
+
+    /// The scoop's outfit: `ModType` 31 in its first slot.
+    const SCOOP: OutfitId = OutfitId(300);
+
+    /// [`boxed`] with the scoop outfit.
+    fn scoopable() -> FakePilotCatalog {
+        let mut catalog = boxed();
+        catalog
+            .outfits
+            .push(outfit(SCOOP.0, &[(MOD_ASTEROID_SCOOP, 0)]));
+        catalog
+    }
+
+    /// [`flying`] holding `tons` of food and owning the scoop.
+    fn scooper(catalog: &FakePilotCatalog, tons: u32) -> Session {
+        let mut session = flying(catalog, tons);
+        session.pilot.outfits.insert(SCOOP, 1);
+        session
+    }
+
+    /// Drops a scoopable box of graphic 1 holding `contents` on the
+    /// player's ship.
+    fn drop_on_ship(session: &mut Session, contents: Option<i16>) {
+        let at = session.player().position;
+        session
+            .boxes
+            .spawn_scoopable(at, contents, 1, &mut NeverFires);
+    }
+
+    /// Every good held, with its tons, leaving out goods of none.
+    fn held(session: &Session) -> Vec<(Good, u32)> {
+        session
+            .pilot()
+            .cargo()
+            .filter(|&(_, tons)| tons > 0)
+            .collect()
+    }
+
+    #[test]
+    fn the_scoop_takes_a_commodity_box_into_the_hold() {
+        let catalog = scoopable();
+        let mut session = scooper(&catalog, 0);
+        drop_on_ship(&mut session, Some(2));
+        session.tick(Controls::default());
+        assert_eq!(held(&session), [(Good::Commodity(2), 1)]);
+        assert!(session.cargo_boxes().is_empty());
+    }
+
+    #[test]
+    fn the_scoop_takes_a_junk_box_into_the_hold() {
+        let catalog = scoopable();
+        let mut session = scooper(&catalog, 0);
+        drop_on_ship(&mut session, Some(1018));
+        session.tick(Controls::default());
+        assert_eq!(held(&session), [(Good::Junk(JunkId(146)), 1)]);
+        assert!(session.cargo_boxes().is_empty());
+    }
+
+    /// Ticks `session` once with a scoopable commodity box on its ship,
+    /// and asserts that the box stays and the cargo is unchanged.
+    fn assert_no_scoop(mut session: Session) {
+        let before = held(&session);
+        drop_on_ship(&mut session, Some(2));
+        session.tick(Controls::default());
+        assert_eq!(held(&session), before);
+        assert_eq!(session.cargo_boxes().len(), 1, "the box is left");
+    }
+
+    #[test]
+    fn no_scoop_outfit_takes_no_box() {
+        let catalog = scoopable();
+        assert_no_scoop(flying(&catalog, 0));
+    }
+
+    #[test]
+    fn a_full_hold_takes_no_box() {
+        let catalog = scoopable();
+        assert_no_scoop(scooper(&catalog, 20));
+    }
+
+    #[test]
+    fn a_disabled_player_takes_no_box() {
+        let catalog = scoopable();
+        let mut session = scooper(&catalog, 0);
+        session.condition = Condition::Disabled;
+        assert_no_scoop(session);
+    }
+
+    #[test]
+    fn the_scoop_takes_no_jettisoned_box() {
+        let catalog = scoopable();
+        let mut session = scooper(&catalog, 0);
+        let on_ship = session.player;
+        session.boxes.spawn(&on_ship, Some(0.0), &mut NeverFires);
+        assert_eq!(session.cargo_boxes()[0].position, on_ship.position);
+        session.tick(Controls::default());
+        assert_eq!(held(&session), []);
+        assert_eq!(session.cargo_boxes().len(), 1, "the box is left");
+    }
+
+    #[test]
+    fn a_full_own_hold_scoops_into_a_trader_escorts_holds() {
+        let catalog = scoopable();
+        let mut session = escorted(&catalog, 20);
+        session.pilot.outfits.insert(SCOOP, 1);
+        drop_on_ship(&mut session, Some(2));
+        session.tick(Controls::default());
+        assert_eq!(session.pilot().held(Good::Commodity(2)), 1);
+        assert!(session.cargo_boxes().is_empty());
+    }
+
+    #[test]
+    fn a_hold_with_a_ton_free_takes_one_box_of_two() {
+        let catalog = scoopable();
+        let mut session = scooper(&catalog, 19);
+        drop_on_ship(&mut session, Some(2));
+        drop_on_ship(&mut session, Some(3));
+        session.tick(Controls::default());
+        assert_eq!(
+            held(&session),
+            [(Good::Commodity(0), 19), (Good::Commodity(2), 1)]
+        );
+        assert_eq!(session.cargo_boxes().len(), 1);
+        assert_eq!(session.cargo_boxes()[0].contents, Some(3));
+    }
+
+    #[test]
+    fn mission_cargo_aboard_counts_toward_a_full_hold() {
+        let mut catalog = scoopable();
+        catalog.missions = vec![mission(140)];
+        let mut session = scooper(&catalog, 10);
+        session.pilot.missions.fill(carrying(140, 10));
+        assert_no_scoop(session);
+    }
+
+    #[test]
+    fn a_box_of_anything_else_is_used_up_for_nothing() {
+        for contents in [Some(6), None, Some(-1), Some(1128)] {
+            let catalog = scoopable();
+            let mut session = scooper(&catalog, 0);
+            drop_on_ship(&mut session, contents);
+            session.tick(Controls::default());
+            assert_eq!(held(&session), [], "{contents:?}");
+            assert!(session.cargo_boxes().is_empty(), "{contents:?}");
+        }
+    }
+
+    #[test]
+    fn a_scoop_sounds_nothing() {
+        let catalog = scoopable();
+        let mut session = scooper(&catalog, 0);
+        let mut twin = scooper(&catalog, 0);
+        let _ = session.take_sounds();
+        let _ = twin.take_sounds();
+        drop_on_ship(&mut session, Some(2));
+        session.tick(Controls::default());
+        twin.tick(Controls::default());
+        assert_eq!(held(&session), [(Good::Commodity(2), 1)]);
+        assert_eq!(session.take_sounds(), twin.take_sounds());
+    }
+
+    #[test]
+    fn every_scoop_resets_the_precalced_values_an_empty_one_too() {
+        for contents in [Some(2), Some(6)] {
+            let catalog = scoopable();
+            let mut session = scooper(&catalog, 0);
+            session.scan_latches = Latches {
+                junk: false,
+                outfits: false,
+            };
+            drop_on_ship(&mut session, contents);
+            session.tick(Controls::default());
+            assert!(session.cargo_boxes().is_empty(), "{contents:?}");
+            assert_eq!(session.scan_latches, Latches::ARMED, "{contents:?}");
+        }
+    }
+
+    #[test]
+    fn no_scoop_leaves_the_precalced_values() {
+        let catalog = scoopable();
+        let mut session = scooper(&catalog, 20);
+        let unarmed = Latches {
+            junk: false,
+            outfits: false,
+        };
+        session.scan_latches = unarmed;
+        drop_on_ship(&mut session, Some(2));
+        session.tick(Controls::default());
+        assert_eq!(session.scan_latches, unarmed);
+    }
+
+    #[test]
+    fn an_npc_not_scooping_leaves_the_box() {
+        let catalog = scoopable();
+        let mut session = scooper(&catalog, 0);
+        let at = Vec2::new(300.0, 0.0);
+        let id = session.traffic.add_npc(Npc {
+            state: ShipState {
+                position: at,
+                velocity: Vec2::ZERO,
+                heading: 0.0,
+            },
+            ..npc(1, ShipStats::default())
+        });
+        session
+            .boxes
+            .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
+        session.tick(Controls::default());
+        assert_eq!(session.cargo_boxes().len(), 1);
+        assert_eq!(session.npc(id).expect("here").cargo, NpcHold::default());
     }
 }

@@ -1384,7 +1384,14 @@ pub trait AsteroidCatalog {
     fn asteroid_types(&self) -> Vec<AsteroidTypeRecord>;
     /// Every `sÿst` that reads: its `Asteroids` and `AstTypes`, raw.
     fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord>;
+    /// The frame width and height of each box graphic 0-4, `spïn` 500 +
+    /// graphic, by graphic: none where the sheet does not read. A scoop
+    /// tests a ship against the box's frame (see [`scoop`](crate::scoop)).
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS];
 }
+
+/// The cargo boxes' graphics: `spïn` 500-504.
+pub const BOX_GRAPHICS: usize = 5;
 
 /// A borrowed catalog is a catalog.
 impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for &T {
@@ -1394,6 +1401,10 @@ impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for &T {
 
     fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
         (**self).asteroid_fields()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        (**self).box_frame_sizes()
     }
 }
 
@@ -1405,6 +1416,10 @@ impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for Rc<T> {
 
     fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
         (**self).asteroid_fields()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        (**self).box_frame_sizes()
     }
 }
 
@@ -2478,12 +2493,24 @@ mod tests {
                 types: 0x0011,
             }]
         }
+
+        fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+            [None, None, Some((22, 20)), None, None]
+        }
     }
 
-    fn asteroids(
-        catalog: impl AsteroidCatalog,
-    ) -> (Vec<AsteroidTypeRecord>, Vec<AsteroidFieldRecord>) {
-        (catalog.asteroid_types(), catalog.asteroid_fields())
+    type Asteroids = (
+        Vec<AsteroidTypeRecord>,
+        Vec<AsteroidFieldRecord>,
+        [Option<(u32, u32)>; BOX_GRAPHICS],
+    );
+
+    fn asteroids(catalog: impl AsteroidCatalog) -> Asteroids {
+        (
+            catalog.asteroid_types(),
+            catalog.asteroid_fields(),
+            catalog.box_frame_sizes(),
+        )
     }
 
     #[test]
@@ -2491,6 +2518,7 @@ mod tests {
         let direct = asteroids(One);
         assert_eq!(direct.0[0].kind, 4);
         assert_eq!(direct.1[0].types, 0x0011);
+        assert_eq!(direct.2[2], Some((22, 20)));
         assert_eq!(asteroids(&One), direct);
         assert_eq!(asteroids(Rc::new(One)), direct);
     }

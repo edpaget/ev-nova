@@ -47,6 +47,7 @@
 //! | `_ShipStatsToSystemInfo`'s tail jump @0xcce7, from the eject @0x6f8bb | the player's eject, once the new class is boarded (see the `eject` module); the eject still leaves whether a save is due as it found it |
 //! | `_HandlePlayer` @0x69a05 | the onboard bombs, after their outfit loop (see the `sabotage` module): no bomb is left, so the sabotage flag clears |
 //! | `_ResetPlayer`'s tail call, from the rescue @0x68f2f | the escape pod's rescue, the cargo already emptied (see the `rescue` module) |
+//! | `_ShipCollisionHandler` @0x371ac | a player's scoop of an asteroid box (`Session::scoop_boxes`), after the hold changes, an empty box's included; the hold had room, so its trim never cuts |
 //! | `_EvalCurrentMissionBitSetString` @0x99a85, `_EvalMissionBitSetString` @0x99dea | the end of every set expression whose text is not empty, one of only spaces or one that did not parse included (`Session::run_ops`): a hook, a mission's script, a crön, an `OnExplore`, a story subscription's |
 //!
 //! *Ordering against the original.* The original runs a take-off's, a

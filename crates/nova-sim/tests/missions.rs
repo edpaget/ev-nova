@@ -35,6 +35,10 @@ impl nova_sim::AsteroidCatalog for Courier {
     fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
         Vec::new()
     }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        [None; nova_sim::BOX_GRAPHICS]
+    }
 }
 
 /// Unarmed and ungoverned.
