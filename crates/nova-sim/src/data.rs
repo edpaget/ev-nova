@@ -867,6 +867,7 @@ impl CombatCatalog for GameData {
                     exit_type: record.exit_type,
                     ionization: record.ionization,
                     ionize_color: record.ionize_color,
+                    jam_vuln: record.jam_vuln,
                     frame: shot_frame(self, record.graphic),
                 })
             })
@@ -937,6 +938,7 @@ impl CombatCatalog for GameData {
                     scan_fine: record.scan_fine,
                     news_pic: record.news_pic,
                     require: record.require.bits(),
+                    inh_jam: record.inh_jam,
                 })
             })
             .collect()
@@ -3001,6 +3003,7 @@ mod tests {
         bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x56, &[12, 2]);
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
+        put_i16s(&mut bytes, 0x5E, &[40, 0, 7, 0]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
         put_i16s(&mut bytes, 0x68, &[4, 70, 6, 3]);
@@ -3052,6 +3055,7 @@ mod tests {
             exit_type: 2,
             ionization: -40,
             ionize_color: 0x0034_c2ff,
+            jam_vuln: [40, 0, 7, 0],
             frame: None,
         };
         assert_eq!(
@@ -3275,6 +3279,7 @@ mod tests {
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
         put_i16s(&mut bytes, 0xAE, &[9001]);
         bytes[0x54..0x5C].copy_from_slice(&0x8000_0000_0000_0021_u64.to_be_bytes());
+        put_i16s(&mut bytes, 0x5C, &[25, 0, -3, 0]);
         bytes
     }
 
@@ -3319,6 +3324,7 @@ mod tests {
             scan_fine: -5,
             news_pic: 9001,
             require: 0x8000_0000_0000_0021,
+            inh_jam: [25, 0, -3, 0],
         };
         assert_eq!(
             data.governments(),

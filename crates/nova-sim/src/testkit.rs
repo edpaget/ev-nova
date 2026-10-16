@@ -419,6 +419,7 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         exit_type: -1,
         ionization: 0,
         ionize_color: 0,
+        jam_vuln: [0; 4],
         frame: None,
     }
 }
@@ -448,7 +449,8 @@ pub(crate) fn hull(id: i16) -> HullRecord {
 
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
 /// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
-/// "Govt `id`", scanning for nothing, fining nothing and requiring nothing.
+/// "Govt `id`", scanning for nothing, fining nothing, requiring nothing
+/// and jamming nothing.
 pub(crate) fn govt(id: i16) -> GovtRecord {
     GovtRecord {
         id: GovtId(id),
@@ -466,6 +468,7 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
         scan_fine: 0,
         news_pic: -1,
         require: 0,
+        inh_jam: [0; 4],
     }
 }
 
@@ -1127,6 +1130,49 @@ impl Chance for Draws {
             }
             None => n.saturating_sub(1),
         }
+    }
+}
+
+/// A chance keyed by range, not by the order of its draws: each
+/// `below(n)` gives the outcome given for `n`, or `n - 1` for a range
+/// given none, and each range asked is kept in `asked`. Every `fires` is
+/// false.
+pub(crate) struct Ranged {
+    outcomes: Vec<(u32, u32)>,
+    pub(crate) asked: Vec<u32>,
+}
+
+impl Ranged {
+    /// `outcomes`, each a range and what a draw below it gives.
+    pub(crate) fn of(outcomes: &[(u32, u32)]) -> Self {
+        Self {
+            outcomes: outcomes.to_vec(),
+            asked: Vec::new(),
+        }
+    }
+
+    /// Whether a draw below `n` was asked.
+    pub(crate) fn was_asked(&self, n: u32) -> bool {
+        self.asked.contains(&n)
+    }
+}
+
+impl Chance for Ranged {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    /// The outcome given for `n`; one outside `0..n` is a mistake in the
+    /// test.
+    fn below(&mut self, n: u32) -> u32 {
+        self.asked.push(n);
+        let outcome = self
+            .outcomes
+            .iter()
+            .find(|&&(range, _)| range == n)
+            .map_or(n.saturating_sub(1), |&(_, outcome)| outcome);
+        assert!(outcome < n, "drew {outcome} below {n}");
+        outcome
     }
 }
 

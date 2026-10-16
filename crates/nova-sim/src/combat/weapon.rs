@@ -338,6 +338,10 @@ pub struct WeaponSpec {
     /// Its `IonizeColor`, `00RRGGBB`: the colour it ORs into the ion
     /// colour of a ship it ionizes ([`ion`](super::ion)).
     pub ionize_colour: u32,
+    /// Its `JamVuln1-4`, raw: the range each jamming type's roll a shot
+    /// of it takes at launch is drawn in (see
+    /// [`jamming`](super::jamming)).
+    pub jam_vuln: [i16; 4],
     /// The exit points it fires from, by its `ExitType`; none, the
     /// centre, for any but 0-3 (see [`exits`](super::exits)).
     pub exit: Option<ExitKind>,
@@ -524,6 +528,7 @@ impl WeaponSpec {
             impact: f32::from(record.impact),
             ionization: i32::from(record.ionization),
             ionize_colour: record.ionize_color,
+            jam_vuln: record.jam_vuln,
             exit: ExitKind::from_raw(record.exit_type),
             nearest_exit: record.flags3 & NEAREST_EXIT != 0,
             broadside: if record.inaccuracy < 0 {
@@ -1402,9 +1407,11 @@ mod tests {
             flags3: 0x0002,
             burst_count: 60,
             burst_reload: 30,
+            jam_vuln: [40, 0, 7, 0],
             ..weapon(138)
         });
         assert_eq!(spec.guidance, Guidance::Rocket);
+        assert_eq!(spec.jam_vuln, [40, 0, 7, 0]);
         assert_eq!(spec.ammo, Ammo::Rounds(WeaponId(138)));
         assert_eq!(
             spec.explosion,

@@ -10446,6 +10446,7 @@ mod tests {
             exit_type: -1,
             ionization: 0,
             ionize_color: 0,
+            jam_vuln: [0; 4],
             frame: None,
         };
         let hull = nova_sim::HullRecord {
@@ -10587,6 +10588,7 @@ mod tests {
             exit_type: -1,
             ionization: 0,
             ionize_color: 0,
+            jam_vuln: [0; 4],
             frame: None,
         }
     }
@@ -12647,6 +12649,7 @@ mod tests {
                 scan_fine: 0,
                 news_pic: -1,
                 require: 0,
+                inh_jam: [0; 4],
             }],
             ..catalog
         }
@@ -14948,6 +14951,7 @@ mod tests {
             scan_fine: fine,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         catalog.missions = vec![MissionRecord {
             cargo_type: 0,
@@ -16701,6 +16705,7 @@ mod tests {
             scan_fine: 0,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         for record in &mut catalog.ships {
             record.crew = 3;
@@ -18303,6 +18308,7 @@ mod tests {
             scan_fine: 0,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         // One ship of düde 128 (ship 129) attacking the player and
         // following it (`ShipSyst` -6).

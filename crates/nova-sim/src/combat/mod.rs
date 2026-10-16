@@ -211,6 +211,7 @@ pub mod flags;
 pub mod hull;
 pub mod impact;
 pub mod ion;
+pub mod jamming;
 pub mod projectile;
 pub mod report;
 pub mod shockwave;

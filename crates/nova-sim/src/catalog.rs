@@ -1073,6 +1073,10 @@ pub struct WeaponRecord {
     pub ionization: i16,
     /// Its `IonizeColor`, `00RRGGBB`.
     pub ionize_color: u32,
+    /// Its `JamVuln1-4`: each jamming type's share, in percent, that a
+    /// shot rolls its vulnerability to at launch (see
+    /// [`jamming`](crate::combat::jamming)).
+    pub jam_vuln: [i16; 4],
     /// The frame size of its shots' sprite, the sheet of `spïn` 3000 +
     /// its `Graphic`, which point defence meets missiles by (see
     /// [`defence`](crate::combat::defence)); none for a `Graphic` below
@@ -1224,6 +1228,10 @@ pub struct GovtRecord {
     /// stellar it governs (`gövt` +0x54; `_PlayerMeetsRequirements`
     /// @0x776f, read by `_HandlePlayerDockRequest` @0x67940-0x6796b).
     pub require: u64,
+    /// Its `InhJam1-4`: the jamming of each type its ships' classes take
+    /// through their `InherentGovt` (`gövt` runtime +0x56; see
+    /// [`jamming`](crate::combat::jamming)).
+    pub inh_jam: [i16; 4],
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each

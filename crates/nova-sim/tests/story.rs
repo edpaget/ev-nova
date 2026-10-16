@@ -66,6 +66,7 @@ impl CombatCatalog for Home {
             exit_type: -1,
             ionization: 0,
             ionize_color: 0,
+            jam_vuln: [0; 4],
             frame: None,
         }]
     }

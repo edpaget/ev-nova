@@ -56,6 +56,10 @@ pub const WARSHIPS_RETREAT: u16 = 0x0010;
 pub const IGNORED_WHEN_ATTACKED: u16 = 0x0020;
 /// `Flags`: its warships never attack the player.
 pub const NEVER_ATTACKS_PLAYER: u16 = 0x0040;
+/// `Flags`: its ships' jamming is halved: in the original every NPC's of
+/// it, whatever its AI type (`_ShipECM` @0x3ccf); by the Bible only its
+/// freighters' `InhJam` share (see [`jamming`](crate::combat::jamming)).
+pub const HALF_JAMMING: u16 = 0x0080;
 /// `Flags`: its interceptors retreat when outnumbered.
 pub const INTERCEPTORS_RETREAT: u16 = 0x0100;
 /// `Flags`: its warships plunder: a warship of it thinks as
@@ -193,6 +197,13 @@ impl Governments {
     #[must_use]
     pub fn require(&self, govt: Option<GovtId>) -> u64 {
         self.record(govt).map_or(0, |record| record.require)
+    }
+
+    /// `govt`'s `InhJam1-4`: none for an independent or a government the
+    /// table does not hold.
+    #[must_use]
+    pub fn inh_jam(&self, govt: Option<GovtId>) -> [i16; 4] {
+        self.record(govt).map_or([0; 4], |record| record.inh_jam)
     }
 
     /// The odds `govt`'s ships still take on, as a fraction (see the
@@ -673,6 +684,17 @@ mod tests {
     }
 
     #[test]
+    fn inh_jam_is_none_for_an_independent_or_unknown_government() {
+        let govts = Governments::new([GovtRecord {
+            inh_jam: [25, 0, -3, 7],
+            ..govt(128)
+        }]);
+        assert_eq!(govts.inh_jam(FED), [25, 0, -3, 7]);
+        assert_eq!(govts.inh_jam(None), [0; 4], "independent");
+        assert_eq!(govts.inh_jam(UNKNOWN), [0; 4]);
+    }
+
+    #[test]
     fn the_empty_table_holds_none() {
         assert_eq!(Governments::empty(), Governments::default());
         assert_eq!(Governments::empty().ids().count(), 0);
@@ -688,11 +710,12 @@ mod tests {
                 WARSHIPS_RETREAT,
                 IGNORED_WHEN_ATTACKED,
                 NEVER_ATTACKS_PLAYER,
+                HALF_JAMMING,
                 INTERCEPTORS_RETREAT,
                 DERELICT
             ],
             [
-                0x0001, 0x0002, 0x0004, 0x0010, 0x0020, 0x0040, 0x0100, 0x0800
+                0x0001, 0x0002, 0x0004, 0x0010, 0x0020, 0x0040, 0x0080, 0x0100, 0x0800
             ]
         );
     }
