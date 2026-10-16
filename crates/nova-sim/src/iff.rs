@@ -71,8 +71,9 @@
 //!    from 0, never yellow; else yellow when `MinStatus` ≤ the record or
 //!    `MinStatus` ≤ −32767, red below 0 and orange from 0.
 //!
-//! The tribute domination and the rank blessing have no state yet; the
-//! [`Standing`] the caller passes is their seam.
+//! The [`Standing`] the caller passes carries both. The session fills
+//! the blessing from its rank blessing table (`Session::blessing`);
+//! domination by tribute has no state yet (rdm:task/planet-domination).
 //!
 //! # Interference ([`interference`], `_HandleStatus` @0x494d7)
 //!

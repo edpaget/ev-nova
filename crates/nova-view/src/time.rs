@@ -1,4 +1,5 @@
-//! Nova's clock: time counted in ticks of 1/30 s.
+//! Nova's clock: time counted in ticks of 1/30 s, and in the Mac's
+//! ticks of 1/60 s ([`sixtieths`]).
 
 use std::time::Duration;
 
@@ -14,9 +15,32 @@ pub(crate) fn ticks(elapsed: Duration) -> u128 {
     elapsed.as_nanos() / FRAME_PERIOD_NANOS
 }
 
+/// One Mac tick: 1/60 s, `TickCount()`'s unit, truncated to whole
+/// nanoseconds (16,666,666 ns), as [`FRAME_PERIOD_NANOS`] truncates 1/30 s.
+pub(crate) const MAC_TICK_NANOS: u128 = 1_000_000_000 / 60;
+
+/// How many whole Mac ticks fit in `elapsed`, rounded down. Truncating
+/// the period makes `nova_sim::mission::screens::mac_ticks(n)` count as
+/// exactly n, and one tick of 1/30 s as exactly 2.
+pub(crate) fn sixtieths(elapsed: Duration) -> u128 {
+    elapsed.as_nanos() / MAC_TICK_NANOS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sixtieths_count_whole_mac_ticks_rounding_down() {
+        use nova_sim::mission::screens::mac_ticks;
+        assert_eq!(MAC_TICK_NANOS, 16_666_666);
+        for n in [0, 1, 2, 118, 119, 150, 500, 501, 100_000] {
+            assert_eq!(sixtieths(mac_ticks(n)), u128::from(n), "{n}");
+        }
+        assert_eq!(sixtieths(Duration::from_secs(1) / 30), 2);
+        assert_eq!(sixtieths(Duration::from_nanos(16_666_665)), 0);
+        assert_eq!(sixtieths(Duration::from_nanos(16_666_666)), 1);
+    }
 
     #[test]
     fn a_tick_is_a_thirtieth_of_a_second_truncated_to_nanoseconds() {

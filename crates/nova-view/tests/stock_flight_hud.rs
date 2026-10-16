@@ -249,7 +249,7 @@ fn a_grants_message_reads_its_stock_strings() {
 }
 
 /// The dock request's line, its denials and the dock approach's greeting
-/// are built from `STR#` 2002 #53 and #74-#101, as the stock strings read.
+/// are built from `STR#` 2002 #53 and #65-#101, as the stock strings read.
 #[test]
 fn the_dock_requests_and_the_approachs_words_read_their_stock_strings() {
     use nova_view::flight::view::{
@@ -260,11 +260,41 @@ fn the_dock_requests_and_the_approachs_words_read_their_stock_strings() {
         TRAFFIC_CONTROL_READS_YOU, WELCOME_TO, YOU_ARE_CLEARED_FOR_HYPERGATE,
         YOU_ARE_CLEARED_TO_DOCK, YOU_ARE_CLEARED_TO_LAND, YOURE_CLEARED_FOR_HYPERGATE,
     };
+    use nova_view::flight::view::{
+        DOCK_AT, HOSTILE_PLANET, HOSTILE_STATION, HYPERGATE_OFFLINE, LAND_ON, TOO_FAR_HYPERGATE,
+        TOO_FAR_PLANET, TOO_FAR_STATION, TOO_FAR_WORMHOLE, TOO_FAST_HYPERGATE, TOO_FAST_PLANET,
+        TOO_FAST_STATION, TOO_FAST_WORMHOLE, UNABLE_TO, WORMHOLE_TOO_HOT,
+    };
     let Some(data) = open() else {
         return;
     };
     let strings = nova_sim::CommCatalog::string_list(&data, 2002);
     assert_eq!(strings[52], NO_RESPONSE);
+    assert_eq!(
+        &strings[64..72],
+        [
+            TOO_FAR_HYPERGATE,
+            TOO_FAR_WORMHOLE,
+            TOO_FAR_STATION,
+            TOO_FAR_PLANET,
+            TOO_FAST_HYPERGATE,
+            TOO_FAST_WORMHOLE,
+            TOO_FAST_STATION,
+            TOO_FAST_PLANET,
+        ]
+    );
+    assert_eq!(
+        &strings[83..90],
+        [
+            UNABLE_TO,
+            HYPERGATE_OFFLINE,
+            WORMHOLE_TOO_HOT,
+            DOCK_AT,
+            LAND_ON,
+            HOSTILE_STATION,
+            HOSTILE_PLANET,
+        ]
+    );
     assert_eq!(
         &strings[73..83],
         [

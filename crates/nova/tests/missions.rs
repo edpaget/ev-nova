@@ -8,8 +8,9 @@
 //! labelled "I'm in", with an offer text and a `BriefText`, and mission
 //! 131, "Second", with an offer text, a `RefuseText` and an `OnRefuse`
 //! setting bit 7) and a synthetic interface file holding the "Spaceport",
-//! the mission computer (`DLOG` 1006), the mission info screen (1012),
-//! "Bar" (1013), the offer dialog (1016) and "Desc Dialog" (3003), driven
+//! "Shipyard Info" (1005), the mission computer (`DLOG` 1006), the
+//! mission info screen (1012), "Bar" (1013), "News" (1014), the offer
+//! dialog (1016), "Player Info" (1017) and "Desc Dialog" (3003), driven
 //! only by window events, with pilots kept in the in-memory store.
 //!
 //! The mission computer: the pilot lands, and Mission BBS lists "Run to
@@ -18,6 +19,23 @@
 //! accepting that too closes the computer silently, nothing being left.
 //! Both are active and saved. Taking off and landing again completes the
 //! run, at its destination, and its `CompText` shows over the spaceport.
+//!
+//! A run whose `OnSuccess` moves the player (`M129`, to Beta and its
+//! Dock) with no `Q`: under its `CompText` the port's status bar names
+//! the Pad, landed on, and once the Trade Center has opened and closed
+//! it names the Dock.
+//! Closing the mission computer afterwards redraws the nav too: the
+//! Dock. A run whose `OnAccept` moves the player instead: under its
+//! `BriefText` the bar names the Dock, and the computer's close restores
+//! the nav it opened with, naming the Pad.
+//! At a Pad with an outfitter and a shipyard, buying the "Racer", whose
+//! `OnPurchase` moves the player, names the Dock; the shipyard's close
+//! restores the Pad but leaves the bar naming the Dock, until a Cancel
+//! of an Option-Buy in the outfitter draws it: the Pad. So does the
+//! shipyard's Info panel closing, the name prompt's Cancel for the
+//! "Scout", and the bar's hire screen closing, each from that Dock.
+//! With the Dock held after the run's `CompText`, the bar's Leave,
+//! News's close, player info's and mission info's each redraw it.
 //!
 //! The bar: a quarter second after the bar opens, the offer dialog shows
 //! the bar job's text, filled, and "I'm in". Return accepts it, and its
@@ -72,10 +90,12 @@ use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
+use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, InterfaceData, Record};
@@ -95,6 +115,7 @@ use nova_view::spaceport::missions::{
 };
 use nova_view::spaceport::{OfferDialog, SpaceportView};
 use nova_view::text::fixture::MonoMetrics;
+use nova_view::ui::quantity::CANCEL_ITEM;
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -203,9 +224,15 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 /// Alpha: a `sÿst` at the map's centre listing the Pad; independent,
 /// with no traffic.
 fn system() -> Vec<u8> {
+    listing(128)
+}
+
+/// A `sÿst` at the map's centre listing `stellar` alone; independent,
+/// with no traffic.
+fn listing(stellar: i16) -> Vec<u8> {
     let mut bytes = vec![0; System::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x04, &[-1; 32]);
-    put_i16s(&mut bytes, 0x24, &[128]);
+    put_i16s(&mut bytes, 0x24, &[stellar]);
     put_i16s(&mut bytes, 0x44, &[-1; 8]);
     put_i16s(&mut bytes, 0x64, &[0, -1]);
     bytes
@@ -214,9 +241,14 @@ fn system() -> Vec<u8> {
 /// The Pad: a `spöb` at the centre that can be landed on, with a bar
 /// (`Flags` 0x41), drawn from `spïn` 1004.
 fn pad() -> Vec<u8> {
+    flagged_pad(0x41)
+}
+
+/// [`pad`] with these `Flags`.
+fn flagged_pad(flags: u32) -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
-    bytes[0x06..0x0A].copy_from_slice(&0x41_u32.to_be_bytes());
+    bytes[0x06..0x0A].copy_from_slice(&flags.to_be_bytes());
     put_i16s(&mut bytes, 0x14, &[-1]);
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
     bytes
@@ -334,14 +366,24 @@ fn game_data_with(bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
 
 /// [`game_data`] with this run, mission 128, and this bar job, mission
 /// 130, and its offer text.
-fn game_data_from(run: &[u8], (bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<GameData> {
-    let mut fork = ForkBuilder::new()
+fn game_data_from(run: &[u8], bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
+    game_data_around(run, bar_job, &pad(), ForkBuilder::new())
+}
+
+/// [`game_data_from`] with this Pad, over the resources `fork` holds.
+fn game_data_around(
+    run: &[u8],
+    (bar_job, bar_job_offer): (Vec<u8>, &str),
+    pad: &[u8],
+    fork: ForkBuilder,
+) -> Rc<GameData> {
+    let mut fork = fork
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system())
-        .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad())
+        .resource(Stellar::TYPE, 128, Some(b"Pad"), pad)
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
         .resource(Mission::TYPE, 128, Some(b"Run to <DST>;courier"), run)
@@ -506,10 +548,115 @@ fn mission_dialogs() -> [[(ResType, i16, Vec<u8>); 2]; 5] {
     [computer, info, bar, offer, text]
 }
 
-/// The interface file: stock "Spaceport" (`DLOG` 1000), the mission
-/// computer (1006), the mission info screen (1012), "Bar" (1013), the
-/// offer dialog (1016) and "Desc Dialog" (3003), each with its items as
-/// stock has them.
+/// "Trade" (`DLOG` 1001), with its items as stock has them.
+fn trade_dialog() -> [(ResType, i16, Vec<u8>); 2] {
+    dialog(
+        1001,
+        (426, 252),
+        &[
+            ((272, 221, 99, 25), true),
+            ((129, 299, 68, 30), false),
+            ((38, 9, 352, 17), false),
+            ((38, 25, 352, 13), true),
+            ((38, 37, 352, 13), true),
+            ((38, 49, 352, 13), true),
+            ((38, 61, 352, 13), true),
+            ((38, 73, 352, 13), true),
+            ((38, 85, 352, 14), true),
+            ((38, 98, 352, 14), true),
+            ((38, 111, 352, 14), true),
+            ((38, 124, 352, 60), false),
+            ((60, 221, 99, 25), true),
+            ((166, 221, 99, 25), true),
+            ((41, 190, 346, 24), false),
+            ((212, 304, 68, 30), false),
+            ((178, 339, 68, 30), false),
+        ],
+    )
+}
+
+/// "Outfit" (`DLOG` 1002), with its items as stock has them.
+fn outfit_dialog() -> [(ResType, i16, Vec<u8>); 2] {
+    dialog(
+        1002,
+        (765, 321),
+        &[
+            ((500, 289, 99, 25), true),
+            ((248, 440, 68, 30), false),
+            ((251, 291, 29, 21), false),
+            ((394, 289, 99, 25), false),
+            ((9, 8, 333, 271), true),
+            ((354, 10, 192, 267), false),
+            ((288, 289, 99, 25), true),
+            ((557, 8, 200, 200), false),
+            ((618, 214, 135, 100), false),
+            ((148, 288, 25, 25), true),
+            ((178, 288, 25, 25), true),
+            ((170, 449, 32, 32), false),
+            ((356, 422, 68, 30), false),
+        ],
+    )
+}
+
+/// "Shipyard" (`DLOG` 1004), with its items as stock has them.
+fn shipyard_dialog() -> [(ResType, i16, Vec<u8>); 2] {
+    dialog(
+        1004,
+        (765, 323),
+        &[
+            ((365, 289, 109, 25), true),
+            ((248, 440, 68, 30), false),
+            ((251, 491, 29, 21), false),
+            ((394, 489, 99, 25), false),
+            ((9, 8, 333, 271), true),
+            ((354, 10, 192, 267), false),
+            ((480, 289, 109, 25), true),
+            ((557, 8, 200, 200), false),
+            ((614, 214, 143, 100), false),
+            ((253, 289, 89, 25), true),
+            ((170, 449, 32, 32), false),
+            ((141, 288, 25, 25), true),
+            ((171, 288, 25, 25), true),
+        ],
+    )
+}
+
+/// "Shipyard Info" (`DLOG` 1005), "News" (1014, with no items) and
+/// "Player Info" (1017), each with its items as stock has them.
+fn info_dialogs() -> [[(ResType, i16, Vec<u8>); 2]; 3] {
+    let ship_info = dialog(
+        1005,
+        (250, 285),
+        &[
+            ((86, 253, 74, 25), true),
+            ((300, 0, 1, 1), false),
+            ((3, 3, 240, 24), false),
+            ((300, 0, 1, 1), false),
+            ((9, 32, 234, 214), false),
+        ],
+    );
+    let news = dialog(1014, (300, 230), &[]);
+    let player_info = dialog(
+        1017,
+        (413, 227),
+        &[
+            ((293, 195, 99, 25), true),
+            ((7, 8, 99, 25), true),
+            ((107, 8, 99, 25), true),
+            ((207, 8, 99, 25), true),
+            ((307, 8, 99, 25), true),
+            ((4, 40, 405, 141), false),
+            ((60, 195, 150, 25), true),
+        ],
+    );
+    [ship_info, news, player_info]
+}
+
+/// The interface file: stock "Spaceport" (`DLOG` 1000), "Trade" (1001),
+/// "Outfit" (1002), "Shipyard" (1004), "Shipyard Info" (1005), the
+/// mission computer (1006), the mission info screen (1012), "Bar" (1013),
+/// "News" (1014), the offer dialog (1016), "Player Info" (1017) and
+/// "Desc Dialog" (3003), each with its items as stock has them.
 fn interface() -> InterfaceData {
     let spaceport = dialog(
         1000,
@@ -532,14 +679,21 @@ fn interface() -> InterfaceData {
             ((605, 548, 32, 32), false),
         ],
     );
-    let fork = std::iter::once(spaceport)
-        .chain(mission_dialogs())
-        .flatten()
-        .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
-            fork.resource(ty, id, None, &bytes)
-        })
-        .build()
-        .bytes;
+    let fork = [
+        spaceport,
+        trade_dialog(),
+        outfit_dialog(),
+        shipyard_dialog(),
+    ]
+    .into_iter()
+    .chain(mission_dialogs())
+    .chain(info_dialogs())
+    .flatten()
+    .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
+        fork.resource(ty, id, None, &bytes)
+    })
+    .build()
+    .bytes;
     InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
@@ -953,6 +1107,485 @@ fn the_mission_computer_lists_offers_accepts_them_and_their_texts_show() {
         Showing::Spaceport,
         "Escape went to the text"
     );
+}
+
+/// [`game_data`] where the run's `OnSuccess` moves the player to Beta
+/// (`M129`), with no `Q` after it, Beta listing the Dock (129) alone, the
+/// Pad has a trade center too (`Flags` 0x43), and the bar's news has a
+/// commercial (`STR#` 8100) and a story (8101).
+fn moving_run_data() -> Rc<GameData> {
+    let mut run = timed(mission(128, 200, 201));
+    let on_success = b"M129\0";
+    run[0x359..0x359 + on_success.len()].copy_from_slice(on_success);
+    let news = beta()
+        .resource(StrList::TYPE, 8100, None, &str_list(&["Buy Bibble"]))
+        .resource(StrList::TYPE, 8101, None, &str_list(&["Nothing new"]));
+    game_data_around(&run, bar_job(), &flagged_pad(0x43), news)
+}
+
+/// `STR#` of `strings`.
+fn str_list(strings: &[&str]) -> Vec<u8> {
+    let mut bytes = i16::try_from(strings.len())
+        .expect("few")
+        .to_be_bytes()
+        .to_vec();
+    for string in strings {
+        bytes.push(u8::try_from(string.len()).expect("short"));
+        bytes.extend(string.as_bytes());
+    }
+    bytes
+}
+
+/// Beta (129), listing the Dock (129) alone.
+fn beta() -> ForkBuilder {
+    ForkBuilder::new()
+        .resource(System::TYPE, 129, Some(b"Beta"), &listing(129))
+        .resource(Stellar::TYPE, 129, Some(b"Dock"), &pad())
+}
+
+/// [`game_data`] where the run's `OnAccept` moves the player to Beta
+/// (`M129`), Beta listing the Dock (129) alone.
+fn moving_accept_data() -> Rc<GameData> {
+    let mut run = timed(mission(128, 200, 201));
+    let on_accept = b"M129\0";
+    run[0x15B..0x15B + on_accept.len()].copy_from_slice(on_accept);
+    game_data_around(&run, bar_job(), &pad(), beta())
+}
+
+/// The texts of flight's status bar as the spaceport draws it beside
+/// itself.
+fn port_bar_texts(game: &Game) -> Vec<String> {
+    let mut bar = nova_view::DrawList::new();
+    game.app
+        .screen()
+        .flight_view()
+        .expect("flying")
+        .draw_status_bar(&mut bar);
+    bar.iter()
+        .filter_map(|command| match command {
+            nova_view::DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_comp_text_shows_the_stellar_landed_on_and_a_shop_closing_on_successs_move() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), moving_run_data());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.accept();
+    game.tap(Key::Enter);
+    for _ in 0..3 {
+        if game.showing() == Showing::Spaceport {
+            game.tap(Key::Escape);
+        }
+    }
+    assert_eq!(game.showing(), Showing::Flight);
+
+    // Landing at the run's return completes it: OnSuccess's M129 selects
+    // the Dock, but under the CompText the port's bar names the Pad.
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
+    assert!(!texts(&game.frame()).contains(&"Dock".to_owned()));
+    game.tap(Key::Escape);
+    assert_eq!(game.shown_text(), None);
+    assert!(!texts(&game.frame()).contains(&"Dock".to_owned()), "held");
+
+    // The Trade Center's close redraws it: the Dock.
+    game.click_port(7);
+    assert!(game.spaceport().open_trade().is_some(), "trading");
+    game.tap(Key::Escape);
+    assert!(game.spaceport().open_trade().is_none(), "closed");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
+    assert!(texts(&game.frame()).contains(&"Dock".to_owned()));
+}
+
+#[test]
+fn a_landed_m_in_on_accept_is_undone_as_the_mission_computer_closes() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), moving_accept_data());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.accept();
+
+    // Under the BriefText the accept's redraw names the Dock.
+    assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
+
+    // The computer's close restores the Pad and draws it.
+    game.tap(Key::Enter);
+    if game.spaceport().mission_computer().is_some() {
+        game.tap(Key::Escape);
+    }
+    assert!(game.spaceport().mission_computer().is_none(), "closed");
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
+    let shown = texts(&game.frame());
+    assert!(shown.contains(&"Pad".to_owned()), "{shown:?}");
+    assert!(!shown.contains(&"Dock".to_owned()), "{shown:?}");
+}
+
+/// Over [`moving_run_data`]: the run and the errand accepted, the run
+/// completed on landing again, its `OnSuccess` selecting the Dock, and
+/// its `CompText` closed, the port's bar still naming the Pad, held, and
+/// the errand left active.
+fn docked_with_the_dock_held(store: &MemoryPilots) -> Game {
+    let mut game = Game::with_data(store, &ada(), moving_run_data());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.accept();
+    game.tap(Key::Enter);
+    if game.spaceport().mission_computer().is_some() {
+        game.accept();
+    }
+    for _ in 0..3 {
+        if game.showing() == Showing::Spaceport {
+            game.tap(Key::Escape);
+        }
+    }
+    game.land();
+    game.tap(Key::Escape);
+    assert_eq!(game.shown_text(), None, "the CompText closed");
+    assert_eq!(game.active(), [(1, MissionId(129))], "the errand");
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "held: {bar:?}");
+    game
+}
+
+#[test]
+fn the_mission_computers_close_redraws_the_port_bars_nav() {
+    let store = MemoryPilots::new();
+    let mut game = docked_with_the_dock_held(&store);
+
+    // Mission BBS, then its close, which redraws the nav: the Dock.
+    game.click_port(MISSION_BBS);
+    if game.spaceport().mission_computer().is_some() {
+        game.tap(Key::Escape);
+    } else {
+        game.tap(Key::Enter);
+    }
+    assert!(game.spaceport().mission_computer().is_none());
+    assert_eq!(game.shown_text(), None);
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
+    assert!(texts(&game.frame()).contains(&"Dock".to_owned()));
+}
+
+#[test]
+fn each_bar_side_closing_redraws_the_port_bars_nav() {
+    type Step = fn(&mut Game);
+    let rows: [(&str, Step, Step); 4] = [
+        (
+            "the bar's Leave (@0x4945e)",
+            |game| {
+                game.click_port(BAR);
+                assert!(game.spaceport().open_bar().is_some(), "in the bar");
+            },
+            |game| {
+                game.tap(Key::Escape);
+                assert!(game.spaceport().open_bar().is_none(), "left");
+            },
+        ),
+        (
+            "News's close (@0x48153)",
+            |game| {
+                game.click_port(BAR);
+                game.tap(Key::Char('n'));
+                let bar = game.spaceport().open_bar().expect("in the bar");
+                let news = bar.news_screen().expect("the news");
+                assert_eq!(news.problem(), None, "laid out");
+            },
+            |game| {
+                game.tap(Key::Escape);
+                let bar = game.spaceport().open_bar().expect("back in the bar");
+                assert!(bar.news_screen().is_none());
+            },
+        ),
+        (
+            "player info's close (@0x5a725)",
+            |game| {
+                game.tap(Key::Char('p'));
+                let open = game.spaceport().player_info().expect("player info");
+                assert_eq!(open.problem(), None, "laid out");
+            },
+            |game| {
+                game.tap(Key::Escape);
+                assert!(game.spaceport().player_info().is_none());
+            },
+        ),
+        (
+            "mission info's close (@0x9e769)",
+            |game| {
+                game.tap(Key::Char('i'));
+                let open = game.spaceport().mission_info().expect("mission info");
+                assert_eq!(open.problem(), None, "laid out");
+            },
+            |game| {
+                game.tap(Key::Escape);
+                assert!(game.spaceport().mission_info().is_none());
+            },
+        ),
+    ];
+    for (what, open, close) in rows {
+        let store = MemoryPilots::new();
+        let mut game = docked_with_the_dock_held(&store);
+        open(&mut game);
+        let bar = port_bar_texts(&game);
+        assert!(bar.contains(&"Pad".to_owned()), "{what}: held: {bar:?}");
+        close(&mut game);
+        let bar = port_bar_texts(&game);
+        assert!(bar.contains(&"Dock".to_owned()), "{what}: {bar:?}");
+        assert!(texts(&game.frame()).contains(&"Dock".to_owned()), "{what}");
+    }
+}
+
+/// The Pad with an outfitter and a shipyard too (`Flags` 0x4D), of tech
+/// level 1.
+fn shopping_pad() -> Vec<u8> {
+    let mut bytes = flagged_pad(0x4D);
+    put_i16s(&mut bytes, 0x0C, &[1]);
+    bytes
+}
+
+/// The "Racer" (129), for sale and for hire every day at 1,000 credits,
+/// whose `OnPurchase` moves the player to Beta (`M129`); the "Scout"
+/// (130), for sale every day at 1,000 credits; and a fuel pod (128),
+/// massless, at 100 credits, up to 10.
+fn shop_goods() -> ForkBuilder {
+    let mut racer = ship();
+    racer[0x30..0x34].copy_from_slice(&1000_i32.to_be_bytes());
+    put_i16s(&mut racer, 0x388, &[100, 100]);
+    let on_purchase = b"M129\0";
+    let mut scout = racer.clone();
+    put_i16s(&mut scout, 0x388, &[100, 0]);
+    racer[0x26A..0x26A + on_purchase.len()].copy_from_slice(on_purchase);
+    let mut pod = vec![0; Outfit::SIZE.expect("fixed")];
+    put_i16s(&mut pod, 0x00, &[10, 0, 1, 0, 0, 10]);
+    pod[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+    put_i16s(&mut pod, 0x3F0, &[100, -1]);
+    beta()
+        .resource(Ship::TYPE, 129, Some(b"Racer"), &racer)
+        .resource(ShipAnim::TYPE, 129, None, &ship_anim(2000))
+        .resource(Ship::TYPE, 130, Some(b"Scout"), &scout)
+        .resource(ShipAnim::TYPE, 130, None, &ship_anim(2000))
+        .resource(Outfit::TYPE, 128, Some(b"Fuel Pod"), &pod)
+}
+
+/// [`game_data`] at the [`shopping_pad`], with the [`shop_goods`].
+fn shopping_data() -> Rc<GameData> {
+    game_data_around(
+        &timed(mission(128, 200, 201)),
+        bar_job(),
+        &shopping_pad(),
+        shop_goods(),
+    )
+}
+
+/// The Outfitter's item.
+const OUTFITTER: usize = 8;
+/// The Shipyard's item.
+const SHIPYARD: usize = 9;
+
+/// Over [`shopping_data`], the Racer bought, its `OnPurchase` moving the
+/// player to Beta's Dock, which the purchase draws, and the shipyard
+/// closed, restoring the Pad but drawing the bar as the purchase left
+/// it: naming the Dock.
+fn bought_the_racer(store: &MemoryPilots) -> Game {
+    let mut game = Game::with_data(store, &ada(), shopping_data());
+    game.frame();
+    game.land();
+    game.click_port(SHIPYARD);
+    select_the_racer(&mut game);
+    game.tap(Key::Char('b'));
+    assert!(
+        game.spaceport()
+            .open_shipyard()
+            .and_then(|shipyard| shipyard.naming())
+            .is_some(),
+        "the name prompt"
+    );
+    game.tap(Key::Enter);
+    assert_eq!(game.session().ship(), nova_sim::ShipId(129), "bought");
+    game.tap(Key::Escape);
+    assert!(game.spaceport().open_shipyard().is_none(), "closed");
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "the close's: {bar:?}");
+    game
+}
+
+/// Clicks the Racer's cell in the shipyard open.
+fn select_the_racer(game: &mut Game) {
+    select_cell(game, 0);
+}
+
+/// Clicks cell `cell` in the shipyard open: 0 the Racer's, 1 the
+/// Scout's.
+fn select_cell(game: &mut Game, cell: usize) {
+    let at = game
+        .spaceport()
+        .open_shipyard()
+        .and_then(|shipyard| shipyard.cell_bounds(cell))
+        .expect("a ship's cell")
+        .center();
+    game.click(at);
+}
+
+#[test]
+fn the_shipyards_info_panels_close_redraws_the_port_bar() {
+    let store = MemoryPilots::new();
+    let mut game = bought_the_racer(&store);
+    game.click_port(SHIPYARD);
+    select_the_racer(&mut game);
+    game.tap(Key::Char('i'));
+    let shipyard = game.spaceport().open_shipyard().expect("shipbuying");
+    assert!(shipyard.info_panel().is_some(), "the Info panel");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "held: {bar:?}");
+    game.tap(Key::Escape);
+    let shipyard = game.spaceport().open_shipyard().expect("still open");
+    assert!(shipyard.info_panel().is_none(), "closed");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "@0x5bac2: {bar:?}");
+}
+
+#[test]
+fn the_shipyards_name_prompts_cancel_redraws_the_port_bar() {
+    let store = MemoryPilots::new();
+    let mut game = bought_the_racer(&store);
+    game.click_port(SHIPYARD);
+    select_cell(&mut game, 1);
+    game.tap(Key::Char('b'));
+    let shipyard = game.spaceport().open_shipyard().expect("shipbuying");
+    assert!(shipyard.naming().is_some(), "the name prompt");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "held: {bar:?}");
+    let cancel = game
+        .spaceport()
+        .open_shipyard()
+        .and_then(|shipyard| shipyard.naming())
+        .and_then(|prompt| prompt.dialog().item_bounds(6))
+        .expect("the prompt's Cancel")
+        .center();
+    game.click(cancel);
+    let shipyard = game.spaceport().open_shipyard().expect("still open");
+    assert!(shipyard.naming().is_none(), "cancelled");
+    assert_eq!(game.session().ship(), nova_sim::ShipId(129), "not bought");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "@0x5eb73: {bar:?}");
+}
+
+#[test]
+fn the_hire_screens_close_redraws_the_port_bar() {
+    let store = MemoryPilots::new();
+    let mut game = bought_the_racer(&store);
+    game.click_port(BAR);
+    game.tap(Key::Char('h'));
+    let bar = game.spaceport().open_bar().expect("in the bar");
+    assert!(bar.hire_screen().is_some(), "the hire screen");
+    let shown = port_bar_texts(&game);
+    assert!(shown.contains(&"Dock".to_owned()), "held: {shown:?}");
+    game.tap(Key::Escape);
+    let bar = game.spaceport().open_bar().expect("back in the bar");
+    assert!(bar.hire_screen().is_none(), "cancelled");
+    let shown = port_bar_texts(&game);
+    assert!(shown.contains(&"Pad".to_owned()), "@0x5f8d4: {shown:?}");
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128))),
+        "restored"
+    );
+}
+
+#[test]
+fn the_hire_screens_info_panels_close_redraws_the_port_bar() {
+    let store = MemoryPilots::new();
+    let mut game = bought_the_racer(&store);
+    game.click_port(BAR);
+    game.tap(Key::Char('h'));
+    game.tap(Key::Char('i'));
+    let hire = game
+        .spaceport()
+        .open_bar()
+        .and_then(|bar| bar.hire_screen())
+        .expect("the hire screen");
+    assert!(hire.info_panel().is_some(), "the Info panel");
+    let shown = port_bar_texts(&game);
+    assert!(shown.contains(&"Dock".to_owned()), "held: {shown:?}");
+    game.tap(Key::Escape);
+    let hire = game
+        .spaceport()
+        .open_bar()
+        .and_then(|bar| bar.hire_screen())
+        .expect("the hire screen still open");
+    assert!(hire.info_panel().is_none(), "closed");
+    let shown = port_bar_texts(&game);
+    assert!(shown.contains(&"Pad".to_owned()), "@0x5bac2: {shown:?}");
+}
+
+#[test]
+fn an_outfitter_cancel_draws_the_nav_the_shipyards_close_restored() {
+    let store = MemoryPilots::new();
+    let mut game = bought_the_racer(&store);
+
+    // Option-B asks how many fuel pods; Cancel buys none, and the buy's
+    // draw shows the Pad.
+    game.click_port(OUTFITTER);
+    let cell = game
+        .spaceport()
+        .open_outfitter()
+        .and_then(|outfitter| outfitter.cell_bounds(0))
+        .expect("the pod's cell")
+        .center();
+    game.click(cell);
+    let cash = game.session().pilot().cash();
+    game.key(Key::Alt, true);
+    game.tap(Key::Char('b'));
+    game.key(Key::Alt, false);
+    let cancel = game
+        .spaceport()
+        .open_outfitter()
+        .and_then(|outfitter| outfitter.quantity())
+        .and_then(|asking| asking.dialog().item_bounds(CANCEL_ITEM))
+        .expect("the quantity dialog's Cancel")
+        .center();
+    game.click(cancel);
+    let outfitter = game.spaceport().open_outfitter().expect("still open");
+    assert!(outfitter.quantity().is_none(), "cancelled");
+    assert_eq!(game.session().pilot().owned(nova_sim::OutfitId(128)), 0);
+    assert_eq!(game.session().pilot().cash(), cash, "nothing bought");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
+    assert!(!bar.contains(&"Dock".to_owned()), "{bar:?}");
 }
 
 #[test]

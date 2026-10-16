@@ -224,6 +224,9 @@
 //! reported once through [`Screen::take_prefs`] for the app to play
 //! and save. Flight follows the Hyperspace Effects preference: it is
 //! built with it, and a change reaches a flight already built. OK, Return or Escape closes it.
+//! Its close redraws nothing of the status bar, as the original's menu
+//! command `pref` calls `_DoPrefsDialog` alone (@0xcccf1); only the `pref`
+//! Apple Event's handler redraws (@0x56195).
 //!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`], and what it shows through
@@ -1007,8 +1010,37 @@ impl AppScreen {
                 Showing::FlightMap
             }
             Side::Flight => Showing::Flight,
+            Side::Spaceport if self.port_map_open() => Showing::FlightMap,
             Side::Spaceport => Showing::Spaceport,
         }
+    }
+
+    /// The input to flight's course map open over the spaceport, taking
+    /// it all, and true; false, taking nothing, with no map open there. An
+    /// Escape press closes it ([`FlightView::close_map`]), as in flight,
+    /// and anything else goes to it ([`FlightView::port_map_input`]).
+    fn port_map_input(&mut self, input: &Input) -> bool {
+        if !self.port_map_open() {
+            return false;
+        }
+        let flight = self.flight.as_mut().expect(ENTERED);
+        let escape = Input::Key {
+            key: Key::Escape,
+            pressed: true,
+            repeat: false,
+        };
+        if *input == escape {
+            flight.close_map();
+        } else {
+            flight.port_map_input(input);
+        }
+        true
+    }
+
+    /// Whether flight's course map is open over the spaceport: the bar's
+    /// map ([`FlightView::open_bar_map`]).
+    fn port_map_open(&self) -> bool {
+        self.side == Side::Spaceport && self.flight.as_ref().is_some_and(FlightView::map_open)
     }
 
     /// The ship browser, shown or not.
@@ -1047,22 +1079,32 @@ impl AppScreen {
         &self.galaxy
     }
 
+    /// The screen of the side shown: flight's while its course map is
+    /// open over the spaceport ([`AppScreen::port_map_open`]), so the
+    /// spaceport neither ticks nor draws beneath it, paused as under any
+    /// modal dialog. The bar's offer wait pausing under it too is ours'
+    /// existing reading
+    /// (rdm:phase/missions-fidelity/phase-15-offer-timer-under-nested-dialogs).
     fn shown(&self) -> &dyn Screen {
         match self.side {
             Side::MainMenu => &self.menu.as_ref().expect(MENU).screen,
             Side::Ships => &self.ships,
             Side::Galaxy => &self.galaxy,
             Side::Flight => self.flight.as_ref().expect(ENTERED),
+            Side::Spaceport if self.port_map_open() => self.flight.as_ref().expect(ENTERED),
             Side::Spaceport => self.spaceport.as_ref().expect(LANDED),
         }
     }
 
+    /// The screen of the side shown, as [`AppScreen::shown`] gives it.
     fn shown_mut(&mut self) -> &mut dyn Screen {
+        let port_map = self.port_map_open();
         match self.side {
             Side::MainMenu => &mut self.menu.as_mut().expect(MENU).screen,
             Side::Ships => &mut self.ships,
             Side::Galaxy => &mut self.galaxy,
             Side::Flight => self.flight.as_mut().expect(ENTERED),
+            Side::Spaceport if port_map => self.flight.as_mut().expect(ENTERED),
             Side::Spaceport => self.spaceport.as_mut().expect(LANDED),
         }
     }
@@ -1343,7 +1385,9 @@ impl AppScreen {
 
     /// The input of the mission dialogs over flight: an Abort on the
     /// mission info screen goes through flight, and the screen shows the
-    /// missions left. They are dropped once nothing is open.
+    /// missions left. Its close, laid out, redraws the whole status bar
+    /// ([`FlightView::refresh_status`]), as `_DoMissionInfoDialog` ends in
+    /// `_RefreshSAT` (@0x9e769). They are dropped once nothing is open.
     fn missions_input(&mut self, input: &Input) -> ScreenAction {
         let missions = self.missions.as_mut().expect("open");
         missions.input(input);
@@ -1354,6 +1398,14 @@ impl AppScreen {
             if let Some(missions) = &mut self.missions {
                 missions.set_info(info);
             }
+        }
+        if self
+            .missions
+            .as_mut()
+            .is_some_and(FlightMissionDialogs::take_info_closed)
+            && let Some(flight) = &mut self.flight
+        {
+            flight.refresh_status();
         }
         self.drop_closed_missions();
         ScreenAction::None
@@ -1390,18 +1442,24 @@ impl AppScreen {
 
     /// The player info screen's input over flight: a confirmed Jettison
     /// jettisons everything through flight. Once it closes, the screen
-    /// below lets go of its keys.
+    /// below lets go of its keys, and, laid out, it redraws the whole
+    /// status bar ([`FlightView::refresh_status`]), as
+    /// `_DoPlayerInfoDialog` ends in `_RefreshSAT` (@0x5a725).
     fn player_info_input(&mut self, input: &Input) -> ScreenAction {
         let screen = self.player_info.as_mut().expect("open");
         screen.input(input);
         let jettison = screen.take_jettison();
         let closed = screen.closed();
+        let laid_out = screen.problem().is_none();
         if jettison && let Some(flight) = &mut self.flight {
             flight.jettison_all();
         }
         if closed {
             self.player_info = None;
             self.release_keys();
+            if laid_out && let Some(flight) = &mut self.flight {
+                flight.refresh_status();
+            }
         }
         ScreenAction::None
     }
@@ -2421,29 +2479,35 @@ impl AppScreen {
     /// ship named there is bought, and one declined there draws its roll
     /// again when the shipyard's list is next built, changing nothing
     /// else. Once it is left, the ship takes off
-    /// and flight shows.
+    /// and flight shows. Otherwise the input ends by redrawing the status
+    /// bar when a closing the original ends in `_RefreshSAT` came
+    /// (`refresh_status_bar`). Mission BBS and Hire Escort are answered
+    /// with the port dialogs' openings (`open_port_dialogs`).
+    ///
+    /// The bar's map key opens flight's course map over the spaceport
+    /// ([`FlightView::open_bar_map`]). While it is open it takes every
+    /// input: an Escape press closes it ([`FlightView::close_map`]), as in
+    /// flight, and anything else goes to it ([`FlightView::port_map_input`],
+    /// where M closes it too).
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
+        if self.port_map_input(input) {
+            return ScreenAction::None;
+        }
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
+        open_bar_map(spaceport, self.flight.as_mut().expect(ENTERED));
         // A new opening clears what lasts one, and the outfitter it opened
-        // on was the cached one: it shows the flight's afresh.
-        if spaceport.take_outfitter_opened() {
-            let flight = self.flight.as_mut().expect(ENTERED);
-            flight.open_outfitter();
-            if let Some(outfitter) = flight.outfitter() {
-                spaceport.set_outfitter(outfitter);
-            }
-        }
+        // on was the cached one: it shows the flight's afresh, or, listing
+        // nothing, says so and never opens, the port's `_DrawStatus` after
+        // it still drawing a marked nav.
+        open_outfitter(spaceport, self.flight.as_mut().expect(ENTERED));
         let trade = spaceport.take_trade();
         let outfit = spaceport.take_outfit();
         let ship = spaceport.take_ship();
         let recharge = spaceport.take_recharge();
         let hire = spaceport.take_hire();
         let accepted = spaceport.take_mission_accept();
-        if spaceport.take_mission_computer_request() {
-            let computer = self.flight.as_ref().expect(ENTERED).mission_computer();
-            spaceport.open_mission_computer(computer);
-        }
+        open_port_dialogs(spaceport, self.flight.as_mut().expect(ENTERED));
         if spaceport.take_mission_info_request() {
             let info = self.flight.as_ref().expect(ENTERED).mission_info();
             spaceport.open_mission_info(info);
@@ -2465,11 +2529,6 @@ impl AppScreen {
             if let (Some(news), Some(picture)) = (flight.news(), flight.news_picture()) {
                 spaceport.open_news(news, picture);
             }
-        }
-        if spaceport.take_hire_request()
-            && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()
-        {
-            spaceport.open_hire(list);
         }
         if let Some(ship) = spaceport.take_ship_request()
             && let Ok(naming) = self.flight.as_mut().expect(ENTERED).ship_naming(ship)
@@ -2493,7 +2552,10 @@ impl AppScreen {
             if let Some(order) = trade {
                 let _ = flight.trade(order);
             }
-            // A plain click's count of 1 is exactly one order. A sale
+            // A plain click's count of 1 is exactly one order; the
+            // quantity dialog's Cancel orders none, which still runs what
+            // follows the original's loop once its button's check passed:
+            // the buy's reset and either's status draw. A sale
             // refused in the sell loop shows its words over the
             // outfitter, at whatever pass it is refused; the sales before
             // it stand. Any other refusal changes nothing. Then the
@@ -2547,6 +2609,9 @@ impl AppScreen {
         }
         self.serve_offers();
         self.serve_player_info();
+        if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
+            refresh_status_bar(spaceport, flight);
+        }
         ScreenAction::None
     }
 
@@ -2556,8 +2621,9 @@ impl AppScreen {
     /// after its hire, on Cancel, or a bar with nothing for hire), each
     /// read once its order or hire went through: flight is told
     /// ([`FlightView::close_outfitter`], [`FlightView::close_hire`]), whose
-    /// reset can trim the cargo, and the shops are handed back. Then a shop
-    /// that closed redraws the status bar (`redraw_after_shop`).
+    /// reset can trim the cargo, and the shops are handed back. Then a port
+    /// dialog that closed redraws what its close draws and restores the
+    /// nav saved as it opened (`close_port_dialogs`).
     fn serve_closings(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
@@ -2573,7 +2639,7 @@ impl AppScreen {
         if outfitter || hire {
             refresh_spaceport(spaceport, flight);
         }
-        redraw_after_shop(spaceport, flight);
+        close_port_dialogs(spaceport, flight);
     }
 
     /// The spaceport's player info screen: asked for, it opens on what
@@ -2772,13 +2838,77 @@ impl AppScreen {
     }
 }
 
-/// Redraws `flight`'s status bar when an exchange, outfitter or shipyard
-/// of `spaceport` has closed ([`FlightView::shop_closed`]), as each of the
-/// original's shops ends in `_RefreshSAT`: after the input's last order,
-/// and before any frame is drawn.
-fn redraw_after_shop(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
-    if spaceport.take_shop_closed() {
-        flight.shop_closed();
+/// Shows `spaceport`'s outfitter as `flight` has it, once it has opened
+/// ([`SpaceportView::take_outfitter_opened`]): `flight` clears what lasts
+/// one opening first. Listing nothing, the outfitter says so and never
+/// opens ([`SpaceportView::set_opened_outfitter`]), and the port's
+/// `_DrawStatus` after it still draws a marked nav
+/// ([`FlightView::empty_outfitter_returned`]), before any port dialog's
+/// opening is told.
+fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if !spaceport.take_outfitter_opened() {
+        return;
+    }
+    flight.open_outfitter();
+    if let Some(outfitter) = flight.outfitter() {
+        spaceport.set_opened_outfitter(outfitter);
+    }
+    if spaceport.take_empty_outfitter() {
+        flight.empty_outfitter_returned();
+    }
+}
+
+/// Opens `flight`'s course map over `spaceport` when the bar's map key
+/// asked for it (`_BarFilter` item 8, `_DoSystemMap` @0x492b2), the
+/// spaceport letting go of its gesture and keys as it is covered.
+fn open_bar_map(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_map_request() {
+        spaceport.cancel_pointer();
+        spaceport.release_keys();
+        flight.open_bar_map();
+    }
+}
+
+/// Answers `spaceport`'s Mission BBS with `flight`'s mission computer and
+/// the bar's Hire Escort with the ships for hire, then tells `flight` of
+/// the port dialog that has opened ([`FlightView::open_port_dialog`]),
+/// which saves the nav before any order or offer run inside it, in the
+/// input that opened it.
+fn open_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_mission_computer_request() {
+        spaceport.open_mission_computer(flight.mission_computer());
+    }
+    if spaceport.take_hire_request()
+        && let Some(list) = flight.escorts_for_hire()
+    {
+        spaceport.open_hire(list);
+    }
+    if spaceport.take_port_dialog_opened().is_some() {
+        flight.open_port_dialog();
+    }
+}
+
+/// Tells `flight` of the port dialog of `spaceport` that has closed
+/// ([`FlightView::close_port_dialog`]): its `_RefreshSAT`, then the nav's
+/// restore, as each of the original's dialogs closes, the bar's hire
+/// screen among them; after the input's last order, and before any frame
+/// is drawn. A mission computer that closed under mission texts is told
+/// once they have closed.
+fn close_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if let Some(dialog) = spaceport.take_port_dialog_closed() {
+        flight.close_port_dialog(dialog);
+    }
+}
+
+/// Redraws `flight`'s whole status bar ([`FlightView::refresh_status`])
+/// when a closing of `spaceport` that the original ends in `_RefreshSAT`
+/// has come ([`SpaceportView::take_status_refresh`]): the bar, News, a
+/// ship description, player info or mission info. It runs at the end of
+/// the spaceport's input, after the input's last order (an abort's
+/// mission info, a jettison), and before any frame is drawn.
+fn refresh_status_bar(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_status_refresh() {
+        flight.refresh_status();
     }
 }
 
@@ -2943,7 +3073,7 @@ impl Screen for AppScreen {
     /// the original's port dialog leaves it beside the dialog and its shops
     /// cover its left edge (`_DoPortDialog` @0x5fbca).
     fn draw(&self, list: &mut DrawList) {
-        if self.side == Side::Spaceport {
+        if self.side == Side::Spaceport && !self.port_map_open() {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
         }
         self.shown().draw(list);
@@ -7393,6 +7523,115 @@ pub(super) mod tests {
 
     const BOOSTER: OutfitId = OutfitId(128);
 
+    /// [`data`] with the status bar ([`barred`]), its planet an
+    /// outfitter selling nothing, as no `oütf` exists.
+    fn empty_outfitter_data() -> Rc<GameData> {
+        let mut built = barred(game_data_fork(false, false, false, 100, b"", b"", None)).build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        loaded_bytes(built.bytes)
+    }
+
+    #[test]
+    fn an_empty_outfitter_shows_its_text_and_restores_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, empty_outfitter_data());
+        assert!(
+            spaceport(&screen)
+                .offered()
+                .contains(&nova_sim::Service::Outfitter)
+        );
+        let bar = bar_drawn(&screen);
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::outfitter::NO_ITEMS.to_owned())
+        );
+        assert_eq!(bar_drawn(&screen), bar, "the status bar as it was");
+        screen.input(&key(Key::Enter, true));
+        assert!(
+            spaceport(&screen).mission_text().is_none(),
+            "the text closed"
+        );
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    /// [`data`] with the status bar ([`barred`]), its planet, of tech
+    /// level 1, a shipyard ([`shipbuying_data`]) and an outfitter selling
+    /// nothing, as no `oütf` exists. Ship 129 carries nothing, is listed
+    /// only while `!b7` (`Flags3` 0x0100), and its `OnPurchase` `M129 b7` moves the pilot to
+    /// Beta Prime and empties the shipyard.
+    fn empty_shops_after_a_move_data() -> Rc<GameData> {
+        let mut built = barred(game_data_fork(true, false, true, 100, b"", b"", None)).build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        built.put_u16(stellar + 0x0C, 1);
+        let ship = built.layout.data_entry(Ship::TYPE, 129) + 4;
+        built.put_u16(ship + 0x4E, 0xFFFF);
+        built.put_u16(ship + 0x56, 0);
+        built.put_u16(ship + 0x726, 0x0100);
+        built.bytes[ship + 0x6C..ship + 0x6F].copy_from_slice(b"!b7");
+        built.bytes[ship + 0x26A..ship + 0x271].copy_from_slice(b"M129 b7");
+        loaded_bytes(built.bytes)
+    }
+
+    /// The stellar named in the status bar's nav area.
+    fn nav_named(screen: &AppScreen) -> Vec<String> {
+        bar_drawn(screen)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } if text.ends_with(" Prime") => Some(text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The shipyard's restore after a landed `M` leaves the nav marked
+    /// but undrawn; an empty shipyard draws nothing after it, while an
+    /// empty outfitter's `_DrawStatus` (@0x5ff09-0x5ff10) draws it.
+    #[test]
+    fn an_empty_outfitter_draws_the_nav_a_shipyard_left_marked_and_an_empty_shipyard_does_not() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard_of(empty_shops_after_a_move_data(), &store);
+        assert_eq!(nav_named(&screen), ["Alpha Prime"], "landed");
+        click_port_item(&mut screen, 9);
+        press_b(&mut screen);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
+        assert_eq!(pilot(&screen).stellar(), Some(nova_sim::StellarId(129)));
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_shipyard().is_none(), "closed");
+        assert_eq!(nav_named(&screen), ["Beta Prime"], "the move held");
+
+        click_port_item(&mut screen, 9);
+        assert!(spaceport(&screen).open_shipyard().is_none(), "empty");
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::shipyard::NO_SHIPS.to_owned())
+        );
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(
+            nav_named(&screen),
+            ["Beta Prime"],
+            "no draw after the shipyard"
+        );
+
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(nav_named(&screen), ["Alpha Prime"], "the restore drawn");
+    }
+
     #[test]
     fn the_outfitter_opens_the_stellars_outfitter() {
         let store = MemoryPilots::new();
@@ -7721,6 +7960,85 @@ pub(super) mod tests {
         assert!(spaceport(&screen).open_bar().is_none(), "left the bar");
         click_port_item(&mut screen, 7);
         assert_eq!(food_shown(&screen), Some(3), "the shops shown afresh");
+    }
+
+    /// [`data`] with system 128 linked to 129, landed at Alpha Prime's
+    /// bar, the bar open.
+    fn in_the_bar() -> AppScreen {
+        let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
+        let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
+        built.put_u16(alpha + 0x04, 129);
+        let mut screen = AppScreen::new(loaded_bytes(built.bytes))
+            .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
+        land(&mut screen);
+        click_port_item(&mut screen, 10);
+        assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
+        screen
+    }
+
+    #[test]
+    fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
+        let mut screen = in_the_bar();
+        let nav = |screen: &AppScreen| {
+            flight(screen)
+                .session()
+                .ok()
+                .map(nova_sim::Session::nav_mode)
+        };
+        let landed = Some(nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128))));
+        assert_eq!(nav(&screen), landed);
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::FlightMap);
+        assert!(spaceport(&screen).open_bar().is_some(), "the bar beneath");
+        let mut list = DrawList::new();
+        flight(&screen).course_map().draw(&mut list);
+        assert_eq!(
+            drawn(&screen).iter().cloned().collect::<Vec<_>>(),
+            list.iter().cloned().collect::<Vec<_>>(),
+            "the map drawn alone"
+        );
+        screen.input(&key(MAP, false));
+        let map = flight(&screen).course_map();
+        let beta = map
+            .view()
+            .world_to_screen(map.model().system(SystemId(129)).expect("Beta").position());
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: beta,
+        };
+        screen.input(&left(true));
+        screen.cancel_pointer();
+        screen.input(&left(false));
+        assert_eq!(nav(&screen), landed, "the map's click abandoned");
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: beta,
+            });
+        }
+        assert_eq!(
+            nav(&screen),
+            Some(nova_sim::NavMode::Hyperspace(Some(SystemId(129)))),
+            "plotted and cued"
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert!(spaceport(&screen).open_bar().is_some(), "still in the bar");
+        assert_eq!(nav(&screen), landed, "the bar's nav put back");
+        assert_eq!(
+            flight(&screen)
+                .session()
+                .map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(129)]),
+            "the course kept"
+        );
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::FlightMap, "again");
+        screen.input(&key(MAP, false));
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::Spaceport, "M closes it too");
     }
 
     #[test]
@@ -8434,7 +8752,10 @@ pub(super) mod tests {
         assert_eq!(rolls.borrow().asked, 2, "drawn again");
         screen.input(&key(Key::Escape, true));
         click_port_item(&mut screen, 9);
-        assert!(!lists_second(&screen), "the new roll missed");
+        assert!(
+            spaceport(&screen).open_shipyard().is_none(),
+            "the new roll missed: nothing listed, it never opens"
+        );
     }
 
     #[test]
@@ -9743,6 +10064,46 @@ pub(super) mod tests {
         assert_eq!(shop_offer(OUTFITTER, 8), Some(MissionId(130)));
     }
 
+    /// [`shipbuying_data`] with an outfitter selling nothing, as no `oütf`
+    /// exists, and mission 130 at the outfitter ([`venue_mission`]),
+    /// unrefusable and with no offer text, so an offer of it is its
+    /// accept at once.
+    fn empty_outfitter_offering_data() -> Rc<GameData> {
+        let mut mission = venue_mission(OUTFITTER);
+        mission[0x50..0x52].copy_from_slice(&0x0004_u16.to_be_bytes());
+        let mut built = game_data_fork(true, false, true, 100, b"", b"", None)
+            .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
+            .build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        loaded_bytes(built.bytes)
+    }
+
+    /// An outfitter listing nothing never opens, so it offers nothing
+    /// (`_DoOutfitDialog` @0x5bbf7 → @0x5dbd6 skips its offer): its
+    /// mission, accepted at once on any offer, stays unaccepted.
+    #[test]
+    fn an_empty_outfitter_offers_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, empty_outfitter_offering_data());
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::outfitter::NO_ITEMS.to_owned())
+        );
+        screen.input(&key(Key::Enter, true));
+        screen.tick(Duration::from_secs(5));
+        assert!(spaceport(&screen).offer_dialog().is_none());
+        assert_eq!(active(&screen), [], "nothing offered, nothing accepted");
+        assert_eq!(pilot(&screen).cash(), 1000);
+    }
+
     #[test]
     fn entering_the_shipyard_offers_its_mission_at_once() {
         assert_eq!(shop_offer(SHIPYARD, 9), Some(MissionId(130)));
@@ -10092,6 +10453,132 @@ pub(super) mod tests {
         let list = drawn(&screen);
         assert!(radar_black(&list));
         assert!(player_cyan(&list));
+    }
+
+    /// The mission info screen's shape, smaller: 300 x 150, fixed at
+    /// (0, 0), with Done (1), the list (2), the heading (3), the text (4),
+    /// Abort (5) and the date (7).
+    fn mission_info_template() -> DialogTemplate {
+        let item = |x, y, w, h| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 150.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(190.0, 120.0, 99.0, 25.0),
+                item(10.0, 24.0, 100.0, 84.0),
+                item(10.0, 1.0, 190.0, 12.0),
+                item(120.0, 26.0, 170.0, 80.0),
+                item(60.0, 120.0, 99.0, 25.0),
+                item(0.0, 300.0, 1.0, 1.0),
+                item(200.0, 4.0, 90.0, 12.0),
+            ],
+        }
+    }
+
+    /// Flies `screen` up, the thrust held, until the radar, refreshed
+    /// every 8 ticks, has just refreshed, then 7 ticks more: it holds the
+    /// ship as it was 7 ticks back.
+    fn stale_radar(screen: &mut AppScreen) {
+        screen.input(&key(Key::Up, true));
+        for _ in 0..200 {
+            screen.tick(TICK);
+        }
+        let mut before = radar_dots(&drawn(screen));
+        for _ in 0..8 {
+            screen.tick(TICK);
+            let after = radar_dots(&drawn(screen));
+            if after != before {
+                break;
+            }
+            before = after;
+        }
+        for _ in 0..7 {
+            screen.tick(TICK);
+        }
+    }
+
+    #[test]
+    fn player_infos_and_mission_infos_close_over_flight_redraw_the_whole_bar() {
+        type Close = fn(&mut AppScreen);
+        let rows: [(&str, Close); 2] = [
+            ("player info (@0x5a725)", |screen| {
+                screen.input(&key(PLAYER_INFO_KEY, true));
+                screen.input(&key(PLAYER_INFO_KEY, false));
+                assert!(screen.flight_player_info().is_some(), "open");
+                screen.input(&key(Key::Escape, true));
+                assert!(screen.flight_player_info().is_none(), "closed");
+            }),
+            ("mission info (@0x9e769)", |screen| {
+                let mut missions = FlightMissionDialogs::new(
+                    Err("no DLOG 3003".to_owned()),
+                    Ok(mission_info_template()),
+                    Rc::new(MonoMetrics),
+                    screen.data.button_style(),
+                );
+                missions.open_info(nova_sim::MissionInfo {
+                    rows: vec![nova_sim::InfoRow {
+                        slot: 0,
+                        name: "Run".to_owned(),
+                        failed: false,
+                        text: "Go.".to_owned(),
+                        abortable: true,
+                    }],
+                    today: String::new(),
+                });
+                assert!(missions.info().is_some(), "open");
+                screen.missions = Some(missions);
+                screen.input(&key(Key::Escape, true));
+                assert!(screen.missions.is_none(), "closed");
+            }),
+        ];
+        for (what, close) in rows {
+            let mut screen = AppScreen::new(barred_outfitting_data())
+                .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics));
+            fly(&mut screen);
+            stale_radar(&mut screen);
+            let held = radar_dots(&drawn(&screen));
+            close(&mut screen);
+            let shown = radar_dots(&drawn(&screen));
+            screen.flight.as_mut().expect("flying").refresh_status();
+            let now = radar_dots(&drawn(&screen));
+            assert_ne!(held, now, "{what}: the radar held what it drew before");
+            assert_eq!(shown, now, "{what}: redrawn as it closed");
+        }
+    }
+
+    #[test]
+    fn player_infos_close_over_flight_without_its_dialog_redraws_nothing() {
+        /// [`Dialogs`] without "Player Info" (1017): the original, failing
+        /// to get it, neither shows the dialog nor redraws (@0x5a0a5).
+        struct NoPlayerInfo;
+
+        impl DialogResources for NoPlayerInfo {
+            fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+                if id == PLAYER_INFO_DIALOG {
+                    return Err(format!("no DLOG {id}"));
+                }
+                Dialogs.dialog_template(id)
+            }
+        }
+
+        let mut screen = AppScreen::new(barred_outfitting_data())
+            .with_dialogs(Rc::new(NoPlayerInfo), Rc::new(MonoMetrics));
+        fly(&mut screen);
+        stale_radar(&mut screen);
+        let held = radar_dots(&drawn(&screen));
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        screen.input(&key(PLAYER_INFO_KEY, false));
+        let info = screen.flight_player_info().expect("open");
+        assert!(info.problem().is_some(), "not laid out");
+        screen.input(&key(Key::Escape, true));
+        assert!(screen.flight_player_info().is_none(), "closed");
+        assert_eq!(radar_dots(&drawn(&screen)), held, "not redrawn");
+        screen.flight.as_mut().expect("flying").refresh_status();
+        assert_ne!(radar_dots(&drawn(&screen)), held, "stale as it closed");
     }
 
     const TANK: OutfitId = OutfitId(133);

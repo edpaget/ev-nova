@@ -67,4 +67,4 @@ pub use outfitter::{OutfitterCatalog, OutfitterScreen};
 pub use service::ServiceScreen;
 pub use shipyard::{ShipBaseImages, ShipOrder, ShipyardCatalog, ShipyardScreen};
 pub use trade::TradeScreen;
-pub use view::SpaceportView;
+pub use view::{PortDialog, SpaceportView};

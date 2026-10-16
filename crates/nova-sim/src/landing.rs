@@ -13,14 +13,20 @@
 //! order:
 //!
 //! 1. **The stellar.** The navigation target; with none, or one no
-//!    longer in the system, the nearest stellar that [`is_landable`]
-//!    ([`nearest_landable`]), station or planet, which the press selects
-//!    ([`DockPress::selected`]) and goes on with (@0x6a8ed-0x6a956). With
-//!    stellars but none landable it selects nothing and refuses with
-//!    [`LandingRefusal::NotLandable`] for the nearest; with no stellars,
-//!    [`LandingRefusal::NoStellars`].
+//!    longer in the system, the nearest stellar with the can-land flag,
+//!    destroyed or not ([`nearest_stellar`], `_FindNearestStellar`),
+//!    station or planet, which the press selects ([`DockPress::selected`])
+//!    and goes on with (@0x6a8ed-0x6a956); a pick it can't land on is
+//!    selected and then refused at step 2. (The "no longer in the system"
+//!    fallback can't be reached from the `Session`: its selection only
+//!    ever holds stellars of `sites`, see hud-fidelity phase 37.) With
+//!    stellars but none with the can-land flag it selects nothing and
+//!    refuses with
+//!    [`LandingRefusal::NothingLandable`]; with no stellars,
+//!    [`LandingRefusal::NoStellars`]. Both are silent: the land key makes
+//!    no dock request (@0x6a94c).
 //! 2. **Not landable** (@0x6695c-0x669ae): a stellar that cannot be landed
-//!    on (only a slot key or a click selects one) refuses with
+//!    on refuses with
 //!    [`LandingRefusal::NotLandable`], wherever the ship is (`STR#` 2002
 //!    #84/#88/#90, "Your ship is unable to land on ... The planet's
 //!    environment is too hostile."). The request is kept.
@@ -212,8 +218,14 @@ pub enum LandingRefusal {
     /// and before anything for a breaking-up or destroyed one (see
     /// [`Session::land`](crate::Session::land)).
     Disabled,
-    /// The system has no stellars.
+    /// The system has no stellars, so the land key has nothing to select
+    /// and makes no dock request (@0x6a94c): a silent refusal.
     NoStellars,
+    /// No stellar was selected, and the system has stellars but none with
+    /// the can-land flag, so none the land key would select (`_FindNearestStellar` gave -1, @0x6a94c):
+    /// the press makes no dock request, a silent refusal. It names no
+    /// stellar, as the original selects none.
+    NothingLandable,
     /// The ship is not over the stellar it would land on.
     TooFar {
         /// The stellar.
@@ -255,16 +267,17 @@ impl LandingRefusal {
     /// before `_IsDisabled`, so a disabled ship's beeps too), out of
     /// reach (@0x66cfd, @0x676aa), or pressed again before the approach
     /// clears or moving too fast (@0x66c23-0x66c66, @0x676fe). The
-    /// others are silent of it: [`Self::Jumping`] and [`Self::NoStellars`]
-    /// never reach the dock request (`_HandlePlayer` @0x6a8cb, @0x6a90f),
-    /// [`Self::Disabled`] goes to its bare epilogue (0x67eef), and
-    /// [`Self::Denied`] plays `_beepSnd[1]` instead (@0x67ec6).
+    /// others are silent of it: [`Self::Jumping`], [`Self::NoStellars`]
+    /// and [`Self::NothingLandable`] never reach the dock request
+    /// (`_HandlePlayer` @0x6a8cb, @0x6a90f, and `_FindNearestStellar`
+    /// giving -1 @0x6a94c), [`Self::Disabled`] goes to its bare epilogue
+    /// (0x67eef), and [`Self::Denied`] plays `_beepSnd[1]` instead
+    /// (@0x67ec6).
     ///
-    /// A [`Self::NotLandable`] from a press with no target, the nearest
-    /// stellar standing in, is the engine's alone: the original's
-    /// `_FindNearestStellar` gives -1 and makes no dock request
-    /// (@0x6a94c), so [`Session::land`](crate::Session::land) leaves it
-    /// silent.
+    /// A [`Self::NotLandable`] from a press with no target beeps too: the
+    /// press selects the nearest stellar with the can-land flag
+    /// ([`nearest_stellar`]) and makes its dock request, which refuses it
+    /// as the original's does (@0x66977 -> 0x67cda).
     #[must_use]
     pub fn beeps(&self) -> bool {
         matches!(
@@ -441,18 +454,19 @@ pub fn land_or_select(
     let target = target.and_then(|id| sites.iter().find(|site| site.id == id));
     let (site, selected) = match target {
         Some(site) => (site, None),
-        None => match nearest_landable_site(player.position, sites) {
+        None => match nearest_stellar_site(player.position, sites) {
             Some(site) => (site, Some(site.id)),
-            None => {
-                return refused(
-                    nearest(player.position, sites.iter())
-                        .map_or(LandingRefusal::NoStellars, not_landable),
-                );
-            }
+            None if sites.is_empty() => return refused(LandingRefusal::NoStellars),
+            None => return refused(LandingRefusal::NothingLandable),
         },
     };
     if !is_landable(site) {
-        return refused(not_landable(site));
+        return DockPress {
+            selected,
+            dock,
+            said: None,
+            outcome: Err(not_landable(site)),
+        };
     }
     let (stellar, station) = (site.id, is_station(site));
     let (mut dock, mut said) = (dock, None);
@@ -547,29 +561,37 @@ pub fn is_dockable_destroyed_or_not(site: &LandingSite) -> bool {
     GateKind::of(site.flags2).is_none() && has(site, StellarFlags::CAN_LAND)
 }
 
-/// The landable stellar among `sites` whose centre is nearest `position`,
-/// the earlier in `sites` of any equally near; `None` when none is
-/// landable.
+/// The stellar among `sites` whose centre is nearest `position`, as
+/// `_FindNearestStellar` (@0x276c-0x2888) picks it: it skips only a
+/// stellar without the can-land flag (`Flags` 0x01, @0x27cd), so a
+/// destroyed one counts, and so does an intact one landable only once
+/// destroyed. Inactive stellars are never in `sites`. The earlier in
+/// `sites` of any equally near wins (@0x285a-0x285d); `None` when none has
+/// the flag. Left out: the hypergate/wormhole 500 px limit
+/// (@0x2838-0x2853) and candidates owned by another visible system, both
+/// rdm:task/gate-stellar-targeting-fidelity.
 #[must_use]
-pub fn nearest_landable(position: Vec2, sites: &[LandingSite]) -> Option<StellarId> {
-    nearest_landable_site(position, sites).map(|site| site.id)
+pub fn nearest_stellar(position: Vec2, sites: &[LandingSite]) -> Option<StellarId> {
+    nearest_stellar_site(position, sites).map(|site| site.id)
 }
 
-/// The stellar [`nearest_landable`] names, and whether it is a station
+/// The stellar [`nearest_stellar`] (`_FindNearestStellar`) names, and whether it is a station
 /// (`spöb` `Flags` 0x10), as the tutorial's land hint words it
 /// (`_HandlePlayer` @0x709e8-0x70a31; see [`tutorial`](crate::tutorial)).
 #[must_use]
-pub fn nearest_landable_station(
-    position: Vec2,
-    sites: &[LandingSite],
-) -> Option<(StellarId, bool)> {
-    nearest_landable_site(position, sites).map(|site| (site.id, is_station(site)))
+pub fn nearest_stellar_station(position: Vec2, sites: &[LandingSite]) -> Option<(StellarId, bool)> {
+    nearest_stellar_site(position, sites).map(|site| (site.id, is_station(site)))
 }
 
-/// The site [`nearest_landable`] names: the one the land key selects when
+/// The site [`nearest_stellar`] names: the one the land key selects when
 /// there is no target.
-fn nearest_landable_site(position: Vec2, sites: &[LandingSite]) -> Option<&LandingSite> {
-    nearest(position, sites.iter().filter(|site| is_landable(site)))
+fn nearest_stellar_site(position: Vec2, sites: &[LandingSite]) -> Option<&LandingSite> {
+    nearest(
+        position,
+        sites
+            .iter()
+            .filter(|site| has(site, StellarFlags::CAN_LAND)),
+    )
 }
 
 /// The one of `sites` whose centre is nearest `position`, the first of
@@ -1004,8 +1026,10 @@ mod tests {
         }
     }
 
+    /// `_FindNearestStellar` (@0x276c-0x2888) tests the can-land flag
+    /// only, not whether the stellar is destroyed.
     #[test]
-    fn the_nearest_landable_stellar_skips_a_destroyed_one() {
+    fn the_nearest_stellar_counts_a_destroyed_one_as_find_nearest_stellar_does() {
         let sites = [
             LandingSite {
                 destroyed: true,
@@ -1018,11 +1042,10 @@ mod tests {
                 ..site(130, 0.0, 500.0)
             },
         ];
-        assert_eq!(nearest_landable(Vec2::ZERO, &sites), Some(StellarId(129)));
+        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(128)));
         assert_eq!(
-            nearest_landable(Vec2::new(0.0, 450.0), &sites),
-            Some(StellarId(130)),
-            "landable only once destroyed, and destroyed"
+            nearest_stellar(Vec2::new(0.0, 450.0), &sites),
+            Some(StellarId(130))
         );
     }
 
@@ -1078,8 +1101,10 @@ mod tests {
         assert!(!answers_hail(&gate(WORMHOLE)), "a wormhole");
     }
 
+    /// `_FindNearestStellar` (@0x276c-0x2888) skips a stellar without the
+    /// can-land flag (@0x27cd), and nothing else for its flags.
     #[test]
-    fn the_nearest_landable_stellar_skips_nearer_ones_that_cannot_be_landed_on() {
+    fn the_nearest_stellar_skips_only_those_without_the_can_land_flag() {
         let sites = [
             site(128, 500.0, 0.0),
             LandingSite {
@@ -1096,38 +1121,43 @@ mod tests {
             },
         ];
         assert_eq!(
-            nearest_landable(Vec2::ZERO, &sites),
-            Some(StellarId(131)),
-            "a station counts"
+            nearest_stellar(Vec2::ZERO, &sites),
+            Some(StellarId(130)),
+            "landable only once destroyed, and intact"
         );
         assert_eq!(
-            nearest_landable(Vec2::new(450.0, 0.0), &sites),
+            nearest_stellar(Vec2::new(450.0, 0.0), &sites),
             Some(StellarId(128))
         );
         assert_eq!(
-            nearest_landable_station(Vec2::ZERO, &sites),
+            nearest_stellar_station(Vec2::new(-250.0, 0.0), &sites),
             Some((StellarId(131), true)),
-            "the station is said to be one"
+            "a station counts, and is said to be one"
         );
         assert_eq!(
-            nearest_landable_station(Vec2::new(450.0, 0.0), &sites),
+            nearest_stellar_station(Vec2::new(450.0, 0.0), &sites),
             Some((StellarId(128), false))
         );
-        assert_eq!(nearest_landable_station(Vec2::ZERO, &[]), None);
+        assert_eq!(nearest_stellar_station(Vec2::ZERO, &[]), None);
     }
 
     #[test]
-    fn with_none_landable_there_is_no_nearest_landable_stellar() {
-        assert_eq!(nearest_landable(Vec2::ZERO, &[]), None);
-        assert_eq!(nearest_landable(Vec2::ZERO, &[with_flags(0)]), None);
+    fn with_no_can_land_flag_there_is_no_nearest_stellar() {
+        assert_eq!(nearest_stellar(Vec2::ZERO, &[]), None);
+        assert_eq!(nearest_stellar(Vec2::ZERO, &[with_flags(0)]), None);
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &[with_flags(StellarFlags::ONLY_WHEN_DESTROYED)]),
+            None
+        );
     }
 
+    /// The strict comparison at @0x285a-0x285d.
     #[test]
     fn equally_near_stellars_go_to_the_earlier_in_nav_order() {
         let sites = [site(131, 0.0, 100.0), site(128, 0.0, -100.0)];
-        assert_eq!(nearest_landable(Vec2::ZERO, &sites), Some(StellarId(131)));
+        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(131)));
         let sites = [site(128, 0.0, -100.0), site(131, 0.0, 100.0)];
-        assert_eq!(nearest_landable(Vec2::ZERO, &sites), Some(StellarId(128)));
+        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(128)));
     }
 
     #[test]
@@ -1620,7 +1650,7 @@ mod tests {
     }
 
     #[test]
-    fn with_no_target_l_selects_the_nearest_landable_stellar_and_requests_it() {
+    fn with_no_target_l_selects_the_nearest_stellar_and_requests_it() {
         // Even at rest over it, it does not land.
         assert_eq!(
             press(None, &parked(), &system()),
@@ -1913,8 +1943,10 @@ mod tests {
         );
     }
 
+    /// With nothing selected, `_FindNearestStellar` gives -1, so the land
+    /// key makes no dock request and names no stellar (@0x6a94c).
     #[test]
-    fn with_none_landable_l_says_so_of_the_nearest_and_selects_nothing() {
+    fn with_none_landable_l_selects_nothing_and_makes_no_request() {
         let sites = [
             LandingSite {
                 flags: 0,
@@ -1931,14 +1963,46 @@ mod tests {
                 selected: None,
                 dock: request(128, 0x2ee),
                 said: None,
-                outcome: Err(LandingRefusal::NotLandable {
-                    stellar: StellarId(129),
-                    station: true,
-                }),
+                outcome: Err(LandingRefusal::NothingLandable),
             }
         );
     }
 
+    /// With no target the land key selects `_FindNearestStellar`'s pick
+    /// (@0x6a8ed-0x6a932), a destroyed one included (@0x276c-0x2888), and
+    /// the dock request refuses it as not landable (@0x66977 → 0x67cda).
+    #[test]
+    fn with_no_target_l_selects_a_destroyed_stellar_and_says_it_cannot_land() {
+        let sites = [LandingSite {
+            destroyed: true,
+            ..site(128, 0.0, 0.0)
+        }];
+        let refused = Err(LandingRefusal::NotLandable {
+            stellar: StellarId(128),
+            station: false,
+        });
+        assert_eq!(
+            press(None, &parked(), &sites),
+            DockPress {
+                selected: Some(StellarId(128)),
+                dock: None,
+                said: None,
+                outcome: refused,
+            }
+        );
+        assert_eq!(
+            press_with(None, request(129, 0x500), &parked(), &sites, true),
+            DockPress {
+                selected: Some(StellarId(128)),
+                dock: request(129, 0x500),
+                said: None,
+                outcome: refused,
+            },
+            "the request is kept"
+        );
+    }
+
+    /// No stellars, so nothing to select: no dock request (@0x6a94c).
     #[test]
     fn with_no_stellars_l_refuses() {
         assert_eq!(
@@ -2189,6 +2253,7 @@ mod tests {
             LandingRefusal::Jumping,
             LandingRefusal::Disabled,
             LandingRefusal::NoStellars,
+            LandingRefusal::NothingLandable,
             LandingRefusal::Denied {
                 stellar,
                 station,

@@ -52,10 +52,14 @@ pub struct SoundTable {
     pub scan_failed: Option<SoundId>,
     /// Plays as a scan catches the player smuggling.
     pub smuggling: Option<SoundId>,
-    /// Plays as the bar's news dialog opens.
+    /// Plays as the bar's news dialog opens, and the mission info
+    /// screen, the same `_beepSnd[1]`.
     pub news_open: Option<SoundId>,
-    /// Plays as the bar's news dialog closes.
+    /// Plays as the bar's news dialog closes, and the mission info
+    /// screen, the same `_beepSnd[2]`.
     pub news_close: Option<SoundId>,
+    /// Plays as a zoom key zooms the floating map.
+    pub floating_map_zoom: Option<SoundId>,
     /// Plays as an announced fleet arrives with its arrival quote.
     pub fleet_quote: Option<SoundId>,
     /// Plays as a person offers its mission on its hail.
@@ -179,9 +183,13 @@ impl SoundTable {
     ///   (@0x7ea3e-0x7ea5d, @0x7ee76-0x7ee95, @0x7f337-0x7f356), at
     ///   priority 1.
     /// - `news_open`: 151, `_beepSnd[1]`, which `_DoNewsDialog` plays as
-    ///   it opens (`PlaySound` @0x47f36).
+    ///   it opens (`PlaySound` @0x47f36), and `_DoMissionInfoDialog` too
+    ///   (@0x9e1d5).
     /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
-    ///   it closes (@0x4814e).
+    ///   it closes (@0x4814e), and `_DoMissionInfoDialog` too
+    ///   (@0x9e791).
+    /// - `floating_map_zoom`: 150, `_beepSnd[0]`, which `_HandlePlayer`
+    ///   plays as `-` or `=` zooms the floating map (@0x7103a, @0x710bc).
     /// - `fleet_quote`: 154, `_beepSnd[4]`, which `_HyperSpawnFleet` plays
     ///   as an announced fleet with a `Quote` arrives, even when its line
     ///   is empty (@0x42698-0x426bb).
@@ -284,6 +292,7 @@ impl SoundTable {
         smuggling: Some(SoundId(154)),
         news_open: Some(SoundId(151)),
         news_close: Some(SoundId(152)),
+        floating_map_zoom: Some(SoundId(150)),
         fleet_quote: Some(SoundId(154)),
         hail_offer: Some(SoundId(154)),
         hail_quote: Some(SoundId(154)),
@@ -348,6 +357,7 @@ mod tests {
         assert_eq!(table.smuggling, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.floating_map_zoom, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.fleet_quote, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_offer, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_quote, Some(SoundId(154)), "_beepSnd[4]");

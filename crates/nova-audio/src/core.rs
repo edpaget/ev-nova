@@ -224,8 +224,15 @@ impl<A: Audio> AudioCore<A> {
             Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
             Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
             Sound::Ui(UiSound::EnterRefused) => self.play(self.table.enter_refused),
-            Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
-            Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
+            Sound::Ui(UiSound::NewsOpened | UiSound::MissionInfoOpened) => {
+                self.play(self.table.news_open);
+            }
+            Sound::Ui(UiSound::NewsClosed | UiSound::MissionInfoClosed) => {
+                self.play(self.table.news_close);
+            }
+            Sound::Ui(UiSound::FloatingMapZoomed) => {
+                self.play(self.table.floating_map_zoom);
+            }
             Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
             Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
             Sound::Ui(UiSound::PortAmbient {
@@ -806,6 +813,29 @@ mod tests {
     }
 
     #[test]
+    fn a_floating_map_zoom_plays_its_own_table_entry_150_in_the_original() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Ui(UiSound::FloatingMapZoomed)],
+        );
+        assert_eq!(drain(&log), [play(150, 0.5)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            floating_map_zoom: Some(SoundId(160)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Ui(UiSound::FloatingMapZoomed)],
+        );
+        assert_eq!(drain(&log), [play(160, EFFECTS)]);
+    }
+
+    #[test]
     fn a_target_key_beeps_152_and_closest_target_finding_none_153() {
         let (mut core, log) = original();
         core.update(
@@ -1208,6 +1238,39 @@ mod tests {
         assert_eq!(
             drain(&log),
             [play(300, EFFECTS), play(301, EFFECTS)],
+            "the table's"
+        );
+    }
+
+    #[test]
+    fn the_mission_info_screen_beeps_the_news_sounds_as_it_opens_and_closes() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::MissionInfoOpened),
+                Sound::Ui(UiSound::MissionInfoClosed),
+            ],
+        );
+        assert_eq!(drain(&log), [play(151, EFFECTS), play(152, EFFECTS)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            news_open: Some(SoundId(300)),
+            news_close: Some(SoundId(301)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::MissionInfoClosed),
+                Sound::Ui(UiSound::MissionInfoOpened),
+            ],
+        );
+        assert_eq!(
+            drain(&log),
+            [play(301, EFFECTS), play(300, EFFECTS)],
             "the table's"
         );
     }

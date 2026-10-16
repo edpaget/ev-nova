@@ -85,12 +85,12 @@
 //! original's +0x6a and +0x6c; see the session's `nav` module) say what
 //! the nav area shows and where J jumps. The player selects one of the
 //! system's stellars ([`Session::select_stellar`]) by its slot in the
-//! system's navigation defaults, as the nearest landable one, or by
+//! system's navigation defaults, as the nearest with the can-land flag, or by
 //! clicking it, as the [`navigation`](crate::navigation) rules say;
 //! turns the nav system off with Nav Off ([`Session::nav_off`]), the
 //! course kept; selects the course's next hop with Hyperspace Mode
 //! ([`Session::hyperspace_mode`]); or presses the land key
-//! ([`Session::land`]), which selects the nearest landable stellar when
+//! ([`Session::land`]), which selects the nearest stellar with the can-land flag when
 //! none is selected and lands on the one selected when there is one.
 //! Landing keeps the selection, and the take-off lets go of it. The mode
 //! is not part of the pilot, so it is not saved.
@@ -406,7 +406,7 @@ mod target_panel;
 mod tutorial;
 
 pub use hooks::HookRules;
-pub use ship_change::ShipChangeRules;
+pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
 pub use edit::RelocateRefusal;
@@ -613,8 +613,8 @@ pub enum StellarPick {
     /// The stellar in this slot of the system's navigation defaults,
     /// from 0: the original's keys 1-4 and F1-F4 (@0x69cf6-0x69f17).
     Slot(usize),
-    /// The nearest landable stellar, the one the land key selects with no
-    /// target ([`nearest_landable`]): the original's F5, which picks
+    /// The nearest stellar with the can-land flag, destroyed or not, the one the land key selects with no
+    /// target ([`nearest_stellar`]): the original's F5, which picks
     /// through the same `_FindNearestStellar` (@0x276c) its land key does.
     Nearest,
 }
@@ -680,6 +680,14 @@ pub struct Session {
     /// The player's nav mode and its selection (see the `nav` module): a
     /// stellar selected is one of `sites`.
     nav: NavMode,
+    /// The nav saved as a port dialog opened, until its close restores it
+    /// ([`Session::save_port_nav`], [`Session::restore_port_nav`]).
+    port_nav: Option<NavMode>,
+    /// The nav saved as the bar opened, put back after each map opened
+    /// from it ([`Session::open_bar`], [`Session::restore_bar_nav`]),
+    /// forgotten with the news at landing and take-off, so no later
+    /// stay can put back a nav saved in an earlier one.
+    bar_nav: Option<NavMode>,
     /// The sprite of each hypergate shown, as it opens and closes (see
     /// the `gate_sprites` module).
     gate_sprites: BTreeMap<StellarId, GateSprite>,
@@ -1068,6 +1076,9 @@ pub struct Session {
     /// Every stellar's and system's name, read when the session starts:
     /// what the text tags read (see the `missions` module).
     place_names: PlaceNames,
+    /// Each system's first stellar that can be read, read when the session
+    /// starts: what a landed `M` selects (see the `nav` module).
+    first_stellars: BTreeMap<SystemId, StellarId>,
     /// Every stellar's place and name, read when the session starts: what
     /// a mission's stop is matched by (see the `missions` module).
     stellar_marks: StellarMarks,
@@ -1097,6 +1108,22 @@ pub struct Session {
     /// The mission texts to show, until they are taken (see the
     /// `mission_screens` module); never saved.
     shown_texts: Vec<MissionText>,
+    /// How many mission texts have been queued, never reset (see the
+    /// `mission_screens` module); never saved.
+    texts_queued: u64,
+    /// The nav mode as the last text queued since they were last taken
+    /// was queued: what its dialog's redraw shows (see the
+    /// `mission_screens` module); never saved.
+    text_nav: Option<NavMode>,
+    /// The `C`, `E` and `H` run while docked since the last outfit order
+    /// or ship purchase began, in order (see the `ship_change` module's
+    /// [`InterfaceLoad`]); never saved.
+    interface_loads: Vec<InterfaceLoad>,
+    /// The nav mode as the last take-off began, before its deselect: what
+    /// the original's take-off redraw shows (`_PlayerLandOnStellar`
+    /// @0x633a0), until taken ([`Session::take_takeoff_nav`]); never
+    /// saved.
+    takeoff_nav: Option<NavMode>,
     /// The outside offers whose accept was refused, passed over until
     /// another venue is entered (see the `mission_screens` module); never
     /// saved, as the original saves none of it.
@@ -1309,6 +1336,8 @@ impl Session {
             shown: system,
             landed,
             nav: NavMode::Off,
+            port_nav: None,
+            bar_nav: None,
             gate_sprites: BTreeMap::new(),
             galaxy,
             jump: None,
@@ -1435,6 +1464,7 @@ impl Session {
             nebulae: catalog.nebulae().into(),
             galaxy_stale: false,
             place_names: catalog.place_names(),
+            first_stellars: catalog.first_stellars().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
             reoffer_due: false,
@@ -1442,6 +1472,10 @@ impl Session {
             swap_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
+            texts_queued: 0,
+            text_nav: None,
+            interface_loads: Vec::new(),
+            takeoff_nav: None,
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),
@@ -2757,6 +2791,13 @@ impl Session {
         self.condition
     }
 
+    /// Sets the player's condition directly, for
+    /// [`fixture::set_player_condition`](crate::fixture::set_player_condition).
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn set_player_condition(&mut self, to: Condition) {
+        self.condition = to;
+    }
+
     /// Where the player's ship is in its lifecycle: its condition, whether
     /// it exploded on the latest fight tick, how far the game's end has
     /// got since, and the escape pod's countdown.
@@ -3448,8 +3489,11 @@ impl Session {
     /// A disabled ship's press goes as far as `_HandlePlayerDockRequest`
     /// does for it and no further: with no target it selects one, starting
     /// its fly-in, as the land key does before the dock request
-    /// (@0x6a8fb-0x6a932); a target that can't be landed on, or none, is
-    /// refused as an intact ship's is (@0x66977-0x669aa). Then the dock
+    /// (@0x6a8fb-0x6a932); a target that can't be landed on is refused as
+    /// an intact ship's is (@0x66977-0x669aa), and with nothing to select
+    /// ([`LandingRefusal::NoStellars`], [`LandingRefusal::NothingLandable`])
+    /// the press makes no dock request, as an intact ship's makes none
+    /// (@0x6a94c). Then the dock
     /// request's `_IsDisabled` test (@0x66af7) goes to its bare epilogue
     /// (0x67eef): [`LandingRefusal::Disabled`], said nothing of, before
     /// the range and speed checks (@0x67838) and the clearance
@@ -3463,19 +3507,17 @@ impl Session {
     /// A refusal from the dock request that [`LandingRefusal::beeps`]
     /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
     /// @0x676fe), once a press, a disabled ship's not-landable target
-    /// too. A press with no target and nothing landable makes no dock
-    /// request in the original (`_FindNearestStellar` gives -1,
-    /// @0x6a94c), so its [`LandingRefusal::NotLandable`] is silent.
+    /// too, and a not-landable stellar the press selected itself, as its
+    /// dock request refuses it. A press with no target and nothing with
+    /// the can-land flag makes no dock request in the original
+    /// (`_FindNearestStellar` gives -1, @0x6a94c), so its
+    /// [`LandingRefusal::NothingLandable`] is silent.
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
-        let requested = self
-            .nav_target()
-            .is_some_and(|id| self.sites.iter().any(|site| site.id == id));
         let press = self.land_press();
-        if let Err(refusal) = &press {
-            let untargeted = !requested && matches!(refusal, LandingRefusal::NotLandable { .. });
-            if refusal.beeps() && !untargeted {
-                self.sounds.push(SimSound::Refused);
-            }
+        if let Err(refusal) = &press
+            && refusal.beeps()
+        {
+            self.sounds.push(SimSound::Refused);
         }
         press
     }
@@ -3505,7 +3547,9 @@ impl Session {
             self.select_pressed(press.selected);
             return match press.outcome {
                 Err(
-                    refusal @ (LandingRefusal::NotLandable { .. } | LandingRefusal::NoStellars),
+                    refusal @ (LandingRefusal::NotLandable { .. }
+                    | LandingRefusal::NoStellars
+                    | LandingRefusal::NothingLandable),
                 ) => Err(refusal),
                 Ok(_) | Err(_) => Err(LandingRefusal::Disabled),
             };
@@ -3768,6 +3812,7 @@ impl Session {
         self.warp_out.clear();
         self.pilot.stellar = Some(stellar);
         self.bar_news = None;
+        self.bar_nav = None;
         self.combat.clear();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
         self.clear_boxes();
@@ -3888,8 +3933,13 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
         let stellar = self.landed.take()?;
+        // The take-off's whole-bar redraw (`_PlayerLandOnStellar`
+        // @0x633a0), before the stay's days (@0x63440) and the deselect
+        // (@0x674d2); see the flight view's `took_off`.
+        self.takeoff_nav = Some(self.nav_mode());
         let stay = std::mem::take(&mut self.stay);
         self.bar_news = None;
+        self.bar_nav = None;
         let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
             self.pass_days(stay.escort_days(), chance);
@@ -3938,6 +3988,9 @@ impl Session {
         // Its tail: the dock request dropped (@0x6374a-0x63759; see the
         // `clearance` module), the nav selection let go, the mode kept,
         // then the course cued (@0x674d2-0x674d8; see the `nav` module).
+        // The original's bar is redrawn before this with the selection
+        // still held (@0x633a0), noted as `takeoff_nav` above; see the
+        // flight view's `took_off`.
         self.dock = None;
         self.deselect();
         self.cue_course();
@@ -4243,10 +4296,17 @@ impl Session {
     /// pass and a Cancel's count of none included, a buy refused at the
     /// button not. A sale resets after each pass (@0x5cffb).
     ///
-    /// A `count` of none runs no pass and moves nothing; a buy of none
-    /// asks the outfitter whether Buy passes, drawing any roll not drawn
-    /// yet, for its reset; [`outfit_counted`](Self::outfit_counted) is the
-    /// one that counts a Cancel's outfit day.
+    /// The run's `button_passed` says whether the order's button passed
+    /// its own check ([`Outfitter::can`]), so the dialog falls through
+    /// its loop to the reset and the draw (@0x5c2fc-0x5c2ff): for a sale,
+    /// or an order of none, asked of the outfitter before the loop; for a
+    /// buy that runs a pass, unless its first pass, whose check is the
+    /// button's, was refused.
+    ///
+    /// A `count` of none runs no pass and moves nothing; it asks the
+    /// outfitter whether its button passes, drawing any roll not drawn
+    /// yet; [`outfit_counted`](Self::outfit_counted) is the one that
+    /// counts a Cancel's outfit day.
     ///
     /// A sale need not lower a count owned: an `OnSell` can grant the
     /// outfit sold back and change the listing again (`^b7 G128`), so
@@ -4267,6 +4327,9 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> OutfitRun {
+        // The bar's loads are this order's alone (see
+        // [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
         let follows = self.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
         // An order of another outfit names another cell: the selection
         // moved, so the relisting's selection is let go.
@@ -4274,8 +4337,15 @@ impl Session {
             self.outfit_reselected = None;
         }
         let asked = self.outfit_reselected;
+        // The button's own check comes before the loop (@0x5c087-0x5c0a2
+        // for Buy, @0x5c5d5-0x5c5dd for Sell). A buy's first pass checks
+        // the same, so a buy that runs a pass reads it off the run
+        // instead ([`button_passed`](Self::button_passed)).
+        let checked = (count == 0 || order.direction == Direction::Sell)
+            .then(|| self.outfit_button_passes(order, chance));
         let mut alert = None;
         let mut relisting = Relisting::default();
+        let mut button_passed = false;
         let run = match order.direction {
             Direction::Sell
                 if self.rules.source_for(RuleKey::RelistedSale) == RuleSource::Engine =>
@@ -4302,7 +4372,8 @@ impl Session {
                 // The buy loop's reset, once after the loop (@0x5c305),
                 // whenever Buy passed its own check: a Cancel's count of
                 // none and a loop stopped by a refusal included.
-                if self.buy_button_passed(order, count, &run, chance, asked) {
+                button_passed = Self::button_passed(checked, &run);
+                if button_passed {
                     self.reset_precalced();
                 }
                 // The buy loop rebuilds the list once, after the loop
@@ -4321,28 +4392,40 @@ impl Session {
         if after != Reselection::Kept {
             self.outfit_reselected = Some(FIRST_OUTFIT);
         }
-        OutfitRun { run, alert, after }
+        if order.direction == Direction::Sell {
+            button_passed = Self::button_passed(checked, &run);
+        }
+        OutfitRun {
+            run,
+            alert,
+            after,
+            button_passed,
+        }
     }
 
-    /// Whether a buy order's button passed its own check
-    /// (`_CanBuyOutfitItem`, [`Outfitter::can`]), so the buy loop's reset
-    /// runs after it (@0x5c305): for a `count` of none, asked of the
-    /// outfitter now; otherwise unless `run` was refused at its first
-    /// pass, whose check is the button's.
-    fn buy_button_passed(
-        &mut self,
-        order: OutfitOrder,
-        count: u32,
-        run: &OrderRun<OutfitRefusal>,
-        chance: &mut dyn Chance,
-        asked: Option<OutfitId>,
-    ) -> bool {
-        if count == 0 {
-            return self
-                .outfitter_with(chance, asked)
-                .is_some_and(|outfitter| outfitter.can(order).is_ok());
-        }
-        run.stopped.as_ref().is_none_or(|stopped| stopped.pass > 0)
+    /// Whether an order's button passed its own check ([`Outfitter::can`]):
+    /// `checked`, when it was asked of the outfitter before the loop (a
+    /// sale, or an order of none); otherwise, for a buy that ran a pass,
+    /// unless `run` was refused at its first pass, whose check
+    /// (`_CanBuyOutfitItem`) is the button's.
+    fn button_passed(checked: Option<bool>, run: &OrderRun<OutfitRefusal>) -> bool {
+        checked.unwrap_or_else(|| run.stopped.as_ref().is_none_or(|stopped| stopped.pass > 0))
+    }
+
+    /// Whether `order`'s Buy or Sell button passes its own check now
+    /// ([`Outfitter::can`]: `_CanBuyOutfitItem` @0x5c087-0x5c0a2 for a
+    /// buy, the Sell flag @0x5c5d5-0x5c5dd for a sale), the outfitter
+    /// carrying the outfit a relisting selected when `order` names it
+    /// ([`outfit_order`](Self::outfit_order)'s `after`); false with no
+    /// outfitter. It draws any roll not drawn yet and changes nothing
+    /// else. An order of none (the quantity dialog's Cancel) runs what
+    /// follows its loop only when this passed.
+    pub fn outfit_button_passes(&mut self, order: OutfitOrder, chance: &mut dyn Chance) -> bool {
+        let asked = self
+            .outfit_reselected
+            .filter(|&reselected| reselected == order.outfit);
+        self.outfitter_with(chance, asked)
+            .is_some_and(|outfitter| outfitter.can(order).is_ok())
     }
 
     /// The listing before an order's first pass, when
@@ -4527,14 +4610,24 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> Result<u32, OutfitRefusal> {
-        if count == 0
-            && self
-                .outfitter(chance)
-                .is_some_and(|outfitter| outfitter.can(order).is_ok())
-        {
+        self.outfit_counted_run(order, count, chance).run.counted()
+    }
+
+    /// [`outfit_counted`](Self::outfit_counted)'s whole run, as
+    /// [`outfit_order`](Self::outfit_order) gives it: a Cancel's count of
+    /// none whose button passed its own check
+    /// ([`OutfitRun::button_passed`]) counts the outfit day too.
+    pub fn outfit_counted_run(
+        &mut self,
+        order: OutfitOrder,
+        count: u32,
+        chance: &mut dyn Chance,
+    ) -> OutfitRun {
+        let run = self.outfit_order(order, count, chance);
+        if count == 0 && run.button_passed {
             self.stay.outfit_traded = true;
         }
-        self.outfit_run(order, count, chance).counted()
+        run
     }
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
@@ -4647,6 +4740,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<ShipPurchase, ShipRefusal> {
         let (shipyard, record) = self.buyable(ship, chance)?;
+        self.interface_loads.clear();
         let quote = Quote {
             price: shipyard.row(ship).map_or(0, |row| row.price),
             trade_in: shipyard.trade_in,
@@ -6307,7 +6401,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_first_l_selects_the_nearest_landable_stellar_and_does_not_land() {
+    fn the_first_l_selects_the_nearest_stellar_and_does_not_land() {
         let mut session = Session::start(&catalog()).expect("starts");
         let before = *session.player();
         assert_eq!(
@@ -10803,7 +10897,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10874,7 +10969,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10922,7 +11018,8 @@ pub(super) mod tests {
                     })
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -11072,7 +11169,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -11103,7 +11201,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_sale_of_none_draws_no_roll_and_changes_nothing_by_either_reading() {
+    fn a_sale_of_none_draws_only_its_buttons_rolls_and_changes_nothing_else_by_either_reading() {
         // A booster of `BuyRandom` 50, not owned and not rolled yet.
         let mut catalog = relisting_catalog();
         catalog.outfits.push(OutfitRecord {
@@ -11116,7 +11214,11 @@ pub(super) mod tests {
                 relisted_by(source),
                 &[(BLASTER, 3), (CONTRABAND, 2)],
             );
-            let before = session.clone();
+            // The button's own check draws the rolls the outfitter
+            // needs, and nothing past it does.
+            let mut checked = session.clone();
+            let mut button = Scripted::default();
+            assert!(checked.outfit_button_passes(sell(CONTRABAND), &mut button));
             let mut chance = Scripted::default();
             let order = session.outfit_order(sell(CONTRABAND), 0, &mut chance);
             assert_eq!(
@@ -11127,12 +11229,13 @@ pub(super) mod tests {
                 },
                 "{source:?}"
             );
+            assert!(order.button_passed, "{source:?}");
             assert_eq!(
                 (chance.asked, chance.sides_asked),
-                (vec![], vec![]),
+                (button.asked, button.sides_asked),
                 "{source:?}"
             );
-            assert!(session == before, "{source:?}: unchanged");
+            assert!(session == checked, "{source:?}: unchanged past the check");
         }
     }
 
@@ -11265,6 +11368,19 @@ pub(super) mod tests {
         let sold = session.outfit_order(sell(BLASTER), 1, &mut NeverFires);
         assert_eq!(sold.run.done, 1);
         assert_eq!(session.pilot().owned(BLASTER), 1);
+    }
+
+    #[test]
+    fn by_the_engine_after_a_reset_the_button_of_an_unlisted_outfit_128_passes() {
+        let mut session = landed_owning(
+            &unlisted_blaster_catalog(),
+            Rulebook::default(),
+            &[(BLASTER, 2), (CONTRABAND, 1)],
+        );
+        assert!(!session.outfit_button_passes(sell(BLASTER), &mut NeverFires));
+        let order = session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        assert!(session.outfit_button_passes(sell(BLASTER), &mut NeverFires));
     }
 
     #[test]
@@ -11755,6 +11871,23 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_order_buttons_check_is_the_outfitters_and_changes_nothing() {
+        let catalog = outfitting();
+        let mut flying = Session::start(&catalog).expect("starts");
+        assert!(
+            !flying.outfit_button_passes(buy(SPEED), &mut NeverFires),
+            "no outfitter in flight"
+        );
+        let mut session = outfitted(&catalog);
+        let before = session.pilot().clone();
+        assert!(session.outfit_button_passes(buy(SPEED), &mut NeverFires));
+        assert!(!session.outfit_button_passes(sell(SPEED), &mut NeverFires));
+        assert!(!session.outfit_button_passes(buy(OutfitId(999)), &mut NeverFires));
+        assert_eq!(session.pilot(), &before);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
     fn a_count_of_none_buys_nothing_and_makes_no_save_due() {
         let mut session = outfitted(&outfitting());
         let before = session.pilot().clone();
@@ -11941,6 +12074,7 @@ pub(super) mod tests {
                 },
                 alert: None,
                 after: Reselection::Kept,
+                button_passed: true,
             }
         );
         assert_eq!(session.pilot().owned(SPEED), 10);
@@ -11949,6 +12083,91 @@ pub(super) mod tests {
             counted.outfit_counted(buy(SPEED), 12, &mut NeverFires),
             Ok(10)
         );
+    }
+
+    #[test]
+    fn an_order_reports_whether_its_button_passed_its_own_check() {
+        let mut broke = outfitted(&outfitting());
+        broke.pilot.cash = 0;
+        let bible = || {
+            over_the_mass_limit_by(
+                Rulebook::default().with_override(RuleKey::SaleRefusal, RuleSource::Bible),
+            )
+        };
+        let cases = vec![
+            ("buy through", outfitted(&outfitting()), buy(SPEED), 2, true),
+            (
+                "buy stopped part way",
+                outfitted(&outfitting()),
+                buy(SPEED),
+                12,
+                true,
+            ),
+            (
+                "buy cancelled",
+                outfitted(&outfitting()),
+                buy(SPEED),
+                0,
+                true,
+            ),
+            (
+                "buy refused at the button",
+                broke.clone(),
+                buy(SPEED),
+                1,
+                false,
+            ),
+            ("buy cancelled, refused", broke, buy(SPEED), 0, false),
+            (
+                "buy unlisted",
+                outfitted(&outfitting()),
+                buy(OutfitId(999)),
+                0,
+                false,
+            ),
+            (
+                "sell none owned",
+                outfitted(&outfitting()),
+                sell(SPEED),
+                1,
+                false,
+            ),
+            (
+                "sell cancelled, none owned",
+                outfitted(&outfitting()),
+                sell(SPEED),
+                0,
+                false,
+            ),
+            (
+                "sell refused in the loop",
+                over_the_mass_limit(RuleSource::Engine),
+                sell(POD),
+                1,
+                true,
+            ),
+            ("sell refused on the button", bible(), sell(POD), 1, false),
+        ];
+        for (name, mut session, order, count, passed) in cases {
+            let run = session.outfit_order(order, count, &mut NeverFires);
+            assert_eq!(run.button_passed, passed, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cancel_on_the_relistings_unlisted_outfit_128_counts_its_day() {
+        let mut session = landed_owning(
+            &unlisted_blaster_catalog(),
+            Rulebook::default(),
+            &[(BLASTER, 2), (CONTRABAND, 1)],
+        );
+        session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        session.stay.outfit_traded = false;
+        assert_eq!(
+            session.outfit_counted(sell(BLASTER), 0, &mut NeverFires),
+            Ok(0)
+        );
+        assert!(session.stay.outfit_traded);
     }
 
     #[test]
@@ -13130,6 +13349,92 @@ pub(super) mod tests {
         assert_eq!(
             session.take_events(),
             [SessionEvent::ShipChanged, SessionEvent::ShipChanged]
+        );
+    }
+
+    /// A disable rule that has every ship disabled, so a ship change's
+    /// armour bump raises the armour to its most.
+    #[derive(Debug)]
+    struct AlwaysDisabled;
+
+    impl crate::combat::hull::DisableRule for AlwaysDisabled {
+        fn disabled(&self, _armor: Gauge, _hull: &crate::combat::hull::HullSpec) -> bool {
+            true
+        }
+    }
+
+    fn run_expr(session: &mut Session, text: &str) {
+        let expr = crate::control::SetExpr::parse(text).expect("parses");
+        session.run_set(&expr, &mut NeverFires);
+    }
+
+    #[test]
+    fn docked_ship_changes_are_noted_as_each_ran_and_cleared_as_an_order_begins() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].inherent_govt = Some(GovtId(150));
+        let tank = catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == TANK)
+            .expect("the tank");
+        tank.on_purchase = crate::control::Script::parse("H129 H128");
+        let mut session = outfitted(&catalog).with_disable_rule(Rc::new(AlwaysDisabled));
+        let selected = NavMode::Stellar(Some(StellarId(140)));
+        session.nav = selected;
+        session.pilot.reserves.armor.now = 1.0;
+        assert_eq!(session.outfit(buy(TANK), &mut NeverFires), Ok(()));
+        let loads = session.take_interface_loads();
+        let governments: Vec<_> = loads.iter().map(|load| load.government).collect();
+        assert_eq!(
+            governments,
+            [Some(GovtId(150)), None],
+            "each class's, in order"
+        );
+        for load in &loads {
+            assert_eq!(load.nav, selected, "as it was");
+            assert_eq!(load.reserves.armor.now, load.reserves.armor.max, "bumped");
+        }
+        assert_ne!(
+            loads[0].reserves.fuel.max, loads[1].reserves.fuel.max,
+            "each at its own operator: 129 carries a tank"
+        );
+        assert_eq!(session.take_interface_loads(), [], "taken");
+        run_expr(&mut session, "H129");
+        assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
+        assert_eq!(session.take_interface_loads(), [], "the order cleared it");
+        let mut flying = Session::start(&catalog).expect("starts");
+        run_expr(&mut flying, "H129");
+        assert_eq!(flying.ship(), NEW);
+        assert_eq!(flying.take_interface_loads(), [], "in flight");
+    }
+
+    #[test]
+    fn a_purchases_on_purchase_change_is_noted_before_the_fill() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].on_purchase = crate::control::Script::parse("H128");
+        let mut session = outfitted(&catalog);
+        run_expr(&mut session, "C128");
+        session.pilot.reserves.fuel.now = 10.0;
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        let loads = session.take_interface_loads();
+        assert_eq!(loads.len(), 1, "the purchase's alone: it cleared the C");
+        assert!(
+            loads[0].reserves.fuel.now < session.reserves().fuel.now,
+            "{:?} before the fill",
+            loads[0].reserves
+        );
+        run_expr(&mut session, "H129");
+        assert!(
+            session
+                .buy_ship(ShipId(999), "Kestrel", &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(
+            session.take_interface_loads().len(),
+            1,
+            "a refusal clears nothing"
         );
     }
 
@@ -17360,7 +17665,7 @@ pub(super) mod tests {
             ..catalog()
         };
         let mut session = disabled(&empty);
-        assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x669aa");
+        assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x6a94c");
         session.condition = Condition::Intact;
         assert_eq!(
             session.land(),
@@ -17406,14 +17711,32 @@ pub(super) mod tests {
             let mut session = Session::start(&unlandable()).expect("starts");
             session.condition = condition;
             let _ = session.take_sounds();
-            assert!(matches!(
-                session.land(),
-                Err(LandingRefusal::NotLandable { .. })
-            ));
+            assert_eq!(session.land(), Err(LandingRefusal::NothingLandable));
             assert_eq!(
                 session.take_sounds(),
                 [],
                 "_FindNearestStellar gives -1, no dock request (@0x6a94c): {condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn l_with_no_target_beeps_as_the_nearest_it_selects_is_refused() {
+        let mut catalog = catalog();
+        for site in &mut catalog.sites[0].1 {
+            site.flags = StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED;
+        }
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.condition = condition;
+            let _ = session.take_sounds();
+            assert!(matches!(
+                session.land(),
+                Err(LandingRefusal::NotLandable { .. })
+            ));
+            assert!(
+                session.take_sounds().contains(&SimSound::Refused),
+                "the dock request refuses the pick (@0x66977, @0x67e8f): {condition:?}"
             );
         }
     }
@@ -17507,6 +17830,28 @@ pub(super) mod tests {
         let _ = session.take_sounds();
         let _ = session.land();
         assert!(!session.take_sounds().contains(&SimSound::Refused));
+    }
+
+    #[test]
+    fn a_disabled_players_l_with_nothing_landable_selects_nothing_as_an_intact_one_does() {
+        let mut catalog = catalog();
+        for site in &mut catalog.sites[0].1 {
+            site.flags = 0;
+        }
+        let mut session = disabled(&catalog);
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NothingLandable),
+            "@0x6a94c"
+        );
+        assert_eq!(session.nav_target(), None, "nothing selected");
+        session.condition = Condition::Intact;
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NothingLandable),
+            "the same refusal"
+        );
+        assert_eq!(session.nav_target(), None, "nothing selected");
     }
 
     #[test]

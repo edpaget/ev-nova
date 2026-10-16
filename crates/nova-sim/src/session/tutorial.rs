@@ -13,7 +13,7 @@
 use super::Session;
 use crate::combat::hull::Condition;
 use crate::hyperspace::JumpRefusal;
-use crate::landing::nearest_landable_station;
+use crate::landing::nearest_stellar_station;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -31,7 +31,10 @@ impl Session {
     /// and, for those [`check_jump`](crate::hyperspace::check_jump) gives,
     /// [`SimSound::Refused`] (`_HandlePlayer` @0x6b86d-0x6bab7).
     ///
-    /// - The engine's own refusals, landed and disabled, are always told.
+    /// - The engine's own refusal, landed, is always told.
+    /// - Disabled (or dying) is never told: the original's J skips the
+    ///   jump block for a disabled player (`_HandlePlayer` @0x6b0f5 →
+    ///   0x6bada), saying and beeping nothing.
     /// - Too close is always told (@0x6b86d-0x6b93c).
     /// - No destination is told only to a newbie, and never in nav mode 3
     ///   with a selection (@0x6b964-0x6b9a3): a seasoned pilot's J with
@@ -44,7 +47,8 @@ impl Session {
     pub fn jump_refusal_told(&self, refusal: &JumpRefusal) -> bool {
         let newbie = self.tutorial.is_newbie();
         match refusal {
-            JumpRefusal::Landed | JumpRefusal::Disabled | JumpRefusal::TooClose { .. } => true,
+            JumpRefusal::Landed | JumpRefusal::TooClose { .. } => true,
+            JumpRefusal::Disabled => false,
             JumpRefusal::NoDestination => {
                 newbie && !matches!(self.nav_mode(), NavMode::Hyperspace(Some(_)))
             }
@@ -56,7 +60,7 @@ impl Session {
 
     /// The tutorial's part of a flight tick on `frame` (see the module
     /// docs): the hint block, with the ship intact or not, its squared
-    /// distance from the centre and the nearest landable stellar
+    /// distance from the centre and the nearest stellar
     /// (`_FindNearestStellar`, the one F5 selects).
     pub(super) fn tutorial_tick(&mut self, frame: i16) {
         if self.condition == Condition::Destroyed {
@@ -69,7 +73,7 @@ impl Session {
             frame,
             self.condition == Condition::Intact,
             distance_squared,
-            || nearest_landable_station(position, sites),
+            || nearest_stellar_station(position, sites),
         );
         for hint in hints {
             self.messages.push(SimMessage::Tutorial(hint));
@@ -279,7 +283,8 @@ mod tests {
             (true, true, engine, no_fuel, false),
             (true, true, bible, no_fuel, true),
             (true, false, engine, JumpRefusal::Landed, true),
-            (false, false, engine, JumpRefusal::Disabled, true),
+            (false, false, engine, JumpRefusal::Disabled, false),
+            (true, false, engine, JumpRefusal::Disabled, false),
         ] {
             let rules = Rulebook::default().with_override(RuleKey::NewbieFuelRefusal, rule);
             let mut session = seasoned(&catalog).with_rules(rules);
@@ -292,6 +297,21 @@ mod tests {
             }
             let case = format!("{newbie} {selected} {rule:?} {refusal:?}");
             assert_eq!(session.jump_refusal_told(&refusal), told, "{case}");
+        }
+        // A disabled or dying player's J is refused as disabled, untold.
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: false,
+            },
+        ] {
+            let mut session = seasoned(&catalog);
+            session.tutorial = Tutorial::NEW_PILOT;
+            session.condition = condition;
+            let refusal = session.begin_jump().expect_err("refused");
+            assert_eq!(refusal, JumpRefusal::Disabled, "{condition:?}");
+            assert!(!session.jump_refusal_told(&refusal), "{condition:?}");
         }
     }
 
@@ -342,6 +362,11 @@ mod tests {
         // The engine's own refusals.
         let mut session = seasoned(&catalog);
         session.condition = Condition::Disabled;
+        assert_eq!(press_j(&mut session), (Err(JumpRefusal::Disabled), vec![]));
+        session.condition = Condition::Dying {
+            ticks_left: 100,
+            starting: false,
+        };
         assert_eq!(press_j(&mut session), (Err(JumpRefusal::Disabled), vec![]));
         let mut session = seasoned(&catalog);
         land_now(&mut session).expect("lands");
