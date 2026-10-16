@@ -530,6 +530,30 @@ mod tests {
         assert!(session.cargo_boxes().is_empty());
     }
 
+    /// Graphic 1's frame is 40 by 40, so the scoop reaches 20 past the
+    /// hull's hit radius along an axis: a box 15 past it is taken, one 25
+    /// past it is left.
+    #[test]
+    fn the_scoop_reaches_the_edge_of_a_boxs_frame_and_no_farther() {
+        let mut catalog = scoopable();
+        catalog.box_frames[1] = Some((40, 40));
+        let mut session = scooper(&catalog, 0);
+        let reach = session.hull.hit_radius;
+        let at = session.player().position;
+        let near = at + Vec2::new(reach + 15.0, 0.0);
+        let far = at + Vec2::new(-(reach + 25.0), 0.0);
+        session
+            .boxes
+            .spawn_scoopable(near, Some(2), 1, &mut NeverFires);
+        session
+            .boxes
+            .spawn_scoopable(far, Some(3), 1, &mut NeverFires);
+        session.tick(Controls::default());
+        assert_eq!(held(&session), [(Good::Commodity(2), 1)]);
+        assert_eq!(session.cargo_boxes().len(), 1, "the far box is left");
+        assert_eq!(session.cargo_boxes()[0].contents, Some(3));
+    }
+
     /// Ticks `session` once with a scoopable commodity box on its ship,
     /// and asserts that the box stays and the cargo is unchanged.
     fn assert_no_scoop(mut session: Session) {
