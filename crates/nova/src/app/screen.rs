@@ -66,7 +66,8 @@
 //! screen flight was entered from; it never quits.
 //!
 //! M and J are flight's own keys. M opens flight's course map, where a
-//! click sets the destination; Escape (or M) closes it, back into flight.
+//! click sets the destination and Tab or `\` cycles the hyperspace
+//! selection; Escape, Return (or M) closes it, back into flight.
 //! J jumps along the course. The Tab side's galaxy map stays the
 //! developer's viewer, which enters systems; play plots courses on the map
 //! opened from flight, which has no "Enter system" button.
@@ -182,10 +183,12 @@
 //! decide as the router's behaviour says ([`AppScreen::with_behaviour`]),
 //! Nova's combat AI until another is given, and their ships are
 //! disabled as the router's rule says ([`AppScreen::with_disable_rule`]),
-//! Nova's own until another is given; their point defence engages the
-//! missiles the router's point-defence rule calls hostile
+//! Nova's own until another is given; by the other reading of the
+//! `pd_hostility` rule, their point defence engages only the missiles the
+//! router's point-defence rule calls hostile
 //! ([`AppScreen::with_point_defence_rule`]), by governments' allegiance
-//! until another is given; the player's crimes are judged by the
+//! until another is given, and by default every missile fired at them;
+//! the player's crimes are judged by the
 //! router's law ([`AppScreen::with_law`]), Nova's until another is given;
 //! escorts are hired by the router's hire terms and control bits
 //! ([`AppScreen::with_hire_terms`], [`AppScreen::with_control_bits`]),
@@ -4760,13 +4763,33 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn tab_f_and_i_do_nothing_on_the_flight_map() {
+    fn tab_cycles_the_flight_maps_selection_and_f_and_i_do_nothing() {
         let mut screen = with_dialogs(data());
         open_flight_map(&mut screen);
+        // Let go of M, whose hold would close the map on I (`_MapFilter`
+        // @0x144db-0x14587).
+        screen.input(&key(MAP, false));
+        let nav = |screen: &AppScreen| {
+            flight(screen)
+                .session()
+                .ok()
+                .map(nova_sim::Session::nav_mode)
+        };
+        assert_eq!(nav(&screen), Some(nova_sim::NavMode::Off));
         for k in [Key::Tab, Key::Char('f'), Key::Char('i')] {
             assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
             assert_eq!(screen.showing(), Showing::FlightMap, "{k:?}");
         }
+        let cycled = nav(&screen).expect("flying");
+        assert!(
+            matches!(cycled, nova_sim::NavMode::Hyperspace(_)),
+            "Tab cycled: {cycled:?}"
+        );
+        assert_eq!(
+            flight(&screen).course_map().hyper_selection(),
+            cycled.hyperspace(),
+            "the map shows it"
+        );
         assert!(screen.about().is_none());
     }
 
@@ -8554,6 +8577,27 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn tab_on_the_bars_map_changes_nothing() {
+        let mut screen = in_the_bar();
+        let nav = |screen: &AppScreen| {
+            flight(screen)
+                .session()
+                .ok()
+                .map(nova_sim::Session::nav_mode)
+        };
+        let landed = nav(&screen);
+        screen.input(&key(MAP, true));
+        screen.input(&key(MAP, false));
+        assert_eq!(screen.showing(), Showing::FlightMap);
+        for k in [Key::Tab, Key::Char('\\')] {
+            assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::FlightMap, "{k:?}");
+            assert_eq!(nav(&screen), landed, "{k:?}");
+        }
+        assert!(spaceport(&screen).open_bar().is_some(), "still in the bar");
+    }
+
+    #[test]
     fn p_in_flight_resets_before_the_info_is_built() {
         let mut screen = past_the_holds(&MemoryPilots::new());
         screen.input(&key(Key::Escape, true));
@@ -12102,6 +12146,7 @@ pub(super) mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
     }

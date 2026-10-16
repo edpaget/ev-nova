@@ -68,7 +68,14 @@ impl Session {
     /// @0x9740f) has no state yet: rdm:task/planet-domination feeds it in
     /// here.
     pub(super) fn iff_dominated(site: &LandingSite) -> bool {
-        site.flags2 & market::DOMINATED != 0
+        Self::dominated_by(site.flags2)
+    }
+
+    /// Whether a stellar of `Flags2` `flags2` is dominated, as
+    /// [`Session::iff_dominated`] reads it: the galaxy map's colour code
+    /// reads it too (see the `map` module).
+    pub(super) fn dominated_by(flags2: u16) -> bool {
+        flags2 & market::DOMINATED != 0
     }
 
     /// The interference in the player's system ([`iff::interference`]):

@@ -24,11 +24,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
     DudeId, DudeRecord, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId,
-    ShipRecord, SystemId, TrafficCatalog, WeaponId,
+    ShipRecord, SystemId, TrafficCatalog,
 };
 use crate::chance::Chance;
 use crate::cloak::CloakGear;
-use crate::combat::armament::{Armament, Arsenal};
+use crate::combat::armament::{Armament, Arsenal, LauncherRounds};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::control::{Gate, Test};
 use crate::escort::EscortClass;
@@ -245,10 +245,11 @@ pub struct ShipKind {
     pub escort_class: EscortClass,
     /// Its hull.
     pub hull: HullSpec,
-    /// Its weapons: its stock weapons and those among its default items.
+    /// Its weapons: its stock weapons alone, as the original arms an NPC
+    /// (see [`Arsenal::npc`]).
     pub armament: Armament,
-    /// The rounds of each ammunition it carries.
-    pub rounds: BTreeMap<WeaponId, u32>,
+    /// The rounds it carries, on each launcher.
+    pub rounds: LauncherRounds,
     /// Its `AppearOn`: while it does not hold, a `düde` or a fleet's
     /// escorts bring none of it (see [`spawn`](crate::traffic::spawn)).
     pub appear_on: Test,
@@ -540,10 +541,11 @@ fn persons(
         .collect()
 }
 
-/// A ship of `record`, carrying its default items, armed from `arsenal`.
+/// A ship of `record`, carrying its default items, armed from `arsenal`
+/// with its stock weapons alone ([`Arsenal::npc`]).
 pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) -> ShipKind {
     let defaults = tally(record.defaults.iter().copied());
-    let (armament, rounds) = arsenal.npc(record.id, &defaults, outfits);
+    let (armament, rounds) = arsenal.npc(record.id);
     ShipKind {
         stats: ShipStats::new(record.fields, &outfit_mods(&defaults, outfits)),
         inherent_ai: record.inherent_ai,
@@ -562,6 +564,8 @@ pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arse
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::catalog::WeaponId;
+    use crate::combat::armament::LauncherRounds;
     use std::cell::RefCell;
 
     use super::*;
@@ -962,8 +966,9 @@ mod tests {
         records
     }
 
-    /// Ship 200 carries two of weapon 128 and a 30-pixel `shän`, and
-    /// its default rockets (outfit 301, rounds of weapon 138).
+    /// Ship 200 carries two of weapon 128, loaded with none, and a
+    /// 30-pixel `shän`; its default items name rockets (outfit 301, rounds
+    /// of weapon 138).
     fn arsenal() -> Arsenal {
         Arsenal::new(
             &[weapon(128), weapon(138)],
@@ -1386,11 +1391,39 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(WeaponId(128), 2)]
         );
-        assert_eq!(armed.rounds, BTreeMap::from([(WeaponId(138), 6)]));
+        assert_eq!(
+            armed.rounds,
+            LauncherRounds::from([(WeaponId(128), 0)]),
+            "its stock slot's load; its default rockets load nothing"
+        );
         let unarmed = &table.ships[&ShipId(201)];
         assert_eq!(unarmed.armament, Armament::default());
         assert_eq!(unarmed.hull, HullSpec::default());
-        assert!(unarmed.rounds.is_empty());
+        assert_eq!(unarmed.rounds, LauncherRounds::default());
+    }
+
+    #[test]
+    fn a_ship_types_default_weapons_and_ammunition_arm_it_with_nothing() {
+        let outfits = [
+            outfit(300, &[(crate::combat::armament::MOD_WEAPON, 138)]),
+            outfit(301, &[(crate::combat::armament::MOD_AMMO, 138)]),
+        ];
+        let record = ShipRecord {
+            defaults: vec![(OutfitId(300), 2), (OutfitId(301), 6)],
+            ..ship(200, FAST)
+        };
+        let armed = kind(&record, &outfits, &arsenal());
+        assert_eq!(
+            armed
+                .armament
+                .mounts()
+                .iter()
+                .map(|mount| (mount.spec.id, mount.count))
+                .collect::<Vec<_>>(),
+            [(WeaponId(128), 2)],
+            "its stock slots alone, as `_LoadObjectData` fills the class's"
+        );
+        assert_eq!(armed.rounds, LauncherRounds::from([(WeaponId(128), 0)]));
     }
 
     #[test]

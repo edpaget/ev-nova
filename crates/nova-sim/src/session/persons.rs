@@ -119,7 +119,7 @@ pub struct PersonQuote {
 /// which a quote shows, keeping any other from being said at random.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct QuoteClock {
-    ticks: u64,
+    pub(super) ticks: u64,
     quiet_until: u64,
 }
 
@@ -182,15 +182,45 @@ impl Session {
     /// may be said draws `Rand(140)`, and says it when it is due now, or
     /// on a draw of 0 when no quote has shown for [`QUOTE_SHOWN_TICKS`]
     /// and its own last is more than [`QUOTE_GAP_TICKS`] back. While the
-    /// ship is landed nothing happens.
+    /// ship is landed nothing happens. Then the quote clock moves on a
+    /// tick: ours moves it once a frame in place of `TickCount`, and
+    /// double time's second pass reads it unmoved
+    /// ([`Session::tick_quotes_again`]).
     pub fn tick_quotes(&mut self, catalog: &(impl CommCatalog + ?Sized), chance: &mut dyn Chance) {
         if self.landed.is_some() {
             return;
         }
-        let lines = catalog.string_list(HAIL_QUOTES);
-        for id in self.traffic.take_attack_quotes() {
-            self.say_hail_quote(id, catalog, &lines, chance);
+        self.roll_quotes(catalog, chance);
+        self.quote_clock.ticks += 1;
+    }
+
+    /// Double time's second pass of the hail quotes: the attack quotes
+    /// queued, then each eligible person's `Rand(140)` roll, as
+    /// [`Session::tick_quotes`] has them, on the quote clock as the
+    /// advance pass left it, which this never moves. `_HandleShip`
+    /// (@0x44483) runs on both passes and its quote block
+    /// (@0x33f0f-0x33fba) tests no pass, while `_HandleComm` counts the
+    /// display timer down on the advance pass only (@0x4421e): after any
+    /// quote on the advance pass only a quote due now follows, and
+    /// otherwise each frame's odds double. The original's `TickCount` can
+    /// move on a tick or two between the passes, which only shifts the
+    /// personal gap ([`QUOTE_GAP_TICKS`]) by less than a frame, so no
+    /// player can see it. While the ship is landed nothing happens.
+    pub fn tick_quotes_again(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) {
+        if self.landed.is_some() {
+            return;
         }
+        self.roll_quotes(catalog, chance);
+    }
+
+    /// The quote block of [`Session::tick_quotes`], the clock unmoved.
+    fn roll_quotes(&mut self, catalog: &(impl CommCatalog + ?Sized), chance: &mut dyn Chance) {
+        let lines = catalog.string_list(HAIL_QUOTES);
+        self.say_queued_attack_quotes(catalog, &lines, chance);
         let player_ai = self
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.inherent_ai);
@@ -253,7 +283,20 @@ impl Session {
             person.quoted_at = Some(ticks);
             self.say_hail_quote(id, catalog, &lines, chance);
         }
-        self.quote_clock.ticks += 1;
+    }
+
+    /// Says each attack quote queued, its line read from `catalog` or
+    /// `lines`, drawing on `chance` as [`Session::say_hail_quote`] takes it
+    /// in.
+    fn say_queued_attack_quotes(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        lines: &[String],
+        chance: &mut dyn Chance,
+    ) {
+        for id in self.traffic.take_attack_quotes() {
+            self.say_hail_quote(id, catalog, lines, chance);
+        }
     }
 
     /// NPC `id`'s person says its hail quote, its tags read, as
@@ -346,14 +389,16 @@ impl Session {
     }
 
     /// NPC `id`, captured, no longer flies as its person, who is gone for
-    /// good, escape pod or not (`_DoShipCapture` @0x41180), and its slot
-    /// holds no person from now on, for `<OSN>`.
+    /// good, escape pod or not (`_DoShipCapture` @0x41180), its slot holds
+    /// no person from now on, for `<OSN>`, and it has no `düde` (+0x78 = -1,
+    /// @0x411aa).
     pub(super) fn lose_captured(&mut self, id: NpcId) {
         let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
         // A capture also unmarks a mission's special ship, its ships left
         // kept (`_DoShipCapture` @0x413c2).
         let taken = npc.map(|npc| {
             npc.mission = None;
+            npc.booty = None;
             (npc.berth, npc.person.take())
         });
         if let Some((berth, person)) = taken {
@@ -369,12 +414,12 @@ impl Session {
     /// Each person of `Flags` 0x0001 that a shot of the player's hit among
     /// `strikes` holds a grudge against it from now on, on the pilot too
     /// (`_DamageShip` @0x3be83-0x3beb3); an escort's shot does not count,
-    /// nor does the player's death shockwave, which provokes nothing
-    /// ([`Strike::provokes`]). No save is due.
+    /// nor does a blast or the player's death shockwave, which is no
+    /// direct hit ([`Strike::direct`]). No save is due.
     pub(super) fn hold_grudges(&mut self, strikes: &[Strike]) {
         for strike in strikes
             .iter()
-            .filter(|strike| strike.by == ShipRef::Player && strike.provokes)
+            .filter(|strike| strike.by == Some(ShipRef::Player) && strike.direct)
         {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
@@ -760,6 +805,20 @@ mod tests {
     }
 
     #[test]
+    fn a_captured_ship_loses_its_dude() {
+        use crate::board::Assignment;
+        let catalog = duel(0, 0);
+        let mut session = captured(&catalog);
+        session.traffic.npcs_mut()[0].booty = Some(0x0141);
+        assert!(
+            session
+                .assign(Assignment::Escort, &mut NeverFires)
+                .is_some()
+        );
+        assert_eq!(session.npcs()[0].booty, None, "+0x78 = -1 (@0x411aa)");
+    }
+
+    #[test]
     fn the_players_hit_on_a_person_of_0x0001_holds_its_grudge() {
         let catalog = duel(GRUDGE | ESCAPE_POD, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
@@ -780,15 +839,33 @@ mod tests {
     }
 
     #[test]
+    fn a_hit_by_no_ship_holds_no_grudge() {
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        session.hold_grudges(&[Strike {
+            ship: ShipRef::Npc(NpcId(0)),
+            by: None,
+            damage: 1.0,
+            downed: None,
+            direct: true,
+            intended: true,
+            lock: false,
+        }]);
+        assert!(!session.pilot().grudge(PersonId(600)));
+    }
+
+    #[test]
     fn an_escorts_hit_holds_no_grudge() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         let hit = |by| Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by,
+            by: Some(by),
             damage: 1.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         session.hold_grudges(&[hit(ShipRef::Npc(NpcId(7)))]);
         assert!(!session.pilot().grudge(PersonId(600)));
@@ -797,15 +874,18 @@ mod tests {
     }
 
     #[test]
-    fn the_players_shockwave_holds_no_grudge() {
+    fn the_players_blast_or_shockwave_holds_no_grudge() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
+        // A blast's strike and a shockwave's alike: no direct hit.
         session.hold_grudges(&[Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 32.0,
             downed: None,
-            provokes: false,
+            direct: false,
+            intended: false,
+            lock: false,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
@@ -832,10 +912,12 @@ mod tests {
         let mut session = facing_ace(&catalog, ada(&catalog));
         let downed = |ship| Strike {
             ship,
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 9.0,
             downed: Some(crate::combat::Downed::Disabled),
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         let mut strikes = [
             downed(ShipRef::Npc(NpcId(0))),
@@ -1451,6 +1533,68 @@ mod tests {
         );
         let (said, _) = quote_tick(&catalog, &mut session, &[1, 0]);
         assert_eq!(said, ["Bee: Prepare to die, Stock!"]);
+    }
+
+    /// Double time's second-pass roll drawing `draws`: what was said, and
+    /// the bounds asked.
+    fn quote_again(
+        catalog: &FakePilotCatalog,
+        session: &mut Session,
+        draws: &[u32],
+    ) -> (Vec<String>, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        session.tick_quotes_again(catalog, &mut chance);
+        let said = session
+            .take_quotes()
+            .into_iter()
+            .map(|quote| quote.text)
+            .collect();
+        (said, chance.asked)
+    }
+
+    #[test]
+    fn the_second_pass_rolls_each_eligible_persons_quote_again_and_leaves_the_clock() {
+        // `_HandleShip` (@0x44483) runs on both passes and its quote block
+        // (@0x33f0f-0x33fba) tests no pass.
+        let (catalog, mut session) = quoting([QUOTE_ONCE, 0]);
+        quiet_ticks(&catalog, &mut session, 1);
+        let ticks = session.quote_clock.ticks;
+        assert_eq!(
+            quote_again(&catalog, &mut session, &[1, 1]),
+            (vec![], vec![140, 140])
+        );
+        let (said, asked) = quote_again(&catalog, &mut session, &[0, 1]);
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+        assert_eq!(asked, [140, 140]);
+        assert_eq!(session.take_sounds(), [SimSound::HailQuote]);
+        assert_eq!(
+            session.npcs()[0].person.expect("Ace").quoted_at,
+            Some(ticks)
+        );
+        assert_eq!(
+            quote_again(&catalog, &mut session, &[0]),
+            (vec![], vec![140]),
+            "Ace, quoted once, draws none"
+        );
+        assert_eq!(session.quote_clock.ticks, ticks, "the clock stands");
+    }
+
+    #[test]
+    fn after_an_advance_pass_quote_the_second_pass_says_no_random_one_but_a_due_one() {
+        // `_HandleComm` counts the display timer down on the advance pass
+        // only (@0x4421e), so it still shows; a forced quote skips that
+        // gate (@0x33f65-0x33f6c).
+        let (catalog, mut session) = quoting([0, QUOTE_ON_ATTACK]);
+        assert_eq!(quote_tick(&catalog, &mut session, &[0]).0.len(), 1);
+        assert_eq!(
+            quote_again(&catalog, &mut session, &[0]),
+            (vec![], vec![140]),
+            "Ace draws, and stays quiet"
+        );
+        session.traffic.npcs_mut()[1].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let (said, asked) = quote_again(&catalog, &mut session, &[0, 77]);
+        assert_eq!(said, ["Bee: Prepare to die, Stock!"]);
+        assert_eq!(asked, [140, 140]);
     }
 
     #[test]

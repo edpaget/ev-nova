@@ -28,8 +28,9 @@
 //! ([`FlightView::with_behaviour`]; [`NovaAi`] by default), and then the
 //! fight ([`Session::tick_combat`]), its ships disabled as the screen's
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
-//! [`NovaDisable`] by default), their point defence engaging the
-//! missiles its [`PointDefenceRule`] calls hostile
+//! [`NovaDisable`] by default), their point defence engaging every
+//! missile fired at them, or by the other reading of the `pd_hostility`
+//! rule those its [`PointDefenceRule`] calls hostile
 //! ([`FlightView::with_point_defence_rule`]; [`Allegiance`] by default),
 //! and the player's crimes judged by its [`LegalCode`]
 //! ([`FlightView::with_law`]; [`NovaLaw`] by default). What could not be read of the looks
@@ -47,8 +48,11 @@
 //! session's second pass ([`Session::tick_again`]) after the advance
 //! pass's calls, and steps the effects and
 //! drains the fight's events after it as after the advance pass
-//! (`_HandleExplods` runs on both, @0x444e1). The second pass says no
-//! quotes, gives no help and tells no comm. The mode is the screen's own
+//! (`_HandleExplods` runs on both, @0x444e1). The second pass answers
+//! its hits ([`Session::answer_strikes`]) and says the attack quotes they
+//! raise, then rolls the hail quotes ([`Session::tick_quotes_again`]),
+//! as `_HandleShot` (@0x44385) and `_HandleShip` (@0x44483) run on both
+//! passes; it gives no help and tells no comm. The mode is the screen's own
 //! and outlives the hails, the map, the jumps and the sessions it flies;
 //! while it is on, `cïcn` 20000 is drawn at the top left over the Red
 //! Alert icon (see the `alert` module).
@@ -218,22 +222,34 @@
 //!   of the flight keys. While it is open flight is paused, as in the
 //!   original, only the map is drawn and every input goes to it, except
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
-//!   router's Escape). It beeps as M opens it ([`UiSound::MapOpened`],
+//!   router's Escape), and so do Return and, while M is held, a key-down
+//!   the original's `_MapFilter` doesn't take (@0x13cdd-0x13d07,
+//!   @0x144db-0x14587). Tab or `\` on it (repeats too) cycles the
+//!   hyperspace selection through the current system's links
+//!   ([`Session::cycle_map_selection`]): the map draws the new selected
+//!   link and selects its system, and the nav area is redrawn at once; on
+//!   the hypergate map it steps the pick through the gate's destinations,
+//!   Shift stepping back ([`Session::hypergate_cycle`]); docked, it does
+//!   nothing. It beeps as M opens it ([`UiSound::MapOpened`],
 //!   `_beepSnd[2]`, `_HandlePlayer` @0x6a809) and as it closes
 //!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says
 //!   nothing, and the hypergate map neither opens nor closes with a beep.
 //!   As it opens it selects the system the original's
 //!   `_DoSystemMap` does ([`Session::map_preselection`]): the one
 //!   selected in nav mode 3, or the current system in any other mode,
-//!   and its panel shows that system. It draws the system selected in
-//!   mode 3 as a link from the current system
-//!   ([`GalaxyMap::show_hyper_selection`]). A system clicked on the map
-//!   becomes the destination: the session plots the course there and the
-//!   map shows it, and the hop it cues as the selected link. The map shows the systems the pilot has explored, and the rest
-//!   unexplored. It draws the session's galaxy ([`Session::galaxy`]):
-//!   the catalog's geometry with only the visible systems, links and
-//!   nebulae active and explored, each system coloured by its government there, rebuilt
-//!   on the frame after each change to it; and the course as it is flown
+//!   and its panel shows that system. It draws the session's drawing
+//!   ([`Session::map_drawing`], [`GalaxyMap::show_drawing`]): what
+//!   `_DrawMap` draws of the known and explored systems, coloured by
+//!   `_ColorCodeSystem`, with the mission systems taken as it opens
+//!   ([`Session::map_mission_systems`]), taken again on the frame after
+//!   the galaxy, the explored or known systems, the course or the nav
+//!   change, and after a plot, a Tab or a hypergate map click. A system
+//!   clicked on the map becomes the destination: the session plots the
+//!   course there and the map shows it, and the hop it cues as the
+//!   selected link. The panel says which systems are unexplored. The
+//!   map's nebulae are the session's galaxy's ([`Session::galaxy`]),
+//!   active and explored, rebuilt on the frame after each change to it;
+//!   its panel's course line is the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
 //!   for it.
 //! - The HUD's nav area shows the session's nav mode and its selection
@@ -517,6 +533,7 @@ use std::time::Duration;
 
 use nova_sim::Drawn as ShipDrawn;
 use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
+use nova_sim::gate::next_gate_pick;
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
@@ -526,16 +543,16 @@ use nova_sim::traffic::gate_entry::enter_level;
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     ALERT_CICN, Allegiance, Assigned, Assignment, AsteroidCatalog, Behaviour, BoardRefusal,
-    Boarding, BoardingRule, Chance, ClassRow, CombatCatalog, CommCatalog, CommNote, Condition,
-    Controls, Departure, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep, GateKind,
-    GateRefusal, Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help,
-    JumpRefusal, LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires,
-    NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder,
-    OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule,
-    RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, Settled,
-    ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage,
-    StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TargetTag,
-    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
+    Boarding, BoardingRule, Chance, ClassRow, CombatCatalog, CombatEvent, CommCatalog, CommNote,
+    Condition, Controls, Departure, DisableRule, DockKind, EscortCommand, FighterNote, FixedStep,
+    GateKind, GateRefusal, Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, HashedRolls,
+    Help, JumpRefusal, LandOutcome, LandPress, LandingRefusal, LegalCode, Market, NavMode,
+    NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId,
+    OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog, PlunderView,
+    PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource, Rulebook, Rules,
+    Session, Settled, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
+    SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick,
+    TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
     glow_level, lights_level,
 };
 use nova_sim::{
@@ -560,6 +577,7 @@ use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
     Toggled, escort_command_message, fighters_abandoned_message,
 };
+use super::flash::ShieldFlash;
 use super::floating::{self, FloatingMap, Hit};
 use super::hud::{self, HudState, NavDestination, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
@@ -570,7 +588,8 @@ use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
-use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMarks, MapMode};
+use crate::galaxy::map::MapPicture;
+use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapCycle, MapMarks, MapMode};
 use crate::spaceport::PortDialog;
 use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
@@ -1981,6 +2000,31 @@ impl NavFlash {
     }
 }
 
+/// What the course map's drawing is taken from
+/// ([`Session::map_drawing`]): while the map is open, a change to any of
+/// it takes the drawing again (see `FlightView::catch_up`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MapSeen {
+    system: SystemId,
+    explored: Vec<SystemId>,
+    known: BTreeSet<SystemId>,
+    course: Vec<SystemId>,
+    nav: NavMode,
+}
+
+impl MapSeen {
+    /// What `session` would draw the map from now.
+    fn of(session: &Session) -> Self {
+        Self {
+            system: session.system(),
+            explored: session.pilot().explored().collect(),
+            known: session.known().clone(),
+            course: session.course().to_vec(),
+            nav: session.nav_mode(),
+        }
+    }
+}
+
 /// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
@@ -2062,10 +2106,26 @@ pub struct FlightView<C> {
     map: GalaxyMap,
     /// Whether the course map is shown.
     map_open: bool,
+    /// Whether [`MAP_KEY`] is held while the map is shown, as
+    /// `_KeyCheck(prefs+0x12)` reads it for the map key's close
+    /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
+    /// its release, and again from any later press of it on the map.
+    map_key_held: bool,
     /// Whether the map shown is the bar's ([`FlightView::open_bar_map`]),
     /// whose close puts back the nav the bar opened with; cleared as the
     /// map closes ([`FlightView::close_map`]).
     bar_map: bool,
+    /// The mission systems the course map's red arrows mark, taken as it
+    /// opens, as `_DoSystemMap` runs `_RecalcMissionSystsForMap` then
+    /// (@0x124a0; [`Session::map_mission_systems`]).
+    map_missions: Vec<SystemId>,
+    /// What the course map's drawing was last taken from
+    /// ([`FlightView::redraw_map`]): while the map is open, a change to
+    /// any of it takes the drawing again.
+    map_seen: Option<MapSeen>,
+    /// What the floating map draws, taken at its last show
+    /// ([`FlightView::show_floating_map`]).
+    floating_picture: Option<MapPicture>,
     /// The jump's effect, while it holds flight: the streak and the
     /// fade-out, until the ship arrives.
     jump: Option<JumpEffect>,
@@ -2120,6 +2180,8 @@ pub struct FlightView<C> {
     effects: Effects,
     /// What the effects are rolled on.
     effects_chance: SharedChance,
+    /// Each ship's shield flash while its timer runs.
+    flashes: BTreeMap<ShipRef, ShieldFlash>,
     /// What the HUD's text is measured by, if anything.
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
@@ -2431,7 +2493,11 @@ impl<
             catalog,
             map,
             map_open: false,
+            map_key_held: false,
             bar_map: false,
+            map_missions: Vec::new(),
+            map_seen: None,
+            floating_picture: None,
             jump: None,
             fade_in: None,
             death_fade: None,
@@ -2479,6 +2545,7 @@ impl<
             codes: BTreeMap::new(),
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
+            flashes: BTreeMap::new(),
             metrics: None,
             escort_menu: EscortMenu::default(),
             ui_sounds: Vec::new(),
@@ -3055,9 +3122,41 @@ impl<
         self.map_open = true;
         if let Ok(session) = &self.session {
             self.map.preselect(session.map_preselection());
-            self.map
-                .show_hyper_selection(session.nav_mode().hyperspace());
+            self.map_missions = session.map_mission_systems();
         }
+        self.redraw_map();
+    }
+
+    /// Takes the session's drawing onto the course map
+    /// ([`Session::map_drawing`]), as `_MapDialogUpdate` runs `_DrawMap`:
+    /// on the hypergate map with the gate's offers arrowed, each of which
+    /// that draw marks known ([`Session::mark_known`], `_DrawMap`
+    /// @0xf457-0xf45f). So the first draw of the hypergate map shows an
+    /// offer the player knew nothing of without its oval, and the next one,
+    /// at a Tab, a click or the course map opened again before the next
+    /// rebuild point, shows it, as the original's next `_MapDialogUpdate`
+    /// does. What the drawing was taken from is noted after the mark
+    /// ([`MapSeen`]), so the mark itself doesn't take it again.
+    fn redraw_map(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
+        let drawing = session.map_drawing(offered.as_deref(), &self.map_missions);
+        self.map.show_drawing(&drawing);
+        if offered.is_some() {
+            session.mark_known(drawing.gate_arrows.iter().copied());
+        }
+        self.map_seen = Some(MapSeen::of(session));
+    }
+
+    /// Opens the course map on a press of [`MAP_KEY`] in flight, held from
+    /// then on. `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
+    /// not the map's: the hypergate's map opens without it.
+    fn open_map_by_key(&mut self) {
+        self.ui_sounds.push(UiSound::MapOpened);
+        self.open_map();
+        self.map_key_held = true;
     }
 
     /// Opens the course map from the bar, as `_DoBarDialog`'s item 8 does
@@ -3089,21 +3188,138 @@ impl<
         }
     }
 
-    /// The map's input; a destination clicked on it becomes the session's
-    /// course, which the map then shows, with the hop it cues as the
-    /// system selected in nav mode 3.
+    /// The map's input, the rest of `_MapFilter` (@0x13c63-0x147ab) that
+    /// the map leaves to its owner:
+    ///
+    /// - A key-down (not a repeat) of a key the filter doesn't take
+    ///   ([`FlightView::map_filter_takes`]) while [`MAP_KEY`] is held
+    ///   closes the map ([`FlightView::close_map`]), as the map key's close
+    ///   reads the key held (@0x144db-0x14587). M's own press closes it
+    ///   before this, in flight and in port.
+    /// - A destination clicked on it becomes the session's course, which
+    ///   the map then shows, with the hop it cues as the system selected
+    ///   in nav mode 3.
+    /// - Tab or `\` cycles the selection ([`FlightView::cycle_map`]).
+    /// - Return closes the map ([`FlightView::close_map`]): with the close
+    ///   beep and the cue in flight, entering or cancelling the hypergate
+    ///   silently, and putting back the bar's nav in port, as M does.
     fn map_input(&mut self, input: &Input) {
-        self.map.input(input);
-        let Some(destination) = self.map.take_destination() else {
+        if let Input::Key {
+            key: MAP_KEY,
+            pressed,
+            ..
+        } = *input
+        {
+            self.map_key_held = pressed;
+        }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && self.map_key_held
+            && !self.map_filter_takes(key)
+        {
+            self.close_map();
             return;
-        };
-        if let Ok(session) = &mut self.session {
+        }
+        self.map.input(input);
+        if let Some(destination) = self.map.take_destination()
+            && let Ok(session) = &mut self.session
+        {
             // A failed plot clears the course, which the map then shows.
             let _ = session.plot_course(destination);
             self.map
                 .show_course(session.system(), &session.course_shown());
-            self.map
-                .show_hyper_selection(session.nav_mode().hyperspace());
+            self.redraw_map();
+        }
+        // A click on the hypergate map draws it again, its offers known.
+        if self.map.mode() == MapMode::Hypergate
+            && matches!(
+                *input,
+                Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                }
+            )
+        {
+            self.redraw_map();
+        }
+        if let Some(cycle) = self.map.take_cycle() {
+            self.cycle_map(cycle);
+        }
+        if self.map.take_close() {
+            self.close_map();
+        }
+    }
+
+    /// Whether `_MapFilter` takes `key` before its map-key close, which a
+    /// key it takes never reaches (@0x13cdd-0x144d6): Return, Enter,
+    /// Escape, Tab and `\` (off a planet, @0x13d20), Space, B, C, `-`,
+    /// `=` and `+` (the keypad's too), the arrows, and F and S. The keys
+    /// later phases port are taken already, so none of them closes the
+    /// map. A modifier is taken too: a Mac sends no key-down for one
+    /// alone, so the filter never sees it.
+    fn map_filter_takes(&self, key: Key) -> bool {
+        let docked = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_some());
+        match key {
+            Key::Shift
+            | Key::Control
+            | Key::Alt
+            | Key::Command
+            | Key::CapsLock
+            | Key::Enter
+            | Key::Escape
+            | Key::Space
+            | Key::Left
+            | Key::Right
+            | Key::Up
+            | Key::Down => true,
+            Key::Tab => !docked,
+            Key::Char(c) => match c.to_ascii_lowercase() {
+                '\\' => !docked,
+                'b' | 'c' | '-' | '=' | '+' | 'f' | 's' => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// A Tab or `\` on the map ([`MapCycle`]), as `_MapFilter` takes it
+    /// off a planet (@0x13d0c-0x140d8). On the hypergate map, the map's
+    /// selection steps to the next of the pending hypergate's
+    /// destinations ([`Session::hypergate_cycle`],
+    /// [`next_gate_pick`](nova_sim::gate::next_gate_pick)), back with
+    /// Shift, held as it is so a hidden one steps on too; no nav mode is
+    /// written and nothing redraws, as the original's mode 4 is never
+    /// drawn (@0x13dd8-0x13ebd). On the course map, the session cycles
+    /// the hyperspace selection ([`Session::cycle_map_selection`]); the
+    /// map then draws the new selected link and selects the system the
+    /// original's `_selSystem` names (@0x1408c-0x140d8,
+    /// [`Session::map_preselection`]), and the nav area is redrawn at
+    /// once, as the filter runs `_DrawStatus` with nav marked
+    /// (`_statusRedraw[0]`, @0x13fb2-0x1406e). Docked, as on the bar's
+    /// map, nothing changes.
+    fn cycle_map(&mut self, cycle: MapCycle) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        if self.map.mode() == MapMode::Hypergate {
+            let destinations = session.hypergate_cycle(&self.catalog);
+            if let Some(pick) = next_gate_pick(&destinations, self.map.selected(), cycle.back) {
+                self.map.select_gate(pick);
+            }
+            self.redraw_map();
+            return;
+        }
+        if session.cycle_map_selection() {
+            self.map.preselect(session.map_preselection());
+            self.redraw_map();
+            self.retake_nav();
         }
     }
 
@@ -3144,7 +3360,8 @@ impl<
     /// `go_on` holds of the session before it: the ship's tick under the
     /// keys held, the traffic's, the quotes', the assistance's and the
     /// fight's, then the effects; in double time, the second pass
-    /// ([`Session::tick_again`]) and the effects again. Then says the comm
+    /// ([`Session::tick_again`]) with the answers to its hits and their
+    /// attack quotes, and the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
     /// system the session populated afresh. Flight and the warp's lead-in
     /// under the streak both step this way. The eject chord, the land key
@@ -3208,24 +3425,34 @@ impl<
                         session.tick_assistance(&*self.disable_rule);
                         notes.extend(session.take_comm());
                         session.tick_combat(rules, &mut self.chance);
-                        // The hit is answered, and the quote block runs,
-                        // before the frame is drawn, as `_HandleShot`
-                        // answers it (@0x44385) before `_HandleShip` and the
-                        // display pass. The second pass's strikes wait for
-                        // the next advance pass's answers (see the session's
-                        // `double_time` module).
-                        session.answer_strikes(&*self.behaviour);
-                        session.tick_quotes(&self.catalog, &mut self.chance);
-                        quotes.extend(session.take_quotes());
                     }
+                    // The pass's hits are answered before the frame is
+                    // drawn, as `_HandleShot` answers them (@0x44385)
+                    // before `_HandleShip` and the display pass, on both
+                    // passes. Each pass then says the attack quotes its
+                    // answers raise (`_ShowPersonHailQuote` @0x89ce1) and
+                    // runs `_HandleShip`'s quote roll (@0x33f0f-0x33fba),
+                    // the quote clock moving on the advance pass alone.
+                    session.answer_strikes(&*self.behaviour);
+                    if again {
+                        session.tick_quotes_again(&self.catalog, &mut self.chance);
+                    } else {
+                        session.tick_quotes(&self.catalog, &mut self.chance);
+                    }
+                    quotes.extend(session.take_quotes());
                     let player = point(session.player().position);
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
                     let chance = &mut self.effects_chance;
-                    self.effects.step(&dying, player, &self.looks, chance);
-                    let scene = Scene { player };
-                    for event in session.take_combat_events() {
-                        self.effects.apply(&event, &scene, &self.looks, chance);
-                    }
+                    let debris = session.rules().source_for(RuleKey::ShipDebris);
+                    let caps = session.rules().source_for(RuleKey::CombatCaps);
+                    let scene = Scene {
+                        player,
+                        debris: debris == RuleSource::Bible,
+                        caps: caps == RuleSource::Engine,
+                    };
+                    self.effects.step(&dying, &scene, &self.looks, chance);
+                    let shown = (&mut self.effects, &mut self.flashes);
+                    show_combat(session, &scene, shown, &self.looks, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {
@@ -3474,6 +3701,15 @@ impl<
         if redrawn.system {
             self.redraw_status();
         }
+        // The open map's drawing follows the galaxy, the explored and known
+        // sets, the course and the nav. The flight is paused while it is
+        // open, so this is rare: a set expression or the developer tools.
+        if self.map_open
+            && let Ok(session) = &self.session
+            && (redrawn.galaxy || self.map_seen.as_ref() != Some(&MapSeen::of(session)))
+        {
+            self.redraw_map();
+        }
         redrawn
     }
 
@@ -3504,6 +3740,7 @@ impl<
         self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
+        self.flashes.clear();
         self.read_npc_sheets();
     }
 
@@ -3824,6 +4061,7 @@ impl<
                 self.pending_landing = Some(stellar);
                 self.message = None;
                 self.effects.clear();
+                self.flashes.clear();
                 self.redraw_status();
             }
             Ok(LandPress::AtGate {
@@ -3913,6 +4151,7 @@ impl<
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
+        self.map_key_held = false;
         let bar_map = std::mem::take(&mut self.bar_map);
         if self.map.mode() != MapMode::Hypergate {
             if let Ok(session) = &mut self.session
@@ -6095,8 +6334,25 @@ impl<C> FlightView<C> {
 
     /// Shows the floating map, restarting its clock, as
     /// `_ShowFloatingMap` does.
+    ///
+    /// Each show takes the map's drawing afresh, as `_ShowFloatingMap`
+    /// draws it into the frame then (`_DrawMapInFloatingFrame`): the
+    /// session's drawing off the hypergate map (`_hypergateMapMode` = 0,
+    /// @0x114cb) with the mission systems taken now (@0x114ea), and the
+    /// system selected now ([`Session::floating_preselection`],
+    /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
+    /// The frame shows that drawing until the next show: its course and
+    /// mode-3 link are those of the last show, not live, as the
+    /// original's frame image is drawn only then (at a show, Hyper Select,
+    /// a click and a zoom, each of which shows it again here).
     fn show_floating_map(&mut self) {
         self.floating.show(self.mac_now());
+        if let Ok(session) = &self.session {
+            self.floating.preselect(session.floating_preselection());
+            let missions = session.map_mission_systems();
+            let drawing = session.map_drawing(None, &missions);
+            self.floating_picture = Some(MapPicture::of(&drawing));
+        }
     }
 
     /// The floating map's work each frame, as `_HandlePlayer` does it
@@ -6189,11 +6445,12 @@ impl<C> FlightView<C> {
     }
 
     /// Draws the floating map while it is up: centred on the current
-    /// system at its zoom, the course map's drawing ([`GalaxyMap::draw_marks`])
-    /// with the session's course and mode-3 selection as they are now,
-    /// no gate offers (`_hypergateMapMode` = 0, @0x114cb) and no selection
-    /// square, in its frame bordered in `cölr` `FloatingMap`, clipped and
-    /// faded to its level ([`floating::draw`]).
+    /// system at its zoom, the drawing its last show took
+    /// ([`FlightView::show_floating_map`]) through the course map's
+    /// [`GalaxyMap::draw_marks`], with no brackets or second names, as
+    /// `_DrawMapInFloatingFrame` runs `_DrawMap` alone, in its frame
+    /// bordered in `cölr` `FloatingMap`, clipped and faded to its level
+    /// ([`floating::draw`]).
     fn draw_floating_map(&self, list: &mut DrawList) {
         let Some(level) = self.floating.level(self.mac_now()) else {
             return;
@@ -6208,13 +6465,12 @@ impl<C> FlightView<C> {
             .map_or_else(Point::default, |at| Point::new(at.x, at.y));
         let frame = floating::frame(VIEW_SIZE);
         let transform = floating::transform(frame, at, self.floating.zoom());
-        let route = session.course_shown();
+        let Some(picture) = &self.floating_picture else {
+            return;
+        };
         let marks = MapMarks {
-            current: Some(current),
-            route: &route,
-            hyper_selection: session.nav_mode().hyperspace(),
-            offered: &[],
-            selected: None,
+            picture,
+            selected: self.floating.preselection(),
         };
         floating::draw(list, frame, level, self.escort_colors.border, |raw| {
             self.map.draw_marks(raw, &transform, &marks);
@@ -6380,6 +6636,19 @@ impl<C> FlightView<C> {
         &self.effects
     }
 
+    /// `ship`'s shield-flash timer as the last frame showed it
+    /// ([`ShieldFlash::shown`]): 32 on the frame of a hit, then a frame
+    /// less each frame; none once it has run out, or with no hit. Once the
+    /// shän shield layer is drawn (rdm:phase/ship-handling-fidelity/phase-10),
+    /// the layer shows it at [`ShieldFlash::step`]'s level.
+    #[must_use]
+    pub fn shield_flash(&self, ship: ShipRef) -> Option<f32> {
+        self.flashes
+            .get(&ship)
+            .map(ShieldFlash::shown)
+            .filter(|&shown| shown > 0.0)
+    }
+
     /// The shots in flight, each where it is drawn: `alpha` of the way
     /// from where it was a step ago, as the ships are.
     fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
@@ -6462,6 +6731,7 @@ impl<C> FlightView<C> {
                     start: shown(beam.start),
                     end: shown(beam.end),
                     weapon: beam.weapon.id,
+                    fade: beam.fade,
                 }
             })
             .collect()
@@ -6714,10 +6984,7 @@ impl<
                 }
             }
             Some(MAP_KEY) => {
-                // `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
-                // not the map's: the hypergate's map opens without it.
-                self.ui_sounds.push(UiSound::MapOpened);
-                self.open_map();
+                self.open_map_by_key();
                 return ScreenAction::None;
             }
             Some(JUMP_KEY) => {
@@ -6917,10 +7184,12 @@ impl<
     }
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
-    /// and coasts.
+    /// and coasts. [`MAP_KEY`] counts as let go too, so a key-down the
+    /// course map doesn't take no longer closes it.
     fn release_keys(&mut self) {
         self.held.clear();
         self.map.release_keys();
+        self.map_key_held = false;
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),
@@ -7063,6 +7332,71 @@ fn placeholder_size() -> (u32, u32) {
 /// The simulation's `v` as a view point.
 fn point(v: Vec2) -> Point {
     Point::new(v.x, v.y)
+}
+
+/// Shows the fight's events `session` raised this pass in `scene`: each on
+/// `effects`, as `looks` says, drawing on `chance`, and each hit on its
+/// ship's flash among `flashes`, which then step a frame
+/// ([`step_flashes`]). An NPC's shot hits land before its
+/// `_HandleShipDisplay`, so they show this frame; a hit the original lands
+/// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
+/// next.
+fn show_combat(
+    session: &mut Session,
+    scene: &Scene,
+    (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
+    looks: &Looks,
+    chance: &mut dyn Chance,
+) {
+    let mut late = Vec::new();
+    for event in session.take_combat_events() {
+        if let CombatEvent::Hit {
+            ship,
+            passes_shields,
+            late: shown_late,
+            ..
+        } = event
+        {
+            if shown_late {
+                late.push((ship, passes_shields));
+            } else {
+                flashes.entry(ship).or_default().hit(passes_shields);
+            }
+        }
+        effects.apply(&event, scene, looks, chance);
+    }
+    step_flashes(flashes, session);
+    for (ship, passes_shields) in late {
+        flashes.entry(ship).or_default().hit(passes_shields);
+    }
+}
+
+/// Steps each ship's shield flash among `flashes` a frame by its shield
+/// in `session` ([`ShieldFlash::step`]), dropping the flashes of ships no
+/// longer in the system and those run out.
+///
+/// No class has a shield layer yet: the shän shield layer is
+/// rdm:phase/ship-handling-fidelity/phase-10's, and no stock `shän` has
+/// one, so each flash only runs down, and the base it is given, which
+/// only a drawn layer reads, is the ship's shield capacity for now. That
+/// phase passes the class's own loaded `Shield` (class +0x5c @0x2c8aa)
+/// with the layer.
+fn step_flashes(flashes: &mut BTreeMap<ShipRef, ShieldFlash>, session: &Session) {
+    let shield = |ship: ShipRef| match ship {
+        ShipRef::Player => Some(session.reserves().shield),
+        ShipRef::Npc(id) => session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .map(|npc| npc.reserves.shield),
+    };
+    flashes.retain(|&ship, flash| {
+        let Some(gauge) = shield(ship) else {
+            return false;
+        };
+        flash.step(gauge.now, gauge.max, false);
+        flash.shown() > 0.0
+    });
 }
 
 /// The ships in `session` breaking up, each with its sprite's width from
@@ -8891,7 +9225,7 @@ mod tests {
         view.tick(TICK / 2);
         assert_ne!(view.shown_heading(), player(&view).heading, "between");
         let frame = view.frame().expect("a sheet");
-        assert_eq!(frame, 15, "{}", view.shown_heading());
+        assert_eq!(frame, 14, "148.5, truncated: {}", view.shown_heading());
         let centre = view.camera().world_to_screen(view.shown_position());
         assert_eq!(
             ship_sprites(&view),
@@ -11023,16 +11357,17 @@ mod tests {
         assert_eq!(view.session().expect("flying").course(), []);
     }
 
-    /// The course map's [`HYPER_SELECTED`] lines drawn, as (from, to).
+    /// The mode-3 link the open course map draws, as (from, to) on the
+    /// map; none while it is shut.
     fn hyper_selected_links(view: &View) -> Vec<(Point, Point)> {
-        drawn(view)
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Line {
-                    from, to, color, ..
-                } if color == crate::galaxy::map::HYPER_SELECTED => Some((from, to)),
-                _ => None,
-            })
+        if !view.map_open() {
+            return Vec::new();
+        }
+        view.course_map()
+            .picture()
+            .and_then(|picture| picture.mode3_link)
+            .map(|(from, to)| (on_map(view, from.0), on_map(view, to.0)))
+            .into_iter()
             .collect()
     }
 
@@ -15635,7 +15970,7 @@ mod tests {
         ) -> nova_sim::Reaction {
             if strike.ship == nova_sim::ShipRef::Npc(npc.id) {
                 nova_sim::Reaction {
-                    target: Some(strike.by),
+                    target: strike.by,
                     provoked: strike.damage,
                     goal: None,
                 }
@@ -15686,6 +16021,103 @@ mod tests {
             shield = left(&hit);
         }
         panic!("never hit");
+    }
+
+    /// [`armed`] with blasters of 5 energy damage and hypergate 141 at
+    /// (0, -110), straight ahead of the player, `with` changes made. A shot
+    /// hits on the pass after the one it moves into its target on, and at
+    /// this distance that move falls on a frame's advance pass, so the hit
+    /// falls on its second.
+    fn gate_110_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
+        let mut catalog = armed(1, &[BLASTER]);
+        for weapon in &mut catalog.weapons {
+            weapon.energy_dmg = 5;
+        }
+        catalog.sites.push(LandingSite {
+            flags2: nova_sim::gate::HYPERGATE,
+            exit_angle: 90,
+            ..site(141, (0.0, -110.0), StellarFlags::CAN_LAND)
+        });
+        with(&mut catalog);
+        catalog
+    }
+
+    /// `catalog`'s flight in double time, `draws` bringing an arrival out
+    /// of gate 141, which answers a hit by taking its attacker; fired at
+    /// until the frame on which the first hit lands, which, as a copy of
+    /// the session run through each frame's passes shows, is that frame's
+    /// second pass. Until then the arrival is hidden in the gate.
+    fn hit_on_the_second_pass(catalog: FakeCatalog, draws: &[u32]) -> View {
+        let (_, chance) = scripted(draws);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Answering))
+            .with_double_time(true);
+        ticks(&mut view, 2);
+        let npc = |view: &View| view.session().expect("flying").npcs()[0].clone();
+        assert!(matches!(npc(&view).mode, Mode::Emerging { .. }));
+        let left = |npc: &nova_sim::Npc| npc.reserves.shield.now + npc.reserves.armor.now;
+        let shield = left(&npc(&view));
+        // Whether a frame from `session`, run on a copy, hits the NPC on
+        // its advance pass, and by the end of its second.
+        let passes = |session: &Session, catalog: &FakeCatalog| {
+            let mut copy = session.clone();
+            copy.tick(Controls::default());
+            copy.tick_traffic(catalog, &Answering, &mut NeverFires);
+            copy.tick_combat(Rules::default(), &mut NeverFires);
+            let advance = left(&copy.npcs()[0]) < shield;
+            copy.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            (advance, left(&copy.npcs()[0]) < shield)
+        };
+        view.input(&key(FIRE_KEY, true));
+        for frame in 0..60 {
+            let ahead = passes(view.session().expect("flying"), view.catalog());
+            view.tick(TICK);
+            if left(&npc(&view)) < shield {
+                assert_eq!(ahead, (false, true), "frame {frame}: the second pass's hit");
+                return view;
+            }
+            let mode = npc(&view).mode;
+            assert!(matches!(mode, Mode::Emerging { .. }), "{mode:?}");
+            assert_eq!(npc_tints(&drawn(&view)), [], "hidden");
+        }
+        panic!("never hit");
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_on_the_second_pass_is_drawn_on_the_frame_of_the_hit() {
+        // `_HandleShot` (@0x44385) runs on double time's second pass too,
+        // with `_DamageShip`'s reaction, so the hit is answered there,
+        // before the next frame is drawn. Setup brings nobody; then an
+        // arrival comes out of the gate, the third of the stellars.
+        let view = hit_on_the_second_pass(gate_110_ahead(|_| ()), &[0, 0, 6, 6, 0, 0, 0, 2]);
+        let mode = view.session().expect("flying").npcs()[0].mode;
+        assert!(matches!(mode, Mode::HeldAtGate { .. }), "{mode:?}");
+        assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE], "seen");
+    }
+
+    #[test]
+    fn a_person_the_player_hits_in_its_gate_on_the_second_pass_says_its_quote_on_that_frame() {
+        // `_DamageShip`'s reaction on the second pass turns it on the
+        // player, and `_AIMakeShipAttackPlayer` says its quote there
+        // (`_ShowPersonHailQuote` @0x89ce1), before the next frame.
+        let catalog = gate_110_ahead(|catalog| {
+            let ace = peopled();
+            catalog.persons = ace.persons;
+            catalog.persons[0].link_syst = -1;
+            catalog.persons[0].flags = nova_sim::person::QUOTE_ON_ATTACK;
+            catalog.strings = ace.strings;
+        });
+        // Setup's person roll comes up empty (`përs` 128); then Ace,
+        // `përs` 600, comes out of the gate, the third of the stellars.
+        let view = hit_on_the_second_pass(catalog, &[0, 0, 0, 0, 472, 0, 2]);
+        let npc = &view.session().expect("flying").npcs()[0];
+        assert!(
+            matches!(npc.mode, Mode::HeldAtGate { .. }),
+            "{:?}",
+            npc.mode
+        );
+        assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
     }
 
     /// `catalog` with hypergate 141 at (200, 100) in Sol, of 6 frames
@@ -16148,13 +16580,14 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
     }
 
     #[test]
     fn the_sessions_diagnostics_come_through_the_screen() {
-        let disabling = nova_sim::WeaponRecord {
+        let planet_type = nova_sim::WeaponRecord {
             id: nova_sim::WeaponId(181),
             reload: 20,
             count: 12,
@@ -16170,10 +16603,12 @@ mod tests {
             blast_radius: 6,
             flags: 0,
             seeker: 0,
-            flags2: 0x1000,
+            flags2: 0x0400,
             flags3: 0,
             decay: 0,
             beam_length: 0,
+            falloff: 0,
+            li_density: 0,
             burst_count: 0,
             burst_reload: 0,
             guided_turn: 0,
@@ -16184,6 +16619,12 @@ mod tests {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            recoil: 0,
+            exit_type: -1,
+            ionization: 0,
+            ionize_color: 0,
+            jam_vuln: [0; 4],
+            frame: None,
             hit_particles: 0,
             hit_part_life: 0,
             hit_part_vel: 0,
@@ -16192,6 +16633,7 @@ mod tests {
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
             flags: 0,
+            flags2: 0,
             death_delay: 0,
             explode1: -1,
             explode2: -1,
@@ -16206,10 +16648,13 @@ mod tests {
             strength: 0,
             key_carried: None,
             cost: 0,
+            speed: 0,
+            exits: None,
+            escort_class: nova_sim::EscortClass::Freighter,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
-            weapons: vec![disabling],
+            weapons: vec![planet_type],
             hulls: vec![hull],
             looks: vec![(181, Ok(WeaponLook::default()))],
             ..trafficked(&[130], 1, 129, 3)
@@ -16224,7 +16669,7 @@ mod tests {
             [Diagnostic::Sim(SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: nova_sim::WeaponId(181),
                 field: nova_sim::combat::flags::FlagField::Flags2,
-                bit: 0x1000
+                bit: 0x0400
             })]
         );
         ticks(&mut view, 30);
@@ -16308,6 +16753,8 @@ mod tests {
             flags3: 0,
             decay: 0,
             beam_length: 50,
+            falloff: 0,
+            li_density: 0,
             burst_count: 0,
             burst_reload: 0,
             guided_turn: 0,
@@ -16318,6 +16765,12 @@ mod tests {
             sub_limit: 0,
             max_ammo: 0,
             prox_safety: 0,
+            recoil: 0,
+            exit_type: -1,
+            ionization: 0,
+            ionize_color: 0,
+            jam_vuln: [0; 4],
+            frame: None,
             hit_particles: 0,
             hit_part_life: 0,
             hit_part_vel: 0,
@@ -16331,6 +16784,7 @@ mod tests {
         nova_sim::HullRecord {
             id: ShipId(id),
             flags: 0,
+            flags2: 0,
             death_delay: 0,
             explode1: -1,
             explode2: 0,
@@ -16348,6 +16802,9 @@ mod tests {
             strength: 0,
             key_carried: None,
             cost: 0,
+            speed: 0,
+            exits: None,
+            escort_class: nova_sim::EscortClass::Freighter,
         }
     }
 
@@ -16880,6 +17337,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
     }
@@ -16898,6 +17356,35 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_beams_fade_is_shown_as_the_session_counts_it() {
+        let mut catalog = armed(0, &[OVER]);
+        for weapon in &mut catalog.weapons {
+            if weapon.id == OVER {
+                *weapon = nova_sim::WeaponRecord {
+                    count: 1,
+                    reload: 100,
+                    decay: 1,
+                    falloff: 10,
+                    ..*weapon
+                };
+            }
+        }
+        let mut view = fighting(catalog, &[]);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        ticks(&mut view, 2);
+        let fade = view.session().expect("flying").beams()[0].fade;
+        assert!(fade > 0, "fading");
+        let shown: Vec<u32> = view
+            .shown_beams(&view.camera())
+            .iter()
+            .map(|beam| beam.fade)
+            .collect();
+        assert_eq!(shown, [fade]);
     }
 
     #[test]
@@ -17804,6 +18291,148 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_npc_destroyed_under_the_originals_debris_reading_scatters_none() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        let rules = Rulebook::default().with_override(RuleKey::ShipDebris, RuleSource::Engine);
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_rules(rules);
+        tap(&mut view, Key::Tab);
+        view.input(&key(FIRE_KEY, true));
+        for _ in 0..10 {
+            view.tick(TICK);
+            if view.session().expect("flying").npcs().is_empty() {
+                break;
+            }
+        }
+        assert!(view.session().expect("flying").npcs().is_empty());
+        let effects = view.effects();
+        assert_eq!(effects.explosions().len(), 1, "its Explode2 still");
+        assert_eq!(effects.explosions()[0].boom, BoomId(128));
+        assert_eq!(effects.particles(), [], "no debris");
+    }
+
+    /// [`armed`] with a blaster whose hits throw off 5 orange particles
+    /// of `HitPartLife` 30, flown once at NPC 0 ahead: the flight on the
+    /// tick its shot hits, and the NPC.
+    fn hit_once() -> (View, ShipRef) {
+        hit_once_by(5, Rulebook::default())
+    }
+
+    /// [`hit_once`] with `particles` thrown off, by `rules`.
+    fn hit_once_by(particles: i16, rules: Rulebook) -> (View, ShipRef) {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].energy_dmg = 1;
+        catalog.weapons[0].explod_type = -1;
+        catalog.weapons[0].hit_particles = particles;
+        catalog.weapons[0].hit_part_vel = 100;
+        catalog.weapons[0].hit_part_life = 30;
+        catalog.weapons[0].hit_part_color = 0x00FF_8000;
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_rules(rules);
+        tap(&mut view, Key::Tab);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        for _ in 0..20 {
+            if view.shield_flash(npc).is_some() {
+                return (view, npc);
+            }
+            view.tick(TICK);
+        }
+        panic!("never hit: {:?}", view.session().expect("flying").npcs());
+    }
+
+    #[test]
+    fn an_npc_hit_flashes_its_shield_32_on_the_tick_of_the_hit_then_31() {
+        let (mut view, npc) = hit_once();
+        assert_eq!(view.shield_flash(npc), Some(32.0));
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), Some(31.0));
+        assert_eq!(view.shield_flash(ShipRef::Player), None, "not hit");
+    }
+
+    #[test]
+    fn a_hit_with_hit_particles_sprays_them_on_the_npc_in_its_colour() {
+        let (view, _) = hit_once();
+        let orange = crate::Color::rgba(0xFF, 0x80, 0x00, 255);
+        let particles = view.effects().particles();
+        assert_eq!(particles.len(), 5, "{particles:?}");
+        assert!(particles.iter().all(|piece| piece.color == orange));
+    }
+
+    #[test]
+    fn under_the_combat_caps_a_hit_keeps_at_most_1024_particles() {
+        let (view, _) = hit_once_by(1100, Rulebook::default());
+        assert_eq!(
+            view.effects().particles().len(),
+            1100,
+            "uncapped by default"
+        );
+        let caps = Rulebook::default().with_override(RuleKey::CombatCaps, RuleSource::Engine);
+        let (view, _) = hit_once_by(1100, caps);
+        assert_eq!(view.effects().particles().len(), 1024);
+    }
+
+    #[test]
+    fn a_beams_hit_flashes_the_npcs_shield_from_the_frame_after() {
+        let mut catalog = armed(1, &[UNDER]);
+        catalog.weapons[4].beam_length = 400;
+        catalog.weapons[4].energy_dmg = 1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        let shield = |view: &View| {
+            view.session().expect("flying").npcs()[0]
+                .reserves
+                .shield
+                .now
+        };
+        let full = shield(&view);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        let mut ticks = 0;
+        while shield(&view) == full {
+            assert!(ticks < 20, "never hit");
+            view.tick(TICK);
+            ticks += 1;
+        }
+        assert_eq!(view.shield_flash(npc), None, "shown the frame after");
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), Some(32.0));
+    }
+
+    #[test]
+    fn a_destroyed_npcs_shield_flash_is_dropped() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].energy_dmg = 20;
+        catalog.weapons[0].mass_dmg = 20;
+        catalog.weapons[0].explod_type = -1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        let mut flashed = false;
+        for _ in 0..20 {
+            view.tick(TICK);
+            if view.session().expect("flying").npcs().is_empty() {
+                break;
+            }
+            flashed |= view.shield_flash(npc) == Some(32.0);
+        }
+        assert!(
+            view.session().expect("flying").npcs().is_empty(),
+            "destroyed"
+        );
+        assert!(flashed, "hit before it was destroyed");
+        assert_eq!(view.shield_flash(npc), None);
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), None, "nor on the next tick");
+    }
+
     /// [`armed`] with a blaster whose shots detonate after a tick.
     fn detonating() -> FakeCatalog {
         let mut catalog = armed(0, &[BLASTER]);
@@ -17812,11 +18441,13 @@ mod tests {
         catalog
     }
 
-    /// Fires one detonating shot, which explodes.
+    /// Fires one detonating shot, which explodes as its end of life comes,
+    /// the tick after its one move.
     fn detonate(view: &mut View) {
         view.input(&key(FIRE_KEY, true));
         view.tick(TICK);
         view.input(&key(FIRE_KEY, false));
+        view.tick(TICK);
         assert_eq!(view.effects().explosions().len(), 1);
     }
 
@@ -17841,6 +18472,55 @@ mod tests {
         arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(*view.effects(), Effects::default());
+    }
+
+    /// [`detonating`] with a blast of radius 100 doing 1 energy damage,
+    /// which reaches the player who fired it.
+    fn self_blasting() -> FakeCatalog {
+        let mut catalog = detonating();
+        catalog.weapons[0].blast_radius = 100;
+        catalog.weapons[0].energy_dmg = 1;
+        catalog
+    }
+
+    /// Fires one [`self_blasting`] shot and ticks until its blast flashes
+    /// the player's shield.
+    fn flash_the_player(view: &mut View) {
+        detonate(view);
+        for _ in 0..5 {
+            if view.shield_flash(ShipRef::Player).is_some() {
+                return;
+            }
+            view.tick(TICK);
+        }
+        panic!("the player was never hit: {:?}", player(view));
+    }
+
+    #[test]
+    fn landing_clears_the_shield_flashes() {
+        let mut catalog = self_blasting();
+        catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        let mut view = fighting(catalog, &[]);
+        flash_the_player(&mut view);
+        land_now(&mut view);
+        assert!(view.take_landing().is_some());
+        assert_eq!(view.shield_flash(ShipRef::Player), None);
+    }
+
+    #[test]
+    fn passing_through_a_wormhole_clears_the_shield_flashes() {
+        let holes = holed();
+        let catalog = FakeCatalog {
+            sites: holes.sites,
+            gates: holes.gates,
+            gate_listers: holes.gate_listers,
+            ..self_blasting()
+        };
+        let mut view = fighting(catalog, &[]);
+        flash_the_player(&mut view);
+        land_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(view.shield_flash(ShipRef::Player), None);
     }
 
     #[test]
@@ -18286,6 +18966,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             }
         }
 
@@ -18311,17 +18992,25 @@ mod tests {
             (0.0, 0.0),
             StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
         )];
+        let sprite = |side| {
+            Some(nova_sim::FrameSize {
+                width: side,
+                height: side,
+            })
+        };
         catalog.weapons.push(nova_sim::WeaponRecord {
             reload: 5,
             count: 12,
             mass_dmg: 1,
             energy_dmg: 4,
+            frame: sprite(35),
             ..gun(QUAD, 0, 9, -1)
         });
         catalog.weapons.push(nova_sim::WeaponRecord {
             reload: 1000,
             count: 200,
             speed: 500,
+            frame: sprite(18),
             ..gun(IR, 0, 1, -1)
         });
         catalog.hulls = vec![hull_of(128, &[QUAD]), hull_of(129, &[IR])];
@@ -18342,21 +19031,28 @@ mod tests {
     #[test]
     fn the_fight_asks_the_point_defence_rule_given_each_step_in_flight() {
         let rule = Rc::new(Unalarmed::default());
-        let mut view = attacked(defending()).with_point_defence_rule(rule.clone());
+        let asking = Rulebook::default().with_override(RuleKey::PdHostility, RuleSource::Bible);
+        let mut view = attacked(defending())
+            .with_rules(asking)
+            .with_point_defence_rule(rule.clone());
         view.tick(TICK);
         assert_eq!(shots_of(&view, IR), 1, "fired at the player");
-        assert_eq!(rule.asked.get(), 1, "of the one missile");
+        assert_eq!(
+            rule.asked.get(),
+            0,
+            "after the player's point defence, which runs before the NPCs fire"
+        );
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3);
+        assert_eq!(rule.asked.get(), 2, "of the one missile, each step");
         assert_eq!(shots_of(&view, QUAD), 0, "never hostile");
         view.input(&key(MAP_KEY, true));
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3, "not while the map is open");
+        assert_eq!(rule.asked.get(), 2, "not while the map is open");
         view.input(&key(MAP_KEY, true));
         tap(&mut view, LAND);
         assert!(view.take_landing().is_some(), "one press, uninhabited");
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3, "not while landed");
+        assert_eq!(rule.asked.get(), 2, "not while landed");
     }
 
     #[test]
@@ -18415,6 +19111,7 @@ mod tests {
                 scan_fine: 0,
                 news_pic: -1,
                 require: 0,
+                inh_jam: [0; 4],
             }],
             ..catalog
         }
@@ -21058,6 +21755,7 @@ mod tests {
             scan_fine: fine,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         catalog.missions = vec![MissionRecord {
             cargo_type: 0,
@@ -21806,6 +22504,21 @@ mod tests {
         );
         assert_lasts(&mut view, "Ace: Prepare to die, !", 420);
         assert_eq!(HAIL_QUOTE_TICKS, 420);
+    }
+
+    #[test]
+    fn in_double_time_a_person_rolls_its_hail_quote_on_both_passes() {
+        // `_HandleShip` (@0x44483) runs on both passes and its quote block
+        // (@0x33f0f-0x33fba) tests no pass.
+        let (script, chance) = scripted(&[99, 750, 650, 0, 1, 0]);
+        let mut view = FlightView::new(peopled())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_double_time(true);
+        view.tick(TICK);
+        assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
+        let asked = &script.borrow().asked;
+        assert_eq!(asked[asked.len() - 2..], [140, 140], "{asked:?}");
     }
 
     #[test]
@@ -22922,6 +23635,7 @@ mod tests {
             scan_fine: 0,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         for record in &mut catalog.ships {
             record.crew = 3;
@@ -24744,6 +25458,327 @@ mod tests {
         assert_lasts(&mut view, HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS);
     }
 
+    // Tab, `\`, Return and the map key on the in-flight maps (`_MapFilter`).
+
+    #[test]
+    fn tab_on_the_course_map_draws_the_next_link_and_selects_it() {
+        let mut view = FlightView::new(FakeCatalog {
+            fan: true,
+            ..catalog()
+        });
+        tap(&mut view, MAP);
+        for (k, expected) in [(Key::Tab, 131), (Key::Char('\\'), 132), (Key::Tab, 131)] {
+            view.input(&key(k, true));
+            assert!(view.map_open(), "{k:?}");
+            assert_eq!(
+                nav_mode(&view),
+                NavMode::Hyperspace(Some(SystemId(expected))),
+                "{k:?}"
+            );
+            let map = view.course_map();
+            assert_eq!(map.selected(), Some(SystemId(expected)));
+            assert_eq!(map.hyper_selection(), Some(SystemId(expected)));
+            assert_eq!(
+                hyper_selected_links(&view),
+                [(on_map(&view, 130), on_map(&view, expected))]
+            );
+            view.input(&key(k, false));
+        }
+        view.input(&held(Key::Tab));
+        assert_eq!(
+            nav_mode(&view),
+            NavMode::Hyperspace(Some(SystemId(132))),
+            "a repeat cycles too"
+        );
+    }
+
+    #[test]
+    fn tab_on_the_course_map_with_no_links_selects_none_and_the_map_selects_the_current_system() {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        run_set(&mut view, "M132");
+        view.settle_script();
+        assert_eq!(system_of(&view), SystemId(132), "Barnard lists no links");
+        tap(&mut view, MAP);
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+        assert_eq!(view.course_map().selected(), Some(SystemId(132)));
+        assert_eq!(view.course_map().hyper_selection(), None);
+        assert_eq!(hyper_selected_links(&view), []);
+    }
+
+    #[test]
+    fn tab_on_the_course_map_plays_no_sound() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        view.take_sounds();
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn tab_on_the_course_map_redraws_the_nav_area_at_once() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        let stale = NavDisplay::Stellar(Some("Stale".to_owned()));
+        let alpha = NavMode::Hyperspace(Some(SystemId(131)));
+        view.nav_scene = Some((alpha, stale.clone()));
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_mode(&view), alpha);
+        assert_eq!(view.nav_shown(), view.nav_now(), "redrawn");
+        assert_ne!(view.nav_shown(), stale);
+        tap(&mut view, MAP);
+        assert_eq!(nav_mode(&view), alpha, "no course to cue");
+        assert_eq!(nav(&view), cueing_alpha(), "shown once the map closes");
+    }
+
+    #[test]
+    fn closing_the_map_cues_the_courses_hop_over_a_tab_selection() {
+        let mut view = FlightView::new(FakeCatalog {
+            fan: true,
+            ..catalog()
+        });
+        plot(&mut view, 131);
+        tap(&mut view, MAP);
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(132))));
+        tap(&mut view, MAP);
+        assert_eq!(
+            nav_mode(&view),
+            NavMode::Hyperspace(Some(SystemId(131))),
+            "the close's cue (@0x13c16)"
+        );
+    }
+
+    /// [`gated`] with Alpha Reborn standing for a hidden Alpha Centauri,
+    /// and hypergate 300 linked to 310, in Alpha Centauri, and 320, in
+    /// Barnard: the hypergate map is open, offering Alpha Reborn and
+    /// Barnard.
+    fn at_a_shadowed_gate() -> View {
+        let mut view = FlightView::new(FakeCatalog {
+            reborn: true,
+            onward: true,
+            gates: vec![
+                gate_site(300, (0.0, 0.0), 0x1200, &[310, 320], 120),
+                gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
+                gate_site(320, (-50.0, 0.0), 0x1000, &[], 0),
+            ],
+            gate_listers: vec![
+                (SystemId(131), StellarId(310)),
+                (SystemId(132), StellarId(320)),
+            ],
+            ..gated()
+        });
+        change_galaxy(&mut view, hiding(131));
+        view.tick(TICK);
+        land_now(&mut view);
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+        view
+    }
+
+    #[test]
+    fn tab_on_the_hypergate_map_cycles_the_gates_destinations_shift_reversing_through_a_shadowed_system()
+     {
+        let mut view = at_a_shadowed_gate();
+        let nav = nav_mode(&view);
+        view.take_sounds();
+        // `_FindSystemFromStellar` gives hidden 131 for 310, its only
+        // lister, unresolved by place.
+        for expected in [131, 132, 131] {
+            tap(&mut view, Key::Tab);
+            assert_eq!(view.course_map().selected(), Some(SystemId(expected)));
+        }
+        view.input(&key(Key::Shift, true));
+        for expected in [132, 131] {
+            tap(&mut view, Key::Char('\\'));
+            assert_eq!(view.course_map().selected(), Some(SystemId(expected)));
+        }
+        view.input(&key(Key::Shift, false));
+        assert_eq!(nav_mode(&view), nav, "no nav mode written");
+        assert_eq!(view.course_map().hyper_selection(), None);
+        assert_eq!(view.take_sounds(), []);
+        tap(&mut view, MAP);
+        assert_eq!(
+            view.message(),
+            Some(HYPERGATE_CANCELLED),
+            "no link resolves to hidden 131 (@0x638cd-0x638ff)"
+        );
+        assert_eq!(system_of(&view), SystemId(130));
+    }
+
+    #[test]
+    fn closing_the_hypergate_map_on_a_tab_pick_enters_the_gate() {
+        let mut view = at_a_shadowed_gate();
+        tap(&mut view, Key::Tab);
+        tap(&mut view, Key::Tab);
+        assert_eq!(view.course_map().selected(), Some(SystemId(132)));
+        view.close_map();
+        assert_eq!(system_of(&view), SystemId(132));
+        assert_eq!(player(&view).position, Vec2::new(-50.0, 0.0), "at 320");
+    }
+
+    #[test]
+    fn tab_on_the_bars_map_changes_nothing() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        let selected = view.course_map().selected();
+        for k in [Key::Tab, Key::Char('\\')] {
+            view.port_map_input(&key(k, true));
+            view.port_map_input(&key(k, false));
+            assert!(view.map_open(), "{k:?}");
+            assert_eq!(
+                view.session().map(Session::nav_mode),
+                Ok(NavMode::Stellar(Some(StellarId(128)))),
+                "{k:?}"
+            );
+            assert_eq!(view.course_map().selected(), selected, "{k:?}");
+            assert_eq!(view.course_map().hyper_selection(), None, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn return_closes_the_course_map_with_the_close_beep_and_the_cue() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        tap(&mut view, NAV_OFF_KEY);
+        tap(&mut view, MAP);
+        view.take_sounds();
+        view.input(&held(Key::Enter));
+        assert!(view.map_open(), "a repeat doesn't close it");
+        tap(&mut view, Key::Enter);
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), [UiSound::MapClosed]);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+    }
+
+    #[test]
+    fn return_on_the_hypergate_map_enters_or_cancels_in_silence() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        view.take_sounds();
+        tap(&mut view, Key::Enter);
+        assert!(!view.map_open());
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+        assert_eq!(map_sounds(&mut view), []);
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        view.take_sounds();
+        tap(&mut view, Key::Enter);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(map_sounds(&mut view), []);
+    }
+
+    #[test]
+    fn return_closes_the_bars_map_and_puts_back_the_bars_nav() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        port_click(&mut view, 131);
+        view.take_sounds();
+        view.port_map_input(&key(Key::Enter, true));
+        assert!(!view.map_open());
+        assert_eq!(map_sounds(&mut view), []);
+        assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "the bar's nav put back"
+        );
+    }
+
+    #[test]
+    fn a_key_down_the_map_doesnt_take_closes_it_while_the_map_key_is_held() {
+        let mut view = flight();
+        view.input(&key(MAP, true));
+        assert!(view.map_open());
+        // Every key `_MapFilter` tests before the map key's close.
+        for k in [
+            Key::Tab,
+            Key::Char('\\'),
+            Key::Space,
+            Key::Char('b'),
+            Key::Char('c'),
+            Key::Char('-'),
+            Key::Char('='),
+            Key::Char('+'),
+            Key::Left,
+            Key::Right,
+            Key::Up,
+            Key::Down,
+            Key::Char('f'),
+            Key::Char('s'),
+        ] {
+            tap(&mut view, k);
+            assert!(view.map_open(), "{k:?}");
+        }
+        view.take_sounds();
+        view.input(&held(LAND));
+        assert!(view.map_open(), "a repeat never closes it");
+        view.input(&key(LAND, true));
+        assert!(!view.map_open(), "L with M held");
+        assert_eq!(map_sounds(&mut view), [UiSound::MapClosed]);
+        view.input(&key(LAND, false));
+        view.input(&key(MAP, false));
+        tap(&mut view, MAP);
+        assert!(view.map_open());
+        tap(&mut view, LAND);
+        assert!(view.map_open(), "M let go");
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_lets_go_of_the_map_key() {
+        // The window loses focus with M still down, so its release never
+        // arrives: the next key the map doesn't take leaves it open.
+        let mut view = flight();
+        view.input(&key(MAP, true));
+        assert!(view.map_open());
+        view.release_keys();
+        tap(&mut view, LAND);
+        assert!(view.map_open(), "in flight");
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        view.port_map_input(&held(MAP));
+        view.release_keys();
+        view.port_map_input(&key(Key::Tab, true));
+        assert!(view.map_open(), "in port");
+    }
+
+    #[test]
+    fn a_modifier_is_no_key_down_and_never_closes_the_map() {
+        // A Mac sends no key-down for a modifier alone, so `_MapFilter`
+        // never sees one.
+        let mut view = flight();
+        view.input(&key(MAP, true));
+        for k in [
+            Key::Shift,
+            Key::Control,
+            Key::Alt,
+            Key::Command,
+            Key::CapsLock,
+        ] {
+            view.input(&key(k, true));
+            assert!(view.map_open(), "{k:?}");
+            view.input(&key(k, false));
+        }
+    }
+
+    #[test]
+    fn in_port_tab_or_backslash_with_the_map_key_held_closes_the_map() {
+        // Both fall through on a planet (@0x13d20).
+        for k in [Key::Tab, Key::Char('\\')] {
+            let mut view = in_the_bar(None);
+            view.open_bar_map();
+            view.port_map_input(&held(MAP));
+            view.port_map_input(&key(k, true));
+            assert!(!view.map_open(), "{k:?}");
+        }
+    }
+
     #[test]
     fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
         // The course map, closed by its key or as Escape does; then the
@@ -24925,6 +25960,7 @@ mod tests {
             scan_fine: 0,
             news_pic: -1,
             require: 0,
+            inh_jam: [0; 4],
         }];
         // One ship of düde 128 (ship 129) attacking the player and
         // following it (`ShipSyst` -6).
@@ -25890,16 +26926,14 @@ mod tests {
 
     #[test]
     fn a_shot_detonating_on_the_second_pass_is_drawn_that_tick() {
-        let lasting_two = || {
-            let mut catalog = detonating();
-            catalog.weapons[0].count = 2;
-            fighting(catalog, &[])
-        };
-        let mut single = lasting_two();
+        // Its one move, on the advance pass, spends it; its end of life
+        // comes in the next pass's hit pass.
+        let lasting_one = || fighting(detonating(), &[]);
+        let mut single = lasting_one();
         single.input(&key(FIRE_KEY, true));
         single.tick(TICK);
         assert!(single.effects().explosions().is_empty(), "not yet");
-        let mut view = lasting_two().with_double_time(true);
+        let mut view = lasting_one().with_double_time(true);
         view.input(&key(FIRE_KEY, true));
         view.tick(TICK);
         assert_eq!(view.effects().explosions().len(), 1);
@@ -26326,7 +27360,11 @@ mod tests {
     // The floating map.
 
     use crate::flight::floating;
-    use crate::galaxy::map::{CURRENT, DOT_SIZE, HYPER_SELECTED, LINK, ROUTE, ROUTE_WIDTH};
+    use crate::galaxy::map::{
+        BRIGHT_GREEN, CLEARED, CYAN, DARK_GREY, DENIED, DIM_GREEN, HOSTILE, LESS_DARK_GREY,
+        LIGHT_GREY,
+    };
+    use crate::geometry::Bounds;
     use nova_sim::mission::screens::mac_ticks;
 
     /// The floating map's frame's centre, where Sol is drawn.
@@ -26385,26 +27423,67 @@ mod tests {
             })
     }
 
-    /// Where the floating map draws system dots, in draw order.
+    /// Where the floating map draws systems' ovals, in draw order: the
+    /// centre of each run of 1-pixel rows in a colour code's colour, each
+    /// row the one after the last, inside the frame. Its black fills cover
+    /// but draw nothing.
     fn floating_dots(view: &View) -> Vec<Point> {
-        drawn(view)
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Dot { center, size, .. }
-                    if size == DOT_SIZE
-                        && floating::contains(floating::frame(VIEW_SIZE), center) =>
+        let codes = [
+            DARK_GREY,
+            LIGHT_GREY,
+            BRIGHT_GREEN,
+            CLEARED,
+            DENIED,
+            HOSTILE,
+        ];
+        let frame = floating::frame(VIEW_SIZE);
+        let mut ovals: Vec<(Color, f32, Bounds)> = Vec::new();
+        for command in &drawn(view) {
+            let DrawCommand::Line {
+                from,
+                to,
+                width,
+                color,
+            } = *command
+            else {
+                continue;
+            };
+            let opaque = Color { a: 255, ..color };
+            if width != 1.0 || from.y != to.y || !codes.contains(&opaque) {
+                continue;
+            }
+            if !floating::contains(frame, from) {
+                continue;
+            }
+            let row = Bounds {
+                min: Point::new(from.x.min(to.x), from.y - 0.5),
+                max: Point::new(from.x.max(to.x), from.y + 0.5),
+            };
+            match ovals.last_mut() {
+                Some((last, top, area))
+                    if *last == opaque && (row.min.y == *top || row.min.y == *top + 1.0) =>
                 {
-                    Some(center)
+                    *top = row.min.y;
+                    area.min.x = area.min.x.min(row.min.x);
+                    area.max.x = area.max.x.max(row.max.x);
+                    area.max.y = row.max.y;
                 }
-                _ => None,
-            })
+                _ => ovals.push((opaque, row.min.y, row)),
+            }
+        }
+        ovals
+            .into_iter()
+            .map(|(_, _, area)| area.center())
             .collect()
     }
 
     /// Where the floating map draws Proxima Near (134) at the zoom whose
-    /// scale is `scale`.
+    /// scale is `scale`: the pixel its point truncates to.
     fn near_at(scale: f32) -> Point {
-        Point::new(686.0 + 40.0 * scale, 278.0 + 30.0 * scale)
+        Point::new(
+            (686.0 + 40.0 * scale).trunc(),
+            (278.0 + 30.0 * scale).trunc(),
+        )
     }
 
     fn sims(view: &mut View) -> Vec<SimSound> {
@@ -26442,8 +27521,8 @@ mod tests {
         assert_eq!(floating_dots(&view), [FRAME_CENTRE], "Sol, at the centre");
         assert!(
             list.iter().any(|command| matches!(command,
-                DrawCommand::Line { color, .. } if *color == CURRENT)),
-            "the current system's mark round it"
+                DrawCommand::Line { color, .. } if *color == CYAN)),
+            "the current system's dot in it"
         );
     }
 
@@ -26624,11 +27703,14 @@ mod tests {
         assert_eq!(system_of(&view), SystemId(134), "Proxima Near, at (40, 30)");
         tap(&mut view, HYPERSPACE_MODE_KEY);
         // Sol, 40 left and 30 up at 16/9: (614.9, 224.7).
-        let sol = Point::new(686.0 - 40.0 * (16.0 / 9.0), 278.0 - 30.0 * (16.0 / 9.0));
+        let sol = Point::new(
+            (686.0 - 40.0 * (16.0_f32 / 9.0)).trunc(),
+            (278.0 - 30.0 * (16.0_f32 / 9.0)).trunc(),
+        );
         assert_eq!(
             floating_dots(&view),
-            [FRAME_CENTRE, sol],
-            "Proxima Near at the centre, then Sol"
+            [sol, FRAME_CENTRE],
+            "Sol, then Proxima Near at the centre, by ascending ID"
         );
         view.take_sounds();
         click(&mut view, at(614.0, 224.0));
@@ -26703,9 +27785,9 @@ mod tests {
         let mut view = near();
         tap(&mut view, HYPERSPACE_MODE_KEY);
         view.take_sounds();
-        assert_eq!(floating_dots(&view), [near_at(16.0 / 9.0), FRAME_CENTRE]);
+        assert_eq!(floating_dots(&view), [FRAME_CENTRE, near_at(16.0 / 9.0)]);
         tap(&mut view, ZOOM_OUT_KEY);
-        assert_eq!(floating_dots(&view), [near_at(4.0 / 3.0), FRAME_CENTRE]);
+        assert_eq!(floating_dots(&view), [FRAME_CENTRE, near_at(4.0 / 3.0)]);
         assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::FloatingMapZoomed)]);
         assert_eq!(ZOOM_OUT_KEY, Key::Char('-'));
     }
@@ -26717,7 +27799,7 @@ mod tests {
             tap(&mut view, HYPERSPACE_MODE_KEY);
             view.take_sounds();
             tap(&mut view, k);
-            assert_eq!(floating_dots(&view)[0], near_at(64.0 / 27.0), "{k:?}");
+            assert_eq!(floating_dots(&view)[1], near_at(64.0 / 27.0), "{k:?}");
             assert_eq!(
                 view.take_sounds(),
                 [Sound::Ui(UiSound::FloatingMapZoomed)],
@@ -26735,15 +27817,15 @@ mod tests {
         tap(&mut view, ZOOM_IN_KEY);
         view.take_sounds();
         tap(&mut view, ZOOM_IN_KEY);
-        assert_eq!(floating_dots(&view)[0], near_at(64.0 / 27.0));
+        assert_eq!(floating_dots(&view)[1], near_at(64.0 / 27.0));
         assert_eq!(view.take_sounds(), []);
         for _ in 0..6 {
             tap(&mut view, ZOOM_OUT_KEY);
         }
-        assert_eq!(floating_dots(&view)[0], near_at(27.0 / 64.0));
+        assert_eq!(floating_dots(&view)[1], near_at(27.0 / 64.0));
         view.take_sounds();
         tap(&mut view, ZOOM_OUT_KEY);
-        assert_eq!(floating_dots(&view)[0], near_at(27.0 / 64.0));
+        assert_eq!(floating_dots(&view)[1], near_at(27.0 / 64.0));
         assert_eq!(view.take_sounds(), []);
     }
 
@@ -26765,11 +27847,11 @@ mod tests {
             view.input(&key(k, true));
             view.take_sounds();
             tap(&mut view, ZOOM_OUT_KEY);
-            assert_eq!(floating_dots(&view)[0], near_at(16.0 / 9.0), "{k:?}");
+            assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0), "{k:?}");
             assert_eq!(view.take_sounds(), [], "{k:?}");
             view.input(&key(k, false));
             tap(&mut view, ZOOM_OUT_KEY);
-            assert_eq!(floating_dots(&view)[0], near_at(4.0 / 3.0), "{k:?} let go");
+            assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0), "{k:?} let go");
         }
     }
 
@@ -26780,7 +27862,7 @@ mod tests {
         tap(&mut view, ZOOM_IN_KEY);
         assert_eq!(view.take_sounds(), []);
         tap(&mut view, HYPERSPACE_MODE_KEY);
-        assert_eq!(floating_dots(&view)[0], near_at(16.0 / 9.0));
+        assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
     }
 
     #[test]
@@ -26847,6 +27929,27 @@ mod tests {
         assert!(icon < map && map < menu, "{icon} < {map} < {menu}");
     }
 
+    /// The rects of `color`, whatever their alpha, in `list`, as (left,
+    /// top, right, bottom).
+    fn rects_of(list: &DrawList, of: Color) -> Vec<(f32, f32, f32, f32)> {
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Line {
+                    from,
+                    to,
+                    width,
+                    color,
+                } if Color { a: 255, ..color } == of && from.y == to.y => Some((
+                    from.x.min(to.x),
+                    from.y - width / 2.0,
+                    from.x.max(to.x),
+                    from.y + width / 2.0,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn the_floating_map_draws_the_sessions_selection_clipped_to_the_frame() {
         let mut view = flight();
@@ -26854,29 +27957,20 @@ mod tests {
         assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
         assert_eq!(view.course_map().hyper_selection(), None, "never opened");
         let list = drawn(&view);
-        let selected: Vec<(Point, Point)> = list
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Line {
-                    from, to, color, ..
-                } if color == HYPER_SELECTED => Some((from, to)),
-                _ => None,
-            })
-            .collect();
         assert_eq!(
-            selected,
-            [(at(693.0, 278.0), at(814.0, 278.0))],
-            "from the edge of Sol's mark to the frame's"
+            rects_of(&list, DIM_GREEN),
+            [(690.0, 278.0, 814.0, 279.0)],
+            "from the edge of Sol's oval to the frame's, drawn once"
         );
-        assert!(
-            !list.iter().any(|command| matches!(command,
-                DrawCommand::Line { color, .. } if *color == LINK)),
-            "the link under it is left out"
+        assert_eq!(
+            rects_of(&list, LESS_DARK_GREY),
+            [],
+            "the link under it is cut away"
         );
     }
 
     #[test]
-    fn the_floating_map_draws_the_sessions_course_as_it_is_now() {
+    fn the_floating_map_draws_the_course_as_its_show_took_it() {
         let mut view = flight();
         view.session
             .as_mut()
@@ -26889,29 +27983,162 @@ mod tests {
             "the course map never shown it"
         );
         tap(&mut view, HYPERSPACE_MODE_KEY);
-        let list = drawn(&view);
-        let route: Vec<(Point, Point, f32)> = list
+        let course = rects_of(&drawn(&view), BRIGHT_GREEN);
+        assert_eq!(
+            course,
+            [(690.0, 279.0, 814.0, 280.0)],
+            "from the edge of Sol's oval to the frame's, at pen 2, its top \
+             row under Sol's link"
+        );
+        assert_eq!(
+            rects_of(&drawn(&view), DIM_GREEN),
+            [(690.0, 278.0, 814.0, 279.0)],
+            "the link to 131, the hop the plot cued, drawn after the course \
+             over it, and over its own grey"
+        );
+        assert_eq!(rects_of(&drawn(&view), LESS_DARK_GREY), []);
+        let session = view.session.as_mut().expect("flying");
+        let _ = session.plot_course(SystemId(130));
+        assert_ne!(session.course(), [SystemId(131)], "the course changed");
+        assert_eq!(
+            rects_of(&drawn(&view), BRIGHT_GREEN),
+            course,
+            "until the next show"
+        );
+    }
+
+    /// The names the floating map draws, clipped to its frame.
+    fn floating_names(view: &View) -> Vec<String> {
+        drawn(view)
             .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Line {
-                    from,
-                    to,
-                    width,
-                    color,
-                } if color == ROUTE => Some((from, to, width)),
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match command.as_ref() {
+                    DrawCommand::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                },
                 _ => None,
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn above_a_zoom_of_1_1_the_floating_map_names_only_the_system_its_show_selected() {
+        let mut view = near();
+        run_set(&mut view, "X134");
+        tap(&mut view, HYPER_SELECT_KEY);
+        tap(&mut view, HYPER_SELECT_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(134))));
         assert_eq!(
-            route,
-            [(at(693.0, 278.0), at(814.0, 278.0), ROUTE_WIDTH)],
-            "from the edge of Sol's mark to the frame's"
+            floating_names(&view),
+            ["Sol", "Proxima Near"],
+            "every explored system in the frame at 16/9"
         );
+        for _ in 0..3 {
+            tap(&mut view, ZOOM_OUT_KEY);
+        }
+        assert_eq!(floating_names(&view), ["Proxima Near"], "at 3/4");
+        tap(&mut view, NAV_OFF_KEY);
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert_eq!(floating_names(&view), [] as [&str; 0], "shown with none");
+    }
+
+    #[test]
+    fn the_floating_map_takes_its_mission_arrows_as_it_shows() {
+        let mut catalog = catalog();
+        catalog.missions = vec![MissionRecord {
+            travel_stel: 140,
+            ..errand(130)
+        }];
+        let mut view = FlightView::new(catalog);
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        let red = |view: &View| {
+            view.floating_picture
+                .as_ref()
+                .expect("shown")
+                .systems
+                .iter()
+                .any(|system| system.id == SystemId(131) && system.red_arrow)
+        };
+        assert!(!red(&view), "no mission");
+        run_set(&mut view, "S130");
+        view.settle_script();
+        assert!(!red(&view), "not until the next show");
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert!(red(&view), "Alpha Centauri, 140's system, arrowed");
+    }
+
+    #[test]
+    fn the_hypergate_maps_offers_get_their_ovals_from_its_second_draw() {
+        // The gate leads to Barnard (132), which nothing has made known.
+        let mut view = FlightView::new(FakeCatalog {
+            gate_listers: vec![(SystemId(132), StellarId(310))],
+            ..gated()
+        });
+        land_now(&mut view);
+        let drawn_systems = |view: &View| -> Vec<SystemId> {
+            view.course_map()
+                .picture()
+                .expect("drawn")
+                .systems
+                .iter()
+                .map(|system| system.id)
+                .collect()
+        };
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_eq!(
+            view.course_map().picture().expect("drawn").gate_arrows,
+            [SystemId(132)]
+        );
+        assert!(!drawn_systems(&view).contains(&SystemId(132)), "first draw");
         assert!(
-            !list.iter().any(|command| matches!(command,
-                DrawCommand::Line { color, .. } if *color == LINK)),
-            "the link under it is left out"
+            view.session().expect("flying").is_known(SystemId(132)),
+            "marked known as its arrow was drawn"
         );
+        view.tick(TICK);
+        assert!(!drawn_systems(&view).contains(&SystemId(132)), "a frame on");
+        tap(&mut view, Key::Tab);
+        assert!(drawn_systems(&view).contains(&SystemId(132)), "after Tab");
+    }
+
+    #[test]
+    fn a_click_on_the_hypergate_map_draws_it_again() {
+        let mut view = FlightView::new(FakeCatalog {
+            gate_listers: vec![(SystemId(132), StellarId(310))],
+            ..gated()
+        });
+        land_now(&mut view);
+        click(&mut view, at(5.0, 5.0));
+        let drawn: Vec<SystemId> = view
+            .course_map()
+            .picture()
+            .expect("drawn")
+            .systems
+            .iter()
+            .map(|system| system.id)
+            .collect();
+        assert!(drawn.contains(&SystemId(132)));
+    }
+
+    #[test]
+    fn the_course_map_draws_the_sessions_known_and_explored_systems() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        let picture = view.course_map().picture().expect("drawn").clone();
+        let ids: Vec<i16> = picture.systems.iter().map(|system| system.id.0).collect();
+        assert_eq!(ids, [130, 131], "Sol and its known link, not Barnard");
+        assert_eq!(picture.named, [SystemId(130)]);
+        assert_eq!(picture.current, Some(SystemId(130)));
+        run_set(&mut view, "X132");
+        view.tick(TICK);
+        let ids: Vec<i16> = view
+            .course_map()
+            .picture()
+            .expect("drawn")
+            .systems
+            .iter()
+            .map(|system| system.id.0)
+            .collect();
+        assert_eq!(ids, [130, 131, 132], "explored while the map is open");
     }
 
     // Keys held across a jump's end, an Option release or a repair

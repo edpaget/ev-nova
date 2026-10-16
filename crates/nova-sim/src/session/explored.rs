@@ -45,15 +45,27 @@
 //! the rebuild `Session::begin` ends with, under the engine; visibility
 //! is the galaxy as `Session::fly` refreshed it for the new pilot's bits.
 //!
+//! **Known** ([`Session::is_known`]; see the
+//! [`exploration`](crate::exploration) module's "Known"). Each rebuild
+//! point works the known set out afresh right after its share
+//! (`Session::rework_known`, @0x32b7b, @0x32b91-0x32c10), so a new
+//! pilot, a loaded one and a fresh session are known from before their
+//! first frame, as each ends in a rebuild. A map grant adds its pass,
+//! with no clear, after its walk (`Session::add_known`, @0xdb06-0xdbd4).
+//! The hypergate map's arrows mark their systems
+//! ([`Session::mark_known`], @0xf45f).
+//!
 //! Left to others: `_ResetPlayer`'s neighbours (@0x1da0f-0x1da7a) and the
-//! escape pod's exploration (@0x690cb), roadmap player-death; the known
-//! flag and the levels 1 and 2 kept apart, the fidelity roadmap. The
+//! escape pod's exploration (@0x690cb), roadmap player-death; the levels
+//! 1 and 2 kept apart, the fidelity roadmap. The
 //! arrival message's second raise (@0x70ee6-0x70f2a) changes nothing after
 //! the arrival's own and is not modelled.
 
+use std::collections::BTreeSet;
+
 use super::Session;
 use crate::catalog::SystemId;
-use crate::exploration::{explored_with, shared_by_place, start_neighbours};
+use crate::exploration::{explored_with, known_from, shared_by_place, start_neighbours};
 use crate::rulebook::{RuleKey, RuleSource};
 
 impl Session {
@@ -81,6 +93,41 @@ impl Session {
         for system in shared {
             self.pilot.explore(system);
         }
+    }
+
+    /// Whether `system` is known (+0x1ec; see the module docs' "Known").
+    #[must_use]
+    pub fn is_known(&self, system: SystemId) -> bool {
+        self.known.contains(&system)
+    }
+
+    /// The systems known, by ascending ID.
+    #[must_use]
+    pub fn known(&self) -> &BTreeSet<SystemId> {
+        &self.known
+    }
+
+    /// A rebuild point's known pass (see the module docs' "Known"): every
+    /// flag cleared (`_HandleStellarSystemVisibility` @0x32b7b), then each
+    /// visible, explored system and its links by place marked
+    /// (@0x32b91-0x32c10).
+    pub(super) fn rework_known(&mut self) {
+        self.known = known_from(&self.galaxy, &self.pilot.explored);
+    }
+
+    /// A map grant's known pass, after its walk, with no clear
+    /// (`_AutoSetExploration` @0xdb06-0xdbd4).
+    pub(super) fn add_known(&mut self) {
+        let known = known_from(&self.galaxy, &self.pilot.explored);
+        self.known.extend(known);
+    }
+
+    /// Marks `systems` known, as the hypergate map marks each system it
+    /// arrows (`_DrawMap` @0xf457-0xf45f): the flight view marks the
+    /// gate's offers as its map opens (see the
+    /// [`galaxy_map`](crate::galaxy_map) module).
+    pub fn mark_known(&mut self, systems: impl IntoIterator<Item = SystemId>) {
+        self.known.extend(systems);
     }
 
     /// A new pilot's neighbours (see the module docs): each of the start
@@ -276,5 +323,51 @@ mod tests {
                 "{source:?}"
             );
         }
+    }
+
+    // Known.
+
+    fn known(session: &Session) -> Vec<i16> {
+        session.known().iter().map(|system| system.0).collect()
+    }
+
+    #[test]
+    fn a_new_a_started_and_a_loaded_pilot_are_known_before_the_first_frame() {
+        // 130, explored, lists 131; 131 lists 132.
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "").expect("starts");
+        let session = Session::fly(&catalog, pilot.clone()).expect("flies");
+        assert_eq!(known(&session), [130, 131]);
+        assert_eq!(
+            known(&Session::start(&catalog).expect("starts")),
+            [130, 131]
+        );
+        let loaded = Session::load(&catalog, pilot, &Rulebook::default()).expect("loads");
+        assert_eq!(known(&loaded), [130, 131]);
+        assert!(loaded.is_known(SystemId(131)));
+        assert!(!loaded.is_known(SystemId(132)));
+    }
+
+    #[test]
+    fn a_rebuild_point_works_the_known_set_out_afresh() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.mark_known([SystemId(133)]);
+        session.pilot.explore(SystemId(131));
+        assert_eq!(known(&session), [130, 131, 133], "nothing until then");
+        session.rebuild_quietly();
+        assert_eq!(
+            known(&session),
+            [130, 131, 132],
+            "133 forgotten, 132 learnt"
+        );
+    }
+
+    #[test]
+    fn marking_known_adds_and_forgets_nothing() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.mark_known([SystemId(133), SystemId(130)]);
+        assert_eq!(known(&session), [130, 131, 133]);
     }
 }

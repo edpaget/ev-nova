@@ -73,7 +73,8 @@
 //! shield usage forcing an uncloak (@0x83422-0x83452) and
 //! `_CloakZeroesShields`; a dying ship's fade out at twice the rate
 //! (direction -2, @0x2d17e); the player's own cloak; area cloaks; NPCs'
-//! own sight of cloaked ships; the visual fade below a full cloak (its
+//! own sight of cloaked ships for their targeting (cloaking-fidelity 4;
+//! point defence and homing shots already ask [`seen`]); the visual fade below a full cloak (its
 //! jitter and levels, @0x2d2c0-0x2d648) and the cloak's sounds. A full
 //! cloak's level is modelled: faint for a ship the player leads or while
 //! it scans on screen, otherwise not drawn ([`full_fade_translucency`],
@@ -416,10 +417,22 @@ pub struct Observer {
 /// not, is seen by `observer` (see the module docs).
 #[must_use]
 pub fn visible(cloak: Cloak, at: Vec2, emerging: bool, observer: Observer) -> bool {
+    seen(cloak.is_cloaked(), at, emerging, observer)
+}
+
+/// Whether a ship at `at`, `cloaked` or not and `emerging` from a
+/// hypergate or not, is seen by `observer`: [`visible`]'s rule
+/// (`_ShipVisibleToShip` @0x971c-0x9809), for a ship known only by
+/// whether it is cloaked, as point defence knows its quarry (see
+/// [`defence::choose_ship`](crate::combat::defence::choose_ship)) and a
+/// homing shot's firer its target (see
+/// [`projectile`](crate::combat::projectile)).
+#[must_use]
+pub fn seen(cloaked: bool, at: Vec2, emerging: bool, observer: Observer) -> bool {
     if emerging {
         return false;
     }
-    if !cloak.is_cloaked() || observer.cloaked_escort {
+    if !cloaked || observer.cloaked_escort {
         return true;
     }
     observer.scanner

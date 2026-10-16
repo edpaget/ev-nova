@@ -77,6 +77,7 @@ pub mod input;
 pub mod menu;
 pub mod movie;
 pub mod navigator;
+pub mod oval;
 pub mod preferences;
 pub mod screen;
 pub mod ships;

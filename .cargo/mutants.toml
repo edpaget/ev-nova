@@ -23,6 +23,20 @@ exclude_re = [
     # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
     # which is `StringPatch::default()`: the same value.
     "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
+    # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
+    # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
+    # `+ 360` in place of `mod 360` lands on the same heading.
+    "galaxy_map.rs:[0-9]+:[0-9]+: replace % with \\+ in arrow_head",
+    # The player's recoil gate by the engine (`Combat::fire_player`): a
+    # `Recoil` of exactly 0 pushes nothing whichever way `> 0.0` or
+    # `>= 0.0` reads it, as `ai_fire::recoil` gives no push for a weapon
+    # that does not recoil (`WeaponSpec::recoils`).
+    "combat/mod.rs:[0-9]+:[0-9]+: replace > with >= in Combat::fire_player",
+    # A burst's end spends one copy's worth unless its copies fire together
+    # (`Armament::burst_step`): copies that don't are one a call
+    # (`ai_fire::copies`), so `spawned` is 1 whichever branch `flags &
+    # SIMULTANEOUS == 0` (or its `|` mutant, always false) takes.
+    "combat/armament.rs:[0-9]+:[0-9]+: replace & with \\| in Armament::burst_step",
     # `_AdjustedAccel`'s sign tests (`launch_velocity`): a push of exactly
     # none adds none whichever branch it takes, so `push < 0.0` and
     # `push <= 0.0` (the first operand, column 24) cannot be told apart.
@@ -216,4 +230,12 @@ exclude_re = [
     # answer false for every NPC already. Phase 5 removes these two.
     "ai/mod.rs:.*replace Goal::scooping -> bool with false",
     "traffic/npc.rs:.*replace Npc::is_scooping -> bool with false",
+    # A shockwave's flash is late on a ship before its wreck in the table:
+    # the wreck is destroyed, so its own shockwave never reaches it, and a
+    # victim's index never equals the wreck's.
+    "combat/mod.rs:.*replace < with <= in Combat::shock",
+    # A run-out shield flash is dropped from the view's map: with `>=` it
+    # is kept at none, which `FlightView::shield_flash` reads as no flash
+    # all the same, and the next hit sets it afresh either way.
+    "view.rs:.*replace > with >= in step_flashes",
 ]

@@ -438,10 +438,12 @@ mod tests {
         );
         let hit = Strike {
             ship: n(1),
-            by: P,
+            by: Some(P),
             damage: 3.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         assert_eq!(
             Interceptor::default()

@@ -1309,10 +1309,14 @@ fn alpharas_named_fleet_comes_when_its_roll_fires() {
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use nova_sim::combat::armament::{Arsenal, Rounds};
+use nova_sim::combat::armament::{Arsenal, LauncherRounds, Rounds};
 use nova_sim::combat::flags::FlagField;
+use nova_sim::combat::impact::TractorLock;
+use nova_sim::combat::ion::Ion;
+use nova_sim::combat::jamming::{Halving, Jamming};
+use nova_sim::combat::projectile::Jam;
 use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
-use nova_sim::combat::{Combat, Fighter, Rules};
+use nova_sim::combat::{Combat, Fighter, Rules, Shove, Strike};
 use nova_sim::{
     Armament, CombatCatalog, CombatEvent, Condition, HullSpec, Reserves, ShipRef, SimDiagnostic,
     Trigger, WeaponId,
@@ -1338,11 +1342,23 @@ struct Combatant {
     target: Option<ShipRef>,
     state: ShipState,
     hull: HullSpec,
+    /// Its class's top speed, its `Speed` alone: what a push soft-caps
+    /// against.
+    class_speed: f32,
+    /// Its top speed: what a push is clamped to.
+    top_speed: f32,
+    tractor: Option<TractorLock>,
+    ion: Ion,
     trigger: Trigger,
     reserves: Reserves,
     condition: Condition,
     armament: Armament,
-    rounds: BTreeMap<WeaponId, u32>,
+    rounds: LauncherRounds,
+    /// The ship it attacks, which point defence reads; none by default.
+    attacking: Option<ShipRef>,
+    /// Whether it threatens the player, which its point defence reads;
+    /// not by default.
+    threatens_player: bool,
 }
 
 impl Combatant {
@@ -1352,6 +1368,8 @@ impl Combatant {
             ship_type: self.ship_type,
             fleet: self.id,
             govt: None,
+            leader: None,
+            booty: None,
             state: self.state,
             hull: self.hull,
             shield_regen: 0.0,
@@ -1362,11 +1380,20 @@ impl Combatant {
             condition: &mut self.condition,
             held_disabled: false,
             cloaked: false,
-            class_speed: 0.0,
-            top_speed: 0.0,
+            attacking: self.attacking,
+            threatens_player: self.threatens_player,
+            emerging: false,
+            cloak_scanner: false,
+            has_cloak: false,
+            jamming: nova_sim::combat::jamming::Jamming::NONE,
+            class_speed: self.class_speed,
+            top_speed: self.top_speed,
             jumping: false,
+            tractor: &mut self.tractor,
+            ion: &mut self.ion,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
+            drawn_heading: self.state.heading,
         }
     }
 }
@@ -1383,6 +1410,7 @@ fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
         arsenal,
         &nova_sim::Governments::default(),
         Rules::default(),
+        nova_sim::Field::default(),
         nova_sim::combat::Scenery::default(),
         &mut Straight,
     );
@@ -1391,9 +1419,9 @@ fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
 /// The player at the centre, at rest, facing right, firing one of
 /// `weapon` with all the ammunition, fuel and armour it could want.
 fn shooter(weapon: &WeaponSpec) -> Combatant {
-    let mut rounds = BTreeMap::new();
+    let mut rounds = LauncherRounds::default();
     if let Ammo::Rounds(ammo) = weapon.ammo {
-        rounds.insert(ammo, 100_000);
+        rounds.set(ammo, 100_000);
     }
     Combatant {
         id: ShipRef::Player,
@@ -1404,6 +1432,10 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
             ..ShipState::default()
         },
         hull: HullSpec::default(),
+        class_speed: 0.0,
+        top_speed: 0.0,
+        tractor: None,
+        ion: Ion::default(),
         trigger: Trigger {
             primary: !weapon.secondary(),
             secondary: weapon.secondary().then_some(weapon.id),
@@ -1411,17 +1443,28 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
             turrets_only: false,
             bays: false,
             point_defence: false,
+            keep: None,
         },
         reserves: Reserves::full(0.0, 1_000_000.0, 1_000_000.0),
         condition: Condition::Intact,
         armament: Armament::new([(*weapon, 1)]),
         rounds,
+        attacking: None,
+        threatens_player: false,
     }
 }
 
-/// NPC 0, a ship of `ship` type `x` pixels right of the centre, at rest,
-/// its reserves full as its stock fields and default items give them.
-fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant {
+/// What stock ship class `ship` gives a ship of it: its hull, its
+/// reserves full as its stock fields and default items give them, its
+/// class's top speed (its `Speed` alone) and its top speed.
+struct Kind {
+    hull: HullSpec,
+    reserves: Reserves,
+    class_speed: f32,
+    top_speed: f32,
+}
+
+fn class(data: &GameData, arsenal: &Arsenal, ship: ShipId) -> Kind {
     let record = data
         .ships()
         .into_iter()
@@ -1444,6 +1487,25 @@ fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant
                 })
         })
         .collect();
+    let stats = ShipStats::new(record.fields, &mods);
+    Kind {
+        hull: arsenal.hull(ship),
+        reserves: stats.full(),
+        class_speed: record.fields.class_speed(),
+        top_speed: stats.handling.max_speed,
+    }
+}
+
+/// NPC 0, a ship of `ship` type `x` pixels right of the centre, at rest,
+/// its reserves full as its stock fields and default items give them, and
+/// its class and top speeds its own.
+fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant {
+    let Kind {
+        hull,
+        reserves,
+        class_speed,
+        top_speed,
+    } = class(data, arsenal, ship);
     Combatant {
         id: ShipRef::Npc(nova_sim::NpcId(0)),
         ship_type: ship,
@@ -1452,12 +1514,18 @@ fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant
             position: Vec2::new(x, 0.0),
             ..ShipState::default()
         },
-        hull: arsenal.hull(ship),
+        hull,
+        class_speed,
+        top_speed,
+        tractor: None,
+        ion: Ion::default(),
         trigger: Trigger::default(),
-        reserves: ShipStats::new(record.fields, &mods).full(),
+        reserves,
         condition: Condition::Intact,
         armament: Armament::default(),
-        rounds: BTreeMap::new(),
+        rounds: LauncherRounds::default(),
+        attacking: None,
+        threatens_player: false,
     }
 }
 
@@ -1523,10 +1591,13 @@ fn beam_hits(spec: &WeaponSpec, x: f32) -> u32 {
 
 /// Each stock weapon in scope, fired from rest into empty space: a shot
 /// leaves at `Speed`/100 (a rocket at its firer's rest, closing on that),
-/// lives `Count` ticks and reaches `Speed`/100 x `Count` (a beam hits for
-/// `Count` ticks and reaches its `BeamLength` and the ship's radius), and
-/// it fires as often as item 7 of the plan says.
+/// lives `Count` ticks and flies `Speed`/100 x `Count`, its own reach
+/// without its sub-munitions (a beam hits for `Count` ticks, and 15 −
+/// `Falloff` more when it decays, and its cone reaches its `BeamLength`
+/// and half the ship's cone radius), and it fires as often as item 7 of
+/// the plan says.
 #[test]
+#[allow(clippy::float_cmp)]
 fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
     let Some(dir) = common::nova_data() else {
         return;
@@ -1540,8 +1611,14 @@ fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
         ships[0].trigger = Trigger::default();
         if spec.guidance == Guidance::Beam {
             assert!((spec.range() - spec.beam_length).abs() < 1e-6, "{id}");
-            let reach = spec.beam_length + nova_sim::combat::hull::DEFAULT_HIT_RADIUS;
-            assert_eq!(beam_hits(&spec, reach - 0.5), spec.lifetime.max(1), "{id}");
+            // A placeholder hull's 75 pixels: trunc(trunc(0.66 x 75) / 2).
+            let reach = spec.beam_length + 24.0;
+            let fade = if spec.decay > 0 {
+                u32::try_from(15 - i32::from(spec.falloff)).unwrap_or(0)
+            } else {
+                0
+            };
+            assert_eq!(beam_hits(&spec, reach), spec.lifetime + fade, "{id}");
             assert_eq!(beam_hits(&spec, reach + 0.5), 0, "{id}: out of reach");
         } else {
             let shot = combat.shots()[0];
@@ -1558,12 +1635,18 @@ fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
                 fight(&mut combat, &mut ships);
                 lived += 1;
             }
-            assert_eq!(lived, spec.lifetime.max(1), "{id}");
-            // Seen last a tick before it flies its last tick and goes: a
-            // tick short of its range.
-            let flown = last.length() + spec.speed;
+            // Seen last at the end of its last move, which spends it, and
+            // gone the tick after, as its end of life comes in that tick's
+            // hit pass.
+            assert_eq!(lived, spec.lifetime + 1, "{id}");
+            let flown = last.length();
             let range = spec.speed * spec.lifetime as f32;
-            assert!((spec.range() - range).abs() < 1e-3, "{id}");
+            assert!((spec.flight() - range).abs() < 1e-3, "{id}");
+            if spec.guidance == Guidance::FreefallBomb {
+                assert_eq!(spec.range(), 0.0, "{id}: a bomb reaches nothing");
+            } else {
+                assert!((spec.range() - range).abs() < 1e-3, "{id}: its own flight");
+            }
             if spec.guidance == Guidance::Rocket {
                 assert!(flown <= range + 1e-3, "{id}");
             } else {
@@ -1608,7 +1691,7 @@ fn every_stock_weapon_in_scope_takes_the_shields_before_the_armour() {
         let reach = if spec.guidance == Guidance::Beam {
             spec.beam_length / 2.0
         } else {
-            spec.range().clamp(1.0, 60.0)
+            spec.flight().clamp(1.0, 60.0)
         };
         let mut combat = Combat::default();
         let mut ships = [shooter(&spec), target(&data, &arsenal, toughest, reach)];
@@ -1727,11 +1810,17 @@ fn sponge(x: f32, y: f32) -> Combatant {
             ..ShipState::default()
         },
         hull: HullSpec::default(),
+        class_speed: 0.0,
+        top_speed: 0.0,
+        tractor: None,
+        ion: Ion::default(),
         trigger: Trigger::default(),
         reserves: Reserves::full(100_000.0, 100_000.0, 0.0),
         condition: Condition::Intact,
         armament: Armament::default(),
-        rounds: BTreeMap::new(),
+        rounds: LauncherRounds::default(),
+        attacking: None,
+        threatens_player: false,
     }
 }
 
@@ -1741,6 +1830,752 @@ fn aiming(weapon: &WeaponSpec) -> Combatant {
         target: Some(QUARRY),
         ..shooter(weapon)
     }
+}
+
+/// `aiming(weapon)` in a ship of stock class `ship`: its hull, mass
+/// included, and its class and top speeds its own, which a tractor beam's
+/// branch and its self-pull read; its reserves still the shooter's.
+fn aiming_from(data: &GameData, arsenal: &Arsenal, ship: ShipId, weapon: &WeaponSpec) -> Combatant {
+    let Kind {
+        hull,
+        class_speed,
+        top_speed,
+        ..
+    } = class(data, arsenal, ship);
+    Combatant {
+        ship_type: ship,
+        hull,
+        class_speed,
+        top_speed,
+        ..aiming(weapon)
+    }
+}
+
+/// A tick of `combat` among `ships`, sub-munitions read from `arsenal`,
+/// each pushed ship's velocity then set from the fight's shoves as the
+/// session sets them: the shoves.
+fn fight_shoving(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) -> Vec<Shove> {
+    fight_with(combat, ships, arsenal);
+    let shoves = combat.take_shoves();
+    for shove in &shoves {
+        if let Some(ship) = ships.iter_mut().find(|ship| ship.id == shove.ship) {
+            ship.state.velocity = shove.velocity;
+        }
+    }
+    shoves
+}
+
+/// The push of `impact` from `from` on a ship of `mass` at rest at `at`,
+/// under its caps: `impact` / `mass` along the whole-degree bearing.
+fn push_of(from: Vec2, at: Vec2, impact: f32, mass: f32) -> Vec2 {
+    nova_sim::flight::facing(f32::from(nova_sim::trig::intercept_angle(from, at))) * (impact / mass)
+}
+
+fn close(a: Vec2, b: Vec2) -> bool {
+    (a - b).length() < 1e-5
+}
+
+/// The stock data has 55 weapons of positive `Impact` and one tractor
+/// beam, 171, and no massless or planet-type ship class: so no stock
+/// shot pulls, and every stock ship can be pushed.
+#[test]
+fn stock_impacts_are_55_pushes_and_one_tractor_beam_on_ships_that_all_move() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let specs: Vec<WeaponSpec> = data.weapons().iter().map(WeaponSpec::new).collect();
+    assert_eq!(specs.iter().filter(|spec| spec.impact > 0.0).count(), 55);
+    let pulls: Vec<(i16, f32, Guidance, u32, u32)> = specs
+        .iter()
+        .filter(|spec| spec.impact < 0.0)
+        .map(|spec| {
+            (
+                spec.id.0,
+                spec.impact,
+                spec.guidance,
+                spec.lifetime,
+                spec.decay,
+            )
+        })
+        .collect();
+    assert_eq!(
+        pulls,
+        [(171, -5.0, Guidance::Beam, 1, 0)],
+        "one tick of life"
+    );
+    for record in data.ships() {
+        let hull = arsenal.hull(record.id);
+        assert!(hull.mass > 0.0, "{:?}", record.id);
+        assert!(!hull.planet_type, "{:?}", record.id);
+    }
+}
+
+/// The EMP Torp. (160), the Polaron Massive Torp. (199) and the Radar
+/// Missile (234), homing, hit a Leviathan (`Mass` 10000) dead ahead and
+/// push it once by `Impact` / 10000 straight on, their blasts sparing the
+/// ship they hit; the EMP Torp.'s 16.7 on a Shuttle (`Mass` 15) is held
+/// to the Shuttle's top speed.
+#[test]
+#[allow(clippy::float_cmp)]
+fn stock_torpedoes_push_the_ship_they_hit_by_impact_over_its_mass() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let spec = |id: i16| {
+        data.weapons()
+            .iter()
+            .map(WeaponSpec::new)
+            .find(|spec| spec.id.0 == id)
+            .expect("a stock weapon")
+    };
+    let hit = |spec: &WeaponSpec, ship: i16| {
+        let mut combat = Combat::default();
+        let ahead = (spec.flight() / 2.0).min(300.0);
+        let mut ships = [aiming(spec), target(&data, &arsenal, ShipId(ship), ahead)];
+        let mut shoves = fight_shoving(&mut combat, &mut ships, &arsenal);
+        ships[0].trigger = Trigger::default();
+        for _ in 0..spec.lifetime {
+            shoves.extend(fight_shoving(&mut combat, &mut ships, &arsenal));
+        }
+        (shoves, ships[1].top_speed)
+    };
+    for (id, impact, blast) in [(160, 250.0, 100.0), (199, 800.0, 20.0), (234, 650.0, 20.0)] {
+        let torpedo = spec(id);
+        assert_eq!(
+            (torpedo.guidance, torpedo.impact),
+            (Guidance::Homing, impact)
+        );
+        assert_eq!(torpedo.blast_radius, blast, "{id}");
+        let (shoves, _) = hit(&torpedo, 131);
+        assert_eq!(shoves.len(), 1, "{id}: the direct hit alone: {shoves:?}");
+        assert_eq!(shoves[0].ship, QUARRY);
+        let expected = Vec2::new(impact / 10_000.0, 0.0);
+        assert!(close(shoves[0].velocity, expected), "{id}: {shoves:?}");
+    }
+    let (shoves, top) = hit(&spec(160), 128);
+    assert_eq!(shoves.len(), 1, "{shoves:?}");
+    assert!(top < 250.0 / 15.0, "{top}");
+    assert!(
+        close(shoves[0].velocity, Vec2::new(top, 0.0)),
+        "held to the Shuttle's top speed {top}: {shoves:?}"
+    );
+}
+
+/// The Thunderhead Lance (166, `Impact` 50, `Count` 10) held on a
+/// Leviathan pushes it on each of its 10 hit ticks, 50 / 10000 a tick,
+/// from the beam's start.
+#[test]
+fn a_stock_beam_pushes_its_ship_on_every_hit_tick() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let lance = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .find(|spec| spec.id.0 == 166)
+        .expect("the Thunderhead Lance");
+    assert_eq!(
+        (lance.guidance, lance.impact, lance.lifetime, lance.decay),
+        (Guidance::Beam, 50.0, 10, 0)
+    );
+    let mut combat = Combat::default();
+    let mut ships = [shooter(&lance), target(&data, &arsenal, ShipId(131), 60.0)];
+    let mut shoves = fight_shoving(&mut combat, &mut ships, &arsenal);
+    ships[0].trigger = Trigger::default();
+    for _ in 0..12 {
+        shoves.extend(fight_shoving(&mut combat, &mut ships, &arsenal));
+    }
+    assert_eq!(shoves.len(), 10, "{shoves:?}");
+    assert!(
+        close(
+            ships[1].state.velocity,
+            Vec2::new(10.0 * 50.0 / 10_000.0, 0.0)
+        ),
+        "{:?}",
+        ships[1].state.velocity
+    );
+}
+
+/// The Flower of Spring (171) fired by a ship of stock class `firer` from
+/// the centre facing `heading` at a Shuttle at `at`, for one tick: the
+/// shoves, the firer and the Shuttle after it, and the beam's start.
+fn flower(
+    data: &GameData,
+    arsenal: &Arsenal,
+    firer: i16,
+    heading: f32,
+    at: Vec2,
+) -> (Vec<Shove>, [Combatant; 2], Vec2) {
+    let tractor = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .find(|spec| spec.id.0 == 171)
+        .expect("the Flower of Spring");
+    let mut ships = [
+        aiming_from(data, arsenal, ShipId(firer), &tractor),
+        target(data, arsenal, ShipId(128), 0.0),
+    ];
+    ships[0].state.heading = heading;
+    ships[1].state.position = at;
+    let mut combat = Combat::default();
+    let shoves = fight_shoving(&mut combat, &mut ships, arsenal);
+    let start = combat.beams().first().map_or(Vec2::ZERO, |beam| beam.start);
+    let hurt = ships[1].reserves.shield.now < class(data, arsenal, ShipId(128)).reserves.shield.now;
+    assert!(hurt, "the beam hit the Shuttle");
+    (shoves, ships, start)
+}
+
+/// A Vell-os Javelin (175, `Mass` 200) holds a Shuttle (`Mass` 15) in the
+/// Flower of Spring, pulling it 5 / 15 toward the beam's start where the
+/// Shuttle is off both of its axes, and not where it is dead ahead.
+#[test]
+#[allow(clippy::float_cmp)]
+fn a_vell_os_javelins_flower_of_spring_holds_a_shuttle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    assert_eq!(class(&data, &arsenal, ShipId(175)).hull.mass, 200.0);
+    assert_eq!(class(&data, &arsenal, ShipId(128)).hull.mass, 15.0);
+    let held = Some(TractorLock::by(ShipRef::Player));
+    // Down the Javelin's 130-degree frame, 150 pixels out.
+    let at = nova_sim::flight::facing(130.0) * 150.0;
+    let (shoves, [javelin, shuttle], start) = flower(&data, &arsenal, 175, 130.0, at);
+    assert_eq!(shuttle.tractor, held);
+    assert_eq!(javelin.tractor, None);
+    assert_eq!(shoves.len(), 1, "{shoves:?}");
+    assert_eq!(shoves[0].ship, QUARRY);
+    let pulled = push_of(start, at, -5.0, 15.0);
+    assert!(close(shoves[0].velocity, pulled), "{shoves:?}, {pulled:?}");
+    assert!(pulled.x < 0.0 && pulled.y < 0.0, "toward the Javelin");
+    let (shoves, [_, shuttle], _) = flower(&data, &arsenal, 175, 90.0, Vec2::new(100.0, 0.0));
+    assert_eq!(shuttle.tractor, held);
+    assert_eq!(shoves, [], "dead ahead");
+}
+
+/// A Vell-os Dart (173, `Mass` 6, below 0.75 x 15) firing the Flower of
+/// Spring at a Shuttle dead ahead pulls itself toward it by 5 / 6, holds
+/// itself, and leaves the Shuttle where it was.
+#[test]
+#[allow(clippy::float_cmp)]
+fn a_vell_os_darts_flower_of_spring_pulls_the_dart_to_a_shuttle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    assert_eq!(class(&data, &arsenal, ShipId(173)).hull.mass, 6.0);
+    let at = Vec2::new(100.0, 0.0);
+    let (shoves, [dart, shuttle], start) = flower(&data, &arsenal, 173, 90.0, at);
+    assert_eq!(dart.tractor, Some(TractorLock::by(ShipRef::Player)));
+    assert_eq!(shuttle.tractor, None);
+    assert_eq!(shuttle.state.velocity, Vec2::ZERO);
+    assert_eq!(shoves.len(), 1, "{shoves:?}");
+    assert_eq!(shoves[0].ship, ShipRef::Player);
+    // The bearing runs from the Shuttle to the start; the pull back along
+    // it, toward the Shuttle.
+    let pulled = push_of(at, start, -5.0, 6.0);
+    assert!(close(dart.state.velocity, pulled), "{shoves:?}, {pulled:?}");
+    assert!(pulled.x > 0.8, "toward the Shuttle: {pulled:?}");
+}
+
+/// Stock weapon `id`.
+fn stock_weapon(data: &GameData, id: i16) -> WeaponSpec {
+    data.weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .find(|spec| spec.id.0 == id)
+        .expect("a stock weapon")
+}
+
+/// Exactly 18 stock weapons ionize, every one by a positive amount.
+#[test]
+fn stock_ionizing_weapons_are_18_all_positive() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let ionizing: Vec<(i16, i32)> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.ionization != 0)
+        .map(|spec| (spec.id.0, spec.ionization))
+        .collect();
+    let ids: Vec<i16> = ionizing.iter().map(|&(id, _)| id).collect();
+    assert_eq!(
+        ids,
+        [
+            137, 142, 146, 148, 160, 163, 164, 173, 174, 182, 184, 185, 198, 199, 201, 229, 230,
+            232
+        ]
+    );
+    assert!(
+        ionizing.iter().all(|&(_, amount)| amount > 0),
+        "{ionizing:?}"
+    );
+}
+
+/// A stock fight over point defence: the player at the centre running
+/// stock weapon `defence` as its point defence, its rounds full; NPC 1, a
+/// Shuttle 200 pixels above facing down, firing stock `missile` at it on
+/// the first tick; and `others`. Each tick's strikes and events, over
+/// `ticks`.
+fn defended_by(
+    data: &GameData,
+    arsenal: &Arsenal,
+    (defence, missile): (i16, i16),
+    others: Vec<Combatant>,
+    ticks: u32,
+) -> (Vec<Strike>, Vec<CombatEvent>) {
+    let mut player = shooter(&stock_weapon(data, defence));
+    player.state.heading = 0.0;
+    player.trigger = Trigger {
+        point_defence: true,
+        ..Trigger::default()
+    };
+    let missile = stock_weapon(data, missile);
+    let mut boat = target(data, arsenal, ShipId(128), 0.0);
+    boat.id = ShipRef::Npc(nova_sim::NpcId(1));
+    boat.state.position = Vec2::new(0.0, -200.0);
+    boat.state.heading = 180.0;
+    boat.target = Some(ShipRef::Player);
+    boat.armament = Armament::new([(missile, 1)]);
+    boat.rounds.set(missile.id, 10);
+    boat.trigger = Trigger {
+        primary: !missile.secondary(),
+        secondary: missile.secondary().then_some(missile.id),
+        ..Trigger::default()
+    };
+    let mut ships = vec![player, boat];
+    ships.extend(others);
+    let mut combat = Combat::default();
+    let (mut strikes, mut events) = (Vec::new(), Vec::new());
+    for _ in 0..ticks {
+        fight_with(&mut combat, &mut ships, arsenal);
+        ships[1].trigger = Trigger::default();
+        strikes.extend(combat.take_strikes());
+        events.extend(combat.take_events());
+    }
+    (strikes, events)
+}
+
+/// A stock Shuttle (128), NPC 0, 40 pixels above the centre: across the
+/// path of the player's point defence at a missile from above.
+fn in_the_way(data: &GameData, arsenal: &Arsenal) -> Combatant {
+    bystander(data, arsenal, 0, Vec2::new(0.0, -40.0))
+}
+
+/// Whether `strikes` hold a hit by the player on NPC 0.
+fn struck_in_the_way(strikes: &[Strike]) -> bool {
+    strikes.iter().any(|strike| {
+        strike.ship == ShipRef::Npc(nova_sim::NpcId(0)) && strike.by == Some(ShipRef::Player)
+    })
+}
+
+/// The Storm Chaingun (161, `ProxRadius` 0) fired at an IR Missile flies
+/// through a Shuttle's centre on its way and never hits it: point defence
+/// meets a ship only by its proximity fuse.
+#[test]
+fn a_stock_storm_chaingun_shot_never_hits_a_ship() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let (strikes, events) = defended_by(
+        &data,
+        &arsenal,
+        (161, 134),
+        vec![in_the_way(&data, &arsenal)],
+        8,
+    );
+    let fired = events.iter().any(|event| {
+        matches!(
+            event,
+            CombatEvent::Fired {
+                ship: ShipRef::Player,
+                weapon: WeaponId(161),
+                ..
+            }
+        )
+    });
+    assert!(fired, "{events:?}");
+    assert!(!struck_in_the_way(&strikes), "{strikes:?}");
+}
+
+/// The Quad Light Blaster Turret (133, `ProxRadius` 5) fired at an IR
+/// Missile hits a Shuttle across its path by its proximity fuse.
+#[test]
+fn a_stock_quad_light_blaster_turret_shot_proximity_hits_a_ship() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let (strikes, _) = defended_by(
+        &data,
+        &arsenal,
+        (133, 134),
+        vec![in_the_way(&data, &arsenal)],
+        8,
+    );
+    assert!(struck_in_the_way(&strikes), "{strikes:?}");
+}
+
+/// The Polaron Torp. (148, `Flags` 0x0080, `Durability` 0) is never
+/// chosen by point defence, but a Quad Light Blaster Turret shot fired at
+/// an IR Missile behind it, whose sprite touches it, downs it in one hit,
+/// shot down where the Quad's shot is.
+#[test]
+fn a_stock_point_defence_shot_downs_a_polaron_torpedo_it_touches_but_never_aims_at_one() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let quad = stock_weapon(&data, 133);
+    let torpedo = stock_weapon(&data, 148);
+    let at_player = nova_sim::combat::projectile::Shot {
+        target: Some(ShipRef::Player),
+        aimed_at: Some(ShipRef::Player),
+        position: Vec2::new(0.0, -100.0),
+        ..nova_sim::combat::projectile::Shot::launch(
+            torpedo,
+            ShipRef::Npc(nova_sim::NpcId(2)),
+            ShipRef::Npc(nova_sim::NpcId(2)),
+            &ShipState::default(),
+            180.0,
+        )
+    };
+    let player = nova_sim::combat::defence::Side {
+        ship: ShipRef::Player,
+        fleet: ShipRef::Player,
+        govt: None,
+    };
+    let shots = [at_player];
+    let chosen = nova_sim::combat::defence::choose(
+        player,
+        &ShipState::default(),
+        &HullSpec::default(),
+        &quad,
+        &shots,
+        None,
+        &nova_sim::Governments::default(),
+    );
+    assert_eq!(chosen, None, "never aimed at");
+    // NPC 2, a Shuttle 100 above, fires the torpedo at the player as NPC
+    // 1 fires the IR Missile from 200 above.
+    let mut launcher = bystander(&data, &arsenal, 2, Vec2::new(0.0, -100.0));
+    launcher.state.heading = 180.0;
+    launcher.target = Some(ShipRef::Player);
+    launcher.armament = Armament::new([(torpedo, 1)]);
+    launcher.rounds.set(torpedo.id, 10);
+    launcher.trigger = Trigger {
+        primary: !torpedo.secondary(),
+        secondary: torpedo.secondary().then_some(torpedo.id),
+        ..Trigger::default()
+    };
+    let (strikes, events) = defended_by(&data, &arsenal, (133, 134), vec![launcher], 4);
+    let downed: Vec<Vec2> = events
+        .iter()
+        .filter_map(|event| match *event {
+            CombatEvent::ShotDown { at } => Some(at),
+            _ => None,
+        })
+        .collect();
+    // The Quad fires the tick after the missiles, as the player's point
+    // defence runs before the NPCs fire. After the third tick the
+    // torpedo, 13 pixels a tick, is at -61 and the Quad's shot, 20 a
+    // tick, at -40: the next tick's hit pass finds their 32- and 35-pixel
+    // sprites overlapping.
+    assert_eq!(downed.len(), 1, "{events:?}");
+    assert!(close(downed[0], Vec2::new(0.0, -40.0)), "{downed:?}");
+    assert!(
+        !strikes.iter().any(|strike| strike.ship == ShipRef::Player),
+        "the torpedo never reached the player: {strikes:?}"
+    );
+}
+
+/// The Quad Light Blaster Turret (133: `Reload` 5, `BurstCount` 4,
+/// `BurstReload` 20) on two mounts fires every two and a half ticks, its
+/// timer carrying what it counted past none: its burst's 8 shots leave on
+/// ticks 0, 3, 5, 8, 10, 13, 15 and 18, then its 20-tick burst reload.
+#[test]
+fn a_stock_quad_light_blaster_turret_on_two_mounts_fires_every_two_and_a_half_ticks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut armament = Armament::new([(stock_weapon(&data, 133), 2)]);
+    let mut rounds = LauncherRounds::default();
+    let mut fuel = Gauge::full(0.0);
+    let mut reports = nova_sim::combat::report::Reports::default();
+    let fired: Vec<u32> = (0..40)
+        .filter(|_| {
+            let fired = armament.fire_point_defence(
+                Condition::Intact,
+                nova_sim::combat::armament::Shooter::PLAYER,
+                &mut rounds,
+                &mut fuel,
+                &mut Straight,
+                &mut reports,
+                true,
+                &mut |_| {
+                    Some((
+                        nova_sim::combat::aim::Pointing::Along(0.0),
+                        nova_sim::combat::projectile::ShotId(1),
+                    ))
+                },
+            );
+            armament.reload();
+            fired.is_some()
+        })
+        .collect();
+    assert_eq!(fired, [0, 3, 5, 8, 10, 13, 15, 18, 38]);
+}
+
+/// The homing weapons point defence cannot target (`Flags` 0x0080) are the
+/// five polaron torpedoes, and every stock homing and point-defence weapon
+/// has a sprite: the Quad Light Blaster Turret's 35 pixels square, the
+/// Storm Chaingun's 16.
+#[test]
+fn stock_pd_immune_missiles_are_the_five_polarons_and_every_homing_and_pd_weapon_has_a_sprite() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    let immune: Vec<i16> = weapons
+        .iter()
+        .filter(|record| record.guidance == 1 && record.flags & 0x0080 != 0)
+        .map(|record| record.id.0)
+        .collect();
+    assert_eq!(immune, [148, 182, 184, 185, 199]);
+    let unseen: Vec<i16> = weapons
+        .iter()
+        .filter(|record| matches!(record.guidance, 1 | 9) && record.frame.is_none())
+        .map(|record| record.id.0)
+        .collect();
+    assert_eq!(
+        unseen, [0_i16; 0],
+        "every homing and point-defence weapon drawn"
+    );
+    let frame = |id: i16| {
+        weapons
+            .iter()
+            .find(|record| record.id.0 == id)
+            .and_then(|record| record.frame)
+            .map(|frame| (frame.width, frame.height))
+    };
+    assert_eq!(frame(133), Some((35, 35)));
+    assert_eq!(frame(161), Some((16, 16)));
+}
+
+/// `ships[0]` fires once, its trigger then let go, and the fight runs on
+/// for `ticks` more: the first explosion's place.
+fn fire_once(ships: &mut [Combatant], arsenal: &Arsenal, ticks: u32) -> Option<Vec2> {
+    let mut combat = Combat::default();
+    let mut at = None;
+    for tick in 0..=ticks {
+        fight_with(&mut combat, ships, arsenal);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+        }
+        at = at.or_else(|| {
+            combat.take_events().iter().find_map(|event| match *event {
+                CombatEvent::Exploded { at, .. } => Some(at),
+                _ => None,
+            })
+        });
+    }
+    at
+}
+
+/// A Shuttle (128), NPC `n`, at `at`.
+fn bystander(data: &GameData, arsenal: &Arsenal, n: u32, at: Vec2) -> Combatant {
+    let mut ship = target(data, arsenal, ShipId(128), 0.0);
+    ship.id = ShipRef::Npc(nova_sim::NpcId(n));
+    ship.state.position = at;
+    ship
+}
+
+/// The EMP Torp. (160: `Ionization` 100, `IonizeColor` 0xd4ffff,
+/// `BlastRadius` 100) hits a Leviathan (131) dead ahead and ionizes it by
+/// 100 in its colour, once; a Shuttle 50 pixels from where it hit gains
+/// 75, and one in the blast's square, 80 off on each axis, outside its
+/// circle, none.
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_stock_emp_torpedo_ionizes_the_ship_it_hits_and_its_blasts_circle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let torpedo = stock_weapon(&data, 160);
+    assert_eq!(
+        (
+            torpedo.guidance,
+            torpedo.ionization,
+            torpedo.ionize_colour,
+            torpedo.blast_radius
+        ),
+        (Guidance::Homing, 100, 0x00d4_ffff, 100.0)
+    );
+    let ahead = 300.0;
+    let leviathan = || target(&data, &arsenal, ShipId(131), ahead);
+    // A first fight finds where the torpedo meets the Leviathan.
+    let mut ships = [aiming(&torpedo), leviathan()];
+    let at = fire_once(&mut ships, &arsenal, torpedo.lifetime).expect("it hit");
+    assert_eq!(
+        ships[1].ion,
+        Ion {
+            charge: 100.0,
+            colour: 0x00d4_ffff
+        }
+    );
+    let mut ships = [
+        aiming(&torpedo),
+        leviathan(),
+        bystander(&data, &arsenal, 1, at + Vec2::new(0.0, 50.0)),
+        bystander(&data, &arsenal, 2, at + Vec2::new(80.0, 80.0)),
+    ];
+    let again = fire_once(&mut ships, &arsenal, torpedo.lifetime);
+    assert_eq!(again, Some(at), "the same hit");
+    assert_eq!(ships[1].ion.charge, 100.0, "the direct hit alone");
+    assert_eq!(
+        ships[2].ion,
+        Ion {
+            charge: 75.0,
+            colour: 0x00d4_ffff
+        }
+    );
+    let shuttle = class(&data, &arsenal, ShipId(128)).reserves.shield.now;
+    assert!(ships[3].reserves.shield.now < shuttle, "in the square");
+    assert_eq!(ships[3].ion, Ion::default(), "outside the circle");
+}
+
+/// The Nanites (229, homing, `Ionization` 50, `Decay` 5, no blast) ionize
+/// a Leviathan by the whole 50 whether they hit early or late in their
+/// life, though late they do less damage.
+#[test]
+#[allow(clippy::float_cmp)]
+fn stock_nanites_ionize_by_their_whole_ionization_however_decayed() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let nanites = stock_weapon(&data, 229);
+    assert_eq!(
+        (
+            nanites.guidance,
+            nanites.ionization,
+            nanites.decay,
+            nanites.blast_radius
+        ),
+        (Guidance::Homing, 50, 5, 0.0)
+    );
+    let hit_from = |ahead: f32| {
+        let mut ships = [
+            aiming(&nanites),
+            target(&data, &arsenal, ShipId(131), ahead),
+        ];
+        let mut combat = Combat::default();
+        let mut damage = 0.0;
+        for tick in 0..=nanites.lifetime {
+            fight_with(&mut combat, &mut ships, &arsenal);
+            if tick == 0 {
+                ships[0].trigger = Trigger::default();
+            }
+            damage += combat
+                .take_strikes()
+                .iter()
+                .filter(|strike| strike.ship == QUARRY)
+                .map(|strike| strike.damage)
+                .sum::<f32>();
+        }
+        (ships[1].ion.charge, damage)
+    };
+    let (early, early_damage) = hit_from(100.0);
+    let (late, late_damage) = hit_from(1500.0);
+    assert!(late_damage < early_damage, "{late_damage} < {early_damage}");
+    assert_eq!((early, late), (50.0, 50.0));
+}
+
+/// The Pulse Laser (146, a beam, `Ionization` 4, 0xff00ff) held on a
+/// Leviathan ionizes it by 4 on each tick it hits.
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_stock_pulse_laser_ionizes_by_4_on_every_hit_tick() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let laser = stock_weapon(&data, 146);
+    assert_eq!(
+        (laser.guidance, laser.ionization, laser.ionize_colour),
+        (Guidance::Beam, 4, 0x00ff_00ff)
+    );
+    let mut combat = Combat::default();
+    let mut ships = [shooter(&laser), target(&data, &arsenal, ShipId(131), 60.0)];
+    let mut hits = 0_u16;
+    for tick in 0..=laser.lifetime + 2 {
+        fight_with(&mut combat, &mut ships, &arsenal);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+        }
+        let strikes = combat.take_strikes();
+        hits += u16::try_from(
+            strikes
+                .iter()
+                .filter(|strike| strike.ship == QUARRY)
+                .count(),
+        )
+        .expect("few");
+    }
+    assert!(hits > 1, "{hits}");
+    assert_eq!(
+        ships[1].ion,
+        Ion {
+            charge: 4.0 * f32::from(hits),
+            colour: 0x00ff_00ff
+        }
+    );
+}
+
+/// The Ion Cannon (142, 0x34c2ff) and then the EMP Torp. (160, 0xd4ffff)
+/// on one ship leave it the two colours OR-ed: 0xf4ffff.
+#[test]
+fn stock_ion_colours_or_together() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let cannon = stock_weapon(&data, 142);
+    let torpedo = stock_weapon(&data, 160);
+    assert_eq!(
+        (cannon.ionize_colour, torpedo.ionize_colour),
+        (0x0034_c2ff, 0x00d4_ffff)
+    );
+    let mut ships = [aiming(&cannon), target(&data, &arsenal, ShipId(131), 100.0)];
+    fire_once(&mut ships, &arsenal, 3);
+    assert_eq!(ships[1].ion.colour, 0x0034_c2ff, "the cannon hit");
+    ships[0] = aiming(&torpedo);
+    fire_once(&mut ships, &arsenal, torpedo.lifetime);
+    assert_eq!(ships[1].ion.colour, 0x00f4_ffff);
 }
 
 /// Each stock homing weapon, fired at a stock ship dead ahead within its
@@ -1764,7 +2599,7 @@ fn every_stock_homing_weapon_flies_its_speed_hits_its_target_and_turns_its_turn(
     );
     for spec in homing {
         let id = spec.id.0;
-        let ahead = (spec.range() / 2.0).min(300.0);
+        let ahead = (spec.flight() / 2.0).min(300.0);
         let mut combat = Combat::default();
         let mut ships = [aiming(&spec), target(&data, &arsenal, ShipId(128), ahead)];
         let full = ships[1].reserves;
@@ -1799,6 +2634,392 @@ fn every_stock_homing_weapon_flies_its_speed_hits_its_target_and_turns_its_turn(
             );
         }
     }
+}
+
+// Jamming and sensor interference (`_ShipECM`, `_SpawnShot`,
+// `_HandleShotGuidance`).
+
+/// Draws what a range is keyed to, and the middle outcome for any other
+/// range, as [`Straight`] does: tests over it pin ranges, not the order
+/// of the draws.
+struct Keyed(&'static [(u32, u32)]);
+
+impl nova_sim::Chance for Keyed {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0
+            .iter()
+            .find(|&&(range, _)| range == n)
+            .map_or(n / 2, |&(_, outcome)| outcome)
+    }
+}
+
+/// A tick of `combat` among `ships` in `field`, each ship of `jamming`
+/// jamming as it says, drawing on `chance`.
+fn fight_in(
+    combat: &mut Combat,
+    ships: &mut [Combatant],
+    (field, jamming): (nova_sim::Field, &[(ShipRef, Jamming)]),
+    chance: &mut dyn nova_sim::Chance,
+) {
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+    for fighter in &mut fighters {
+        if let Some(&(_, jams)) = jamming.iter().find(|(ship, _)| *ship == fighter.ship) {
+            fighter.jamming = jams;
+        }
+    }
+    combat.tick(
+        &mut fighters,
+        &Arsenal::default(),
+        &nova_sim::Governments::default(),
+        Rules::default(),
+        field,
+        nova_sim::combat::Scenery::default(),
+        chance,
+    );
+}
+
+/// The headings of the missile `ships[0]` fires on the first of `ticks`
+/// ticks, after each, its target moved 90 degrees off after the first.
+fn headings_in(
+    ships: &mut [Combatant],
+    ticks: u32,
+    (field, jamming): (nova_sim::Field, &[(ShipRef, Jamming)]),
+    chance: &mut dyn nova_sim::Chance,
+) -> Vec<f32> {
+    let mut combat = Combat::default();
+    let mut headings = Vec::new();
+    for tick in 0..ticks {
+        fight_in(&mut combat, ships, (field, jamming), chance);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+            ships[1].state.position = Vec2::new(0.0, 5000.0);
+        }
+        headings.push(combat.shots()[0].heading);
+    }
+    headings
+}
+
+/// The stock Military IR Jammer (240, +30 to Jamming 1) aboard the stock
+/// Shuttle jams 30 of type 1; a stock IR Missile (134, `JamVuln` [100, 0,
+/// 0, 0]) fired at it keeps its heading on a roll of 71 and turns its
+/// `GuidedTurn`/10 on 70. A stock Fed Destroyer (141) of the Federation
+/// (128, `Flags` 0x0080) jams 28 by the engine and 57 by the Bible.
+#[test]
+fn a_stock_jammer_turns_a_stock_missile_aside() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let govts = nova_sim::Governments::read(&data);
+    let outfits = data.outfits();
+    let ships = data.ships();
+    let class = |id| {
+        ships
+            .iter()
+            .find(|record| record.id == ShipId(id))
+            .expect("a stock ship")
+    };
+    let owned = BTreeMap::from([(OutfitId(240), 1)]);
+    let shuttle = class(128);
+    let jammer = Jamming::of_player(govts.inh_jam(shuttle.inherent_govt), &owned, &outfits);
+    assert_eq!(jammer, Jamming([30, 0, 0, 0]));
+    let ir = stock_weapon(&data, 134);
+    assert_eq!(ir.jam_vuln, [100, 0, 0, 0]);
+    let rolls: [(&'static [(u32, u32)], bool); 2] = [(&[(101, 71)], false), (&[(101, 70)], true)];
+    for (table, turns) in rolls {
+        let mut ships = [aiming(&ir), sponge(5000.0, 0.0)];
+        let headings = headings_in(
+            &mut ships,
+            17,
+            (nova_sim::Field::default(), &[(QUARRY, jammer)]),
+            &mut Keyed(table),
+        );
+        assert!(headings[..15].iter().all(|&h| (h - 90.0).abs() < 1e-6));
+        let turned = headings[16] - headings[15];
+        let expected = if turns { ir.turn } else { 0.0 };
+        assert!((turned - expected).abs() < 1e-3, "{table:?}: {headings:?}");
+    }
+    let destroyer = class(141);
+    let fed = Some(GovtId(128));
+    assert!(govts.flag(fed, nova_sim::govt::HALF_JAMMING));
+    let jamming = |source| {
+        let halving = Halving::of(true, false, source);
+        Jamming::of_npc(
+            govts.inh_jam(destroyer.inherent_govt),
+            &destroyer.defaults,
+            &outfits,
+            halving,
+        )
+    };
+    assert_eq!(jamming(nova_sim::RuleSource::Engine).0[0], 28);
+    assert_eq!(jamming(nova_sim::RuleSource::Bible).0[0], 57);
+}
+
+/// In Obatta (sÿst 155, `Interference` 50) a stock Radar Missile (135,
+/// `Seeker` 0x000a) and a stock EW Missile (137, 0x0009) are confused on a
+/// roll of 49 and circle from their 15th tick; on 50 they home.
+#[test]
+fn a_stock_interference_system_confuses_a_stock_seeker() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let obatta = data
+        .star_map()
+        .into_iter()
+        .find(|system| system.id == SystemId(155))
+        .expect("Obatta");
+    assert_eq!(obatta.interference, 50);
+    let field = nova_sim::Field {
+        frame: 0,
+        interference: obatta.interference,
+    };
+    for id in [135, 137] {
+        let missile = stock_weapon(&data, id);
+        let mut combat = Combat::default();
+        let mut ships = [aiming(&missile), sponge(5000.0, 0.0)];
+        fight_in(
+            &mut combat,
+            &mut ships,
+            (field, &[]),
+            &mut Keyed(&[(100, 49)]),
+        );
+        assert_eq!(combat.shots()[0].jam, Jam::Interfered, "{id}");
+        let mut ships = [aiming(&missile), sponge(5000.0, 0.0)];
+        let headings = headings_in(&mut ships, 17, (field, &[]), &mut Keyed(&[(100, 49)]));
+        assert!(headings[..15].iter().all(|&h| (h - 90.0).abs() < 1e-6));
+        // Frame 0 turns it back, whatever its target.
+        let turned = headings[16] - headings[15];
+        assert!((turned + missile.turn).abs() < 1e-3, "{id}: {headings:?}");
+        let mut ships = [aiming(&missile), sponge(5000.0, 0.0)];
+        let headings = headings_in(&mut ships, 17, (field, &[]), &mut Keyed(&[(100, 50)]));
+        let turned = headings[16] - headings[15];
+        assert!(
+            (turned - missile.turn).abs() < 1e-3,
+            "{id} homes: {headings:?}"
+        );
+    }
+}
+
+/// A stock IR Missile (134) given `Seeker` 0x4000, which no stock weapon
+/// sets, drops its lock on a target 200 pixels behind it as it starts to
+/// steer, and keeps it on one 300 pixels behind, out of the box.
+#[test]
+fn a_stock_seeker_with_0x4000_drops_its_lock_in_the_box() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let ir = stock_weapon(&data, 134);
+    assert!(
+        data.weapons()
+            .iter()
+            .all(|record| record.seeker & nova_sim::combat::weapon::LOSES_LOCK_OFF_AHEAD == 0),
+        "no stock weapon sets 0x4000"
+    );
+    let locked = WeaponSpec {
+        seeker: ir.seeker | nova_sim::combat::weapon::LOSES_LOCK_OFF_AHEAD,
+        ..ir
+    };
+    for (behind, kept) in [(200.0, false), (300.0, true)] {
+        let mut combat = Combat::default();
+        // Where it is as its 16th tick begins, and the target behind it,
+        // 100 pixels below its path.
+        let at = ir.speed * 15.0;
+        let mut ships = [aiming(&locked), sponge(at - behind, 100.0)];
+        for _ in 0..16 {
+            fight_in(
+                &mut combat,
+                &mut ships,
+                (nova_sim::Field::default(), &[]),
+                &mut Straight,
+            );
+            ships[0].trigger = Trigger::default();
+        }
+        assert_eq!(combat.shots()[0].target.is_some(), kept, "{behind}");
+    }
+}
+
+// The shot tick: decay, the proximity fuse and the missile lock.
+
+/// The stock shots whose direct hits decay are the 22 non-beam weapons
+/// of `Decay` above 0; the two beams of `Decay` (146 and 173) are beams,
+/// which no decay reads.
+#[test]
+fn the_stock_shots_that_decay() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let decaying: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.decay > 0 && !spec.is_beam())
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(
+        decaying,
+        [
+            143, 144, 145, 148, 156, 157, 158, 159, 161, 162, 163, 182, 183, 184, 185, 197, 198,
+            199, 200, 219, 229, 233
+        ]
+    );
+    let beams: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.decay > 0 && spec.is_beam())
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(beams, [146, 173]);
+}
+
+/// The shield a stock railgun slug takes off a sponge `x` pixels ahead,
+/// and the tick it hit on.
+fn slug_hit(spec: &WeaponSpec, x: f32) -> (f32, u32) {
+    let mut combat = Combat::default();
+    let mut ships = [aiming(spec), sponge(x, 0.0)];
+    let full = ships[1].reserves.shield.now;
+    for tick in 1..=spec.lifetime {
+        fight(&mut combat, &mut ships);
+        ships[0].trigger = Trigger::default();
+        let now = ships[1].reserves.shield.now;
+        if now < full {
+            return (full - now, tick);
+        }
+    }
+    panic!("wëap {} never hit at {x}", spec.id.0);
+}
+
+/// Each stock railgun (156-159), its slug fired at a ship near and far,
+/// takes a point of its energy damage off the shield for each `Decay` + 1
+/// ticks it has flown.
+#[test]
+// Whole points of damage and fields read whole.
+#[allow(clippy::float_cmp)]
+fn a_stock_railgun_slug_loses_a_point_of_mass_and_energy_every_decay_plus_one_ticks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    for id in 156..=159 {
+        let spec = *arsenal.weapon(WeaponId(id)).expect("a railgun");
+        assert!(spec.decay > 0, "{id}");
+        let (near, near_tick) = slug_hit(&spec, 100.0);
+        let (far, far_tick) = slug_hit(&spec, spec.flight() * 0.75);
+        let steps = |tick: u32| (tick / (spec.decay + 1)) as f32;
+        assert_eq!(near, spec.energy_damage - steps(near_tick), "{id} near");
+        assert_eq!(far, spec.energy_damage - steps(far_tick), "{id} far");
+        assert!(steps(far_tick) >= 2.0, "{id}: {far_tick}");
+        assert_eq!(near - far, steps(far_tick) - steps(near_tick), "{id}");
+    }
+}
+
+/// The stock Nanite launcher (163, `ProxRadius` 0) touching a ship in its
+/// path releases no Nanite (229); fired at a ship out of its reach, it
+/// releases its Nanite at the end of its life, aimed at that ship.
+#[test]
+// Whole points of damage and fields read whole.
+#[allow(clippy::float_cmp)]
+fn stock_nanites_release_their_sub_229_only_at_expiry() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let nanites = *arsenal.weapon(WeaponId(163)).expect("the Nanites");
+    assert_eq!(nanites.prox_radius, 0.0);
+    let released = |x: f32| {
+        let mut combat = Combat::default();
+        let mut ships = [aiming(&nanites), sponge(x, 0.0)];
+        let full = ships[1].reserves;
+        let mut subs = Vec::new();
+        for _ in 0..=nanites.lifetime + 1 {
+            fight_with(&mut combat, &mut ships, &arsenal);
+            ships[0].trigger = Trigger::default();
+            subs.extend(
+                combat
+                    .shots()
+                    .iter()
+                    .filter(|shot| shot.weapon.id == WeaponId(229))
+                    .map(|shot| shot.aimed_at),
+            );
+        }
+        (ships[1].reserves != full, subs)
+    };
+    let (hit, subs) = released(60.0);
+    assert!(hit, "it touched the ship");
+    assert_eq!(subs, [], "and released nothing");
+    let (hit, subs) = released(5000.0);
+    assert!(!hit);
+    assert!(!subs.is_empty(), "released at the end of its life");
+    assert!(subs.iter().all(|&aimed| aimed == Some(QUARRY)), "{subs:?}");
+    // The stock shots whose contact hits no longer release theirs.
+    let fused: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.prox_radius > 0.0 && spec.submunitions.is_some())
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(fused, [182, 185]);
+}
+
+/// Each stock homing missile, fired by the player at an NPC out of its
+/// reach, strikes it once with no damage, a lock, on the tick its age
+/// passes 30; the three of `Count` 20 (182, 185 and 199) never live that
+/// long.
+#[test]
+fn every_stock_player_homing_missile_locks_its_target_at_31_ticks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let homing = guided(&data, &[Guidance::Homing]);
+    let ids: Vec<i16> = homing.iter().map(|spec| spec.id.0).collect();
+    assert_eq!(
+        ids,
+        [
+            134, 135, 136, 137, 148, 160, 182, 184, 185, 199, 229, 230, 234
+        ]
+    );
+    let mut short = Vec::new();
+    for spec in homing {
+        let id = spec.id.0;
+        let mut combat = Combat::default();
+        let mut ships = [aiming(&spec), sponge(20_000.0, 0.0)];
+        let full = ships[1].reserves;
+        let mut locks = Vec::new();
+        for tick in 1..=40 {
+            fight(&mut combat, &mut ships);
+            ships[0].trigger = Trigger::default();
+            locks.extend(
+                combat
+                    .take_strikes()
+                    .into_iter()
+                    .map(|strike| (tick, strike)),
+            );
+        }
+        if spec.lifetime < 30 {
+            short.push(id);
+            assert_eq!(locks, [], "wëap {id}");
+            continue;
+        }
+        assert_eq!(locks.len(), 1, "wëap {id}: {locks:?}");
+        let (tick, strike) = locks[0];
+        assert_eq!(tick, 31, "wëap {id}");
+        assert!(strike.lock && strike.direct && strike.intended, "{id}");
+        assert_eq!((strike.ship, strike.by), (QUARRY, Some(ShipRef::Player)));
+        assert_eq!((strike.damage, strike.downed), (0.0, None), "{id}");
+        assert_eq!(ships[1].reserves, full, "wëap {id}");
+    }
+    assert_eq!(short, [182, 185, 199]);
 }
 
 /// Whether `spec`, on a ship of `hull`, facing right, fires at a ship
@@ -1988,7 +3209,7 @@ type Row = (&'static [i16], &'static [(FlagField, u16)]);
 /// ahead, reports exactly its unimplemented flags, each once.
 #[test]
 fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
-    use FlagField::{Flags2, Flags3, Seeker};
+    use FlagField::Seeker;
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -2015,18 +3236,17 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
         diagnostics.extend(combat.take_diagnostics());
     }
     // The Zephyr family's `Flags2` 0x4000 (183-185, 199) fires while
-    // cloaked, which `Armament::has_ammo` does, so it reports nothing;
-    // `Seeker` 0x0001 (148, 182, 184, 185, 199, 229, 137) passes through
-    // asteroids and `Flags2` 0x8000 (196-198, 230) mines them, both done.
-    let rows: [Row; 7] = [
-        (&[134, 136], &[(Seeker, 0x2)]),
-        (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
-        (&[137], &[(Seeker, 0x8)]),
-        (&[142, 201], &[(Flags2, 0x1000), (Flags3, 0x10)]),
-        (&[233], &[(Flags2, 0x1000)]),
-        (&[234], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x1000)]),
-        (&[230], &[(Seeker, 0x2), (Seeker, 0x8)]),
-    ];
+    // cloaked, which `Armament::has_ammo` does, so it reports nothing.
+    // The disable-only `Flags2` 0x1000 (142, 201, 233, 234) never
+    // destroys, which `damage::take` does, so it reports nothing. The Ion
+    // Cannons' `Flags3` 0x0010 (142, 201) fires from the exit point
+    // nearest the target, which `exits` does, so they report nothing.
+    // The sensor-interference `Seeker` 0x0008 (135, 137, 160, 230, 234) is
+    // ported (see `projectile`), so it reports nothing either. `Seeker`
+    // 0x0001 (148, 182, 184, 185, 199, 229, 137) passes through asteroids
+    // and `Flags2` 0x8000 (196-198, 230) mines them, both done. What is
+    // left is `Seeker` 0x0002, the asteroid lock.
+    let rows: [Row; 1] = [(&[134, 135, 136, 160, 230, 234], &[(Seeker, 0x2)])];
     let expected: BTreeSet<SimDiagnostic> = rows
         .iter()
         .flat_map(|(weapons, flags)| {
@@ -2041,9 +3261,279 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
             })
         })
         .collect();
-    assert_eq!(expected.len(), 17);
-    assert_eq!(diagnostics.len(), 17, "each once: {diagnostics:?}");
+    assert_eq!(expected.len(), 6);
+    assert_eq!(diagnostics.len(), 6, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
+}
+
+/// Every stock `shïp` has a `shän` whose weapon exit points reach its
+/// hull, 279 of the 288 with one off the centre; 55 of the 81 `wëap` fire
+/// from a set of them. The Shuttle (128) fires its Light Blasters from
+/// guns 3 pixels either side of its nose, 10 ahead, squashed to 71% up the
+/// screen and lifted 2 by its z: at (3, -5.1) and then (-3, -5.1).
+#[test]
+fn stock_shans_carry_their_exit_points_to_the_hull() {
+    use nova_sim::combat::exits::ExitKind;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let hulls = data.hulls();
+    let backed: Vec<_> = hulls.iter().filter(|hull| hull.size.is_some()).collect();
+    assert_eq!(backed.len(), 288);
+    assert!(
+        backed
+            .iter()
+            .all(|hull| hull.exits.is_some() && arsenal.hull(hull.id).exits.is_some()),
+        "every shän-backed hull carries its exits"
+    );
+    let off_centre = backed
+        .iter()
+        .filter_map(|hull| hull.exits)
+        .filter(|exits| exits.points.iter().flatten().any(|&point| point != (0, 0)))
+        .count();
+    assert_eq!(off_centre, 279);
+    let weapons: Vec<WeaponSpec> = data.weapons().iter().map(WeaponSpec::new).collect();
+    assert_eq!(weapons.len(), 81);
+    assert_eq!(
+        weapons.iter().filter(|spec| spec.exit.is_some()).count(),
+        55
+    );
+    let shuttle = hulls
+        .iter()
+        .find(|hull| hull.id == ShipId(128))
+        .and_then(|hull| hull.exits)
+        .expect("the Shuttle's exits");
+    assert_eq!(shuttle.points[0], [(3, 10), (-3, 10), (3, 10), (-3, 10)]);
+    assert_eq!(shuttle.z[0], [-2; 4]);
+    assert_eq!(
+        (shuttle.up_compress, shuttle.down_compress),
+        ((100, 71), (100, 71))
+    );
+    let blaster = *arsenal.weapon(WeaponId(128)).expect("the Light Blaster");
+    assert_eq!(blaster.exit, Some(ExitKind::Gun));
+    let mut ships = [Combatant {
+        hull: arsenal.hull(ShipId(128)),
+        state: ShipState::default(),
+        ..shooter(&blaster)
+    }];
+    let mut combat = Combat::default();
+    let mut starts = Vec::new();
+    for _ in 0..30 {
+        fight_with(&mut combat, &mut ships, &arsenal);
+        if let Some(shot) = combat.shots().iter().find(|shot| shot.age == 1) {
+            starts.push(shot.position - shot.velocity);
+        }
+    }
+    assert!(starts.len() >= 2, "{starts:?}");
+    let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
+    assert!(near(starts[0], Vec2::new(3.0, -5.1)), "{starts:?}");
+    assert!(near(starts[1], Vec2::new(-3.0, -5.1)), "{starts:?}");
+}
+
+/// The only stock beams that decay, the Pulse Laser (146) and the Autumn
+/// Petal (173), say Falloff 0, which loads as 16 (`_LoadObjectData`
+/// @0x795e2-0x795f0), so neither fades: the Pulse Laser hits its Count,
+/// 15 ticks, and the Autumn Petal, fired every tick, keeps one beam at a
+/// time, hitting every tick.
+#[test]
+fn the_stock_pulse_laser_and_autumn_petal_never_fade() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let decaying: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.beam_length > 0.0 && spec.decay > 0)
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(decaying, [146, 173]);
+    let pulse = *arsenal.weapon(WeaponId(146)).expect("the Pulse Laser");
+    let petal = *arsenal.weapon(WeaponId(173)).expect("the Autumn Petal");
+    assert_eq!((pulse.falloff, petal.falloff), (16, 16));
+    assert_eq!(beam_hits(&pulse, 300.0), 15);
+    let mut ships = [aiming(&petal), sponge(100.0, 0.0)];
+    let mut combat = Combat::default();
+    let mut most = 0;
+    for tick in 0..20 {
+        let before = ships[1].reserves;
+        fight(&mut combat, &mut ships);
+        assert_ne!(ships[1].reserves, before, "tick {tick}");
+        assert!(combat.beams().iter().all(|beam| beam.fade == 0));
+        most = most.max(combat.beams().len());
+    }
+    assert_eq!(most, 1);
+}
+
+/// Draws its value, or the last below that, every time.
+struct Drawing(u32);
+
+impl nova_sim::Chance for Drawing {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0.min(n.saturating_sub(1))
+    }
+}
+
+/// The Thunderhead Lance (166, `Inaccuracy` 2), held ahead, and the Ion
+/// Cannon (142, `Inaccuracy` 4), a turret, each turn by `Rand(2i) − i`
+/// every tick of their life: along their frame or bearing, d − i off for
+/// each tick's draw d.
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_stock_thunderhead_lance_and_ion_cannon_jitter_every_tick() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let lance = *arsenal
+        .weapon(WeaponId(166))
+        .expect("the Thunderhead Lance");
+    assert_eq!((lance.inaccuracy, lance.lifetime), (2, 10));
+    let ion = WeaponSpec {
+        lifetime: 10,
+        ..*arsenal.weapon(WeaponId(142)).expect("the Ion Cannon")
+    };
+    assert_eq!(ion.inaccuracy, 4);
+    // The sponge lies straight up from the Ion Cannon, at bearing 0.
+    for (spec, sponge_at, aim) in [(lance, (300.0, 0.0), 90.0), (ion, (0.0, -100.0), 0.0)] {
+        let id = spec.id.0;
+        let mut ships = [aiming(&spec), sponge(sponge_at.0, sponge_at.1)];
+        let mut combat = Combat::default();
+        let mut headings = Vec::new();
+        for draw in [0, 3, 1, 2, 7, 5, 6, 4, 0, 1] {
+            let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+            combat.tick(
+                &mut fighters,
+                &Arsenal::default(),
+                &nova_sim::Governments::default(),
+                Rules::default(),
+                nova_sim::Field::default(),
+                nova_sim::combat::Scenery::default(),
+                &mut Drawing(draw),
+            );
+            drop(fighters);
+            ships[0].trigger = Trigger::default();
+            let beam = combat.beams().first().copied().expect("a beam");
+            let inaccuracy = spec.inaccuracy;
+            headings.push(beam.heading - aim);
+            let off = f32::from(u16::try_from(draw.min(2 * inaccuracy - 1)).unwrap_or(0))
+                - inaccuracy as f32;
+            assert_eq!(beam.heading - aim, off, "{id}: draw {draw}");
+        }
+        assert!(
+            headings.iter().any(|&off| off != headings[0]),
+            "{id}: {headings:?}"
+        );
+    }
+}
+
+/// Only the stock Ion Cannons (142, 201) fire from the exit point nearest
+/// their target (`Flags3` 0x0010). A Manticore (146), whose beam exits
+/// stand ahead, 30 pixels to starboard, behind and 30 to port, fires its
+/// Ion Cannon from the starboard exit at a ship to starboard and from the
+/// port exit at a ship to port.
+#[test]
+fn the_stock_ion_cannons_fire_from_the_beam_exit_nearest_their_target() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let nearest: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.nearest_exit)
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(nearest, [142, 201]);
+    // Kept past its one tick of life, so the beam can be seen.
+    let ion = WeaponSpec {
+        lifetime: 10,
+        ..*arsenal.weapon(WeaponId(142)).expect("the Ion Cannon")
+    };
+    for (x, exit, at) in [(100.0, 1, 30.0), (-100.0, 3, -30.0)] {
+        let mut ships = [
+            Combatant {
+                hull: arsenal.hull(ShipId(146)),
+                state: ShipState::default(),
+                ..aiming(&ion)
+            },
+            sponge(x, 0.0),
+        ];
+        let mut combat = Combat::default();
+        fight_with(&mut combat, &mut ships, &arsenal);
+        let beam = combat.beams().first().copied().expect("a beam");
+        assert_eq!(beam.exit, Some(exit), "{x}");
+        assert!(
+            (beam.start - Vec2::new(at, 0.0)).length() < 1e-3,
+            "{x}: {beam:?}"
+        );
+    }
+}
+
+/// Each stock disable-only weapon (`Flags2` 0x1000): the Ion Cannons
+/// (142, 201, turreted beams), the Fusion Pulse Turret (233) and the
+/// Radar Missile (234, both blasting 20 pixels), fired again and again at
+/// a ship with no shields and little armour, and a bystander beside it
+/// for the blasting two: each is left at 1 armour, disabled, and never
+/// breaks up (`_DamageShip` @0x3abd6, @0x3ac64).
+#[test]
+#[allow(clippy::float_cmp)]
+fn every_stock_disable_only_weapon_leaves_its_victims_at_1_armour() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let bystander = ShipRef::Npc(nova_sim::NpcId(1));
+    let frail = |id, x, y| Combatant {
+        id,
+        hull: HullSpec {
+            hit_radius: 10.0,
+            ..HullSpec::default()
+        },
+        reserves: Reserves::full(0.0, 20.0, 0.0),
+        ..sponge(x, y)
+    };
+    for (id, blasts) in [(142, false), (201, false), (233, true), (234, true)] {
+        let spec = *arsenal.weapon(WeaponId(id)).expect("a stock weapon");
+        assert!(spec.disable_only(), "wëap {id}");
+        assert_eq!(spec.blast_radius > 0.0, blasts, "wëap {id}");
+        let mut ships = vec![aiming(&spec), frail(QUARRY, 100.0, 0.0)];
+        if blasts {
+            ships.push(Combatant {
+                hull: HullSpec::default(),
+                ..frail(bystander, 100.0, 15.0)
+            });
+        }
+        let mut combat = Combat::default();
+        let mut events = Vec::new();
+        for _ in 0..600 {
+            fight_with(&mut combat, &mut ships, &arsenal);
+            events.extend(combat.take_events());
+        }
+        for victim in &ships[1..] {
+            assert_eq!(victim.reserves.armor.now, 1.0, "wëap {id}: {:?}", victim.id);
+            assert_eq!(victim.condition, Condition::Disabled, "wëap {id}");
+        }
+        let downed = events.iter().any(|event| {
+            matches!(
+                event,
+                CombatEvent::BreakingUp { .. } | CombatEvent::Destroyed { .. }
+            )
+        });
+        assert!(!downed, "wëap {id}: {events:?}");
+    }
 }
 
 /// Every stock weapon that releases sub-munitions, fired alone again and
@@ -2168,13 +3658,32 @@ fn destroyer_in_fomalhaut(data: &GameData) -> Session {
     session
 }
 
+/// [`destroyer_in_fomalhaut`] with its two Quad Light Blaster Turrets
+/// (`oütf` 133) taken off. Its point defence would fire at the Federation
+/// fighters that answer the player (`_HandleShipPointDefense`
+/// @0x394ce-0x3969d: every Lone Federation Ship the seeds bring is of
+/// `Flags2` 0x0008), each hit a crime of its own, where the scenario
+/// measures the disabling's.
+fn destroyer_in_fomalhaut_without_point_defence(data: &GameData) -> Session {
+    let flown = destroyer_in_fomalhaut(data);
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(flown.pilot())).expect("JSON");
+    let outfits = save["outfits"].as_array_mut().expect("a list");
+    let before = outfits.len();
+    outfits.retain(|outfit| outfit["outfit"] != 133);
+    assert_eq!(outfits.len(), before - 1, "the Quads were fitted");
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    Session::fly(data, pilot).expect("flies")
+}
+
 /// The NPC numbered `id`, if it is still in the system.
 fn npc_of(session: &Session, id: nova_sim::NpcId) -> Option<&nova_sim::Npc> {
     session.npcs().iter().find(|npc| npc.id == id)
 }
 
-/// Whether no NPC but `quarry` is within 80 pixels of the line from the
-/// player to it, so a shot at it hits nothing else on the way.
+/// Whether no NPC but `quarry`, breaking up or not, is within 80 pixels
+/// of the line from the player to it, so a shot at it hits nothing else
+/// on the way.
 fn clear_shot(session: &Session, quarry: &nova_sim::Npc) -> bool {
     let from = session.player().position;
     let line = quarry.state.position - from;
@@ -2182,7 +3691,7 @@ fn clear_shot(session: &Session, quarry: &nova_sim::Npc) -> bool {
     session
         .npcs()
         .iter()
-        .filter(|npc| npc.id != quarry.id && npc.condition.hittable())
+        .filter(|npc| npc.id != quarry.id && npc.condition.active())
         .all(|npc| {
             let off = npc.state.position - from;
             let along = ((off.x * line.x + off.y * line.y) / length).clamp(0.0, length);
@@ -2236,13 +3745,15 @@ struct Fomalhaut {
 /// 4) fly, the player picks a seed that brings a trader of 1 to 6 crew
 /// (so it can be boarded, and the Destroyer's 50 crew cap the odds) and
 /// the Federation, attacks the trader until it is disabled and the
-/// Federation answers, then holds its fire for 30 ticks.
+/// Federation answers, then holds its fire for 30 ticks. The player's
+/// Destroyer flies without its point defence
+/// ([`destroyer_in_fomalhaut_without_point_defence`]).
 fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
     let crews: BTreeMap<ShipId, i16> = PilotCatalog::ships(data)
         .into_iter()
         .map(|record| (record.id, record.crew))
         .collect();
-    let mut session = destroyer_in_fomalhaut(data);
+    let mut session = destroyer_in_fomalhaut_without_point_defence(data);
     let mut chance = Seeded(0x5EED_F00D);
     let (trader, police) = (1..=200)
         .find_map(|seed| {
@@ -2267,6 +3778,16 @@ fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
             Some((trader, police))
         })
         .expect("a seed brings a Civvies trader with a crew and the Federation");
+    // The player targets the trader, as a player would: only a hit on the
+    // ship it means to hit brings the police (`_DamageShip` @0x3bed2).
+    session.select_target(nova_sim::TargetPick::Nearest);
+    for _ in 0..session.npcs().len() {
+        if session.target().is_some_and(|npc| npc.id == trader) {
+            break;
+        }
+        session.select_target(nova_sim::TargetPick::Next);
+    }
+    assert_eq!(session.target().map(|npc| npc.id), Some(trader), "targeted");
     let (mut fled, mut answered, mut disabled) = (false, false, false);
     for _ in 0..3000 {
         let Some(quarry) = npc_of(&session, trader) else {
@@ -2883,13 +4404,9 @@ fn stock_fighter_bays_launch_their_fighters_as_the_extracted_rules_say() {
     assert_eq!((viper_bay.max_ammo, viper_bay.reload), (4, 60.0));
     assert!(viper_bay.secondary());
     let outfits = data.outfits();
-    let (_, rounds) = arsenal.npc(ShipId(143), &BTreeMap::new(), &outfits);
-    assert_eq!(
-        rounds.get(&WeaponId(149)),
-        Some(&4),
-        "the Fed Carrier's Vipers"
-    );
-    assert_eq!(rounds.get(&WeaponId(150)), Some(&2), "and Anacondas");
+    let (_, rounds) = arsenal.npc(ShipId(143));
+    assert_eq!(rounds.slot(WeaponId(149)), 4, "the Fed Carrier's Vipers");
+    assert_eq!(rounds.slot(WeaponId(150)), 2, "and Anacondas");
     assert!(Arsenal::ammo_outfits(&outfits).contains(&(WeaponId(149), OutfitId(158))));
     let vipers = outfits
         .iter()
@@ -3430,15 +4947,11 @@ fn jack_folstam_appears_in_nesre_primus_and_by_the_engines_slip_in_jraphit() {
             was + u32::try_from(slot.count).expect("more"),
             "wëap {id}"
         );
-        if let Some(nova_sim::combat::weapon::Ammo::Rounds(ammo)) =
-            arsenal.weapon(slot.weapon).map(|spec| spec.ammo)
-            && slot.ammo > 0
-        {
+        if arsenal.weapon(slot.weapon).is_some() {
             assert_eq!(
-                fitted.rounds.get(&ammo).copied().unwrap_or(0),
-                valkyrie.rounds.get(&ammo).copied().unwrap_or(0)
-                    + u32::try_from(slot.ammo).expect("more"),
-                "the rounds of wëap {id}"
+                fitted.rounds.slot(slot.weapon),
+                valkyrie.rounds.slot(slot.weapon) + i32::from(slot.ammo),
+                "the rounds on wëap {id}, its own slot"
             );
         }
     }
@@ -3992,10 +5505,22 @@ fn stock_repair_droids_are_the_only_repair_system_and_no_ship_class_carries_them
 // Which missile an NPC fires (`_AIFireMissile`), over the stock arsenal.
 
 /// What a stock NPC of class `ship`, armed as the traffic arms it, fires
-/// at the player 1000 pixels ahead flying stock class `target` at rest,
-/// its reserves too strong for any damage aimed to suffice. The NPC is a
-/// stock one of Fomalhaut's traffic made over into the class.
+/// at the player 1000 pixels ahead flying stock class `target` at rest
+/// ([`stock_pick_at`]).
 fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nova_sim::WeaponId> {
+    stock_pick_at(data, ship, target, 1000.0)
+}
+
+/// What a stock NPC of class `ship`, armed as the traffic arms it, fires
+/// at the player `distance` pixels ahead flying stock class `target` at
+/// rest, its reserves too strong for any damage aimed to suffice. The NPC
+/// is a stock one of Fomalhaut's traffic made over into the class.
+fn stock_pick_at(
+    data: &GameData,
+    ship: ShipId,
+    target: ShipId,
+    distance: f32,
+) -> Option<nova_sim::WeaponId> {
     let mut session = destroyer_in_fomalhaut(data);
     let mut chance = NeverFires;
     session.tick_traffic(data, &NovaAi::default(), &mut chance);
@@ -4005,12 +5530,7 @@ fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nov
         .expect("Fomalhaut has traffic")
         .clone();
     let arsenal = Arsenal::read(data);
-    let outfits = data.outfits();
-    let mut defaults = std::collections::BTreeMap::new();
-    for (outfit, count) in data.default_outfits(ship) {
-        *defaults.entry(outfit).or_insert(0_u16) += count;
-    }
-    let (armament, rounds) = arsenal.npc(ship, &defaults, &outfits);
+    let (armament, rounds) = arsenal.npc(ship);
     let fields = data.ship_fields(ship).expect("the shïp reads");
     npc.ship = ship;
     npc.stats = ShipStats::new(fields, &[]);
@@ -4025,7 +5545,7 @@ fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nov
     let strong = nova_sim::Reserves::full(1_000_000.0, 1_000_000.0, 100.0);
     let player = nova_sim::ai::PlayerSide {
         state: ShipState {
-            position: Vec2::new(0.0, -1000.0),
+            position: Vec2::new(0.0, -distance),
             ..ShipState::default()
         },
         condition: Condition::Intact,
@@ -4059,20 +5579,17 @@ fn a_stock_manticore_fires_its_ir_missile_before_its_emp_torpedo() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let manticore = ShipId(146);
-    let arsenal = Arsenal::read(&data);
-    let mounted: Vec<i16> = arsenal
-        .of_class(
-            manticore,
-            &std::collections::BTreeMap::new(),
-            &data.outfits(),
-        )
-        .mounts()
+    let slotted: Vec<i16> = nova_sim::CombatCatalog::hulls(&data)
+        .into_iter()
+        .find(|hull| hull.id == manticore)
+        .expect("the Manticore")
+        .weapons
         .iter()
-        .map(|mount| mount.spec.id.0)
+        .map(|slot| slot.weapon.0)
         .collect();
-    let emp = mounted.iter().position(|&id| id == 160).expect("the EMP");
-    let ir = mounted.iter().position(|&id| id == 134).expect("the IR");
-    assert!(emp < ir, "mounted EMP first: {mounted:?}");
+    let emp = slotted.iter().position(|&id| id == 160).expect("the EMP");
+    let ir = slotted.iter().position(|&id| id == 134).expect("the IR");
+    assert!(emp < ir, "slotted EMP first: {slotted:?}");
     let ir_missile = Some(nova_sim::WeaponId(134));
     assert_eq!(stock_missile_at(&data, manticore, ShipId(130)), ir_missile);
     assert_eq!(stock_missile_at(&data, manticore, ShipId(128)), ir_missile);
@@ -4095,7 +5612,7 @@ fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
         .map(|ship| ship.id)
         .find(|&ship| {
             let homing: Vec<i16> = arsenal
-                .of_class(ship, &std::collections::BTreeMap::new(), &data.outfits())
+                .of_class(ship)
                 .mounts()
                 .iter()
                 .filter(|mount| mount.spec.guidance == Guidance::Homing)
@@ -4120,4 +5637,1038 @@ fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
         emp,
         "at the Cargo Drone"
     );
+}
+
+// An NPC's rounds on each launcher (`_WeaponHasAmmo` @0xbab4-0xbac2).
+
+/// The stock classes whose stock slots carry both 155 Hail and 161 Storm,
+/// which fire 155's rounds alike, are 241, 248, 250, 294 and 395. As an
+/// NPC each keeps every launcher's own load (`_RandomShipSpawn`
+/// @0x3c7de-0x3c848): 241's Storm, loaded -1, never fires its point
+/// defence, and 248's and 250's Hails, loaded -1, hold nothing though
+/// their Storms hold hundreds. Firing the Storm as point defence until it
+/// stops spends its own load to none and leaves the Hail's whole.
+#[test]
+fn stock_classes_carrying_the_hail_and_storm_chainguns_keep_separate_rounds() {
+    use nova_sim::combat::armament::Shooter;
+    use nova_sim::combat::projectile::ShotId;
+    use nova_sim::combat::report::Reports;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let (hail, storm) = (nova_sim::WeaponId(155), nova_sim::WeaponId(161));
+    let hulls = nova_sim::CombatCatalog::hulls(&data);
+    let both: Vec<i16> = hulls
+        .iter()
+        .filter(|hull| {
+            let carries = |weapon| hull.weapons.iter().any(|slot| slot.weapon == weapon);
+            carries(hail) && carries(storm)
+        })
+        .map(|hull| hull.id.0)
+        .collect();
+    assert_eq!(both, [241, 248, 250, 294, 395]);
+    for hull in hulls.iter().filter(|hull| both.contains(&hull.id.0)) {
+        let load = |weapon| {
+            hull.weapons
+                .iter()
+                .find(|slot| slot.weapon == weapon)
+                .map_or(0, |slot| i32::from(slot.ammo))
+        };
+        let (mut armament, mut rounds) = arsenal.npc(hull.id);
+        assert_eq!(rounds.slot(hail), load(hail), "{:?}", hull.id);
+        assert_eq!(rounds.slot(storm), load(storm), "{:?}", hull.id);
+        let npc = Shooter {
+            npc: true,
+            ..Shooter::PLAYER
+        };
+        let mut fuel = Gauge::full(0.0);
+        let mut shots = 0_u32;
+        for _ in 0..100_000 {
+            let fired = armament.fire_point_defence(
+                Condition::Intact,
+                npc,
+                &mut rounds,
+                &mut fuel,
+                &mut NeverFires,
+                &mut Reports::default(),
+                true,
+                &mut |_| Some((nova_sim::combat::aim::Pointing::Along(0.0), ShotId(1))),
+            );
+            shots += u32::from(fired.is_some());
+            armament.reload();
+        }
+        assert_eq!(
+            shots > 0,
+            load(storm) > 0,
+            "{:?}: the Storm fires on its own load alone",
+            hull.id
+        );
+        assert_eq!(rounds.slot(storm), load(storm).min(0), "{:?}", hull.id);
+        assert_eq!(
+            rounds.slot(hail),
+            load(hail),
+            "{:?}: the Hail's whole",
+            hull.id
+        );
+    }
+}
+
+/// The stock scans behind the per-launcher rounds: no class names one
+/// weapon in two stock slots, so summing and replacing agree; the only
+/// negative stock loads on a weapon that spends rounds are 241's 161 and
+/// 248's and 250's 155, each -1; no stock count is negative; and no class
+/// carries a weapon or ammunition outfit among its `DefaultItems`, which
+/// arm no NPC (`_LoadObjectData` @0x7aa25-0x7ad0f).
+#[test]
+fn stock_classes_load_one_slot_a_weapon_and_name_no_weapon_among_their_default_items() {
+    use nova_sim::PilotCatalog;
+    use nova_sim::combat::armament::{MOD_AMMO, MOD_WEAPON};
+    use nova_sim::combat::weapon::Ammo;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let hulls = nova_sim::CombatCatalog::hulls(&data);
+    let twice: Vec<i16> = hulls
+        .iter()
+        .filter(|hull| {
+            let mut weapons: Vec<_> = hull.weapons.iter().map(|slot| slot.weapon).collect();
+            weapons.sort_unstable();
+            weapons.windows(2).any(|pair| pair[0] == pair[1])
+        })
+        .map(|hull| hull.id.0)
+        .collect();
+    assert_eq!(twice, Vec::<i16>::new());
+    let negative: Vec<(i16, i16, i16)> = hulls
+        .iter()
+        .flat_map(|hull| hull.weapons.iter().map(move |slot| (hull.id, slot)))
+        .filter(|(_, slot)| {
+            slot.ammo < 0
+                && arsenal
+                    .weapon(slot.weapon)
+                    .is_some_and(|spec| matches!(spec.ammo, Ammo::Rounds(_)) || spec.guidance_99())
+        })
+        .map(|(ship, slot)| (ship.0, slot.weapon.0, slot.ammo))
+        .collect();
+    assert_eq!(negative, [(241, 161, -1), (248, 155, -1), (250, 155, -1)]);
+    assert!(
+        hulls
+            .iter()
+            .flat_map(|hull| &hull.weapons)
+            .all(|slot| slot.count >= 0)
+    );
+    let outfits = data.outfits();
+    let arming: Vec<i16> = data
+        .ships()
+        .iter()
+        .filter(|ship| {
+            data.default_outfits(ship.id).iter().any(|(outfit, _)| {
+                outfits.iter().any(|record| {
+                    record.id == *outfit
+                        && record
+                            .mods
+                            .iter()
+                            .any(|&(kind, _)| kind == MOD_WEAPON || kind == MOD_AMMO)
+                })
+            })
+        })
+        .map(|ship| ship.id.0)
+        .collect();
+    assert_eq!(arming, Vec::<i16>::new());
+}
+
+// Every weapon's reach down its sub-munition chain (`_LoadObjectData`
+// @0x79e8c-0x79fa6).
+
+/// The Nanites (163) reach 2437.5 pixels down their chain to the Nanite
+/// swarm (229), and the Polaron Multi-Torpedoes (182, 185) 3510 down
+/// theirs to the Polaron Torpedo (148), each sub-munition at its own
+/// flight. Among the stock weapons that are not beams, those whose range
+/// is not their own flight are these three and every fighter bay, which
+/// reaches nothing.
+#[test]
+// Whole and half pixels, exactly.
+#[allow(clippy::float_cmp)]
+fn stock_nanites_and_polaron_multi_torpedoes_reach_down_their_sub_munition_chain() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let range = |id| {
+        arsenal
+            .weapon(nova_sim::WeaponId(id))
+            .map(WeaponSpec::range)
+            .expect("read")
+    };
+    let flight = |id| {
+        arsenal
+            .weapon(nova_sim::WeaponId(id))
+            .map(WeaponSpec::flight)
+            .expect("read")
+    };
+    assert_eq!((flight(163), range(163)), (187.5, 2437.5));
+    assert_eq!((flight(182), range(182)), (260.0, 3510.0));
+    assert_eq!(range(185), 3510.0);
+    assert_eq!(range(229), flight(229));
+    assert_eq!(range(148), flight(148));
+    let differing: Vec<i16> = arsenal
+        .weapons()
+        .filter(|spec| !spec.is_beam() && (spec.range() - spec.flight()).abs() > 1e-3)
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(
+        differing,
+        [
+            149, 150, 151, 152, 153, 154, 163, 169, 175, 176, 177, 178, 179, 180, 182, 185, 186,
+            187, 188, 189, 190, 191, 192, 193, 194, 195
+        ]
+    );
+    for spec in arsenal.weapons().filter(|spec| spec.guidance_99()) {
+        assert_eq!(spec.range(), 0.0, "{:?}", spec.id);
+    }
+}
+
+/// A stock Raven (164) fires its Polaron Multi-Torpedo (182, flying 260
+/// pixels) at a ship 3450 pixels off, within its 3510-pixel chain
+/// (3510² ≥ 0.95 d² up to about 3601), and no torpedo at 3700: there its
+/// pick is the fighter bay (154) it launches, which its gun pass, finding
+/// nothing, fires as its kept pick (`_AILaunchFighter` @0x81411,
+/// `_AIFireGun` @0x80213), and which is reloading by then.
+#[test]
+fn a_stock_raven_fires_its_polaron_multi_torpedo_from_beyond_its_own_flight() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let raven = ShipId(164);
+    let carried: Vec<i16> = nova_sim::CombatCatalog::hulls(&data)
+        .into_iter()
+        .find(|hull| hull.id == raven)
+        .expect("the Raven")
+        .weapons
+        .iter()
+        .map(|slot| slot.weapon.0)
+        .collect();
+    assert_eq!(carried, [146, 182, 154], "a beam, the torpedo and a bay");
+    let torpedo = Some(nova_sim::WeaponId(182));
+    assert_eq!(stock_pick_at(&data, raven, ShipId(130), 3450.0), torpedo);
+    let bay = Some(nova_sim::WeaponId(154));
+    assert_eq!(stock_pick_at(&data, raven, ShipId(130), 3700.0), bay);
+}
+
+/// A stock Krypt Pod (176), whose one weapon is the Nanites turret (163,
+/// flying 187.5 pixels), turns them on a ship 2000 pixels off, within its
+/// 2437.5-pixel chain and the margin, and not on one 2500 off.
+#[test]
+fn a_stock_krypt_pod_turns_its_nanites_on_a_ship_beyond_their_own_flight() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let pod = ShipId(176);
+    let nanites = Some(nova_sim::WeaponId(163));
+    assert_eq!(stock_pick_at(&data, pod, ShipId(130), 2000.0), nanites);
+    assert_ne!(stock_pick_at(&data, pod, ShipId(130), 2500.0), nanites);
+}
+
+/// The stock reads behind `_FireAIShipWeapon`'s port
+/// (`combat::ai_fire`): `Flags` 0x0040 (copies fire together) is set on
+/// fighter bays alone, each guidance 99; no weapon has a `Recoil` other
+/// than 0 or -1; none is exclusive (`Flags3` 0x0020); and every fighter bay is a secondary (`Flags` 0x0002), so an NPC keeps
+/// a bay it picked.
+#[test]
+fn stock_weapons_fire_ai_ship_weapon_reads() {
+    use nova_sim::CombatCatalog;
+    use nova_sim::combat::weapon::{EXCLUSIVE, SIMULTANEOUS};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    let ids = |keep: &dyn Fn(&nova_sim::WeaponRecord) -> bool| -> Vec<i16> {
+        weapons.iter().filter(|w| keep(w)).map(|w| w.id.0).collect()
+    };
+    let simultaneous = ids(&|w| w.flags & SIMULTANEOUS != 0);
+    assert_eq!(simultaneous, [151, 152, 186, 187, 188, 189]);
+    assert!(
+        weapons
+            .iter()
+            .filter(|w| simultaneous.contains(&w.id.0))
+            .all(|w| w.guidance == 99)
+    );
+    assert_eq!(ids(&|w| !matches!(w.recoil, 0 | -1)), [0_i16; 0]);
+    assert_eq!(ids(&|w| w.flags3 & EXCLUSIVE != 0), [0_i16; 0]);
+    let bays = ids(&|w| WeaponSpec::new(w).is_bay());
+    assert!(bays.len() >= 20, "{bays:?}");
+    assert_eq!(
+        ids(&|w| WeaponSpec::new(w).is_bay() && w.flags & 0x0002 == 0),
+        [0_i16; 0]
+    );
+}
+
+/// The stock reads behind `_FirePlayerWeapon`'s port (weapons-fidelity
+/// phase 15): no weapon has `AmmoType` -999 or a `Recoil` above none or
+/// below -1, and none is exclusive (`Flags3` 0x0020), so neither the
+/// self-destruct, the recoil nor the exclusive hold reaches stock play. The
+/// quadrant turrets (7 and 8) set no blind spot of their own, so the 18
+/// classes of a hull blind spot carrying one are
+/// `quadrant_turret_blind_spots`'s stock reach. Three classes carry two of
+/// a `Flags` 0x0040 bay, the Aurora Carrier variants 297, 302 and 396, none
+/// sold (`BuyRandom` 0): a player's only by capture.
+#[test]
+fn stock_weapons_fire_player_weapon_reads() {
+    use nova_sim::CombatCatalog;
+    use nova_sim::combat::weapon::{EXCLUSIVE, SIMULTANEOUS};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    let ids = |keep: &dyn Fn(&nova_sim::WeaponRecord) -> bool| -> Vec<i16> {
+        weapons.iter().filter(|w| keep(w)).map(|w| w.id.0).collect()
+    };
+    assert_eq!(ids(&|w| w.ammo_type == -999), [0_i16; 0]);
+    assert_eq!(ids(&|w| w.recoil > 0 || w.recoil < -1), [0_i16; 0]);
+    assert_eq!(ids(&|w| w.flags3 & EXCLUSIVE != 0), [0_i16; 0]);
+    let quadrant = |w: &nova_sim::WeaponRecord| matches!(w.guidance, 7 | 8);
+    let blind = ids(&|w| quadrant(w) && w.flags & 0x7000 != 0);
+    assert_eq!(blind, [0_i16; 0], "no quadrant turret is blind of its own");
+    let quadrants = ids(&|w| quadrant(w));
+    let hulls = data.hulls();
+    let blind_hulls: Vec<(i16, Vec<i16>)> = hulls
+        .iter()
+        .filter(|hull| hull.flags & 0x7000 != 0)
+        .filter_map(|hull| {
+            let carried: Vec<i16> = hull
+                .weapons
+                .iter()
+                .map(|slot| slot.weapon.0)
+                .filter(|weapon| quadrants.contains(weapon))
+                .collect();
+            (!carried.is_empty()).then_some((hull.id.0, carried))
+        })
+        .collect();
+    let expected: Vec<(i16, Vec<i16>)> = [
+        (154, vec![158, 156]),
+        (211, vec![143]),
+        (222, vec![143]),
+        (247, vec![158]),
+        (248, vec![158, 155]),
+        (249, vec![158]),
+        (250, vec![156, 155]),
+        (251, vec![158, 156]),
+        (252, vec![158, 156]),
+        (253, vec![158, 156]),
+        (254, vec![158, 156]),
+        (255, vec![158, 156]),
+        (348, vec![158]),
+        (349, vec![158, 219]),
+        (358, vec![158]),
+        (359, vec![158, 219]),
+        (380, vec![157]),
+        (397, vec![158, 156]),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(blind_hulls, expected, "blind classes carrying a 7 or an 8");
+    let simultaneous = ids(&|w| w.flags & SIMULTANEOUS != 0);
+    let doubled: Vec<(i16, i16, i16)> = hulls
+        .iter()
+        .flat_map(|hull| {
+            hull.weapons
+                .iter()
+                .filter(|slot| slot.count >= 2 && simultaneous.contains(&slot.weapon.0))
+                .map(|slot| (hull.id.0, slot.weapon.0, slot.count))
+        })
+        .collect();
+    assert_eq!(
+        doubled,
+        [
+            (297, 152, 2),
+            (297, 151, 2),
+            (302, 151, 2),
+            (302, 152, 2),
+            (302, 186, 2),
+            (302, 187, 2),
+            (396, 151, 2),
+            (396, 152, 2),
+            (396, 186, 2),
+            (396, 187, 2)
+        ],
+        "two of a simultaneous bay"
+    );
+}
+
+// The turret miss and the bomb and rocket launch (weapons-fidelity
+// phase 10: `_SpawnShot` @0x3e89e-0x3e963, @0x3e73a-0x3e783,
+// @0x3ede8-0x3ee0a; `_ShotCanHitShip` @0x448ad-0x448d5).
+
+/// Draws as [`Straight`], every shot leaving straight ahead, but a draw in
+/// `class`, a miss roll's range, draws `roll - 1`; each range asked is kept.
+struct Rolling {
+    class: u32,
+    roll: u32,
+    asked: Vec<u32>,
+}
+
+impl nova_sim::Chance for Rolling {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.asked.push(n);
+        if n == self.class {
+            self.roll - 1
+        } else {
+            n / 2
+        }
+    }
+}
+
+/// NPC 1, a ship of stock class `ship` at the centre, at rest, facing
+/// right, targeting NPC 0, firing one of `weapon` with all the rounds,
+/// fuel and armour it could want.
+fn npc_shooter(data: &GameData, arsenal: &Arsenal, ship: ShipId, weapon: &WeaponSpec) -> Combatant {
+    let Kind {
+        hull,
+        class_speed,
+        top_speed,
+        ..
+    } = class(data, arsenal, ship);
+    let mut rounds = LauncherRounds::default();
+    rounds.set(weapon.id, 100_000);
+    Combatant {
+        id: ShipRef::Npc(nova_sim::NpcId(1)),
+        ship_type: ship,
+        target: Some(QUARRY),
+        hull,
+        class_speed,
+        top_speed,
+        rounds,
+        ..shooter(weapon)
+    }
+}
+
+/// Whether the shot of `weapon` that a ship of stock class `firer` fires
+/// at a ship of stock class `quarry` 100 pixels ahead, `condition`
+/// (disabled with its armour down to a tenth), hits it directly, its miss
+/// roll scripted to `roll`; and the ranges drawn in.
+fn turret_hits(
+    data: &GameData,
+    arsenal: &Arsenal,
+    weapon: &WeaponSpec,
+    (firer, quarry): (i16, i16),
+    condition: Condition,
+    roll: u32,
+) -> (bool, Vec<u32>) {
+    let shooter = npc_shooter(data, arsenal, ShipId(firer), weapon);
+    let class = shooter.hull.miss_class;
+    let mut quarry = target(data, arsenal, ShipId(quarry), 100.0);
+    quarry.condition = condition;
+    if condition == Condition::Disabled {
+        quarry.reserves.armor.now = quarry.reserves.armor.max / 10.0;
+    }
+    let mut ships = [shooter, quarry];
+    let mut chance = Rolling {
+        class,
+        roll,
+        asked: Vec::new(),
+    };
+    let mut combat = Combat::default();
+    let mut hit = false;
+    // Long enough for the slowest to pass the quarry, short of any life's
+    // end, so no expiry blast or sub-munition is counted.
+    for tick in 0..12 {
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+        combat.tick(
+            &mut fighters,
+            arsenal,
+            &nova_sim::Governments::default(),
+            Rules::default(),
+            nova_sim::Field::default(),
+            nova_sim::combat::Scenery::default(),
+            &mut chance,
+        );
+        drop(fighters);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+        }
+        hit |= combat
+            .take_strikes()
+            .iter()
+            .any(|strike| strike.ship == QUARRY && strike.direct);
+    }
+    (hit, chance.asked)
+}
+
+/// 25 stock ships are Fighter class, 106 Medium, 106 Warships and 51
+/// Freighters, so their hulls' miss classes are 80, 90, 100 and 100.
+#[test]
+fn stock_hulls_take_their_miss_class_from_their_escort_class() {
+    use nova_sim::CombatCatalog;
+    use nova_sim::escort::EscortClass;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let mut counts: BTreeMap<EscortClass, usize> = BTreeMap::new();
+    for record in data.hulls() {
+        *counts.entry(record.escort_class).or_default() += 1;
+    }
+    assert_eq!(
+        counts.into_iter().collect::<Vec<_>>(),
+        [
+            (EscortClass::Fighter, 25),
+            (EscortClass::Medium, 106),
+            (EscortClass::Warship, 106),
+            (EscortClass::Freighter, 51)
+        ]
+    );
+    let miss = |id| arsenal.hull(ShipId(id)).miss_class;
+    assert_eq!([135, 133, 141, 128].map(miss), [80, 90, 100, 100]);
+}
+
+/// Every stock turret (4), fired by a Fed Destroyer (141, a Warship),
+/// rolls its miss below 100: it flies through an intact Lightning (135, a
+/// Fighter) on 81 and hits it on 80, hits a disabled one on 100, flies
+/// through an intact Starbridge (133, Medium) on 91 and hits it on 90,
+/// and hits a Fed Destroyer and a Shuttle (128, a Freighter) on 100. Fired
+/// by a Lightning, it rolls below 80.
+#[test]
+fn every_stock_turret_misses_a_light_ship_by_its_roll_and_hits_a_disabled_one() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let turrets = guided(&data, &[Guidance::Turret]);
+    let ids: Vec<i16> = turrets.iter().map(|spec| spec.id.0).collect();
+    assert_eq!(
+        ids,
+        [130, 131, 132, 139, 144, 159, 162, 163, 196, 197, 198, 233]
+    );
+    let intact = Condition::Intact;
+    for spec in &turrets {
+        let id = spec.id.0;
+        let hits = |quarry, condition, roll| {
+            turret_hits(&data, &arsenal, spec, (141, quarry), condition, roll).0
+        };
+        assert!(!hits(135, intact, 81), "{id}: a fighter on 81");
+        assert!(hits(135, intact, 80), "{id}: a fighter on 80");
+        assert!(hits(135, Condition::Disabled, 100), "{id}: disabled");
+        assert!(!hits(133, intact, 91), "{id}: a medium ship on 91");
+        assert!(hits(133, intact, 90), "{id}: a medium ship on 90");
+        assert!(hits(141, intact, 100), "{id}: a warship");
+        assert!(hits(128, intact, 100), "{id}: a freighter");
+        let (_, asked) = turret_hits(&data, &arsenal, spec, (141, 141), intact, 1);
+        assert!(asked.contains(&100), "{id}: {asked:?}");
+        let (_, asked) = turret_hits(&data, &arsenal, spec, (135, 141), intact, 1);
+        assert!(
+            asked.contains(&80) && !asked.contains(&100),
+            "{id}: {asked:?}"
+        );
+    }
+}
+
+/// Each stock point-defence turret (9: 133, 161), on a Fed Destroyer,
+/// rolls its miss below 100 as it engages an IR Missile.
+#[test]
+fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let ir = *arsenal.weapon(WeaponId(134)).expect("the IR Missile");
+    let defences = guided(&data, &[Guidance::PointDefence]);
+    let ids: Vec<i16> = defences.iter().map(|spec| spec.id.0).collect();
+    assert_eq!(ids, [133, 161]);
+    for spec in defences {
+        let id = spec.id.0;
+        let mut defender = npc_shooter(&data, &arsenal, ShipId(141), &spec);
+        defender.trigger = Trigger {
+            point_defence: true,
+            ..Trigger::default()
+        };
+        let mut attacker = Combatant {
+            id: QUARRY,
+            target: Some(defender.id),
+            ..shooter(&ir)
+        };
+        attacker.state = ShipState {
+            position: Vec2::new(engagement_range(&spec) - 10.0, 0.0),
+            velocity: Vec2::ZERO,
+            heading: 270.0,
+        };
+        let mut ships = [defender, attacker];
+        let mut chance = Rolling {
+            class: 100,
+            roll: 37,
+            asked: Vec::new(),
+        };
+        let mut combat = Combat::default();
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+        combat.tick(
+            &mut fighters,
+            &arsenal,
+            &nova_sim::Governments::default(),
+            Rules::default(),
+            nova_sim::Field::default(),
+            nova_sim::combat::Scenery::default(),
+            &mut chance,
+        );
+        let rolls: Vec<Option<u32>> = combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.id == spec.id)
+            .map(|shot| shot.miss_roll)
+            .collect();
+        assert_eq!(rolls, [Some(37)], "{id}");
+        let missile = combat
+            .shots()
+            .iter()
+            .find(|shot| shot.weapon.id == WeaponId(134))
+            .expect("the missile");
+        assert_eq!(missile.miss_roll, None, "{id}: a missile never rolls");
+    }
+}
+
+// Point defence against ships (`_HandleShipPointDefense` @0x394ce-0x3969d).
+// No stock weapon is a point-defence beam (10): only 133 and 161 are point
+// defence at all (`every_stock_point_defence_turret_engages_an_ir_missile_in_range`
+// pins them), so a point-defence beam on a ship has unit tests alone.
+
+/// The stock ships point defence fires on (`Flags2` 0x0008) and the stock
+/// ships carrying point defence (133 or 161 in a stock slot).
+#[test]
+fn stock_point_defence_targets_and_carriers() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let hulls = data.hulls();
+    let targets: Vec<i16> = hulls
+        .iter()
+        .filter(|hull| hull.flags2 & 0x0008 != 0)
+        .map(|hull| hull.id.0)
+        .collect();
+    let carriers: Vec<i16> = hulls
+        .iter()
+        .filter(|hull| {
+            hull.weapons
+                .iter()
+                .any(|slot| matches!(slot.weapon.0, 133 | 161))
+        })
+        .map(|hull| hull.id.0)
+        .collect();
+    assert_eq!((targets.len(), carriers.len()), (TARGETS, CARRIERS));
+    for id in [128, 144, 157, 167, 279] {
+        assert!(targets.contains(&id), "{id} a target");
+        assert!(arsenal.hull(ShipId(id)).pd_target, "{id}");
+    }
+    for id in [141, 143, 153, 181] {
+        assert!(carriers.contains(&id), "{id} a carrier");
+    }
+    assert!(!targets.contains(&141), "the Fed Destroyer is no target");
+    assert!(!arsenal.hull(ShipId(141)).pd_target);
+}
+
+/// How many stock ships point defence fires on.
+const TARGETS: usize = 129;
+/// How many stock ships carry point defence.
+const CARRIERS: usize = 71;
+
+/// The stock `count` of `weapon` in ship `ship`'s stock slots.
+fn stock_count(data: &GameData, ship: i16, weapon: i16) -> u32 {
+    data.hulls()
+        .iter()
+        .find(|hull| hull.id == ShipId(ship))
+        .expect("a stock ship")
+        .weapons
+        .iter()
+        .filter(|slot| slot.weapon == WeaponId(weapon))
+        .map(|slot| u32::try_from(slot.count).expect("a count"))
+        .sum()
+}
+
+/// A stock carrier of `ship` (NPC 1) at the centre facing up, running its
+/// stock `defence` as point defence alone, and a stock `attacker` (NPC 0)
+/// at `at`, moving `velocity` a tick, attacking it.
+fn defending(
+    data: &GameData,
+    arsenal: &Arsenal,
+    (ship, defence): (i16, i16),
+    attacker: i16,
+    (at, velocity): (Vec2, Vec2),
+) -> [Combatant; 2] {
+    let spec = stock_weapon(data, defence);
+    let mut carrier = npc_shooter(data, arsenal, ShipId(ship), &spec);
+    carrier.armament = Armament::new([(spec, stock_count(data, ship, defence))]);
+    carrier.target = None;
+    carrier.state.heading = 0.0;
+    carrier.trigger = Trigger {
+        point_defence: true,
+        ..Trigger::default()
+    };
+    let mut fighter = target(data, arsenal, ShipId(attacker), 0.0);
+    fighter.state.position = at;
+    fighter.state.velocity = velocity;
+    fighter.attacking = Some(carrier.id);
+    [carrier, fighter]
+}
+
+/// Each tick of `ships` over `ticks`, the attacker moving on: the
+/// point-defence shots of `weapon` fired, each with where it left from,
+/// its heading and the attacker as it was, and the strikes.
+fn defended_against(
+    arsenal: &Arsenal,
+    ships: &mut [Combatant; 2],
+    weapon: i16,
+    ticks: u32,
+) -> (Vec<(Vec2, f32, ShipState)>, Vec<Strike>) {
+    let mut combat = Combat::default();
+    let (mut fired, mut strikes) = (Vec::new(), Vec::new());
+    for _ in 0..ticks {
+        let seen: Vec<_> = combat.shots().iter().map(|shot| shot.id).collect();
+        let attacker = ships[1].state;
+        fight_with(&mut combat, ships, arsenal);
+        fired.extend(
+            combat
+                .shots()
+                .iter()
+                .filter(|shot| shot.weapon.id == WeaponId(weapon) && !seen.contains(&shot.id))
+                .map(|shot| (shot.position - shot.velocity, shot.heading, attacker)),
+        );
+        strikes.extend(combat.take_strikes());
+        let state = &mut ships[1].state;
+        state.position = state.position + state.velocity;
+    }
+    (fired, strikes)
+}
+
+/// A stock Fed Destroyer (141) runs its two Quads (133) as point defence;
+/// a stock Viper (167, `Flags2` 0x0089) attacks it, crossing at its top
+/// speed 150 pixels off, within the Quad's 240-pixel flight. The Quad
+/// leads it from its exit, which matters at that speed, and a Quad shot
+/// strikes it.
+#[test]
+fn a_stock_fed_destroyers_quad_leads_and_hits_a_viper_attacking_it() {
+    use nova_sim::combat::aim::{bearing, lead};
+    use nova_sim::combat::projectile::Target;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let speed = target(&data, &arsenal, ShipId(167), 0.0).top_speed;
+    let mut ships = defending(
+        &data,
+        &arsenal,
+        (141, 133),
+        167,
+        (Vec2::new(-100.0, -150.0), Vec2::new(speed, 0.0)),
+    );
+    let quad = stock_weapon(&data, 133);
+    let (fired, strikes) = defended_against(&arsenal, &mut ships, 133, 40);
+    let &(start, heading, viper) = fired.first().expect("the Quad fires");
+    let quarry = Target {
+        ship: QUARRY,
+        ship_type: ShipId(167),
+        fleet: QUARRY,
+        ties: nova_sim::combat::sides::Ties::default(),
+        position: viper.position,
+        velocity: viper.velocity,
+        radius: 0.0,
+        sprite_x: 0.0,
+        sheet: true,
+        condition: Condition::Intact,
+        miss_class: 0,
+    };
+    let from = ShipState {
+        position: start,
+        ..ShipState::default()
+    };
+    let led = lead(&from, &quarry, quad.speed);
+    assert!((heading - led).abs() < 1e-3, "{heading} led {led}");
+    let aimed = bearing(start, viper.position);
+    assert!((led - aimed).abs() > 5.0, "the lead matters: {led} {aimed}");
+    assert_ne!(start, Vec2::ZERO, "from its exit");
+    assert!(
+        strikes
+            .iter()
+            .any(|strike| strike.ship == QUARRY && strike.by == Some(ships[0].id) && strike.direct),
+        "{strikes:?}"
+    );
+}
+
+/// A stock Aurora Carrier (153) runs its Storm Chaingun (161, `ProxRadius`
+/// 0) as point defence; a stock Thunderhead (157, `Flags2` 0x0089)
+/// attacks it. A Storm Chaingun shot strikes it, which it can only by
+/// contact: one fired at a ship is in the shot layer.
+#[test]
+fn a_stock_aurora_carriers_storm_chaingun_hits_a_thunderhead_attacking_it_by_contact() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    assert!(stock_weapon(&data, 161).prox_radius <= 0.0, "no fuse");
+    let mut ships = defending(
+        &data,
+        &arsenal,
+        (153, 161),
+        157,
+        (Vec2::new(0.0, -150.0), Vec2::ZERO),
+    );
+    let (fired, strikes) = defended_against(&arsenal, &mut ships, 161, 40);
+    assert!(!fired.is_empty(), "the Storm Chaingun fires");
+    assert!(
+        strikes
+            .iter()
+            .any(|strike| strike.ship == QUARRY && strike.by == Some(ships[0].id)),
+        "{strikes:?}"
+    );
+}
+
+/// A stock Rebel Destroyer (181) runs its Quads as point defence; a stock
+/// Fed Destroyer (141, no `Flags2` 0x0008) attacking it draws no fire.
+#[test]
+fn a_stock_point_defence_holds_fire_at_a_destroyer_attacking_it() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let mut ships = defending(
+        &data,
+        &arsenal,
+        (181, 133),
+        141,
+        (Vec2::new(0.0, -150.0), Vec2::ZERO),
+    );
+    let (fired, _) = defended_against(&arsenal, &mut ships, 133, 20);
+    assert_eq!(fired, []);
+}
+
+/// The Raven Rocket (138) is in the stock slots of 31 ships. Fired by one
+/// of them, an Auroran Carrier (137), as an NPC moving (2, 1) and facing
+/// right, it leaves at that and its 15 pixels a tick to the right; fired
+/// by the player in the same ship, at its ship's velocity alone. Each
+/// then closes on its top speed as a rocket does.
+#[test]
+fn a_stock_raven_rocket_leaves_an_npc_at_its_speed_and_the_player_at_its_ships() {
+    use nova_sim::CombatCatalog;
+    use nova_sim::combat::projectile::{ROCKET_KEEP, ROCKET_PUSH};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let carriers: Vec<i16> = data
+        .hulls()
+        .iter()
+        .filter(|hull| hull.weapons.iter().any(|slot| slot.weapon == WeaponId(138)))
+        .map(|hull| hull.id.0)
+        .collect();
+    assert_eq!(carriers.len(), 31, "{carriers:?}");
+    assert_eq!(carriers[0], 137);
+    let raven = stock_weapon(&data, 138);
+    assert_eq!((raven.guidance, raven.speed), (Guidance::Rocket, 15.0));
+    let v = Vec2::new(2.0, 1.0);
+    let flown = |id: ShipRef| {
+        let mut ship = npc_shooter(&data, &arsenal, ShipId(137), &raven);
+        ship.id = id;
+        ship.state.velocity = v;
+        if id == ShipRef::Player {
+            ship.rounds.set(WeaponId(10), 100_000);
+        }
+        let mut ships = [ship];
+        let mut combat = Combat::default();
+        fight_with(&mut combat, &mut ships, &arsenal);
+        combat
+            .shots()
+            .iter()
+            .find(|shot| shot.weapon.id == WeaponId(138))
+            .expect("a Raven Rocket")
+            .velocity
+    };
+    let ahead = facing(90.0) * (15.0 * ROCKET_PUSH);
+    let npc = flown(ShipRef::Npc(nova_sim::NpcId(1)));
+    let thrown = (v + Vec2::new(15.0, 0.0)) * ROCKET_KEEP + ahead;
+    assert!(close(npc, thrown), "{npc:?} {thrown:?}");
+    let player = flown(ShipRef::Player);
+    let dropped = v * ROCKET_KEEP + ahead;
+    assert!(close(player, dropped), "{player:?} {dropped:?}");
+}
+
+/// No stock weapon is a freefall bomb (5), none releases one as its
+/// sub-munition, and none spreads its sub-munitions in a starburst (a
+/// negative `SubTheta`): the bomb launch, the weathervane, a bomb
+/// sub-munition's speed and the starburst's whole-degree halving reach no
+/// stock weapon.
+#[test]
+fn no_stock_weapon_is_a_bomb_or_a_starburst() {
+    use nova_sim::CombatCatalog;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    assert!(weapons.iter().all(|weapon| weapon.guidance != 5));
+    assert!(weapons.iter().all(|weapon| weapon.sub_theta >= 0));
+}
+
+/// The events of `ticks` ticks after `ships[0]` fires once.
+fn events_of_one_shot(ships: &mut [Combatant], arsenal: &Arsenal, ticks: u32) -> Vec<CombatEvent> {
+    let mut combat = Combat::default();
+    let mut events = Vec::new();
+    for tick in 0..=ticks {
+        fight_with(&mut combat, ships, arsenal);
+        if tick == 0 {
+            ships[0].trigger = Trigger::default();
+        }
+        events.extend(combat.take_events());
+    }
+    events
+}
+
+/// The Hellhound (230: `ExplodType` 1014, `BlastRadius` 145) explodes
+/// with extras where it hits a Leviathan, of its `BlastRadius`, so its
+/// explosion scatters extras about it.
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_stock_hellhound_explodes_with_extras_of_its_blast_radius() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let hellhound = stock_weapon(&data, 230);
+    let explosion = hellhound.explosion.expect("an explosion");
+    assert!(explosion.extra, "{explosion:?}");
+    assert_eq!(hellhound.blast_radius, 145.0);
+    let mut ships = [
+        aiming(&hellhound),
+        target(&data, &arsenal, ShipId(131), 300.0),
+    ];
+    let events = events_of_one_shot(&mut ships, &arsenal, hellhound.lifetime);
+    let sizes: Vec<f32> = events
+        .iter()
+        .filter_map(|event| match *event {
+            CombatEvent::Exploded {
+                explosion: boom,
+                size,
+                ..
+            } if boom == explosion => Some(size),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sizes, [145.0], "{events:?}");
+}
+
+/// The stock shots that fizzle out in `bööm` 128 at the end of their
+/// life: those of an `ExplodType` above none that don't detonate.
+#[test]
+fn the_stock_shots_that_fizzle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let fizzling: Vec<i16> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| {
+            spec.fizzles
+                && !spec.detonates()
+                && !spec.is_beam()
+                && spec.guidance != Guidance::FighterBay
+        })
+        .map(|spec| spec.id.0)
+        .collect();
+    assert_eq!(
+        fizzling,
+        [
+            136, 137, 143, 144, 145, 156, 157, 158, 159, 162, 182, 183, 184, 185, 197, 199, 200,
+            219, 233
+        ]
+    );
+}
+
+/// 56 stock weapons throw off particles where they hit.
+#[test]
+fn fifty_six_stock_weapons_throw_off_hit_particles() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let spraying = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.hit_particles.is_some())
+        .count();
+    assert_eq!(spraying, 56);
+}
+
+/// The stock weapons of a proximity fuse: 39 of `ProxRadius` above none.
+/// None flies fast enough to pass a ship of the smallest reach, 32 pixels
+/// wide (`_GetSpriteXSize`'s width with no sheet), between two moves'
+/// ends without ending one within trunc(`ProxRadius` + 32 x 0.333) of it,
+/// which needs a move longer than twice that reach. No stock weapon has a
+/// `Count` of none or below, the shot of no life the fight drops unseen.
+#[test]
+#[allow(clippy::float_cmp)]
+fn stock_proximity_fuses_reach_every_ship_they_pass() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    let fused: Vec<(i16, f32, f64)> = weapons
+        .iter()
+        .filter(|record| record.prox_radius > 0)
+        .map(|record| {
+            let reach = (f64::from(record.prox_radius) + 32.0 * 0.333).trunc();
+            (record.id.0, WeaponSpec::new(record).speed, reach)
+        })
+        .collect();
+    let ids: Vec<i16> = fused.iter().map(|&(id, _, _)| id).collect();
+    assert_eq!(
+        ids,
+        [
+            128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 140, 141, 142, 146, 147, 148, 160,
+            164, 165, 166, 167, 168, 170, 171, 172, 173, 174, 181, 182, 184, 185, 196, 198, 199,
+            201, 230, 231, 232, 234
+        ]
+    );
+    let least = fused
+        .iter()
+        .map(|&(_, _, reach)| reach)
+        .fold(f64::INFINITY, f64::min);
+    assert_eq!(least, 11.0, "trunc(1 + 10.656)");
+    let fastest = fused
+        .iter()
+        .map(|&(_, speed, _)| speed)
+        .fold(0.0_f32, f32::max);
+    assert_eq!(fastest, 20.0, "133 and 231");
+    let passing: Vec<i16> = fused
+        .iter()
+        .filter(|&&(_, speed, reach)| f64::from(speed) > 2.0 * reach)
+        .map(|&(id, _, _)| id)
+        .collect();
+    assert_eq!(passing, [] as [i16; 0], "none passes a ship between moves");
+    let lifeless: Vec<i16> = weapons
+        .iter()
+        .filter(|record| record.count <= 0)
+        .map(|record| record.id.0)
+        .collect();
+    assert_eq!(lifeless, [] as [i16; 0]);
 }

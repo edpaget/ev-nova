@@ -147,6 +147,17 @@ pub enum DrawCommand {
         /// Its colour.
         color: Color,
     },
+    /// `command` drawn only inside `clip`: a text run cut to it, a
+    /// sprite's or picture's quad cropped to it with its texture
+    /// coordinates, a tiled picture's area cut to it. A line or a dot is
+    /// drawn as it is, uncut. The floating map clips its names and arrows
+    /// to its frame so.
+    Clipped {
+        /// Where it may draw.
+        clip: Bounds,
+        /// What it draws.
+        command: Box<DrawCommand>,
+    },
 }
 
 /// A frame's draw commands, drawn in order (later ones on top).
@@ -289,6 +300,14 @@ impl DrawList {
             center,
             size,
             color,
+        })
+    }
+
+    /// Appends `command` drawn only inside `clip` ([`DrawCommand::Clipped`]).
+    pub fn clipped(&mut self, clip: Bounds, command: DrawCommand) -> &mut Self {
+        self.push(DrawCommand::Clipped {
+            clip,
+            command: Box::new(command),
         })
     }
 }

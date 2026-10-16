@@ -62,7 +62,7 @@ use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
-use nova_view::galaxy::map::{COURSE_HELP, ENTER_LABEL, ROUTE};
+use nova_view::galaxy::map::{BRIGHT_GREEN, COURSE_HELP, ENTER_LABEL};
 use nova_view::menu::MenuChoice;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::{Key, MouseButton, Point};
@@ -755,7 +755,8 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.frame();
     assert_eq!(date(&harness), (23, 6, 1177));
 
-    // M opens flight's map: no Enter button, and Return enters nothing.
+    // M opens flight's map: no Enter button, and Return enters nothing
+    // but closes the map, as the original's `_MapFilter` does.
     harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::FlightMap);
     let map = harness.frame();
@@ -763,6 +764,9 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     assert!(!shows(&map, ENTER_LABEL), "{:?}", texts(&map));
     assert_eq!(ENTER_LABEL, "Enter system (Return)");
     harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().system(), SystemId(128));
+    harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::FlightMap);
 
     // Clicking Gamma plots the course through Beta, drawn on the map.
@@ -770,7 +774,11 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.click(gamma);
     assert_eq!(harness.session().course(), [SystemId(129), SystemId(130)]);
     let map = harness.frame();
-    assert_eq!(solids_in(&map, ROUTE), 2, "a line for each jump");
+    assert_eq!(
+        solids_in(&map, BRIGHT_GREEN),
+        2 + 8,
+        "a line for each jump, and the brackets' eight ticks round Gamma"
+    );
     assert!(
         shows(&map, "Course: 2 jump(s) to Gamma"),
         "{:?}",

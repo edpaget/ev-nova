@@ -210,6 +210,9 @@ impl Session {
                 self.explore_place(system);
                 self.raise(StoryEvent::Explored { system });
             }
+            // Its known pass, with no clear (`_AutoSetExploration`
+            // @0xdb06-0xdbd4).
+            self.add_known();
         }
         if let Some(paint) = effect.paint {
             self.pilot.paint = paint;
@@ -405,6 +408,22 @@ mod tests {
         let mut session = self::session(&mapped());
         session.grant_outfit(CLASS_3);
         assert_eq!(explored(&session), ids(&[130, 135]));
+    }
+
+    #[test]
+    fn a_map_grant_adds_its_known_pass_and_clears_nothing() {
+        let mut session = session(&mapped());
+        let known = |session: &Session| -> BTreeSet<i16> {
+            session.known().iter().map(|system| system.0).collect()
+        };
+        assert_eq!(known(&session), ids(&[130, 131, 132]));
+        session.mark_known([SystemId(137)]);
+        session.grant_outfit(JUMPS_2);
+        assert_eq!(
+            known(&session),
+            ids(&[130, 131, 132, 133, 137]),
+            "132's link 133 learnt, 137 kept"
+        );
     }
 
     #[test]

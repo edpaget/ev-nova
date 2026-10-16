@@ -1431,6 +1431,7 @@ mod tests {
             flags: 0,
             flags2: 0,
             govt: None,
+            min_status: 0,
         };
         let stellars = stellars_of(
             &galaxy,
@@ -1465,6 +1466,7 @@ mod tests {
             flags: 0,
             flags2: 0,
             govt: None,
+            min_status: 0,
         };
         let listed = [
             listed(140, &[130, 131]),
@@ -1522,6 +1524,7 @@ mod tests {
             flags: StellarFlags::CAN_LAND,
             flags2: 0,
             govt: None,
+            min_status: 0,
         };
         let listed = [
             landable(140, &[130, 131]),
@@ -1578,6 +1581,7 @@ mod tests {
             flags: 0x21,
             flags2: 0x0010,
             govt: Some(FED),
+            min_status: 0,
         };
         let stellars = stellars_of(
             &galaxy,
@@ -1632,6 +1636,7 @@ mod tests {
             flags: 0,
             flags2: 0,
             govt: None,
+            min_status: 0,
         }
     }
 

@@ -119,6 +119,13 @@
 //!   a system the current one lists (@0x137b3-0x137bb), or its cue as the
 //!   map closes for a longer route (@0x13c16); no route lets go of the
 //!   selection and keeps the mode (@0x13788-0x13790).
+//! - The galaxy map's Tab or `\` ([`Session::cycle_map_selection`],
+//!   `_MapFilter` @0x13f0f-0x13fac): mode 3 with the next Con slot that
+//!   holds a link, stepping on from +0x6c, or with nothing; in silence,
+//!   the course kept. Where a cycle outside mode 3 starts is
+//!   [`RuleKey::MapCycleStart`]'s. The cue notes the slot it writes, the
+//!   first at the hop's place (@0xe30f-0xe344), for the cycle to step on
+//!   from.
 //! - A click on the floating map ([`Session::select_on_floating_map`],
 //!   `_HandlePlayer` @0x6a16c-0x6a762): on the current system's centre,
 //!   mode 3 with nothing selected (@0x6a1d5-0x6a1de); on the box of one of
@@ -129,8 +136,7 @@
 //!
 //! **Left out.** The floating map's preselect
 //! (`_ShowFloatingMap` @0x11488), which only its names would read (the
-//! galaxy-map-fidelity roadmap's); the map dialog's Tab / `\` cycling
-//! (`_MapFilter` @0x13f0f-0x13fac); the map panel's titles by the mode
+//! galaxy-map-fidelity roadmap's); the map panel's titles by the mode
 //! (`_MapDialogUpdate` @0x10b68-0x10c76); and the destroyed player's and the ship swap's per-frame clears
 //! (@0x68712-0x68718, @0x6f41b-0x6f421). Mode 4, the hypergate map's, is
 //! never drawn.
@@ -182,12 +188,29 @@
 //! `N`.
 
 use super::Session;
-use crate::StellarPick;
 use crate::catalog::{StellarId, SystemId};
 use crate::hyperspace::{HyperSelectRule, next_hyper_destination};
 use crate::landing::nearest_stellar;
 use crate::navigation::NavMode;
 use crate::sound::SimSound;
+use crate::{RuleKey, RuleSource, StellarPick};
+
+/// How many Con slots a `sÿst` has, `Con1-Con16`: the slots the
+/// original's link cycles step through.
+const CON_SLOTS: usize = 16;
+
+/// The Con slot a mode-3 selection was written from, as the original
+/// keeps it at +0x6c where ours keeps the system. A setter that knows the
+/// slot notes it ([`Session::cycle_map_selection`], [`Session::cue_course`]);
+/// it stands while the player is still in `system` and the raw selection
+/// is still `selected`, and a later cycle steps on from it. Every other
+/// write of the nav forgets it ([`Session::set_nav`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct NavSlot {
+    system: SystemId,
+    slot: usize,
+    selected: SystemId,
+}
 
 impl Session {
     /// The player's nav mode and its selection, a hyperspace selection
@@ -218,7 +241,10 @@ impl Session {
     /// there (`_FindActiveCoLocatedSystem` gives −1, @0x124e6); otherwise
     /// the current system (@0x124f6-0x124ff). The original's on-planet
     /// branch (@0x124bd) gives the current system too, and ours' map
-    /// opens only in flight.
+    /// opens only in flight. After the map's Tab / `\` cycle
+    /// ([`Session::cycle_map_selection`]) it is the map's new selection,
+    /// as `_MapFilter` sets `_selSystem` by the same rule
+    /// (@0x1408c-0x140d8).
     #[must_use]
     pub fn map_preselection(&self) -> Option<SystemId> {
         match self.nav {
@@ -244,9 +270,28 @@ impl Session {
         jumps.contains(&selected).then_some(selected)
     }
 
+    /// Writes the nav mode and its selection, as each of the original's
+    /// setters writes +0x6a and +0x6c, and forgets the Con slot noted for
+    /// the old selection ([`NavSlot`]). A setter that writes mode 3 from a
+    /// slot it knows ([`Session::cycle_map_selection`],
+    /// [`Session::cue_course`]) notes that slot after. Every other one's
+    /// selection stands in the first slot naming it
+    /// ([`Session::selected_slot`]). The floating map's click writes that
+    /// slot, the first whose box it hits, as a repeated link's slots
+    /// share a box (@0x6a332 → @0x6a719). Hyper Select writes the slot it
+    /// steps to (@0x69cce), and ours, whose cycle visits each link once
+    /// ([`HyperSelectRule`]), stands it in that link's first slot, the
+    /// one the original steps to from any slot before it. The port
+    /// dialogs' and the bar's restores write mode 3 only after
+    /// [`Session::land_at`], which has no original.
+    pub(super) fn set_nav(&mut self, nav: NavMode) {
+        self.nav = nav;
+        self.nav_slot = None;
+    }
+
     /// Lets go of the selection and keeps the mode.
     pub(super) fn deselect(&mut self) {
-        self.nav = self.nav.deselected();
+        self.set_nav(self.nav.deselected());
     }
 
     /// A landed `M` (`first`) or `N` into `system` writes the selection
@@ -267,12 +312,12 @@ impl Session {
         if self.landed.is_none() || !self.galaxy.exists(system) {
             return;
         }
-        self.nav = match self.nav {
+        self.set_nav(match self.nav {
             NavMode::Stellar(_) if first => {
                 NavMode::Stellar(self.first_stellars.get(&system).copied())
             }
             mode => mode.deselected(),
-        };
+        });
     }
 
     /// Saves the nav mode and its selection as a port dialog opens, as the
@@ -288,7 +333,7 @@ impl Session {
     /// save is restored once.
     pub fn restore_port_nav(&mut self) {
         if let Some(saved) = self.port_nav.take() {
-            self.nav = saved;
+            self.set_nav(saved);
         }
     }
 
@@ -299,7 +344,7 @@ impl Session {
     /// same nav. With nothing saved it changes nothing.
     pub fn restore_bar_nav(&mut self) {
         if let Some(saved) = self.bar_nav {
-            self.nav = saved;
+            self.set_nav(saved);
         }
     }
 
@@ -307,7 +352,9 @@ impl Session {
     /// does: when the course's first hop as it is flown
     /// ([`Session::course_shown`]) is a system the ship can jump to from
     /// here, mode 3 with it selected; otherwise nothing changes. It makes
-    /// no sound.
+    /// no sound. The original writes the first Con slot whose system
+    /// stands at the hop's place (@0xe30f-0xe344), which a later map
+    /// cycle steps on from ([`Session::cycle_map_selection`]).
     pub fn cue_course(&mut self) {
         let Some(&hop) = self.course_shown().first() else {
             return;
@@ -318,7 +365,15 @@ impl Session {
             .jumps(self.pilot.system, self.hyperlinks)
             .contains(&hop)
         {
-            self.nav = NavMode::Hyperspace(Some(hop));
+            self.set_nav(NavMode::Hyperspace(Some(hop)));
+            self.nav_slot = self.galaxy.same_place(hop).and_then(|place| {
+                let slot = self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))?;
+                Some(NavSlot {
+                    system: self.pilot.system,
+                    slot,
+                    selected: hop,
+                })
+            });
         }
     }
 
@@ -341,10 +396,10 @@ impl Session {
         self.sounds.push(SimSound::NavSelected);
         self.dock = None;
         if nav_off {
-            self.nav = NavMode::Off;
+            self.set_nav(NavMode::Off);
         }
         if hyperspace && !matches!(self.nav, NavMode::Hyperspace(_)) {
-            self.nav = NavMode::Hyperspace(None);
+            self.set_nav(NavMode::Hyperspace(None));
             self.cue_course();
         }
         true
@@ -406,7 +461,7 @@ impl Session {
         self.sounds.push(SimSound::NavSelected);
         if !selected {
             self.nav_fly_in.start();
-            self.nav = NavMode::Stellar(Some(picked));
+            self.set_nav(NavMode::Stellar(Some(picked)));
             self.dock = None;
         }
         Some(picked)
@@ -450,7 +505,7 @@ impl Session {
         if self.hyper_select == HyperSelectRule::OneJumpCourse {
             self.pilot.course = vec![next];
         }
-        self.nav = NavMode::Hyperspace(Some(next));
+        self.set_nav(NavMode::Hyperspace(Some(next)));
         Some(next)
     }
 
@@ -467,8 +522,117 @@ impl Session {
             .con_slots(self.pilot.system)
             .iter()
             .copied()
-            .filter(|&slot| self.galaxy.exists(slot) && self.galaxy.same_place(slot).is_some())
+            .filter(|&slot| self.flags(slot))
             .collect()
+    }
+
+    /// Whether a Con slot naming `slot` is one the link cycles and the
+    /// floating map take: in the catalog, with a visible system at its
+    /// place (`_FindActiveCoLocatedSystem` ≠ −1, `_MapFilter`
+    /// @0x13f4f-0x13f65, `_HandlePlayer` @0x6a21f).
+    fn flags(&self, slot: SystemId) -> bool {
+        self.galaxy.exists(slot) && self.galaxy.same_place(slot).is_some()
+    }
+
+    /// The first of the current system's [`CON_SLOTS`] Con slots whose
+    /// system `test` passes, empty slots (−1) passed over.
+    fn slot_at(&self, test: impl Fn(SystemId) -> bool) -> Option<usize> {
+        self.galaxy
+            .con_slots(self.pilot.system)
+            .iter()
+            .take(CON_SLOTS)
+            .position(|&slot| self.galaxy.exists(slot) && test(slot))
+    }
+
+    /// The Con slot the raw mode-3 selection `selected` stands in: the one
+    /// noted as it was written, while it stands ([`NavSlot`]); else the
+    /// first naming it; else the first whose system stands at its place.
+    pub(super) fn selected_slot(&self, selected: SystemId) -> Option<usize> {
+        if let Some(noted) = self.nav_slot
+            && noted.system == self.pilot.system
+            && noted.selected == selected
+        {
+            return Some(noted.slot);
+        }
+        self.slot_at(|slot| slot == selected).or_else(|| {
+            let place = self.galaxy.same_place(selected)?;
+            self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))
+        })
+    }
+
+    /// What +0x6c holds as the map's cycle starts, the slot it steps on
+    /// from (see [`Session::cycle_map_selection`]): in mode 3 the slot the
+    /// selection stands in; in mode 2 with a stellar, by the engine's
+    /// [`RuleKey::MapCycleStart`], the stellar's index (its ID less 128);
+    /// otherwise −1, as every write of Off writes +0x6c = −1 with it
+    /// (`_ResetPlayer` @0x1d4cd-0x1d4d5, Nav Off @0x69b54-0x69b5a, an
+    /// arrival @0x6be25-0x6be2b, the hypergate @0x637e4-0x637f2), and so
+    /// does every deselect.
+    fn cycle_from(&self) -> i32 {
+        match self.nav {
+            NavMode::Hyperspace(Some(selected)) => self
+                .selected_slot(selected)
+                .and_then(|slot| i32::try_from(slot).ok())
+                .unwrap_or(-1),
+            NavMode::Stellar(Some(stellar))
+                if self.rules.source_for(RuleKey::MapCycleStart) == RuleSource::Engine =>
+            {
+                i32::from(stellar.0) - 128
+            }
+            _ => -1,
+        }
+    }
+
+    /// The galaxy map's Tab or `\`, as `_MapFilter` cycles the hyperspace
+    /// selection off the hypergate map (@0x13f0f-0x13fac): mode 3 with the
+    /// next of the current system's Con slots that holds a link
+    /// ([`Session::floating_map_links`]' test), stepping on from the slot
+    /// +0x6c holds, past the 16th back to the first, the selection the
+    /// slot's raw system, as the floating map's click writes it; with no
+    /// such slot, mode 3 with nothing selected. Where it starts:
+    ///
+    /// - In mode 3, after the slot the selection stands in: the slot the
+    ///   last cycle or the cue wrote, while it stands, so a repeated link
+    ///   is visited once for each slot; else the first slot naming it, or
+    ///   standing at its place; else the first slot.
+    /// - In mode 2 with a stellar, as [`RuleKey::MapCycleStart`] says: by
+    ///   the engine, after the slot the stellar's index (its ID less 128)
+    ///   names when that is 0-15, and at the first slot otherwise; by the
+    ///   other reading at the first slot.
+    /// - Otherwise at the first slot, as +0x6c is −1 in Off and with no
+    ///   selection.
+    ///
+    /// It makes no sound and writes nothing else: the course and the dock
+    /// request are kept. Docked it does nothing and says so, as on a
+    /// planet the key falls through (`_onPlanet` @0x13d20-0x13d28). It
+    /// doesn't read the jump: ours' map can't open during one. Then the
+    /// original redraws the nav area (@0x13fb2-0x1406e), which the flight
+    /// view does, and selects [`Session::map_preselection`] on the map
+    /// (@0x1408c-0x140d8).
+    pub fn cycle_map_selection(&mut self) -> bool {
+        if self.landed.is_some() {
+            return false;
+        }
+        // The step goes on from +0x6c, past the last slot to the first and
+        // below the first to the last (@0x13f77-0x13f9b): a start past the
+        // slots begins the walk at the first.
+        let start = usize::try_from(self.cycle_from() + 1).unwrap_or(CON_SLOTS - 1);
+        let slots = self.galaxy.con_slots(self.pilot.system);
+        let slots = &slots[..slots.len().min(CON_SLOTS)];
+        let next = (start..slots.len()).chain(0..start).find_map(|at| {
+            slots
+                .get(at)
+                .copied()
+                .filter(|&slot| self.flags(slot))
+                .map(|slot| (at, slot))
+        });
+        self.set_nav(NavMode::Hyperspace(next.map(|(_, selected)| selected)));
+        self.nav_slot = next.map(|(slot, selected)| NavSlot {
+            system: self.pilot.system,
+            slot,
+            selected,
+        });
+        true
     }
 
     /// A click hit on the floating map, as `_HandlePlayer` takes it: mode
@@ -482,7 +646,7 @@ impl Session {
         if self.jump.is_some() {
             return false;
         }
-        self.nav = NavMode::Hyperspace(link);
+        self.set_nav(NavMode::Hyperspace(link));
         self.sounds.push(SimSound::HyperSelected);
         true
     }
@@ -502,13 +666,14 @@ mod tests {
     use crate::session::LandPress;
     use crate::session::tests::{
         alternates, armed, at_gate, at_wormhole, facing_an_npc, gated, hide, hub, three_stellars,
-        wormholes,
+        with_alternate, wormholes,
     };
     use crate::sound::SimSound;
     use crate::targeting::TargetPick;
     use crate::testkit::{
-        FakePilotCatalog, begin_jump_now, catalog, click_stellar, fly_out, land_now, starting,
+        FakePilotCatalog, begin_jump_now, catalog, click_stellar, fly_out, land_now, star, starting,
     };
+    use crate::{RuleKey, RuleSource, Rulebook};
 
     fn ids(route: &[i16]) -> Vec<SystemId> {
         route.iter().copied().map(SystemId).collect()
@@ -1317,6 +1482,212 @@ mod tests {
         assert!(session.select_on_floating_map(None));
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
         assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+    }
+
+    // The galaxy map's Tab / `\` cycle.
+
+    /// Cycles the map's selection once, and gives the raw selection.
+    fn cycle(session: &mut Session) -> NavMode {
+        assert!(session.cycle_map_selection());
+        session.nav
+    }
+
+    #[test]
+    fn the_map_cycle_sets_mode_3_with_the_next_listed_link_from_the_selection_and_wraps() {
+        // `hub`'s 130 lists 134, 131, 131, 130, 999, 135.
+        let mut session = Session::start(&hub()).expect("starts");
+        session.nav = hyperspace(134);
+        assert_eq!(cycle(&mut session), hyperspace(131));
+        assert_eq!(session.nav_mode(), hyperspace(131));
+        session.nav = hyperspace(135);
+        assert_eq!(cycle(&mut session), hyperspace(134), "wraps");
+    }
+
+    #[test]
+    fn the_map_cycle_visits_a_repeated_link_once_per_slot() {
+        let mut session = Session::start(&hub()).expect("starts");
+        for expected in [134, 131, 131, 130, 135, 134] {
+            assert_eq!(cycle(&mut session), hyperspace(expected));
+        }
+    }
+
+    /// [`alternates`] with 130 listing 133, the missing 999, 131 and
+    /// itself, in that order, then 131 and 133 hidden: 134 stands at 131's
+    /// place, and nothing at 133's.
+    fn shadowed() -> Session {
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[133, 999, 131, 130]);
+        with_alternate(&mut catalog);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(hide(&mut session, &catalog, &[131, 133]));
+        session
+    }
+
+    #[test]
+    fn a_map_cycle_after_hyper_select_steps_on_from_the_first_slot_naming_its_system() {
+        // `hub`'s 130 lists 134, 131, 131, 130, 999, 135. The cycle notes
+        // slot 2 for 131; Hyper Select comes back round to 131, writing
+        // slot 1 (@0x69cce), and the next cycle steps on to slot 2.
+        let mut session = Session::start(&hub()).expect("starts");
+        for _ in 0..3 {
+            cycle(&mut session);
+        }
+        assert_eq!(session.nav, hyperspace(131), "slot 2");
+        for expected in [135, 134, 131] {
+            assert_eq!(session.select_next_system(), Some(SystemId(expected)));
+        }
+        assert_eq!(cycle(&mut session), hyperspace(131), "slot 2, after slot 1");
+    }
+
+    #[test]
+    fn a_map_cycle_after_a_floating_map_click_steps_on_from_the_first_slot_naming_its_system() {
+        // The click writes the first slot whose box it hits
+        // (@0x6a332 → @0x6a719), and a repeated link's slots share a box.
+        let mut session = Session::start(&hub()).expect("starts");
+        for _ in 0..3 {
+            cycle(&mut session);
+        }
+        assert!(session.nav_off());
+        assert!(session.select_on_floating_map(Some(SystemId(131))));
+        assert_eq!(cycle(&mut session), hyperspace(131), "slot 2, after slot 1");
+    }
+
+    #[test]
+    fn the_map_cycle_passes_over_slots_with_no_visible_system_and_keeps_the_raw_slot() {
+        let mut session = shadowed();
+        assert_eq!(cycle(&mut session), hyperspace(131), "the raw slot");
+        assert_eq!(session.nav_mode(), hyperspace(134), "read by place");
+        assert_eq!(cycle(&mut session), hyperspace(130), "itself");
+        assert_eq!(
+            cycle(&mut session),
+            hyperspace(131),
+            "133 and 999 passed over"
+        );
+    }
+
+    #[test]
+    fn the_map_cycle_from_off_or_mode_3_with_none_starts_at_the_first_link() {
+        for before in [
+            NavMode::Off,
+            NavMode::Hyperspace(None),
+            NavMode::Stellar(None),
+        ] {
+            let mut session = Session::start(&hub()).expect("starts");
+            session.nav = before;
+            assert_eq!(cycle(&mut session), hyperspace(134), "{before:?}");
+        }
+    }
+
+    #[test]
+    fn the_map_cycle_in_a_system_with_no_links_selects_none_in_mode_3() {
+        for before in [NavMode::Off, stellar(128), hyperspace(130)] {
+            let mut session = linkless();
+            session.nav = before;
+            assert_eq!(cycle(&mut session), NavMode::Hyperspace(None), "{before:?}");
+        }
+    }
+
+    #[test]
+    fn the_map_cycle_makes_no_sound_and_keeps_the_course() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        let mut session = quiet(session);
+        assert_eq!(cycle(&mut session), hyperspace(131), "after the cue's slot");
+        assert_eq!(session.take_sounds(), []);
+        assert_eq!(session.course(), ids(&[131, 132]), "the course kept");
+    }
+
+    #[test]
+    fn no_map_cycle_while_landed() {
+        let mut session = Session::start(&hub()).expect("starts");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        assert!(!session.cycle_map_selection());
+        assert_eq!(session.nav_mode(), stellar(128));
+    }
+
+    #[test]
+    fn a_map_cycle_after_the_cue_steps_on_from_the_first_slot_at_the_hops_place() {
+        // `_CueNextHyperRouteDest` writes the first slot whose system
+        // stands at the hop's place (@0xe30f-0xe344): here 131's, hidden
+        // behind 134, before the slot naming 134 itself.
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[131, 134, 132]);
+        with_alternate(&mut catalog);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(hide(&mut session, &catalog, &[131]));
+        session.pilot.course = ids(&[134]);
+        session.cue_course();
+        assert_eq!(session.nav, hyperspace(134));
+        assert_eq!(cycle(&mut session), hyperspace(134), "slot 1, after slot 0");
+        assert_eq!(cycle(&mut session), hyperspace(132));
+    }
+
+    #[test]
+    fn a_map_cycle_from_a_stellar_starts_after_its_index_by_the_engine_and_at_the_first_link_by_the_other_reading()
+     {
+        let other = Rulebook::default().with_override(RuleKey::MapCycleStart, RuleSource::Bible);
+        for (stellar_id, engine, by_other) in [
+            (129, 131, 134), // index 1: slot 2 next
+            (128, 131, 134), // index 0: slot 1 next
+            (143, 134, 134), // index 15: wraps to slot 0
+            (150, 134, 134), // index 22: slot 0
+        ] {
+            for (rules, expected) in [(Rulebook::default(), engine), (other, by_other)] {
+                let source = rules.source_for(RuleKey::MapCycleStart);
+                let mut session = Session::start(&hub()).expect("starts").with_rules(rules);
+                session.nav = stellar(stellar_id);
+                assert_eq!(
+                    cycle(&mut session),
+                    hyperspace(expected),
+                    "{stellar_id} by {source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_map_cycle_from_a_system_no_slot_stands_for_starts_at_the_first_link() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.nav = hyperspace(132);
+        assert_eq!(cycle(&mut session), hyperspace(134));
+    }
+
+    #[test]
+    fn a_map_cycle_from_a_system_no_slot_names_steps_on_from_the_slot_at_its_place() {
+        // 134 shares 131's place, and 131, the lower, stands for it.
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[132, 131]);
+        with_alternate(&mut catalog);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.nav = hyperspace(134);
+        assert_eq!(cycle(&mut session), hyperspace(132), "after 131's slot");
+    }
+
+    #[test]
+    fn a_map_cycle_steps_from_below_the_first_slot_to_the_last() {
+        let mut catalog = hub();
+        let mut links = [-1; 16];
+        (links[0], links[15]) = (134, 135);
+        catalog.star_map[0] = star(130, (0.0, 0.0), &links);
+        for (stellar_id, expected) in [(100, 135), (142, 135), (143, 134)] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.nav = stellar(stellar_id);
+            assert_eq!(
+                cycle(&mut session),
+                hyperspace(expected),
+                "index {}",
+                stellar_id - 128
+            );
+        }
+    }
+
+    #[test]
+    fn a_map_cycle_from_a_stellar_counts_the_empty_slots_by_the_engine() {
+        let mut catalog = hub();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[-1, 131, -1, 132]);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.nav = stellar(129);
+        assert_eq!(cycle(&mut session), hyperspace(132), "after slot 1, 131's");
     }
 
     #[test]

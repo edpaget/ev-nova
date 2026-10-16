@@ -497,7 +497,7 @@ impl StarMap {
     /// overlay hides them (see the [`story`](crate::story) module's
     /// "Galaxy overlay"), a place two visible systems share resolved as
     /// `colocated` says: only the visible systems are on it, every one of
-    /// them, as `_DrawMap` draws every visible system. A link names a
+    /// them. A link names a
     /// place, as the original's `_FindActiveCoLocatedSystem` (@0x4be0)
     /// resolves every Con slot: its own [`StarMap::listed_links`], and
     /// the links drawn, name the system standing for its target
@@ -591,7 +591,9 @@ impl StarMap {
     }
 
     /// System `id`'s raw Con slots, as its `sÿst` lists them: in record
-    /// order, repeats and itself kept, hidden or not, unresolved. Empty
+    /// order, repeats and itself kept, hidden or not, unresolved, an empty
+    /// slot before the last link as −1 in its place
+    /// ([`StarSystem::links`](crate::catalog::StarSystem::links)). Empty
     /// when the catalog does not hold it.
     #[must_use]
     pub fn con_slots(&self, id: SystemId) -> &[SystemId] {

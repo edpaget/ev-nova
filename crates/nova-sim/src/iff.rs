@@ -75,6 +75,43 @@
 //! the blessing from its rank blessing table (`Session::blessing`);
 //! domination by tribute has no state yet (rdm:task/planet-domination).
 //!
+//! # Systems on the galaxy map ([`system_color_code`], `_ColorCodeSystem` @0xd672-0xd941)
+//!
+//! The colour the galaxy map frames a system's oval in (`_DrawMap`
+//! @0xef8a-0xefad), worked out from the system's head (+0xba, or itself
+//! when that is −1: an inlined `_FindFirstCoLocatedSystem`,
+//! @0xd680-0xd6a9) and the system standing for it (an inlined
+//! `_FindActiveCoLocatedSystem`, @0xd6ac-0xd70d):
+//!
+//! 1. `_rgbDarkGrey` ([`SystemColorCode::Unexplored`]) when no system
+//!    stands for it, its head is invalid (@0xd712-0xd742) or its head is
+//!    unexplored (+0x90 ≤ 0, @0xd75b-0xd764).
+//! 2. `_rgbLightGrey` ([`SystemColorCode::Uninhabited`]) when the system
+//!    standing for it isn't inhabited: an inlined `_SystemIsInhabited`,
+//!    which reads only its first four `NavDefs` slots
+//!    (@0xd776-0xd7b7, → @0xd915).
+//! 3. Otherwise each of its 16 `NavDefs` stellars that is active (+0x44),
+//!    not a hypergate or wormhole (`Flags2` & 0x3000), inhabited (no
+//!    `Flags` 0x20) and landable (`_StellarIsLandable`)
+//!    (@0xd7e6-0xd82c) is counted into one bucket: dominated (+0x46,
+//!    @0xd82e); else clear when its government (0-0xff) blesses landing
+//!    (`gövt` +0x85, @0xd83a-0xd862); else by `MinStatus` against the
+//!    player's record in the head (`_playerRecord[head]`, @0xd864-0xd8a1),
+//!    as `_ColorCodeStellar` reads it ([`stellar_iff`]'s step 5): with
+//!    `MinStatus` 0x7FFF hostile below 0 and denied from 0; else clear
+//!    when `MinStatus` ≤ the record or ≤ −32767; else hostile below 0 and
+//!    denied from 0.
+//! 4. The first bucket with a stellar wins, in this order
+//!    (@0xd8b0-0xd915): dominated `_brightGreen`
+//!    ([`SystemColorCode::Dominated`]), clear blue (0, 0, 0xffff,
+//!    [`SystemColorCode::Cleared`]), denied orange (0xffff, 0x6666, 0,
+//!    [`SystemColorCode::Denied`]), hostile red (0xffff, 0, 0,
+//!    [`SystemColorCode::Hostile`]); with none, `_rgbLightGrey`.
+//!
+//! The caller works the inputs out ([`MapStellar`]): the session reads the
+//! inhabited test and the record as its rules say (`Session`'s `map`
+//! module). IDs above 0x7ff (@0xd6ac, @0xd718) don't arise in ours.
+//!
 //! # Interference ([`interference`], `_HandleStatus` @0x494d7)
 //!
 //! The system's `sÿst` `Interference` less the anti-interference, clamped
@@ -86,8 +123,9 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord};
 use crate::combat::hull::Condition;
+use crate::exploration::GATES;
 use crate::gate::{HYPERGATE, WORMHOLE};
-use crate::landing::{StellarFlags, is_landable};
+use crate::landing::{StellarFlags, is_landable, landable};
 use crate::outfitter::outfit_mods;
 use crate::traffic::npc::Npc;
 
@@ -217,6 +255,15 @@ pub fn stellar_iff(site: &LandingSite, record: i16, standing: Standing) -> Stell
             return StellarIff::Dominated;
         }
     }
+    by_record(site.min_status, record, standing.blessed)
+}
+
+/// The legal colours of a stellar of `MinStatus` `min_status` with the
+/// player's `record`, `blessed` or not: [`StellarIff::Cleared`],
+/// [`StellarIff::Denied`] or [`StellarIff::Hostile`], as
+/// `_ColorCodeStellar` (@0xaa96-0xab24) and `_ColorCodeSystem`
+/// (@0xd83a-0xd8a1) both read them (see the module docs).
+fn by_record(min_status: i16, record: i16, blessed: bool) -> StellarIff {
     let refused = |record: i16| {
         if record < 0 {
             StellarIff::Hostile
@@ -224,14 +271,108 @@ pub fn stellar_iff(site: &LandingSite, record: i16, standing: Standing) -> Stell
             StellarIff::Denied
         }
     };
-    if standing.blessed {
+    if blessed {
         StellarIff::Cleared
-    } else if site.min_status == NEVER {
+    } else if min_status == NEVER {
         refused(record)
-    } else if site.min_status <= record || site.min_status <= ALWAYS {
+    } else if min_status <= record || min_status <= ALWAYS {
         StellarIff::Cleared
     } else {
         refused(record)
+    }
+}
+
+/// What the galaxy map frames a system in (`_ColorCodeSystem`; see the
+/// module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemColorCode {
+    /// No system stands for it, or its head is unexplored:
+    /// `_rgbDarkGrey`.
+    Unexplored,
+    /// The system standing for it isn't inhabited, or none of its
+    /// stellars counts: `_rgbLightGrey`.
+    Uninhabited,
+    /// A stellar is dominated: `_brightGreen`.
+    Dominated,
+    /// The player may land on a stellar: blue.
+    Cleared,
+    /// The player may not land, with a record of 0 or more: orange.
+    Denied,
+    /// The player may not land, with a record below 0: red.
+    Hostile,
+}
+
+/// A stellar of the system standing for the one coloured, as
+/// `_ColorCodeSystem` reads it (@0xd7e6-0xd8a1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapStellar {
+    /// Whether it is active (+0x44): held by a visible system.
+    pub active: bool,
+    /// Its `Flags`.
+    pub flags: u32,
+    /// Its `Flags2`.
+    pub flags2: u16,
+    /// Whether it is destroyed.
+    pub destroyed: bool,
+    /// Its `MinStatus`.
+    pub min_status: i16,
+    /// Whether it is dominated, and whether its government blesses
+    /// landing.
+    pub standing: Standing,
+}
+
+impl MapStellar {
+    /// Whether it counts at all: active, not a hypergate or wormhole,
+    /// inhabited and landable (@0xd801-0xd82c).
+    fn counts(&self) -> bool {
+        self.active
+            && self.flags2 & GATES == 0
+            && self.flags & StellarFlags::UNINHABITED == 0
+            && landable(self.flags, self.destroyed)
+    }
+}
+
+/// What the galaxy map frames a system in (see the module docs): `stood`,
+/// whether a system stands for it; `explored`, whether its head is valid
+/// and explored; `inhabited`, whether the system standing for it is; and,
+/// with the player's legal `record` in its head, the `stellars` of the
+/// system standing for it.
+#[must_use]
+pub fn system_color_code(
+    stood: bool,
+    explored: bool,
+    inhabited: bool,
+    record: i16,
+    stellars: &[MapStellar],
+) -> SystemColorCode {
+    if !stood || !explored {
+        return SystemColorCode::Unexplored;
+    }
+    if !inhabited {
+        return SystemColorCode::Uninhabited;
+    }
+    let (mut dominated, mut cleared, mut denied, mut hostile) = (false, false, false, false);
+    for stellar in stellars.iter().filter(|stellar| stellar.counts()) {
+        if stellar.standing.dominated {
+            dominated = true;
+            continue;
+        }
+        match by_record(stellar.min_status, record, stellar.standing.blessed) {
+            StellarIff::Cleared => cleared = true,
+            StellarIff::Denied => denied = true,
+            _ => hostile = true,
+        }
+    }
+    if dominated {
+        SystemColorCode::Dominated
+    } else if cleared {
+        SystemColorCode::Cleared
+    } else if denied {
+        SystemColorCode::Denied
+    } else if hostile {
+        SystemColorCode::Hostile
+    } else {
+        SystemColorCode::Uninhabited
     }
 }
 
@@ -623,6 +764,153 @@ mod tests {
         assert_eq!(
             stellar_iff(&site(LAND, 0, -32766), i16::MIN, NONE),
             StellarIff::Hostile
+        );
+    }
+
+    // Systems on the galaxy map.
+
+    /// A stellar that counts, of `MinStatus` `min_status`.
+    fn counted(min_status: i16) -> MapStellar {
+        MapStellar {
+            active: true,
+            flags: LAND,
+            min_status,
+            ..MapStellar::default()
+        }
+    }
+
+    fn code(record: i16, stellars: &[MapStellar]) -> SystemColorCode {
+        system_color_code(true, true, true, record, stellars)
+    }
+
+    #[test]
+    fn a_system_with_no_stand_in_or_an_unexplored_head_is_dark_grey() {
+        let stellars = [counted(0)];
+        for (stood, explored) in [(false, true), (true, false), (false, false)] {
+            assert_eq!(
+                system_color_code(stood, explored, true, 0, &stellars),
+                SystemColorCode::Unexplored
+            );
+        }
+    }
+
+    #[test]
+    fn an_uninhabited_system_is_light_grey() {
+        assert_eq!(
+            system_color_code(true, true, false, 0, &[counted(0)]),
+            SystemColorCode::Uninhabited
+        );
+    }
+
+    #[test]
+    fn each_bucket_gives_its_colour() {
+        let dominated = MapStellar {
+            standing: Standing {
+                dominated: true,
+                blessed: false,
+            },
+            ..counted(NEVER)
+        };
+        assert_eq!(code(-5, &[dominated]), SystemColorCode::Dominated);
+        assert_eq!(code(10, &[counted(10)]), SystemColorCode::Cleared);
+        assert_eq!(code(5, &[counted(10)]), SystemColorCode::Denied);
+        assert_eq!(code(0, &[counted(10)]), SystemColorCode::Denied);
+        assert_eq!(code(-1, &[counted(10)]), SystemColorCode::Hostile);
+    }
+
+    #[test]
+    fn the_first_bucket_with_a_stellar_wins() {
+        let dominated = MapStellar {
+            standing: Standing {
+                dominated: true,
+                blessed: false,
+            },
+            ..counted(0)
+        };
+        let (clear, refused) = (counted(-5), counted(5));
+        assert_eq!(
+            code(0, &[refused, clear, dominated]),
+            SystemColorCode::Dominated
+        );
+        assert_eq!(code(0, &[refused, clear]), SystemColorCode::Cleared);
+        assert_eq!(code(-1, &[refused]), SystemColorCode::Hostile);
+        assert_eq!(code(-1, &[counted(-5), refused]), SystemColorCode::Cleared);
+    }
+
+    #[test]
+    fn a_blessing_clears_a_refused_stellar() {
+        for min_status in [NEVER, 10] {
+            let blessed = MapStellar {
+                standing: Standing {
+                    dominated: false,
+                    blessed: true,
+                },
+                ..counted(min_status)
+            };
+            assert_eq!(code(-100, &[blessed]), SystemColorCode::Cleared);
+        }
+    }
+
+    #[test]
+    fn min_status_0x7fff_refuses_and_minus_32767_clears_every_record() {
+        assert_eq!(code(i16::MAX, &[counted(NEVER)]), SystemColorCode::Denied);
+        assert_eq!(code(-1, &[counted(NEVER)]), SystemColorCode::Hostile);
+        assert_eq!(code(i16::MIN, &[counted(ALWAYS)]), SystemColorCode::Cleared);
+        assert_eq!(
+            code(i16::MIN, &[counted(i16::MIN)]),
+            SystemColorCode::Cleared
+        );
+    }
+
+    #[test]
+    fn gates_uninhabited_inactive_and_unlandable_stellars_are_passed_over() {
+        let skipped = [
+            MapStellar {
+                flags2: HYPERGATE,
+                ..counted(0)
+            },
+            MapStellar {
+                flags2: WORMHOLE,
+                ..counted(0)
+            },
+            MapStellar {
+                flags: LAND | StellarFlags::UNINHABITED,
+                ..counted(0)
+            },
+            MapStellar {
+                active: false,
+                ..counted(0)
+            },
+            MapStellar {
+                flags: 0,
+                ..counted(0)
+            },
+            MapStellar {
+                destroyed: true,
+                ..counted(0)
+            },
+        ];
+        for stellar in skipped {
+            assert_eq!(
+                code(0, &[stellar]),
+                SystemColorCode::Uninhabited,
+                "{stellar:?}"
+            );
+        }
+        let rebuilt = MapStellar {
+            flags: LAND | StellarFlags::ONLY_WHEN_DESTROYED,
+            destroyed: true,
+            ..counted(0)
+        };
+        assert_eq!(
+            code(0, &[rebuilt]),
+            SystemColorCode::Cleared,
+            "landable destroyed"
+        );
+        assert_eq!(
+            code(0, &[]),
+            SystemColorCode::Uninhabited,
+            "nothing counted"
         );
     }
 

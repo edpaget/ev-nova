@@ -115,6 +115,7 @@ pub mod table;
 
 use crate::ai::interceptor::within_reach;
 use crate::ai::{Behaviour, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings};
+use crate::combat::ion::Ion;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
@@ -639,6 +640,11 @@ impl Traffic {
             .collect();
         for (npc, command) in self.npcs.iter_mut().zip(commands) {
             if let Some((trigger, target)) = command {
+                // No pass clears the pick (+0x72): passes that keep none,
+                // or none run, leave it as it was.
+                if trigger.keep.is_some() {
+                    npc.pick = trigger.keep;
+                }
                 npc.trigger = trigger;
                 npc.target = target;
             }
@@ -926,8 +932,8 @@ impl Traffic {
         self.add(fleet, world.persons.grudges, Some(world.spawn_reserve));
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that provokes,
-    /// as `behaviour` says, now, as [`Traffic::tick_in`]'s step 2 does: the
+    /// Each intact NPC answers each of `strikes` in `world` that was a
+    /// direct hit, as `behaviour` says, now, as [`Traffic::tick_in`]'s step 2 does: the
     /// hit's own step (see [`Session::answer_strikes`](crate::Session::answer_strikes)).
     pub fn answer(
         &mut self,
@@ -938,10 +944,11 @@ impl Traffic {
         self.react(behaviour, world, strikes);
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that provokes
-    /// ([`Strike::provokes`]: not a death shockwave, which skips
-    /// `_DamageShip`'s reaction block @0x3b44d), as `behaviour` says, all
-    /// against the NPCs as they were before; by the
+    /// Each intact NPC answers each of `strikes` in `world` that was a
+    /// direct hit ([`Strike::direct`]: a shot's or beam's, not a blast's
+    /// or a death shockwave's, which skip `_DamageShip`'s reaction block
+    /// @0x3b44d), as `behaviour` says, all against the NPCs as they were
+    /// before; by the
     /// other reading of [`World::arrival_hits`] only those that have
     /// arrived ([`Npc::arrived`]) do. A hit on it that it answers (taking
     /// a target) cuts its wait, in its gate, held at it or holding its
@@ -986,7 +993,7 @@ impl Traffic {
     /// the hit, as the original answers inside `_HandleShot` (@0x44385);
     /// [`Traffic::tick_in`] answers those its caller leaves.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
-        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.provokes).collect();
+        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.direct).collect();
         if strikes.is_empty() {
             return;
         }
@@ -1013,7 +1020,7 @@ impl Traffic {
             for (reaction, strike) in reactions.into_iter().zip(&strikes) {
                 let id = self.npcs[at].id;
                 let on_itself = reaction.target.is_some() && strike.ship == ShipRef::Npc(id);
-                let attacks_player = on_itself && strike.by == ShipRef::Player;
+                let attacks_player = on_itself && strike.by == Some(ShipRef::Player);
                 if let Some(target) = reaction.target {
                     self.npcs[at].target = Some(target);
                 }
@@ -1041,6 +1048,14 @@ impl Traffic {
                     }
                 }
             }
+        }
+    }
+
+    /// What `_HandleShip` does with each NPC's pick once the fight has
+    /// fired it ([`after_firing`](crate::ai::fire::after_firing)).
+    pub fn after_firing(&mut self) {
+        for npc in &mut self.npcs {
+            crate::ai::fire::after_firing(npc);
         }
     }
 
@@ -1474,6 +1489,7 @@ impl Traffic {
                 armament: kind.armament.clone(),
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
+                pick: None,
                 target: hunts.then_some(ShipRef::Player),
                 provoked: 0.0,
                 aggression: ship.aggression,
@@ -1503,6 +1519,8 @@ impl Traffic {
                 },
                 self_repair: kind.self_repair,
                 former: None,
+                tractor: None,
+                ion: Ion::default(),
             };
             self.write_berth_person(berth, name);
             self.npcs.push(npc);
@@ -1514,6 +1532,7 @@ impl Traffic {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::combat::armament::LauncherRounds;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
@@ -1616,7 +1635,7 @@ mod tests {
                         ..HullSpec::default()
                     },
                     armament: Armament::new([(WeaponSpec::new(&weapon(128)), 2)]),
-                    rounds: BTreeMap::from([(WeaponId(138), 7)]),
+                    rounds: LauncherRounds::from([(WeaponId(138), 7)]),
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
                     self_repair: false,
@@ -1712,12 +1731,12 @@ mod tests {
         assert_eq!(first.condition, Condition::Intact);
         assert_eq!(first.hull.hit_radius, 9.0);
         assert_eq!(first.armament.mounts().len(), 1);
-        assert_eq!(first.rounds, BTreeMap::from([(WeaponId(138), 7)]));
+        assert_eq!(first.rounds, LauncherRounds::from([(WeaponId(138), 7)]));
         assert_eq!(first.trigger, Trigger::default());
         assert_eq!(first.state.position, Vec2::new(0.0, 0.0));
         assert_eq!(first.mode, Mode::Flying);
         assert_eq!(first.goal, Goal::Idle);
-        assert_eq!(first.booty, 0x0041, "its düde's");
+        assert_eq!(first.booty, Some(0x0041), "its düde's");
         assert_eq!(first.info_types, 0x8000, "its düde's");
         assert!(!first.spared);
         assert_eq!(first.assisting, 0);
@@ -2151,6 +2170,7 @@ mod tests {
                 turrets_only: false,
                 bays: false,
                 point_defence: false,
+                keep: None,
             },
             ..Recording::deciding(Goal::Idle)
         };
@@ -2164,6 +2184,24 @@ mod tests {
         );
         traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[1].trigger, behaviour.trigger);
+    }
+
+    #[test]
+    fn the_pick_the_passes_keep_is_held_until_they_set_another() {
+        let mut traffic = populated(1, 1);
+        let keeping = Recording {
+            trigger: Trigger {
+                keep: Some(WeaponId(131)),
+                ..Trigger::default()
+            },
+            ..Recording::deciding(Goal::Idle)
+        };
+        traffic.tick(&keeping, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(131)));
+        // A trigger whose passes keep nothing (or didn't run) leaves it:
+        // no pass clears the pick.
+        traffic.tick(&Recording::deciding(Goal::Idle), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(131)));
     }
 
     #[test]
@@ -2642,7 +2680,7 @@ mod tests {
                 .push(format!("react {} {:?}", npc.id.0, strike.ship));
             if strike.ship == ShipRef::Npc(npc.id) {
                 Reaction {
-                    target: Some(strike.by),
+                    target: strike.by,
                     provoked: strike.damage,
                     goal: None,
                 }
@@ -2655,10 +2693,12 @@ mod tests {
     fn struck(ship: u32, damage: f32) -> Strike {
         Strike {
             ship: ShipRef::Npc(NpcId(ship)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         }
     }
 
@@ -2692,7 +2732,8 @@ mod tests {
         let mut traffic = populated(2, 1);
         let fighting = Fighting::deciding(Goal::Idle);
         let shockwave = Strike {
-            provokes: false,
+            direct: false,
+            intended: false,
             ..struck(1, 4.0)
         };
         traffic.tick_in(
@@ -2932,7 +2973,7 @@ mod tests {
         fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
             if strike.ship == ShipRef::Npc(npc.id) {
                 Reaction {
-                    target: Some(strike.by),
+                    target: strike.by,
                     provoked: strike.damage,
                     goal: Some(Goal::Attack(ShipRef::Player)),
                 }
@@ -3459,7 +3500,7 @@ mod tests {
     /// A strike of `damage` on NPC `ship` by NPC `by`.
     fn struck_by(ship: u32, by: u32, damage: f32) -> Strike {
         Strike {
-            by: ShipRef::Npc(NpcId(by)),
+            by: Some(ShipRef::Npc(NpcId(by))),
             ..struck(ship, damage)
         }
     }
@@ -3516,6 +3557,7 @@ mod tests {
         turrets_only: false,
         bays: false,
         point_defence: false,
+        keep: None,
     };
 
     const POINT_DEFENCE: Trigger = Trigger {
@@ -3525,6 +3567,7 @@ mod tests {
         turrets_only: false,
         bays: false,
         point_defence: true,
+        keep: None,
     };
 
     impl Behaviour for Firing {
@@ -3548,7 +3591,7 @@ mod tests {
 
         fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
             Reaction {
-                target: (strike.ship == ShipRef::Npc(npc.id)).then_some(strike.by),
+                target: strike.by.filter(|_| strike.ship == ShipRef::Npc(npc.id)),
                 provoked: if strike.ship == ShipRef::Npc(npc.id) {
                     strike.damage
                 } else {
@@ -3689,7 +3732,7 @@ mod tests {
             let answers = strike.ship == ShipRef::Npc(npc.id)
                 || (npc.id == NpcId(0) && strike.ship == ShipRef::Npc(NpcId(1)));
             Reaction {
-                target: answers.then_some(strike.by),
+                target: strike.by.filter(|_| answers),
                 provoked: 0.0,
                 goal: None,
             }
@@ -4280,7 +4323,7 @@ mod tests {
         assert_eq!(npc.reserves.fuel.now, 0.0, "the reserves it starts with");
         assert_eq!(npc.reserves.shield.max, 2.0 * f32::from(FAST.shield));
         assert_eq!(npc.condition, Condition::Disabled);
-        assert_eq!((npc.booty, npc.info_types), (0, 0));
+        assert_eq!((npc.booty, npc.info_types), (None, 0), "no düde");
         assert_eq!(
             npc.person,
             Some(NpcPerson {
@@ -4375,7 +4418,7 @@ mod tests {
             },
             entry: Entry::Placed,
             aggression: 3,
-            booty: 2,
+            booty: Some(2),
             info_types: 1,
             person: None,
             mission: Some(npc::MissionMark {
@@ -4418,7 +4461,7 @@ mod tests {
         );
         assert_eq!(
             (npcs[0].booty, npcs[0].info_types, npcs[0].aggression),
-            (2, 1, 3)
+            (Some(2), 1, 3)
         );
         assert_eq!(npcs[1].state.position, Vec2::new(6.0, 0.0));
         assert_eq!((npcs[0].goal, npcs[0].target), (Goal::Idle, None));

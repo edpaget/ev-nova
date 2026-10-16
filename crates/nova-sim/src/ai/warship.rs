@@ -692,10 +692,12 @@ mod tests {
         );
         let hit = Strike {
             ship: n(9),
-            by: P,
+            by: Some(P),
             damage: 1.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
         };
         let victim = ship(9, TRADERS, AiType::WimpyTrader, 900.0, 0.0);
         let npcs = [ship(1, POLICE, AiType::Warship, 0.0, 0.0), victim];

@@ -1,15 +1,15 @@
 //! An NPC ship: what it is, how it performs, where it is, what it is
 //! doing, and what it fights with.
 
-use std::collections::BTreeMap;
-
 use crate::ai::Goal;
 use crate::bay::Carrier;
 use crate::catalog::{GovtId, PersonId, ShipId, StellarId, WeaponId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
-use crate::combat::armament::{Armament, Trigger};
+use crate::combat::armament::{Armament, LauncherRounds, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
+use crate::combat::impact::TractorLock;
+use crate::combat::ion::Ion;
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
@@ -229,10 +229,16 @@ pub struct Npc {
     pub hull: HullSpec,
     /// Its weapons.
     pub armament: Armament,
-    /// The rounds of each ammunition it holds.
-    pub rounds: BTreeMap<WeaponId, u32>,
+    /// The rounds it holds, on each launcher (see
+    /// [`armament`](crate::combat::armament)).
+    pub rounds: LauncherRounds,
     /// The fire command it holds, as it last decided.
     pub trigger: Trigger,
+    /// The weapon it holds as its pick (the original's +0x72): set by its
+    /// AI's passes ([`Trigger::keep`]), kept from tick to tick and cleared
+    /// once a pick without `Flags` 0x0002 fires
+    /// ([`after_firing`](crate::ai::fire::after_firing)); none at first.
+    pub pick: Option<WeaponId>,
     /// The ship it targets, as it last decided.
     pub target: Option<ShipRef>,
     /// The shield and armour damage it has taken while it fights: none
@@ -243,9 +249,13 @@ pub struct Npc {
     pub aggression: u8,
     /// The ship it last inspected, if any.
     pub inspected: Option<ShipRef>,
-    /// Its `düde`'s `Booty` flags, what boarding it yields; none for a
-    /// fleet's ship.
-    pub booty: u16,
+    /// Its `düde`'s `Booty` flags, what boarding it yields, and whose
+    /// 0x0100 bit the hit rules read ([`sides`](crate::combat::sides));
+    /// `None` when it has no `düde` (the original's +0x78 is -1): a
+    /// fleet's ship, a person's, a hired escort, a fighter, or a captured
+    /// ship, which loses its `düde` (`_DoShipCapture` @0x411aa). Boarding
+    /// reads `None` as `Booty` 0.
+    pub booty: Option<u16>,
     /// Whether the player has boarded it: it cannot be boarded again.
     pub boarded: bool,
     /// Its `düde`'s `InfoTypes` flags, what it says when hailed (see
@@ -309,6 +319,19 @@ pub struct Npc {
     /// original's +0xc8de). It forgets once intact, boarded or taken into
     /// the fleet again (see [`self_repair`](crate::self_repair)).
     pub former: Option<FormerEscort>,
+    /// Its tractor lock, if a tractor beam holds it or it holds itself
+    /// along its own (the original's +0xc8dc and +0xb4, see
+    /// [`impact`](crate::combat::impact)): none as it spawns or launches,
+    /// as the original's spawns and `_LaunchFighter` set it (@0x3c5c8,
+    /// @0x3cb1c, @0x3d71d). The fight sets and touches it.
+    pub tractor: Option<TractorLock>,
+    /// Its ionization (the original's +0x5c and +0xb0, see
+    /// [`ion`](crate::combat::ion)): none as it spawns, launches or is
+    /// left as the player's hulk, as `_RandomShipSpawn`,
+    /// `_GenericRandomShipSpawn`, `_LaunchFighter` and the eject set it
+    /// (@0x3c457, @0x3c9f1, @0x3d8aa, @0x6f372). The fight raises it;
+    /// ship-handling-fidelity phase 11 lowers it. Never saved.
+    pub ion: Ion,
 }
 
 /// The commodities 0-5 the original's ship records count.
@@ -397,10 +420,22 @@ impl Npc {
         self.escort.is_some()
     }
 
+    /// The ship it follows, the original's +0x9a: the player while it
+    /// [escorts the player](Npc::escorts_player), otherwise its
+    /// [`leader`](Npc::leader). The hit rules read it
+    /// ([`sides`](crate::combat::sides)).
+    #[must_use]
+    pub fn leader_ref(&self) -> Option<ShipRef> {
+        if self.escorts_player() {
+            Some(ShipRef::Player)
+        } else {
+            self.leader.map(ShipRef::Npc)
+        }
+    }
+
     /// Its fleet: the player, for the player's escort, hired or a mission
     /// escort; otherwise the lead it escorts, or itself. Ships of one fleet
-    /// never hit each other (`_ShipsShareParent` @0x7926, which follows the
-    /// leader +0x9a), and count each other's missiles friendly.
+    /// count each other's missiles friendly.
     #[must_use]
     pub fn fleet(&self) -> ShipRef {
         if self.escorts_player() {

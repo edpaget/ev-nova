@@ -888,7 +888,7 @@ impl Session {
             NavStep::Keep => {}
             NavStep::Deselect => self.deselect(),
             NavStep::OffThenCue => {
-                self.nav = NavMode::Off;
+                self.set_nav(NavMode::Off);
                 self.cue_course();
             }
         }

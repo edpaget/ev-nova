@@ -444,14 +444,14 @@ mod tests {
 
     /// `around` with the player in the system, blessed by `blessed` alone
     /// when it is some.
-    fn with_blessing(around: Surroundings<'_>, blessed: Option<GovtId>) -> Surroundings<'_> {
+    fn with_blessing<'a>(around: &Surroundings<'a>, blessed: Option<GovtId>) -> Surroundings<'a> {
         Surroundings {
             player: Some(crate::ai::PlayerSide {
                 blessing: blessed
                     .map_or(crate::rank::Blessing::NONE, crate::ai::fixture::blessing_of),
                 ..crate::ai::fixture::player(0.0, 0.0)
             }),
-            ..around
+            ..*around
         }
     }
 
@@ -484,10 +484,10 @@ mod tests {
             let around = among(&govts, Some(system), record);
             let govt = npc.govt;
             assert!(
-                !likes_player(&npc, &with_blessing(around, None), mission),
+                !likes_player(&npc, &with_blessing(&around, None), mission),
                 "{case}: unblessed"
             );
-            let blessed = with_blessing(around, govt);
+            let blessed = with_blessing(&around, govt);
             assert!(likes_player(&npc, &blessed, mission), "{case}");
             assert_eq!(attitude(&npc, &blessed, mission), Attitude::Friendly);
         }
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn a_blessing_excuses_no_ship_that_threatens_the_player() {
         let govts = govts(0);
-        let around = with_blessing(among(&govts, Some(ME), 0), Some(ME));
+        let around = with_blessing(&among(&govts, Some(ME), 0), Some(ME));
         let mut npc = ship(Some(ME));
         assert!(likes_player(&npc, &around, None));
         npc.goal = Goal::Attack(ShipRef::Player);

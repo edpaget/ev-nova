@@ -52,11 +52,17 @@
 //!   velocity (the target's less the chaser's) has a component over
 //!   [`OPENING_SPEED`] either way and points more than [`OPENING_ANGLE`]
 //!   off the bearing from the target back to the chaser, so the gap is
-//!   opening; and the chaser is no faster than the target, or slower when
-//!   it holds a homing missile with the reach (range squared at least
-//!   [`MISSILE_REACH`] of the distance squared). The original compares
-//!   the two angles without wrapping them; here they are compared the
-//!   short way round.
+//!   opening; and the chaser's class is no faster than the target's, or
+//!   slower when it holds a homing missile with the reach. Both are the
+//!   classes' top speeds ([`HullSpec::class_speed`](crate::combat::hull::HullSpec::class_speed),
+//!   class +0x40 @0x810d3-0x81151), so neither ship's outfits count. A
+//!   missile reaches when its launcher's own slot of rounds holds some or
+//!   is exactly [`UNLIMITED_SLOT`] (@0x8103a-0x8104e), it suits the
+//!   target and has its ammunition, and its range down its sub-munition
+//!   chain ([`WeaponSpec::range`](crate::combat::weapon::WeaponSpec::range))
+//!   squared is at least [`MISSILE_REACH`] of the distance squared. The
+//!   original compares the two angles without wrapping them; here they are
+//!   compared the short way round.
 
 use crate::ai::Surroundings;
 use crate::ai::fire::{has_ammo, suitable_missile};
@@ -81,6 +87,10 @@ pub const OPENING_ANGLE: f32 = 89.0;
 /// The share of the distance squared a homing missile's range squared
 /// must reach (0.8 @0xdd6f8).
 pub const MISSILE_REACH: f32 = 0.8;
+/// The slot of rounds a missile counts with in a chase though it holds
+/// none: an `AmmoLoad` of -1, as stock gives most weapons that spend
+/// nothing (`_AIEvalHopelessChase` @0x81044-0x81049).
+pub const UNLIMITED_SLOT: i32 = -1;
 
 /// A ship's shield factor: its shield over its most, held between
 /// [`WEAKEST`] and 1; its raw shield, so held the same, when it holds
@@ -127,7 +137,7 @@ pub fn friend_strength(ship: ShipRef, around: &Surroundings) -> f32 {
                 .iter()
                 .filter(|other| {
                     other.id != id
-                        && other.condition.hittable()
+                        && other.condition.standing()
                         && (other.leader == Some(id) || around.govts.allies(npc.govt, other.govt))
                 })
                 .map(|other| weighed(other.hull.strength, &other.reserves))
@@ -170,19 +180,18 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
 /// module docs).
 #[must_use]
 pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
-    let (quarry, handling) = match target {
+    let (quarry, handling, top_speed) = match target {
         ShipRef::Player => match around.player {
-            Some(player) => (player.state, player.handling),
+            Some(player) => (player.state, player.handling, player.hull.class_speed),
             None => return false,
         },
         ShipRef::Npc(id) => match around.npc(id) {
             Some(other) if matches!(other.goal, crate::ai::Goal::Flee(_)) => {
-                (other.state, other.stats.handling)
+                (other.state, other.stats.handling, other.hull.class_speed)
             }
             _ => return false,
         },
     };
-    let top_speed = handling.max_speed;
     if npc.hull.mass <= HEAVY {
         return false;
     }
@@ -201,12 +210,14 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
     let distance = to.x * to.x + to.y * to.y;
     let in_reach = npc.armament.mounts().iter().any(|mount| {
         let range = mount.spec.range();
-        mount.spec.guidance == Guidance::Homing
+        let slot = npc.rounds.slot(mount.spec.id);
+        (slot > 0 || slot == UNLIMITED_SLOT)
+            && mount.spec.guidance == Guidance::Homing
             && suitable_missile(&mount.spec, handling.turn_rate)
             && has_ammo(npc, mount)
             && range * range >= MISSILE_REACH * distance
     });
-    let speed = npc.stats.handling.max_speed;
+    let speed = npc.hull.class_speed;
     if in_reach {
         speed < top_speed
     } else {
@@ -217,7 +228,7 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::collections::BTreeMap;
+    use crate::combat::armament::LauncherRounds;
 
     use super::*;
     use crate::ai::fixture::blessing_of;
@@ -577,16 +588,18 @@ mod tests {
         }
     }
 
-    /// A heavy chaser (100 tons) of top speed 6 at the centre, chasing the
-    /// player 300 pixels above, which opens the gap upwards at `speed`.
+    /// A heavy chaser (100 tons) of class speed 6 at the centre, chasing
+    /// the player 300 pixels above, also of class speed 6, which opens the
+    /// gap upwards at `speed`.
     fn chase(speed: f32) -> (Npc, PlayerSide) {
         let mut chaser = ship(1, 140, 0.0);
         chaser.hull.mass = 100.0;
+        chaser.hull.class_speed = 6.0;
         chaser.goal = Goal::Attack(ShipRef::Player);
         let mut target = player(0.0);
         target.state.position = Vec2::new(0.0, -300.0);
         target.state.velocity = Vec2::new(0.0, -speed);
-        target.handling.max_speed = 6.0;
+        target.hull.class_speed = 6.0;
         (chaser, target)
     }
 
@@ -613,8 +626,22 @@ mod tests {
         let (chaser, target) = chase(1.0);
         assert!(hopeless(&chaser, target));
         let mut slower = target;
-        slower.handling.max_speed = 5.9;
+        slower.hull.class_speed = 5.9;
         assert!(!hopeless(&chaser, slower), "the chaser is faster");
+    }
+
+    #[test]
+    fn a_chase_compares_the_class_speeds_not_the_outfitted_top_speeds() {
+        let (mut chaser, mut target) = chase(1.0);
+        chaser.stats.handling.max_speed = 20.0;
+        target.handling.max_speed = 1.0;
+        assert!(
+            hopeless(&chaser, target),
+            "equal class speeds, whatever their outfits give"
+        );
+        target.hull.class_speed = 5.9;
+        target.handling.max_speed = 50.0;
+        assert!(!hopeless(&chaser, target), "the chaser's class is faster");
     }
 
     #[test]
@@ -656,9 +683,9 @@ mod tests {
         assert_eq!(OPENING_ANGLE, 89.0);
     }
 
-    /// A homing missile reaching 100 pixels, firing rounds of weapon 138,
-    /// one of them held.
-    fn missile() -> (Armament, BTreeMap<WeaponId, u32>) {
+    /// A homing missile launcher 140 reaching 100 pixels, firing rounds of
+    /// weapon 138, one of them held on the launcher.
+    fn missile() -> (Armament, LauncherRounds) {
         let record = WeaponRecord {
             guidance: 1,
             count: 10,
@@ -666,7 +693,7 @@ mod tests {
             ammo_type: 10,
             ..weapon(140)
         };
-        let rounds = BTreeMap::from([(WeaponId(138), 1)]);
+        let rounds = LauncherRounds::from([(WeaponId(140), 1)]);
         (Armament::new([(WeaponSpec::new(&record), 1)]), rounds)
     }
 
@@ -679,9 +706,9 @@ mod tests {
         // 100 pixels' range: 10000 >= 0.8 d² up to d² = 12500.
         target.state.position = Vec2::new(0.0, -111.8);
         assert!(!hopeless(&chaser, target), "equal speeds, in reach");
-        target.handling.max_speed = 6.1;
+        target.hull.class_speed = 6.1;
         assert!(hopeless(&chaser, target), "slower, in reach");
-        target.handling.max_speed = 6.0;
+        target.hull.class_speed = 6.0;
         target.state.position = Vec2::new(0.0, -111.81);
         assert!(hopeless(&chaser, target), "out of reach");
         target.state.position = Vec2::new(70.0, -80.0);
@@ -689,9 +716,70 @@ mod tests {
         target.state.position = Vec2::new(80.0, -80.0);
         assert!(hopeless(&chaser, target), "out of reach both ways");
         target.state.position = Vec2::new(0.0, -100.0);
-        chaser.rounds.clear();
+        chaser.rounds = LauncherRounds::default();
         assert!(hopeless(&chaser, target), "no rounds");
         assert_eq!(MISSILE_REACH, 0.8);
+    }
+
+    #[test]
+    fn a_chase_counts_a_missile_only_while_its_launchers_slot_holds_rounds_or_minus_one() {
+        let (mut chaser, mut target) = chase(1.0);
+        let unlimited = WeaponRecord {
+            guidance: 1,
+            count: 10,
+            speed: 1000,
+            ammo_type: -1,
+            ..weapon(141)
+        };
+        chaser.armament = Armament::new([(WeaponSpec::new(&unlimited), 1)]);
+        target.state.position = Vec2::new(0.0, -100.0);
+        for (slot, in_reach) in [(0, false), (-1, true), (2, true), (-2, false)] {
+            chaser.rounds = LauncherRounds::from([(WeaponId(141), slot)]);
+            assert_eq!(
+                !hopeless(&chaser, target),
+                in_reach,
+                "an unlimited missile with {slot} on its slot"
+            );
+        }
+        let (armament, _) = missile();
+        chaser.armament = armament;
+        chaser.rounds = LauncherRounds::from([(WeaponId(138), 5)]);
+        assert!(
+            hopeless(&chaser, target),
+            "a launcher needs its own slot, not its ammunition's"
+        );
+        chaser.rounds = LauncherRounds::from([(WeaponId(140), -1)]);
+        assert!(
+            hopeless(&chaser, target),
+            "-1 passes the slot test, but a launcher fires only rounds it holds"
+        );
+    }
+
+    #[test]
+    fn a_chase_reaches_with_a_missiles_chain_range() {
+        let (mut chaser, mut target) = chase(1.0);
+        let torpedo = WeaponRecord {
+            guidance: 1,
+            count: 10,
+            speed: 1000,
+            sub_count: 5,
+            sub_type: Some(WeaponId(148)),
+            ..weapon(182)
+        };
+        let homer = WeaponRecord {
+            guidance: 1,
+            count: 30,
+            speed: 1000,
+            ..weapon(148)
+        };
+        let arsenal = crate::combat::armament::Arsenal::new(&[torpedo, homer], Vec::new());
+        chaser.armament = Armament::new([(*arsenal.weapon(WeaponId(182)).expect("read"), 1)]);
+        chaser.rounds = LauncherRounds::from([(WeaponId(182), -1)]);
+        // 400 pixels' range: 160000 >= 0.8 d² up to d² = 200000.
+        target.state.position = Vec2::new(0.0, -447.0);
+        assert!(!hopeless(&chaser, target), "in reach down the chain");
+        target.state.position = Vec2::new(0.0, -448.0);
+        assert!(hopeless(&chaser, target), "beyond it");
     }
 
     #[test]
@@ -729,6 +817,7 @@ mod tests {
     fn only_the_player_or_a_fleeing_npc_is_chased_hopelessly() {
         let (chaser, _) = chase(1.0);
         let mut quarry = ship(2, 142, 0.0);
+        quarry.hull.class_speed = 6.0;
         quarry.state.position = Vec2::new(0.0, -300.0);
         quarry.state.velocity = Vec2::new(0.0, -1.0);
         let npcs = [chaser.clone(), quarry.clone()];

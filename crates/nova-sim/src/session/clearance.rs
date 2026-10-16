@@ -114,7 +114,7 @@ impl Session {
     /// mode 2 with the brackets' fly-in (@0x6a8ed-0x6a932).
     pub(super) fn select_pressed(&mut self, selected: Option<crate::catalog::StellarId>) {
         if let Some(stellar) = selected {
-            self.nav = NavMode::Stellar(Some(stellar));
+            self.set_nav(NavMode::Stellar(Some(stellar)));
             self.nav_fly_in.start();
         }
     }

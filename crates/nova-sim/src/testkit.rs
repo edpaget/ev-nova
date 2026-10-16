@@ -17,7 +17,9 @@ use crate::catalog::{
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
+use crate::combat::ion::Ion;
 use crate::control::{ControlBits, PilotFacts, Script, Test, TestExpr};
+use crate::escort::EscortClass;
 use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
@@ -422,6 +424,8 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         flags3: 0,
         decay: 0,
         beam_length: 0,
+        falloff: 0,
+        li_density: 0,
         burst_count: 0,
         burst_reload: 0,
         guided_turn: 0,
@@ -436,6 +440,12 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         hit_part_life: 0,
         hit_part_vel: 0,
         hit_part_color: 0,
+        recoil: 0,
+        exit_type: -1,
+        ionization: 0,
+        ionize_color: 0,
+        jam_vuln: [0; 4],
+        frame: None,
     }
 }
 
@@ -445,6 +455,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
     HullRecord {
         id: ShipId(id),
         flags: 0,
+        flags2: 0,
         death_delay: 0,
         explode1: -1,
         explode2: -1,
@@ -455,12 +466,16 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         strength: 0,
         key_carried: None,
         cost: 0,
+        speed: 0,
+        exits: None,
+        escort_class: EscortClass::Freighter,
     }
 }
 
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
 /// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
-/// "Govt `id`", scanning for nothing, fining nothing and requiring nothing.
+/// "Govt `id`", scanning for nothing, fining nothing, requiring nothing
+/// and jamming nothing.
 pub(crate) fn govt(id: i16) -> GovtRecord {
     GovtRecord {
         id: GovtId(id),
@@ -478,6 +493,7 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
         scan_fine: 0,
         news_pic: -1,
         require: 0,
+        inh_jam: [0; 4],
     }
 }
 
@@ -534,13 +550,14 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         condition: Condition::Intact,
         hull: HullSpec::default(),
         armament: Armament::default(),
-        rounds: std::collections::BTreeMap::new(),
+        rounds: crate::combat::armament::LauncherRounds::default(),
         trigger: Trigger::default(),
+        pick: None,
         target: None,
         provoked: 0.0,
         aggression: 0,
         inspected: None,
-        booty: 0,
+        booty: None,
         boarded: false,
         info_types: 0,
         cargo: NpcHold::default(),
@@ -556,6 +573,8 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         emerges_from: None,
         self_repair: false,
         former: None,
+        tractor: None,
+        ion: Ion::default(),
     }
 }
 
@@ -1257,6 +1276,49 @@ impl Chance for Draws {
     }
 }
 
+/// A chance keyed by range, not by the order of its draws: each
+/// `below(n)` gives the outcome given for `n`, or `n - 1` for a range
+/// given none, and each range asked is kept in `asked`. Every `fires` is
+/// false.
+pub(crate) struct Ranged {
+    outcomes: Vec<(u32, u32)>,
+    pub(crate) asked: Vec<u32>,
+}
+
+impl Ranged {
+    /// `outcomes`, each a range and what a draw below it gives.
+    pub(crate) fn of(outcomes: &[(u32, u32)]) -> Self {
+        Self {
+            outcomes: outcomes.to_vec(),
+            asked: Vec::new(),
+        }
+    }
+
+    /// Whether a draw below `n` was asked.
+    pub(crate) fn was_asked(&self, n: u32) -> bool {
+        self.asked.contains(&n)
+    }
+}
+
+impl Chance for Ranged {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    /// The outcome given for `n`; one outside `0..n` is a mistake in the
+    /// test.
+    fn below(&mut self, n: u32) -> u32 {
+        self.asked.push(n);
+        let outcome = self
+            .outcomes
+            .iter()
+            .find(|&&(range, _)| range == n)
+            .map_or(n.saturating_sub(1), |&(_, outcome)| outcome);
+        assert!(outcome < n, "drew {outcome} below {n}");
+        outcome
+    }
+}
+
 /// A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
 /// arrives slow enough to land, over planet 140 at 131's edge.
 pub(crate) fn edge_lander() -> FakePilotCatalog {
@@ -1292,6 +1354,21 @@ pub(crate) struct AllowAll;
 impl ControlBits for AllowAll {
     fn allows(&self, _test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
         true
+    }
+}
+
+/// No governments at all, for [`among`].
+static NO_GOVERNMENTS: crate::govt::Governments = crate::govt::Governments::empty();
+
+/// The fight's sides as `targets` alone make them: no governments, and
+/// the original's pass-through.
+pub(crate) fn among(
+    targets: &[crate::combat::projectile::Target],
+) -> crate::combat::sides::Sides<'_> {
+    crate::combat::sides::Sides {
+        targets,
+        govts: &NO_GOVERNMENTS,
+        pass_through: crate::combat::sides::PassThrough::default(),
     }
 }
 

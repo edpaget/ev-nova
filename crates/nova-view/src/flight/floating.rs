@@ -31,10 +31,15 @@
 //!   link; anything else in the frame is a miss, which the flight
 //!   swallows.
 //! - **Drawing** ([`draw`]): the frame's border in `cölr` `FloatingMap`,
-//!   then the course map's own drawing ([`GalaxyMap::draw_marks`])
-//!   centred on the current system at the zoom, in the 16-bit order
-//!   (@0x113e3-0x11418), so the map can draw over the border. Then
-//!   [`clip_and_fade`] clips it to the frame and fades it to the level.
+//!   then the course map's own drawing ([`GalaxyMap::draw_marks`]: what
+//!   `_DrawMap` draws, with no brackets or second names, as
+//!   `_DrawMapInFloatingFrame` runs `_DrawMap` alone) centred on the
+//!   current system at the zoom, in the 16-bit order (@0x113e3-0x11418),
+//!   so the map can draw over the border. Then [`clip_and_fade`] clips it
+//!   to the frame and fades it to the level.
+//! - **The selection** ([`FloatingMap::preselect`]): `_ShowFloatingMap`
+//!   sets `_selSystem` at each show (@0x1147b-0x114c8), the system whose
+//!   name alone `_DrawMap` draws above a zoom of 1.1.
 //!
 //! # Clipping and fading in the view
 //!
@@ -44,18 +49,24 @@
 //! @0xba54f-0xba55b, `_BlitPixieTranslucentCopy` @0xc1110). Black ORs in
 //! nothing, so over black space the frame's lines come out as map × w/32,
 //! which alpha w/32 over black gives too, rounding aside. Ours draws no
-//! black fill: it clips the map's lines and dots to the frame by hand and
-//! draws them straight onto the scene at alpha w/32. The renderer has no
-//! clipped layer to OR a texture with.
+//! black fill: it clips the map's lines, rects and dots to the frame by
+//! hand and draws them straight onto the scene at alpha w/32, and has the
+//! renderer clip its names and arrow `cicn`s to the frame
+//! ([`DrawCommand::Clipped`]), each faded to the same alpha. The renderer
+//! has no clipped layer to OR a texture with. A black piece, an oval's
+//! fill, ORs in nothing either: it covers what came before it in the
+//! frame's image, so the pass cuts that away, and then drops it.
 //!
 //! The original fades the map as one opaque image. Ours fades each
 //! command on its own, so where the map's own marks overlap they would
 //! show through each other while it fades (ticks 119-149). The pass
 //! resolves the overlaps the map draws:
 //!
-//! - every line and dot is cut away where a dot drawn after it covers it:
-//!   the outline under each system's dot, the current system's mark under
-//!   both, and the ends of the links and the course under the dots;
+//! - every line, rect and dot is cut away where a dot or rect drawn
+//!   after it covers it: a link's end under a system's oval, an oval
+//!   under a later oval, a frame under the current system's dot. A
+//!   horizontal line is the rect it fills ([`fill_rect`]): an oval's
+//!   rows, and a horizontal or vertical pen line;
 //! - a line is dropped where a later line has the same ends and is at
 //!   least as wide: a link under the course, or under the link to the
 //!   system selected in mode 3.
@@ -71,11 +82,14 @@
 //!   wide line is clipped along its centre line, so it can stand up to
 //!   half its width past the frame's edge or a dot's. Each is a pixel or
 //!   two for half a second.
-//! - **Only lines and dots are clipped.** The pass drops every text,
-//!   picture and sprite. The map draws none of these in the frame. When
-//!   the galaxy-map-fidelity roadmap's `_DrawMap` port adds names, ovals
-//!   or arrow `cicn`s to [`GalaxyMap::draw_marks`], it must teach this
-//!   pass to clip them.
+//! - **Names and arrows cut nothing.** A name or an arrow drawn over a
+//!   line blends with it while the map fades, where the original's image
+//!   holds only the later pixel. A name or arrow is kept for the renderer
+//!   to clip when it can reach the frame: an arrow within 16 units of it;
+//!   a name whose line meets the frame's rows and that starts before its
+//!   right edge and less than the frame's width left of it, which no
+//!   stock name at 9 points is wide enough to need. Pictures and tiles are
+//!   dropped: the map draws none.
 //! - **Particles and the cursor.** The original ORs the frame over the
 //!   cursor sprite and draws its particles after it (`_PostDrawCallback`
 //!   @0x38c80-0x38c9a). Ours draws its effects before the HUD and the
@@ -95,10 +109,6 @@
 //!
 //! # Left out, each with its address and reason
 //!
-//! - `_ShowFloatingMap` @0x1147b-0x114c8, the `_selSystem` preselect, and
-//!   @0x114ea, `_RecalcMissionSystsForMap`. They only feed `_DrawMap`'s
-//!   names and mission arrows, which ours' map doesn't draw. They go with
-//!   the galaxy-map-fidelity roadmap's `_DrawMap` port.
 //! - `_ShowFloatingMap` @0x11445-0x11480, the zoom reset to 1.0 when it
 //!   is ≤ 0: the zoom starts at 0.5625 and only ever multiplies by
 //!   positive steps.
@@ -129,6 +139,7 @@ use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::galaxy::SystemId;
 use crate::galaxy::view::{SCALES, Transform};
 use crate::geometry::{Bounds, Point};
+use crate::text::LINE_HEIGHT;
 
 /// The frame's smallest side.
 pub const MIN_SIDE: f32 = 200.0;
@@ -150,6 +161,11 @@ pub const BOX_HALF: f32 = 8.0;
 /// Half a link's click box's side at the largest scale (see
 /// [`FloatingMap::big_boxes`]).
 pub const BIG_BOX_HALF: f32 = 12.0;
+
+/// How far from its centre an arrow `cicn` may reach: a stock map arrow
+/// is 16 × 16, and one up to twice that is still clipped rather than
+/// dropped.
+const ICON_REACH: f32 = 16.0;
 
 /// The original's zooms, the inverses of [`SCALES`], as the click boxes
 /// divide by them.
@@ -207,6 +223,8 @@ pub struct FloatingMap {
     shown_at: Option<u128>,
     /// The index of its scale in [`SCALES`].
     zoom: usize,
+    /// The system selected as it was last shown (`_selSystem`).
+    preselection: Option<SystemId>,
 }
 
 impl Default for FloatingMap {
@@ -222,7 +240,21 @@ impl FloatingMap {
         Self {
             shown_at: None,
             zoom: START_ZOOM,
+            preselection: None,
         }
+    }
+
+    /// Selects `system` as `_ShowFloatingMap` sets `_selSystem` at each
+    /// show (@0x1147b-0x114c8): the system whose name alone is drawn above
+    /// a zoom of 1.1 (`_DrawMap` @0xf52b-0xf533).
+    pub fn preselect(&mut self, system: Option<SystemId>) {
+        self.preselection = system;
+    }
+
+    /// The system selected as it was last shown.
+    #[must_use]
+    pub fn preselection(&self) -> Option<SystemId> {
+        self.preselection
     }
 
     /// Shows it at Mac tick `now`, restarting its clock.
@@ -354,8 +386,10 @@ pub fn hit(
 }
 
 /// Draws the floating map in `frame` at `level` onto `list`: the border in
-/// `border`, then what `map` draws, clipped and faded together
-/// ([`clip_and_fade`]).
+/// `border`, faded, then what `map` draws, clipped and faded
+/// ([`clip_and_fade`]). The border is drawn whole, on the frame's edges:
+/// what the map draws over it doesn't cut it, where the original's map
+/// overwrites the border's pixels in the frame's image.
 pub fn draw(
     list: &mut DrawList,
     frame: Bounds,
@@ -363,7 +397,9 @@ pub fn draw(
     border: Color,
     map: impl FnOnce(&mut DrawList),
 ) {
-    let mut raw = DrawList::new();
+    if level == 0 {
+        return;
+    }
     let (left, top, right, bottom) = (frame.min.x, frame.min.y, frame.max.x, frame.max.y);
     let corners = [
         Point::new(left, top),
@@ -372,14 +408,15 @@ pub fn draw(
         Point::new(left, bottom),
     ];
     for (at, &from) in corners.iter().enumerate() {
-        raw.line(from, corners[(at + 1) % 4], 1.0, border);
+        list.line(from, corners[(at + 1) % 4], 1.0, fade(border, level));
     }
+    let mut raw = DrawList::new();
     map(&mut raw);
     clip_and_fade(&raw, frame, level, list);
 }
 
-/// One line or dot of the map, clipped to the frame, with what is left of
-/// it once the dots drawn after it have cut it.
+/// One line, rect, dot, name or arrow of the map, clipped to the frame,
+/// with what is left of it once the covers drawn after it have cut it.
 enum Piece {
     /// A line from `from` to `to`, of which the stretches `kept` (as
     /// fractions of the way from `from`) are left.
@@ -401,14 +438,25 @@ enum Piece {
         area: Bounds,
         kept: Vec<Bounds>,
     },
+    /// A horizontal line, the rect it fills ([`fill_rect`]): the part of
+    /// it in the frame, `area`, of which the rectangles `kept` are left.
+    Rect {
+        color: Color,
+        area: Bounds,
+        kept: Vec<Bounds>,
+    },
+    /// A name or an arrow, drawn clipped to the frame by the renderer,
+    /// uncut by what comes after it.
+    Clipped(DrawCommand),
 }
 
 impl Piece {
-    /// What it covers of the pieces drawn before it: a dot's area.
+    /// What it covers of the pieces drawn before it: a dot's or a rect's
+    /// area.
     fn cover(&self) -> Option<Bounds> {
         match self {
-            Self::Dot { area, .. } => Some(*area),
-            Self::Line { .. } => None,
+            Self::Dot { area, .. } | Self::Rect { area, .. } => Some(*area),
+            Self::Line { .. } | Self::Clipped(_) => None,
         }
     }
 
@@ -422,17 +470,22 @@ impl Piece {
                     }
                 }
             }
-            Self::Dot { kept, .. } => {
+            Self::Dot { kept, .. } | Self::Rect { kept, .. } => {
                 for cover in covers {
                     *kept = kept.iter().flat_map(|&have| minus(have, *cover)).collect();
                 }
             }
+            Self::Clipped(_) => {}
         }
     }
 
-    /// Draws what is left of it onto `out` at `level`.
-    fn draw(self, level: u8, out: &mut DrawList) {
+    /// Draws what is left of it onto `out` at `level`, in `frame`: nothing
+    /// of a black line, rect or dot, which covers what came before it but
+    /// ORs in nothing.
+    fn draw(self, level: u8, frame: Bounds, out: &mut DrawList) {
         match self {
+            Self::Line { color, .. } | Self::Dot { color, .. } | Self::Rect { color, .. }
+                if covers_only(color) => {}
             Self::Line {
                 from,
                 to,
@@ -465,16 +518,67 @@ impl Piece {
                     }
                 }
             }
+            Self::Rect { color, kept, .. } => {
+                for area in kept {
+                    fill_rect(out, area, fade(color, level));
+                }
+            }
+            Self::Clipped(command) => {
+                out.clipped(frame, faded(command, level));
+            }
         }
     }
 }
 
-/// Draws `map`'s lines and dots onto `out`, clipped to `frame` and faded
-/// to `level` (see the module docs): each line cut to the frame, and
-/// dropped when nothing is left; each dot whole when inside, its overlap
-/// when partly inside, and dropped when outside; every other command
-/// dropped. Each is then cut where a dot drawn after it covers it, a line
-/// dropped where a later line has its ends and at least its width, and
+/// Whether a piece of `color` is black: what the frame's black ORs into
+/// the scene, nothing (`_BlitPixieFloatingRectDrawProc`), so it only
+/// covers what came before it.
+fn covers_only(color: Color) -> bool {
+    color == Color::BLACK
+}
+
+/// `command`, a name or an arrow, faded to `level`: its colour's or
+/// tint's alpha scaled as [`fade`] scales it.
+fn faded(command: DrawCommand, level: u8) -> DrawCommand {
+    match command {
+        DrawCommand::Text {
+            text,
+            font,
+            origin,
+            size,
+            wrap_width,
+            color,
+        } => DrawCommand::Text {
+            text,
+            font,
+            origin,
+            size,
+            wrap_width,
+            color: fade(color, level),
+        },
+        DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend,
+        } => DrawCommand::Sprite {
+            image,
+            center,
+            tint: fade(tint, level),
+            blend,
+        },
+        other => other,
+    }
+}
+
+/// Draws `map` onto `out`, clipped to `frame` and faded to `level` (see
+/// the module docs): each line cut to the frame, and dropped when nothing
+/// is left; each horizontal line's rect and each dot whole when inside,
+/// its overlap when partly inside, and dropped when outside; each name and
+/// arrow that can reach the frame clipped to it by the renderer; every
+/// other command dropped. Each line, rect and dot is then cut where a dot
+/// or rect drawn after it covers it, a line dropped where a later line has
+/// its ends and at least its width, a black one drawn not at all, and
 /// every colour's alpha becomes round(alpha × level / 32). Level 0 draws
 /// nothing.
 pub fn clip_and_fade(map: &DrawList, frame: Bounds, level: u8, out: &mut DrawList) {
@@ -488,12 +592,12 @@ pub fn clip_and_fade(map: &DrawList, frame: Bounds, level: u8, out: &mut DrawLis
         head[index].cut(&covers);
     }
     for piece in pieces {
-        piece.draw(level, out);
+        piece.draw(level, frame, out);
     }
 }
 
-/// `map`'s lines and dots clipped to `frame`, less each line a later line
-/// with its ends and at least its width covers.
+/// `map`'s lines, rects, dots, names and arrows clipped to `frame`, less
+/// each line a later line with its ends and at least its width covers.
 fn clipped(map: &DrawList, frame: Bounds) -> Vec<Piece> {
     let commands: Vec<&DrawCommand> = map.iter().collect();
     let mut pieces = Vec::new();
@@ -512,7 +616,23 @@ fn clipped(map: &DrawList, frame: Bounds) -> Vec<Piece> {
                 if covered {
                     continue;
                 }
-                if let Some((t0, t1)) = span_in(from, to, frame) {
+                // Exactly horizontal, as `fill_rect` draws a rect.
+                #[allow(clippy::float_cmp)]
+                let horizontal = from.y == to.y && from.x != to.x;
+                if horizontal {
+                    let half = width / 2.0;
+                    let whole = Bounds {
+                        min: Point::new(from.x.min(to.x), from.y - half),
+                        max: Point::new(from.x.max(to.x), from.y + half),
+                    };
+                    if let Some(area) = intersection(whole, frame) {
+                        pieces.push(Piece::Rect {
+                            color,
+                            area,
+                            kept: vec![area],
+                        });
+                    }
+                } else if let Some((t0, t1)) = span_in(from, to, frame) {
                     let along = |t: f32| lerp(from, to, t);
                     pieces.push(Piece::Line {
                         from: along(t0),
@@ -538,6 +658,24 @@ fn clipped(map: &DrawList, frame: Bounds) -> Vec<Piece> {
                         area,
                         kept: vec![area],
                     });
+                }
+            }
+            DrawCommand::Text { origin, size, .. } => {
+                let reaches = origin.x < frame.max.x
+                    && origin.x > frame.min.x - frame.width()
+                    && origin.y < frame.max.y
+                    && origin.y + size * LINE_HEIGHT > frame.min.y;
+                if reaches {
+                    pieces.push(Piece::Clipped((*command).clone()));
+                }
+            }
+            DrawCommand::Sprite { center, .. } => {
+                let reach = Bounds {
+                    min: Point::new(center.x - ICON_REACH, center.y - ICON_REACH),
+                    max: Point::new(center.x + ICON_REACH, center.y + ICON_REACH),
+                };
+                if intersection(reach, frame).is_some() {
+                    pieces.push(Piece::Clipped((*command).clone()));
                 }
             }
             _ => {}
@@ -1070,12 +1208,64 @@ mod tests {
     }
 
     #[test]
-    fn everything_but_lines_and_dots_is_dropped() {
+    fn names_and_arrows_are_clipped_to_the_frame_faded_and_pictures_dropped() {
         let mut map = DrawList::new();
         map.picture(ImageKey::picture(128), at(600.0, 200.0));
         map.text("Sol", at(600.0, 200.0), 10.0, None, RED);
-        map.sprite(ImageKey::picture(129), at(600.0, 200.0), Color::WHITE);
+        map.sprite(ImageKey::icon(15000), at(810.0, 400.0), Color::WHITE);
+        let sol = DrawCommand::Text {
+            text: "Sol".to_owned(),
+            font: crate::Font::Geneva,
+            origin: at(600.0, 200.0),
+            size: 10.0,
+            wrap_width: None,
+            color: Color { a: 128, ..RED },
+        };
+        let arrow = DrawCommand::Sprite {
+            image: ImageKey::icon(15000),
+            center: at(810.0, 400.0),
+            tint: Color::rgba(255, 255, 255, 128),
+            blend: crate::Blend::Normal,
+        };
+        let mut expected = DrawList::new();
+        expected.clipped(stock(), sol).clipped(stock(), arrow);
+        assert_eq!(
+            passed(&map, 16),
+            expected.iter().cloned().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn names_and_arrows_that_cannot_reach_the_frame_are_dropped() {
+        let mut map = DrawList::new();
+        // Each starts past the right edge, below the bottom, its line above
+        // the top, or more than the frame's width left of it.
+        for origin in [
+            at(814.0, 200.0),
+            at(600.0, 406.0),
+            at(600.0, 137.0),
+            at(301.0, 200.0),
+        ] {
+            map.text("Sol", origin, 10.0, None, RED);
+        }
+        // 16 past the right edge, the bottom, the left and the top.
+        for center in [
+            at(831.0, 200.0),
+            at(600.0, 423.0),
+            at(541.0, 200.0),
+            at(600.0, 133.0),
+        ] {
+            map.sprite(ImageKey::icon(15000), center, Color::WHITE);
+        }
+        // Exactly the frame's width left of it, and a line ending on its top.
+        map.text("Sol", at(302.0, 200.0), 10.0, None, RED);
+        map.text("Sol", at(600.0, 138.0), 10.0, None, RED);
         assert_eq!(passed(&map, 32), []);
+        let mut near = DrawList::new();
+        // Its line (12 high at size 10) reaching half a unit in.
+        near.text("Sol", at(303.0, 138.5), 10.0, None, RED);
+        near.sprite(ImageKey::icon(15000), at(829.0, 200.0), Color::WHITE);
+        assert_eq!(passed(&near, 32).len(), 2, "each reaches it");
     }
 
     #[test]
@@ -1190,16 +1380,66 @@ mod tests {
     #[test]
     fn a_line_wholly_under_a_later_dot_is_dropped_and_one_after_every_dot_is_whole() {
         let map = list(&[
+            line(at(600.0, 200.0), at(602.0, 202.0), 1.0, RED),
             line(at(600.0, 200.0), at(602.0, 200.0), 1.0, RED),
             dot(at(600.0, 200.0), 8.0, BLUE),
-            line(at(600.0, 200.0), at(603.0, 200.0), 1.0, GREEN),
+            line(at(600.0, 200.0), at(603.0, 203.0), 1.0, GREEN),
         ]);
         assert_eq!(
             passed(&map, 32),
             [
                 dot(at(600.0, 200.0), 8.0, BLUE),
-                line(at(600.0, 200.0), at(603.0, 200.0), 1.0, GREEN),
-            ]
+                line(at(600.0, 200.0), at(603.0, 203.0), 1.0, GREEN),
+            ],
+            "a line and a rect under the dot gone; a line covers nothing"
+        );
+    }
+
+    #[test]
+    fn a_horizontal_line_is_a_rect_that_covers_what_came_before() {
+        let map = list(&[
+            dot(at(600.0, 200.0), 8.0, BLUE),
+            line(at(590.0, 200.0), at(610.0, 200.0), 2.0, GREEN),
+        ]);
+        assert_eq!(
+            passed(&map, 32),
+            [
+                rect((596.0, 196.0), (604.0, 199.0), BLUE),
+                rect((596.0, 201.0), (604.0, 204.0), BLUE),
+                rect((590.0, 199.0), (610.0, 201.0), GREEN),
+            ],
+            "the dot cut where the rect lies over it"
+        );
+    }
+
+    #[test]
+    fn a_black_piece_covers_but_draws_nothing() {
+        let map = list(&[
+            line(at(560.0, 160.0), at(640.0, 240.0), 1.0, RED),
+            dot(at(600.0, 200.0), 10.0, Color::BLACK),
+            line(at(595.0, 200.0), at(605.0, 200.0), 1.0, Color::BLACK),
+        ]);
+        let passed = passed(&map, 32);
+        assert_eq!(passed.len(), 2, "{passed:?}");
+        assert!(
+            passed.iter().all(|command| matches!(command,
+                DrawCommand::Line { color, .. } if *color == RED)),
+            "the line, cut in two where the black dot covers it: {passed:?}"
+        );
+    }
+
+    #[test]
+    fn a_rect_partly_outside_is_cut_to_the_frame() {
+        let map = list(&[line(at(540.0, 300.0), at(600.0, 300.0), 4.0, RED)]);
+        assert_eq!(
+            passed(&map, 32),
+            [rect((558.0, 298.0), (600.0, 302.0), RED)]
+        );
+        let map = list(&[line(at(600.0, 150.0), at(640.0, 150.0), 4.0, RED)]);
+        assert_eq!(
+            passed(&map, 32),
+            [rect((600.0, 150.0), (640.0, 152.0), RED)],
+            "its rows above the frame too"
         );
     }
 

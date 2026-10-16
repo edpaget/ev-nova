@@ -9,24 +9,40 @@
 //!   `bööm`'s `FrameAdvance` / 100, and it ends once the frame is past the
 //!   last. A delayed one is hidden while its delay counts down by the same
 //!   advance a step. One whose sheet cannot be read is heard and lasts a
-//!   frame, unseen. At most [`MAX_EXPLOSIONS`] are kept: one more is
-//!   dropped.
+//!   frame, unseen.
+//! - Under the original's caps
+//!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
+//!   reading, [`Scene::caps`]; by default nothing is capped) at most
+//!   [`MAX_EXPLOSIONS`] explosions are kept: one more is dropped, though
+//!   still heard, as `_CreateExplosion` plays its sound whether
+//!   `_SpawnExplod` found it a slot or not (@0x3f91a). The extras take
+//!   their slots first, so a size of 163 or more fills the pool alone and
+//!   the main one is lost, heard. At most [`MAX_PARTICLES`] particles are
+//!   kept, of a burst or of debris, one more dropped; and a particle of
+//!   no life is never moved, drawn or freed, holding its count of the
+//!   pool until it is cleared (`_MoveParticles` @0xc6134-0xc613a).
 //! - An explosion of a code of 1000 or more, with a size, first scatters
 //!   `trunc(0.04 x size)` explosions of `bööm` 129 within a quarter of the
 //!   size of it, delayed 4-11, and `trunc(0.16 x size)` of `bööm` 128
 //!   within half the size, delayed 8-23 ([`Effects::explode`]). Only the
-//!   main one sounds. A weapon's explosion has no size.
+//!   main one sounds. A weapon's explosion is of its `BlastRadius`, as
+//!   the fight raises it; every other is of none.
 //! - A ship breaking up, while more than 2 ticks are left, sets off its
 //!   `Explode1` about it at random, more often as its end nears, a quarter
 //!   of them heard ([`Effects::step`]).
-//! - A destroyed ship goes off in its `Explode2`, with its size, and, as
-//!   the phase asks though the original scatters none, [`DEBRIS_COUNT`]
-//!   particles of debris, by the original's particle model: each in a
+//! - A destroyed ship goes off in its `Explode2`, with its size, and,
+//!   under [`RuleKey::ShipDebris`](nova_sim::RuleKey::ShipDebris)'s other
+//!   reading, the default, though the original scatters none
+//!   ([`Scene::debris`]), [`DEBRIS_COUNT`] particles of debris, by the
+//!   original's particle model: each in a
 //!   random direction at [`DEBRIS_SPEED`] ± [`DEBRIS_SPEED_VARIATION`] %,
 //!   living 15-45 ticks, and carried on with the ship's velocity.
 //! - A weapon firing sounds its `snd ` from where it was fired (its ship,
 //!   or the shot releasing sub-munitions), and an explosion its own, each
-//!   heard from the player ([`CombatSound`]).
+//!   heard from the player ([`CombatSound`]), unless the fight raised it
+//!   with no sound: an NPC's pick sounds once a call, on its first copy
+//!   ([`FireSound`](nova_sim::FireSound)). The priority it carries isn't
+//!   played by yet (rdm phase audio-fidelity/phase-15).
 //! - A weapon whose sound loops (`Flags` 0x0010) is not heard again while
 //!   its sound is still playing: for its length in steps
 //!   ([`WeaponLook::sound_ticks`]) after it was heard. It plays out when
@@ -36,21 +52,23 @@
 //!   keeps its own, so two ships' chainguns are each heard, from where
 //!   each is. A looped weapon whose sound has no known length is heard
 //!   every shot.
-//! - A missile shot down by point defence goes off as explosion type 0
-//!   ([`SHOT_DOWN`]), unheard, as `_SpawnExplod` plays nothing.
-//! - A burst of particles ([`CombatEvent::Particles`]: a shot's hit on an
-//!   asteroid, an asteroid destroyed) is `_SpawnParticles`
+//! - A missile shot down by point defence, and a shot fizzling out at the
+//!   end of its life ([`CombatEvent::Fizzled`]), go off as explosion type
+//!   0 ([`TYPE_ZERO`]), unheard, as `_SpawnExplod` plays nothing.
+//! - A burst of particles ([`CombatEvent::Particles`]: a shot's or a
+//!   beam's hit on a ship, a shot's on an asteroid or a stellar, an
+//!   asteroid destroyed) is `_SpawnParticles`
 //!   (@0x44b70-0x44d4e) as a plain particle effect: each of its pieces
 //!   leaves where it went off, or `_Accel(Rand(360), Rand(spread × 100)
 //!   × 0.01)` off it with a spread, along `Rand(360)` at its speed,
 //!   varied as `speed × (100 + Rand(2v + 1) − v) / 100` for a variation
 //!   `v` of 1-99, and lives `min + Rand(max − min + 1)` ticks, or `min`
 //!   when `min` is at or above `max`; it takes on no source's velocity,
-//!   and is a dot of the burst's `00RRGGBB` colour. Left out: the
-//!   original's constant 0x20 argument, which `_NewParticle` reads, and
-//!   how the original draws a particle;
-//!   rdm:phase/weapons-fidelity/phase-14-combat-presentation refines the
-//!   look.
+//!   and is a dot of the burst's `00RRGGBB` colour, opaque. Left out: the
+//!   original's eighth argument, which `_NewParticle` reads, and how the
+//!   original draws a particle. Every burst the fight raises passes 0x20,
+//!   drawn opaque; only a shot's trail (@0x35ea6) passes another, and
+//!   rdm:phase/weapons-fidelity/phase-24-shots-and-beams-drawn owns it.
 //!
 //! [`WeaponLook::sound_ticks`]: super::catalog::WeaponLook::sound_ticks
 //!
@@ -68,14 +86,20 @@ use crate::sound::CombatSound;
 use crate::system::camera::Camera;
 use crate::{Color, DrawList, ImageKey, Point};
 
-/// The most explosions shown at once.
+/// The most explosions shown at once under the caps (`_SpawnExplod`
+/// @0x3f615-0x3f68e).
 pub const MAX_EXPLOSIONS: usize = 32;
+/// The most particles kept at once under the caps: the pool
+/// `_SetupSpriteWorld` makes (`_InitParticles(0x400, 0)` @0x22170-0x2217f),
+/// a particle more dropped (`_NewParticle` @0xc5054, @0xc5092).
+pub const MAX_PARTICLES: usize = 1024;
 /// The small extra explosions, `bööm` 129.
 pub const SMALL_EXTRA: BoomId = BoomId(129);
 /// The large extra explosions, `bööm` 128.
 pub const LARGE_EXTRA: BoomId = BoomId(128);
-/// A missile shot down by point defence, explosion type 0: `bööm` 128.
-pub const SHOT_DOWN: BoomId = BoomId(128);
+/// `_SpawnExplod`'s explosion type 0, `bööm` 128: a missile shot down by
+/// point defence, and a shot fizzling out.
+pub const TYPE_ZERO: BoomId = BoomId(128);
 /// Small extras per unit of size (the double @0xdd700).
 pub const SMALL_PER_SIZE: f64 = 0.04;
 /// Large extras per unit of size (the double @0xdd710).
@@ -157,11 +181,19 @@ pub struct Particle {
     pub color: Color,
 }
 
-/// Where a step's events are heard from.
+/// Where a step's events are heard from, and how they are shown.
 #[derive(Clone, Copy, Debug)]
 pub struct Scene {
     /// Where the player is: sounds are heard from here.
     pub player: Point,
+    /// Whether a destroyed ship scatters debris, as
+    /// [`RuleKey::ShipDebris`](nova_sim::RuleKey::ShipDebris)'s other
+    /// reading, the default, has it; the original scatters none.
+    pub debris: bool,
+    /// Whether the original's explosion and particle pools cap them, as
+    /// [`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
+    /// reading has it; by default, not.
+    pub caps: bool,
 }
 
 /// A ship breaking up.
@@ -189,6 +221,10 @@ pub struct Effects {
     /// Each looped weapon sound still playing, by firer and weapon, with
     /// the steps it has left.
     playing: BTreeMap<(ShipRef, WeaponId), u32>,
+    /// The particles made with no life under the caps: never moved, drawn
+    /// or freed, each holds its count of the pool until it is cleared
+    /// (see the module docs).
+    lifeless: usize,
 }
 
 impl Effects {
@@ -202,7 +238,12 @@ impl Effects {
         chance: &mut dyn Chance,
     ) {
         match *event {
-            CombatEvent::Fired { ship, weapon, at } => {
+            CombatEvent::Fired {
+                ship,
+                weapon,
+                at,
+                sound: Some(_),
+            } => {
                 let Some((sound, look)) = looks
                     .weapon(weapon)
                     .and_then(|look| Some((look.sound?, look)))
@@ -219,11 +260,15 @@ impl Effects {
                 }
                 self.sounds.push(heard(sound, point(at), scene.player));
             }
-            CombatEvent::ShotDown { at } => {
-                self.spawn(SHOT_DOWN, point(at), 0.0, looks);
+            CombatEvent::ShotDown { at } | CombatEvent::Fizzled { at } => {
+                self.spawn(TYPE_ZERO, point(at), 0.0, looks, scene.caps);
             }
-            CombatEvent::Exploded { at, explosion } => {
-                self.explode(explosion, point(at), 0.0, scene.player, looks, chance);
+            CombatEvent::Exploded {
+                at,
+                explosion,
+                size,
+            } => {
+                self.explode(explosion, point(at), size, scene, looks, chance);
             }
             CombatEvent::Destroyed {
                 at,
@@ -233,17 +278,25 @@ impl Effects {
                 ..
             } => {
                 if let Some(explosion) = explosion {
-                    self.explode(explosion, point(at), size, scene.player, looks, chance);
+                    self.explode(explosion, point(at), size, scene, looks, chance);
                 }
-                self.scatter(point(at), point(velocity), chance);
+                if scene.debris {
+                    self.scatter(point(at), point(velocity), scene.caps, chance);
+                }
             }
-            CombatEvent::Particles(burst) => self.spray(&burst, chance),
-            CombatEvent::Disabled { .. } | CombatEvent::BreakingUp { .. } => {}
+            CombatEvent::Particles(burst) => self.spray(&burst, scene.caps, chance),
+            // A hit's shield flash is the flight view's
+            // ([`ShieldFlash`](super::flash::ShieldFlash)).
+            CombatEvent::Fired { sound: None, .. }
+            | CombatEvent::Disabled { .. }
+            | CombatEvent::BreakingUp { .. }
+            | CombatEvent::Hit { .. } => {}
         }
     }
 
-    /// Throws off `burst`'s particles (see the module docs).
-    fn spray(&mut self, burst: &ParticleBurst, chance: &mut dyn Chance) {
+    /// Throws off `burst`'s particles, under the `caps` or not (see the
+    /// module docs).
+    fn spray(&mut self, burst: &ParticleBurst, caps: bool, chance: &mut dyn Chance) {
         let at = point(burst.at);
         let color = particle_color(burst.color);
         let (least, most) = burst.life;
@@ -269,18 +322,38 @@ impl Effects {
             } else {
                 at
             };
-            self.particles.push(Particle {
+            let piece = Particle {
                 at: start,
                 velocity: offset_along(Point::new(0.0, 0.0), heading, speed),
                 life,
                 color,
-            });
+            };
+            self.keep(piece, caps);
+        }
+    }
+
+    /// Keeps `piece`, unless the `caps` hold the pool full: then it is
+    /// dropped, as `_NewParticle` drops one once 1024 are counted
+    /// (@0xc5054-0xc5056, @0xc5092-0xc5094). Under them a piece of no life
+    /// is counted and kept nowhere: `_NewParticle` counts it, and
+    /// `_MoveParticles` skips a life of none or less, never moving it or
+    /// counting it off (@0xc6134-0xc613a), and the draw skips it
+    /// (`_DrawParticlesOffscreen` @0xc5a20-0xc5a27), until the pool is
+    /// cleared ([`Effects::clear`], `_ClearParticles`).
+    fn keep(&mut self, piece: Particle, caps: bool) {
+        if caps && self.particles.len() + self.lifeless >= MAX_PARTICLES {
+            return;
+        }
+        if caps && piece.life == 0 {
+            self.lifeless += 1;
+        } else {
+            self.particles.push(piece);
         }
     }
 
     /// Scatters [`DEBRIS_COUNT`] pieces of debris from `at`, carried on
-    /// with `velocity`.
-    fn scatter(&mut self, at: Point, velocity: Point, chance: &mut dyn Chance) {
+    /// with `velocity`, under the `caps` or not.
+    fn scatter(&mut self, at: Point, velocity: Point, caps: bool, chance: &mut dyn Chance) {
         let variation = DEBRIS_SPEED_VARIATION;
         for _ in 0..DEBRIS_COUNT {
             let heading = chance.below(360) as f32;
@@ -288,19 +361,21 @@ impl Effects {
             let speed = DEBRIS_SPEED * (percent as f32 - variation as f32) / 100.0;
             let life = DEBRIS_LIFE_MIN + chance.below(DEBRIS_LIFE_MAX - DEBRIS_LIFE_MIN + 1);
             let (sin, cos) = heading.to_radians().sin_cos();
-            self.particles.push(Particle {
+            let piece = Particle {
                 at,
                 velocity: Point::new(velocity.x + sin * speed, velocity.y - cos * speed),
                 life,
                 color: DEBRIS_COLOR,
-            });
+            };
+            self.keep(piece, caps);
         }
     }
 
-    /// Sets off `boom` at `at`, hidden for `delay`, unless the pool is full
-    /// or its look was not read; whether it went off.
-    fn spawn(&mut self, boom: BoomId, at: Point, delay: f32, looks: &Looks) -> bool {
-        let spawned = self.explosions.len() < MAX_EXPLOSIONS && looks.boom(boom).is_some();
+    /// Sets off `boom` at `at`, hidden for `delay`, unless the `caps` hold
+    /// the pool full or its look was not read; whether it went off.
+    fn spawn(&mut self, boom: BoomId, at: Point, delay: f32, looks: &Looks, caps: bool) -> bool {
+        let room = !caps || self.explosions.len() < MAX_EXPLOSIONS;
+        let spawned = room && looks.boom(boom).is_some();
         if spawned {
             self.explosions.push(Explosion {
                 boom,
@@ -312,17 +387,18 @@ impl Effects {
         spawned
     }
 
-    /// Sets off `explosion` at `at` with `size`, heard from `player` (see
-    /// the module docs).
+    /// Sets off `explosion` at `at` with `size`, heard from the player in
+    /// `scene`, under its caps or not (see the module docs).
     pub fn explode(
         &mut self,
         explosion: Blast,
         at: Point,
         size: f32,
-        player: Point,
+        scene: &Scene,
         looks: &Looks,
         chance: &mut dyn Chance,
     ) {
+        let caps = scene.caps;
         if explosion.extra {
             let size = f64::from(size);
             let small = (SMALL_PER_SIZE * size) as u32;
@@ -332,7 +408,7 @@ impl Effects {
                     |chance: &mut dyn Chance| f64::from(chance.below(small_reach)) - 0.25 * size;
                 let (x, y) = (off(chance), off(chance));
                 let delay = chance.below(8) + 4;
-                self.spawn(SMALL_EXTRA, offset(at, x, y), delay as f32, looks);
+                self.spawn(SMALL_EXTRA, offset(at, x, y), delay as f32, looks, caps);
             }
             let large = (LARGE_PER_SIZE * size) as u32;
             let large_reach = size as u32;
@@ -341,20 +417,23 @@ impl Effects {
                     |chance: &mut dyn Chance| f64::from(chance.below(large_reach)) - 0.5 * size;
                 let (x, y) = (off(chance), off(chance));
                 let delay = chance.below(16) + 8;
-                self.spawn(LARGE_EXTRA, offset(at, x, y), delay as f32, looks);
+                self.spawn(LARGE_EXTRA, offset(at, x, y), delay as f32, looks, caps);
             }
         }
-        if self.spawn(explosion.boom, at, 0.0, looks)
-            && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound)
-        {
-            self.sounds.push(heard(sound, at, player));
+        // Heard whether or not the pool had room for it (`_CreateExplosion`
+        // @0x3f91a).
+        self.spawn(explosion.boom, at, 0.0, looks, caps);
+        if let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
+            self.sounds.push(heard(sound, at, scene.player));
         }
     }
 
     /// Advances the explosions and debris a step, and the looped sounds
     /// playing, then sets off the explosions of the ships `dying`, but
-    /// for those on their breakup's first tick, heard from `player`.
-    pub fn step(&mut self, dying: &[Dying], player: Point, looks: &Looks, chance: &mut dyn Chance) {
+    /// for those on their breakup's first tick, heard from the player in
+    /// `scene`, under its caps or not.
+    pub fn step(&mut self, dying: &[Dying], scene: &Scene, looks: &Looks, chance: &mut dyn Chance) {
+        let player = scene.player;
         self.playing.retain(|_, left| {
             *left = left.saturating_sub(1);
             *left > 0
@@ -395,12 +474,11 @@ impl Effects {
             let mut off = || chance.below(2 * half) as f32 - half as f32;
             let (x, y) = (off(), off());
             let at = Point::new(ship.at.x + x, ship.at.y + y);
-            let spawned = self.spawn(explosion.boom, at, 0.0, looks);
+            // `_CreateExplosion(.., Rand(4) == 0)` @0x2decf: heard whether
+            // or not the pool had room for it.
+            self.spawn(explosion.boom, at, 0.0, looks, scene.caps);
             let audible = chance.below(4) == 0;
-            if spawned
-                && audible
-                && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound)
-            {
+            if audible && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
                 self.sounds.push(heard(sound, at, player));
             }
         }
@@ -438,13 +516,14 @@ impl Effects {
         std::mem::take(&mut self.sounds)
     }
 
-    /// Clears everything: the explosions, the debris, the sounds, and the
-    /// looped sounds playing.
+    /// Clears everything: the explosions, the debris, the sounds, the
+    /// looped sounds playing, and the particles of no life the caps count.
     pub fn clear(&mut self) {
         self.explosions.clear();
         self.particles.clear();
         self.sounds.clear();
         self.playing.clear();
+        self.lifeless = 0;
     }
 }
 
@@ -454,7 +533,7 @@ mod tests {
     use std::collections::{BTreeMap, VecDeque};
     use std::num::NonZeroU16;
 
-    use nova_sim::{NpcId, SoundId};
+    use nova_sim::{FireSound, NpcId, SoundId};
 
     use super::*;
     use crate::DrawCommand;
@@ -559,11 +638,16 @@ mod tests {
     const PLAYER: Point = Point::new(0.0, 0.0);
 
     fn exploded(effects: &mut Effects, boom: i16, where_: Point) {
+        exploded_in(effects, boom, where_, &scene());
+    }
+
+    /// `boom` set off at `where_` in `scene`.
+    fn exploded_in(effects: &mut Effects, boom: i16, where_: Point, scene: &Scene) {
         effects.explode(
             blast(boom, false),
             where_,
             0.0,
-            PLAYER,
+            scene,
             &looks(),
             &mut Script::default(),
         );
@@ -575,7 +659,7 @@ mod tests {
 
     fn steps(effects: &mut Effects, n: u32) {
         for _ in 0..n {
-            effects.step(&[], PLAYER, &looks(), &mut Script::default());
+            effects.step(&[], &scene(), &looks(), &mut Script::default());
         }
     }
 
@@ -658,10 +742,10 @@ mod tests {
     }
 
     #[test]
-    fn at_most_32_explosions_go_off_at_once() {
+    fn under_the_caps_at_most_32_explosions_go_off_at_once() {
         let mut effects = Effects::default();
         for i in 0..33 {
-            exploded(&mut effects, 130, at(i as f32, 0.0));
+            exploded_in(&mut effects, 130, at(i as f32, 0.0), &capped());
         }
         assert_eq!(effects.explosions().len(), 32);
         assert_eq!(
@@ -669,8 +753,111 @@ mod tests {
             at(31.0, 0.0),
             "the 33rd dropped"
         );
-        assert_eq!(effects.take_sounds().len(), 32);
+        // `_CreateExplosion` plays the main one's sound whether or not
+        // `_SpawnExplod` found it a slot (@0x3f91a).
+        assert_eq!(effects.take_sounds().len(), 33, "the 33rd still heard");
         assert_eq!(MAX_EXPLOSIONS, 32);
+    }
+
+    #[test]
+    fn uncapped_by_default_a_33rd_explosion_goes_off() {
+        let mut effects = Effects::default();
+        for i in 0..33 {
+            exploded(&mut effects, 130, at(i as f32, 0.0));
+        }
+        assert_eq!(effects.explosions().len(), 33);
+        let mut chance = Script::of(&[0, 0, 0, 0]);
+        effects.step(&[dying(30)], &scene(), &looks(), &mut chance);
+        assert_eq!(effects.explosions().len(), 34, "a breakup's too");
+        let mut capped_too = effects.clone();
+        let mut chance = Script::of(&[0, 0, 0, 0]);
+        capped_too.step(&[dying(30)], &capped(), &looks(), &mut chance);
+        assert_eq!(
+            capped_too.explosions().len(),
+            34,
+            "none more under the caps"
+        );
+        let shot_down = CombatEvent::ShotDown { at: Vec2::ZERO };
+        effects.apply(&shot_down, &scene(), &looks(), &mut Script::default());
+        assert_eq!(effects.explosions().len(), 35);
+        capped_too.apply(&shot_down, &capped(), &looks(), &mut Script::default());
+        assert_eq!(capped_too.explosions().len(), 34);
+    }
+
+    #[test]
+    fn under_the_caps_a_particle_past_1024_is_dropped_and_by_default_none_is() {
+        let fill = |scene: &Scene| {
+            let mut effects = Effects::default();
+            let mut chance = Script::default();
+            effects.apply(&burst(1000, 0, (10, 10), 0.0), scene, &looks(), &mut chance);
+            effects.apply(&burst(30, 0, (10, 10), 0.0), scene, &looks(), &mut chance);
+            effects
+        };
+        assert_eq!(fill(&scene()).particles().len(), 1030);
+        let mut capped_fill = fill(&capped());
+        assert_eq!(capped_fill.particles().len(), MAX_PARTICLES);
+        let destroyed = CombatEvent::Destroyed {
+            ship: NPC,
+            ship_type: nova_sim::ShipId(128),
+            at: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            explosion: None,
+            size: 0.0,
+        };
+        capped_fill.apply(&destroyed, &capped(), &looks(), &mut Script::default());
+        assert_eq!(
+            capped_fill.particles().len(),
+            MAX_PARTICLES,
+            "no debris either"
+        );
+        let mut debris = fill(&scene());
+        debris.apply(&destroyed, &scene(), &looks(), &mut Script::default());
+        assert_eq!(debris.particles().len(), 1030 + DEBRIS_COUNT as usize);
+        assert_eq!(MAX_PARTICLES, 1024);
+    }
+
+    #[test]
+    fn under_the_caps_a_lifeless_particle_holds_its_count_unseen_until_cleared() {
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        effects.apply(
+            &burst(1000, 0, (0, 0), 0.0),
+            &capped(),
+            &looks(),
+            &mut chance,
+        );
+        assert_eq!(effects.particles(), [], "never kept to be drawn");
+        effects.step(&[], &capped(), &looks(), &mut chance);
+        effects.apply(
+            &burst(30, 0, (10, 10), 0.0),
+            &capped(),
+            &looks(),
+            &mut chance,
+        );
+        assert_eq!(effects.particles().len(), 24, "the pool's count held");
+        effects.clear();
+        effects.apply(
+            &burst(30, 0, (10, 10), 0.0),
+            &capped(),
+            &looks(),
+            &mut chance,
+        );
+        assert_eq!(effects.particles().len(), 30, "cleared");
+        let mut uncapped = Effects::default();
+        uncapped.apply(
+            &burst(1000, 0, (0, 0), 0.0),
+            &scene(),
+            &looks(),
+            &mut chance,
+        );
+        uncapped.step(&[], &scene(), &looks(), &mut chance);
+        uncapped.apply(
+            &burst(30, 0, (10, 10), 0.0),
+            &scene(),
+            &looks(),
+            &mut chance,
+        );
+        assert_eq!(uncapped.particles().len(), 30, "gone a step on, by default");
     }
 
     #[test]
@@ -682,7 +869,7 @@ mod tests {
             blast(130, true),
             at(0.0, 0.0),
             25.0,
-            PLAYER,
+            &scene(),
             &looks(),
             &mut chance,
         );
@@ -721,7 +908,7 @@ mod tests {
             blast(130, true),
             at(1000.0, 500.0),
             100.0,
-            PLAYER,
+            &scene(),
             &looks(),
             &mut chance,
         );
@@ -766,7 +953,7 @@ mod tests {
             blast(130, true),
             at(1000.0, 500.0),
             100.0,
-            PLAYER,
+            &scene(),
             &looks(),
             &mut chance,
         );
@@ -787,7 +974,7 @@ mod tests {
             blast(130, true),
             at(0.0, 0.0),
             0.0,
-            PLAYER,
+            &scene(),
             &looks(),
             &mut chance,
         );
@@ -795,7 +982,7 @@ mod tests {
             blast(130, false),
             at(0.0, 0.0),
             100.0,
-            PLAYER,
+            &scene(),
             &looks(),
             &mut chance,
         );
@@ -821,10 +1008,10 @@ mod tests {
             starting: true,
             ..dying(30)
         };
-        effects.step(&[starting], PLAYER, &looks(), &mut chance);
+        effects.step(&[starting], &scene(), &looks(), &mut chance);
         assert!(chance.asked.is_empty(), "{:?}", chance.asked);
         assert_eq!(effects.explosions(), []);
-        effects.step(&[dying(30)], PLAYER, &looks(), &mut chance);
+        effects.step(&[dying(30)], &scene(), &looks(), &mut chance);
         assert_eq!(chance.asked, [2], "from the tick after");
     }
 
@@ -845,7 +1032,7 @@ mod tests {
         ] {
             let mut effects = Effects::default();
             let mut chance = Script::default();
-            effects.step(&[dying(ticks_left)], PLAYER, &looks(), &mut chance);
+            effects.step(&[dying(ticks_left)], &scene(), &looks(), &mut chance);
             let expected: &[u32] = if odds == 1 { &[1, 24, 24, 4] } else { &[odds] };
             assert_eq!(chance.asked, expected, "{ticks_left}");
         }
@@ -857,7 +1044,12 @@ mod tests {
         // h is a quarter of 48: 12; the offsets draw below 24, less 12.
         let mut chance = Script::of(&[0, 0, 23, 0, 0, 5, 5, 1]);
         let ship = dying(30);
-        effects.step(&[ship, ship], at(100.0, 0.0), &looks(), &mut chance);
+        effects.step(
+            &[ship, ship],
+            &heard_at(at(100.0, 0.0)),
+            &looks(),
+            &mut chance,
+        );
         assert_eq!(chance.asked, [2, 24, 24, 4, 2, 24, 24, 4]);
         let explosions = effects.explosions();
         assert_eq!(explosions.len(), 2);
@@ -876,6 +1068,26 @@ mod tests {
     }
 
     #[test]
+    fn a_breakup_explosion_with_no_room_is_still_heard() {
+        let mut effects = Effects::default();
+        for i in 0..32 {
+            exploded_in(&mut effects, 129, at(i as f32, 0.0), &capped());
+        }
+        effects.take_sounds();
+        let mut chance = Script::of(&[0, 0, 0, 0]);
+        let scene = Scene {
+            caps: true,
+            ..heard_at(at(100.0, 0.0))
+        };
+        effects.step(&[dying(30)], &scene, &looks(), &mut chance);
+        assert!(
+            effects.explosions().iter().all(|e| e.boom == BoomId(129)),
+            "no room"
+        );
+        assert_eq!(effects.take_sounds().len(), 1, "heard");
+    }
+
+    #[test]
     fn a_narrow_ship_breaks_up_within_a_pixel() {
         let mut effects = Effects::default();
         let mut chance = Script::of(&[0, 0, 1]);
@@ -883,7 +1095,7 @@ mod tests {
             sprite_width: 3.0,
             ..dying(10)
         };
-        effects.step(&[narrow], PLAYER, &looks(), &mut chance);
+        effects.step(&[narrow], &scene(), &looks(), &mut chance);
         assert_eq!(&chance.asked[..3], [1, 2, 2]);
         assert_eq!(effects.explosions()[0].at, at(99.0, 200.0));
     }
@@ -898,7 +1110,7 @@ mod tests {
         };
         effects.step(
             &[dying(2), dying(1), dying(0), quiet],
-            PLAYER,
+            &scene(),
             &looks(),
             &mut chance,
         );
@@ -906,9 +1118,27 @@ mod tests {
         assert_eq!(effects.explosions(), []);
     }
 
-    /// The scene: the player at the origin.
+    /// The scene: the player at the origin, debris scattered, nothing
+    /// capped.
     fn scene() -> Scene {
-        Scene { player: PLAYER }
+        Scene {
+            player: PLAYER,
+            debris: true,
+            caps: false,
+        }
+    }
+
+    /// The scene under the caps.
+    fn capped() -> Scene {
+        Scene {
+            caps: true,
+            ..scene()
+        }
+    }
+
+    /// The scene, its player at `player`.
+    fn heard_at(player: Point) -> Scene {
+        Scene { player, ..scene() }
     }
 
     /// Where NPC 1 is.
@@ -925,10 +1155,35 @@ mod tests {
             } else {
                 NPC_AT
             },
+            sound: Some(FireSound::UNPORTED),
         }
     }
 
     const NPC: ShipRef = ShipRef::Npc(NpcId(1));
+
+    #[test]
+    fn a_fired_event_with_no_sound_plays_nothing() {
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        let pick = |sound| CombatEvent::Fired {
+            ship: NPC,
+            weapon: WeaponId(128),
+            at: NPC_AT,
+            sound,
+        };
+        let first = Some(FireSound { priority: Some(4) });
+        for event in [pick(first), pick(None), pick(None)] {
+            effects.apply(&event, &scene(), &looks(), &mut chance);
+        }
+        assert_eq!(
+            effects.take_sounds(),
+            [CombatSound {
+                sound: SoundId(208),
+                offset: (300, -400)
+            }],
+            "once a call"
+        );
+    }
 
     #[test]
     fn a_weapon_fired_sounds_from_where_it_was_fired() {
@@ -943,6 +1198,7 @@ mod tests {
                 ship: NPC,
                 weapon: WeaponId(128),
                 at: Vec2::new(-5.0, 7.0),
+                sound: Some(FireSound::UNPORTED),
             },
         ] {
             effects.apply(&event, &scene(), &looks(), &mut chance);
@@ -973,6 +1229,7 @@ mod tests {
     fn a_sound_is_heard_from_where_the_player_is() {
         let scene = Scene {
             player: at(10.0, 20.0),
+            ..scene()
         };
         let mut effects = Effects::default();
         effects.apply(&fired(NPC, 128), &scene, &looks(), &mut Script::default());
@@ -991,7 +1248,7 @@ mod tests {
         let mut effects = Effects::default();
         let mut heard = vec![Vec::new(); firers.len()];
         for step in 0..steps {
-            effects.step(&[], PLAYER, &looks(), &mut Script::default());
+            effects.step(&[], &scene(), &looks(), &mut Script::default());
             for (n, &firer) in firers.iter().enumerate() {
                 effects.apply(
                     &fired(firer, weapon),
@@ -1018,7 +1275,7 @@ mod tests {
         let mut effects = Effects::default();
         let mut heard = Vec::new();
         for step in 0..20 {
-            effects.step(&[], PLAYER, &looks(), &mut Script::default());
+            effects.step(&[], &scene(), &looks(), &mut Script::default());
             if step % 14 == 0 {
                 effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
             }
@@ -1063,25 +1320,44 @@ mod tests {
     }
 
     #[test]
-    fn a_missile_shot_down_explodes_as_bööm_128_without_a_sound() {
+    fn a_missile_shot_down_or_a_shot_fizzling_explodes_as_bööm_128_without_a_sound() {
+        let at_ = Vec2::new(30.0, 40.0);
+        for event in [
+            CombatEvent::ShotDown { at: at_ },
+            CombatEvent::Fizzled { at: at_ },
+        ] {
+            let mut effects = Effects::default();
+            let mut chance = Script::default();
+            effects.apply(&event, &scene(), &looks(), &mut chance);
+            assert_eq!(
+                effects.explosions(),
+                [Explosion {
+                    boom: BoomId(128),
+                    at: at(30.0, 40.0),
+                    frame: 0.0,
+                    delay: 0.0
+                }],
+                "{event:?}"
+            );
+            assert_eq!(effects.take_sounds(), [], "{event:?}");
+            assert!(chance.asked.is_empty());
+        }
+        assert_eq!(TYPE_ZERO, BoomId(128));
+    }
+
+    #[test]
+    fn a_hit_shows_nothing_of_its_own() {
         let mut effects = Effects::default();
         let mut chance = Script::default();
-        let event = CombatEvent::ShotDown {
+        let event = CombatEvent::Hit {
+            ship: NPC,
+            weapon: Some(WeaponId(128)),
             at: Vec2::new(30.0, 40.0),
+            passes_shields: false,
+            late: false,
         };
         effects.apply(&event, &scene(), &looks(), &mut chance);
-        assert_eq!(
-            effects.explosions(),
-            [Explosion {
-                boom: BoomId(128),
-                at: at(30.0, 40.0),
-                frame: 0.0,
-                delay: 0.0
-            }]
-        );
-        assert_eq!(effects.take_sounds(), []);
-        assert!(chance.asked.is_empty());
-        assert_eq!(SHOT_DOWN, BoomId(128));
+        assert_eq!(effects, Effects::default());
     }
 
     #[test]
@@ -1091,6 +1367,7 @@ mod tests {
         let event = CombatEvent::Exploded {
             at: Vec2::new(30.0, 40.0),
             explosion: blast(130, true),
+            size: 0.0,
         };
         effects.apply(&event, &scene(), &looks(), &mut chance);
         assert_eq!(effects.explosions().len(), 1, "no size, no extras");
@@ -1103,6 +1380,61 @@ mod tests {
             }]
         );
         assert!(chance.asked.is_empty(), "{:?}", chance.asked);
+    }
+
+    /// Weapon explosion `explosion` of `size` at (30, 40), applied: the
+    /// effects, and what the chance was asked.
+    fn weapon_explosion(explosion: Blast, size: f32) -> (Effects, Vec<u32>) {
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        let event = CombatEvent::Exploded {
+            at: Vec2::new(30.0, 40.0),
+            explosion,
+            size,
+        };
+        effects.apply(&event, &scene(), &looks(), &mut chance);
+        (effects, chance.asked)
+    }
+
+    #[test]
+    fn a_hellhounds_explosion_of_size_145_scatters_5_small_and_23_large_extras() {
+        let (mut effects, asked) = weapon_explosion(blast(130, true), 145.0);
+        let booms: Vec<BoomId> = effects.explosions().iter().map(|e| e.boom).collect();
+        let mut expected = vec![SMALL_EXTRA; 5];
+        expected.extend([LARGE_EXTRA; 23]);
+        expected.push(BoomId(130));
+        assert_eq!(booms, expected, "trunc(5.8) small, trunc(23.2) large");
+        // Within half the size and delayed below 8, then within the size
+        // and delayed below 16.
+        let mut reaches = [72, 72, 8].repeat(5);
+        reaches.extend([145, 145, 16].repeat(23));
+        assert_eq!(asked, reaches);
+        for small in &effects.explosions()[..5] {
+            assert_eq!(small.at, at(30.0 + 71.0 - 36.25, 40.0 + 71.0 - 36.25));
+            assert_eq!(small.delay, 11.0);
+        }
+        for large in &effects.explosions()[5..28] {
+            assert_eq!(large.at, at(30.0 + 144.0 - 72.5, 40.0 + 144.0 - 72.5));
+            assert_eq!(large.delay, 23.0);
+        }
+        assert_eq!(effects.explosions()[28].at, at(30.0, 40.0));
+        assert_eq!(
+            effects.take_sounds(),
+            [CombatSound {
+                sound: SoundId(302),
+                offset: (30, 40)
+            }],
+            "only the main one is heard"
+        );
+    }
+
+    #[test]
+    fn a_weapons_plain_explosion_or_one_of_no_size_scatters_none() {
+        for (explosion, size) in [(blast(130, false), 145.0), (blast(130, true), 0.0)] {
+            let (effects, asked) = weapon_explosion(explosion, size);
+            assert_eq!(effects.explosions().len(), 1, "{explosion:?} {size}");
+            assert!(asked.is_empty(), "{asked:?}");
+        }
     }
 
     #[test]
@@ -1158,6 +1490,25 @@ mod tests {
             (16, 2.0, 50)
         );
         assert_eq!((DEBRIS_LIFE_MIN, DEBRIS_LIFE_MAX), (15, 45));
+    }
+
+    #[test]
+    fn a_destroyed_ship_scatters_no_debris_when_the_scene_draws_none() {
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        let scene = Scene {
+            debris: false,
+            ..scene()
+        };
+        effects.apply(
+            &destroyed(Some(blast(130, false)), 57.0),
+            &scene,
+            &looks(),
+            &mut chance,
+        );
+        assert_eq!(effects.explosions().len(), 1, "its Explode2 still");
+        assert_eq!(effects.particles(), []);
+        assert!(chance.asked.is_empty(), "{:?}", chance.asked);
     }
 
     #[test]

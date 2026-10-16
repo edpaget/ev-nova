@@ -14,36 +14,30 @@
 //!   ([`DAMAGE_PER_TON`] @0xdd598, [`DAMAGE_BASE`] @0xdd5a0, in doubles,
 //!   `cvttsd2si` 0x2d96f), the same to shields and armour, with no
 //!   falloff. It is taken as any hit that does not pass shields
-//!   ([`damage::apply`](super::damage::apply), `_DamageShip`'s plain
-//!   path @0x3ac00).
+//!   (`_DamageShip`'s plain path @0x3ac00).
 //! - **It never destroys** (arg +0x28, @0x3ac3a-0x3ac64) **and never
-//!   newly disables** (arg +0x2c, @0x3acc2-0x3ad4a): it is a spared hit
-//!   ([`damage::apply_spared`], whose module docs give the floors), a
-//!   ship in any condition but intact counting as disabled before it.
+//!   newly disables** (arg +0x2c, @0x3acc2-0x3ad4a): a [`Hit`] with both
+//!   floors ([`damage::take`], whose module docs give them), a ship in
+//!   any condition but intact counting as disabled before it.
 //! - **A dying ship** was disabled before and has no armour above none,
 //!   so it takes the hit with neither floor.
-//! - **The push** ([`shove`], @0x3aa6e-0x3ab7f): a ship whose jump is not
-//!   under way (+0x50 at or below 0, @0x3aa7d), of a `Mass` above none and
-//!   not planet-type (@0x3aac2-0x3aad2) gains [`IMPACT`] / its `Mass` along
-//!   the bearing from the wreck to it (`_CalcInterceptAngle` @0x3aa9e,
-//!   [`aim::bearing`](super::aim::bearing)) through `_AdjustedAccel`
-//!   (@0x3ab14, [`launch_velocity`]) against its class's top speed (class
-//!   +0x40, the `shïp` `Speed` / 100). `_SpeedLimit` (@0x2af91) then
-//!   clamps each axis to its top speed. The player's 1.8 x cap while its
-//!   afterburner is on (0x3ab19-0x3ab68) is left to
-//!   `ship-handling-fidelity/phase-6-afterburner`.
+//! - **The push** is [`IMPACT`] from the wreck through `_DamageShip`'s
+//!   impact block ([`impact::push`](super::impact::push), @0x3aa6e-0x3ab7f),
+//!   with no direct-hit gate: a ship whose jump is not under way, of a
+//!   `Mass` above none and not planet-type, gains [`IMPACT`] / its `Mass`
+//!   along the whole-degree bearing from the wreck to it
+//!   (`_CalcInterceptAngle` @0x3aa9e), soft-capped at its class's top
+//!   speed and clamped on each axis to its top speed. An escape pod is
+//!   pushed no more than it is hit: `_DamageShip`'s early-out returns
+//!   before the push.
 //!
 //! The hit is no attack of the wreck's (arg +0x20 is 0): nothing answers
-//! it (see [`Strike::provokes`](super::Strike::provokes)). It makes no
+//! it (see [`Strike::direct`](super::Strike::direct)). It makes no
 //! sound of its own.
 
-use super::aim;
 pub use super::damage::SPARED_ARMOR;
 use super::damage::{self, Hit};
 use super::hull::{Condition, DisableRule, HullSpec};
-use crate::bay::launch_velocity;
-use crate::flight::ShipState;
-use crate::geometry::Vec2;
 use crate::reserves::Reserves;
 
 /// The shockwave's damage per ton of the wreck (the double @0xdd598).
@@ -81,38 +75,10 @@ pub fn hit(
         mass: damage,
         energy: damage,
         passes_shields: false,
+        cant_kill: true,
+        cant_disable: true,
     };
-    damage::apply_spared(reserves, hit, hull, rule, condition != Condition::Intact);
-}
-
-/// The velocity a shockwave centred on `centre` leaves a ship of `hull`
-/// in `state`, of class speed `class_speed` and top speed `top_speed`;
-/// none when it is not pushed: while its jump is under way (`jumping`),
-/// or for a massless or planet-type hull.
-#[must_use]
-pub fn shove(
-    state: &ShipState,
-    centre: Vec2,
-    hull: &HullSpec,
-    jumping: bool,
-    class_speed: f32,
-    top_speed: f32,
-) -> Option<Vec2> {
-    if jumping || hull.mass <= 0.0 || hull.planet_type {
-        return None;
-    }
-    let heading = aim::bearing(centre, state.position);
-    let pushed = launch_velocity(state.velocity, heading, IMPACT / hull.mass, class_speed);
-    Some(speed_limit(pushed, top_speed))
-}
-
-/// `velocity` with each axis clamped to `top_speed` either way
-/// (`_SpeedLimit` @0x2af91).
-pub(crate) fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
-    // Down to the top speed first, then up to its negative, as the
-    // original tests them; `f32::clamp` would panic on a negative one.
-    let clamp = |axis: f32| axis.min(top_speed).max(-top_speed);
-    Vec2::new(clamp(velocity.x), clamp(velocity.y))
+    damage::take(reserves, hit, hull, rule, condition != Condition::Intact);
 }
 
 #[cfg(test)]
@@ -120,6 +86,8 @@ pub(crate) fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
 mod tests {
     use super::*;
     use crate::combat::hull::NovaDisable;
+    use crate::combat::impact::{Body, push};
+    use crate::geometry::Vec2;
     use crate::reserves::Gauge;
 
     fn of_mass(mass: f32) -> HullSpec {
@@ -300,87 +268,26 @@ mod tests {
         );
     }
 
-    fn at_rest(x: f32, y: f32) -> ShipState {
-        ShipState {
-            position: Vec2::new(x, y),
-            velocity: Vec2::ZERO,
-            heading: 0.0,
-        }
-    }
-
-    fn near(a: Vec2, b: Vec2) -> bool {
-        (a - b).length() < 1e-4
-    }
-
     #[test]
     fn a_mass_200_ship_at_rest_is_shoved_3_75_away_from_the_wreck() {
-        let hull = of_mass(200.0);
-        let right = shove(&at_rest(40.0, 0.0), Vec2::ZERO, &hull, false, 10.0, 10.0);
+        let ship = |x: f32, y: f32| Body {
+            position: Vec2::new(x, y),
+            mass: 200.0,
+            class_speed: 10.0,
+            top_speed: 10.0,
+            ..Body::default()
+        };
+        let right = push(&ship(40.0, 0.0), Vec2::ZERO, IMPACT, None);
         assert!(
             near(right.expect("pushed"), Vec2::new(3.75, 0.0)),
             "{right:?}"
         );
-        let up = shove(
-            &at_rest(5.0, -60.0),
-            Vec2::new(5.0, 0.0),
-            &hull,
-            false,
-            10.0,
-            10.0,
-        );
+        let up = push(&ship(5.0, -60.0), Vec2::new(5.0, 0.0), IMPACT, None);
         assert!(near(up.expect("pushed"), Vec2::new(0.0, -3.75)), "{up:?}");
         assert_eq!(IMPACT, 750.0);
     }
 
-    #[test]
-    fn a_planet_type_massless_or_jumping_target_is_not_shoved() {
-        let state = at_rest(40.0, 0.0);
-        let planet = HullSpec {
-            planet_type: true,
-            ..of_mass(200.0)
-        };
-        assert_eq!(shove(&state, Vec2::ZERO, &planet, false, 10.0, 10.0), None);
-        assert_eq!(
-            shove(&state, Vec2::ZERO, &of_mass(0.0), false, 10.0, 10.0),
-            None
-        );
-        assert_eq!(
-            shove(&state, Vec2::ZERO, &of_mass(200.0), true, 10.0, 10.0),
-            None
-        );
-    }
-
-    #[test]
-    fn the_shove_is_capped_at_the_class_speed_and_clamped_per_axis_to_top_speed() {
-        let hull = of_mass(100.0);
-        // 7.5 a tick to the right: none past the class speed of 5.
-        let moving = ShipState {
-            velocity: Vec2::new(6.0, 0.0),
-            ..at_rest(40.0, 0.0)
-        };
-        let capped = shove(&moving, Vec2::ZERO, &hull, false, 5.0, 10.0);
-        assert!(
-            near(capped.expect("pushed"), Vec2::new(6.0, 0.0)),
-            "already past the class speed: {capped:?}"
-        );
-        let slow = ShipState {
-            velocity: Vec2::new(4.0, 0.0),
-            ..moving
-        };
-        let pushed = shove(&slow, Vec2::ZERO, &hull, false, 5.0, 10.0);
-        assert!(
-            near(pushed.expect("pushed"), Vec2::new(10.0, 0.0)),
-            "11.5, clamped to 10: {pushed:?}"
-        );
-        // Each axis clamped on its own to the top speed, either way.
-        let fast = ShipState {
-            velocity: Vec2::new(-20.0, 9.0),
-            ..slow
-        };
-        let clamped = shove(&fast, Vec2::ZERO, &hull, false, 20.0, 8.0);
-        assert!(
-            near(clamped.expect("pushed"), Vec2::new(-8.0, 8.0)),
-            "{clamped:?}"
-        );
+    fn near(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-4
     }
 }
