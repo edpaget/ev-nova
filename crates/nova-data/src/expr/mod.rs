@@ -129,8 +129,9 @@
 //! module keeps such an operator as [`SetOp::OutOfRange`], its number in
 //! full (the original's 16-bit wrap is not kept), and leaves the sim to
 //! decide what it does. A bit above 9999 is out of range too (the bit
-//! checks are signed). `P`, `T` and `Q` are not checked, and a number past
-//! 32767 for them is rejected. A missing number is rejected (the original
+//! checks are signed). `P`, `T` and `Q` are not checked; a number past
+//! 32767 for them names no resource, and is kept as [`SetOp::OutOfRange`]
+//! in full too. A missing number is rejected (the original
 //! reads it as 0).
 //!
 //! `!` and `^` record their own pending operator, which a following `b`

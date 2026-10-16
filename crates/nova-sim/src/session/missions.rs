@@ -1956,6 +1956,33 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_a_landed_move_to_a_missing_system_only_empties_the_offers() {
+        let catalog = offering();
+        for (reading, emptied) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            for text in ["M1500", "N1500"] {
+                let mut session = landed(&catalog, &mut NeverFires).with_rules(
+                    crate::Rulebook::default()
+                        .with_override(crate::RuleKey::MissingSystemMove, reading),
+                );
+                assert!(!session.mission_offers(Venue::Computer).is_empty());
+                session.run_set(&SetExpr::parse(text).expect("parses"), &mut NeverFires);
+                let _ = session.settle_script(&catalog, &mut NeverFires);
+                assert_eq!(session.system(), SystemId(130), "{reading:?} {text}");
+                assert_eq!(
+                    session.mission_offers(Venue::Computer).is_empty(),
+                    emptied,
+                    "{reading:?} {text}"
+                );
+                assert_eq!(
+                    session.offers.rolled_at(),
+                    Some(StellarId(128)),
+                    "{reading:?} {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_relocation_empties_the_offers_and_forgets_their_stellar() {
         let catalog = offering();
         let mut session = landed(&catalog, &mut NeverFires);

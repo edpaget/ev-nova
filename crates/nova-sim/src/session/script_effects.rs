@@ -41,8 +41,10 @@
 //! session starts (see the `nav` module), so a dialog's redraw after the
 //! script shows it. [`Session::settle_script`] applies the moves in order at a safe
 //! point, which whoever runs set expressions calls after each input and
-//! tick, before saving; a move to a system that does not exist changes
-//! nothing (the original indexes it blindly). Each move makes a save
+//! tick, before saving; a move to a system in range that does not exist
+//! runs the move's tail with no move, as an `N` out of range does below,
+//! by [`ScriptEffectRules::missing_system_move`]'s engine reading, and
+//! does nothing by the other. Each move makes a save
 //! due. In flight a move gives up a jump being prepared.
 //!
 //! [`Session::run_set`] stays catalog-free, so a script it runs in the
@@ -123,6 +125,17 @@
 //! [`ScriptEffectRules::arrival`] says, as it moves nowhere. It queues
 //! and settles as a move does. By the other reading it does nothing, as
 //! every other operator out of range does (see the `control` module).
+//!
+//! **An `M` or `N` to a system with no `sÿst`** (in range) runs that same
+//! tail, by [`ScriptEffectRules::missing_system_move`]'s engine reading:
+//! neither operator checks that the system exists (@0x15723, @0x158ea),
+//! and both tails branch only on the landed flag (@0x157fb-0x158d4,
+//! @0x1593f-0x159ad). The original moves the player into the system
+//! table's blank row first; a session holds no pilot in a system with no
+//! record, so here the move itself, `M`'s placement on that row's unset
+//! nav slots, `N`'s take-off hold and the escorts' move are left out, and
+//! the ship, the pilot's stellar and the escorts stay as they are. By the
+//! other reading the move does nothing.
 //!
 //! **`Qxxx`** draws its message when it runs, from
 //! the session's string lists ([`Session::with_strings`]; none by
@@ -236,13 +249,17 @@ pub struct ScriptEffectRules {
     /// Whether an `N` out of range runs the move's tail
     /// ([`RuleKey::OutOfRangeMove`]).
     pub out_of_range_move: RuleSource,
+    /// Whether an `M` or `N` to a system with no record runs the move's
+    /// tail ([`RuleKey::MissingSystemMove`]).
+    pub missing_system_move: RuleSource,
 }
 
 impl ScriptEffectRules {
     /// The rules `rulebook` chooses: its [`RuleKey::MoveStarless`],
     /// [`RuleKey::MoveArrival`], [`RuleKey::MoveKeepFlag`],
-    /// [`RuleKey::BlankLeave`], [`RuleKey::ScriptSound`] and
-    /// [`RuleKey::OutOfRangeMove`] entries.
+    /// [`RuleKey::BlankLeave`], [`RuleKey::ScriptSound`],
+    /// [`RuleKey::OutOfRangeMove`] and [`RuleKey::MissingSystemMove`]
+    /// entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -252,6 +269,7 @@ impl ScriptEffectRules {
             blank_leave: rulebook.source_for(RuleKey::BlankLeave),
             sound: rulebook.source_for(RuleKey::ScriptSound),
             out_of_range_move: rulebook.source_for(RuleKey::OutOfRangeMove),
+            missing_system_move: rulebook.source_for(RuleKey::MissingSystemMove),
         }
     }
 }
@@ -264,7 +282,9 @@ pub(super) enum ScriptMove {
     /// `N`: to the system, keeping the position.
     KeepPosition(SystemId),
     /// An `N` out of range, by [`ScriptEffectRules::out_of_range_move`]'s
-    /// engine reading: the move's tail with no move.
+    /// engine reading: the move's tail with no move. A move to a system
+    /// with no record settles as this too, by
+    /// [`ScriptEffectRules::missing_system_move`]'s engine reading.
     Stay,
 }
 
@@ -382,6 +402,8 @@ impl Session {
             if catalog.system_exists(system) {
                 self.move_to(system, keep, catalog, chance);
                 settled.moved = Some(self.pilot.system);
+            } else if self.script_effect_rules().missing_system_move == RuleSource::Engine {
+                self.stay(catalog, chance);
             }
         }
     }
@@ -512,13 +534,37 @@ impl Session {
                 Some(slot) => self.mission_text(slot, &text),
                 None => text,
             });
-        self.queued.leave = picked.or_else(|| {
-            (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
-        });
+        self.queued.leave = picked.or_else(|| self.blank_leave());
     }
 
-    /// An `N` out of range: the move's tail, with no move (see the module
-    /// docs). Landed, the offers are emptied and nothing else changes;
+    /// A blank `Q`'s leave: none, cancelling an earlier `Q`, or one with
+    /// no message by [`ScriptEffectRules::blank_leave`]'s Bible reading.
+    fn blank_leave(&self) -> Option<String> {
+        (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
+    }
+
+    /// A `Q` whose list is past 32767, the engine's widest ID, so names
+    /// none: a blank `Q`, as `_GetRandomIndString` (@0x72ef7) leaves
+    /// `_absquatulateStr` empty for a missing list (@0x72f0f).
+    pub(super) fn leave_on_no_list(&mut self) {
+        self.queued.leave = self.blank_leave();
+    }
+
+    /// A `P` whose sound is past 32767, the engine's widest ID, so names
+    /// none. By [`ScriptEffectRules::sound`]'s engine reading it replaces
+    /// a held sound with none, as `_missionSoundID` is overwritten
+    /// (@0x15a30) and `_PlayGame` plays nothing for a sound that does not
+    /// load (`_ST_LoadSndResource` @0x4631b-0x46348); by the other, there
+    /// is nothing to sound.
+    pub(super) fn drop_script_sound(&mut self) {
+        if self.script_effect_rules().sound == RuleSource::Engine {
+            self.queued.sound = None;
+        }
+    }
+
+    /// An `N` out of range, or by [`ScriptEffectRules::missing_system_move`]'s
+    /// engine reading an `M` or `N` to a system with no record: the
+    /// move's tail, with no move (see the module docs). Landed, the offers are emptied and nothing else changes;
     /// in flight, the player's own system is entered again, the ship kept
     /// as it is, as a move within the system that is never an arrival
     /// ([`Entry::ScriptStay`]). It moves nowhere, so `settled.moved` is
@@ -771,6 +817,7 @@ mod tests {
             blank_leave: RuleSource::Engine,
             sound: RuleSource::Engine,
             out_of_range_move: RuleSource::Engine,
+            missing_system_move: RuleSource::Engine,
         };
         assert_eq!(ScriptEffectRules::default(), engine);
         assert_eq!(
@@ -824,6 +871,13 @@ mod tests {
                 ..engine
             }
         );
+        assert_eq!(
+            bible(RuleKey::MissingSystemMove),
+            ScriptEffectRules {
+                missing_system_move: RuleSource::Bible,
+                ..engine
+            }
+        );
     }
 
     // Through run_set.
@@ -853,16 +907,24 @@ mod tests {
         assert_eq!(ids(&session.sites), [150, 151]);
     }
 
+    /// The rules with `MissingSystemMove` read as `reading`.
+    fn missing_system(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::MissingSystemMove, reading)
+    }
+
     #[test]
-    fn a_move_to_a_system_that_is_not_there_changes_nothing() {
+    fn by_the_other_reading_a_move_to_a_missing_system_does_nothing() {
         let catalog = moving();
-        let mut session = flying(&catalog);
-        let _ = settle(&mut session, &catalog);
-        let before = session.clone();
-        run(&mut session, "M150 N999");
-        assert_eq!(settle(&mut session, &catalog), Settled::default());
-        assert_eq!(session, before);
-        assert!(!session.take_save_due());
+        for start in [flying, landed] {
+            let mut session = start(&catalog).with_rules(missing_system(RuleSource::Bible));
+            let _ = settle(&mut session, &catalog);
+            session.take_events();
+            let before = session.clone();
+            run(&mut session, "M150 N999");
+            assert_eq!(settle(&mut session, &catalog), Settled::default());
+            assert_eq!(session, before);
+            assert!(!session.take_save_due());
+        }
     }
 
     // In flight.
@@ -1569,6 +1631,24 @@ mod tests {
         assert_eq!(session.take_sounds(), [], "nothing held");
     }
 
+    #[test]
+    fn a_p_past_32767_drops_the_held_sound_by_the_engine() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.take_sounds();
+        run(&mut session, "P200 P40000");
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [], "names no sound");
+        let rules = Rulebook::default().with_override(RuleKey::ScriptSound, RuleSource::Bible);
+        let mut session = flying(&catalog).with_rules(rules);
+        session.take_sounds();
+        run(&mut session, "P200 P40000");
+        assert_eq!(session.take_sounds(), [mission_sound(200, false)]);
+        run(&mut session, "P40000");
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [], "the Bible: nothing to sound");
+    }
+
     // Q.
 
     /// String lists by ID.
@@ -1811,6 +1891,27 @@ mod tests {
     }
 
     #[test]
+    fn a_q_past_32767_is_a_blank_q() {
+        let catalog = moving();
+        for (reading, due) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let rules = Rulebook::default().with_override(RuleKey::BlankLeave, reading);
+            let mut session = told(landed(&catalog)).with_rules(rules);
+            assert_eq!(run_rolling(&mut session, "Q25048 Q40000", &[0]), [3]);
+            let _ = settle(&mut session, &catalog);
+            assert_eq!(session.leave_due(), due, "{reading:?}");
+            if due {
+                assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
+                assert_eq!(session.take_leave_message(), None, "{reading:?}");
+            }
+            let mut session = told(flying(&catalog)).with_rules(rules);
+            session.take_sounds();
+            run_rolling(&mut session, "Q25048 Q40000", &[0]);
+            assert_eq!(settle(&mut session, &catalog), Settled::default());
+            assert_eq!(session.take_sounds(), [], "{reading:?}: no message");
+        }
+    }
+
+    #[test]
     fn a_q_take_off_with_a_message_neither_greets_nor_moves_the_tutorial() {
         let catalog = moving();
         for tutorial in [Tutorial::SEASONED, Tutorial::NEW_PILOT] {
@@ -1958,6 +2059,66 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_a_move_to_a_missing_system_in_flight_enters_the_system_again_where_it_is() {
+        let catalog = moving();
+        for text in ["M150", "N999"] {
+            let mut session = flying(&catalog);
+            session.pilot.stellar = Some(StellarId(129));
+            session.hold_fire(true, false);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            assert_eq!(session.shots().len(), 1, "{text}");
+            session.player.position = Vec2::new(10.0, 10.0);
+            session.player.velocity = Vec2::new(5.0, -1.0);
+            session.stage_scene(NpcId(0));
+            session.take_events();
+            session.drop_raised();
+            run(&mut session, text);
+            let mut settled = Settled::default();
+            session.settle_moves(&catalog, &mut NeverFires, &mut settled);
+            session.assert_docked_among_shown();
+            assert_eq!(
+                session.story_raised(),
+                [crate::story::StoryEvent::EnteredSystem {
+                    system: SystemId(130),
+                    how: crate::story::Entrance::ScriptMove { landed: false },
+                }],
+                "{text}"
+            );
+            assert_eq!(settled.moved, None, "{text}: moved nowhere");
+            assert_eq!(session.system(), SystemId(130), "{text}");
+            assert_eq!(session.player().position, Vec2::new(10.0, 10.0), "{text}");
+            assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0), "{text}");
+            assert!(!session.hold_position, "{text}: no take-off hold");
+            assert_eq!(session.pilot().stellar, Some(StellarId(129)), "{text}");
+            assert_eq!(session.shots(), [], "{text}");
+            session.assert_scene_left(text);
+            assert_eq!(
+                session.take_events(),
+                [SessionEvent::SystemChanged],
+                "{text}"
+            );
+            assert!(session.take_save_due(), "{text}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_landed_move_to_a_missing_system_changes_only_the_offers() {
+        let catalog = moving();
+        for text in ["M1500", "N1500"] {
+            let mut session = landed(&catalog);
+            let _ = settle(&mut session, &catalog);
+            session.take_events();
+            let raised = stayed(&mut session, &catalog, text);
+            assert_eq!(raised, [], "{text}: no enter-system hook");
+            assert_eq!(session.system(), SystemId(130), "{text}");
+            assert_eq!(session.landed(), Some(StellarId(128)), "{text}");
+            assert_eq!(session.pilot().stellar, Some(StellarId(128)), "{text}");
+            assert_eq!(session.take_events(), [], "{text}");
+            assert!(!session.hold_position, "{text}");
+        }
+    }
+
+    #[test]
     fn as_an_arrival_an_out_of_range_n_in_flight_is_still_no_arrival() {
         let catalog = moving();
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
@@ -2040,7 +2201,18 @@ mod tests {
         }
         let mut session = flying(&catalog);
         moved(&mut session, &catalog, "M999");
-        assert_eq!(session.take_events(), [], "no such system");
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged],
+            "no such system: entered again by the engine"
+        );
+        let mut session = flying(&catalog).with_rules(missing_system(RuleSource::Bible));
+        moved(&mut session, &catalog, "M999");
+        assert_eq!(
+            session.take_events(),
+            [],
+            "no such system: the other reading"
+        );
     }
 
     #[test]

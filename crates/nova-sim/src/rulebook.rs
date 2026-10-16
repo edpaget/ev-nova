@@ -68,6 +68,7 @@
 //! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the player leaves all the same, with no message |
 //! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
 //! | [`OutOfRangeMove`](RuleKey::OutOfRangeMove) | `out_of_range_move` | an `N` whose system is out of range (128-2175) runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x158e3, @0x1593f-0x159ad; [`ScriptEffectRules`](crate::ScriptEffectRules)) | it does nothing, as every other operator out of range does\* |
+//! | [`MissingSystemMove`](RuleKey::MissingSystemMove) | `missing_system_move` | an `M` or `N` to a system 128-2175 with no `sÿst` runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x15723, @0x158ea, @0x1593f-0x159ad; [`ScriptEffectRules`](crate::ScriptEffectRules)) | it does nothing\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
 //! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, the fleet's holds less the goods and the mission cargo aboard (`_TotalCargo` @0x4a0b), measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b, @0x70863-0x70888; [`Session`](crate::Session)) | tribbles goods grow only into that free space, and perishable goods always decay‡ |
 //! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
@@ -191,7 +192,8 @@
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `ship_change_bay_ammo`,
 //! `ship_change_default_weapons`, `ship_change_negative_stock`, `move_arrival`,
-//! `move_keep_flag`, `script_sound`, `out_of_range_move`, `ship_info_rounding`,
+//! `move_keep_flag`, `script_sound`, `out_of_range_move`, `missing_system_move`,
+//! `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
@@ -1023,6 +1025,17 @@ rule_keys! {
     /// reading is the intended behaviour, not anything the Bible says
     /// (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
     OutOfRangeMove => "out_of_range_move",
+    /// What an `M` or `N` set operator to a system in range (128-2175)
+    /// with no `sÿst` does: by the engine, the move's tail with no move,
+    /// as `_EvalSetExp` never checks that the system exists (`M`
+    /// @0x15723, `N` @0x158ea) and runs the tail whatever it finds
+    /// (@0x157fb-0x158d4, @0x1593f-0x159ad): landed, the offers are
+    /// emptied; in flight, the scene is reset and the system entered again
+    /// where the ship is. The move itself, into a row with no record, is
+    /// left out. Otherwise it does nothing. The Bible is silent here, so
+    /// the other reading is the intended behaviour, not anything the Bible
+    /// says (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    MissingSystemMove => "missing_system_move",
     /// How a `BuyRandom` outside 1-100 reads: by the engine, an outfit's
     /// below 1 is never for sale and a ship's below 0 always, as the
     /// original's loader clamps them (`_LoadObjectData` @0x78b8d,
@@ -3842,6 +3855,15 @@ mod tests {
             Some(RuleKey::OutOfRangeMove)
         );
         assert_eq!(RuleKey::OutOfRangeMove.default_source(), RuleSource::Engine);
+        assert_eq!(RuleKey::MissingSystemMove.key(), "missing_system_move");
+        assert_eq!(
+            RuleKey::from_key("missing_system_move"),
+            Some(RuleKey::MissingSystemMove)
+        );
+        assert_eq!(
+            RuleKey::MissingSystemMove.default_source(),
+            RuleSource::Engine
+        );
         assert_eq!(
             RuleKey::ShipChangePersistence.key(),
             "ship_change_persistence"
@@ -4031,6 +4053,7 @@ mod tests {
                 RuleKey::BlankLeave,
                 RuleKey::ScriptSound,
                 RuleKey::OutOfRangeMove,
+                RuleKey::MissingSystemMove,
                 RuleKey::BuyRandom,
                 RuleKey::JunkFlags,
                 RuleKey::LauncherSale,

@@ -2046,6 +2046,14 @@ mod tests {
     }
 
     #[test]
+    fn a_t_past_32767_renames_nothing_and_the_rest_runs() {
+        let mut session = named(lists());
+        assert_eq!(rename(&mut session, "T40000 b7", &[0]), Vec::<u16>::new());
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"));
+        assert!(session.pilot().control_bit(Bit::new(7).expect("a bit")));
+    }
+
+    #[test]
     fn a_renamed_ship_survives_a_save() {
         let mut session = named(lists());
         rename(&mut session, "T25040 T25040", &[0, 0]);

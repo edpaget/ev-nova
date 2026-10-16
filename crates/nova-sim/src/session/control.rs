@@ -206,12 +206,27 @@ impl Session {
     /// a stay by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
     /// and does nothing by the other.
     ///
+    /// `P`, `T` and `Q` have no check, and a number past 32767, the
+    /// engine's widest ID, names no resource, so each does what the
+    /// original does with a missing one: `T` nothing (an empty pick
+    /// skips, @0x15b47); `Q` a blank `Q` (`_GetRandomIndString` @0x72f0f
+    /// leaves the message empty, @0x15c02); `P` a sound that does not
+    /// load, which by [`ScriptEffectRules::sound`]'s engine reading
+    /// replaces a held one with none (@0x15a30; `_PlayGame`
+    /// @0x4631b-0x46348).
+    ///
     /// [`ScriptEffectRules::out_of_range_move`]: crate::ScriptEffectRules::out_of_range_move
+    /// [`ScriptEffectRules::sound`]: crate::ScriptEffectRules::sound
     fn out_of_range(&mut self, op: SetOpKind) {
-        if op == SetOpKind::MoveKeepPosition
-            && self.script_effect_rules().out_of_range_move == RuleSource::Engine
-        {
-            self.queued.moves.push(ScriptMove::Stay);
+        match op {
+            SetOpKind::MoveKeepPosition
+                if self.script_effect_rules().out_of_range_move == RuleSource::Engine =>
+            {
+                self.queued.moves.push(ScriptMove::Stay);
+            }
+            SetOpKind::PlaySound => self.drop_script_sound(),
+            SetOpKind::LeaveStellar => self.leave_on_no_list(),
+            _ => {}
         }
     }
 

@@ -81,8 +81,9 @@ pub enum SetOp {
     /// reads it, and only that operator is skipped: the scan goes on to
     /// the next (@0x15873). Every checked operator skips this way but `N`,
     /// whose check (@0x158e3) jumps to the move's tail (@0x1593f) instead.
-    /// `P`, `T` and `Q` have no check; a missing number is still an
-    /// error.
+    /// `P`, `T` and `Q` have no check; a number past 32767, the engine's
+    /// widest ID, names no resource and is kept here too. A missing number
+    /// is still an error.
     OutOfRange {
         /// Which operator it is: never `Random` or `OutOfRange`.
         op: SetOpKind,
@@ -271,7 +272,8 @@ const SHIPS: RangeInclusive<u16> = 128..=895;
 const SYSTEMS: RangeInclusive<u16> = 128..=2175;
 /// Rank IDs the original acts on.
 const RANKS: RangeInclusive<u16> = 128..=255;
-/// Any ID: the original passes sound and `STR#` IDs on unchecked.
+/// Any ID: the original passes sound and `STR#` IDs on unchecked. A number
+/// past it names no resource and reads as [`SetOp::OutOfRange`].
 const ANY: RangeInclusive<u16> = 0..=MAX_NUMBER;
 
 /// The set operator letters, `B` among them (`!b`, `^b` and `R` are read
@@ -349,12 +351,12 @@ fn op(cursor: &mut Cursor<'_>) -> Result<SetOp, ParseError> {
     }
 }
 
-/// The kind of the operator `letter` reads, when the original checks its
-/// number's range (see [`SetOp::OutOfRange`]).
+/// The kind of operator `letter` reads, whose number can be out of range:
+/// past the original's check, or, for `P`, `T` and `Q`, past the engine's
+/// 16-bit IDs (see [`SetOp::OutOfRange`]).
 fn checked(letter: u8) -> Option<SetOpKind> {
     letter_spec(letter)
         .and_then(|spec| spec.range.map(|range| (spec.build, range)))
-        .filter(|(_, range)| *range != ANY)
         .map(|(build, range)| build(*range.start()).kind())
 }
 
@@ -447,10 +449,6 @@ mod tests {
         SetOp::Random(Box::new(a), Box::new(b))
     }
 
-    fn range(value: u32, min: u16, max: u16) -> ParseErrorKind {
-        K::NumberOutOfRange { value, min, max }
-    }
-
     #[test]
     fn a_blank_set_does_nothing() {
         assert_eq!(parse(""), []);
@@ -502,6 +500,20 @@ mod tests {
     }
 
     #[test]
+    fn p_t_and_q_past_32767_are_kept_out_of_range_in_full() {
+        assert_eq!(parse("P32768"), [out(SetOpKind::PlaySound, 32768)]);
+        assert_eq!(parse("t40000"), [out(SetOpKind::RenameShip, 40000)]);
+        assert_eq!(
+            parse("Q99999999999"),
+            [out(SetOpKind::LeaveStellar, u32::MAX)]
+        );
+        assert_eq!(
+            parse("Q40000 b7"),
+            [out(SetOpKind::LeaveStellar, 40000), SetOp::Set(b(7))]
+        );
+    }
+
+    #[test]
     fn the_operators_after_an_out_of_range_one_still_parse() {
         assert_eq!(
             parse("N9999 b5 M200"),
@@ -530,6 +542,10 @@ mod tests {
         assert_eq!(
             parse("R(b1 !b20000)"),
             [random(SetOp::Set(b(1)), out(SetOpKind::Clear, 20000))]
+        );
+        assert_eq!(
+            parse("R(P40000 b7)"),
+            [random(out(SetOpKind::PlaySound, 40000), SetOp::Set(b(7)))]
         );
     }
 
@@ -599,15 +615,6 @@ mod tests {
                 "{letter}{max}"
             );
             let past = u32::from(max) + 1;
-            if max == 32767 {
-                // `P`, `T` and `Q` have no range check: the engine's IDs
-                // stop there.
-                assert_eq!(
-                    fails(&format!("{letter}{past}")),
-                    err(1, range(past, min, max))
-                );
-                continue;
-            }
             let out = |value| [SetOp::OutOfRange { op: kind, value }];
             assert_eq!(parse(&format!("{letter}{past}")), out(past), "{letter}");
             assert_eq!(parse(&format!("{lower}{past}")), out(past), "{lower}");
