@@ -12218,6 +12218,56 @@ mod tests {
     }
 
     #[test]
+    fn under_the_caps_a_shot_ended_last_tick_holds_its_slot_from_the_players_point_defence() {
+        let ending = WeaponSpec::new(&WeaponRecord {
+            count: 1,
+            speed: 0,
+            ..weapon(141)
+        });
+        let far = ShipState {
+            position: Vec2::new(-50_000.0, 0.0),
+            ..ShipState::default()
+        };
+        for defender in [ShipRef::Player, A] {
+            for capped in [false, true] {
+                let mut combat = crowded(MAX_SHOTS - 2, capped);
+                combat.shots.push(Shot::launch(ending, C, C, &far, 0.0));
+                let mut ships = missile_attack(quad());
+                ships[0].id = defender;
+                ships[0].fleet = defender;
+                ships[1].target = Some(defender);
+                // It ends this tick, nothing firing.
+                let (defending, attacking) = (ships[0].trigger, ships[1].trigger);
+                ships[0].trigger = Trigger {
+                    point_defence: false,
+                    ..QUIET
+                };
+                ships[1].trigger = Trigger {
+                    primary: false,
+                    ..attacking
+                };
+                tick(&mut combat, &mut ships, &NovaDisable);
+                assert_eq!(combat.shots().len(), MAX_SHOTS - 2, "ended");
+                combat.take_events();
+                // The missile takes the 127th slot: the player's point
+                // defence finds the ended shot still holding the 128th; an
+                // NPC's finds it free.
+                ships[0].trigger = defending;
+                ships[1].trigger = attacking;
+                tick(&mut combat, &mut ships, &NovaDisable);
+                let missiles = combat.shots().iter().filter(|shot| shot.firer == B);
+                assert_eq!(missiles.count(), 1, "{defender:?} {capped}: incoming");
+                let pd = sounds(&combat.take_events())
+                    .into_iter()
+                    .filter(|&(weapon, _)| weapon == WeaponId(133))
+                    .count();
+                let held = capped && defender == ShipRef::Player;
+                assert_eq!(pd, usize::from(!held), "{defender:?} {capped}");
+            }
+        }
+    }
+
+    #[test]
     fn under_the_caps_a_beam_ended_last_tick_holds_its_slot_through_the_next_firing() {
         let short = WeaponSpec::new(&WeaponRecord {
             count: 0,
