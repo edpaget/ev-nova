@@ -6,8 +6,8 @@
 //! Pilot asks for a name in "Create a new pilot:" (the interface file's,
 //! or a built-in one), refusing a name already saved, then creates the
 //! pilot from the first `chär`, saves it and flies it. Open Pilot lists
-//! the saved pilots and flies the one chosen, from the spaceport of the
-//! stellar it last landed on when it is docked. A pilot whose load had to
+//! the saved pilots and flies the one chosen, in space over the stellar
+//! it last landed on, with no spaceport opened. A pilot whose load had to
 //! fall back for data the save references and the game data lacks
 //! ([`nova_sim::Session::load`], under the router's rules) is flown only
 //! once the note `STR#` 140 #52 over the menu is dismissed; its flight,
@@ -1809,8 +1809,8 @@ impl AppScreen {
     }
 
     /// Flies `pilot`, from the main menu, in place of any flight; Escape
-    /// goes back to the menu. A pilot docked at a stellar resumes in its
-    /// spaceport.
+    /// goes back to the menu. A pilot last landed on a stellar resumes in
+    /// flight over it ([`FlightView::with_pilot`]).
     fn start_flight(&mut self, pilot: Pilot) {
         self.build_flight(pilot, false);
         self.enter_built_flight();
@@ -1835,14 +1835,11 @@ impl AppScreen {
     }
 
     /// Shows the flight just built, from the main menu, which Escape goes
-    /// back to: its spaceport when the pilot resumed docked.
+    /// back to: in space, as `_EnterGameFromMainScreen` and `_PlayGame`
+    /// land nothing.
     fn enter_built_flight(&mut self) {
-        let landing = self.flight.as_mut().and_then(FlightView::take_landing);
         self.return_to = Side::MainMenu;
         self.switch_to(Side::Flight);
-        if let Some(stellar) = landing {
-            self.show_spaceport(stellar);
-        }
     }
 
     /// Puts the pilot away and shows `side`: saves it (unless it may not
@@ -6713,6 +6710,7 @@ pub(super) mod tests {
         create(&mut screen, "Ada");
         land_twice(&mut screen);
         let landed = pilot(&screen).clone();
+        let docked_at = ship(&screen).position;
         assert_eq!(landed.stellar(), Some(nova_sim::StellarId(128)));
         assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
         let mut screen = menu(&store);
@@ -6724,8 +6722,10 @@ pub(super) mod tests {
         assert_eq!(screen.pilot_list().expect("open").keys(), ["Ada"]);
         screen.take_sounds();
         screen.input(&key(Key::Enter, true));
-        assert_eq!(screen.showing(), Showing::Spaceport);
-        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(128));
+        assert_eq!(screen.showing(), Showing::Flight, "in space, no spaceport");
+        assert!(screen.spaceport.is_none());
+        assert!(undocked(&screen));
+        assert_eq!(ship(&screen).position, docked_at, "over its stellar");
         assert_eq!(*pilot(&screen), landed);
         assert!(screen.pilot_list().is_none());
         assert_eq!(screen.take_sounds(), [], "no landing sound");
@@ -6839,7 +6839,8 @@ pub(super) mod tests {
         assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
         let mut screen = menu_with_dialogs(&store);
         open_first(&mut screen);
-        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(undocked(&screen));
         assert!(screen.load_note().is_none());
         let store = MemoryPilots::new();
         let mut screen = menu_with_dialogs(&store);
@@ -6856,10 +6857,10 @@ pub(super) mod tests {
         let store = MemoryPilots::new();
         let mut screen = menu_with_dialogs(&store);
         create(&mut screen, "Ada");
-        assert_eq!(pilot(&screen).stellar(), None, "never landed");
         assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
         rewrite_save(&store, "Ada", |fields| {
             fields.insert("system".into(), 300.into());
+            fields.insert("stellar".into(), serde_json::Value::Null);
         });
         let mut screen = menu_with_dialogs(&store);
         open_first(&mut screen);
@@ -6947,7 +6948,7 @@ pub(super) mod tests {
         let mut screen = menu(&store).with_chance(last_outcome());
         choose(&mut screen, MenuChoice::OpenPilot);
         screen.input(&key(Key::Enter, true));
-        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(screen.showing(), Showing::Flight);
         assert_eq!(ship(&screen).heading, 359.0);
     }
 
@@ -8877,6 +8878,15 @@ pub(super) mod tests {
         (script, SharedChance::new(shared))
     }
 
+    /// The traffic's setup draws: the trader under a new pilot's ship at
+    /// (50, 50), where [`nova_sim::Session::begin`] puts it, facing up;
+    /// then the last outcomes.
+    fn under_a_new_pilot() -> SharedChance {
+        let script = Script([6, 6, 0, 0, 800, 800, 0, 0].into());
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(script));
+        SharedChance::new(shared)
+    }
+
     /// [`boarding_data_with`] no cash.
     fn boarding_data() -> Rc<GameData> {
         boarding_data_with(0)
@@ -9198,6 +9208,7 @@ pub(super) mod tests {
         let mut screen = boardable(
             with_dialogs(boarding_data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)),
         )
+        .with_chance(under_a_new_pilot())
         .with_boarding_rule(Rc::new(Sure));
         create(&mut screen, "Ada");
         board(&mut screen);

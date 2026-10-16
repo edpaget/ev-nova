@@ -104,15 +104,14 @@ fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
     }
 }
 
-/// A new stock pilot docked at Port Kane (`spöb` 137 in Kania, where it
-/// starts), through a save that says so.
+/// A new stock pilot, resumed over Port Kane (`spöb` 137 in Kania, where
+/// it starts) through a save that says so, and landed there.
 fn at_port_kane(data: &GameData) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(137);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    Session::fly(data, docked).expect("flies")
+    fly(data, &save)
 }
 
 /// Port Kane's Trade Center: its exchange in the 426 x 252 "Trade"
@@ -169,12 +168,12 @@ fn port_kanes_trade_center_lists_its_goods_in_the_trade_dialog() {
     }
 }
 
-/// A new stock pilot docked at Viking (`spöb` 157 in Tichel, `sÿst` 129).
+/// A new stock pilot landed at Viking (`spöb` 157 in Tichel, `sÿst` 129).
 fn at_viking(data: &GameData) -> Session {
     fly(data, &viking_save(data))
 }
 
-/// A new stock pilot's save, docked at Viking.
+/// A new stock pilot's save, last landed at Viking.
 fn viking_save(data: &GameData) -> serde_json::Value {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
@@ -184,10 +183,15 @@ fn viking_save(data: &GameData) -> serde_json::Value {
     save
 }
 
-/// A session flying the pilot of `save`.
+/// A session flying the pilot of `save`, landed on the stellar it
+/// resumed over.
 fn fly(data: &GameData, save: &serde_json::Value) -> Session {
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    Session::fly(data, docked).expect("flies")
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(data, saved).expect("flies");
+    let stellar = session.pilot().stellar().expect("resumed over a stellar");
+    let system = session.pilot().system();
+    session.land_at(data, system, stellar).expect("lands");
+    session
 }
 
 /// A chance that fires every roll and draws 0: every ship's `BuyRandom`

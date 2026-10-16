@@ -594,8 +594,9 @@ impl Game {
         self.session().pilot().clone()
     }
 
-    /// Opens the saved pilot from the main menu, which then shows
-    /// `showing`.
+    /// Opens the saved pilot from the main menu, which resumes it in
+    /// flight over the stellar it last landed on, and, for `showing` the
+    /// spaceport, lands there; then `showing` shows.
     fn open_pilot(&mut self, showing: Showing) {
         let at = self
             .app
@@ -608,6 +609,13 @@ impl Game {
         self.click(at);
         assert_eq!(self.showing(), Showing::OpenPilot);
         self.tap(Key::Enter);
+        assert_eq!(self.showing(), Showing::Flight, "resumed in flight");
+        if showing == Showing::Spaceport {
+            // L requests clearance, a second L lands.
+            self.tap(Key::Char('l'));
+            self.approach();
+            self.tap(Key::Char('l'));
+        }
         assert_eq!(self.showing(), showing);
     }
 

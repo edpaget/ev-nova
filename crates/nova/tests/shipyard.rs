@@ -227,11 +227,11 @@ fn system() -> Vec<u8> {
     bytes
 }
 
-/// Alpha Prime: a landable planet at the system's centre, whose
-/// landscape is `PICT` 10004, with a bar and a shipyard of tech level 1.
+/// Alpha Prime: a landable planet at (50, 50), where a new pilot's ship
+/// starts, whose landscape is `PICT` 10004, with a bar and a shipyard of tech level 1.
 fn stellar() -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
+    put_i16s(&mut bytes, 0x00, &[50, 50, 4]);
     bytes[0x06..0x0A].copy_from_slice(&0x0000_0049_u32.to_be_bytes());
     put_i16s(&mut bytes, 0x0C, &[1]);
     put_i16s(&mut bytes, 0x14, &[-1]);

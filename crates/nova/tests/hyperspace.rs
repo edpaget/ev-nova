@@ -617,7 +617,9 @@ impl Harness {
     fn steer(&mut self, out: bool) {
         let ship = self.ship();
         let outward = ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y;
-        let drifting_wrong = if out { outward < 0.0 } else { outward > 0.0 };
+        // A crawl, as a ship at rest off the centre can drift, isn't
+        // drifting wrong: Down would hold it there.
+        let drifting_wrong = if out { outward < -1e-3 } else { outward > 1e-3 };
         let facing = ship.position.length() == 0.0 || {
             let away = nova_sim::flight::heading_of(ship.position);
             let way = if out { away } else { away + 180.0 };

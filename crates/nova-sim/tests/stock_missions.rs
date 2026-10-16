@@ -28,8 +28,9 @@ use nova_sim::{
     RuleSource, Session, StellarId, SystemId, is_landable,
 };
 
-/// A new stock pilot docked at the first landable stellar of its system,
-/// through a save that says so, flown and settled with every roll 1.
+/// A new stock pilot resumed over the first landable stellar of its
+/// system through a save that says so, flown, landed there and settled
+/// with every roll 1.
 fn docked_new_pilot(data: &GameData) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let site = data
@@ -40,8 +41,10 @@ fn docked_new_pilot(data: &GameData) -> Session {
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(site.id.0);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(data, docked).expect("flies");
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(data, saved).expect("flies");
+    let system = session.pilot().system();
+    session.land_at(data, system, site.id).expect("lands");
     assert_eq!(session.landed(), Some(site.id), "docked");
     let _ = session.settle_script(data, &mut NeverFires);
     session
@@ -329,7 +332,7 @@ fn a_stock_cargo_mission_loads_on_accept_and_completes_at_its_destination() {
     let cash = session.pilot().cash();
     let today = session.date();
 
-    // Docked at the destination, before the deadline.
+    // Landed at the destination, before the deadline.
     let destination = offer.destination.expect("a destination");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");
@@ -337,6 +340,10 @@ fn a_stock_cargo_mission_loads_on_accept_and_completes_at_its_destination() {
     save["system"] = serde_json::json!(destination.system.expect("a system").0);
     let there = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(&data, there).expect("flies");
+    let system = session.pilot().system();
+    session
+        .land_at(&data, system, destination.stellar)
+        .expect("lands");
     assert_eq!(session.landed(), Some(destination.stellar), "docked there");
     let _ = session.settle_script(&data, &mut NeverFires);
 

@@ -31,8 +31,7 @@
 //! spaceport keeps serving it, and the new system's wait for the
 //! take-off: after a landed `M` or `N`, after the overlay moves a landed
 //! player, after a relocation to a stellar of a system resolved to
-//! another, and for a pilot flown docked at a stellar of a hidden system at
-//! its place. A mover says only where the ship is docked ([`Dock`]).
+//! another. A mover says only where the ship is docked ([`Dock`]).
 //!
 //! Which of a system's stellars are shown is the galaxy's: those it holds
 //! by ownership or by the rescue ([`OverlaidGalaxy::shows`]), as

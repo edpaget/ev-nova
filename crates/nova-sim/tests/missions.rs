@@ -271,16 +271,17 @@ impl nova_sim::TrafficCatalog for Courier {
     }
 }
 
-/// A new pilot of `courier`'s, docked at 128 through a save that says so,
-/// flown and settled.
+/// A new pilot of `courier`'s, resumed on 128 through a save that says
+/// so, flown, landed there and settled.
 fn docked_at_128(courier: &Courier) -> Session {
     let pilot = Pilot::new(courier, "Courier").expect("starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(128);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(courier, docked).expect("flies");
-    assert_eq!(session.landed(), Some(StellarId(128)));
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(courier, saved).expect("flies");
+    assert_eq!(session.landed(), None, "resumed in flight");
+    assert_eq!(land(&mut session), StellarId(128));
     let _ = session.settle_script(courier, &mut NeverFires);
     session
 }

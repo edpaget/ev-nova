@@ -166,12 +166,12 @@ fn system() -> Vec<u8> {
     bytes
 }
 
-/// Alpha Prime: a landable planet at the system's centre, whose
-/// landscape is `PICT` 10004, with a bar and a trade center trading food
+/// Alpha Prime: a landable planet at (50, 50), where a new pilot's ship
+/// starts, whose landscape is `PICT` 10004, with a bar and a trade center trading food
 /// at medium and metal at low.
 fn stellar() -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
+    put_i16s(&mut bytes, 0x00, &[50, 50, 4]);
     bytes[0x06..0x0A].copy_from_slice(&0x2000_1043_u32.to_be_bytes());
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
     bytes
@@ -610,11 +610,15 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     assert_eq!(saved(&store, "Ada"), landed);
 
     // A new app, a plain trade there moving a ton (the `trade_lot` rule's
-    // other reading), resumes the pilot docked, with its cargo.
+    // other reading), resumes the pilot in space over the stellar, with
+    // its cargo, and it lands there again.
     let mut game = Harness::opening(&store, RuleSource::Bible);
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    game.frame();
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(game.pilot().held(FOOD), 10);
     game.open_trade_center();

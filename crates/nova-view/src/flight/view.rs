@@ -2240,9 +2240,9 @@ impl<
     }
 
     /// `pilot`'s flight, read from `catalog`, which the screen keeps. A
-    /// pilot docked at a stellar resumes landed there: the landing is
-    /// reported once ([`FlightView::take_landing`]), with no sound, so the
-    /// router shows the spaceport.
+    /// pilot last landed on a stellar resumes in flight over it, at rest,
+    /// as [`Session::fly`] places it: nothing lands, so no landing is
+    /// reported ([`FlightView::take_landing`]) and nothing sounds.
     pub fn with_pilot(catalog: C, pilot: Pilot) -> Self {
         let session = Session::fly(&catalog, pilot);
         Self::flying(catalog, session)
@@ -2258,12 +2258,15 @@ impl<
 
     /// Begins a new pilot's game as [`Session::begin`] does, on the
     /// flight's chance, and shows on the course map any system it
-    /// explored: for a pilot just created, before its first save. A
+    /// explored: for a pilot just created, before its first save. The
+    /// ship, which the beginning puts at (50, 50), is drawn there from the
+    /// first frame, not on its way from where the view was read. A
     /// session that failed begins nothing.
     pub fn begin(&mut self) {
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
             self.map.show_explored(session.pilot().explored());
+            self.place_ship();
         }
     }
 
@@ -2277,20 +2280,14 @@ impl<
         }
     }
 
-    /// The flight of `session`, or why it could not start. A pilot
-    /// resumed docked starts with the bar redrawn, as `_PlayGame`'s
-    /// `_RedrawStatus` (@0x457d8) does before `_DoPortDialog`; flight's
-    /// first frame redraws it otherwise.
+    /// The flight of `session`, or why it could not start. No session
+    /// starts landed, so flight's first frame redraws the bar, as
+    /// `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
     fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
-        let mut view = Self::read(catalog, session);
-        if view.pending_landing.is_some() {
-            view.redraw_status();
-        }
-        view
+        Self::read(catalog, session)
     }
 
-    /// The flight of `session` as [`FlightView::flying`] reads it, before
-    /// any redraw.
+    /// The flight of `session` as [`FlightView::flying`] reads it.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
     fn read(catalog: C, session: Result<Session, StartError>) -> Self {
         let session = session.map_err(|err| err.to_string());
@@ -2313,7 +2310,6 @@ impl<
             map.show_course(session.system(), &session.course_shown());
             map.show_explored(session.pilot().explored());
         }
-        let pending_landing = session.as_ref().ok().and_then(Session::landed);
         let looks = match &session {
             Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
             Err(_) => Looks::default(),
@@ -2355,7 +2351,7 @@ impl<
             nav_latch: false,
             select_latch: false,
             jump_latch: false,
-            pending_landing,
+            pending_landing: None,
             message: None,
             overlays: FlightOverlays::default(),
             pending_boarding: false,
@@ -4177,8 +4173,8 @@ impl<C> FlightView<C> {
     /// target's blink are left as they are.
     ///
     /// The original calls it at flight start (`_PlayGame` @0x457d8, ours
-    /// the first frame, which shows the radar as it is, or as a pilot
-    /// resumed docked starts), on landing and take-off
+    /// the first frame, which shows the radar as it is), on landing and
+    /// take-off
     /// (`_PlayerLandOnStellar`), on arrival in a system (`_HandlePlayer`;
     /// ours whenever a system is laid out), on closing the map
     /// (`_DoSystemMap`), on entering a hypergate (`_PlayerEnterHypergate`,
@@ -10463,9 +10459,10 @@ mod tests {
     fn the_hyperspace_hint_names_m_and_j() {
         let hint = "Now you should probably hyperspace to another system. Hit 'M' to access the map, select a nearby system, then move outward and hit 'J' to begin your jump.";
         assert_eq!(hyperspace_hint("M", "J"), hint);
+        // At (50, 50), where a new pilot starts.
         let mut view = new_pilot(flight_among(vec![site(
             128,
-            (0.0, 0.0),
+            (50.0, 50.0),
             StellarFlags::CAN_LAND,
         )]));
         land_now(&mut view);
@@ -11590,11 +11587,15 @@ mod tests {
 
     // Pilot edits.
 
-    /// A view of Ada docked at Earth, the landing taken, with the systems
-    /// read so far forgotten.
+    /// A view of Ada resumed over Earth and landed there, the landing,
+    /// its sounds and its message taken, with the systems read so far
+    /// forgotten.
     fn landed_view() -> View {
         let mut view = FlightView::with_pilot(catalog(), docked_pilot("Ada"));
-        view.take_landing();
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        view.take_sounds();
+        view.message = None;
         view.catalog().systems_read.borrow_mut().clear();
         view
     }
@@ -11678,21 +11679,31 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_docked_at_a_stellar_resumes_landed_there_silently() {
+    fn a_pilot_saved_at_a_stellar_resumes_in_flight_over_it_silently() {
         let pilot = docked_pilot("Ada");
         assert_eq!(pilot.stellar(), Some(StellarId(128)));
         let mut view = FlightView::with_pilot(catalog(), pilot.clone());
         assert_eq!(view.pilot(), Some(&pilot));
-        assert_eq!(
-            view.take_landing(),
-            Some(StellarId(128)),
-            "the router lands"
-        );
-        assert_eq!(view.take_landing(), None, "once");
+        assert_eq!(view.take_landing(), None, "nothing lands");
+        assert_eq!(view.session().map(Session::landed), Ok(None));
         assert_eq!(player(&view).position, Vec2::new(0.0, -600.0));
+        assert_eq!(view.shown_position(), Point::new(0.0, -600.0));
         assert_eq!(view.take_sounds(), [], "no landing sound");
         assert!(!view.take_save_due());
-        assert_eq!(view.take_off(), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn a_new_pilots_ship_is_first_shown_at_50_50() {
+        let mut view = flight();
+        view.begin();
+        assert_eq!(player(&view).position, Vec2::new(50.0, 50.0));
+        assert_eq!(
+            view.shown_position(),
+            Point::new(50.0, 50.0),
+            "before any tick, not on its way from the centre"
+        );
+        view.tick(TICK / 2);
+        assert_eq!(view.shown_position(), Point::new(50.0, 50.0), "at rest");
     }
 
     #[test]
@@ -11706,7 +11717,8 @@ mod tests {
 
     #[test]
     fn a_pilot_whose_system_is_gone_flies_in_the_lowest_that_exists() {
-        // In flight: a docked pilot resumes in its stellar's system.
+        // In flight: a pilot last landed on a stellar resumes in its
+        // stellar's system.
         let mut pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         pilot.explore(SystemId(132));
         let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 132");
@@ -12230,7 +12242,9 @@ mod tests {
         let shared: Rc<RefCell<dyn Chance>> = always.clone();
         let mut view = FlightView::with_pilot(eventful(), docked_pilot("Ada"))
             .with_chance(SharedChance::new(shared));
-        view.take_landing();
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        always.borrow_mut().asked.clear();
         let landed = view.session().expect("docked").date();
         view.take_off().expect("took off");
         assert_eq!(always.borrow().asked, [35], "the take-off's day");
@@ -13717,17 +13731,18 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_resumed_docked_holds_the_gauges_from_its_start() {
+    fn a_pilot_resumed_and_landed_holds_the_gauges_from_its_landing() {
         let pilot = {
             let mut view = FlightView::new(outfitting());
             land_now(&mut view);
             view.pilot().expect("flying").clone()
         };
         let mut view = FlightView::with_pilot(outfitting(), pilot);
-        assert!(view.take_landing().is_some(), "docked");
+        assert_eq!(view.take_landing(), None, "in flight");
+        land_now(&mut view);
         assert_eq!(view.outfit(BUY_TANK), Ok(()));
         assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
-        assert_eq!(view.reserves_shown().fuel.max, 250.0, "the start's");
+        assert_eq!(view.reserves_shown().fuel.max, 250.0, "the landing's");
     }
 
     #[test]
@@ -19829,8 +19844,10 @@ mod tests {
     }
 
     /// [`boardable`] with ship 130 of `Cost` 10,000 (a wage of 100), and
-    /// a pilot holding `cash` whose fleet is one hired ship 130, docked
-    /// at stellar 128 when `docked`; its flight, its first tick done.
+    /// a pilot holding `cash` whose fleet is one hired ship 130, saved at
+    /// stellar 128 and landed there after its flight's first tick when
+    /// `docked`, the landing not yet taken; else its flight, its first
+    /// tick done.
     fn paying(cash: i64, docked: bool) -> View {
         let mut catalog = boardable();
         for record in &mut catalog.ships {
@@ -19853,6 +19870,9 @@ mod tests {
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
         view.tick(TICK);
+        if docked {
+            land_now(&mut view);
+        }
         view
     }
 
@@ -19877,22 +19897,22 @@ mod tests {
         assert_eq!(paid.pilot().map(Pilot::cash), Some(0));
     }
 
+    /// The greeting from Earth on the take-off of a docked [`paying`]
+    /// flight, its lead the one the fixture's scripted draws leave.
+    const PAYING_GREETING: &str = "Departing Earth on June 24, 1177 NC.";
+
     #[test]
     fn by_the_engine_an_escort_left_unpaid_at_take_off_defects_and_the_flight_says_so() {
         let mut view = paying(50, true);
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         assert_eq!(view.take_off(), Some(StellarId(128)));
-        let said = format!("Launching from Earth on June 24, 1177 NC.  {DEFECTED_ONE}");
+        let said = format!("{PAYING_GREETING}  {DEFECTED_ONE}");
         assert_eq!(view.message(), Some(said.as_str()), "after the greeting");
         assert_eq!(view.pilot().expect("flying").escorts(), []);
         let mut kept = paying(50, true)
             .with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, RuleSource::Bible));
         kept.take_off().expect("took off");
-        assert_eq!(
-            kept.message(),
-            Some("Launching from Earth on June 24, 1177 NC."),
-            "the greeting alone"
-        );
+        assert_eq!(kept.message(), Some(PAYING_GREETING), "the greeting alone");
         assert_eq!(kept.pilot().expect("flying").escorts().len(), 1);
     }
 
@@ -20395,7 +20415,7 @@ mod tests {
         let mut view = paying(50, true);
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         view.take_off().expect("takes off");
-        let said = format!("{EARTH_GREETING}  {DEFECTED_ONE}");
+        let said = format!("{PAYING_GREETING}  {DEFECTED_ONE}");
         assert_lasts(&mut view, &said, 240);
     }
 
@@ -20665,7 +20685,8 @@ mod tests {
     #[test]
     fn a_rebuild_that_changes_the_stellars_shown_lays_out_the_scene_again() {
         let mut view = FlightView::with_pilot(proxima_in_sol(), docked_pilot("Ada"));
-        view.take_landing();
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
         move_to(&mut view, 131, 140);
         view.tick(TICK);
         assert_eq!(shown_ids(&view), [StellarId(140)], "docked at it");
@@ -23523,14 +23544,16 @@ mod tests {
             };
             let pilot = Pilot::new(&catalog, "Ada").expect("starts");
             let mut view = FlightView::with_pilot(catalog, pilot);
+            // Begun, the ship sits at (50, 50), so Earth is drawn up and
+            // to the left of the radar's centre.
             view.begin();
             ticks(&mut view, 1);
             radar_marks(&view)
                 .into_iter()
-                .find(|mark| matches!(mark, RadarMark::Oval { rect, .. } if *rect == IRect::around(926, 77, 1)))
+                .find(|mark| matches!(mark, RadarMark::Oval { rect, .. } if *rect == IRect::around(924, 75, 1)))
         };
         let oval = |color| RadarMark::Oval {
-            rect: IRect::around(926, 77, 1),
+            rect: IRect::around(924, 75, 1),
             color,
         };
         assert_eq!(earth("K200"), Some(oval(RadarColor::Yellow)));
