@@ -10,7 +10,16 @@
 //! a button for each service the stellar's flags offer. The other service
 //! items stay blank, and clicks on them do nothing.
 //!
-//! Leave, Return and Escape leave: the router takes off. A service's
+//! Leave, Return and Escape leave: the router takes off. Each of the
+//! [`PORT_KEYS`](super::layout::PORT_KEYS) presses its button, as
+//! `_PortFilter` @0x4f209-0x4f257 does: R or F Recharge, C or T the Trade
+//! Center, O the Outfitter, S the Shipyard, N the Mission BBS and B the
+//! Bar. A letter does exactly what a click on its button does, so one for
+//! a service the stellar doesn't offer does nothing, as `_DoPortDialog`'s
+//! answers gate only on the stellar's flags (@0x5fd6c-0x60115). The keys
+//! are a press, never a repeat (@0x4f15b), make no sound, and work with
+//! modifiers held, as the view never reads them; they reach the spaceport
+//! only while nothing is open over it. A service's
 //! button opens its [`ServiceScreen`], which takes every input until it
 //! closes. The Trade Center's opens the stellar's exchange instead, a
 //! [`TradeScreen`] over it, when the spaceport is given one
@@ -120,7 +129,8 @@ use super::bar::{BarScreen, Hiring};
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
-    RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, service_item,
+    RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, port_key_item,
+    service_item,
 };
 use super::missions::{MissionComputerScreen, MissionInfoScreen};
 use super::offer::{OfferChoice, OfferDialog, VenueOffers};
@@ -1421,8 +1431,10 @@ impl SpaceportView {
 }
 
 impl Screen for SpaceportView {
-    /// An open service takes every input until it closes. Otherwise every
-    /// input goes to the dialog. It never quits.
+    /// An open service takes every input until it closes. Otherwise the
+    /// mission info and player info keys ask for their screens, a press of
+    /// one of the [`PORT_KEYS`](super::layout::PORT_KEYS) presses its
+    /// button, and every other input goes to the dialog. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Some(screen) = &mut self.player_info {
             screen.input(input);
@@ -1492,6 +1504,17 @@ impl Screen for SpaceportView {
                 .is_some_and(|landscape| landscape.contains(at))
         {
             self.sounds.extend(ambient.pressed().map(Sound::Ui));
+        }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && self.port.is_ok()
+            && let Some(item) = port_key_item(key)
+        {
+            self.activate(item);
+            return ScreenAction::None;
         }
         let event = match &mut self.port {
             Ok(port) => port.dialog.input(input),
@@ -2251,6 +2274,193 @@ mod tests {
             });
             assert_eq!(view.take_sounds(), [], "{k:?}");
         }
+    }
+
+    // The letter keys.
+
+    /// A stellar offering every service: every flag but uninhabited's.
+    fn everything() -> FakePort {
+        flagged(0xFF & !StellarFlags::UNINHABITED)
+    }
+
+    /// A stellar with `flags`, otherwise Earth.
+    fn flagged(flags: u32) -> FakePort {
+        FakePort {
+            port: Ok(PortRecord {
+                flags,
+                ..catalog().port.expect("a record")
+            }),
+            ..catalog()
+        }
+    }
+
+    /// The eight letters `_PortFilter` reads (@0x4f209-0x4f257).
+    const LETTERS: [char; 8] = ['r', 'f', 'c', 't', 'o', 's', 'n', 'b'];
+
+    /// `_PortFilter` @0x4f209-0x4f257: C or T the Trade Center, O the
+    /// Outfitter, S the Shipyard, N the Mission BBS and B the Bar, each
+    /// opening what its button opens (`_DoPortDialog` @0x5fe63-0x6011b),
+    /// with no sound.
+    #[test]
+    fn each_letter_opens_its_service_as_its_button_does() {
+        use Service::{Bar, MissionBbs, Outfitter, Shipyard, TradeCenter};
+        for (letter, service) in [
+            ('c', TradeCenter),
+            ('t', TradeCenter),
+            ('o', Outfitter),
+            ('s', Shipyard),
+            ('n', MissionBbs),
+            ('b', Bar),
+        ] {
+            let mut clicked = view_of(&everything());
+            click_item(&mut clicked, service_item(service));
+            let mut view = view_of(&everything());
+            view.take_sounds();
+            view.input(&key(Key::Char(letter)));
+            assert_eq!(
+                view.open_service().map(ServiceScreen::service),
+                Some(service),
+                "{letter}"
+            );
+            assert_eq!(drawn(&view), drawn(&clicked), "{letter}");
+            assert_eq!(view.take_sounds(), [], "{letter}");
+            assert!(!view.left() && !view.take_recharge(), "{letter}");
+        }
+    }
+
+    #[test]
+    fn n_asks_for_the_mission_computer_and_b_opens_the_bar() {
+        let mut view = missioned();
+        view.input(&key(Key::Char('n')));
+        assert!(view.open_service().is_none(), "no placeholder");
+        assert!(view.take_mission_computer_request());
+        let mut view = drinking(true);
+        view.take_sounds();
+        view.input(&key(Key::Char('b')));
+        assert!(view.open_bar().is_some());
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    /// R or F → item 4 (`_PortFilter` @0x4f209), whose answer fills the
+    /// tank (`_DoPortDialog` @0x5fd5d).
+    #[test]
+    fn r_and_f_ask_for_a_recharge_as_its_button_does() {
+        for letter in ['r', 'f'] {
+            let mut view = earth();
+            view.input(&key(Key::Char(letter)));
+            assert!(view.take_recharge(), "{letter}");
+            assert!(!view.take_recharge(), "once");
+            view.refuse_recharge(RechargeRefusal::Full);
+            assert_eq!(box_lines(&view), [ALREADY_RECHARGED]);
+            view.input(&key(Key::Char(letter)));
+            assert_eq!(box_lines(&view), DESCRIPTION, "{letter}: recharge again");
+            assert!(view.take_recharge(), "{letter}");
+            assert!(view.open_service().is_none());
+            assert!(!view.left());
+            assert_eq!(view.take_sounds(), [], "{letter}");
+        }
+    }
+
+    /// `_DoPortDialog`'s answers gate each item on the stellar's flags
+    /// (@0x5fd6c, @0x5fe71, @0x5feb5, @0x5ff2c, @0x5ffb7, @0x60115), and
+    /// a key meets no other gate, so a letter for a service the stellar
+    /// doesn't offer does nothing, as a click on a blank button does.
+    #[test]
+    fn a_letter_for_a_service_not_offered_does_nothing() {
+        let mut bare = view_of(&flagged(StellarFlags::CAN_LAND));
+        bare.refuse_recharge(RechargeRefusal::Full);
+        for letter in ['o', 's', 'b', 'c', 't'] {
+            bare.input(&key(Key::Char(letter)));
+            assert!(bare.open_service().is_none(), "{letter}");
+            assert_eq!(box_lines(&bare), [ALREADY_RECHARGED], "{letter}");
+        }
+        assert_eq!(bare.take_sounds(), []);
+        let uninhabited = || flagged(StellarFlags::CAN_LAND | StellarFlags::UNINHABITED);
+        let mut view = view_of(&uninhabited());
+        for letter in LETTERS {
+            view.input(&key(Key::Char(letter)));
+            assert!(view.open_service().is_none(), "{letter}");
+        }
+        assert!(!view.take_recharge(), "no fuel sold");
+        assert!(!view.left());
+        assert_eq!(view.take_sounds(), []);
+        let mut view = view_of(&uninhabited()).with_missions(
+            Ok(computer_template()),
+            Ok(info_template()),
+            Ok(text_template()),
+            Ok(text_template()),
+        );
+        view.input(&key(Key::Char('n')));
+        assert!(!view.take_mission_computer_request(), "no missions");
+    }
+
+    /// `_PortFilter` acts on a `keyDown` alone (@0x4f15b): an `autoKey`
+    /// and a key-up do nothing.
+    #[test]
+    fn a_letters_repeat_and_release_do_nothing() {
+        for letter in LETTERS {
+            let mut view = view_of(&everything());
+            for (pressed, repeat) in [(true, true), (false, false)] {
+                view.input(&Input::Key {
+                    key: Key::Char(letter),
+                    pressed,
+                    repeat,
+                });
+            }
+            assert!(view.open_service().is_none(), "{letter}");
+            assert!(!view.take_recharge(), "{letter}");
+            assert!(!view.left(), "{letter}");
+        }
+    }
+
+    /// The filter only runs while the spaceport is in front: a letter
+    /// over an open service goes to it.
+    #[test]
+    fn a_letter_goes_to_whatever_is_open_over_the_spaceport() {
+        let mut view = view_of(&everything());
+        click_item(&mut view, service_item(Service::TradeCenter));
+        for letter in LETTERS {
+            view.input(&key(Key::Char(letter)));
+        }
+        assert_eq!(
+            view.open_service().map(ServiceScreen::service),
+            Some(Service::TradeCenter)
+        );
+        assert!(!view.take_recharge());
+        let mut broken = SpaceportView::new(&everything(), StellarId(140), Err("no".to_owned()));
+        for letter in LETTERS {
+            broken.input(&key(Key::Char(letter)));
+        }
+        assert!(broken.open_service().is_none());
+        assert!(!broken.take_recharge() && !broken.left());
+    }
+
+    /// The map, player info and mission info keys come first
+    /// (@0x4f165-0x4f1de), and none of them is a letter.
+    #[test]
+    fn the_other_keys_still_win() {
+        use crate::spaceport::PORT_KEYS;
+        let others = [
+            PLAYER_INFO_KEY,
+            MISSION_INFO_KEY,
+            crate::flight::view::MAP_KEY,
+            Key::Enter,
+            Key::Escape,
+        ];
+        for (letter, _) in PORT_KEYS {
+            assert!(!others.contains(&letter), "{letter:?}");
+        }
+        let mut view = view_of(&everything()).with_missions(
+            Ok(computer_template()),
+            Ok(info_template()),
+            Ok(text_template()),
+            Ok(text_template()),
+        );
+        view.input(&key(PLAYER_INFO_KEY));
+        assert!(view.take_player_info_request());
+        view.input(&key(MISSION_INFO_KEY));
+        assert!(view.take_mission_info_request());
+        assert!(view.open_service().is_none());
     }
 
     // Recharging.
