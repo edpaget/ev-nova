@@ -387,6 +387,21 @@ impl Dialog {
         self.item(item).map(|item| item.bounds)
     }
 
+    /// Draws `image` stretched over the whole dialog, as `DrawPicHandle`
+    /// fills a picture dialog's port with its frame.
+    pub fn draw_stretched_over(&self, list: &mut DrawList, image: ImageKey) {
+        let bounds = self.bounds;
+        list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
+    }
+
+    /// Draws `PICT` `graphic` stretched into item `item` (from 1); nothing
+    /// when the dialog has no such item.
+    pub fn draw_picture_in(&self, list: &mut DrawList, item: usize, graphic: i16) {
+        if let Some(at) = self.item_bounds(item) {
+            list.stretched_picture(ImageKey::picture(graphic), at.min, at.width(), at.height());
+        }
+    }
+
     /// Whether item `item` (from 1) is shown: inside the dialog.
     #[must_use]
     pub fn item_shown(&self, item: usize) -> bool {
@@ -758,6 +773,48 @@ mod tests {
         let mut list = DrawList::new();
         dialog.draw(&mut list);
         list.iter().cloned().collect()
+    }
+
+    #[test]
+    fn draw_stretched_over_fills_the_dialog_bounds_with_the_image() {
+        let dialog = dialog(&yes_no(), &[]);
+        let mut list = DrawList::new();
+        dialog.draw_stretched_over(&mut list, ImageKey::picture(8527));
+        let drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert_eq!(
+            drawn,
+            vec![DrawCommand::StretchedPicture {
+                image: ImageKey::picture(8527),
+                top_left: YES_NO,
+                width: 355.0,
+                height: 109.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn draw_picture_in_stretches_the_graphic_into_the_item() {
+        let dialog = dialog(&yes_no(), &[]);
+        let mut list = DrawList::new();
+        dialog.draw_picture_in(&mut list, 4, 5008);
+        let drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert_eq!(
+            drawn,
+            vec![DrawCommand::StretchedPicture {
+                image: ImageKey::picture(5008),
+                top_left: Point::new(YES_NO.x + 7.0, YES_NO.y + 5.0),
+                width: 32.0,
+                height: 32.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn draw_picture_in_an_absent_item_draws_nothing() {
+        let dialog = dialog(&yes_no(), &[]);
+        let mut list = DrawList::new();
+        dialog.draw_picture_in(&mut list, 6, 5008);
+        assert_eq!(list.iter().count(), 0);
     }
 
     fn press(at: Point) -> Input {

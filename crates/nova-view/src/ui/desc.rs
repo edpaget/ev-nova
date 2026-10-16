@@ -253,17 +253,10 @@ impl Screen for DescDialog {
             self.dialog.draw(list);
             return;
         };
-        let bounds = self.dialog.bounds();
-        list.stretched_picture(PICTURE_FRAME, bounds.min, bounds.width(), bounds.height());
+        self.dialog.draw_stretched_over(list, PICTURE_FRAME);
         self.dialog.draw(list);
-        if let Some(item) = self.dialog.item_bounds(DESC_PICTURE_ITEM) {
-            list.stretched_picture(
-                ImageKey::picture(graphic),
-                item.min,
-                item.width(),
-                item.height(),
-            );
-        }
+        self.dialog
+            .draw_picture_in(list, DESC_PICTURE_ITEM, graphic);
     }
 
     fn cancel_pointer(&mut self) {

@@ -721,14 +721,7 @@ impl Screen for BarScreen {
                 match laid.picture {
                     Some(id) => {
                         list.picture(PICTURE_BACKGROUND, origin);
-                        if let Some(item) = laid.dialog.item_bounds(BAR_PICTURE_ITEM) {
-                            list.stretched_picture(
-                                ImageKey::picture(id),
-                                item.min,
-                                item.width(),
-                                item.height(),
-                            );
-                        }
+                        laid.dialog.draw_picture_in(list, BAR_PICTURE_ITEM, id);
                     }
                     None => {
                         list.picture(BACKGROUND, origin);

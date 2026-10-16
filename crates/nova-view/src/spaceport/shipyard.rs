@@ -768,12 +768,8 @@ impl Panel {
     pub(super) fn draw(&self, list: &mut DrawList, metrics: &dyn TextMetrics) {
         let bounds = self.dialog.bounds();
         if self.variant == InfoVariant::MissingPicture {
-            list.stretched_picture(
-                self.variant.background(),
-                bounds.min,
-                bounds.width(),
-                bounds.height(),
-            );
+            self.dialog
+                .draw_stretched_over(list, self.variant.background());
         } else {
             list.picture(self.variant.background(), bounds.min);
         }
@@ -814,11 +810,8 @@ impl Panel {
         {
             draw_weapons(list, metrics, area, heading, sentence.as_deref());
         }
-        if let (Some(id), Some(area)) = (
-            self.variant.graphic(),
-            self.dialog.item_bounds(PANEL_GRAPHIC_ITEM),
-        ) {
-            list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
+        if let Some(id) = self.variant.graphic() {
+            self.dialog.draw_picture_in(list, PANEL_GRAPHIC_ITEM, id);
         }
     }
 }

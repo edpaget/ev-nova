@@ -445,17 +445,9 @@ impl Screen for OfferDialog {
                     dialog.draw(list);
                     return;
                 };
-                let bounds = dialog.bounds();
-                list.stretched_picture(PICTURE_FRAME, bounds.min, bounds.width(), bounds.height());
+                dialog.draw_stretched_over(list, PICTURE_FRAME);
                 dialog.draw(list);
-                if let Some(item) = dialog.item_bounds(OFFER_PICTURE_ITEM) {
-                    list.stretched_picture(
-                        ImageKey::picture(graphic),
-                        item.min,
-                        item.width(),
-                        item.height(),
-                    );
-                }
+                dialog.draw_picture_in(list, OFFER_PICTURE_ITEM, graphic);
             }
             Err(reason) => {
                 list.text(
