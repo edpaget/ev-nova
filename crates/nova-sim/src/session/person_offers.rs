@@ -36,12 +36,14 @@
 //! it is open (@0x65882, @0x65a11); a hail quote, and the 0x0400 quote
 //! filter's check of a linked person, name nobody after (see the
 //! `persons` module); a new pilot or a load names nobody. The name is the
-//! person of the ship that holds the slot now ([`Npc::berth`], reused as
-//! the original's slots are), or, with the slot empty, the person it
-//! held. Left out: after an accept whose person is swapped for
-//! its mission ship, the original names the player's new target, the
-//! swapped-in ship (@0x6252f, @0x625a4); here the hailed slot stays
-//! named.
+//! person of the ship last brought in at that slot ([`Npc::berth`],
+//! reused as the original's slots are), whether or not it is still there
+//! ([`Traffic::berth_person`](crate::Traffic::berth_person)): none for a
+//! ship with no person, or once a capture cleared it. After an accept
+//! whose person is swapped for its mission ship, the slot named is the
+//! swapped-in ship's, the player's new target (@0x6252f, @0x625a4),
+//! which has no person (`_GenericRandomShipSpawn` @0x3cb48), so `<OSN>`
+//! reads `"[Error]"`.
 
 use std::collections::BTreeMap;
 
@@ -86,14 +88,11 @@ pub(super) struct Offering {
 
 /// The ship the original's `_offeringShipIndex` names when a hail or a
 /// boarding leaves it set, for `<OSN>` by the engine
-/// ([`RuleKey::OfferingShipName`]; see the module docs): its slot, and
-/// its person's name then, which an emptied slot still reads.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// ([`RuleKey::OfferingShipName`]; see the module docs): its slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct OfferingShip {
     /// Its ship-table slot ([`Npc::berth`]).
     pub(super) berth: u32,
-    /// Its person's name as it was set.
-    pub(super) name: String,
 }
 
 /// What hailing the player's target opened ([`Session::open_hail`]).
@@ -254,10 +253,7 @@ impl Session {
         let on_board = person.record.flags & MISSION_ON_BOARD != 0;
         let mission = MissionId(person.record.link_mission?);
         (on_board == (by == OfferedBy::Boarding)).then(|| {
-            let ship = OfferingShip {
-                berth: npc.berth,
-                name: person.record.name.clone(),
-            };
+            let ship = OfferingShip { berth: npc.berth };
             (ship, mission)
         })
     }
@@ -273,19 +269,12 @@ impl Session {
     }
 
     /// The name `<OSN>` reads by the engine (`_MungeBriefing`
-    /// @0x9cebe-0x9cf28): the person of the ship that now holds the slot
-    /// `_offeringShipIndex` names, none when it has none; a slot no ship
-    /// holds still reads the person it held, remembered as it was set.
-    /// None with no slot named.
+    /// @0x9cebe-0x9cf28): the person of the ship last brought in at the
+    /// slot `_offeringShipIndex` names, whether or not it is still there
+    /// ([`Traffic::berth_person`](crate::Traffic::berth_person)), none
+    /// when it had none or a capture cleared it. None with no slot named.
     pub(super) fn offering_ship_name(&self) -> Option<&str> {
-        let ship = self.offering_ship.as_ref()?;
-        match self.npcs().iter().find(|npc| npc.berth == ship.berth) {
-            Some(npc) => {
-                let person = self.traffic.person(npc.person?.id)?;
-                Some(&person.record.name)
-            }
-            None => Some(&ship.name),
-        }
+        self.traffic.berth_person(self.offering_ship?.berth)
     }
 
     /// Whether `options` list a way for `npc` to join the fleet, its hail
@@ -1161,17 +1150,55 @@ mod tests {
             session.refuse_mission(MissionId(130), &mut NeverFires),
             Ok(())
         );
-        session.traffic.npcs_mut()[0].person = None;
-        assert_eq!(
-            osn(&session, RuleSource::Engine),
-            "[Error]",
-            "its person gone from the slot (+0xc8d0)"
-        );
         session.traffic.remove(NpcId(0));
         assert_eq!(
             osn(&session, RuleSource::Engine),
             "Ace",
-            "a slot left empty still holds what it last held: the name remembered"
+            "a slot left empty still holds what it last held"
+        );
+        let newcomer = session
+            .traffic
+            .add_npc(crate::testkit::npc(0, crate::stats::ShipStats::default()));
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "[Error]",
+            "reused by a ship with no person (-1 @0x3cb48)"
+        );
+        session.traffic.remove(newcomer);
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "[Error]",
+            "left empty again: the last ship it held, not Ace"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_reused_slot_names_its_newcomers_person() {
+        let (_, mut session) = offered(0);
+        let ace = session.npcs()[0].clone();
+        session.traffic.remove(ace.id);
+        let _ = session
+            .traffic
+            .add_npc(crate::testkit::npc(0, crate::stats::ShipStats::default()));
+        session.traffic.remove(NpcId(1));
+        session.traffic.add_npc(ace);
+        assert_eq!(osn(&session, RuleSource::Engine), "Ace", "@0x40cef");
+    }
+
+    #[test]
+    fn by_the_engine_a_captured_ships_slot_names_nobody() {
+        let (_, mut session) = offered(0);
+        session.lose_captured(NpcId(0));
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "[Error]",
+            "_DoShipCapture @0x411b3"
+        );
+        session.traffic.remove(NpcId(0));
+        assert_eq!(
+            osn(&session, RuleSource::Engine),
+            "[Error]",
+            "nor once gone"
         );
     }
 
@@ -1193,10 +1220,8 @@ mod tests {
         let mut unavailable = boardable(0);
         unavailable.missions[0].avail_random = 50;
         let mut session = alongside_ace(&unavailable);
-        session.offering_ship = Some(OfferingShip {
-            berth: 99,
-            name: "Earlier".to_owned(),
-        });
+        session.traffic.set_berth_person(99, "Earlier");
+        session.offering_ship = Some(OfferingShip { berth: 99 });
         session.offers.set_roll(MissionId(130), 51);
         let (boarded, _) = board(&mut session);
         assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");

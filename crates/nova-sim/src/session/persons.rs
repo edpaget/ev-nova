@@ -307,17 +307,23 @@ impl Session {
     }
 
     /// NPC `id`, captured, no longer flies as its person, who is gone for
-    /// good, escape pod or not (`_DoShipCapture` @0x41180).
+    /// good, escape pod or not (`_DoShipCapture` @0x41180), and its slot
+    /// holds no person from now on, for `<OSN>`.
     pub(super) fn lose_captured(&mut self, id: NpcId) {
         let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
         // A capture also unmarks a mission's special ship, its ships left
         // kept (`_DoShipCapture` @0x413c2).
-        let person = npc.and_then(|npc| {
+        let taken = npc.map(|npc| {
             npc.mission = None;
-            npc.person.take()
+            (npc.berth, npc.person.take())
         });
-        if let Some(person) = person {
-            self.go(person.id);
+        if let Some((berth, person)) = taken {
+            // The slot's person is cleared too (+0xc8d0 = -1: @0x411b3,
+            // @0x89741, @0x946a6), which `<OSN>` reads.
+            self.traffic.forget_berth_person(berth);
+            if let Some(person) = person {
+                self.go(person.id);
+            }
         }
     }
 
@@ -1238,10 +1244,8 @@ mod tests {
 
     /// A hailed ship named for `<OSN>` that is not among the NPCs: "Earlier".
     fn named_earlier(session: &mut Session) {
-        session.offering_ship = Some(super::super::person_offers::OfferingShip {
-            berth: 99,
-            name: "Earlier".to_owned(),
-        });
+        session.traffic.set_berth_person(99, "Earlier");
+        session.offering_ship = Some(super::super::person_offers::OfferingShip { berth: 99 });
         assert_eq!(session.plain_text("<OSN>"), "Earlier");
     }
 

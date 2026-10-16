@@ -964,9 +964,16 @@ impl Session {
         self.traffic.remove(npc);
         let last = self.last_npc();
         self.traffic.bring_in(vec![ship]);
+        let swapped_in = self.last_npc();
         if targeted {
-            self.target = self.last_npc();
+            self.target = swapped_in;
             self.target_fly_in.settle();
+        }
+        // The hail's dialog closes on the player's target, now the ship
+        // swapped in (@0x6252f), which `_offeringShipIndex` takes
+        // (@0x625a4): `<OSN>` names its slot, which holds no person.
+        if let Some(npc) = swapped_in.and_then(|id| self.npc(id)) {
+            self.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
         }
         if self.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
             && let Some(active) = self.slot_holding(slot, record.id)
@@ -5052,6 +5059,24 @@ pub(super) mod tests {
         // (`nova_view::flight::cadence::retake_target`).
         assert_ne!(ship.id, NpcId(0), "a new target");
         assert!(!session.pilot().gone(PersonId(600)), "not gone for good");
+    }
+
+    #[test]
+    fn by_the_engine_after_a_swap_osn_names_the_swapped_in_ships_slot() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let session = hailing_ace(&catalog);
+        assert_eq!(session.plain_text("<OSN>"), "Ace", "hailed (@0x621de)");
+        let session = swapped(&catalog);
+        assert_eq!(
+            session.plain_text("<OSN>"),
+            "[Error]",
+            "the target swapped in (@0x6252f, @0x625a4) holds no person (@0x3cb48)"
+        );
+        let mut kept = swapping(0);
+        kept.persons[0].flags = 0;
+        let session = swapped(&kept);
+        assert!(person_here(&session), "no swap");
+        assert_eq!(session.plain_text("<OSN>"), "Ace", "the hailed ship still");
     }
 
     /// [`swapped`], under `source` of [`RuleKey::LeaderlessSwapHold`].
