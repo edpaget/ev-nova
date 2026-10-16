@@ -251,7 +251,7 @@ impl Session {
     /// [`RuleKey::MissionStellarIdentity`]'s engine reading, also a
     /// stellar of another ID at the same place with the same name, read
     /// as [`RuleKey::StellarIdentityRecord`] says
-    /// ([`StellarMarks::identical`]). No stop is never docked at.
+    /// ([`StellarMarks::identical`](crate::mission::StellarMarks::identical)). No stop is never docked at.
     pub(super) fn docked_at_stop(&self, stop: Option<Stop>, docked: StellarId) -> bool {
         let rules = IdentityRules::of(&self.rules);
         stop.is_some_and(|stop| self.stellar_marks.identical(stop.stellar, docked, rules))

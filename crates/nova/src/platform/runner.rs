@@ -7,7 +7,7 @@
 //! about the game data; the runner prints the warnings the app keeps, such as a
 //! failed save.
 //!
-//! With the `dev-tools` feature and [`Runner::with_dev_tools`], it also
+//! With the `dev-tools` feature and `Runner::with_dev_tools`, it also
 //! drives the developer tools: while their overlay shows, each redraw runs
 //! the egui panel first, over the pilot flying (`App::pilot_desk_frame`),
 //! and submits the frame with the panel painted over it, and the raw

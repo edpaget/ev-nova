@@ -435,7 +435,7 @@ impl Session {
     }
 
     /// Queues `mission`'s `kind` text to show, when it has one, taken in
-    /// as a `dësc` ([`TextSource::Desc`], drawing on `chance`) and filled for `slot`
+    /// as a `dësc` ([`TextSource::Desc`](super::missions::TextSource::Desc), drawing on `chance`) and filled for `slot`
     /// ([`Session::mission_text`]), or with no mission
     /// ([`Session::plain_text`]): whether it had one.
     pub(super) fn show_mission_text(

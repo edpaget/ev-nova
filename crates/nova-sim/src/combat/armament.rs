@@ -742,7 +742,7 @@ impl Armament {
     /// 3. With nothing spawned, nothing else changes (@0x88dc0).
     /// 4. Otherwise it reloads by [`ai_fire::reload`]; a burst counts one a
     ///    call, spends at a multiple of its `BurstCount` when it spends at
-    ///    the burst's end ([`Armament::burst_end`]), and past its interval
+    ///    the burst's end ([`burst_end`]), and past its interval
     ///    (`BurstCount`, times the count unless its copies fire together)
     ///    starts again on its `BurstReload` (@0x8901f-0x891ad); an
     ///    exclusive weapon ([`EXCLUSIVE`]) holds every other weapon's

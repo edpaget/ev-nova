@@ -9,7 +9,7 @@
 //! `Flags` 0x1000-0x4000) or to beams (0, 3 and 10: `Flags2` 0x2000). A
 //! weapon a bit does not apply to is [`Status::NotApplicable`] for it.
 //!
-//! [`unimplemented`] lists the bits a weapon sets that apply to it and
+//! [`unimplemented`](fn@unimplemented) lists the bits a weapon sets that apply to it and
 //! that the simulation does not do yet, so a session can report each once
 //! while the weapon fires with them ignored. Undocumented bits are never
 //! reported.

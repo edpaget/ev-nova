@@ -5,9 +5,9 @@
 //!
 //! **Each fight tick**, after the escorts lost to it have left the fleet
 //! ([`Session::lose_escorts`]), every NPC that is not disabled forgets
-//! what it was as an escort ([`Npc::former`], @0x33bdb), and every
+//! what it was as an escort ([`Npc::former`](crate::traffic::npc::Npc::former), @0x33bdb), and every
 //! disabled NPC whose class carries a repair system
-//! ([`Npc::self_repair`]) draws `Rand(500)`. On 0, with armour above 0
+//! ([`Npc::self_repair`](crate::traffic::npc::Npc::self_repair)) draws `Rand(500)`. On 0, with armour above 0
 //! and not breaking up, its armour goes to
 //! [`repaired_armor`](crate::self_repair::repaired_armor) and its
 //! condition is decided again at once, so no frame shows it disabled: it
@@ -25,8 +25,8 @@
 //! save is due. The player's target is kept, though the original redraws
 //! the target panel when it is this ship (@0x33ad9-0x33af5; the engine
 //! draws the panel every frame). The player is told "Fighter repaired." or
-//! "Escort repaired." ([`SimMessage::FighterRepaired`],
-//! [`SimMessage::EscortRepaired`]) with `_beepSnd[4]`
+//! "Escort repaired." ([`SimMessage::FighterRepaired`](crate::message::SimMessage::FighterRepaired),
+//! [`SimMessage::EscortRepaired`](crate::message::SimMessage::EscortRepaired)) with `_beepSnd[4]`
 //! ([`SimSound::EscortRepaired`]). As in the original, the fleet's size
 //! ([`MAX_ESCORTS`](crate::board::MAX_ESCORTS)) is not checked. A ship
 //! the rule still disables once repaired (a class that is not tough

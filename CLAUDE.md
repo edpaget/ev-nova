@@ -127,8 +127,9 @@ under `tests/`, or doctests) so `cargo` runs them.
 - In the TDD loop, run `cargo nextest run -p <crate>`, the same form the
   pre-commit hook uses, so its build stays warm. Don't switch between `-p` and
   `--workspace` in the loop: each switch rebuilds.
-- Run the full gate with `mise run ci` (fmt, clippy with `-D warnings`, tests,
-  doctests and the dev-tools legs). Run it once before moving an item to
+- Run the full gate with `mise run ci` (fmt, clippy with `-D warnings`, the
+  `cargo-deny` bans, rustdoc with broken links denied, tests, doctests and the
+  dev-tools legs). Run it once before moving an item to
   needs-review; `rdm:land` runs it again before landing. `hk check` runs it
   too.
 - The pre-commit hook is lighter: `cargo fmt --check`, then clippy and nextest
@@ -177,6 +178,16 @@ Give a `git bisect` (or any second checkout) its own `CARGO_TARGET_DIR`.
 Sharing the main worktree's target directory can leave stale build artifacts
 behind, which cause false compile errors and test failures until you run
 `cargo clean -p` on the affected crates.
+
+## Doc links between crates
+
+`mise run doc` (part of `mise run ci`) runs rustdoc over every crate, private
+items included, and fails on a broken intra-doc link. A doc may link only to
+items its crate can name: its own and those of the crates below it. To refer
+to an item in a crate above, such as a rulebook row naming the session code
+that applies it, write its facade path as inline code (`` `nova_sim::Session` ``),
+or move the link to the higher item's doc. Links within a crate, or pointing
+down, stay links.
 
 ## Mutation testing
 

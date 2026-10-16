@@ -224,7 +224,7 @@ impl Session {
     /// the [`warp`](crate::warp) module). A held scan is gone: the
     /// inspection ended before it ran, so nothing retries it
     /// (`_HighLevelAIHandler` @0x8f366-0x8f38a). Then the mission cargo
-    /// (see [`scan`]): a
+    /// (see [`scan`](fn@scan)): a
     /// mission found with `Flags` 0x0020 fails at once
     /// ([`Session::quick_failure`]), the player told, with
     /// [`SimSound::ScanFailedMission`], unless it has `Flags` 0x0400; any

@@ -2437,7 +2437,7 @@ impl Shop<'_> {
         self.outfitter_with(pilot, rolls, chance, None)
     }
 
-    /// The outfitter as [`outfitter`](Self::outfitter) builds it, with
+    /// The outfitter as `outfitter` (built for tests only) builds it, with
     /// the row of `also`, when it has a record and is not listed, as its
     /// [`unlisted`](Outfitter::unlisted) row, sold here: the outfit a
     /// relisting selects, [`FIRST_OUTFIT`], which the sell loop sells and
