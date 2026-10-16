@@ -376,7 +376,7 @@ pub use combat::armament::{Armament, Trigger};
 pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
-pub use combat::{CombatEvent, Downed, FireSound, Rules, ShipRef, Sortie, Strike};
+pub use combat::{CombatEvent, Downed, Field, FireSound, Rules, ShipRef, Sortie, Strike};
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
     SetExpr, SetOp, SetOpKind, Test, TestExpr,

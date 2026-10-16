@@ -234,8 +234,10 @@ use hull::{
 };
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion};
+use jamming::Jamming;
 use projectile::{
-    BombLaunch, DecayStep, Fuse, Jam, Meeting, Shot, ShotId, ShotLayer, Source, Target,
+    BombLaunch, DecayStep, Fuse, Guide, Jam, LockAngle, Meeting, Shot, ShotId, ShotLayer, Sight,
+    Source, Target,
 };
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
@@ -505,8 +507,16 @@ pub struct Fighter<'a> {
     /// Whether it has a cloak scanner on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)): its
     /// point defence sees a cloaked ship within 200 pixels on each axis
-    /// (`_ShipVisibleToShip` @0x97a4-0x97f8).
+    /// (`_ShipVisibleToShip` @0x97a4-0x97f8), and so do its homing shots
+    /// ([`Sight::scanner`]).
     pub cloak_scanner: bool,
+    /// Whether it has a cloak (`_HasCloak`): a homing shot it fires at its
+    /// leader sees the leader cloaked (`_ShipVisibleToShip` @0x9788-0x97a2,
+    /// [`Sight::has_cloak`]). The player never has.
+    pub has_cloak: bool,
+    /// How strongly it jams each jamming type (`_ShipECM`, see
+    /// [`jamming`]), whatever its condition: a disabled ship jams nothing.
+    pub jamming: Jamming,
     /// Its class's top speed, in pixels a tick: its `shïp` `Speed` alone,
     /// none of its outfits' (the original's class +0x40), which every
     /// push soft-caps against ([`impact::push`]).
@@ -570,6 +580,20 @@ impl Default for Rules<'static> {
             },
         }
     }
+}
+
+/// What a fight reads of when and where it is fought, each tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Field {
+    /// The frame counter (`_frameCounter`) as `_DoPlayGameWork` sees it,
+    /// before `_PlayGame` adds 1: what an interfered shot circles by
+    /// ([`Jam::Interfered`](projectile::Jam::Interfered)).
+    pub frame: i32,
+    /// The player's system's `sÿst` `Interference`, raw (+0x96), not less
+    /// any anti-interference: what a `Seeker` 0x0008 homing shot rolls
+    /// against as it is launched, whoever fires it (`_SpawnShot`
+    /// @0x3eab2-0x3eb66).
+    pub interference: i16,
 }
 
 /// A hit that landed on a ship in step 7, before it is taken.
@@ -657,23 +681,31 @@ pub struct Combat {
     /// [`PointDefenceRule`] which missiles are hostile
     /// ([`RuleKey::PdHostility`](crate::RuleKey::PdHostility)).
     pd_hostility: RuleSource,
+    /// The field of the tick under way, as [`Combat::tick`] was given it.
+    field: Field,
+    /// How a `Seeker` 0x4000 shot measures its lock
+    /// ([`RuleKey::SeekerLockAngle`](crate::RuleKey::SeekerLockAngle)).
+    lock_angle: LockAngle,
 }
 
 impl Combat {
     /// Advances the fight among `fighters` and `stellars` a tick (see the
-    /// module docs), by `rules`, with the relations between governments in
-    /// `govts`, each sub-munition's weapon read from `arsenal` and each
-    /// shot's inaccuracy and spread drawn on `chance`. Each stellar's
-    /// strength is left as the shots left it.
+    /// module docs), by `rules`, in `field`, with the relations between
+    /// governments in `govts`, each sub-munition's weapon read from
+    /// `arsenal` and each shot's inaccuracy and spread drawn on `chance`.
+    /// Each stellar's strength is left as the shots left it.
+    #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self,
         fighters: &mut [Fighter],
         arsenal: &Arsenal,
         govts: &Governments,
         rules: Rules,
+        field: Field,
         stellars: &mut [StellarTarget],
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.field = field;
         // A `dyn` source over the caller's, which may be unsized.
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
@@ -688,10 +720,17 @@ impl Combat {
         for fighter in fighters.iter_mut() {
             fighter.armament.reload();
         }
+        let sights: Vec<Sight> = fighters.iter().map(Fighter::sight).collect();
+        let guide = Guide {
+            sights: &sights,
+            frame: field.frame,
+            lock_angle: self.lock_angle,
+            ..Guide::among(&targets)
+        };
         let was: Vec<Vec2> = self
             .shots
             .iter_mut()
-            .map(|shot| shot.step(&targets))
+            .map(|shot| shot.step(&guide, chance))
             .collect();
         let shots = &self.shots;
         let compression = self.compression;
@@ -897,6 +936,14 @@ impl Combat {
         self.pd_hostility = source;
     }
 
+    /// Has a `Seeker` 0x4000 shot measure how far its target is off ahead
+    /// as `source` says ([`LockAngle`]): by default, the other reading's
+    /// short way round, the engine's plain angle restored by
+    /// [`RuleSource::Engine`].
+    pub fn set_seeker_lock_angle(&mut self, source: RuleSource) {
+        self.lock_angle = LockAngle::from(source);
+    }
+
     /// The next shot's number.
     fn next_id(&mut self) -> ShotId {
         let id = ShotId(self.next_shot);
@@ -1089,6 +1136,7 @@ impl Combat {
             if let Some(Quarry::Ship(_)) = quarry {
                 shot.layer = ShotLayer::Shots;
             }
+            shot.roll_at_launch(self.field.interference, chance);
             // A dropped bomb or rocket reads no heading, so it is never sent
             // broadside, as the gate it fails holds the broadside
             // (@0x3ede8-0x3ee0a).
@@ -1786,9 +1834,10 @@ impl Combat {
                 priority: Some(SUBMUNITION_PRIORITY),
             }),
         });
-        for shot in shots {
-            let id = self.next_id();
-            self.shots.push(Shot { id, ..shot });
+        for mut shot in shots {
+            shot.id = self.next_id();
+            shot.roll_at_launch(self.field.interference, chance);
+            self.shots.push(shot);
         }
     }
 
@@ -2038,6 +2087,21 @@ impl Fighter<'_> {
         }
     }
 
+    /// What homing guidance reads of the ship as the tick begins: its
+    /// jamming, whether it is disabled as `_IsDisabled` reads it (not
+    /// intact, or held disabled), and its sight facts.
+    fn sight(&self) -> Sight {
+        Sight {
+            ship: self.ship,
+            jamming: self.jamming,
+            disabled: self.held_disabled || *self.condition != Condition::Intact,
+            cloaked: self.cloaked,
+            emerging: self.emerging,
+            scanner: self.cloak_scanner,
+            has_cloak: self.has_cloak,
+        }
+    }
+
     /// The ship as shots and beams see it.
     fn as_target(&self) -> Target {
         Target {
@@ -2237,8 +2301,8 @@ mod tests {
     use crate::combat::defence::Side;
     use crate::combat::exits::{Compression, ExitCursors, ExitKind, ExitPoints};
     use crate::combat::hull::{DEFAULT_HIT_RADIUS, ESCAPE_POD_SHIP, NovaDisable};
-    use crate::combat::weapon::WeaponSpec;
-    use crate::testkit::weapon;
+    use crate::combat::weapon::{LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, WeaponSpec};
+    use crate::testkit::{Ranged, weapon};
 
     /// A ship in a test fight, owning what a fighter borrows.
     #[allow(clippy::struct_excessive_bools)]
@@ -2263,6 +2327,8 @@ mod tests {
         threatens_player: bool,
         emerging: bool,
         cloak_scanner: bool,
+        has_cloak: bool,
+        jamming: Jamming,
         class_speed: f32,
         top_speed: f32,
         jumping: bool,
@@ -2316,6 +2382,8 @@ mod tests {
                 threatens_player: false,
                 emerging: false,
                 cloak_scanner: false,
+                has_cloak: false,
+                jamming: Jamming::NONE,
                 class_speed: 10.0,
                 top_speed: 10.0,
                 jumping: false,
@@ -2366,6 +2434,8 @@ mod tests {
                 threatens_player: self.threatens_player,
                 emerging: self.emerging,
                 cloak_scanner: self.cloak_scanner,
+                has_cloak: self.has_cloak,
+                jamming: self.jamming,
                 class_speed: self.class_speed,
                 top_speed: self.top_speed,
                 jumping: self.jumping,
@@ -2403,6 +2473,7 @@ mod tests {
             arsenal,
             govts,
             rules,
+            Field::default(),
             &mut [],
             &mut NeverFires,
         );
@@ -2421,6 +2492,7 @@ mod tests {
             arsenal,
             &Governments::default(),
             Rules::default(),
+            Field::default(),
             stellars,
             &mut NeverFires,
         );
@@ -8352,6 +8424,7 @@ mod tests {
             &Arsenal::default(),
             &Governments::default(),
             Rules::default(),
+            Field::default(),
             &mut [],
             chance,
         );
@@ -9118,5 +9191,407 @@ mod tests {
             assert_eq!(fired(&combat.take_events(), A), 1, "{source:?}");
         }
         assert_eq!(*rule.asked.borrow(), [], "never asked");
+    }
+
+    // Jamming and sensor interference (`_SpawnShot` @0x3eab2-0x3eb66 and
+    // @0x3f051-0x3f0a7, `_HandleShotGuidance` @0x320dc-0x32aa4).
+
+    /// A tick among `ships` in `field`, with `arsenal`, drawing on
+    /// `chance`.
+    fn tick_in(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        (arsenal, field): (&Arsenal, Field),
+        chance: &mut dyn Chance,
+    ) {
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        combat.tick(
+            &mut fighters,
+            arsenal,
+            &Governments::default(),
+            Rules::default(),
+            field,
+            &mut [],
+            chance,
+        );
+    }
+
+    /// [`missile`] with `seeker` and `jam_vuln`.
+    fn vulnerable(seeker: u16, jam_vuln: [i16; 4]) -> WeaponRecord {
+        WeaponRecord {
+            seeker,
+            jam_vuln,
+            ..missile()
+        }
+    }
+
+    /// The shots in flight after A fires `record` once at B, at (0, -300),
+    /// in a system of `interference`, drawing on `chance`.
+    fn fired_in(record: WeaponRecord, interference: i16, chance: &mut dyn Chance) -> Vec<Shot> {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(record).targeting(B),
+            Ship::at(2, 0.0, -300.0),
+        ];
+        let field = Field {
+            interference,
+            ..Field::default()
+        };
+        tick_in(
+            &mut combat,
+            &mut ships,
+            (&Arsenal::default(), field),
+            chance,
+        );
+        combat.shots().to_vec()
+    }
+
+    #[test]
+    fn every_shot_rolls_its_weapons_jam_vuln_as_it_is_launched() {
+        let mut chance = Ranged::of(&[(41, 17)]);
+        let shots = fired_in(vulnerable(0, [40, 0, 7, 0]), 0, &mut chance);
+        assert_eq!(shots[0].jam_rolls, [17, 0, 7, 0]);
+        assert!(chance.was_asked(41) && chance.was_asked(8));
+        let unguided = WeaponRecord {
+            jam_vuln: [3, 0, 0, 0],
+            ..blaster()
+        };
+        let shots = fired_in(unguided, 0, &mut Ranged::of(&[]));
+        assert_eq!(shots[0].jam_rolls, [3, 0, 0, 0], "every shot rolls");
+    }
+
+    #[test]
+    fn a_seeker_0x0008_missile_is_interfered_when_its_roll_falls_within_the_interference() {
+        let sensitive = vulnerable(SENSOR_INTERFERENCE, [0; 4]);
+        for (interference, draw, jam) in [
+            (50, 49, Jam::Interfered),
+            (50, 50, Jam::Clear),
+            (100, 99, Jam::Interfered),
+            (0, 0, Jam::Clear),
+            (-5, 0, Jam::Clear),
+        ] {
+            let mut chance = Ranged::of(&[(100, draw)]);
+            let shots = fired_in(sensitive, interference, &mut chance);
+            assert_eq!(shots[0].jam, jam, "{interference} {draw}");
+        }
+        for record in [
+            vulnerable(0, [0; 4]),
+            WeaponRecord {
+                seeker: SENSOR_INTERFERENCE,
+                ..blaster()
+            },
+        ] {
+            let mut chance = Ranged::of(&[(100, 0)]);
+            let shots = fired_in(record, 100, &mut chance);
+            assert_eq!(shots[0].jam, Jam::Clear, "{record:?}");
+            assert!(!chance.was_asked(100), "{record:?}");
+        }
+    }
+
+    /// A shell releasing a homing sub-munition 148 of `seeker` and
+    /// `jam_vuln` at the end of its 3 ticks.
+    fn seeding(seeker: u16, jam_vuln: [i16; 4]) -> (WeaponRecord, Arsenal) {
+        let shell = WeaponRecord {
+            reload: 1000,
+            count: 3,
+            speed: 1000,
+            sub_count: 1,
+            sub_type: Some(WeaponId(148)),
+            ..weapon(182)
+        };
+        let sub = WeaponRecord {
+            id: WeaponId(148),
+            ..vulnerable(seeker, jam_vuln)
+        };
+        (shell, Arsenal::new(&[shell, sub], Vec::new()))
+    }
+
+    #[test]
+    fn a_sub_munition_rolls_its_own_weapons_jam_vuln_and_interference() {
+        let (shell, arsenal) = seeding(SENSOR_INTERFERENCE, [5, 0, 0, 9]);
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell).targeting(B),
+            Ship::at(2, 0.0, -900.0),
+        ];
+        let field = Field {
+            interference: 100,
+            ..Field::default()
+        };
+        for _ in 0..3 {
+            tick_in(
+                &mut combat,
+                &mut ships,
+                (&arsenal, field),
+                &mut Ranged::of(&[]),
+            );
+            ships[0].trigger = QUIET;
+        }
+        let subs = sub_shots(&combat);
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].jam_rolls, [5, 0, 0, 9]);
+        assert_eq!(subs[0].jam, Jam::Interfered);
+    }
+
+    /// The heading of the missile `ships[0]` fires on the first tick,
+    /// after `ticks` ticks in `field`, drawing on `chance`, or `None` once
+    /// it is gone.
+    fn missile_heading(
+        ships: &mut [Ship],
+        ticks: u32,
+        field: Field,
+        chance: &mut dyn Chance,
+    ) -> Option<f32> {
+        let mut combat = Combat::default();
+        for _ in 0..ticks {
+            tick_in(&mut combat, ships, (&Arsenal::default(), field), chance);
+            ships[0].trigger = QUIET;
+        }
+        combat.shots().first().map(|shot| shot.heading)
+    }
+
+    /// A fires a missile of `JamVuln` [100, 0, 0, 0] at B straight below
+    /// it, 90 degrees off its heading; B jams `jamming`.
+    fn at_a_jammer(jamming: [i16; 4]) -> [Ship; 2] {
+        [
+            Ship::at(1, 0.0, 0.0)
+                .armed(vulnerable(0, [100, 0, 0, 0]))
+                .targeting(B),
+            Ship {
+                jamming: Jamming(jamming),
+                ..Ship::at(2, 0.0, 1000.0)
+            },
+        ]
+    }
+
+    #[test]
+    fn a_missile_at_a_ship_whose_jamming_beats_its_roll_stops_turning() {
+        let field = Field::default();
+        let jammed = missile_heading(
+            &mut at_a_jammer([30, 0, 0, 0]),
+            16,
+            field,
+            &mut Ranged::of(&[(101, 71)]),
+        );
+        assert_eq!(jammed, Some(90.0));
+        let missed = missile_heading(
+            &mut at_a_jammer([30, 0, 0, 0]),
+            16,
+            field,
+            &mut Ranged::of(&[(101, 70)]),
+        );
+        assert!((missed.unwrap() - 97.0).abs() < 1e-4, "{missed:?}");
+    }
+
+    #[test]
+    fn a_disabled_breaking_up_or_held_disabled_ship_jams_nothing() {
+        for (condition, held) in [
+            (Condition::Disabled, false),
+            (
+                Condition::Dying {
+                    ticks_left: 90,
+                    starting: false,
+                },
+                false,
+            ),
+            (Condition::Intact, true),
+        ] {
+            let mut ships = at_a_jammer([100, 100, 100, 100]);
+            let mut combat = Combat::default();
+            let mut chance = Ranged::of(&[(101, 100)]);
+            let field = (&Arsenal::default(), Field::default());
+            // Fired at B intact, which is then downed.
+            tick_in(&mut combat, &mut ships, field, &mut chance);
+            ships[0].trigger = QUIET;
+            ships[1].condition = condition;
+            ships[1].held_disabled = held;
+            ships[1].reserves.armor.now = 1.0;
+            ships[1].hull.death_delay = 90;
+            for _ in 1..16 {
+                tick_in(&mut combat, &mut ships, field, &mut chance);
+            }
+            assert_ne!(ships[1].condition, Condition::Intact, "{condition:?}");
+            let heading = combat.shots()[0].heading;
+            assert!(
+                (heading - 97.0).abs() < 1e-4,
+                "{condition:?} {held}: {heading:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_jammed_missile_still_hits_its_target_and_its_damage_still_counts_as_aimed_at_it() {
+        // B straight ahead, jamming every type.
+        let mut ships = at_a_jammer([100, 100, 100, 100]);
+        ships[1].state.position = Vec2::new(250.0, 0.0);
+        let mut combat = Combat::default();
+        let mut chance = Ranged::of(&[(101, 100)]);
+        let mut aimed = BTreeMap::new();
+        let mut strikes = Vec::new();
+        for tick in 1..=25 {
+            tick_in(
+                &mut combat,
+                &mut ships,
+                (&Arsenal::default(), Field::default()),
+                &mut chance,
+            );
+            ships[0].trigger = QUIET;
+            if tick == 20 {
+                aimed = combat.targeted_damage();
+            }
+            strikes.extend(combat.take_strikes());
+        }
+        assert_eq!(aimed, BTreeMap::from([(B, 15)]));
+        assert!(
+            strikes
+                .iter()
+                .any(|strike| strike.ship == B && strike.direct),
+            "{strikes:?}"
+        );
+    }
+
+    #[test]
+    fn a_players_jammed_missile_still_locks() {
+        let jammer = Ship {
+            jamming: Jamming([100, 100, 100, 100]),
+            ..far_b()
+        };
+        let mut ships = [player_with(vulnerable(0, [100, 0, 0, 0])), jammer];
+        let mut combat = Combat::default();
+        let mut chance = Ranged::of(&[(101, 100)]);
+        let mut locks = 0;
+        for _ in 0..40 {
+            tick_in(
+                &mut combat,
+                &mut ships,
+                (&Arsenal::default(), Field::default()),
+                &mut chance,
+            );
+            ships[0].trigger = QUIET;
+            locks += combat
+                .take_strikes()
+                .iter()
+                .filter(|strike| strike.lock)
+                .count();
+        }
+        assert_eq!(locks, 1);
+    }
+
+    /// A fires a plain missile at B straight below it, cloaked.
+    fn at_a_cloak() -> [Ship; 2] {
+        [
+            Ship::at(1, 0.0, 0.0).armed(missile()).targeting(B),
+            Ship {
+                cloaked: true,
+                ..Ship::at(2, 0.0, 1000.0)
+            },
+        ]
+    }
+
+    #[test]
+    fn a_missile_stops_turning_at_a_target_its_firer_cannot_see() {
+        let unseen = missile_heading(&mut at_a_cloak(), 16, Field::default(), &mut NeverFires);
+        assert_eq!(unseen, Some(90.0));
+        let mut emerging = at_a_cloak();
+        emerging[1].cloaked = false;
+        emerging[1].emerging = true;
+        assert_eq!(
+            missile_heading(&mut emerging, 16, Field::default(), &mut NeverFires),
+            Some(90.0),
+            "coming out of a gate"
+        );
+        // The firer is within 200 pixels of the target, with a scanner.
+        for (y, seen) in [(200.0, true), (201.0, false)] {
+            let mut scanning = at_a_cloak();
+            scanning[1].state.position = Vec2::new(0.0, y);
+            scanning[0].cloak_scanner = true;
+            let heading = missile_heading(&mut scanning, 16, Field::default(), &mut NeverFires);
+            assert_eq!(heading.unwrap() > 90.0, seen, "{y}: {heading:?}");
+        }
+    }
+
+    #[test]
+    fn an_escort_with_a_cloak_steers_its_missile_at_its_cloaked_leader() {
+        for (has_cloak, turns) in [(true, true), (false, false)] {
+            let mut ships = at_a_cloak();
+            ships[0].leader = Some(B);
+            ships[0].has_cloak = has_cloak;
+            let heading = missile_heading(&mut ships, 16, Field::default(), &mut NeverFires);
+            assert_eq!(heading.unwrap() > 90.0, turns, "{has_cloak}");
+        }
+    }
+
+    #[test]
+    fn an_interfered_missile_circles_by_the_fields_frame() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0)
+                .armed(vulnerable(SENSOR_INTERFERENCE, [0; 4]))
+                .targeting(B),
+            Ship::at(2, 0.0, 1000.0),
+        ];
+        let field = |frame| Field {
+            frame,
+            interference: 100,
+        };
+        for frame in 0..15 {
+            tick_in(
+                &mut combat,
+                &mut ships,
+                (&Arsenal::default(), field(frame)),
+                &mut NeverFires,
+            );
+            ships[0].trigger = QUIET;
+        }
+        assert_eq!(combat.shots()[0].jam, Jam::Interfered);
+        assert_eq!(combat.shots()[0].heading, 90.0);
+        tick_in(
+            &mut combat,
+            &mut ships,
+            (&Arsenal::default(), field(149)),
+            &mut NeverFires,
+        );
+        assert!((combat.shots()[0].heading - 83.0).abs() < 1e-4);
+        tick_in(
+            &mut combat,
+            &mut ships,
+            (&Arsenal::default(), field(150)),
+            &mut NeverFires,
+        );
+        assert!((combat.shots()[0].heading - 90.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_seeker_lock_angle_follows_the_rulebook_the_short_way_by_default() {
+        // A faces 355; on the missile's 16th tick B is 100 pixels off at a
+        // bearing of 5.
+        let from = Vec2::ZERO + crate::flight::facing(355.0) * 150.0;
+        let b = from + crate::flight::facing(5.0) * 100.0;
+        let locked = WeaponRecord {
+            seeker: LOSES_LOCK_OFF_AHEAD,
+            ..missile()
+        };
+        for (source, kept) in [
+            (None, true),
+            (Some(RuleSource::Bible), true),
+            (Some(RuleSource::Engine), false),
+        ] {
+            let mut combat = Combat::default();
+            if let Some(source) = source {
+                combat.set_seeker_lock_angle(source);
+            }
+            let mut ships = [
+                Ship::at(1, 0.0, 0.0)
+                    .armed(locked)
+                    .facing(355.0)
+                    .targeting(B),
+                Ship::at(2, b.x, b.y),
+            ];
+            for _ in 0..16 {
+                tick(&mut combat, &mut ships, &NovaDisable);
+                ships[0].trigger = QUIET;
+            }
+            assert_eq!(combat.shots()[0].target.is_some(), kept, "{source:?}");
+        }
     }
 }

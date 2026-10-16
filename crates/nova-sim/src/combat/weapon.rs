@@ -442,6 +442,20 @@ pub const PD_IMMUNE: u16 = 0x0080;
 /// `Flags2`: a homing shot's proximity fuse is set off by other ships
 /// than its target.
 pub const PROXIMITY_BY_OTHERS: u16 = 0x0008;
+/// `Seeker`: a homing shot of it is confused by sensor interference: it
+/// circles from launch when a roll falls within its system's
+/// `Interference` (`_SpawnShot` @0x3eac5; see
+/// [`projectile`](super::projectile)).
+pub const SENSOR_INTERFERENCE: u16 = 0x0008;
+/// `Seeker`: a homing shot of it jammed turns away from its target
+/// (`_HandleShotGuidance` @0x3221d), where any other stops turning.
+pub const TURNS_AWAY_JAMMED: u16 = 0x0010;
+/// `Seeker`: a homing shot of it loses its lock on a target near it that
+/// is not ahead (`_HandleShotGuidance` @0x32348).
+pub const LOSES_LOCK_OFF_AHEAD: u16 = 0x4000;
+/// `Seeker`: a homing shot of it jammed, blinded or confused may turn on
+/// its firer (`_HandleShotGuidance` @0x32248, @0x322f2, @0x32729).
+pub const TURNS_ON_FIRER: u16 = 0x8000;
 /// `Flags2`: its sub-munitions are aimed at the nearest ship they can
 /// hit.
 pub const SUBS_SEEK_NEAREST: u16 = 0x0010;
@@ -591,6 +605,12 @@ impl WeaponSpec {
     #[must_use]
     pub fn proximity_by_others(&self) -> bool {
         self.flags2 & PROXIMITY_BY_OTHERS != 0
+    }
+
+    /// Whether its `Seeker` has the `bit`.
+    #[must_use]
+    pub fn seeks(&self, bit: u16) -> bool {
+        self.seeker & bit != 0
     }
 
     /// Whether the second trigger fires it.

@@ -1407,6 +1407,8 @@ impl Combatant {
             threatens_player: self.threatens_player,
             emerging: false,
             cloak_scanner: false,
+            has_cloak: false,
+            jamming: nova_sim::combat::jamming::Jamming::NONE,
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
@@ -1431,6 +1433,7 @@ fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
         arsenal,
         &nova_sim::Governments::default(),
         Rules::default(),
+        nova_sim::Field::default(),
         &mut [],
         &mut Straight,
     );
@@ -3236,6 +3239,7 @@ fn the_stock_thunderhead_lance_and_ion_cannon_jitter_every_tick() {
                 &Arsenal::default(),
                 &nova_sim::Governments::default(),
                 Rules::default(),
+                nova_sim::Field::default(),
                 &mut [],
                 &mut Drawing(draw),
             );
@@ -5792,6 +5796,7 @@ fn turret_hits(
             arsenal,
             &nova_sim::Governments::default(),
             Rules::default(),
+            nova_sim::Field::default(),
             &mut [],
             &mut chance,
         );
@@ -5920,6 +5925,7 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
             &arsenal,
             &nova_sim::Governments::default(),
             Rules::default(),
+            nova_sim::Field::default(),
             &mut [],
             &mut chance,
         );

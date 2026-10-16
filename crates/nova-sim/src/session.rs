@@ -441,10 +441,11 @@ use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
+use crate::combat::jamming::Jamming;
 use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
-use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Shove, Strike};
+use crate::combat::{Combat, CombatEvent, Downed, Field, Fighter, Rules, ShipRef, Shove, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
@@ -575,6 +576,8 @@ impl FightTerms {
             threatens_player: self.threatens_player,
             emerging,
             cloak_scanner,
+            has_cloak: false,
+            jamming: Jamming::NONE,
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
@@ -2181,6 +2184,8 @@ impl Session {
             threatens_player: false,
             emerging: false,
             cloak_scanner: scanner.on_screen,
+            has_cloak: false,
+            jamming: Jamming::NONE,
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
             jumping: self.jump.is_some(),
@@ -2197,6 +2202,7 @@ impl Session {
             &self.arsenal,
             &self.govts,
             rules,
+            Field::default(),
             &mut stellars,
             chance,
         );
@@ -2228,6 +2234,12 @@ impl Session {
         self.strike_stellars(&stellars, rules.law, chance);
         self.see_stellars();
         self.lay_out_ships();
+        self.note_drawn();
+    }
+
+    /// Notes the heading each ship is drawn at as the fight's tick ends,
+    /// which its next tick's shots leave from ([`Fighter::drawn_heading`]).
+    fn note_drawn(&mut self) {
         self.drawn = std::iter::once((ShipRef::Player, self.player.heading))
             .chain(
                 self.traffic

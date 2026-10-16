@@ -47,9 +47,15 @@ use super::ShipRef;
 use super::aim::bearing;
 use super::damage::Blast;
 use super::hull::Condition;
+use super::jamming::{JAMMING_TYPES, Jamming};
 use super::sides::{Sides, Ties};
-use super::weapon::{Guidance, WeaponSpec};
+use super::weapon::{
+    Guidance, LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, TURNS_AWAY_JAMMED, TURNS_ON_FIRER,
+    WeaponSpec,
+};
 use crate::catalog::{GovtId, ShipId};
+use crate::chance::Chance;
+use crate::cloak::{self, Observer};
 use crate::flight::{ShipState, facing, normalized, shortest_turn};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -65,6 +71,29 @@ pub const ROCKET_PUSH: f32 = 0.05;
 pub const BOMB_TURN: f32 = 1.0;
 /// How many ticks a homing shot flies straight before it steers.
 pub const HOMING_DELAY: u32 = 15;
+/// The odds, one in this, that a jammed `Seeker` 0x8000 shot turns on its
+/// firer (`_Rand(500)` @0x32250).
+pub const JAMMED_TURNS_ON_FIRER: u32 = 500;
+/// The odds, one in this, that a `Seeker` 0x8000 shot whose firer cannot
+/// see its target, or that sensor interference confuses, turns on its
+/// firer (`_Rand(1000)` @0x322fa, @0x32735).
+pub const BLINDED_TURNS_ON_FIRER: u32 = 1000;
+/// How near, on each axis, a `Seeker` 0x4000 shot's target must be for
+/// the shot to lose its lock (±249, @0x3237d-0x3239d).
+pub const LOCK_BOX: f32 = 249.0;
+/// How far off its heading, in degrees, a `Seeker` 0x4000 shot keeps its
+/// lock (@0x323e7).
+pub const LOCK_CONE: f32 = 45.0;
+/// The frames of an interfered shot's circle, back and on (300,
+/// @0x3265b).
+pub const CIRCLE_FRAMES: i32 = 300;
+/// The last frame of the circle an interfered shot turns back on (149,
+/// @0x32663).
+pub const CIRCLE_BACK: i32 = 149;
+/// The range sensor interference rolls in at launch: interfered when
+/// `below(INTERFERENCE_ROLL) + 1` is at most the system's `Interference`
+/// (`_SpawnShot` @0x3ead4, 100 at `_gSpeedMult` 1.0).
+pub const INTERFERENCE_ROLL: u32 = 100;
 /// The age a player's homing missile locks on its target past (the 30.0
 /// @0xdd638, tested "> 30" @0x357ab).
 pub const LOCK_AGE: u32 = 30;
@@ -156,6 +185,126 @@ pub enum Jam {
     Clear,
     /// Lost, its ship gone (998, `_HandleShot` @0x3561b).
     Lost,
+    /// Confused by sensor interference (999, `_SpawnShot` @0x3eb43): it
+    /// circles (`_HandleShotGuidance` @0x32613-0x32769).
+    Interfered,
+}
+
+/// What homing guidance reads of a ship besides its [`Target`], as the
+/// tick began: how strongly it jams (`_ShipECM`) and what
+/// `_ShipVisibleToShip` reads of it, as the target or as the firer looking
+/// for it. A ship with none is [`Sight::of`] it.
+// Each flag is its own fact about the ship, read on its own.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sight {
+    /// Which ship.
+    pub ship: ShipRef,
+    /// Its jamming.
+    pub jamming: Jamming,
+    /// Whether `_IsDisabled` holds of it: disabled, breaking up or held
+    /// disabled. It then jams nothing.
+    pub disabled: bool,
+    /// Whether it is cloaked.
+    pub cloaked: bool,
+    /// Whether it waits in the gate it comes out of, unseen.
+    pub emerging: bool,
+    /// Whether it has a cloak scanner on screen.
+    pub scanner: bool,
+    /// Whether it has a cloak (`_HasCloak`), which lets it see a cloaked
+    /// leader.
+    pub has_cloak: bool,
+}
+
+impl Sight {
+    /// `ship` jamming nothing, intact, uncloaked, in the open, with no
+    /// scanner and no cloak.
+    #[must_use]
+    pub fn of(ship: ShipRef) -> Self {
+        Self {
+            ship,
+            jamming: Jamming::NONE,
+            disabled: false,
+            cloaked: false,
+            emerging: false,
+            scanner: false,
+            has_cloak: false,
+        }
+    }
+}
+
+/// How a `Seeker` 0x4000 shot measures how far its target is off its
+/// heading, as the rulebook's
+/// [`RuleKey::SeekerLockAngle`](crate::RuleKey::SeekerLockAngle) says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LockAngle {
+    /// The short way round: the default, a recorded departure from the
+    /// original.
+    #[default]
+    Shortest,
+    /// The truncated difference, absolute and mod 360 with no fold
+    /// (@0x323bb-0x323e7): the engine's reading.
+    Plain,
+}
+
+impl From<RuleSource> for LockAngle {
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Plain,
+            RuleSource::Bible => Self::Shortest,
+        }
+    }
+}
+
+impl LockAngle {
+    /// How far, in degrees, a truncated `angle` from a heading to a
+    /// bearing is off ahead.
+    #[must_use]
+    pub fn off_ahead(self, angle: f32) -> f32 {
+        let plain = angle.abs() % 360.0;
+        match self {
+            Self::Plain => plain,
+            Self::Shortest => plain.min(360.0 - plain),
+        }
+    }
+}
+
+/// What a shot's guidance reads in a tick: every ship in the fight, what
+/// it reads of each beyond that ([`Sight`]), the frame counter
+/// (`_frameCounter` as `_DoPlayGameWork` sees it), and how a lock is
+/// measured.
+#[derive(Clone, Copy, Debug)]
+pub struct Guide<'a> {
+    /// Every ship in the fight.
+    pub targets: &'a [Target],
+    /// What guidance reads of each beyond its [`Target`].
+    pub sights: &'a [Sight],
+    /// The frame counter.
+    pub frame: i32,
+    /// How a `Seeker` 0x4000 lock is measured.
+    pub lock_angle: LockAngle,
+}
+
+impl<'a> Guide<'a> {
+    /// `targets`, with no sights, at frame 0, by the default lock angle.
+    #[must_use]
+    pub fn among(targets: &'a [Target]) -> Self {
+        Self {
+            targets,
+            sights: &[],
+            frame: 0,
+            lock_angle: LockAngle::default(),
+        }
+    }
+
+    /// What it reads of `ship`: its sight, or [`Sight::of`] it with none.
+    fn sight(&self, ship: ShipRef) -> Sight {
+        self.sights
+            .iter()
+            .find(|sight| sight.ship == ship)
+            .copied()
+            .unwrap_or_else(|| Sight::of(ship))
+    }
 }
 
 /// How often a decaying shot loses a point of its direct hit's mass and
@@ -278,6 +427,9 @@ pub struct Shot {
     /// point-defence shot as it is launched, and [`ShotLayer::Shots`] for
     /// any other, or one fired at a ship.
     pub layer: ShotLayer,
+    /// Its rolls against each jamming type (the original's +0x38-+0x3e),
+    /// drawn as it is launched ([`jamming::roll`](super::jamming::roll)).
+    pub jam_rolls: [u16; JAMMING_TYPES],
 }
 
 /// How a freefall bomb (5) or a rocket (6) leaves its ship. `_SpawnShot`
@@ -370,16 +522,19 @@ impl Shot {
             } else {
                 ShotLayer::Shots
             },
+            jam_rolls: [0; JAMMING_TYPES],
         }
     }
 
     /// Flies the shot one tick, a homing one steering at its target among
-    /// `targets`, and gives where it was. First, a shot whose ship has
-    /// gone from `targets` is lost (see the module docs).
-    pub fn step(&mut self, targets: &[Target]) -> Vec2 {
+    /// `guide`'s ships, its draws made on `chance`, and gives where it
+    /// was. First, a shot whose ship has gone from the fight is lost (see
+    /// the module docs).
+    pub fn step(&mut self, guide: &Guide, chance: &mut dyn Chance) -> Vec2 {
+        let targets = guide.targets;
         self.lose_a_gone_ship(targets);
         match self.weapon.guidance {
-            Guidance::Homing => self.home(targets),
+            Guidance::Homing => self.home(guide, chance),
             Guidance::Rocket => {
                 self.velocity = self.velocity * ROCKET_KEEP
                     + facing(self.heading) * (self.weapon.speed * ROCKET_PUSH);
@@ -460,11 +615,21 @@ impl Shot {
         }
     }
 
-    /// Steers a homing shot a tick at its target among `targets`, while
-    /// that is active, breaking up included (`_HandleShotGuidance` steers
-    /// at any active slot), and sets its velocity to its speed along its
-    /// heading (see the module docs).
-    fn home(&mut self, targets: &[Target]) {
+    /// Steers a homing shot a tick, as `_HandleShotGuidance` does
+    /// (@0x320dc-0x32aa4; see the module docs): an interfered one circles
+    /// ([`Shot::circle`]); any other, past [`HOMING_DELAY`] ticks with its
+    /// target active among `guide`'s ships, breaking up included, is
+    /// tested in order for its target's jamming ([`Shot::jammed`]), its
+    /// firer's sight of the target ([`Shot::blinded`]) and a `Seeker`
+    /// 0x4000 lock ([`Shot::lock_holds`]), then turns at the bearing it
+    /// read before them; then its velocity is its speed along its heading.
+    /// Draws are made on `chance`.
+    fn home(&mut self, guide: &Guide, chance: &mut dyn Chance) {
+        if self.jam == Jam::Interfered {
+            self.circle(guide.frame, chance);
+            return;
+        }
+        let targets = guide.targets;
         let target = self.target.and_then(|ship| {
             targets
                 .iter()
@@ -472,13 +637,158 @@ impl Shot {
         });
         if let Some(target) = target.filter(|_| self.age >= HOMING_DELAY) {
             let wanted = bearing(self.position, target.position);
+            let mut turn = self.weapon.turn;
+            self.jammed(target.ship, &mut turn, guide, chance);
+            self.blinded(target, &mut turn, guide, chance);
+            if !self.lock_holds(guide) {
+                self.target = None;
+                self.aimed_at = None;
+            }
+            // A negative turn, a jammed 0x0010 shot's, turns away.
             let off = shortest_turn(self.heading, wanted);
-            let turn = self.weapon.turn;
-            if off.abs() > turn {
-                self.heading = normalized(self.heading + turn.copysign(off));
+            if off.abs() > turn.abs() {
+                self.heading = normalized(self.heading + turn * off.signum());
             }
         }
         self.velocity = facing(self.heading) * self.weapon.speed;
+    }
+
+    /// The jam test (@0x321b7-0x32275): when `target`'s jamming jams the
+    /// shot's rolls ([`jamming::jams`](super::jamming::jams)), a positive
+    /// `turn` is turned away under `Seeker` 0x0010 ([`TURNS_AWAY_JAMMED`])
+    /// and stopped otherwise, and under `Seeker` 0x8000
+    /// ([`TURNS_ON_FIRER`]) a [`JAMMED_TURNS_ON_FIRER`] roll of none turns
+    /// it on its firer ([`Shot::turn_on_firer`]). It sets no jam.
+    fn jammed(&mut self, target: ShipRef, turn: &mut f32, guide: &Guide, chance: &mut dyn Chance) {
+        let sight = guide.sight(target);
+        if !super::jamming::jams(self.jam_rolls, sight.jamming, sight.disabled) {
+            return;
+        }
+        if *turn > 0.0 {
+            *turn = if self.weapon.seeks(TURNS_AWAY_JAMMED) {
+                -*turn
+            } else {
+                0.0
+            };
+        }
+        if self.weapon.seeks(TURNS_ON_FIRER) && chance.below(JAMMED_TURNS_ON_FIRER) == 0 {
+            self.turn_on_firer();
+        }
+    }
+
+    /// The cloak test (@0x32284-0x32335), for a shot a ship launched: when
+    /// its firer does not see `target` ([`cloak::seen`]), the `turn` stops,
+    /// and under `Seeker` 0x8000 a [`BLINDED_TURNS_ON_FIRER`] roll of none
+    /// turns it on its firer. The firer looks from where it is, with its
+    /// scanner, and as an escort of `target` with a cloak of its own; a
+    /// firer no longer in the fight sees only a ship neither cloaked nor
+    /// coming out of a gate (the original reads its stale slot,
+    /// @0x322b4-0x322d8).
+    fn blinded(&mut self, target: &Target, turn: &mut f32, guide: &Guide, chance: &mut dyn Chance) {
+        if !matches!(self.source, Source::Ship(_)) {
+            return;
+        }
+        let observer = guide
+            .targets
+            .iter()
+            .find(|ship| ship.ship == self.firer)
+            .map_or_else(Observer::default, |firer| {
+                let sight = guide.sight(firer.ship);
+                Observer {
+                    at: firer.position,
+                    scanner: sight.scanner,
+                    cloaked_escort: firer.ties.leader == Some(target.ship) && sight.has_cloak,
+                }
+            });
+        let seen = guide.sight(target.ship);
+        if cloak::seen(seen.cloaked, target.position, seen.emerging, observer) {
+            return;
+        }
+        *turn = 0.0;
+        if self.weapon.seeks(TURNS_ON_FIRER) && chance.below(BLINDED_TURNS_ON_FIRER) == 0 {
+            self.turn_on_firer();
+        }
+    }
+
+    /// Whether a `Seeker` 0x4000 shot ([`LOSES_LOCK_OFF_AHEAD`]) keeps its
+    /// lock on its target as the jam and cloak tests left it
+    /// (@0x3233b-0x323ed): it loses it on a ship within [`LOCK_BOX`] on
+    /// each axis, truncated, whose truncated bearing off its heading is
+    /// above [`LOCK_CONE`] as `guide`'s [`LockAngle`] measures it. Any
+    /// other shot, and one whose target is not in the fight, keeps it.
+    fn lock_holds(&self, guide: &Guide) -> bool {
+        if !self.weapon.seeks(LOSES_LOCK_OFF_AHEAD) {
+            return true;
+        }
+        let Some(target) = self
+            .target
+            .and_then(|ship| guide.targets.iter().find(|target| target.ship == ship))
+        else {
+            return true;
+        };
+        let off = target.position - self.position;
+        if off.x.trunc().abs() > LOCK_BOX || off.y.trunc().abs() > LOCK_BOX {
+            return true;
+        }
+        let angle = (bearing(self.position, target.position) - self.heading).trunc();
+        guide.lock_angle.off_ahead(angle) <= LOCK_CONE
+    }
+
+    /// Sensor interference's flight (@0x32613-0x32769): past
+    /// [`HOMING_DELAY`] ticks it turns its turn a tick, back while the
+    /// `frame` counter's truncated remainder by [`CIRCLE_FRAMES`] is at
+    /// most [`CIRCLE_BACK`] and on otherwise, whatever its target; its
+    /// velocity is its speed along its heading. Then, every tick, under
+    /// `Seeker` 0x8000 a [`BLINDED_TURNS_ON_FIRER`] roll of none drawn on
+    /// `chance` clears it, turned on its firer.
+    fn circle(&mut self, frame: i32, chance: &mut dyn Chance) {
+        if self.age >= HOMING_DELAY {
+            let turn = self.weapon.turn;
+            let back = frame % CIRCLE_FRAMES <= CIRCLE_BACK;
+            self.heading = normalized(if back {
+                self.heading - turn
+            } else {
+                self.heading + turn
+            });
+        }
+        self.velocity = facing(self.heading) * self.weapon.speed;
+        if self.weapon.seeks(TURNS_ON_FIRER)
+            && chance.below(BLINDED_TURNS_ON_FIRER) == 0
+            && matches!(self.source, Source::Ship(_))
+        {
+            self.jam = Jam::Clear;
+            self.turn_on_firer();
+        }
+    }
+
+    /// Turns a shot a ship launched on its firer: its target and the ship
+    /// its damage is aimed at become the firer (+0x2a), and it is launched
+    /// by no ship from then on ([`Source::Other`], +0x2c = -1), so it can
+    /// hit only its firer, holds no reload, locks nothing, and its hit
+    /// and blast are no one's. A shot no ship launched is left alone.
+    fn turn_on_firer(&mut self) {
+        if matches!(self.source, Source::Ship(_)) {
+            self.target = Some(self.firer);
+            self.aimed_at = Some(self.firer);
+            self.source = Source::Other;
+        }
+    }
+
+    /// Draws what `_SpawnShot` rolls for a shot as it is launched, on
+    /// `chance`, in a system of `interference`: its rolls against each
+    /// jamming type ([`jamming::roll`](super::jamming::roll),
+    /// @0x3f051-0x3f0a7), and for a homing shot of `Seeker` 0x0008
+    /// ([`SENSOR_INTERFERENCE`]) whether it is [`Jam::Interfered`]:
+    /// `below(`[`INTERFERENCE_ROLL`]`) + 1` at most the `interference`
+    /// (@0x3eab2-0x3eb66). A sub-munition rolls its own weapon's.
+    pub fn roll_at_launch(&mut self, interference: i16, chance: &mut dyn Chance) {
+        if self.weapon.guidance == Guidance::Homing && self.weapon.seeks(SENSOR_INTERFERENCE) {
+            let roll = i64::from(chance.below(INTERFERENCE_ROLL)) + 1;
+            if roll <= i64::from(interference) {
+                self.jam = Jam::Interfered;
+            }
+        }
+        self.jam_rolls = super::jamming::roll(self.weapon.jam_vuln, chance);
     }
 
     /// Its firer's government as it fired, or `None` for an independent
@@ -613,12 +923,20 @@ impl Shot {
 mod tests {
     use super::*;
     use crate::catalog::{GovtRecord, WeaponRecord};
+    use crate::chance::NeverFires;
     use crate::combat::sides::PassThrough;
+    use crate::combat::weapon::{LOSES_LOCK_OFF_AHEAD, TURNS_AWAY_JAMMED, TURNS_ON_FIRER};
     use crate::govt::{Governments, NEVER_ATTACKS_PLAYER, PLAYER_SHOTS_PASS};
-    use crate::testkit::{among, govt, weapon};
+    use crate::testkit::{Ranged, among, govt, weapon};
     use crate::traffic::npc::NpcId;
 
     const FIRER: ShipRef = ShipRef::Npc(NpcId(1));
+
+    /// Flies `shot` a tick among `targets`, with no sights, at frame 0,
+    /// every draw its last outcome.
+    fn step(shot: &mut Shot, targets: &[Target]) -> Vec2 {
+        shot.step(&Guide::among(targets), &mut NeverFires)
+    }
 
     fn spec(guidance: i16, speed: i16, count: i16) -> WeaponSpec {
         WeaponSpec::new(&WeaponRecord {
@@ -703,7 +1021,7 @@ mod tests {
         for tick in 1..=13 {
             assert!(!shot.expired(), "{tick}");
             let was = shot.position;
-            assert_eq!(shot.step(&[]), was);
+            assert_eq!(step(&mut shot, &[]), was);
             assert_eq!(shot.age, tick);
         }
         assert!(shot.expired());
@@ -721,16 +1039,16 @@ mod tests {
             90.0,
         );
         assert_eq!(rocket.velocity, Vec2::ZERO);
-        rocket.step(&[]);
+        step(&mut rocket, &[]);
         assert!(close(rocket.velocity, Vec2::new(0.5, 0.0)), "{rocket:?}");
         assert!(
             close(rocket.position, Vec2::new(0.5, 0.0)),
             "moved after speeding up"
         );
-        rocket.step(&[]);
+        step(&mut rocket, &[]);
         assert!(close(rocket.velocity, Vec2::new(0.975, 0.0)), "{rocket:?}");
         for _ in 0..200 {
-            rocket.step(&[]);
+            step(&mut rocket, &[]);
         }
         assert!((rocket.velocity.x - 10.0).abs() < 1e-3, "{rocket:?}");
         let moving = Shot::launch(
@@ -755,12 +1073,12 @@ mod tests {
         );
         assert!(close(bomb.velocity, Vec2::new(4.0, 0.0)), "{bomb:?}");
         assert_eq!(BOMB_LAUNCH, 0.8);
-        bomb.step(&[]);
+        step(&mut bomb, &[]);
         assert!((bomb.heading - 1.0).abs() < 1e-4, "{bomb:?}");
         assert!(close(bomb.velocity, Vec2::new(4.0, 0.0)), "kept");
         assert!(close(bomb.position, Vec2::new(4.0, 0.0)));
         for _ in 0..100 {
-            bomb.step(&[]);
+            step(&mut bomb, &[]);
         }
         assert!(
             (bomb.heading - 90.0).abs() < 1e-3,
@@ -773,7 +1091,7 @@ mod tests {
             &state(0.0, 0.0, -5.0, 0.0, 0.0),
             0.0,
         );
-        left.step(&[]);
+        step(&mut left, &[]);
         assert!((left.heading - 359.0).abs() < 1e-3, "{left:?}");
         assert_eq!(BOMB_TURN, 1.0);
     }
@@ -786,7 +1104,7 @@ mod tests {
             ..Shot::launch(spec(5, 1000, 600), FIRER, FIRER, &ShipState::default(), 0.0)
         };
         for _ in 0..ticks {
-            bomb.step(&[]);
+            step(&mut bomb, &[]);
         }
         bomb.heading
     }
@@ -951,7 +1269,7 @@ mod tests {
             &state(0.0, 0.0, 0.0, 0.0, 90.0),
             90.0,
         );
-        shot.step(&[]);
+        step(&mut shot, &[]);
         shot
     }
 
@@ -1586,19 +1904,19 @@ mod tests {
         let below = [target(2, 0.0, 1000.0, Condition::Intact)];
         let mut shot = homing(missile(0), Some(TARGET));
         for tick in 1..=15 {
-            shot.step(&below);
+            step(&mut shot, &below);
             assert_eq!(shot.heading, 90.0, "{tick}");
         }
         assert!(close(shot.position, Vec2::new(150.0, 0.0)), "{shot:?}");
-        shot.step(&below);
+        step(&mut shot, &below);
         assert!((shot.heading - 97.0).abs() < 1e-4, "{shot:?}");
         assert!(close(shot.velocity, facing(97.0) * 10.0), "{shot:?}");
-        shot.step(&below);
+        step(&mut shot, &below);
         assert!((shot.heading - 104.0).abs() < 1e-4, "{shot:?}");
         let above = [target(2, 300.0, -1000.0, Condition::Intact)];
         let mut left = homing(missile(0), Some(TARGET));
         for _ in 0..16 {
-            left.step(&above);
+            step(&mut left, &above);
         }
         assert!(
             (left.heading - 83.0).abs() < 1e-4,
@@ -1614,7 +1932,7 @@ mod tests {
         let ahead = [target(2, 650.0, -near_ahead, Condition::Intact)];
         let mut shot = homing(missile(0), Some(TARGET));
         for _ in 0..16 {
-            shot.step(&ahead);
+            step(&mut shot, &ahead);
         }
         assert_eq!(shot.heading, 90.0, "not snapped to the bearing");
         // Straight up from where it is on its 16th tick: exactly 90
@@ -1626,7 +1944,7 @@ mod tests {
         let above = [target(2, 150.0, -1000.0, Condition::Intact)];
         let mut shot = homing(sharp, Some(TARGET));
         for _ in 0..16 {
-            shot.step(&above);
+            step(&mut shot, &above);
         }
         assert_eq!(shot.heading, 90.0, "exactly its turn off: kept");
     }
@@ -1642,7 +1960,7 @@ mod tests {
         );
         assert!(close(shot.velocity, Vec2::new(0.0, 10.0)), "{shot:?}");
         shot.velocity = Vec2::new(4.0, 4.0);
-        shot.step(&[]);
+        step(&mut shot, &[]);
         assert!(close(shot.position, Vec2::new(0.0, 10.0)), "{shot:?}");
     }
 
@@ -1700,7 +2018,7 @@ mod tests {
     fn a_homing_shot_without_a_target_flies_straight_and_hits_nothing() {
         let mut shot = homing(missile(0), None);
         for _ in 0..30 {
-            shot.step(&in_its_path());
+            step(&mut shot, &in_its_path());
         }
         assert_eq!(shot.heading, 90.0);
         assert_eq!(shot.jam, Jam::Clear);
@@ -1716,13 +2034,13 @@ mod tests {
             let mut shot = homing(missile(0), Some(TARGET));
             shot.aimed_at = Some(TARGET);
             for _ in 0..20 {
-                shot.step(&gone);
+                step(&mut shot, &gone);
             }
             assert_eq!(shot.jam, Jam::Lost, "{gone:?}");
             assert_eq!((shot.target, shot.aimed_at), (None, None), "{gone:?}");
             assert_eq!(shot.heading, 90.0, "flies straight on: {gone:?}");
             let back = [target(2, 0.0, 1000.0, Condition::Intact)];
-            shot.step(&back);
+            step(&mut shot, &back);
             assert_eq!(shot.heading, 90.0, "lost for good: {gone:?}");
         }
         let lost = Shot {
@@ -1745,7 +2063,7 @@ mod tests {
             let mut chasing = homing(missile(0), Some(TARGET));
             chasing.aimed_at = Some(TARGET);
             for _ in 0..16 {
-                chasing.step(&quarry);
+                step(&mut chasing, &quarry);
             }
             assert_eq!(chasing.jam, Jam::Clear, "{condition:?}");
             assert!(chasing.heading > 90.0, "chased: {condition:?}");
@@ -1780,7 +2098,7 @@ mod tests {
         for guidance in [-1, 4, 5, 6, 1] {
             let mut kept = aimed_at_two(guidance);
             let was = kept.position;
-            kept.step(&[behind, aimed]);
+            step(&mut kept, &[behind, aimed]);
             assert_eq!(kept.jam, Jam::Clear, "{guidance}");
             assert_eq!(kept.aimed_at, Some(TARGET), "{guidance}");
             assert_eq!(
@@ -1790,13 +2108,13 @@ mod tests {
             );
             let mut lost = aimed_at_two(guidance);
             let was = lost.position;
-            lost.step(&[behind]);
+            step(&mut lost, &[behind]);
             assert_eq!(lost.jam, Jam::Lost, "{guidance}");
             assert_eq!((lost.aimed_at, lost.target), (None, None), "{guidance}");
             assert_eq!(lost.hit(was, &among(&[behind])), None, "{guidance}");
             for _ in 0..200 {
                 let was = lost.position;
-                lost.step(&[behind, aimed]);
+                step(&mut lost, &[behind, aimed]);
                 assert_eq!(lost.hit(was, &among(&[behind, aimed])), None);
             }
             assert_eq!(lost.jam, Jam::Lost, "{guidance}: for good");
@@ -1810,14 +2128,14 @@ mod tests {
             aimed_at: None,
             ..aimed_at_two(7)
         };
-        ahead.step(&[]);
+        step(&mut ahead, &[]);
         assert_eq!(ahead.jam, Jam::Clear);
     }
 
     #[test]
     fn a_point_defence_shot_is_never_lost_and_is_aimed_at_no_ship() {
         let mut defence = aimed_at_two(9);
-        defence.step(&[]);
+        step(&mut defence, &[]);
         assert_eq!(defence.jam, Jam::Clear);
         assert_eq!(defence.aimed_at, None);
         assert_eq!(defence.target, Some(TARGET), "its quarry kept");
@@ -1835,13 +2153,13 @@ mod tests {
             },
         );
         let mut shot = aimed_at_two(-1);
-        shot.step(&[dying]);
+        step(&mut shot, &[dying]);
         assert_eq!(shot.jam, Jam::Clear);
         let destroyed = Target {
             condition: Condition::Destroyed,
             ..dying
         };
-        shot.step(&[destroyed]);
+        step(&mut shot, &[destroyed]);
         assert_eq!(shot.jam, Jam::Lost);
     }
 
@@ -1870,7 +2188,7 @@ mod tests {
             )
         };
         for _ in 0..20 {
-            turret.step(&below);
+            step(&mut turret, &below);
         }
         assert_eq!(turret.heading, 90.0);
         assert_eq!(turret.jam, Jam::Clear);
@@ -1897,7 +2215,7 @@ mod tests {
         let mut original = Vec::new();
         let mut bible = Vec::new();
         for _ in 1..=9 {
-            shot.step(&[]);
+            step(&mut shot, &[]);
             original.push(shot.decay_steps(DecayStep::EveryDecayPlusOne));
             bible.push(shot.decay_steps(DecayStep::EveryDecay));
         }
@@ -1950,5 +2268,552 @@ mod tests {
             Some(0.375),
             "across it"
         );
+    }
+
+    /// An IR Missile with `seeker`, at `target`, fired by [`FIRER`].
+    fn seeking(seeker: u16, target: Option<ShipRef>) -> Shot {
+        let weapon = WeaponSpec {
+            seeker,
+            ..missile(0)
+        };
+        Shot {
+            aimed_at: target,
+            ..homing(weapon, target)
+        }
+    }
+
+    /// `shot` flown `ticks` ticks among `targets` and `sights`, at
+    /// `frame`, its draws on `chance`.
+    fn guided(
+        shot: &mut Shot,
+        ticks: u32,
+        (targets, sights): (&[Target], &[Sight]),
+        chance: &mut dyn Chance,
+    ) {
+        let guide = Guide {
+            sights,
+            ..Guide::among(targets)
+        };
+        for _ in 0..ticks {
+            shot.step(&guide, chance);
+        }
+    }
+
+    /// The target straight down, 90 degrees off a missile heading right.
+    fn below() -> Target {
+        target(2, 0.0, 1000.0, Condition::Intact)
+    }
+
+    /// Ship 2 jamming `jamming`.
+    fn jamming(jamming: [i16; 4]) -> Sight {
+        Sight {
+            jamming: Jamming(jamming),
+            ..Sight::of(TARGET)
+        }
+    }
+
+    #[test]
+    fn a_jammed_missile_stops_turning_from_its_15th_tick_and_one_not_jammed_turns() {
+        let jammer = [jamming([30, 0, 0, 0])];
+        for (rolls, heading, why) in [
+            ([71, 0, 0, 0], 90.0, "71 against 30"),
+            ([70, 0, 0, 0], 97.0, "exactly 100 less 30 is not jammed"),
+            ([0, 0, 0, 0], 97.0, "no roll"),
+        ] {
+            let mut shot = Shot {
+                jam_rolls: rolls,
+                ..seeking(0, Some(TARGET))
+            };
+            guided(&mut shot, 16, (&[below()], &jammer), &mut NeverFires);
+            assert!((shot.heading - heading).abs() < 1e-4, "{why}: {shot:?}");
+            assert_eq!(shot.jam, Jam::Clear, "{why}: jammed sets no jam");
+            assert_eq!((shot.target, shot.aimed_at), (Some(TARGET), Some(TARGET)));
+        }
+        let mut over = Shot {
+            jam_rolls: [101, 0, 0, 0],
+            ..seeking(0, Some(TARGET))
+        };
+        guided(&mut over, 16, (&[below()], &[]), &mut NeverFires);
+        assert_eq!(over.heading, 90.0, "a roll above 100 jams a target of none");
+    }
+
+    #[test]
+    fn each_types_roll_is_tested_against_its_own_jamming() {
+        let jammer = [jamming([100, 40, 0, 0])];
+        let mut second = Shot {
+            jam_rolls: [0, 61, 0, 0],
+            ..seeking(0, Some(TARGET))
+        };
+        guided(&mut second, 16, (&[below()], &jammer), &mut NeverFires);
+        assert_eq!(second.heading, 90.0);
+        let mut short = Shot {
+            jam_rolls: [0, 60, 0, 0],
+            ..seeking(0, Some(TARGET))
+        };
+        guided(&mut short, 16, (&[below()], &jammer), &mut NeverFires);
+        assert!((short.heading - 97.0).abs() < 1e-4, "type 1's 100 ignored");
+    }
+
+    #[test]
+    fn a_jammed_0x0010_missile_turns_away_by_its_turn() {
+        let jammer = [jamming([30, 0, 0, 0])];
+        let mut shot = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            ..seeking(TURNS_AWAY_JAMMED, Some(TARGET))
+        };
+        guided(&mut shot, 17, (&[below()], &jammer), &mut NeverFires);
+        assert!((shot.heading - 76.0).abs() < 1e-4, "{shot:?}");
+        assert!(close(shot.velocity, facing(76.0) * 10.0));
+    }
+
+    #[test]
+    fn a_disabled_or_breaking_up_target_jams_nothing() {
+        let disabled = [Sight {
+            disabled: true,
+            ..jamming([100, 100, 100, 100])
+        }];
+        let mut shot = Shot {
+            jam_rolls: [100, 100, 100, 100],
+            ..seeking(0, Some(TARGET))
+        };
+        guided(&mut shot, 16, (&[below()], &disabled), &mut NeverFires);
+        assert!((shot.heading - 97.0).abs() < 1e-4, "{shot:?}");
+    }
+
+    #[test]
+    fn the_jam_test_waits_its_15_ticks_and_asks_its_odds_only_when_jammed() {
+        let jammer = [jamming([30, 0, 0, 0])];
+        let mut chance = Ranged::of(&[(500, 0)]);
+        let mut shot = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            ..seeking(TURNS_ON_FIRER, Some(TARGET))
+        };
+        guided(&mut shot, 15, (&[below()], &jammer), &mut chance);
+        assert!(!chance.was_asked(500), "before its 15 ticks");
+        assert_eq!(shot.target, Some(TARGET));
+        let mut clear = Shot {
+            jam_rolls: [70, 0, 0, 0],
+            ..seeking(TURNS_ON_FIRER, Some(TARGET))
+        };
+        let mut unjammed = Ranged::of(&[(500, 0)]);
+        guided(&mut clear, 20, (&[below()], &jammer), &mut unjammed);
+        assert!(!unjammed.was_asked(500), "not jammed");
+        let mut plain = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            ..seeking(0, Some(TARGET))
+        };
+        let mut never = Ranged::of(&[(500, 0)]);
+        guided(&mut plain, 20, (&[below()], &jammer), &mut never);
+        assert!(!never.was_asked(500), "no 0x8000");
+        assert_eq!(plain.target, Some(TARGET));
+    }
+
+    #[test]
+    fn a_jammed_0x8000_missile_turns_on_its_firer_at_1_in_500() {
+        let jammer = [jamming([30, 0, 0, 0])];
+        // The firer sits above the missile's 16th-tick position.
+        let firer = Target {
+            ship: FIRER,
+            ..target(1, 160.0, -1000.0, Condition::Intact)
+        };
+        let ships = [below(), firer];
+        let mut shot = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            ..seeking(TURNS_ON_FIRER, Some(TARGET))
+        };
+        let mut chance = Ranged::of(&[(500, 0)]);
+        guided(&mut shot, 16, (&ships, &jammer), &mut chance);
+        assert!(chance.was_asked(500));
+        assert_eq!(
+            (shot.target, shot.aimed_at, shot.source),
+            (Some(FIRER), Some(FIRER), Source::Other)
+        );
+        assert_eq!(shot.heading, 90.0, "its jammed turn, from the old bearing");
+        guided(&mut shot, 1, (&ships, &jammer), &mut chance);
+        assert!(
+            (shot.heading - 83.0).abs() < 1e-4,
+            "then at its firer: {shot:?}"
+        );
+        let mut kept = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            ..seeking(TURNS_ON_FIRER, Some(TARGET))
+        };
+        guided(
+            &mut kept,
+            16,
+            (&ships, &jammer),
+            &mut Ranged::of(&[(500, 1)]),
+        );
+        assert_eq!(
+            (kept.target, kept.source),
+            (Some(TARGET), Source::Ship(Ties::default()))
+        );
+        let mut other = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            source: Source::Other,
+            ..seeking(TURNS_ON_FIRER, Some(TARGET))
+        };
+        guided(
+            &mut other,
+            16,
+            (&ships, &jammer),
+            &mut Ranged::of(&[(500, 0)]),
+        );
+        assert_eq!(other.target, Some(TARGET), "no ship launched it");
+    }
+
+    #[test]
+    fn a_missile_turned_on_its_firer_hits_it_and_no_other() {
+        let shot = Shot {
+            target: Some(FIRER),
+            aimed_at: Some(FIRER),
+            source: Source::Other,
+            ..passing_homing(0, Some(FIRER))
+        };
+        let firer = Target {
+            ship: FIRER,
+            ..target(1, 60.0, 0.0, Condition::Intact)
+        };
+        let path = [target(3, 30.0, 0.0, Condition::Intact), firer];
+        assert_eq!(
+            shot.hit(Vec2::ZERO, &among(&path)).map(|met| met.ship),
+            Some(FIRER)
+        );
+    }
+
+    /// Ship 2 cloaked.
+    fn cloaked() -> Sight {
+        Sight {
+            cloaked: true,
+            ..Sight::of(TARGET)
+        }
+    }
+
+    #[test]
+    fn a_missile_stops_turning_while_its_firer_cannot_see_its_target() {
+        let mut shot = seeking(0, Some(TARGET));
+        guided(&mut shot, 17, (&[below()], &[cloaked()]), &mut NeverFires);
+        assert_eq!(shot.heading, 90.0, "cloaked, no scanner");
+        assert!(close(shot.velocity, facing(90.0) * 10.0));
+        guided(&mut shot, 1, (&[below()], &[]), &mut NeverFires);
+        assert!((shot.heading - 97.0).abs() < 1e-4, "uncloaked: {shot:?}");
+        let emerging = [Sight {
+            emerging: true,
+            ..Sight::of(TARGET)
+        }];
+        let mut gated = seeking(0, Some(TARGET));
+        guided(&mut gated, 16, (&[below()], &emerging), &mut NeverFires);
+        assert_eq!(gated.heading, 90.0, "coming out of a gate");
+    }
+
+    #[test]
+    fn a_firer_with_a_cloak_scanner_sees_a_cloaked_target_within_200_pixels_on_each_axis() {
+        let scanner = Sight {
+            scanner: true,
+            ..Sight::of(FIRER)
+        };
+        for (y, seen) in [(800.0, true), (799.0, false)] {
+            let firer = Target {
+                ship: FIRER,
+                ..target(1, 200.0, y, Condition::Intact)
+            };
+            let mut shot = seeking(0, Some(TARGET));
+            guided(
+                &mut shot,
+                16,
+                (&[below(), firer], &[cloaked(), scanner]),
+                &mut NeverFires,
+            );
+            assert_eq!(shot.heading > 90.0, seen, "{y}: {shot:?}");
+        }
+    }
+
+    #[test]
+    fn an_escort_with_a_cloak_sees_its_cloaked_leader() {
+        let escort = Target {
+            ship: FIRER,
+            ties: Ties {
+                leader: Some(TARGET),
+                ..Ties::default()
+            },
+            ..target(1, 0.0, -5000.0, Condition::Intact)
+        };
+        for (has_cloak, seen) in [(true, true), (false, false)] {
+            let gear = Sight {
+                has_cloak,
+                ..Sight::of(FIRER)
+            };
+            let mut shot = seeking(0, Some(TARGET));
+            guided(
+                &mut shot,
+                16,
+                (&[below(), escort], &[cloaked(), gear]),
+                &mut NeverFires,
+            );
+            assert_eq!(shot.heading > 90.0, seen, "{has_cloak}");
+        }
+    }
+
+    #[test]
+    fn a_blinded_0x8000_missile_turns_on_its_firer_at_1_in_1000() {
+        let mut shot = seeking(TURNS_ON_FIRER, Some(TARGET));
+        let mut chance = Ranged::of(&[(1000, 0)]);
+        guided(&mut shot, 16, (&[below()], &[cloaked()]), &mut chance);
+        assert_eq!(
+            (shot.target, shot.aimed_at, shot.source),
+            (Some(FIRER), Some(FIRER), Source::Other)
+        );
+        assert_eq!(shot.heading, 90.0, "no turn that tick");
+        let mut kept = seeking(TURNS_ON_FIRER, Some(TARGET));
+        guided(
+            &mut kept,
+            16,
+            (&[below()], &[cloaked()]),
+            &mut Ranged::of(&[(1000, 1)]),
+        );
+        assert_eq!(kept.target, Some(TARGET));
+        let mut seen = seeking(TURNS_ON_FIRER, Some(TARGET));
+        let mut asked = Ranged::of(&[(1000, 0)]);
+        guided(&mut seen, 16, (&[below()], &[]), &mut asked);
+        assert!(!asked.was_asked(1000), "seen: no odds asked");
+    }
+
+    #[test]
+    fn a_missile_its_jamming_turned_on_its_firer_skips_the_cloak_test_that_tick() {
+        let blinded_jammer = [Sight {
+            jamming: Jamming([30, 0, 0, 0]),
+            ..cloaked()
+        }];
+        let mut shot = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            ..seeking(TURNS_ON_FIRER, Some(TARGET))
+        };
+        let mut chance = Ranged::of(&[(500, 0), (1000, 0)]);
+        guided(&mut shot, 16, (&[below()], &blinded_jammer), &mut chance);
+        assert_eq!(shot.source, Source::Other);
+        assert!(!chance.was_asked(1000), "{:?}", chance.asked);
+    }
+
+    #[test]
+    fn an_unseen_target_stops_a_turn_away_too() {
+        let blinded_jammer = [Sight {
+            jamming: Jamming([30, 0, 0, 0]),
+            ..cloaked()
+        }];
+        let mut shot = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            ..seeking(TURNS_AWAY_JAMMED, Some(TARGET))
+        };
+        guided(
+            &mut shot,
+            16,
+            (&[below()], &blinded_jammer),
+            &mut NeverFires,
+        );
+        assert_eq!(shot.heading, 90.0);
+    }
+
+    /// A 0x4000 missile past its 15 ticks at (150, 0) heading `heading`,
+    /// at ship 2 `at` off it.
+    fn locked(heading: f32, seeker: u16) -> Shot {
+        Shot {
+            age: HOMING_DELAY,
+            position: Vec2::new(150.0, 0.0),
+            heading,
+            ..seeking(LOSES_LOCK_OFF_AHEAD | seeker, Some(TARGET))
+        }
+    }
+
+    /// Ship 2 at `bearing` from (150, 0), `distance` away.
+    fn bearing_off(bearing: f32, distance: f32) -> Target {
+        let at = Vec2::new(150.0, 0.0) + facing(bearing) * distance;
+        target(2, at.x, at.y, Condition::Intact)
+    }
+
+    #[test]
+    fn a_0x4000_missile_drops_its_lock_on_a_target_behind_it_in_the_box() {
+        let behind = [target(2, -50.0, 0.0, Condition::Intact)];
+        let mut shot = locked(90.0, 0);
+        guided(&mut shot, 1, (&behind, &[]), &mut NeverFires);
+        assert_eq!((shot.target, shot.aimed_at), (None, None));
+        assert!(
+            (shot.heading - 97.0).abs() < 1e-4,
+            "it still turns at it that tick: {shot:?}"
+        );
+        guided(&mut shot, 5, (&behind, &[]), &mut NeverFires);
+        assert!((shot.heading - 97.0).abs() < 1e-4, "then straight");
+        let at = Shot {
+            position: Vec2::new(-50.0, 0.0),
+            ..shot
+        };
+        assert_eq!(at.hit(Vec2::new(-60.0, 0.0), &among(&behind)), None);
+        let mut young = Shot {
+            age: HOMING_DELAY - 1,
+            ..locked(90.0, 0)
+        };
+        guided(&mut young, 1, (&behind, &[]), &mut NeverFires);
+        assert_eq!(young.target, Some(TARGET), "before its 15 ticks");
+        let mut plain = Shot {
+            weapon: missile(0),
+            ..locked(90.0, 0)
+        };
+        guided(&mut plain, 1, (&behind, &[]), &mut NeverFires);
+        assert_eq!(plain.target, Some(TARGET), "no 0x4000");
+    }
+
+    #[test]
+    fn the_lock_box_is_249_pixels_on_each_axis_truncated() {
+        for (x, y, kept) in [
+            (150.0 - 250.0, 0.0, true),
+            (150.0 - 249.0, 0.0, false),
+            (150.0 - 249.9, 0.0, false),
+            (150.0 + 249.9, 249.9, false),
+            (150.0 - 100.0, -250.0, true),
+            (150.0 - 100.0, 250.0, true),
+        ] {
+            let mut shot = locked(0.0, 0);
+            let there = [target(2, x, y, Condition::Intact)];
+            guided(&mut shot, 1, (&there, &[]), &mut NeverFires);
+            assert_eq!(shot.target.is_some(), kept, "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn the_lock_holds_within_45_degrees_of_ahead() {
+        for (bearing, kept) in [(135.5, true), (136.5, false), (44.5, true), (43.5, false)] {
+            let mut shot = locked(90.0, 0);
+            guided(
+                &mut shot,
+                1,
+                (&[bearing_off(bearing, 100.0)], &[]),
+                &mut NeverFires,
+            );
+            assert_eq!(shot.target.is_some(), kept, "{bearing}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_the_lock_angle_is_not_the_short_way_round() {
+        let ahead = [bearing_off(5.0, 100.0)];
+        for (lock_angle, kept) in [(LockAngle::Shortest, true), (LockAngle::Plain, false)] {
+            let mut shot = locked(355.0, 0);
+            let guide = Guide {
+                lock_angle,
+                ..Guide::among(&ahead)
+            };
+            shot.step(&guide, &mut NeverFires);
+            assert_eq!(shot.target.is_some(), kept, "{lock_angle:?}");
+        }
+        assert_eq!(LockAngle::default(), LockAngle::Shortest);
+        assert_eq!(LockAngle::from(RuleSource::Engine), LockAngle::Plain);
+        assert_eq!(LockAngle::from(RuleSource::Bible), LockAngle::Shortest);
+    }
+
+    #[test]
+    fn the_lock_is_tested_on_the_firer_a_jammed_missile_turned_on() {
+        let jammer = [jamming([30, 0, 0, 0])];
+        let firer = Target {
+            ship: FIRER,
+            ..target(1, -50.0, 0.0, Condition::Intact)
+        };
+        let mut shot = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            ..locked(90.0, TURNS_ON_FIRER)
+        };
+        guided(
+            &mut shot,
+            1,
+            (&[bearing_off(90.0, 100.0), firer], &jammer),
+            &mut Ranged::of(&[(500, 0)]),
+        );
+        assert_eq!(
+            (shot.target, shot.aimed_at, shot.source),
+            (None, None, Source::Other)
+        );
+    }
+
+    /// An interfered missile `age` ticks old.
+    fn interfered(seeker: u16, age: u32) -> Shot {
+        Shot {
+            jam: Jam::Interfered,
+            age,
+            ..seeking(seeker, Some(TARGET))
+        }
+    }
+
+    /// `shot` flown a tick at `frame` among `targets`, its draws on
+    /// `chance`.
+    fn at_frame(shot: &mut Shot, frame: i32, targets: &[Target], chance: &mut dyn Chance) {
+        let guide = Guide {
+            frame,
+            ..Guide::among(targets)
+        };
+        shot.step(&guide, chance);
+    }
+
+    #[test]
+    fn an_interfered_missile_flies_straight_for_15_ticks_then_circles_with_the_frame() {
+        let mut young = interfered(0, 0);
+        for frame in 0..15 {
+            at_frame(&mut young, frame, &[below()], &mut NeverFires);
+        }
+        assert_eq!(young.heading, 90.0);
+        for (frame, heading) in [
+            (149, 83.0),
+            (150, 97.0),
+            (299, 97.0),
+            (300, 83.0),
+            (-14, 83.0),
+            (-1, 83.0),
+            (1024, 83.0),
+            (0, 83.0),
+            (151, 97.0),
+        ] {
+            let mut shot = interfered(0, HOMING_DELAY);
+            at_frame(&mut shot, frame, &[below()], &mut NeverFires);
+            assert!((shot.heading - heading).abs() < 1e-4, "{frame}: {shot:?}");
+            assert!(close(shot.velocity, facing(heading) * 10.0), "{frame}");
+            assert_eq!(shot.jam, Jam::Interfered, "{frame}");
+        }
+        let mut round = interfered(0, HOMING_DELAY);
+        round.heading = 3.0;
+        at_frame(&mut round, 0, &[below()], &mut NeverFires);
+        assert!((round.heading - 356.0).abs() < 1e-4, "wrapped: {round:?}");
+    }
+
+    #[test]
+    fn an_interfered_missile_hits_nothing_its_target_included() {
+        let shot = Shot {
+            jam: Jam::Interfered,
+            ..passing_homing(0x0008, Some(TARGET))
+        };
+        assert_eq!(shot.hit(Vec2::ZERO, &among(&in_its_path())), None);
+    }
+
+    #[test]
+    fn an_interfered_0x8000_missile_turns_on_its_firer_at_1_in_1000_from_launch() {
+        for age in [0, HOMING_DELAY] {
+            let mut shot = interfered(TURNS_ON_FIRER, age);
+            let mut chance = Ranged::of(&[(1000, 0)]);
+            at_frame(&mut shot, 0, &[below()], &mut chance);
+            assert_eq!(
+                (shot.jam, shot.target, shot.aimed_at, shot.source),
+                (Jam::Clear, Some(FIRER), Some(FIRER), Source::Other),
+                "{age}"
+            );
+        }
+        let mut kept = interfered(TURNS_ON_FIRER, 3);
+        at_frame(&mut kept, 0, &[below()], &mut Ranged::of(&[(1000, 1)]));
+        assert_eq!(kept.jam, Jam::Interfered);
+        let mut other = Shot {
+            source: Source::Other,
+            ..interfered(TURNS_ON_FIRER, 3)
+        };
+        at_frame(&mut other, 0, &[below()], &mut Ranged::of(&[(1000, 0)]));
+        assert_eq!((other.jam, other.target), (Jam::Interfered, Some(TARGET)));
+        let mut plain = interfered(0, 3);
+        let mut never = Ranged::of(&[(1000, 0)]);
+        at_frame(&mut plain, 0, &[below()], &mut never);
+        assert!(!never.was_asked(1000));
     }
 }
