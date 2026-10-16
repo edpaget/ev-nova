@@ -1339,7 +1339,7 @@ use nova_sim::combat::flags::FlagField;
 use nova_sim::combat::impact::TractorLock;
 use nova_sim::combat::ion::Ion;
 use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
-use nova_sim::combat::{Combat, Fighter, Rules, Shove};
+use nova_sim::combat::{Combat, Fighter, Rules, Shove, Strike};
 use nova_sim::{
     Armament, CombatCatalog, CombatEvent, Condition, HullSpec, Reserves, ShipRef, SimDiagnostic,
     Trigger, WeaponId,
@@ -2136,6 +2136,259 @@ fn stock_ionizing_weapons_are_18_all_positive() {
         ionizing.iter().all(|&(_, amount)| amount > 0),
         "{ionizing:?}"
     );
+}
+
+/// A stock fight over point defence: the player at the centre running
+/// stock weapon `defence` as its point defence, its rounds full; NPC 1, a
+/// Shuttle 200 pixels above facing down, firing stock `missile` at it on
+/// the first tick; and `others`. Each tick's strikes and events, over
+/// `ticks`.
+fn defended_by(
+    data: &GameData,
+    arsenal: &Arsenal,
+    (defence, missile): (i16, i16),
+    others: Vec<Combatant>,
+    ticks: u32,
+) -> (Vec<Strike>, Vec<CombatEvent>) {
+    let mut player = shooter(&stock_weapon(data, defence));
+    player.state.heading = 0.0;
+    player.trigger = Trigger {
+        point_defence: true,
+        ..Trigger::default()
+    };
+    let missile = stock_weapon(data, missile);
+    let mut boat = target(data, arsenal, ShipId(128), 0.0);
+    boat.id = ShipRef::Npc(nova_sim::NpcId(1));
+    boat.state.position = Vec2::new(0.0, -200.0);
+    boat.state.heading = 180.0;
+    boat.target = Some(ShipRef::Player);
+    boat.armament = Armament::new([(missile, 1)]);
+    boat.rounds.set(missile.id, 10);
+    boat.trigger = Trigger {
+        primary: !missile.secondary(),
+        secondary: missile.secondary().then_some(missile.id),
+        ..Trigger::default()
+    };
+    let mut ships = vec![player, boat];
+    ships.extend(others);
+    let mut combat = Combat::default();
+    let (mut strikes, mut events) = (Vec::new(), Vec::new());
+    for _ in 0..ticks {
+        fight_with(&mut combat, &mut ships, arsenal);
+        ships[1].trigger = Trigger::default();
+        strikes.extend(combat.take_strikes());
+        events.extend(combat.take_events());
+    }
+    (strikes, events)
+}
+
+/// A stock Shuttle (128), NPC 0, 40 pixels above the centre: across the
+/// path of the player's point defence at a missile from above.
+fn in_the_way(data: &GameData, arsenal: &Arsenal) -> Combatant {
+    bystander(data, arsenal, 0, Vec2::new(0.0, -40.0))
+}
+
+/// Whether `strikes` hold a hit by the player on NPC 0.
+fn struck_in_the_way(strikes: &[Strike]) -> bool {
+    strikes.iter().any(|strike| {
+        strike.ship == ShipRef::Npc(nova_sim::NpcId(0)) && strike.by == ShipRef::Player
+    })
+}
+
+/// The Storm Chaingun (161, `ProxRadius` 0) fired at an IR Missile flies
+/// through a Shuttle's centre on its way and never hits it: point defence
+/// meets a ship only by its proximity fuse.
+#[test]
+fn a_stock_storm_chaingun_shot_never_hits_a_ship() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let (strikes, events) = defended_by(
+        &data,
+        &arsenal,
+        (161, 134),
+        vec![in_the_way(&data, &arsenal)],
+        8,
+    );
+    let fired = events.iter().any(|event| {
+        matches!(
+            event,
+            CombatEvent::Fired {
+                ship: ShipRef::Player,
+                weapon: WeaponId(161),
+                ..
+            }
+        )
+    });
+    assert!(fired, "{events:?}");
+    assert!(!struck_in_the_way(&strikes), "{strikes:?}");
+}
+
+/// The Quad Light Blaster Turret (133, `ProxRadius` 5) fired at an IR
+/// Missile hits a Shuttle across its path by its proximity fuse.
+#[test]
+fn a_stock_quad_light_blaster_turret_shot_proximity_hits_a_ship() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let (strikes, _) = defended_by(
+        &data,
+        &arsenal,
+        (133, 134),
+        vec![in_the_way(&data, &arsenal)],
+        8,
+    );
+    assert!(struck_in_the_way(&strikes), "{strikes:?}");
+}
+
+/// The Polaron Torp. (148, `Flags` 0x0080, `Durability` 0) is never
+/// chosen by point defence, but a Quad Light Blaster Turret shot fired at
+/// an IR Missile behind it, whose sprite touches it, downs it in one hit,
+/// shot down where the Quad's shot is.
+#[test]
+fn a_stock_point_defence_shot_downs_a_polaron_torpedo_it_touches_but_never_aims_at_one() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let quad = stock_weapon(&data, 133);
+    let torpedo = stock_weapon(&data, 148);
+    let at_player = nova_sim::combat::projectile::Shot {
+        target: Some(ShipRef::Player),
+        aimed_at: Some(ShipRef::Player),
+        position: Vec2::new(0.0, -100.0),
+        ..nova_sim::combat::projectile::Shot::launch(
+            torpedo,
+            ShipRef::Npc(nova_sim::NpcId(2)),
+            ShipRef::Npc(nova_sim::NpcId(2)),
+            &ShipState::default(),
+            180.0,
+        )
+    };
+    let player = nova_sim::combat::defence::Side {
+        ship: ShipRef::Player,
+        fleet: ShipRef::Player,
+        govt: None,
+    };
+    let shots = [at_player];
+    let chosen = nova_sim::combat::defence::choose(
+        player,
+        &ShipState::default(),
+        &HullSpec::default(),
+        &quad,
+        &shots,
+        None,
+        &nova_sim::Governments::default(),
+    );
+    assert_eq!(chosen, None, "never aimed at");
+    // NPC 2, a Shuttle 100 above, fires the torpedo at the player as NPC
+    // 1 fires the IR Missile from 200 above.
+    let mut launcher = bystander(&data, &arsenal, 2, Vec2::new(0.0, -100.0));
+    launcher.state.heading = 180.0;
+    launcher.target = Some(ShipRef::Player);
+    launcher.armament = Armament::new([(torpedo, 1)]);
+    launcher.rounds.set(torpedo.id, 10);
+    launcher.trigger = Trigger {
+        primary: !torpedo.secondary(),
+        secondary: torpedo.secondary().then_some(torpedo.id),
+        ..Trigger::default()
+    };
+    let (strikes, events) = defended_by(&data, &arsenal, (133, 134), vec![launcher], 4);
+    let downed: Vec<Vec2> = events
+        .iter()
+        .filter_map(|event| match *event {
+            CombatEvent::ShotDown { at } => Some(at),
+            _ => None,
+        })
+        .collect();
+    // The torpedo, 13 pixels a tick, at -61 after the third tick; the
+    // Quad's shot, 20 a tick, at -60: their 32- and 35-pixel sprites
+    // overlap.
+    assert_eq!(downed.len(), 1, "{events:?}");
+    assert!(close(downed[0], Vec2::new(0.0, -60.0)), "{downed:?}");
+    assert!(
+        !strikes.iter().any(|strike| strike.ship == ShipRef::Player),
+        "the torpedo never reached the player: {strikes:?}"
+    );
+}
+
+/// The Quad Light Blaster Turret (133: `Reload` 5, `BurstCount` 4,
+/// `BurstReload` 20) on two mounts fires every two and a half ticks, its
+/// timer carrying what it counted past none: its burst's 8 shots leave on
+/// ticks 0, 3, 5, 8, 10, 13, 15 and 18, then its 20-tick burst reload.
+#[test]
+fn a_stock_quad_light_blaster_turret_on_two_mounts_fires_every_two_and_a_half_ticks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut armament = Armament::new([(stock_weapon(&data, 133), 2)]);
+    let mut rounds = LauncherRounds::default();
+    let mut fuel = Gauge::full(0.0);
+    let mut reports = nova_sim::combat::report::Reports::default();
+    let fired: Vec<u32> = (0..40)
+        .filter(|_| {
+            let fired = armament.fire_point_defence(
+                Condition::Intact,
+                nova_sim::combat::armament::Shooter::PLAYER,
+                &mut rounds,
+                &mut fuel,
+                &mut Straight,
+                &mut reports,
+                &mut |_| {
+                    Some((
+                        nova_sim::combat::aim::Pointing::Along(0.0),
+                        nova_sim::combat::projectile::ShotId(1),
+                    ))
+                },
+            );
+            armament.reload();
+            fired.is_some()
+        })
+        .collect();
+    assert_eq!(fired, [0, 3, 5, 8, 10, 13, 15, 18, 38]);
+}
+
+/// The homing weapons point defence cannot target (`Flags` 0x0080) are the
+/// five polaron torpedoes, and every stock homing and point-defence weapon
+/// has a sprite: the Quad Light Blaster Turret's 35 pixels square, the
+/// Storm Chaingun's 16.
+#[test]
+fn stock_pd_immune_missiles_are_the_five_polarons_and_every_homing_and_pd_weapon_has_a_sprite() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    let immune: Vec<i16> = weapons
+        .iter()
+        .filter(|record| record.guidance == 1 && record.flags & 0x0080 != 0)
+        .map(|record| record.id.0)
+        .collect();
+    assert_eq!(immune, [148, 182, 184, 185, 199]);
+    let unseen: Vec<i16> = weapons
+        .iter()
+        .filter(|record| matches!(record.guidance, 1 | 9) && record.frame.is_none())
+        .map(|record| record.id.0)
+        .collect();
+    assert_eq!(
+        unseen, [0_i16; 0],
+        "every homing and point-defence weapon drawn"
+    );
+    let frame = |id: i16| {
+        weapons
+            .iter()
+            .find(|record| record.id.0 == id)
+            .and_then(|record| record.frame)
+            .map(|frame| (frame.width, frame.height))
+    };
+    assert_eq!(frame(133), Some((35, 35)));
+    assert_eq!(frame(161), Some((16, 16)));
 }
 
 /// `ships[0]` fires once, its trigger then let go, and the fight runs on

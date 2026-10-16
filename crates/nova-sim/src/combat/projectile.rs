@@ -34,7 +34,9 @@
 //!   to where it is so that a fast shot cannot pass through a ship between
 //!   ticks; `ProxSafety` holds a touch until its age reaches it and the
 //!   fuse until its age is past it ([`Shot::hit`]). Its last move is never
-//!   tested. Which ships it can hit is [`sides`](super::sides)' rule, the
+//!   tested. A point-defence shot (9) touches none, and meets a ship only
+//!   by its proximity fuse. Which ships it can hit is
+//!   [`sides`](super::sides)' rule, the
 //!   original's `_ShotCanHitShip`: never its firer, the ships of its
 //!   firer's government or under its firer's leaders, the escape pod or a
 //!   destroyed ship, among others, but a disabled or breaking-up one; a
@@ -515,7 +517,13 @@ impl Shot {
     /// (`_CheckShotProximities` @0x37553-0x3768a), which runs after them,
     /// so a contact anywhere on the move is the hit. `ProxSafety` arms
     /// each: contact once its age has reached it (@0x37066-0x37086),
-    /// proximity once its age is past it (@0x3720e-0x3721e).
+    /// proximity once its age is past it (@0x3720e-0x3721e). A
+    /// point-defence shot (9) never meets a ship by contact: its sprite's
+    /// layer (0x3b53bc) is collided with the ships' only by
+    /// `_ShipCollisionHandler`, which acts on a shot in the other shot
+    /// layers alone (`_DoPlayGameWork` @0x43fdd-0x43ffa,
+    /// @0x36fbd-0x36fd6), and `_CheckShotProximities` has no guidance test,
+    /// so it meets one only by its proximity fuse.
     ///
     /// Each pass here takes the ship met first along the move; the
     /// original's contact pass goes in sprite-collision order and its
@@ -545,7 +553,10 @@ impl Shot {
         };
         let safety = self.weapon.prox_safety;
         let prox = self.weapon.prox_radius;
-        let touched = (self.age >= safety)
+        // A point-defence shot's sprite is in a layer no ship's collision
+        // proc acts on (see the doc comment).
+        let by_contact = self.weapon.guidance != Guidance::PointDefence;
+        let touched = (by_contact && self.age >= safety)
             .then(|| first(Fuse::Contact, 0.0))
             .flatten();
         touched.or_else(|| {
@@ -991,6 +1002,31 @@ mod tests {
             &among(&[target(2, 50.0, 4.0, Condition::Intact)]),
         );
         assert_eq!(on.map(|met| met.fuse), Some(Fuse::Contact));
+    }
+
+    #[test]
+    fn a_point_defence_shot_meets_a_ship_only_by_its_proximity_fuse() {
+        let defence = |prox| {
+            let mut shot = passing(prox);
+            shot.weapon.guidance = Guidance::PointDefence;
+            shot
+        };
+        let through = [target(2, 50.0, 0.0, Condition::Intact)];
+        let met = |shot: Shot| {
+            shot.hit(Vec2::ZERO, &among(&through))
+                .map(|met| (met.ship, met.fuse))
+        };
+        assert_eq!(met(defence(0)), None, "through its centre, no fuse");
+        assert_eq!(
+            met(defence(5)),
+            Some((ShipRef::Npc(NpcId(2)), Fuse::Proximity)),
+            "set off on its way"
+        );
+        assert_eq!(
+            met(passing(0)),
+            Some((ShipRef::Npc(NpcId(2)), Fuse::Contact)),
+            "an unguided shot touches it"
+        );
     }
 
     #[test]

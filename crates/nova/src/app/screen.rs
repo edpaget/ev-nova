@@ -168,10 +168,12 @@
 //! decide as the router's behaviour says ([`AppScreen::with_behaviour`]),
 //! Nova's combat AI until another is given, and their ships are
 //! disabled as the router's rule says ([`AppScreen::with_disable_rule`]),
-//! Nova's own until another is given; their point defence engages the
-//! missiles the router's point-defence rule calls hostile
+//! Nova's own until another is given; by the other reading of the
+//! `pd_hostility` rule, their point defence engages only the missiles the
+//! router's point-defence rule calls hostile
 //! ([`AppScreen::with_point_defence_rule`]), by governments' allegiance
-//! until another is given; the player's crimes are judged by the
+//! until another is given, and by default every missile fired at them;
+//! the player's crimes are judged by the
 //! router's law ([`AppScreen::with_law`]), Nova's until another is given;
 //! escorts are hired by the router's hire terms and control bits
 //! ([`AppScreen::with_hire_terms`], [`AppScreen::with_control_bits`]),

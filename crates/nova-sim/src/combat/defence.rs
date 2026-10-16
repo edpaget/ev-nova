@@ -8,36 +8,53 @@
 //! - Each tick its trigger asks
 //!   ([`Trigger::point_defence`](super::armament::Trigger::point_defence)):
 //!   the player's every tick while intact, an NPC's when its AI asks for a
-//!   turret (`_AIFireTurret` @0x80b0d), each intact ship fires its first
-//!   ready point-defence weapon it can pay for, by weapon ID, at the
-//!   nearest candidate missile ([`choose`]), and nothing when there is
-//!   none.
-//! - A candidate is a live homing shot that is not jammed (lost), that
-//!   point defence can target (no `Flags` 0x0080), that is fired at this
+//!   turret (`_AIFireTurret` @0x80b0d), each intact ship whose jump is not
+//!   under way fires its first ready point-defence weapon it can pay for,
+//!   by weapon ID, at the nearest candidate missile ([`choose`]), and
+//!   nothing when there is none: a later weapon is never tried. Its timer
+//!   takes `Reload / count` on top of what is left of it, so two Quads
+//!   fire every two and a half ticks
+//!   ([`Armament::fire_point_defence`](super::armament::Armament::fire_point_defence)).
+//! - A candidate is a homing shot that is not jammed (lost), that point
+//!   defence can target (no `Flags` 0x0080), whose damage is aimed at this
 //!   ship or at its fleet's lead (an escort defends its lead), that is
 //!   within the weapon's [`engagement_range`] and not in a blind spot (see
-//!   [`aim`](super::aim)), and whose firer the [`PointDefenceRule`] says
-//!   is hostile. The nearest wins; of two as near, the one fired first.
-//!   A point-defence shot meets only a missile that point defence could
-//!   have chosen but for its target, range and arc ([`engageable`]), so it
-//!   flies through one that has lost its target.
+//!   [`aim`](super::aim)), its squared distance truncated. The nearest
+//!   wins; of two as near, the one fired first. The original has no
+//!   hostility test: "fired at me or my lead" is the whole rule, so by
+//!   default the player's point defence engages its own escort's stray
+//!   missile, and police an allied trader's. By the other reading of
+//!   [`RuleKey::PdHostility`](crate::RuleKey::PdHostility) the
+//!   [`PointDefenceRule`] must also call the firer hostile: Nova's
+//!   [`Allegiance`] calls a missile hostile unless its firer is in the
+//!   defender's fleet, or both have governments that are allies.
 //! - A point-defence turret (9) fires a shot at the missile's bearing, no
 //!   lead, plus its inaccuracy; a point-defence beam (10) is held on the
 //!   missile, with no inaccuracy.
+//! - A point-defence shot meets missiles by their sprites, as the
+//!   original's collision pass does (`_SWCollideSpriteLayer`
+//!   @0xacb4b-0xace4e): each sprite is a box of its frame's size
+//!   ([`WeaponSpec::frame`], its sheet's, with no collision inset or hot
+//!   spot), its top left half its frame's *width* up and left of its
+//!   offset from the player, each truncated to whole pixels
+//!   ([`SpriteBox`], `_HandleShot` @0x35c48-0x35cc0), and two meet when
+//!   their boxes overlap, strictly ([`SpriteBox::meets`]). They are tested
+//!   where both end the tick, not swept, so a shot can pass through a
+//!   missile between ticks as in the original; a shot of no sprite never
+//!   meets. A point-defence shot meets every homing missile its box
+//!   overlaps, with no other test: lost, untargetable, friendly or aimed
+//!   elsewhere (`_PointDefenseCollisionHandler` @0x37776-0x3785d), but not
+//!   one that touches a ship that tick, whose hit comes first
+//!   ([`Combat`](super::Combat), step 5).
 //! - Each hit takes [`pd_damage`], `MassDmg` plus half the `EnergyDmg`
 //!   (truncated), off the missile's durability while that is above none;
-//!   the hit after that destroys it ([`Shot::take_pd_hit`]). A point
-//!   defence shot is spent on the missile it meets; a beam hits the
+//!   the hit after that destroys it ([`Shot::take_pd_hit`]), shot down
+//!   where the point-defence shot is, with no detonation. A
+//!   point-defence shot is spent on the missiles it meets; a beam hits the
 //!   missile it is held on every tick.
-//! - The original has no hostility check: "fired at me or my lead" is the
-//!   whole rule. The default [`Allegiance`] adds governments' relations: a
-//!   missile is hostile unless its firer is in the defender's fleet, or
-//!   both have governments that are allies. The player has none, so its
-//!   point defence engages any NPC's missile at it, and an NPC's the
-//!   player's, while police leave an allied trader's stray missile be.
-//! - The original tests a point-defence shot against a missile's sprite;
-//!   the simulation has no sprites, so a shot meets a missile within
-//!   [`INTERCEPT_RADIUS`] of it, a placeholder.
+//! - A point-defence shot meets a ship only by its proximity fuse
+//!   ([`Shot::hit`]): the Quad Light Blaster Turret's (`ProxRadius` 5)
+//!   does, the Storm Chaingun's (0) never.
 
 use std::fmt::Debug;
 
@@ -46,13 +63,11 @@ use super::aim::{angle_off, bearing, blind};
 use super::hull::HullSpec;
 use super::projectile::{Jam, Shot};
 use super::weapon::{Guidance, WeaponSpec};
-use crate::catalog::GovtId;
+use crate::catalog::{FrameSize, GovtId};
 use crate::flight::ShipState;
+use crate::geometry::Vec2;
 use crate::govt::Governments;
 
-/// How near, in pixels, a point-defence shot must pass a missile to meet
-/// it: a placeholder for the original's sprite test.
-pub const INTERCEPT_RADIUS: f32 = 10.0;
 /// A point-defence turret's engagement range, per pixel of its range.
 pub const PD_RANGE_FACTOR: f32 = 1.5;
 
@@ -79,7 +94,9 @@ impl Side {
     }
 }
 
-/// Which missiles point defence engages, by who fired them.
+/// Which missiles point defence engages, by who fired them: asked only by
+/// the other reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility),
+/// as the original has no hostility test ([`choose`]).
 pub trait PointDefenceRule: Debug {
     /// Whether a missile fired by `firer` is hostile to `defender`, with
     /// the relations between governments in `govts`.
@@ -114,27 +131,22 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
     }
 }
 
-/// Whether point defence on `defender`, whether a mount choosing a
-/// missile or a shot passing one, can engage `missile` at all: a homing
-/// shot not jammed ([`Jam::Clear`]), that point defence can target (no
-/// `Flags` 0x0080), and whose firer `rule` calls hostile, with the
-/// relations in `govts`. A lost missile is neither chosen nor met.
-#[must_use]
-pub fn engageable(
-    defender: Side,
-    missile: &Shot,
-    rule: &dyn PointDefenceRule,
-    govts: &Governments,
-) -> bool {
-    missile.weapon.guidance == Guidance::Homing
-        && missile.jam == Jam::Clear
-        && !missile.weapon.pd_immune()
-        && rule.hostile(defender, Side::of(missile), govts)
-}
-
 /// The missile among `shots` that point defence `spec` on `defender`, at
-/// `at` with `hull`, engages, if any, as `rule` says with the relations
-/// in `govts` (see the module docs).
+/// `at` with `hull`, engages, if any (`_HandleShipPointDefense`
+/// @0x393b1-0x394bd): a homing shot not jammed ([`Jam::Clear`]), that point
+/// defence can target (no `Flags` 0x0080), whose damage is aimed at the
+/// defender or at its fleet's lead ([`Shot::aimed_at`], shot +0x2a, not
+/// its quarry), within the weapon's [`engagement_range`] and not in a
+/// blind spot. Its squared distance is truncated before the range test
+/// and before the nearest test, so a missile under a square pixel past
+/// the range is in it, and of two whose squared distances truncate alike
+/// the one fired first wins. By the engine (`rule` none) there is no
+/// other test; by the other reading
+/// ([`RuleKey::PdHostility`](crate::RuleKey::PdHostility)), `rule` must
+/// also call the firer hostile, with the relations in `govts`.
+///
+/// The original truncates the squared distance into 32 bits, so a missile
+/// past 2³¹ (about 46,341 pixels) reads in range; here it is not wrapped.
 #[must_use]
 pub fn choose<'a>(
     defender: Side,
@@ -142,23 +154,28 @@ pub fn choose<'a>(
     hull: &HullSpec,
     spec: &WeaponSpec,
     shots: &'a [Shot],
-    rule: &dyn PointDefenceRule,
+    rule: Option<&dyn PointDefenceRule>,
     govts: &Governments,
 ) -> Option<&'a Shot> {
     let range = engagement_range(spec);
+    let in_range = range * range;
     let blind_spots = spec.flags | hull.blind_spots;
     let mut best: Option<(&Shot, f32)> = None;
     for shot in shots {
         let off = shot.position - at.position;
-        let distance = off.x * off.x + off.y * off.y;
-        let candidate = (shot.target == Some(defender.ship) || shot.target == Some(defender.fleet))
-            && distance <= range * range
+        let distance = (off.x * off.x + off.y * off.y).trunc();
+        let aimed = shot.aimed_at == Some(defender.ship) || shot.aimed_at == Some(defender.fleet);
+        let candidate = shot.weapon.guidance == Guidance::Homing
+            && shot.jam == Jam::Clear
+            && !shot.weapon.pd_immune()
+            && aimed
+            && distance <= in_range
+            && best.is_none_or(|(_, nearest)| distance < nearest)
             && !blind(
                 blind_spots,
                 angle_off(at.heading, bearing(at.position, shot.position)),
             )
-            && best.is_none_or(|(_, nearest)| distance < nearest)
-            && engageable(defender, shot, rule, govts);
+            && rule.is_none_or(|rule| rule.hostile(defender, Side::of(shot), govts));
         if candidate {
             best = Some((shot, distance));
         }
@@ -171,6 +188,70 @@ pub fn choose<'a>(
 #[must_use]
 pub fn pd_damage(spec: &WeaponSpec) -> f32 {
     spec.mass_damage + (spec.energy_damage / 2.0).trunc()
+}
+
+/// A shot's sprite as the original's collision pass sees it, in whole
+/// pixels relative to the camera: its frame, placed `_HandleShot`'s way
+/// (see the module docs). Each edge is a pixel boundary: a box takes the
+/// pixels from `left` up to `right` and from `top` up to `bottom`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpriteBox {
+    /// Its left edge.
+    pub left: i64,
+    /// Its top edge.
+    pub top: i64,
+    /// Its right edge, its left plus its frame's width.
+    pub right: i64,
+    /// Its bottom edge, its top plus its frame's height.
+    pub bottom: i64,
+}
+
+impl SpriteBox {
+    /// The box of a sprite of `frame` at `position`, seen from `camera`:
+    /// its offset from the camera truncated on each axis, less half its
+    /// frame's width, truncated, on both (`_HandleShot` @0x35c48-0x35cc0
+    /// reads `_GetSpriteXSize` alone), then its frame's width and height
+    /// on (`_SWSetSpriteLocation` @0xab640, a frame's hot spot 0).
+    #[must_use]
+    pub fn of(position: Vec2, frame: FrameSize, camera: Vec2) -> Self {
+        let off = position - camera;
+        // A sprite's offset in whole pixels: far within an `i64`, and
+        // saturated past it.
+        #[allow(clippy::cast_possible_truncation)]
+        let (x, y) = (off.x.trunc() as i64, off.y.trunc() as i64);
+        let (width, height) = (i64::from(frame.width), i64::from(frame.height));
+        let left = x - width / 2;
+        let top = y - width / 2;
+        Self {
+            left,
+            top,
+            right: left + width,
+            bottom: top + height,
+        }
+    }
+
+    /// Whether it overlaps `other`: strictly on each axis, so two boxes
+    /// that only share an edge do not meet (`_SWCollideSpriteLayer`
+    /// @0xacc30-0xacc81).
+    #[must_use]
+    pub fn meets(self, other: Self) -> bool {
+        self.top < other.bottom
+            && self.bottom > other.top
+            && self.left < other.right
+            && self.right > other.left
+    }
+}
+
+/// Whether the sprites of shots `a` and `b` meet, seen from `camera`
+/// ([`SpriteBox`]): never for a shot with no sprite ([`WeaponSpec::frame`]).
+#[must_use]
+pub fn sprites_meet(a: &Shot, b: &Shot, camera: Vec2) -> bool {
+    let sprite = |shot: &Shot| {
+        shot.weapon
+            .frame
+            .map(|frame| SpriteBox::of(shot.position, frame, camera))
+    };
+    sprite(a).zip(sprite(b)).is_some_and(|(a, b)| a.meets(b))
 }
 
 impl Shot {
@@ -196,7 +277,6 @@ mod tests {
     use crate::combat::aim::BLIND_REAR;
     use crate::combat::projectile::{ShotId, Source};
     use crate::combat::sides::Ties;
-    use crate::geometry::Vec2;
     use crate::testkit::weapon;
     use crate::traffic::npc::NpcId;
 
@@ -267,7 +347,8 @@ mod tests {
     }
 
     /// A shot numbered `id` of a homing missile fired by `ENEMY` of
-    /// government 140 at `target`, at (`x`, `y`).
+    /// government 140 at `target`, its quarry and the ship its damage is
+    /// aimed at, at (`x`, `y`).
     fn missile(id: u32, x: f32, y: f32, target: Option<ShipRef>) -> Shot {
         let spec = WeaponSpec::new(&WeaponRecord {
             guidance: 1,
@@ -278,6 +359,7 @@ mod tests {
             id: ShotId(id),
             position: Vec2::new(x, y),
             target,
+            aimed_at: target,
             source: Source::Ship(Ties {
                 govt: Some(GovtId(140)),
                 ..Ties::default()
@@ -311,15 +393,11 @@ mod tests {
 
     /// The missile the defender, an escort of `LEAD` at the centre facing
     /// up, picks among `shots` with `quad(flags)` and a hull with
-    /// `blind_spots`, every firer hostile.
+    /// `blind_spots`, by the engine: with no hostility test.
     fn picked(shots: &[Shot], flags: u16, blind_spots: u16) -> Option<ShotId> {
         let hull = HullSpec {
             blind_spots,
             ..HullSpec::default()
-        };
-        let rule = Recording {
-            hostile: true,
-            ..Recording::default()
         };
         choose(
             ESCORT,
@@ -327,10 +405,76 @@ mod tests {
             &hull,
             &quad(flags),
             shots,
-            &rule,
+            None,
             &Governments::default(),
         )
         .map(|shot| shot.id)
+    }
+
+    #[test]
+    fn a_missile_past_the_range_by_under_a_square_pixel_is_a_candidate() {
+        // 360 pixels: 129,600 squared.
+        let just_past = missile(1, 0.0, -129_600.5_f32.sqrt(), Some(DEFENDER));
+        let off = just_past.position;
+        assert!(off.x * off.x + off.y * off.y > 129_600.0, "{off:?}");
+        assert_eq!(picked(&[just_past], 0, 0), Some(ShotId(1)), "truncated");
+        let past = missile(1, 0.0, -129_601.0_f32.sqrt(), Some(DEFENDER));
+        assert_eq!(picked(&[past], 0, 0), None);
+    }
+
+    #[test]
+    fn missiles_whose_squared_distances_truncate_alike_go_to_the_one_fired_first() {
+        let farther = missile(1, 0.0, -10_000.9_f32.sqrt(), Some(DEFENDER));
+        let nearer = missile(2, 10_000.1_f32.sqrt(), 0.0, Some(DEFENDER));
+        assert_eq!(
+            picked(&[farther, nearer], 0, 0),
+            Some(ShotId(1)),
+            "both 10,000"
+        );
+        let nearest = missile(3, 9_999.9_f32.sqrt(), 0.0, Some(DEFENDER));
+        assert_eq!(picked(&[farther, nearest], 0, 0), Some(ShotId(3)), "9,999");
+    }
+
+    #[test]
+    fn point_defence_reads_the_ship_a_missiles_damage_is_aimed_at_not_its_quarry() {
+        let unsteered = Shot {
+            target: None,
+            ..missile(1, 0.0, -100.0, Some(DEFENDER))
+        };
+        assert_eq!(
+            picked(&[unsteered], 0, 0),
+            Some(ShotId(1)),
+            "fired at a ship breaking up"
+        );
+        let elsewhere = Shot {
+            aimed_at: None,
+            ..missile(1, 0.0, -100.0, Some(DEFENDER))
+        };
+        assert_eq!(picked(&[elsewhere], 0, 0), None);
+    }
+
+    #[test]
+    fn by_the_engine_point_defence_engages_its_own_fleets_missile_aimed_at_it() {
+        let own = Shot {
+            firer: LEAD,
+            fleet: LEAD,
+            source: Source::Ship(Ties::default()),
+            ..missile(1, 0.0, -100.0, Some(DEFENDER))
+        };
+        assert_eq!(picked(&[own], 0, 0), Some(ShotId(1)));
+        let rule = Recording::default();
+        let shots = [own];
+        let chosen = choose(
+            ESCORT,
+            &ShipState::default(),
+            &HullSpec::default(),
+            &quad(0),
+            &shots,
+            Some(&rule),
+            &Governments::default(),
+        );
+        assert_eq!(chosen, None, "by the other reading, the rule spares it");
+        assert_eq!(rule.asked.take().len(), 1);
     }
 
     #[test]
@@ -385,10 +529,6 @@ mod tests {
             position: Vec2::new(1000.0, 1000.0),
             ..ShipState::default()
         };
-        let rule = Recording {
-            hostile: true,
-            ..Recording::default()
-        };
         let near = [missile(1, 1000.0, 700.0, Some(DEFENDER))];
         let none = Governments::default();
         let chosen = choose(
@@ -397,7 +537,7 @@ mod tests {
             &HullSpec::default(),
             &quad(0),
             &near,
-            &rule,
+            None,
             &none,
         );
         assert_eq!(
@@ -412,7 +552,7 @@ mod tests {
             &HullSpec::default(),
             &quad(0),
             &far,
-            &rule,
+            None,
             &none,
         );
         assert_eq!(chosen, None, "1414 pixels off");
@@ -433,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rule_is_asked_of_each_candidate_and_one_not_hostile_is_skipped() {
+    fn by_the_other_reading_the_rule_is_asked_of_each_candidate_and_one_not_hostile_is_skipped() {
         let shots = [
             missile(1, 0.0, -50.0, Some(DEFENDER)),
             Shot {
@@ -452,7 +592,7 @@ mod tests {
             &HullSpec::default(),
             &quad(0),
             &shots,
-            &peaceful,
+            Some(&peaceful),
             &govts,
         );
         assert_eq!(chosen, None);
@@ -570,6 +710,93 @@ mod tests {
             "two without a government are not allies"
         );
         assert!(Allegiance.hostile(independent, side(ENEMY, ENEMY, None), &govts));
+    }
+
+    /// A `width` x `height` frame.
+    fn frame(width: u32, height: u32) -> FrameSize {
+        FrameSize { width, height }
+    }
+
+    #[test]
+    fn a_sprite_box_is_its_frame_half_its_width_up_and_left_of_its_truncated_offset() {
+        let at = SpriteBox::of(Vec2::new(10.7, 20.2), frame(10, 30), Vec2::ZERO);
+        assert_eq!(
+            at,
+            SpriteBox {
+                left: 5,
+                top: 15,
+                right: 15,
+                bottom: 45,
+            },
+            "half the width up, not half the height"
+        );
+        let off = SpriteBox::of(Vec2::new(-10.7, -20.2), frame(9, 4), Vec2::new(0.5, 0.5));
+        assert_eq!(
+            off,
+            SpriteBox {
+                left: -15,
+                top: -24,
+                right: -6,
+                bottom: -20,
+            },
+            "-11.2 and -20.7 truncated toward none, less 4 each way"
+        );
+    }
+
+    /// A box `width` square with its top left at (`left`, `top`).
+    fn square(left: i64, top: i64, width: i64) -> SpriteBox {
+        SpriteBox {
+            left,
+            top,
+            right: left + width,
+            bottom: top + width,
+        }
+    }
+
+    #[test]
+    fn two_boxes_meet_when_they_overlap_and_not_when_they_only_share_an_edge() {
+        let at = square(0, 0, 10);
+        assert!(at.meets(square(5, 5, 10)));
+        assert!(at.meets(square(-9, -9, 10)), "by a pixel up and left");
+        assert!(at.meets(square(9, 9, 10)), "by a pixel down and right");
+        assert!(at.meets(square(2, 2, 2)), "within");
+        for (left, top) in [(10, 0), (-10, 0), (0, 10), (0, -10), (10, 10)] {
+            let beside = square(left, top, 10);
+            assert!(!at.meets(beside), "({left}, {top})");
+            assert!(!beside.meets(at), "({left}, {top}), the other way");
+        }
+    }
+
+    /// A shot of `frame` at (`x`, 0).
+    fn drawn(x: f32, frame: Option<FrameSize>) -> Shot {
+        let mut shot = missile(1, x, 0.0, None);
+        shot.weapon.frame = frame;
+        shot
+    }
+
+    #[test]
+    fn two_sprites_meet_by_their_offsets_from_the_camera_truncated() {
+        let a = drawn(0.5, Some(frame(10, 10)));
+        let b = drawn(10.4, Some(frame(10, 10)));
+        assert!(!sprites_meet(&a, &b, Vec2::ZERO), "0 and 10: an edge apart");
+        assert!(
+            sprites_meet(&a, &b, Vec2::new(0.6, 0.0)),
+            "0 (-0.1) and 9 (9.8): overlapping"
+        );
+        assert!(
+            sprites_meet(&a, &b, Vec2::new(5.0, 0.0)),
+            "-4 (-4.5) and 5 (5.4): toward none, not down"
+        );
+    }
+
+    #[test]
+    fn a_shot_with_no_sprite_never_meets() {
+        let drawn_at = |x| drawn(x, Some(frame(10, 10)));
+        let bare = drawn(0.0, None);
+        assert!(sprites_meet(&drawn_at(0.0), &drawn_at(1.0), Vec2::ZERO));
+        assert!(!sprites_meet(&bare, &drawn_at(1.0), Vec2::ZERO));
+        assert!(!sprites_meet(&drawn_at(1.0), &bare, Vec2::ZERO));
+        assert!(!sprites_meet(&bare, &bare, Vec2::ZERO));
     }
 
     #[test]

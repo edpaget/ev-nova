@@ -50,7 +50,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::exits::ExitKind;
 use crate::bay::{FIGHTER_BAY, FIRST_SHIP};
-use crate::catalog::{BoomId, ShipId, WeaponId, WeaponRecord};
+use crate::catalog::{BoomId, FrameSize, ShipId, WeaponId, WeaponRecord};
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 
 /// How a weapon's shots fly, from its `Guidance`.
@@ -349,6 +349,10 @@ pub struct WeaponSpec {
     /// when that is below 0, which then draws no inaccuracy (`_SpawnShot`
     /// @0x3ec2d-0x3ec95, @0x3ee10-0x3eec0); none otherwise.
     pub broadside: u32,
+    /// The frame size of its shots' sprite, if any
+    /// ([`WeaponRecord::frame`]): the box point defence meets missiles by
+    /// ([`defence`](super::defence)).
+    pub frame: Option<FrameSize>,
 }
 
 /// The weapon whose rounds the status bar's secondary weapon line counts
@@ -427,7 +431,9 @@ pub const ONE_AT_A_TIME: u16 = 0x0004;
 /// `Flags2`: hidden when out of ammo, so selecting a secondary skips it
 /// while it has no rounds.
 pub const HIDE_WHEN_EMPTY: u16 = 0x0800;
-/// `Flags`: point defence cannot target its shots.
+/// `Flags`: point defence cannot target its shots
+/// (`_HandleShipPointDefense` @0x393f4), though a point-defence shot that
+/// touches one still meets it (see [`defence`](super::defence)).
 pub const PD_IMMUNE: u16 = 0x0080;
 /// `Flags2`: a homing shot's proximity fuse is set off by other ships
 /// than its target.
@@ -525,6 +531,7 @@ impl WeaponSpec {
             } else {
                 0
             },
+            frame: record.frame,
         }
     }
 
@@ -554,7 +561,7 @@ impl WeaponSpec {
         )
     }
 
-    /// Whether point defence cannot target its shots.
+    /// Whether point defence cannot target its shots ([`PD_IMMUNE`]).
     #[must_use]
     pub fn pd_immune(&self) -> bool {
         self.flags & PD_IMMUNE != 0
@@ -880,6 +887,20 @@ mod tests {
                 "{raw}"
             );
         }
+    }
+
+    #[test]
+    fn a_weapons_shots_carry_its_frame_size() {
+        let frame = FrameSize {
+            width: 35,
+            height: 20,
+        };
+        let spec = WeaponSpec::new(&WeaponRecord {
+            frame: Some(frame),
+            ..light_blaster()
+        });
+        assert_eq!(spec.frame, Some(frame));
+        assert_eq!(WeaponSpec::new(&light_blaster()).frame, None);
     }
 
     #[test]

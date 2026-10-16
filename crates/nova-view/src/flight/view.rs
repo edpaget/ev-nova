@@ -28,8 +28,9 @@
 //! ([`FlightView::with_behaviour`]; [`NovaAi`] by default), and then the
 //! fight ([`Session::tick_combat`]), its ships disabled as the screen's
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
-//! [`NovaDisable`] by default), their point defence engaging the
-//! missiles its [`PointDefenceRule`] calls hostile
+//! [`NovaDisable`] by default), their point defence engaging every
+//! missile fired at them, or by the other reading of the `pd_hostility`
+//! rule those its [`PointDefenceRule`] calls hostile
 //! ([`FlightView::with_point_defence_rule`]; [`Allegiance`] by default),
 //! and the player's crimes judged by its [`LegalCode`]
 //! ([`FlightView::with_law`]; [`NovaLaw`] by default). What could not be read of the looks
@@ -10445,6 +10446,7 @@ mod tests {
             exit_type: -1,
             ionization: 0,
             ionize_color: 0,
+            frame: None,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -10584,6 +10586,7 @@ mod tests {
             exit_type: -1,
             ionization: 0,
             ionize_color: 0,
+            frame: None,
         }
     }
 
@@ -12527,17 +12530,25 @@ mod tests {
     fn defending() -> FakeCatalog {
         let mut catalog = armed(1, &[QUAD]);
         catalog.sites = vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        let sprite = |side| {
+            Some(nova_sim::FrameSize {
+                width: side,
+                height: side,
+            })
+        };
         catalog.weapons.push(nova_sim::WeaponRecord {
             reload: 5,
             count: 12,
             mass_dmg: 1,
             energy_dmg: 4,
+            frame: sprite(35),
             ..gun(QUAD, 0, 9, -1)
         });
         catalog.weapons.push(nova_sim::WeaponRecord {
             reload: 1000,
             count: 200,
             speed: 500,
+            frame: sprite(18),
             ..gun(IR, 0, 1, -1)
         });
         catalog.hulls = vec![hull_of(128, &[QUAD]), hull_of(129, &[IR])];
@@ -12558,7 +12569,10 @@ mod tests {
     #[test]
     fn the_fight_asks_the_point_defence_rule_given_each_step_in_flight() {
         let rule = Rc::new(Unalarmed::default());
-        let mut view = attacked(defending()).with_point_defence_rule(rule.clone());
+        let asking = Rulebook::default().with_override(RuleKey::PdHostility, RuleSource::Bible);
+        let mut view = attacked(defending())
+            .with_rules(asking)
+            .with_point_defence_rule(rule.clone());
         view.tick(TICK);
         assert_eq!(shots_of(&view, IR), 1, "fired at the player");
         assert_eq!(rule.asked.get(), 1, "of the one missile");

@@ -419,6 +419,7 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         exit_type: -1,
         ionization: 0,
         ionize_color: 0,
+        frame: None,
     }
 }
 

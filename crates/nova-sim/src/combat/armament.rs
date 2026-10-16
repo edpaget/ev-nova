@@ -65,8 +65,14 @@
 //!   with no cap; a bay whose slot held exactly none restarts its reload.
 //! - Point defence ([`Armament::fire_point_defence`]) fires, each tick,
 //!   only the ready point-defence weapon the ship can pay for with the
-//!   lowest weapon ID, and only at a missile it picks; it pays, bursts and
-//!   reloads like any weapon, and a beam (10) draws no inaccuracy.
+//!   lowest weapon ID, and only at a missile it picks, as
+//!   `_HandleShipPointDefense` does: its timer takes `Reload / n` on top
+//!   of what is left of it, so a timer counted past none carries; it pays
+//!   fuel every shot, and rounds every shot unless it uses ammo at the end
+//!   of a burst (`Flags3` 0x0001), which pays a round each time its burst
+//!   reaches `_WeaponBurstInterval` (`BurstCount`, times n unless its
+//!   copies fire together, `Flags` 0x0040); a beam (10) draws no
+//!   inaccuracy.
 //!
 //! The player's armament ([`Arsenal::player`]) is the weapons among its
 //! outfits ([`MOD_WEAPON`]), firing the rounds of the ammunition among
@@ -435,29 +441,67 @@ impl Mount {
         }
     }
 
-    /// Fires a shot: reports the flags it ignores to `reports`, counts it
-    /// in the burst, pays for it from `rounds` and `fuel` when it spends,
-    /// the ship an `npc` or the player and the weapon its `point_defence`
-    /// or not, and sets the reload (see the module docs).
+    /// Fires a shot on a trigger: reports the flags it ignores to
+    /// `reports`, counts it in the burst, pays for it from `rounds` and
+    /// `fuel` when it spends, the ship an `npc` or the player, and sets the
+    /// reload (see the module docs).
     fn discharge(
         &mut self,
         rounds: &mut dyn Rounds,
         fuel: &mut Gauge,
         reports: &mut Reports,
         npc: bool,
-        point_defence: bool,
     ) {
         reports.fired(&self.spec);
         if self.spec.burst_count > 0 {
             self.burst += 1;
         }
         if self.spends() {
-            self.pay(rounds, fuel, npc, point_defence);
+            self.pay(rounds, fuel, npc, false);
         }
         self.reload = self.spec.reload / self.count as f32;
         if self.spec.burst_count > 0 && self.burst >= self.spec.burst_count * self.count {
             self.burst = 0;
             self.reload = self.spec.burst_reload;
+        }
+    }
+
+    /// Fires a point-defence shot or beam, as `_HandleShipPointDefense`'s
+    /// tail does (@0x39931-0x39bb3): reports the flags it ignores to
+    /// `reports`; adds `Reload / count` to its timer, whatever is left of
+    /// it (`+=`, @0x39959, so a timer counted past none carries); pays for
+    /// it from `rounds` and `fuel`, the ship an `npc` or the player, unless
+    /// it spends only at the end of a burst (`Flags3` 0x0001) on rounds,
+    /// as fuel is paid every shot (@0x39a2e only guards `AmmoType` 0 and
+    /// up); and counts it in its burst, which past [`burst_interval`] starts
+    /// again on its `BurstReload` in place of the timer and, under 0x0001
+    /// with an `AmmoType` of 0 to 255, pays a round then (@0x39ac2-0x39b8a).
+    /// The original's round at the end of a burst is unfloored; the burst's
+    /// last shot fires only with a round to pay, so the floor here never
+    /// shows.
+    fn defend(
+        &mut self,
+        rounds: &mut dyn Rounds,
+        fuel: &mut Gauge,
+        reports: &mut Reports,
+        npc: bool,
+    ) {
+        reports.fired(&self.spec);
+        self.reload += self.spec.reload / self.count as f32;
+        let at_burst_end = self.spec.ammo_at_burst_end();
+        let on_rounds = (0..=MAX_AMMO_SLOT).contains(&self.spec.ammo_type);
+        if !(at_burst_end && self.spec.ammo_type >= 0) {
+            self.pay(rounds, fuel, npc, true);
+        }
+        if self.spec.burst_count > 0 {
+            self.burst += 1;
+            if self.burst >= burst_interval(&self.spec, self.count) {
+                self.burst = 0;
+                self.reload = self.spec.burst_reload;
+                if at_burst_end && on_rounds {
+                    self.pay(rounds, fuel, npc, true);
+                }
+            }
         }
     }
 
@@ -658,7 +702,7 @@ impl Armament {
                 continue;
             }
             let inaccuracy = inaccuracy(mount.spec.inaccuracy, chance);
-            mount.discharge(rounds, fuel, reports, shooter.npc, false);
+            mount.discharge(rounds, fuel, reports, shooter.npc);
             launches.push(Launch {
                 weapon: mount.spec,
                 pointing: aimed.pointing,
@@ -760,12 +804,7 @@ impl Armament {
                 };
                 burst_end(&spec, amount, rounds, fuel);
             }
-            let interval = if spec.flags & SIMULTANEOUS == 0 {
-                spec.burst_count * count
-            } else {
-                spec.burst_count
-            };
-            if mount.burst >= interval {
+            if mount.burst >= burst_interval(&spec, count) {
                 mount.burst = 0;
                 held = spec.burst_reload;
             }
@@ -863,7 +902,7 @@ impl Armament {
         } else {
             inaccuracy(mount.spec.inaccuracy, chance)
         };
-        mount.discharge(rounds, fuel, reports, shooter.npc, true);
+        mount.defend(rounds, fuel, reports, shooter.npc);
         let launch = Launch {
             weapon: mount.spec,
             pointing,
@@ -940,10 +979,19 @@ impl Armament {
         }
     }
 
-    /// Counts every weapon's reload timer down a tick.
+    /// Counts every weapon's reload timer down a tick, as `_HandleShip`
+    /// (@0x33896-0x338ce) and `_HandlePlayer` (@0x6ae25-0x6ae61) do: a
+    /// timer above none loses a tick, unfloored, so one of 0.5 reads -0.5
+    /// for a tick, which point defence's reload adds to
+    /// ([`Armament::fire_point_defence`]); one at or below none is set to
+    /// none.
     pub fn reload(&mut self) {
         for mount in &mut self.mounts {
-            mount.reload = (mount.reload - 1.0).max(0.0);
+            mount.reload = if mount.reload > 0.0 {
+                mount.reload - 1.0
+            } else {
+                0.0
+            };
         }
     }
 }
@@ -986,6 +1034,21 @@ fn secondaries(mounts: &[Mount]) -> impl Iterator<Item = &WeaponSpec> {
         .map(|mount| &mount.spec)
         .filter(|spec| spec.secondary())
 }
+
+/// The shots in a burst of `spec` carried `count` times
+/// (`_WeaponBurstInterval` @0x831c): its `BurstCount` for copies that
+/// fire together (`Flags` 0x0040), and `BurstCount` × `count` otherwise.
+fn burst_interval(spec: &WeaponSpec, count: u32) -> u32 {
+    if spec.flags & SIMULTANEOUS == 0 {
+        spec.burst_count * count
+    } else {
+        spec.burst_count
+    }
+}
+
+/// The highest `AmmoType` whose round point defence pays at the end of a
+/// burst (`_HandleShipPointDefense` @0x39b56-0x39b5a, unsigned).
+const MAX_AMMO_SLOT: i16 = 255;
 
 /// What the end of a burst of `spec` spends, `amount` shots' worth, from
 /// `rounds` and `fuel` (`_FireAIShipWeapon` @0x890a5-0x8913d): a round
@@ -2736,6 +2799,180 @@ mod tests {
             &mut Vec::new(),
         );
         assert_eq!(supplies.reports.take().len(), 1);
+    }
+
+    /// The ticks of `ticks` on which `armament`'s point defence fires at a
+    /// missile always there, from `supplies`, each followed by a reload.
+    fn defending(armament: &mut Armament, supplies: &mut Supplies, ticks: u32) -> Vec<u32> {
+        (0..ticks)
+            .filter(|_| {
+                let fired = defend(
+                    armament,
+                    supplies,
+                    &mut NeverFires,
+                    Some((0.0, ShotId(1))),
+                    &mut Vec::new(),
+                );
+                armament.reload();
+                fired.is_some()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn point_defence_adds_its_reload_share_to_what_is_left_of_its_timer() {
+        let mut armament = mounted(defence(133, 9, 5, 0), 2);
+        armament.mounts[0].reload = -0.5;
+        let mut supplies = Supplies::none();
+        defend(
+            &mut armament,
+            &mut supplies,
+            &mut NeverFires,
+            Some((0.0, ShotId(1))),
+            &mut Vec::new(),
+        )
+        .expect("fires");
+        assert_eq!(armament.mounts()[0].reload, 2.0, "-0.5 and 5 / 2");
+    }
+
+    #[test]
+    fn a_two_mount_quad_fires_every_two_and_a_half_ticks() {
+        let mut armament = mounted(defence(133, 9, 5, 0), 2);
+        assert_eq!(
+            defending(&mut armament, &mut Supplies::none(), 11),
+            [0, 3, 5, 8, 10]
+        );
+    }
+
+    #[test]
+    fn a_reload_timer_counts_down_past_none_once_then_rests_at_none() {
+        let mut armament = mounted(defence(133, 9, 5, 0), 1);
+        armament.mounts[0].reload = 0.5;
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            armament.reload();
+            seen.push(armament.mounts()[0].reload);
+        }
+        assert_eq!(seen, [-0.5, 0.0, 0.0]);
+    }
+
+    /// A point-defence weapon of `flags` and `flags3`, of no reload, firing
+    /// bursts of 3 with a 20-tick burst reload, on 155's rounds (`AmmoType`
+    /// 27).
+    fn bursting_defence(flags: u16, flags3: u16) -> WeaponRecord {
+        WeaponRecord {
+            flags,
+            flags3,
+            burst_count: 3,
+            burst_reload: 20,
+            ammo_type: 27,
+            ..defence(161, 9, 0, 0)
+        }
+    }
+
+    #[test]
+    fn point_defences_burst_runs_its_count_times_its_copies_or_its_count_if_simultaneous() {
+        let fires = |flags| {
+            let mut armament = mounted(bursting_defence(flags, 0), 2);
+            let mut supplies = Supplies::none();
+            supplies.rounds = slots(&[(155, 100)]);
+            defending(&mut armament, &mut supplies, 10)
+        };
+        assert_eq!(fires(0), [0, 1, 2, 3, 4, 5], "3 x 2");
+        assert_eq!(fires(SIMULTANEOUS), [0, 1, 2], "3, its copies together");
+        let mut armament = mounted(bursting_defence(0, 0), 2);
+        let mut supplies = Supplies::none();
+        supplies.rounds = slots(&[(155, 100)]);
+        defending(&mut armament, &mut supplies, 6);
+        assert_eq!(
+            (armament.mounts()[0].burst, armament.mounts()[0].reload),
+            (0, 19.0),
+            "the burst reload in place of the carry, a tick gone"
+        );
+    }
+
+    #[test]
+    fn point_defence_using_ammo_at_the_end_of_a_burst_spends_a_round_each_interval() {
+        // `AmmoType` 27 is 155's rounds, and 0 is 128's.
+        for (shooter, ammo_type, slot) in [
+            (Shooter::PLAYER, 27, 155),
+            (Shooter::PLAYER, 0, 128),
+            (NPC, 27, 161),
+            (NPC, 0, 161),
+        ] {
+            let record = WeaponRecord {
+                ammo_type,
+                ..bursting_defence(0, AMMO_AT_BURST_END)
+            };
+            let mut armament = mounted(record, 2);
+            let mut supplies = Supplies::none();
+            supplies.shooter = shooter;
+            supplies.rounds = slots(&[(slot, 10)]);
+            let fired = defending(&mut armament, &mut supplies, 6);
+            assert_eq!(fired, [0, 1, 2, 3, 4, 5], "{shooter:?}");
+            assert_eq!(
+                supplies.rounds.slot(WeaponId(slot)),
+                9,
+                "{shooter:?}: one round for the burst of 6"
+            );
+            defending(&mut armament, &mut supplies, 30);
+            assert_eq!(supplies.rounds.slot(WeaponId(slot)), 8, "{shooter:?}");
+        }
+    }
+
+    #[test]
+    fn an_npcs_point_defence_of_an_ammo_type_past_255_using_ammo_at_a_bursts_end_never_pays() {
+        let odd = WeaponRecord {
+            ammo_type: 300,
+            ..bursting_defence(0, AMMO_AT_BURST_END)
+        };
+        let mut armament = mounted(odd, 1);
+        let mut supplies = Supplies::none();
+        supplies.shooter = NPC;
+        supplies.rounds = slots(&[(161, 5)]);
+        assert_eq!(defending(&mut armament, &mut supplies, 3), [0, 1, 2]);
+        assert_eq!(armament.mounts()[0].reload, 19.0, "its burst ended");
+        assert_eq!(supplies.rounds.slot(WeaponId(161)), 5, "nothing spent");
+    }
+
+    #[test]
+    fn point_defence_on_fuel_spends_it_every_shot_even_using_ammo_at_the_end_of_a_burst() {
+        // `AmmoType` -1010: a unit of fuel a shot.
+        let fuelled = WeaponRecord {
+            ammo_type: -1010,
+            ..bursting_defence(0, AMMO_AT_BURST_END)
+        };
+        let mut armament = mounted(fuelled, 1);
+        let mut supplies = Supplies::none();
+        supplies.fuel = Gauge::full(10.0);
+        assert_eq!(defending(&mut armament, &mut supplies, 3), [0, 1, 2]);
+        assert_eq!(supplies.fuel.now, 7.0);
+    }
+
+    #[test]
+    fn point_defence_tries_only_its_first_ready_weapon() {
+        let mut armament = Armament::new(
+            [defence(133, 9, 5, 0), defence(150, 10, 3, 0)]
+                .iter()
+                .map(|record| (WeaponSpec::new(record), 1)),
+        );
+        let mut supplies = Supplies::none();
+        let mut asked = Vec::new();
+        let fired = armament.fire_point_defence(
+            Condition::Intact,
+            supplies.shooter,
+            &mut supplies.rounds,
+            &mut supplies.fuel,
+            &mut NeverFires,
+            &mut supplies.reports,
+            &mut |spec: &WeaponSpec| {
+                asked.push(spec.id);
+                // Only the longer-reaching beam has a missile in reach.
+                (spec.id == WeaponId(150)).then_some((Pointing::Along(0.0), ShotId(1)))
+            },
+        );
+        assert_eq!(fired, None, "the beam is never tried");
+        assert_eq!(asked, [WeaponId(133)]);
     }
 
     #[test]

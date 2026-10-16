@@ -1073,6 +1073,20 @@ pub struct WeaponRecord {
     pub ionization: i16,
     /// Its `IonizeColor`, `00RRGGBB`.
     pub ionize_color: u32,
+    /// The frame size of its shots' sprite, the sheet of `spïn` 3000 +
+    /// its `Graphic`, which point defence meets missiles by (see
+    /// [`defence`](crate::combat::defence)); none for a `Graphic` below
+    /// 0 or a sheet that cannot be read.
+    pub frame: Option<FrameSize>,
+}
+
+/// A sprite frame's size, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameSize {
+    /// Its width.
+    pub width: u32,
+    /// Its height.
+    pub height: u32,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`

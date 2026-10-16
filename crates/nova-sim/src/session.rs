@@ -173,8 +173,10 @@
 //! session starts, by the fight's [`Rules`]: disabling ships as a
 //! [`DisableRule`](crate::combat::hull::DisableRule) says, and every
 //! ship's point defence engaging the missiles fired at it, with no target
-//! needed, as a [`PointDefenceRule`](crate::combat::defence::PointDefenceRule)
-//! says. The player's weapons are its ship's stock weapons
+//! needed, whoever fired them, or, by the other reading of
+//! [`RuleKey::PdHostility`], only those a
+//! [`PointDefenceRule`](crate::combat::defence::PointDefenceRule) calls
+//! hostile. The player's weapons are its ship's stock weapons
 //! and its weapon outfits, firing the rounds of its ammunition outfits and
 //! its fuel, so a fight changes the pilot only in its shield, armour and
 //! fuel and the ammunition it owns. The fight stands still while the
@@ -1497,6 +1499,8 @@ impl Session {
             .set_beam_cone_quirks(rules.source_for(RuleKey::BeamConeQuirks));
         self.combat
             .set_bomb_rocket_launch(rules.source_for(RuleKey::BombRocketLaunch));
+        self.combat
+            .set_pd_hostility(rules.source_for(RuleKey::PdHostility));
         self.rules = rules;
         self
     }
@@ -14588,6 +14592,18 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_rulebook_says_whether_point_defence_asks_who_is_hostile() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session(Rulebook::default()).combat, Combat::default());
+        let mut asking = Combat::default();
+        asking.set_pd_hostility(RuleSource::Bible);
+        assert_ne!(asking, Combat::default());
+        let other = Rulebook::default().with_override(RuleKey::PdHostility, RuleSource::Bible);
+        assert_eq!(session(other).combat, asking);
+    }
+
+    #[test]
     fn the_rulebook_says_how_an_npcs_bombs_and_rockets_leave() {
         let catalog = armed();
         let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
@@ -18657,9 +18673,23 @@ pub(super) mod tests {
             speed: 1000,
             guided_turn: 70,
             durability: 4,
+            frame: Some(IR_MISSILE_SPRITE),
             ..blaster()
         }
     }
+
+    /// The stock IR Missile's sprite frame, 18 pixels square.
+    const IR_MISSILE_SPRITE: crate::catalog::FrameSize = crate::catalog::FrameSize {
+        width: 18,
+        height: 18,
+    };
+
+    /// The stock Quad Light Blaster Turret's sprite frame, 35 pixels
+    /// square.
+    const QUAD_SPRITE: crate::catalog::FrameSize = crate::catalog::FrameSize {
+        width: 35,
+        height: 35,
+    };
 
     #[test]
     fn the_players_homing_missile_hits_its_target_and_without_one_flies_through_it() {
@@ -18992,6 +19022,7 @@ pub(super) mod tests {
             speed: 2000,
             mass_dmg: 1,
             energy_dmg: 4,
+            frame: Some(QUAD_SPRITE),
             ..blaster()
         };
         let slow = WeaponRecord {
@@ -19033,6 +19064,58 @@ pub(super) mod tests {
         );
     }
 
+    #[test]
+    fn the_players_point_defence_rests_while_its_jump_is_under_way() {
+        let quad = WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            frame: Some(QUAD_SPRITE),
+            ..blaster()
+        };
+        let slow = WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..homing_missile(134, 1000)
+        };
+        let catalog = arming(quad, slow, 0);
+        let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+        let defended = |session: &mut Session| {
+            session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.take_combat_events().iter().any(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Fired {
+                        ship: ShipRef::Player,
+                        weapon: WeaponId(133),
+                        ..
+                    }
+                )
+            })
+        };
+        session.jump = Some(Jump::PreJump {
+            to: SystemId(129),
+            bearing: None,
+            warp: None,
+        });
+        let jumping: Vec<bool> = (0..5).map(|_| defended(&mut session)).collect();
+        assert_eq!(jumping, [false; 5], "resting");
+        assert!(
+            session
+                .shots()
+                .iter()
+                .any(|shot| shot.weapon.id == WeaponId(134)),
+            "a missile at it"
+        );
+        session.jump = None;
+        assert!(defended(&mut session), "firing once the jump is off");
+    }
+
     /// Every NPC takes `goal`, fires as Nova's AI picks
     /// ([`crate::ai::fire::trigger`]) and targets what `goal` is about.
     #[derive(Debug)]
@@ -19066,6 +19149,7 @@ pub(super) mod tests {
             speed: 2000,
             mass_dmg: 1,
             energy_dmg: 4,
+            frame: Some(QUAD_SPRITE),
             ..blaster()
         };
         let slow = WeaponRecord {
@@ -19139,6 +19223,7 @@ pub(super) mod tests {
             speed: 2000,
             mass_dmg: 1,
             energy_dmg: 4,
+            frame: Some(QUAD_SPRITE),
             ..weapon(133)
         }
     }
@@ -19153,6 +19238,7 @@ pub(super) mod tests {
             guided_turn: 70,
             mass_dmg: 20,
             energy_dmg: 10,
+            frame: Some(IR_MISSILE_SPRITE),
             ..weapon(134)
         }
     }
@@ -19550,29 +19636,40 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn point_defence_engages_a_xenophobes_missile_but_not_an_allys() {
-        // A xenophobe's missile boat (AI 1 here, so the volley fires it)
-        // 300 above the player.
-        let catalog = skirmish(&[(1, 142, 133)], Some(140));
-        let mut session = Session::start(&catalog).expect("starts");
-        session.populate(&catalog, &mut placing(1, &[(0, 0, -300, 180)]));
-        let at_player = Volley {
-            at: ShipRef::Player,
-        };
-        assert!(shot_down(&mut session, &catalog, &at_player));
-        // A trader's missile at the police, allied: their point defence
-        // lets it be, and it hits.
-        let catalog = skirmish(&[(1, 140, 134), (4, 141, 135)], Some(140));
-        let mut session = Session::start(&catalog).expect("starts");
-        session.populate(
-            &catalog,
-            &mut placing(2, &[(0, 0, -600, 180), (1, 0, -300, 0)]),
-        );
-        let at_police = Volley {
-            at: ShipRef::Npc(NpcId(1)),
-        };
-        assert!(!shot_down(&mut session, &catalog, &at_police));
-        assert!(session.npcs()[1].reserves.shield.now < 30.0, "it hit");
+    fn point_defence_engages_an_allys_missile_by_the_engine_and_only_a_xenophobes_by_the_other() {
+        let other = Rulebook::default().with_override(RuleKey::PdHostility, RuleSource::Bible);
+        for rules in [Rulebook::default(), other] {
+            // A xenophobe's missile boat (AI 1 here, so the volley fires
+            // it) 300 above the player.
+            let catalog = skirmish(&[(1, 142, 133)], Some(140));
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            session.populate(&catalog, &mut placing(1, &[(0, 0, -300, 180)]));
+            let at_player = Volley {
+                at: ShipRef::Player,
+            };
+            assert!(shot_down(&mut session, &catalog, &at_player), "{rules:?}");
+        }
+        // A trader's missile at the police, allied: by the engine their
+        // point defence shoots it down; by the other reading it lets it
+        // be, and it hits.
+        for (rules, downed) in [(Rulebook::default(), true), (other, false)] {
+            let catalog = skirmish(&[(1, 140, 134), (4, 141, 135)], Some(140));
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            session.populate(
+                &catalog,
+                &mut placing(2, &[(0, 0, -600, 180), (1, 0, -300, 0)]),
+            );
+            let at_police = Volley {
+                at: ShipRef::Npc(NpcId(1)),
+            };
+            assert_eq!(
+                shot_down(&mut session, &catalog, &at_police),
+                downed,
+                "{rules:?}"
+            );
+            let shield = session.npcs()[1].reserves.shield.now;
+            assert_eq!(shield < 30.0, !downed, "{rules:?}: {shield}");
+        }
     }
 
     /// `catalog`'s session with a xenophobe's missile boat (NPC 0) 600

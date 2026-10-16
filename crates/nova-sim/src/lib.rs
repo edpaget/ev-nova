@@ -63,7 +63,9 @@
 //!   shooting missiles down, sub-munitions, damage to shields then armour,
 //!   the fight's [`Rules`]: the [`DisableRule`] port with Nova's
 //!   [`NovaDisable`] and the [`PointDefenceRule`] port with Nova's
-//!   [`Allegiance`], and destruction, reported as [`CombatEvent`]s, with
+//!   [`Allegiance`], which point defence asks only by the other reading
+//!   of [`RuleKey::PdHostility`], and destruction, reported as
+//!   [`CombatEvent`]s, with
 //!   each weapon feature not done yet reported once as a
 //!   [`SimDiagnostic`].
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
@@ -361,12 +363,12 @@ pub use board::{
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
-    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
-    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    FleetRecord, FrameSize, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord,
+    LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId,
+    NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon,
+    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem,
+    StartDate, StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

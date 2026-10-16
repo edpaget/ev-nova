@@ -35,12 +35,12 @@ use crate::blink::Blink;
 use crate::catalog::{
     AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
-    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipExits, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic,
-    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    FleetRecord, FrameSize, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite,
+    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
+    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
+    PlaceNames, RankId, RankRecord, ShipExits, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::escort::EscortClass;
@@ -812,6 +812,27 @@ fn shown_resource_name(name: &str) -> &str {
     shown.trim_end_matches([' ', ';'])
 }
 
+/// The first `spïn` of the shots' sprites (the Bible: 3000-3255).
+const FIRST_SHOT_SPIN: i16 = 3000;
+
+/// The frame size of the sprite a shot of `Graphic` `graphic` is drawn
+/// with in `data`, as the original clones it (`_SpawnShot` @0x3f1a1-0x3f1c1,
+/// `spïn` 3000 + `Graphic`): none for a `Graphic` below 0, a missing
+/// `spïn` or a sheet that cannot be read.
+fn shot_frame(data: &GameData, graphic: i16) -> Option<FrameSize> {
+    if graphic < 0 {
+        return None;
+    }
+    let sheet = data
+        .spin_sheet(FIRST_SHOT_SPIN.saturating_add(graphic))
+        .ok()?
+        .sheet;
+    Some(FrameSize {
+        width: sheet.frame_width(),
+        height: sheet.frame_height(),
+    })
+}
+
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
 impl CombatCatalog for GameData {
@@ -855,6 +876,7 @@ impl CombatCatalog for GameData {
                     exit_type: record.exit_type,
                     ionization: record.ionization,
                     ionize_color: record.ionize_color,
+                    frame: shot_frame(self, record.graphic),
                 })
             })
             .collect()
@@ -1152,8 +1174,9 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipExits,
-        StarSystem, StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
+        DisasterId, FrameSize, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties,
+        ShipExits, StarSystem, StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId,
+        WeaponRecord,
     };
     use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test, TestExpr};
@@ -3037,6 +3060,7 @@ mod tests {
             exit_type: 2,
             ionization: -40,
             ionize_color: 0x0034_c2ff,
+            frame: None,
         };
         assert_eq!(
             data.weapons(),
@@ -3044,6 +3068,42 @@ mod tests {
             "by ID, the undecodable one left out"
         );
         assert_eq!(store(&[]).weapons(), []);
+    }
+
+    /// [`weapon_bytes`] of `Graphic` `graphic`.
+    fn drawn_as(graphic: i16) -> Vec<u8> {
+        let mut bytes = weapon_bytes();
+        put_i16s(&mut bytes, 0x0E, &[graphic]);
+        bytes
+    }
+
+    #[test]
+    fn a_wëaps_shots_carry_the_frame_size_of_spin_3000_plus_its_graphic() {
+        let data = store(&[
+            (Weapon::TYPE, 128, drawn_as(3)),
+            (Weapon::TYPE, 129, drawn_as(-1)),
+            (Weapon::TYPE, 130, drawn_as(4)),
+            (Weapon::TYPE, 131, drawn_as(5)),
+            (Spin::TYPE, 2999, spin(2000)),
+            (Spin::TYPE, 3003, spin(2000)),
+            (Spin::TYPE, 3005, spin(2001)),
+            (RLED, 2000, sheet(10, 30)),
+        ]);
+        let frames: Vec<Option<FrameSize>> =
+            data.weapons().iter().map(|record| record.frame).collect();
+        assert_eq!(
+            frames,
+            [
+                Some(FrameSize {
+                    width: 10,
+                    height: 30
+                }),
+                None,
+                None,
+                None
+            ],
+            "spïn 3003's; none for Graphic -1, no spïn 3004, and spïn 3005's missing sheet"
+        );
     }
 
     #[test]

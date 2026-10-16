@@ -866,16 +866,29 @@ fn the_players_point_defence_shoots_down_the_traders_missile() {
 }
 
 #[test]
-fn the_routers_point_defence_rule_decides_for_the_flight() {
+fn the_routers_point_defence_rule_decides_for_the_flight_by_the_other_reading() {
     let rule = Rc::new(Unalarmed::default());
     let given: Rc<dyn PointDefenceRule> = rule.clone();
-    let mut harness = defending(|screen| screen.with_point_defence_rule(given));
+    let asking = nova_sim::Rulebook::default()
+        .with_override(nova_sim::RuleKey::PdHostility, nova_sim::RuleSource::Bible);
+    let mut harness = defending(|screen| screen.with_point_defence_rule(given).with_rules(asking));
     harness.until(|harness| missiles(harness) == 1);
     for _ in 0..20 {
         harness.frame();
     }
     assert!(rule.asked.get() > 0);
     assert_eq!(missiles(&harness), 1, "never hostile, never shot down");
+}
+
+#[test]
+fn by_the_engine_the_routers_point_defence_rule_is_never_asked() {
+    let rule = Rc::new(Unalarmed::default());
+    let given: Rc<dyn PointDefenceRule> = rule.clone();
+    let mut harness = defending(|screen| screen.with_point_defence_rule(given));
+    harness.until(|harness| missiles(harness) == 1);
+    harness.until(|harness| missiles(harness) == 0);
+    assert_eq!(rule.asked.get(), 0);
+    assert_eq!(harness.session().reserves().shield.now, 30.0, "shot down");
 }
 
 // Patrolled, by Nova's AI and law.
