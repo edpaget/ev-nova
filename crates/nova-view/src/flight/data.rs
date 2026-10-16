@@ -14,7 +14,7 @@ use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, LayerError, LayerSprite};
+use nova_data::{GameData, LayerError, LayerSprite, shot_spin_id};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
 use nova_sim::combat::weapon::loaded_falloff;
@@ -124,8 +124,6 @@ impl StatusBars for GameData {
     }
 }
 
-/// The first `spïn` of the shots' graphics (the Bible: 3000-3255).
-pub const FIRST_SHOT_SPIN: i16 = 3000;
 /// The first `snd ` of the weapons' sounds (the loader's 200-455).
 pub const FIRST_WEAPON_SOUND: i16 = 200;
 /// The first `spïn` of the explosions' graphics (`_LoadObjectData`).
@@ -157,8 +155,7 @@ impl CombatLooks for GameData {
             None => return Err(format!("no wëap {}", id.0)),
         };
         let weapon = entry.record;
-        let sheet = (weapon.graphic >= 0)
-            .then(|| effect_sheet(self, FIRST_SHOT_SPIN.saturating_add(weapon.graphic)));
+        let sheet = shot_spin_id(weapon.graphic).map(|spin| effect_sheet(self, spin));
         let sound = offset_sound(FIRST_WEAPON_SOUND, weapon.sound);
         Ok(WeaponLook {
             name: resource_name(entry.name.unwrap_or_default()),

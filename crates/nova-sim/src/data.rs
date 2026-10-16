@@ -28,7 +28,7 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, Record, stellar_spin_id};
+use nova_data::{GameData, Record, shot_spin_id, stellar_spin_id};
 use nova_rsrc::ResType;
 
 use crate::blink::Blink;
@@ -812,21 +812,12 @@ fn shown_resource_name(name: &str) -> &str {
     shown.trim_end_matches([' ', ';'])
 }
 
-/// The first `spïn` of the shots' sprites (the Bible: 3000-3255).
-const FIRST_SHOT_SPIN: i16 = 3000;
-
 /// The frame size of the sprite a shot of `Graphic` `graphic` is drawn
-/// with in `data`, as the original clones it (`_SpawnShot` @0x3f1a1-0x3f1c1,
-/// `spïn` 3000 + `Graphic`): none for a `Graphic` below 0, a missing
-/// `spïn` or a sheet that cannot be read.
+/// with in `data`, its `spïn` as the original clones it
+/// ([`shot_spin_id`]): none for a `Graphic` below 0, a missing `spïn` or a
+/// sheet that cannot be read.
 fn shot_frame(data: &GameData, graphic: i16) -> Option<FrameSize> {
-    if graphic < 0 {
-        return None;
-    }
-    let sheet = data
-        .spin_sheet(FIRST_SHOT_SPIN.saturating_add(graphic))
-        .ok()?
-        .sheet;
+    let sheet = data.spin_sheet(shot_spin_id(graphic)?).ok()?.sheet;
     Some(FrameSize {
         width: sheet.frame_width(),
         height: sheet.frame_height(),
