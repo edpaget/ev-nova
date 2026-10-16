@@ -724,6 +724,34 @@ mod tests {
     }
 
     #[test]
+    fn a_movie_of_a_size_too_large_to_count_still_fits_the_screen() {
+        for (size, wide) in [((u32::MAX, 100), true), ((100, u32::MAX), false)] {
+            let player = MockMoviePlayer::playing(size, 3);
+            let mut stage = staged(&player, 0x0004);
+            stage.begin();
+            run(&mut stage, MOVIE_FADE_FOR * 2);
+            let _ = fills(&stage);
+            let frame = player.drawn()[0];
+            if wide {
+                assert!(frame.width() > 1000.0, "{frame:?}");
+            } else {
+                assert!(frame.height() > 700.0, "{frame:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn it_debugs_as_its_movie_and_where_it_stands() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let debugged = format!("{:?}", staged(&player, 0));
+        assert!(
+            debugged.starts_with("MovieStage { movie: DescMovie {"),
+            "{debugged}"
+        );
+        assert!(debugged.contains("phase: Waiting"), "{debugged}");
+    }
+
+    #[test]
     fn a_plain_movie_larger_than_the_screen_has_a_window_as_large() {
         let player = MockMoviePlayer::playing((2000, 100), 3);
         let mut stage = staged(&player, 0);

@@ -1240,3 +1240,18 @@ fn with_the_engines_player_a_texts_movie_is_skipped_and_its_text_shows() {
     assert_eq!(game.showing(), Showing::MissionText);
     assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
 }
+
+#[test]
+fn a_cinematic_offer_movie_over_flight_hides_the_pointer() {
+    use nova_view::Screen;
+    let (mut game, _) = hailed_with_movies(Knobs {
+        offer_movie: Some(0x0004),
+        ..PLAIN
+    });
+    assert!(!game.app.screen().hides_pointer(), "during the fade out");
+    for _ in 0..61 {
+        game.frame();
+    }
+    assert_eq!(game.showing(), Showing::Movie);
+    assert!(game.app.screen().hides_pointer(), "_HideTheCursor @0x55a73");
+}

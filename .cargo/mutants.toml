@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `fitted` scales a movie box down only when the window is smaller
+    # (@0x55cb8, @0x55d16); at an equal side the scale is exactly 1, so
+    # `<=` gives the same size.
+    "movie.rs:.*replace < with <= in fitted",
     # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
     # which is `StringPatch::default()`: the same value.
     "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
