@@ -31,13 +31,20 @@ use crate::table::SoundTable;
 ///   and on, before the music is spent, starts it again from the top.
 /// - Each event with a `snd ` in the table plays it once, at the effects
 ///   volume, while the sound setting is on. A landing plays the table's
-///   landing sound, then the stellar's own. A `P` set operator's sound
+///   landing sound alone: the stellar's own is the spaceport's ambient
+///   sound. A `P` set operator's sound
 ///   plays its own `snd ` the same way, on the one mission channel when
 ///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
 ///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
 ///   which the port decides.
+/// - The spaceport's ambient sound plays its own `snd ` the same way: over
+///   anything, or unless still playing for a looped one
+///   ([`UiSound::PortAmbient`]); the spaceport's close halts it
+///   ([`UiSound::PortAmbientHalted`]), whatever the sound setting.
 /// - A key's click on a main-menu button plays the button-down sound,
 ///   then the button-up sound once the port says the first has ended.
+///   Until then the click is waited on ([`AudioCore::click_waiting`]):
+///   the main menu holds the key's choice until the app sees it is not.
 /// - A halt halts each `snd ` it names, in order ([`AudioCommand::Halt`]),
 ///   whatever the sound setting: halting what is not playing is harmless.
 /// - Each of a fight's sounds plays its own `snd ` once, at the effects
@@ -83,6 +90,18 @@ impl<A: Audio> AudioCore<A> {
             loop_on: false,
             keyed: None,
         }
+    }
+
+    /// Whether a keyed click is still waited on: its button-down sound
+    /// was asked for, and its button-up sound has not been played yet, as
+    /// `_PlayMainScreenClickSound` @0x177af spins until 600 has ended
+    /// (@0x177e0-0x177f2) and plays 601 before `_MainScreenChoice` runs.
+    /// False before any keyed click, with sound off, with no button-down
+    /// sound in the table, and from the [`update`](Self::update) that
+    /// plays the button-up sound.
+    #[must_use]
+    pub fn click_waiting(&self) -> bool {
+        self.keyed.is_some()
     }
 
     /// Takes in one frame's worth: the screen `showing` (`None` keeps the
@@ -141,10 +160,7 @@ impl<A: Audio> AudioCore<A> {
                 self.thrusting = self.scene == Some(Showing::Flight);
             }
             Sound::Sim(SimSound::ThrustStopped) => self.thrusting = false,
-            Sound::Sim(SimSound::Landed { stellar_sound }) => {
-                self.play(self.table.landing);
-                self.play(stellar_sound);
-            }
+            Sound::Sim(SimSound::Landed) => self.play(self.table.landing),
             Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
             Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
             Sound::Sim(SimSound::JumpBeganInDoubleTime) => self.play(self.table.jump_double_time),
@@ -157,6 +173,10 @@ impl<A: Audio> AudioCore<A> {
             Sound::Sim(SimSound::Script {
                 sound,
                 exclusive: false,
+            })
+            | Sound::Ui(UiSound::PortAmbient {
+                sound,
+                until_stopped: false,
             }) => self.play(Some(sound)),
             Sound::Sim(SimSound::Script {
                 sound,
@@ -203,6 +223,7 @@ impl<A: Audio> AudioCore<A> {
             Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
             Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
             Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
+            Sound::Ui(UiSound::EnterRefused) => self.play(self.table.enter_refused),
             Sound::Ui(UiSound::NewsOpened | UiSound::MissionInfoOpened) => {
                 self.play(self.table.news_open);
             }
@@ -214,6 +235,11 @@ impl<A: Audio> AudioCore<A> {
             }
             Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
             Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
+            Sound::Ui(UiSound::PortAmbient {
+                sound,
+                until_stopped: true,
+            }) => self.play_unless_playing(Some(sound)),
+            Sound::Ui(UiSound::PortAmbientHalted(sound)) => self.halt(&[sound]),
             Sound::Combat(fight) => {
                 let gain = distance_gain(fight.offset);
                 let volume = self.settings.effects_volume.amplitude() * gain;
@@ -249,7 +275,13 @@ impl<A: Audio> AudioCore<A> {
     /// Plays the klaxon, unless it is still playing, at the effects
     /// volume, while sound is on.
     fn sound_klaxon(&mut self) {
-        if let Some(sound) = self.table.klaxon
+        self.play_unless_playing(self.table.klaxon);
+    }
+
+    /// Plays `sound`, if there is one, unless it is still playing, at the
+    /// effects volume, while sound is on.
+    fn play_unless_playing(&mut self, sound: Option<SoundId>) {
+        if let Some(sound) = sound
             && self.settings.sound
         {
             self.audio.run(AudioCommand::PlayUnlessPlaying {
@@ -531,11 +563,7 @@ mod tests {
     const JUMP: Sound = Sound::Sim(SimSound::JumpBegan);
     const ARRIVED: Sound = Sound::Sim(SimSound::Arrived);
 
-    fn landed(stellar_sound: Option<i16>) -> Sound {
-        Sound::Sim(SimSound::Landed {
-            stellar_sound: stellar_sound.map(SoundId),
-        })
-    }
+    const LANDED: Sound = Sound::Sim(SimSound::Landed);
 
     /// The default effects volume, level 4's: a quarter of full.
     const EFFECTS: f32 = 0.25;
@@ -694,6 +722,54 @@ mod tests {
         core.update(Some(Showing::ShipBrowser), &[KEYED]);
         core.update(None, &[]);
         assert_eq!(drain(&log), [play(600, EFFECTS)], "no 601 to play");
+    }
+
+    #[test]
+    fn a_keyed_click_is_waited_on_from_600_until_the_update_that_plays_601() {
+        let (mut core, log, audio) = keyed();
+        assert!(!core.click_waiting(), "no click yet");
+        core.update(Some(Showing::MainMenu), &[KEYED]);
+        assert!(core.click_waiting(), "600 has just been asked for");
+        audio.set_playing(SoundId(600), true);
+        core.update(None, &[]);
+        assert!(core.click_waiting(), "600 still playing");
+        audio.set_playing(SoundId(600), false);
+        drain(&log);
+        core.update(None, &[]);
+        assert_eq!(drain(&log), [play(601, EFFECTS)]);
+        assert!(!core.click_waiting(), "601 has started");
+    }
+
+    #[test]
+    fn a_keyed_click_is_not_waited_on_with_sound_off_or_no_600() {
+        let (mut core, _, audio) = keyed();
+        audio.set_playing(SoundId(600), true);
+        core.set_sound(false);
+        core.update(Some(Showing::MainMenu), &[KEYED]);
+        assert!(!core.click_waiting(), "sound off");
+
+        let audio = RecordingAudio::new();
+        audio.set_playing(SoundId(600), true);
+        let table = SoundTable {
+            button_down: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::MainMenu), &[KEYED]);
+        assert!(!core.click_waiting(), "no 600");
+    }
+
+    #[test]
+    fn enter_refused_on_the_main_menu_beeps_153_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_music(false);
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::MainMenu), &[Sound::Ui(UiSound::EnterRefused)]);
+        assert_eq!(drain(&log), [play(153, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &[Sound::Ui(UiSound::EnterRefused)]);
+        assert_eq!(drain(&log), [], "sound off");
     }
 
     #[test]
@@ -1022,6 +1098,62 @@ mod tests {
         assert_eq!(drain(&log), [], "sound off");
     }
 
+    fn ambient(id: i16, until_stopped: bool) -> Sound {
+        Sound::Ui(UiSound::PortAmbient {
+            sound: SoundId(id),
+            until_stopped,
+        })
+    }
+
+    #[test]
+    fn the_ports_ambient_sound_plays_over_anything_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::Spaceport),
+            &[ambient(10_032, false), ambient(10_032, false)],
+        );
+        assert_eq!(drain(&log), [play(10_032, 0.5), play(10_032, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[ambient(10_032, false)]);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_looped_ambient_sound_plays_unless_still_playing() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::Spaceport), &[ambient(10_033, true)]);
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::PlayUnlessPlaying {
+                sound: SoundId(10_033),
+                volume: Volume::new(0.5),
+            }],
+            "the adapter decides"
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[ambient(10_033, true)]);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_ports_close_halts_its_ambient_sound_even_with_sound_off() {
+        let halted = Sound::Ui(UiSound::PortAmbientHalted(SoundId(10_032)));
+        let halt = AudioCommand::Halt {
+            sound: SoundId(10_032),
+        };
+        let (mut core, log) = original();
+        core.update(Some(Showing::Spaceport), &[halted]);
+        assert_eq!(drain(&log), [halt]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[halted]);
+        assert_eq!(drain(&log), [halt], "sound off halts too");
+    }
+
     #[test]
     fn a_halt_halts_each_named_sound_in_order() {
         const HALTS: [SoundId; 4] = [SoundId(371), SoundId(128), SoundId(129), SoundId(130)];
@@ -1273,11 +1405,9 @@ mod tests {
     }
 
     #[test]
-    fn a_landing_plays_the_beep_then_the_stellars_own_sound() {
+    fn a_landing_plays_only_the_beep() {
         let (mut core, log) = original();
-        core.update(Some(Showing::ShipBrowser), &[landed(Some(10_032))]);
-        assert_eq!(drain(&log), [play(151, EFFECTS), play(10_032, EFFECTS)]);
-        core.update(None, &[landed(None)]);
+        core.update(Some(Showing::ShipBrowser), &[LANDED]);
         assert_eq!(drain(&log), [play(151, EFFECTS)]);
     }
 
@@ -1325,8 +1455,8 @@ mod tests {
             ..SoundTable::ORIGINAL
         };
         let mut core = AudioCore::with_table(audio, table);
-        core.update(Some(Showing::ShipBrowser), &[landed(Some(10_000)), JUMP]);
-        assert_eq!(drain(&log), [play(10_000, EFFECTS)]);
+        core.update(Some(Showing::ShipBrowser), &[LANDED, JUMP, ARRIVED]);
+        assert_eq!(drain(&log), [play(130, EFFECTS)]);
     }
 
     // The engine.
@@ -1360,7 +1490,7 @@ mod tests {
         core.set_music(false);
         core.update(Some(Showing::Flight), &[THRUST]);
         drain(&log);
-        core.update(Some(Showing::Flight), &[COAST, landed(None)]);
+        core.update(Some(Showing::Flight), &[COAST, LANDED]);
         assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, EFFECTS)]);
     }
 
@@ -1655,7 +1785,7 @@ mod tests {
         let (mut core, log) = engine();
         core.update(Some(Showing::Flight), &[THRUST]);
         assert_eq!(drain(&log), [start_loop(200, EFFECTS)]);
-        core.update(Some(Showing::Spaceport), &[COAST, landed(None)]);
+        core.update(Some(Showing::Spaceport), &[COAST, LANDED]);
         assert_eq!(drain(&log), [AudioCommand::StopLoop, play(151, EFFECTS)]);
     }
 
@@ -1707,7 +1837,9 @@ mod tests {
             &[
                 COAST,
                 THRUST,
-                landed(Some(10_032)),
+                LANDED,
+                ambient(10_032, false),
+                ambient(10_032, true),
                 TOOK_OFF,
                 JUMP,
                 ARRIVED,

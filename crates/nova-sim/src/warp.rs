@@ -141,15 +141,29 @@ pub fn warp_factor(flags: u16) -> f32 {
 /// `movw`); the engine keeps it wide. A rate under 1 Hz would trap the
 /// original's divide: the engine takes it as no sound.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
 pub fn sound_duration(sound: Option<SoundLength>) -> u32 {
-    match sound {
-        Some(SoundLength { frames, rate }) if rate > 0 => {
-            let ticks = u64::from(frames) * u64::from(MAC_TICKS_PER_SECOND) / u64::from(rate);
-            ticks.min(u64::from(u32::MAX)) as u32
-        }
-        _ => NO_SOUND_DURATION,
-    }
+    sound.and_then(length_ticks).unwrap_or(NO_SOUND_DURATION)
+}
+
+/// The warp-out's duration, in Mac ticks, from `sound`, the length of
+/// `snd ` 130: its frames × 60 over the whole part of its rate, as
+/// [`sound_duration`] works it, but 0 without one. 130 has no
+/// `_jumpSoundLength` entry (`_LoadSounds`' duration loop
+/// @0x1c0d2-0x1c12d reads 128 and 129 only), so there is no 350-tick
+/// fallback: a missing 130 never plays.
+#[must_use]
+pub fn warp_out_duration(sound: Option<SoundLength>) -> u32 {
+    sound.and_then(length_ticks).unwrap_or(0)
+}
+
+/// `sound`'s frames × 60 over its rate, in Mac ticks, kept wide; none for
+/// a rate under 1 Hz.
+#[allow(clippy::cast_possible_truncation)]
+fn length_ticks(SoundLength { frames, rate }: SoundLength) -> Option<u32> {
+    (rate > 0).then(|| {
+        let ticks = u64::from(frames) * u64::from(MAC_TICKS_PER_SECOND) / u64::from(rate);
+        ticks.min(u64::from(u32::MAX)) as u32
+    })
 }
 
 /// The warp sound's duration that `_WarpSoundDuration` (@0x8203-0x8224)
@@ -305,6 +319,14 @@ pub fn npc_warp_out_speed(
 /// warp-up's pitch follows w (`_AdjustWarpSoundSpeed`,
 /// rdm:phase/ship-handling-fidelity/phase-8-warp-out), its length will
 /// scale with it.
+///
+/// A jump's arrival halts both ([`SimSound::Halt`] of [`WARP_UP_HALTS`]),
+/// as the original's warp end does (`_HandlePlayer` @0x6c69d-0x6c6d2); a
+/// hypergate or wormhole exit keeps them playing, as the original's do
+/// (@0x63e57, @0x6443d); a relocation's dock ends them for the session
+/// only, raising no halt.
+///
+/// [`SimSound::Halt`]: crate::SimSound::Halt
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WarpUps {
     /// The Mac ticks left of 128 and of 129.
@@ -343,6 +365,68 @@ impl WarpUps {
     #[must_use]
     pub fn playing(&self, double_time: bool) -> bool {
         self.left[usize::from(double_time)] > 0
+    }
+}
+
+/// The warp-out sound `warpOutSnd`, `snd ` 130.
+const WARP_OUT: SoundId = SoundId(130);
+
+/// Whether the warp-out, `warpOutSnd`, `snd ` 130, is still playing, which
+/// the original asks `ST_IsSoundPlaying` of at a jump's natural end
+/// (`_HandlePlayer` @0x6bbe1-0x6bbe9): that end plays 130 only when it is
+/// not (@0x6bc08), where the fallback end plays it unasked (@0x6c706).
+///
+/// Every arrival sound starts it ([`SimSound::Arrived`]): a jump's warp
+/// end, and the hypergate's and wormhole's exits, which play 130
+/// unconditionally (`_PlayerEnterHypergate` @0x63e57,
+/// `_PlayerEnterWormhole` @0x6443d). It lasts [`warp_out_duration`],
+/// counted down by [`MAC_TICKS_PER_TICK`] on each advance pass
+/// ([`WarpOut::step`]). The player's explosion halts it
+/// (`_HandleShipDisplay` @0x2d8d0-0x2d8ea, in [`PLAYER_EXPLOSION_HALTS`]),
+/// and the session takes it as over on landing, as it does the warp-ups
+/// ([`WarpUps`]).
+///
+/// As with [`WarpUps`], the session models the play state rather than
+/// asking the audio side. Accepted differences: the countdown follows
+/// the session's ticks, so it stands still under a dialog or the map,
+/// where the sound plays on; and the engine plays 130 unpitched, as
+/// `PlaySound` does, so its length is its duration at its own rate.
+///
+/// [`SimSound::Arrived`]: crate::SimSound::Arrived
+/// [`PLAYER_EXPLOSION_HALTS`]: crate::sound::PLAYER_EXPLOSION_HALTS
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WarpOut {
+    /// The Mac ticks left of 130.
+    left: u32,
+}
+
+impl WarpOut {
+    /// Starts the warp-out, to play for `duration` Mac ticks.
+    pub fn start(&mut self, duration: u32) {
+        self.left = duration;
+    }
+
+    /// Plays one engine tick of it: [`MAC_TICKS_PER_TICK`] off.
+    pub fn step(&mut self) {
+        self.left = self.left.saturating_sub(MAC_TICKS_PER_TICK);
+    }
+
+    /// Halts it if `sounds` names 130, as `ST_HaltSound` does.
+    pub fn halt(&mut self, sounds: &[SoundId]) {
+        if sounds.contains(&WARP_OUT) {
+            self.left = 0;
+        }
+    }
+
+    /// Ends it.
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Whether it is playing.
+    #[must_use]
+    pub fn playing(&self) -> bool {
+        self.left > 0
     }
 }
 
@@ -724,6 +808,62 @@ mod tests {
         ups.start(true, 252);
         ups.clear();
         assert_eq!(ups, WarpUps::default());
+    }
+
+    // The warp-out sound's play state.
+
+    #[test]
+    fn the_warp_out_lasts_its_sounds_duration_and_nothing_without_one() {
+        let sound = SoundLength {
+            frames: 44_508,
+            rate: 22_254,
+        };
+        assert_eq!(warp_out_duration(Some(sound)), 120);
+        assert_eq!(warp_out_duration(Some(sound)), sound_duration(Some(sound)));
+        assert_eq!(warp_out_duration(None), 0, "no 350-tick fallback");
+        assert_eq!(
+            warp_out_duration(Some(SoundLength {
+                frames: 100,
+                rate: 0
+            })),
+            0,
+            "no rate, no sound"
+        );
+    }
+
+    #[test]
+    fn the_warp_out_plays_for_its_duration_in_mac_ticks() {
+        let mut out = WarpOut::default();
+        assert!(!out.playing(), "not at first");
+        out.start(5);
+        assert!(out.playing());
+        out.step();
+        out.step();
+        assert!(out.playing(), "1 Mac tick left");
+        out.step();
+        assert!(!out.playing(), "over after 3 engine ticks");
+        out.step();
+        assert!(!out.playing(), "stays over");
+        out.start(0);
+        assert!(!out.playing(), "a missing 130 never plays");
+    }
+
+    #[test]
+    fn a_halt_naming_130_ends_the_warp_out() {
+        let mut out = WarpOut::default();
+        out.start(200);
+        out.halt(&crate::sound::WARP_UP_HALTS);
+        assert!(out.playing(), "128 and 129 are not it");
+        out.halt(&crate::sound::PLAYER_EXPLOSION_HALTS);
+        assert!(!out.playing());
+    }
+
+    #[test]
+    fn clearing_ends_the_warp_out() {
+        let mut out = WarpOut::default();
+        out.start(200);
+        out.clear();
+        assert_eq!(out, WarpOut::default());
     }
 
     #[test]

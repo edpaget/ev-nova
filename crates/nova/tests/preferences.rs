@@ -110,7 +110,7 @@ fn sheet(frames: u16) -> Vec<u8> {
         .build()
 }
 
-/// Alpha Prime's own landing sound.
+/// Alpha Prime's ambient sound, its `CustSndID`.
 const LANDING_SOUND: i16 = 10_032;
 
 /// The original table's landing sound.
@@ -434,12 +434,12 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
                 sound: SoundId(LANDING_BEEP),
                 volume: five
             },
-            AudioCommand::Play {
-                sound: SoundId(LANDING_SOUND),
-                volume: five
-            },
         ]
     );
+    // No ambient sound follows: without the interface's "Spaceport"
+    // dialog the spaceport can't be shown, and plays nothing.
+    harness.frame();
+    assert_eq!(harness.played(), []);
     assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
 
     // A restart reads back exactly what was chosen.

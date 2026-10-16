@@ -706,6 +706,13 @@ pub struct Session {
     /// warp start's still-playing skip and the double-time switch (see
     /// [`warp::WarpUps`]); not saved, as the original's sounds are not.
     warp_ups: warp::WarpUps,
+    /// The warp-out's duration, in Mac ticks, read when the session
+    /// starts from `snd ` 130 ([`warp::warp_out_duration`]).
+    warp_out_sound: u32,
+    /// Whether the warp-out, `snd ` 130, is still playing, for a jump's
+    /// natural end (see [`warp::WarpOut`]); not saved, as the original's
+    /// sounds are not.
+    warp_out: warp::WarpOut,
     /// The rule a multi-jump follows.
     multi_jump: MultiJumpRule,
     /// The rule Hyper Select follows.
@@ -1337,6 +1344,8 @@ impl Session {
             warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
                 .map(warp::sound_duration),
             warp_ups: warp::WarpUps::default(),
+            warp_out_sound: warp::warp_out_duration(catalog.warp_out_sound()),
+            warp_out: warp::WarpOut::default(),
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
             hyperlinks: HyperlinkRule::default(),
@@ -1703,9 +1712,11 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
-        // The warp-ups play in real time, a frame's worth on each advance
-        // pass, and the switch reads them.
+        // The warp-ups and the warp-out play in real time, a frame's worth
+        // on each advance pass, and the switch and the natural end read
+        // them.
         self.warp_ups.step();
+        self.warp_out.step();
         self.latch_double_time();
         self.takeoff_grace_tick();
         self.sound_script();
@@ -3088,9 +3099,10 @@ impl Session {
     }
 
     /// Halts each of `sounds` that is playing ([`SimSound::Halt`]), the
-    /// warp-ups among them over for the session too.
+    /// warp-ups and the warp-out among them over for the session too.
     pub(super) fn halt_sounds(&mut self, sounds: &'static [crate::catalog::SoundId]) {
         self.warp_ups.halt(sounds);
+        self.warp_out.halt(sounds);
         self.sounds.push(SimSound::Halt(sounds));
     }
 
@@ -3235,6 +3247,24 @@ impl Session {
     /// harmless: the fill reads nothing the days change, and the days
     /// don't read the table. Only the order of the draws differs, and the
     /// engine doesn't match that.
+    ///
+    /// It first halts the warp-ups, a [`SimSound::Halt`] of
+    /// [`WARP_UP_HALTS`](crate::sound::WARP_UP_HALTS), once for a whole
+    /// chain, then raises [`SimSound::Arrived`]: the warp end's order
+    /// (`_HandlePlayer` @0x6c6b7, @0x6c6d2, then the warp-out @0x6c706).
+    /// The original's fallback end halts them and plays the warp-out a
+    /// frame before it switches systems; its natural end switches once
+    /// they have finished. The engine has no separate fallback frame: it
+    /// does both in the arrival's tick, the halt first. No frame, dialog
+    /// or save falls between them, so the player can't see the
+    /// difference.
+    ///
+    /// Which end it is is read before the halt: the natural end, with
+    /// both warp-ups finished ([`warp::WarpUps`]), plays the warp-out only
+    /// when it is not still playing ([`warp::WarpOut`]; `ST_IsSoundPlaying`
+    /// @0x6bbe1-0x6bbe9), so a skipped one raises no [`SimSound::Arrived`]
+    /// and leaves the last one's countdown running. The fallback end, a
+    /// warp-up still playing, plays it unasked (@0x6c6d7-0x6c706).
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -3244,9 +3274,16 @@ impl Session {
             return None;
         };
         self.jump = None;
-        // The warp-up has ended, or the warp's end halted it
-        // (`_HandlePlayer` @0x6c69d-0x6c6d2).
-        self.warp_ups.clear();
+        // The natural end, the warp-ups finished (`_warpSoundDone`
+        // @0x6bb5e-0x6bba4), read before the halt ends them.
+        let natural_end = !self.warp_ups.playing(false) && !self.warp_ups.playing(true);
+        // The warp's end halts the warp-ups, 128 then 129, each if it is
+        // playing (`_HandlePlayer` @0x6c69d-0x6c6d2), before the warp-out
+        // plays (@0x6c706); on the natural end they have already finished
+        // and the halt does nothing. Raised whatever the session's
+        // countdown says, as the countdown stands still under a dialog
+        // while the sound plays on.
+        self.halt_sounds(&crate::sound::WARP_UP_HALTS);
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
@@ -3316,7 +3353,13 @@ impl Session {
             self.emit(SessionEvent::GalaxyChanged);
         }
         self.pilot.jumped_from = Some(from);
-        self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
+        self.enter_system(
+            Entry::Jump { hops, natural_end },
+            entered,
+            catalog,
+            catalog,
+            chance,
+        );
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).
         self.reset_precalced();
@@ -3761,11 +3804,12 @@ impl Session {
         if let Some(site) = site {
             self.player.position = site.position;
         }
-        let stellar_sound = site.and_then(|site| site.landing_sound);
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
-        // A warp-up still playing is taken as over (see `warp::WarpUps`).
+        // A warp-up or warp-out still playing is taken as over (see
+        // `warp::WarpUps`, `warp::WarpOut`).
         self.warp_ups.clear();
+        self.warp_out.clear();
         self.pilot.stellar = Some(stellar);
         self.bar_news = None;
         self.bar_nav = None;
@@ -3782,7 +3826,7 @@ impl Session {
         self.stop_thrust();
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
         self.red_alert.clear_icon();
-        self.sounds.push(SimSound::Landed { stellar_sound });
+        self.sounds.push(SimSound::Landed);
         // `_PlayerLandOnStellar`'s reset (@0x63211; see the `precalced`
         // module), before the port opens.
         self.reset_precalced();
@@ -6406,12 +6450,7 @@ pub(super) mod tests {
             "landing writes neither nav word"
         );
         assert!(session.take_save_due());
-        assert_eq!(
-            session.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: None
-            }]
-        );
+        assert_eq!(session.take_sounds(), [SimSound::Landed]);
         // Once off again, L requests clearance afresh.
         session.take_off(&NoTraffic, &mut NeverFires);
         assert!(matches!(
@@ -8156,7 +8195,7 @@ pub(super) mod tests {
 
     #[test]
     fn the_session_is_thrusting_while_the_last_tick_flew_thrust() {
-        let mut session = Session::start(&sounding()).expect("starts");
+        let mut session = Session::start(&catalog()).expect("starts");
         assert!(!session.thrusting(), "at rest");
         session.tick(THRUST);
         assert!(session.thrusting());
@@ -8272,43 +8311,16 @@ pub(super) mod tests {
         assert_eq!(session.take_sounds(), []);
     }
 
-    /// The catalog with planet 128 playing `snd ` 10032 when landed on.
-    fn sounding() -> FakePilotCatalog {
-        FakePilotCatalog {
-            sites: vec![(
-                SystemId(130),
-                vec![LandingSite {
-                    landing_sound: Some(SoundId(10_032)),
-                    ..planet(128, 30.0, -40.0)
-                }],
-            )],
-            ..catalog()
-        }
-    }
-
     #[test]
-    fn landing_emits_landed_with_the_stellars_sound() {
-        let mut session = Session::start(&sounding()).expect("starts");
+    fn landing_emits_landed() {
+        let mut session = Session::start(&catalog()).expect("starts");
         land_now(&mut session).expect("lands");
-        assert_eq!(
-            session.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: Some(SoundId(10_032))
-            }]
-        );
-        let mut silent = Session::start(&catalog()).expect("starts");
-        land_now(&mut silent).expect("lands");
-        assert_eq!(
-            silent.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: None
-            }]
-        );
+        assert_eq!(session.take_sounds(), [SimSound::Landed]);
     }
 
     #[test]
     fn landing_while_thrusting_stops_the_thrust_first() {
-        let mut session = Session::start(&sounding()).expect("starts");
+        let mut session = Session::start(&catalog()).expect("starts");
         session.tick(Controls {
             turn: Turn::Right,
             ..THRUST
@@ -8317,12 +8329,7 @@ pub(super) mod tests {
         land_now(&mut session).expect("lands");
         assert_eq!(
             session.take_sounds(),
-            [
-                SimSound::ThrustStopped,
-                SimSound::Landed {
-                    stellar_sound: Some(SoundId(10_032))
-                }
-            ]
+            [SimSound::ThrustStopped, SimSound::Landed]
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "docked, nothing thrusts");
@@ -8383,9 +8390,242 @@ pub(super) mod tests {
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "jumping, nothing thrusts");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
-        assert_eq!(session.take_sounds(), [SimSound::Arrived]);
+        assert_eq!(
+            session.take_sounds(),
+            [
+                SimSound::Halt(&crate::sound::WARP_UP_HALTS),
+                SimSound::Arrived
+            ]
+        );
         session.arrive(&catalog, &mut NeverFires);
         assert_eq!(session.take_sounds(), [], "no jump under way");
+    }
+
+    /// The sounds `session` raises arriving with the warp-ups begun in
+    /// `double_times` (`false` 128, `true` 129) still playing, as a stock
+    /// 128 outlasts the engine's jump effect. The arrival ends them all.
+    fn arriving_with_warp_ups(double_times: &[bool]) -> Vec<SimSound> {
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
+        session.begin_jump().expect("jumps");
+        for &double_time in double_times {
+            session.warp_ups.start(double_time, 100_000);
+        }
+        session.take_sounds();
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        session.take_sounds()
+    }
+
+    #[test]
+    fn an_arrival_halts_the_warp_ups_before_the_warp_out() {
+        let sounds = arriving_with_warp_ups(&[false, true]);
+        let halt = SimSound::Halt(&crate::sound::WARP_UP_HALTS);
+        let halted = sounds.iter().position(|sound| *sound == halt);
+        let arrived = sounds.iter().position(|sound| *sound == SimSound::Arrived);
+        assert!(
+            halted.is_some() && halted < arrived,
+            "@0x6c6b7, @0x6c6d2 before @0x6c706: {sounds:?}"
+        );
+        assert_eq!(
+            sounds.iter().filter(|sound| **sound == halt).count(),
+            1,
+            "{sounds:?}"
+        );
+    }
+
+    #[test]
+    fn an_arrival_halts_a_warp_up_begun_in_double_time() {
+        // 129, `_warpUpSnd[1]`, is halted by the same pair (@0x6c6d2).
+        let sounds = arriving_with_warp_ups(&[true]);
+        let halted: Vec<_> = sounds
+            .iter()
+            .filter_map(|sound| match sound {
+                SimSound::Halt(ids) => Some(*ids),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(halted, [&[SoundId(128), SoundId(129)][..]]);
+    }
+
+    // The warp-out, `snd ` 130, skipped by a natural end while it plays.
+
+    /// A warp-up of no length: every jump's warp-ups have finished by its
+    /// arrival, its natural end.
+    const SILENT: crate::warp::SoundLength = crate::warp::SoundLength {
+        frames: 0,
+        rate: 22_050,
+    };
+
+    /// A warp-out of 60 Mac ticks: 30 of the engine's.
+    const WARP_OUT_60: crate::warp::SoundLength = crate::warp::SoundLength {
+        frames: 22_050,
+        rate: 22_050,
+    };
+
+    /// `base` with 131 linked back to 130, west of it, the warp-up
+    /// `warp_up` and the warp-out `warp_out`.
+    fn warping(
+        base: FakePilotCatalog,
+        warp_up: Option<crate::warp::SoundLength>,
+        warp_out: Option<crate::warp::SoundLength>,
+    ) -> FakePilotCatalog {
+        let mut catalog = FakePilotCatalog {
+            warp_sound: warp_up,
+            warp_out_sound: warp_out,
+            ..base
+        };
+        catalog.star_map[1] = crate::testkit::star(131, (600.0, 0.0), &[130, 132]);
+        catalog
+    }
+
+    /// The sounds `session` raises jumping from 131 back to 130, at rest
+    /// facing west, from the J to the arrival, the J's own left out.
+    fn jumping_back_to_130(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<SimSound> {
+        session.plot_course(SystemId(130)).expect("a route");
+        session.player = ShipState {
+            position: OUT,
+            velocity: Vec2::ZERO,
+            heading: 270.0,
+        };
+        session.begin_jump().expect("jumps");
+        session.take_sounds();
+        session.arrive(catalog, &mut NeverFires).expect("arrives");
+        session.take_sounds()
+    }
+
+    /// The sounds of a jump from 130 to 131 with `catalog`.
+    fn jumping_to_131(catalog: &FakePilotCatalog) -> (Session, Vec<SimSound>) {
+        let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
+        session.begin_jump().expect("jumps");
+        session.take_sounds();
+        session.arrive(catalog, &mut NeverFires).expect("arrives");
+        let sounds = session.take_sounds();
+        (session, sounds)
+    }
+
+    const HALT_ONLY: [SimSound; 1] = [SimSound::Halt(&crate::sound::WARP_UP_HALTS)];
+    const HALT_THEN_ARRIVED: [SimSound; 2] = [
+        SimSound::Halt(&crate::sound::WARP_UP_HALTS),
+        SimSound::Arrived,
+    ];
+
+    #[test]
+    fn a_natural_end_plays_no_warp_out_while_the_last_one_plays() {
+        // `_HandlePlayer` @0x6bbe1-0x6bbe9 skips the play @0x6bc08.
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, first) = jumping_to_131(&catalog);
+        assert_eq!(first, HALT_THEN_ARRIVED, "130 was not playing");
+        assert!(session.warp_out.playing());
+        assert_eq!(
+            jumping_back_to_130(&mut session, &catalog),
+            HALT_ONLY,
+            "130 still plays"
+        );
+    }
+
+    #[test]
+    fn a_skipped_warp_out_leaves_the_last_ones_countdown_running() {
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, _) = jumping_to_131(&catalog);
+        for _ in 0..20 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(jumping_back_to_130(&mut session, &catalog), HALT_ONLY);
+        for _ in 0..10 {
+            session.tick(Controls::default());
+        }
+        assert!(!session.warp_out.playing(), "not restarted by the skip");
+    }
+
+    #[test]
+    fn a_natural_end_plays_the_warp_out_once_the_last_one_has_run_out() {
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, _) = jumping_to_131(&catalog);
+        for _ in 0..29 {
+            session.tick(Controls::default());
+        }
+        assert!(session.warp_out.playing(), "2 Mac ticks left");
+        session.tick(Controls::default());
+        assert!(!session.warp_out.playing(), "over after 30 engine ticks");
+        assert_eq!(
+            jumping_back_to_130(&mut session, &catalog),
+            HALT_THEN_ARRIVED
+        );
+        assert!(session.warp_out.playing(), "started again");
+    }
+
+    #[test]
+    fn a_fallback_end_plays_the_warp_out_while_the_last_one_plays() {
+        // The warp-up still playing: @0x6c6d7-0x6c706 plays 130 unasked,
+        // and the countdown starts over.
+        let catalog = warping(catalog(), None, Some(WARP_OUT_60));
+        let (mut session, first) = jumping_to_131(&catalog);
+        assert_eq!(first, HALT_THEN_ARRIVED);
+        for _ in 0..20 {
+            session.tick(Controls::default());
+        }
+        assert!(session.warp_out.playing());
+        assert_eq!(
+            jumping_back_to_130(&mut session, &catalog),
+            HALT_THEN_ARRIVED
+        );
+        for _ in 0..20 {
+            session.tick(Controls::default());
+        }
+        assert!(session.warp_out.playing(), "restarted: 20 Mac ticks left");
+    }
+
+    #[test]
+    fn a_gate_exit_plays_the_warp_out_while_it_plays_and_a_natural_end_then_skips_it() {
+        // `_PlayerEnterHypergate` plays 130 unasked (@0x63e57).
+        let catalog = warping(gated(), Some(SILENT), Some(WARP_OUT_60));
+        let mut session = at_gate(&catalog);
+        session.warp_out.start(2);
+        session.take_sounds();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
+            .expect("enters");
+        assert_eq!(session.take_sounds(), [SimSound::Arrived]);
+        for _ in 0..20 {
+            session.tick(Controls::default());
+        }
+        assert!(session.warp_out.playing(), "restarted by the exit");
+        assert_eq!(jumping_back_to_130(&mut session, &catalog), HALT_ONLY);
+    }
+
+    #[test]
+    fn without_a_warp_out_sound_every_natural_end_plays_it() {
+        // 130 missing: `_LoadSounds` has no 350-tick fallback for it.
+        let catalog = warping(catalog(), Some(SILENT), None);
+        let (mut session, first) = jumping_to_131(&catalog);
+        assert_eq!(first, HALT_THEN_ARRIVED);
+        assert!(!session.warp_out.playing());
+        assert_eq!(
+            jumping_back_to_130(&mut session, &catalog),
+            HALT_THEN_ARRIVED
+        );
+    }
+
+    #[test]
+    fn landing_ends_the_warp_out() {
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, _) = jumping_to_131(&catalog);
+        assert!(session.warp_out.playing());
+        // At rest over 131's planet 140.
+        session.player = ShipState::default();
+        land_now(&mut session).expect("lands");
+        assert!(!session.warp_out.playing());
+    }
+
+    #[test]
+    fn landing_at_a_stellar_from_flight_ends_the_warp_out() {
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, _) = jumping_to_131(&catalog);
+        session
+            .land_at(&catalog, SystemId(130), StellarId(128))
+            .expect("relocates");
+        assert!(!session.warp_out.playing());
     }
 
     #[test]
@@ -10117,6 +10357,21 @@ pub(super) mod tests {
             session.take_messages(),
             [SimMessage::Arrived(SystemId(134))]
         );
+    }
+
+    #[test]
+    fn a_multi_jump_halts_the_warp_ups_once() {
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        begin_jump_now(&mut session).expect("jumps");
+        session.take_sounds();
+        session.arrive(&catalog, &mut NeverFires);
+        let halts = session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == SimSound::Halt(&crate::sound::WARP_UP_HALTS))
+            .count();
+        assert_eq!(halts, 1, "one warp end");
     }
 
     #[test]
@@ -18054,6 +18309,17 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_players_explosion_ends_the_warp_out() {
+        // 130 halted @0x2d8d0-0x2d8ea.
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        session.warp_out.start(100_000);
+        from_the_breakup(&mut session, &catalog, 9);
+        assert_eq!(session.condition, Condition::Destroyed);
+        assert!(!session.warp_out.playing());
+    }
+
+    #[test]
     fn the_player_explosions_halts_name_the_klaxon_and_the_warp_sounds() {
         assert_eq!(
             crate::sound::PLAYER_EXPLOSION_HALTS,
@@ -22995,7 +23261,7 @@ pub(super) mod tests {
             !session
                 .take_sounds()
                 .iter()
-                .any(|sound| matches!(sound, SimSound::Landed { .. })),
+                .any(|sound| matches!(sound, SimSound::Landed)),
             "no landing sound"
         );
         assert_eq!(
@@ -23073,6 +23339,21 @@ pub(super) mod tests {
             Err(GateRefusal::NotAtGate),
             "the entry is over"
         );
+    }
+
+    #[test]
+    fn a_hypergate_exit_keeps_a_warp_up_playing() {
+        // `_PlayerEnterHypergate` plays 130 (@0x63e57-0x63e61) and never
+        // touches `_warpUpSnd` or `_warpSoundDone`.
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        session.warp_ups.start(false, 100_000);
+        session.take_sounds();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
+            .expect("enters");
+        assert_eq!(session.take_sounds(), [SimSound::Arrived], "no halt");
+        assert!(session.warp_ups.playing(false));
     }
 
     #[test]
@@ -23247,6 +23528,21 @@ pub(super) mod tests {
             session.enter_wormhole(&catalog, &mut chance),
             Err(GateRefusal::NotAtGate)
         );
+    }
+
+    #[test]
+    fn a_wormhole_exit_keeps_a_warp_up_playing() {
+        // `_PlayerEnterWormhole` plays 130 (@0x6443d-0x64447) and never
+        // touches `_warpUpSnd` or `_warpSoundDone`.
+        let catalog = wormholes();
+        let mut session = at_wormhole(&catalog);
+        session.warp_ups.start(false, 100_000);
+        session.take_sounds();
+        session
+            .enter_wormhole(&catalog, &mut Scripted::rolling(&[0]))
+            .expect("enters");
+        assert_eq!(session.take_sounds(), [SimSound::Arrived], "no halt");
+        assert!(session.warp_ups.playing(false));
     }
 
     /// Holds `P300` in `session`, by the engine's `script_sound` reading.

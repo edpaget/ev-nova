@@ -6556,8 +6556,8 @@ mod tests {
     use nova_sim::{
         CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling,
         JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord,
-        ShipStats, SimDiagnostic, SimSound, SoundId, StarSystem, StartDate, StartError, SystemId,
-        TICK, Vec2, step,
+        ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId, TICK,
+        Vec2, step,
     };
 
     use super::*;
@@ -6832,7 +6832,6 @@ mod tests {
             frame_size: Some((20, 20)),
             flags,
             min_status: 0,
-            landing_sound: None,
             tech_level: 1,
             special_tech: [0; 8],
             govt: None,
@@ -9988,12 +9987,13 @@ mod tests {
         assert_eq!(view.take_off(), None);
     }
 
+    /// Only the landing beep sounds at touchdown: the stellar's own sound
+    /// is its spaceport's ambient sound, which plays once the spaceport is
+    /// frontmost (see the spaceport's
+    /// `the_ambient_sound_plays_on_the_first_frame_then_after_each_wait`).
     #[test]
-    fn l_over_a_stellar_sounds_the_landing_with_its_own_sound() {
-        let mut view = flight_among(vec![LandingSite {
-            landing_sound: Some(SoundId(10_032)),
-            ..site(140, (6.0, -8.0), StellarFlags::CAN_LAND)
-        }]);
+    fn l_over_a_stellar_sounds_only_the_landing_at_touchdown() {
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
         assert_eq!(view.take_sounds(), []);
         tap(&mut view, LAND);
         assert_eq!(view.take_sounds(), [], "a request over it is silent");
@@ -10004,12 +10004,7 @@ mod tests {
             "the greeting"
         );
         tap(&mut view, LAND);
-        assert_eq!(
-            view.take_sounds(),
-            [Sound::Sim(SimSound::Landed {
-                stellar_sound: Some(SoundId(10_032))
-            })]
-        );
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Landed)]);
         assert_eq!(view.take_sounds(), [], "taken");
         view.take_off();
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TookOff)]);
@@ -24161,6 +24156,32 @@ mod tests {
             Some(id)
         );
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
+    }
+
+    #[test]
+    fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        assert!(
+            (over.x - VIEW_CENTER.x).abs() > 64.0 || (over.y - VIEW_CENTER.y).abs() > 64.0,
+            "the NPC at {over:?} sits clear of the player's ship"
+        );
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(id));
+        view.take_sounds();
+        // The camera centres on the player, so its ship is drawn at the centre.
+        click(&mut view, VIEW_CENTER);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetCleared)]);
+    }
+
+    #[test]
+    fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
+        let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        view.take_sounds();
+        click(&mut view, VIEW_CENTER);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(view.take_sounds(), []);
     }
 
     #[test]

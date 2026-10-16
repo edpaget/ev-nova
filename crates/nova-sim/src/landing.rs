@@ -807,7 +807,6 @@ mod tests {
             frame_size: Some((100, 60)),
             flags: StellarFlags::CAN_LAND,
             min_status: -32767,
-            landing_sound: None,
             tech_level: 0,
             special_tech: [0; 8],
             govt: None,

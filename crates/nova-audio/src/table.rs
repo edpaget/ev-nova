@@ -14,7 +14,7 @@ use nova_data::SoundId;
 pub struct SoundTable {
     /// Loops while the ship thrusts.
     pub engine: Option<SoundId>,
-    /// Plays as the ship lands, before the stellar's own landing sound.
+    /// Plays as the ship lands.
     pub landing: Option<SoundId>,
     /// Plays as the ship takes off.
     pub take_off: Option<SoundId>,
@@ -40,6 +40,8 @@ pub struct SoundTable {
     pub escort_group: Option<SoundId>,
     /// Plays as the player asks for the escort menu with no escorts.
     pub no_escorts: Option<SoundId>,
+    /// Plays as the main menu's E finds no pilot to enter the game with.
+    pub enter_refused: Option<SoundId>,
     /// Plays as a disabled former escort repairs itself and rejoins.
     pub escort_repaired: Option<SoundId>,
     /// Plays as the player becomes threatened: the Red Alert.
@@ -115,9 +117,10 @@ impl SoundTable {
     ///   reserves no ID for one: the original thrusts in silence.
     /// - `landing`: 151, "Beep2". The guide: "151 Beep 2: ... request/grant
     ///   landing clearance". L lands at once here, so the clearance beep
-    ///   marks the landing. The stellar's own sound (its `CustSndID`, 10000
-    ///   and up, the guide's "custom stellar landing sounds") follows it,
-    ///   from the event.
+    ///   marks the landing. The stellar's own sound (its `CustSndID`, 128
+    ///   and up) is not the table's: the spaceport plays it as its ambient
+    ///   sound once it is frontmost
+    ///   ([`UiSound::PortAmbient`](nova_view::sound::UiSound::PortAmbient)).
     /// - `take_off`: none. The guide lists none, and the `NovaSwift` remake
     ///   (github.com/SirStig/NovaSwift, `Game/GameScene.swift`) notes that
     ///   "lifting off a planet is silent in the original".
@@ -156,6 +159,11 @@ impl SoundTable {
     ///   (`_HandlePlayer` @0x6e126-0x6e149).
     /// - `no_escorts`: 153, `_beepSnd[3]`, with "You don't have any
     ///   escorts." (`_HandlePlayer` @0x6de08-0x6de87).
+    /// - `enter_refused`: 153, `_beepSnd[3]` again, which
+    ///   `_MainScreenChoice(3)` plays as the main screen's E finds no game
+    ///   in progress, or a dying pilot (`PlaySound` @0x1aa89-0x1aaac).
+    ///   `_LoadSounds` fills `_beepSnd` (@0x1c174) before `_DoMainScreen`
+    ///   runs (`_InitEVNova` @0x47196, @0x47428).
     /// - `escort_repaired`: 154, `_beepSnd[4]`, which `_HandleShip` plays
     ///   after "Escort repaired." or "Fighter repaired." as a former
     ///   escort rejoins (@0x33bc9-0x33bd4). The original plays it on
@@ -276,6 +284,7 @@ impl SoundTable {
         escorts_commanded: Some(SoundId(151)),
         escort_group: Some(SoundId(152)),
         no_escorts: Some(SoundId(153)),
+        enter_refused: Some(SoundId(153)),
         escort_repaired: Some(SoundId(154)),
         red_alert: Some(SoundId(370)),
         jettison: Some(SoundId(154)),
@@ -340,6 +349,7 @@ mod tests {
         assert_eq!(table.escorts_commanded, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.escort_group, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.no_escorts, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.enter_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.escort_repaired, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.red_alert, Some(SoundId(370)), "Red Alert");
         assert_eq!(table.jettison, Some(SoundId(154)), "_beepSnd[4]");

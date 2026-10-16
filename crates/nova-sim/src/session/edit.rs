@@ -557,15 +557,19 @@ mod tests {
     #[test]
     fn a_moves_dock_ends_a_warp_up_playing() {
         // The move docks by the entry table's `Reset::Dock`, not through
-        // a landing, so it ends the warp-ups itself (see `warp::WarpUps`).
+        // a landing, so it ends the warp-ups itself (see `warp::WarpUps`),
+        // for the session only: no landing in the original halts them,
+        // so it raises no halt.
         let catalog = atlas();
         let mut session = landed(&catalog);
         session.warp_ups.start(false, 364);
         session.warp_ups.start(true, 252);
+        session.take_sounds();
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
         assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.take_sounds(), [], "silently");
     }
 
     /// The original redraws the rolls only in its daily step

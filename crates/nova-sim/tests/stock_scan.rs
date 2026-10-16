@@ -9,7 +9,7 @@
 //!
 //! The warp-up sound, `snd ` 128, gives the warp's lead-in, through which
 //! the player is still scanned (`_ScanPlayer` @0x7e562-0x7e633; see
-//! `nova_sim::warp`).
+//! `nova_sim::warp`). The warp-out, `snd ` 130, is read here beside it.
 
 mod common;
 
@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use nova_data::GameData;
 use nova_sim::market::Good;
 use nova_sim::scan::{Carried, Contraband, Latches, ScanRules, contraband};
-use nova_sim::warp::{SoundLength, held, sound_duration, warp_factor};
+use nova_sim::warp::{SoundLength, held, sound_duration, warp_factor, warp_out_duration};
 use nova_sim::{Governments, GovtId, JunkId, OutfitId, PilotCatalog, ShipId};
 
 /// What the Federation finds on a player holding `junk` (a ton of each)
@@ -133,4 +133,24 @@ fn the_stock_double_time_warp_up_lasts_252_ticks_and_the_shuttles_lead_in_52() {
     let w = warp_factor(0);
     assert!(!held(Some(52), w, duration, false));
     assert!(held(Some(54), w, duration, false));
+}
+
+/// The stock warp-out, `snd ` 130, runs 55616 frames at 22050 Hz: 151 Mac
+/// ticks, about 2.5 s, through which a jump's natural end skips another
+/// (`_HandlePlayer` @0x6bbe1-0x6bbe9; see `nova_sim::warp::WarpOut`).
+#[test]
+fn the_stock_warp_out_lasts_151_ticks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let sound = data.warp_out_sound();
+    assert_eq!(
+        sound,
+        Some(SoundLength {
+            frames: 55_616,
+            rate: 22_050
+        })
+    );
+    assert_eq!(warp_out_duration(sound), 151);
 }

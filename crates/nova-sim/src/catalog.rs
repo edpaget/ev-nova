@@ -105,11 +105,6 @@ pub struct LandingSite {
     pub flags: u32,
     /// Its `MinStatus`: the legal record below which landing is refused.
     pub min_status: i16,
-    /// The sound it plays when the player lands, from its `CustSndID`:
-    /// stellar landing sounds are `snd ` 10000 and up, and any other value
-    /// (-1 for none, 0, or the angle hypergates and wormholes keep there)
-    /// is none.
-    pub landing_sound: Option<SoundId>,
     /// Its `TechLevel`: the [`outfitter`](crate::outfitter) sells outfits
     /// up to it.
     pub tech_level: i16,
@@ -1459,6 +1454,14 @@ pub trait PilotCatalog {
     fn warp_sound_double_time(&self) -> Option<SoundLength> {
         None
     }
+    /// The length of the warp-out sound, `snd ` 130, which every
+    /// arrival plays and whose play state decides whether a jump's
+    /// natural end plays it again
+    /// ([`WarpOut`](crate::warp::WarpOut)); none when there is none or it
+    /// cannot be read, as by default.
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        None
+    }
     /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
     /// of `Flags` 0x0800 draws its ships' one type from at accept (see
     /// [`SpecialShips::uniform_type`](crate::mission::SpecialShips::uniform_type)).
@@ -1603,6 +1606,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).warp_sound_double_time()
     }
 
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        (**self).warp_out_sound()
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
     }
@@ -1729,6 +1736,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn warp_sound_double_time(&self) -> Option<SoundLength> {
         (**self).warp_sound_double_time()
+    }
+
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        (**self).warp_out_sound()
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -1901,7 +1912,6 @@ mod tests {
                 frame_size: Some((10, 20)),
                 flags: 0x01,
                 min_status: 0,
-                landing_sound: None,
                 tech_level: 3,
                 special_tech: [0; 8],
                 govt: None,
@@ -2112,6 +2122,14 @@ mod tests {
             })
         }
 
+        /// Two seconds at 11025 Hz.
+        fn warp_out_sound(&self) -> Option<SoundLength> {
+            Some(SoundLength {
+                frames: 22_050,
+                rate: 11_025,
+            })
+        }
+
         /// Düde 150 flies ship 128.
         fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
             (id == DudeId(150)).then(|| DudeRecord {
@@ -2162,6 +2180,7 @@ mod tests {
             format!("{:?}", catalog.buoy_strings()),
             format!("{:?}", catalog.warp_sound()),
             format!("{:?}", catalog.warp_sound_double_time()),
+            format!("{:?}", catalog.warp_out_sound()),
             format!("{:?}", catalog.mission_dude(DudeId(150))),
             format!("{:?}", catalog.first_stellars()),
         ]
@@ -2360,9 +2379,13 @@ mod tests {
             direct[32], "Some(SoundLength { frames: 22050, rate: 44100 })",
             "forwarded, not a default"
         );
-        assert!(direct[33].contains("ShipId(128), 40"), "{direct:?}");
         assert_eq!(
-            direct[34], "[(SystemId(130), StellarId(129))]",
+            direct[33], "Some(SoundLength { frames: 22050, rate: 11025 })",
+            "forwarded, not a default"
+        );
+        assert!(direct[34].contains("ShipId(128), 40"), "{direct:?}");
+        assert_eq!(
+            direct[35], "[(SystemId(130), StellarId(129))]",
             "forwarded, not the default's 128"
         );
         assert_eq!(reads(&One), direct);

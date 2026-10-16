@@ -28,7 +28,7 @@
 //! @0x195b9 plays them under the pointer, and `_PlayMainScreenClickSound`
 //! @0x177af plays both, one after the other, for `_MainScreenKey`'s keys.
 //! So the main menu's shortcut keys raise [`UiSound::ButtonKeyed`], once,
-//! with the choice they make. The spaceport's screens map their keys to
+//! and their choice waits for the click to play. The spaceport's screens map their keys to
 //! items with no sound (`_PortFilter` @0x4f041, `_BarFilter` @0x47a4b,
 //! `_TradeFilter` @0x4e092, `_OutfitFilter` @0x58039, `_ShipyardFilter`
 //! @0x60449, `_MissionFilter` @0x9f7a9, `_MissionInfoFilter` @0x9d6e5,
@@ -67,8 +67,16 @@ pub enum UiSound {
     /// never does (see the module docs).
     ButtonUp,
     /// A key activated a main-menu button: `_PlayMainScreenClickSound`
-    /// @0x177af, which plays snd 600, then 601 once 600 has ended.
+    /// @0x177af, which plays snd 600, then 601 once 600 has ended. The
+    /// key's choice waits for that click: the main menu acts on it only
+    /// once the audio side says 600 has ended
+    /// ([`Screen::keyed_click_ended`](crate::Screen::keyed_click_ended)).
+    /// E clicks on its release, not its press.
     ButtonKeyed,
+    /// Enter Ship was chosen on the main screen with no pilot loaded, or
+    /// a dying one: `_MainScreenChoice(3)` @0x1aa89-0x1aaac plays
+    /// `_beepSnd[3]`. E raises it after its click.
+    EnterRefused,
     /// The interface refused what was asked of it: the original's
     /// `SysBeep`.
     Alert,
@@ -103,6 +111,26 @@ pub enum UiSound {
     /// plays `_beepSnd[0]` once `_DoSystemMap` returns (`PlaySound`
     /// @0x6a85a). The hypergate's map does not raise it.
     MapClosed,
+    /// The stellar's ambient sound, its `CustSndID` (128 and up), plays
+    /// while the spaceport is frontmost: `_PortFilter` @0x4f041 plays
+    /// `_planetSnd` (@0x4f0e8, @0x4f106), and so does a press on the
+    /// landscape (`_DoPortDialog`'s item 5, @0x5fe2a-0x5fe5e). The
+    /// spaceport decides when (see [`spaceport::ambient`]).
+    ///
+    /// [`spaceport::ambient`]: crate::spaceport::ambient
+    PortAmbient {
+        /// The `snd `.
+        sound: SoundId,
+        /// Whether it plays only if it is not still playing, the
+        /// original's `ST_IsSoundPlaying` check for a stellar whose
+        /// `Flags2` has 0x0010 (@0x4f0cd-0x4f0de): a looped ambient
+        /// sound. Otherwise it plays over whatever is playing.
+        until_stopped: bool,
+    },
+    /// The spaceport closed: its ambient sound stops, as `_DoPortDialog`
+    /// halts `_planetSnd` as the port closes (`ST_HaltSound`
+    /// @0x601d2-0x601eb), whatever closed it.
+    PortAmbientHalted(SoundId),
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from
