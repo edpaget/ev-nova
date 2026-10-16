@@ -2203,7 +2203,7 @@ mod tests {
 
     #[test]
     fn the_listed_stellars_are_every_readable_one_some_system_lists_with_every_system_listing_it() {
-        let mut governed = stellar(5, 6, 0, 0x21, 0);
+        let mut governed = stellar(5, 6, 0, 0x21, 25);
         put_i16s(&mut governed, 0x14, &[140]);
         let data = store(&[
             (System::TYPE, 131, system_with(&[129, 128, 129])),
@@ -2223,7 +2223,7 @@ mod tests {
                     flags: 0x21,
                     flags2: 0,
                     govt: Some(GovtId(140)),
-                    min_status: 0,
+                    min_status: 25,
                 },
                 ListedStellar {
                     id: StellarId(129),
