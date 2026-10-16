@@ -2736,6 +2736,7 @@ mod tests {
                     CLEARED => "blue".to_owned(),
                     HOSTILE => "red".to_owned(),
                     CYAN => "cyan".to_owned(),
+                    Color::WHITE => "white".to_owned(),
                     PANEL => break,
                     other => format!("{other:?}"),
                 },
@@ -2970,6 +2971,36 @@ mod tests {
                 &(at(213.0, 455.0), at(g2.0 + 1.0, g2.1 + 1.0), 2.0),
             ],
             "its head's strokes"
+        );
+    }
+
+    #[test]
+    fn the_gate_arrows_are_drawn_after_the_current_dot_and_before_the_names() {
+        let mut map = showing(&MapDrawing {
+            hypergate: true,
+            course: Vec::new(),
+            current_links: Vec::new(),
+            links: Vec::new(),
+            mode3_link: None,
+            systems: Vec::new(),
+            gate_arrows: vec![SystemId(129), SystemId(130)],
+            ..drawing()
+        });
+        map.preselect(Some(SystemId(129)));
+        assert_eq!(
+            order(&drawn(&map)),
+            [
+                "cyan",
+                "white",
+                "cyan",
+                "Alpha",
+                "Beta",
+                "bright green",
+                "Alpha",
+                "Beta",
+            ],
+            "the current dot, Beta's (selected) arrow, Gamma's arrow, the \
+             names; then the brackets and the names again"
         );
     }
 
