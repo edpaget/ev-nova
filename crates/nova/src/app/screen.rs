@@ -9049,6 +9049,14 @@ pub(super) mod tests {
     /// "Offer.mov" played as `movie` says, with movies played through a
     /// new [`Reel`] and `prefs`.
     fn landed_filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<Reel>) {
+        let (mut screen, reel) = filmed(flags, text, movie, prefs);
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        (screen, reel)
+    }
+
+    /// [`landed_filmed`], before any pilot is made.
+    fn filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<Reel>) {
         let mut mission = venue_mission(SPACEPORT);
         mission[0x50..0x52].copy_from_slice(&flags.to_be_bytes());
         let offer = filmed_desc_of(text, "Offer.mov", movie);
@@ -9057,14 +9065,57 @@ pub(super) mod tests {
             .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &offer);
         let reel = Rc::new(Reel::default());
         let store = MemoryPilots::new();
-        let mut screen = AppScreen::new(loaded(&fork))
+        let screen = AppScreen::new(loaded(&fork))
             .with_prefs(prefs)
             .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
             .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        (screen, reel)
+    }
+
+    /// Opens the Preferences, clicks QuickTime Movies and closes them.
+    fn toggle_movies(screen: &mut AppScreen) {
+        open_prefs(screen);
+        let was = prefs_dialog(screen).quicktime_movies().on();
+        let point = prefs_dialog(screen).quicktime_movies().rect().center();
+        click_at(screen, point);
+        assert_eq!(prefs_dialog(screen).quicktime_movies().on(), !was);
+        screen.input(&key(Key::Enter, true));
+        assert!(screen.preferences().is_none(), "closed");
+        assert_eq!(screen.prefs().quicktime_movies, !was);
+    }
+
+    #[test]
+    fn quicktime_movies_turned_off_in_the_dialog_stop_every_movie() {
+        for movie in [0, 0x0001] {
+            let (mut screen, reel) = filmed(0, "Job.", movie, Prefs::default());
+            toggle_movies(&mut screen);
+            create(&mut screen, "Ada");
+            land_twice(&mut screen);
+            assert!(spaceport(&screen).offer_dialog().is_some(), "{movie}");
+            screen.input(&key(Key::Enter, true));
+            assert_eq!(active(&screen), [MissionId(130)], "{movie}");
+            assert!(reeled(&reel).is_empty(), "{movie}: {:?}", reeled(&reel));
+        }
+    }
+
+    #[test]
+    fn quicktime_movies_turned_on_in_the_dialog_play_again() {
+        let off = Prefs {
+            quicktime_movies: false,
+            ..Prefs::default()
+        };
+        let (mut screen, reel) = filmed(0, "Job.", 0, off);
+        toggle_movies(&mut screen);
         create(&mut screen, "Ada");
         land_twice(&mut screen);
-        (screen, reel)
+        assert_eq!(reeled(&reel), ["start Offer.mov"], "before the dialog");
+        let (mut screen, reel) = filmed(0, "Job.", 0x0001, off);
+        toggle_movies(&mut screen);
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(reeled(&reel), ["start Offer.mov"], "after the answer");
     }
 
     fn reeled(reel: &Reel) -> Vec<String> {
