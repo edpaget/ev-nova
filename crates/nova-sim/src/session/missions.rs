@@ -1541,6 +1541,9 @@ pub(super) enum TextSource {
     /// A hail quote, parsed with no reset (`_ShowPersonHailQuote`
     /// @0x445ee).
     Quote,
+    /// A ship's specific advice, parsed with no reset (`_LoadAdvice`
+    /// @0x919ca).
+    Advice,
 }
 
 impl TextSource {
@@ -1556,7 +1559,7 @@ impl TextSource {
         let rules = ParseRules::from_rulebook(&session.rules);
         let before = match self {
             Self::Desc => RankTagGovts::NONE,
-            Self::Quote => remembered,
+            Self::Quote | Self::Advice => remembered,
         };
         parse_text_description(raw, session, rules, before)
     }
