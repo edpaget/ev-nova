@@ -14181,11 +14181,12 @@ mod tests {
 
     /// A text queued before an `H` onto ship 130 (under `ïntf` 129, whose
     /// background is `PICT` 705): a refusal's `RefuseText` before its
-    /// `OnRefuse` (@0xa2f04 → @0xa2f41), and a landing's `CompText`
-    /// before its `OnSuccess` (@0xa048c → @0xa04f8). A `ShipDoneText`
-    /// before its `OnShipDone` (@0x9ed0f → @0x9ed70) is staged by the
-    /// same landing's settling. Each gives the view, docked with the text
-    /// taken and a frame's catch-up made.
+    /// `OnRefuse` (@0xa2f04 → @0xa2f41), a landing's `CompText` before
+    /// its `OnSuccess` (@0xa048c → @0xa04f8), and a `ShipDoneText` before
+    /// its `OnShipDone` (@0x9ed0f → @0x9ed70), of a mission to destroy
+    /// no ships that an `S` in a landing's `OnSuccess` starts, whose goals
+    /// the landing's trailing check meets. Each gives the view, docked
+    /// with the text taken and a frame's catch-up made.
     fn texts_before_an_h(cadence: RuleSource) -> Vec<(&'static str, View)> {
         let refusal = {
             let mut catalog = port();
@@ -14206,7 +14207,45 @@ mod tests {
             view.settle_script();
             view
         };
-        let views = vec![("a RefuseText", refusal), ("a CompText", landing)];
+        let ship_done = {
+            let mut catalog = port();
+            catalog.missions = vec![
+                MissionRecord {
+                    travel_stel: 128,
+                    on_success: nova_sim::Script::parse("S131"),
+                    ..errand(130)
+                },
+                MissionRecord {
+                    on_ship_done: nova_sim::Script::parse("H130"),
+                    ships: MissionShip {
+                        goal: 0,
+                        count: 0,
+                        ..MissionShip::NONE
+                    },
+                    ..errand(131)
+                },
+            ];
+            catalog.mission_texts = vec![
+                MissionTexts::named(MissionId(130), "Run"),
+                MissionTexts {
+                    ship_done: Some("Met.".to_owned()),
+                    ..MissionTexts::named(MissionId(131), "Escort")
+                },
+            ];
+            let mut view = docked_at_earth(catalog, cadence);
+            run_set(&mut view, "S130");
+            view.take_off().expect("takes off");
+            view.settle_script();
+            land_now(&mut view);
+            assert_eq!(bar_shown(&view), Some(700), "ship 128's");
+            view.settle_script();
+            view
+        };
+        let views = vec![
+            ("a RefuseText", refusal),
+            ("a CompText", landing),
+            ("a ShipDoneText", ship_done),
+        ];
         views
             .into_iter()
             .map(|(what, mut view)| {
