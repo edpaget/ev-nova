@@ -966,6 +966,22 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_beside_a_fused_shots_path_sets_it_off_by_the_bible_only() {
+        let catalog = arming(fused_gun(), npc_gun(), 0);
+        // The NPC at (49, -90), 30 wide: within its hit radius and the
+        // `ProxRadius`, 9.9 + 40, of the shot's path up the y axis, but
+        // never within trunc(40 + 30 x 0.333) = 49 of where a move ends,
+        // (0, -80) and (0, -100) being 10 short of and past it.
+        for (source, struck) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let rules = Rulebook::default().with_override(RuleKey::ProximityFuse, source);
+            let mut session = with_an_npc_at(&catalog, 799, 660, 180).with_rules(rules);
+            shoot_once(&mut session, 12);
+            let shield = session.npcs()[0].reserves.shield.now;
+            assert_eq!(shield < 30.0, struck, "{source:?}: {shield}");
+        }
+    }
+
+    #[test]
     fn a_point_defence_shot_meets_an_asteroid_on_its_way_to_a_missile() {
         let quad = WeaponRecord {
             id: WeaponId(133),
