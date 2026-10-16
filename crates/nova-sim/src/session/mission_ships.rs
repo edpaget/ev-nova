@@ -971,7 +971,11 @@ impl Session {
         }
         // The hail's dialog closes on the player's target, now the ship
         // swapped in (@0x6252f), which `_offeringShipIndex` takes
-        // (@0x625a4): `<OSN>` names its slot, which holds no person.
+        // (@0x625a4): `<OSN>` names its slot, which holds no person. The
+        // original swaps as the dialog closes, when the hailed ship is
+        // always the target; this settling comes after, so a target the
+        // player moved since is kept, and `<OSN>` names the swapped-in
+        // ship all the same.
         if let Some(npc) = swapped_in.and_then(|id| self.npc(id)) {
             self.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
         }
@@ -5077,6 +5081,87 @@ pub(super) mod tests {
         let session = swapped(&kept);
         assert!(person_here(&session), "no swap");
         assert_eq!(session.plain_text("<OSN>"), "Ace", "the hailed ship still");
+    }
+
+    /// [`hailing_ace`] with Ace moved to berth 2 before the hail, which
+    /// remembers Ace, and the lower berth 1 left free: the ship swapped in
+    /// takes berth 1, not the hailed ship's.
+    fn hailing_ace_at_berth_2(catalog: &FakePilotCatalog) -> Session {
+        let pilot = crate::pilot::Pilot::new(catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_strings(Rc::new(Names));
+        session.populate(catalog, &mut NeverFires);
+        let ace = &mut session.traffic.npcs_mut()[0];
+        ace.state = ACE_AT;
+        ace.berth = 2;
+        session.traffic.set_berth_person(2, "Ace");
+        session.traffic.forget_berth_person(1);
+        session.target = Some(NpcId(0));
+        let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
+        assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
+        assert_eq!(session.plain_text("<OSN>"), "Ace", "hailed at berth 2");
+        session
+    }
+
+    /// The berth of the one mission ship here after a swap.
+    fn swapped_in_berth(session: &Session) -> u32 {
+        let ships: Vec<_> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.person.is_none())
+            .collect();
+        assert_eq!(ships.len(), 1, "the swapped-in ship alone");
+        ships[0].berth
+    }
+
+    #[test]
+    fn by_the_engine_after_a_swap_osn_follows_the_swapped_in_ship_to_its_new_slot() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace_at_berth_2(&catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, &catalog);
+        let berth = swapped_in_berth(&session);
+        assert_eq!(berth, 1, "the lowest free berth, not the hailed ship's");
+        assert_eq!(
+            session.offering_ship,
+            Some(super::super::person_offers::OfferingShip { berth }),
+            "the target swapped in (@0x6252f, @0x625a4)"
+        );
+        assert_eq!(
+            session.plain_text("<OSN>"),
+            "[Error]",
+            "its slot holds no person, though Ace's old slot still names Ace"
+        );
+        assert_eq!(session.traffic.berth_person(2), Some("Ace"));
+    }
+
+    #[test]
+    fn by_the_engine_a_swap_settled_after_the_target_moved_still_names_the_swapped_in_ships_slot() {
+        // The original swaps as the hail's dialog closes, when the hailed
+        // ship is always the player's target, and `_offeringShipIndex`
+        // takes the ship swapped into its place (@0x6252f, @0x625a4). The
+        // engine swaps at the settling after, so a target moved in
+        // between is kept, and `<OSN>` still names the swapped-in ship.
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace_at_berth_2(&catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        session.target = None;
+        settle(&mut session, &catalog);
+        assert!(!person_here(&session), "swapped all the same");
+        assert_eq!(session.target, None, "the player's target is kept");
+        let berth = swapped_in_berth(&session);
+        assert_eq!(
+            session.offering_ship,
+            Some(super::super::person_offers::OfferingShip { berth }),
+        );
+        assert_eq!(session.plain_text("<OSN>"), "[Error]");
     }
 
     /// [`swapped`], under `source` of [`RuleKey::LeaderlessSwapHold`].
