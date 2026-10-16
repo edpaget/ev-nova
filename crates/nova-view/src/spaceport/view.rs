@@ -3969,6 +3969,23 @@ mod tests {
     }
 
     #[test]
+    fn each_open_screens_description_is_asked_through_the_spaceport() {
+        for item in [8, 9, 10] {
+            let mut view = venues();
+            assert_eq!(view.take_description_request(), Some(140), "the port's");
+            click_item(&mut view, item);
+            let id = view.take_description_request().expect("asked");
+            assert_ne!(id, 140, "{item}");
+            assert_eq!(view.take_description_request(), None, "{item}: once");
+            view.show_description(id, "Loaded venue.");
+            assert!(
+                texts(&drawn(&view)).contains(&"Loaded venue.".to_owned()),
+                "{item}"
+            );
+        }
+    }
+
+    #[test]
     fn each_shop_asks_as_its_venue() {
         for (item, venue) in [(7, TRADE_CENTER), (8, OUTFITTER), (9, SHIPYARD)] {
             let mut view = venues();
