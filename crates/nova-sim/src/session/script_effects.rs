@@ -273,7 +273,7 @@ pub struct Settled {
 impl Session {
     /// The rules the moving set operators follow, projected from the
     /// session's rule set ([`Session::with_rules`]).
-    fn script_effect_rules(&self) -> ScriptEffectRules {
+    pub(super) fn script_effect_rules(&self) -> ScriptEffectRules {
         ScriptEffectRules::from_rulebook(&self.rules)
     }
 
