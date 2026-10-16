@@ -1309,6 +1309,46 @@ mod tests {
         );
     }
 
+    /// How many airlocks for a plunder are among the sounds raised since
+    /// the last taken.
+    fn plunder_airlocks(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == SimSound::Boarded)
+            .count()
+    }
+
+    #[test]
+    fn a_boarded_offer_plays_the_offers_airlock_alone() {
+        let catalog = boardable(0);
+        let mut session = alongside_ace(&catalog);
+        let _ = session.take_sounds();
+        assert!(matches!(board(&mut session).0, Ok(Boarding::Offered(_))));
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::PersonOfferBoarded],
+            "the offer jumps past @0x65991"
+        );
+    }
+
+    #[test]
+    fn a_named_person_plundered_plays_the_airlock() {
+        let mut unavailable = boardable(0);
+        unavailable.missions[0].avail_random = 50;
+        let mut session = alongside_ace(&unavailable);
+        session.offers.set_roll(MissionId(130), 51);
+        let _ = session.take_sounds();
+        assert!(matches!(board(&mut session).0, Ok(Boarding::Opened(_))));
+        assert_eq!(plunder_airlocks(&mut session), 1, "@0x659b3");
+        let mut linked_only = boardable(0);
+        linked_only.persons[0].flags = 0;
+        let mut session = alongside_ace(&linked_only);
+        let _ = session.take_sounds();
+        assert!(matches!(board(&mut session).0, Ok(Boarding::Opened(_))));
+        assert_eq!(plunder_airlocks(&mut session), 1, "@0x65a3f → @0x65f00");
+    }
+
     #[test]
     fn a_hail_or_board_with_no_offer_makes_neither_sound() {
         let mut unavailable = talking();

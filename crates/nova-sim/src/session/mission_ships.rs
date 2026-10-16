@@ -4506,6 +4506,57 @@ pub(super) mod tests {
         assert_eq!(crimes, []);
     }
 
+    /// The airlocks among the sounds raised since the last taken.
+    fn airlocks(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == crate::sound::SimSound::Boarded)
+            .count()
+    }
+
+    /// A mission's special ship skips the plunder and its airlock
+    /// (@0x657b8-0x657e3 → @0x65f43), whether its mission stands or its
+    /// slot is free; a failed mission's ship goes on to the plunder,
+    /// after `_DoGoodSamaritan`, and plays it (@0x65eb3 → @0x65f00).
+    #[test]
+    fn only_a_failed_missions_ship_plays_the_airlock() {
+        let catalog = rescuing(5, 1, 0x0001);
+        let mut session = in_flight_with(&catalog, 1);
+        let _ = session.take_sounds();
+        let (boarding, _) = board_first(&mut session);
+        assert!(
+            matches!(boarding, Ok(crate::board::Boarding::MissionShip(_))),
+            "{boarding:?}"
+        );
+        assert_eq!(airlocks(&mut session), 0, "the mission stands");
+
+        let mut session = in_flight_with(&catalog, 1);
+        if let Some(npc) = session.traffic.npcs_mut().first_mut() {
+            npc.mission = Some(crate::traffic::npc::MissionMark {
+                order: None,
+                slot: 5,
+                behav: ShipBehav::Own,
+                formation: None,
+            });
+        }
+        let _ = session.take_sounds();
+        let _ = board_first(&mut session);
+        assert_eq!(airlocks(&mut session), 0, "a free slot");
+
+        let mut session = in_flight_with(&catalog, 1);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.failed = Some(FailedBy::Marked);
+        }
+        let _ = session.take_sounds();
+        let (boarding, _) = board_first(&mut session);
+        assert!(
+            matches!(boarding, Ok(crate::board::Boarding::Opened(_))),
+            "{boarding:?}"
+        );
+        assert_eq!(airlocks(&mut session), 1, "the mission failed");
+    }
+
     /// [`in_flight`] for a mission of `count` ships.
     fn in_flight_with(catalog: &FakePilotCatalog, count: i16) -> Session {
         let mut session = accepted(catalog);

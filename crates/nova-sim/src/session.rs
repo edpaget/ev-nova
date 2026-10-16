@@ -4571,7 +4571,9 @@ impl Session {
     /// says its crew repels the boarders, its plunder is rolled on
     /// `chance` and the boarding is under way ([`Session::plunder`]). A
     /// board that passes the checks raises [`Fate::Boarded`], repelled
-    /// or not. A person of `Flags` 0x0200 whose `LinkMission` is
+    /// or not, and the airlock, [`SimSound::Boarded`], as the boarders go
+    /// aboard, before the crew may repel them (@0x659b3, @0x65f00). A
+    /// person of `Flags` 0x0200 whose `LinkMission` is
     /// available from a ship offers it instead, once the crime is
     /// convicted ([`Boarding::Offered`], see the `person_offers` module):
     /// nothing is rolled or granted, and the ship is marked boarded, and
@@ -4638,6 +4640,7 @@ impl Session {
             self.offering_ship = None;
         }
         self.mark_boarded(npc.id);
+        self.sounds.push(SimSound::Boarded);
         if rule.repels(npc.booty) {
             return Ok(Boarding::Repelled);
         }
@@ -19052,6 +19055,54 @@ pub(super) mod tests {
             (Taken::Aborted, vec![])
         );
         assert_eq!(session.boarding(), None);
+    }
+
+    /// How many [`SimSound::Boarded`](crate::sound::SimSound::Boarded)
+    /// are among the sounds raised since the last taken.
+    fn airlocks(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == crate::sound::SimSound::Boarded)
+            .count()
+    }
+
+    #[test]
+    fn a_plain_board_plays_the_airlock_once() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let _ = session.take_sounds();
+        assert!(matches!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Opened(_))
+        ));
+        assert_eq!(airlocks(&mut session), 1, "snd 390 (@0x65f00)");
+    }
+
+    #[test]
+    fn a_repelled_board_plays_the_airlock_and_a_refused_one_nothing() {
+        let mut catalog = boardable();
+        catalog.dudes[0].1.booty = 0;
+        let bible = NovaBoarding {
+            empty_booty: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        let mut session = alongside(&catalog);
+        let _ = session.take_sounds();
+        assert_eq!(
+            session.board(&NovaLaw::default(), &bible, &mut Draws::of(&[])),
+            Ok(Boarding::Repelled)
+        );
+        assert_eq!(airlocks(&mut session), 1, "aboard before repelled");
+        assert_eq!(
+            session.board(&NovaLaw::default(), &bible, &mut Draws::of(&[])),
+            Err(BoardRefusal::CantBoard),
+            "boarded already"
+        );
+        assert_eq!(session.take_sounds(), [], "refused (@0x65fdb)");
+        session.target = None;
+        assert!(board_by(&mut session, &NovaLaw::default()).is_err());
+        assert_eq!(session.take_sounds(), [], "no target");
     }
 
     #[test]

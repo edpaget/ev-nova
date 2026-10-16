@@ -123,8 +123,8 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::PersonOfferHailed) => {
                     self.play(self.table.person_offer_hail);
                 }
-                Sound::Sim(SimSound::PersonOfferBoarded) => {
-                    self.play(self.table.person_offer_boarding);
+                Sound::Sim(SimSound::PersonOfferBoarded | SimSound::Boarded) => {
+                    self.play(self.table.airlock);
                 }
                 Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
                 Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
@@ -600,6 +600,18 @@ mod tests {
                 Sound::Sim(SimSound::PersonOfferBoarded),
             ],
         );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_board_plays_390_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Boarded)]);
+        assert_eq!(drain(&log), [play(390, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Boarded)]);
         assert_eq!(drain(&log), [], "sound off");
     }
 

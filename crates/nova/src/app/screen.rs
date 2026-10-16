@@ -7948,12 +7948,19 @@ pub(super) mod tests {
     }
 
     /// The router over [`boarding_data`] with dialogs, in the developer's
-    /// flight, boarded.
+    /// flight, boarded, its sounds taken.
     fn boarded() -> AppScreen {
         let mut screen = boardable(with_dialogs(boarding_data()));
         fly(&mut screen);
+        let _ = screen.take_sounds();
         board(&mut screen);
         assert_eq!(screen.showing(), Showing::Plunder);
+        assert!(
+            screen
+                .take_sounds()
+                .contains(&Sound::Sim(SimSound::Boarded)),
+            "the airlock, as the dialog opens"
+        );
         screen
     }
 

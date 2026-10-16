@@ -71,6 +71,19 @@ pub enum SimSound {
     /// `_HandlePlayerBoardAttempt` before `_OfferOneMission`
     /// (@0x658e5-0x65907). Its priority, 8, is not modelled.
     PersonOfferBoarded,
+    /// The player's boarders went aboard a ship to plunder it: `snd ` 390
+    /// "Airlock", as for [`SimSound::PersonOfferBoarded`], played by
+    /// `_HandlePlayerBoardAttempt` before `_DoPlunderDialog` on both of
+    /// its plunder paths: a person whose mission is not available
+    /// (@0x65991-0x659b3), and every other ship plundered, after
+    /// `_DoGoodSamaritan` or not (@0x65ede-0x65f00). So it sounds for a
+    /// failed mission's special ship too, but never for one whose mission
+    /// stands, nor for a person's offer, nor for a board refused. It
+    /// sounds for a board the crew repels by the Bible's
+    /// [`RuleKey::EmptyBooty`](crate::RuleKey::EmptyBooty), which the
+    /// original never does: the boarders go aboard first. Its priority,
+    /// 8, is not modelled.
+    Boarded,
     /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
     /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
     /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is
