@@ -249,12 +249,14 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtId, LandingSite, MissionId, StarSystem, StellarId};
     use crate::landing::StellarFlags;
+    use crate::market::DOMINATED;
     use crate::mission::Venue;
     use crate::mission::active::ActiveMission;
     use crate::mission::offer::{Offer, Stop};
     use crate::pilot::Pilot;
     use crate::rulebook::Rulebook;
     use crate::session::ranks::tests::blessing_rank;
+    use crate::story::Countdown;
     use crate::testkit::{FakePilotCatalog, catalog, mission, planet, star};
 
     /// A stellar of `MinStatus` `min_status` and government `govt`.
@@ -448,6 +450,82 @@ mod tests {
                 RuleSource::Bible => assert_eq!(code, SystemColorCode::Denied),
             }
         }
+    }
+
+    // Each stellar's inputs.
+
+    #[test]
+    fn a_stellar_counts_only_while_active_and_the_rescue_reads_the_players_system() {
+        // 131 shown by the player's move (`Some(true)`) owns no stellar, so
+        // 140 is active only once rescued to the player's system, as
+        // `_HandleStellarSystemVisibility` sets +0x44 from `_shipData[0]`
+        // +0x74 (@0x32c62-0x32cdf).
+        let catalog = coloured();
+        let mut session = flown(&catalog, Rulebook::default());
+        session.pilot.explore(SystemId(131));
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(true));
+        });
+        assert_eq!(
+            session.system_color_code(SystemId(131)),
+            SystemColorCode::Uninhabited,
+            "the player in 130: 140 inactive"
+        );
+        session.pilot.system = SystemId(131);
+        assert_eq!(
+            session.system_color_code(SystemId(131)),
+            SystemColorCode::Denied,
+            "the player in 131: 140 rescued, active"
+        );
+    }
+
+    #[test]
+    fn a_stellars_blessing_reads_the_overlays_government() {
+        let catalog = coloured();
+        let mut session = flown(&catalog, Rulebook::default());
+        session.pilot.explore(SystemId(131));
+        session.pilot.ranks.insert(crate::catalog::RankId(200));
+        session.reset_precalced();
+        assert_eq!(
+            session.system_color_code(SystemId(131)),
+            SystemColorCode::Cleared,
+            "government 140 blesses landing"
+        );
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(140), Some(Some(GovtId(141))));
+        });
+        assert_eq!(
+            session.system_color_code(SystemId(131)),
+            SystemColorCode::Denied,
+            "140 now government 141's"
+        );
+    }
+
+    #[test]
+    fn a_destroyed_stellar_does_not_count() {
+        let catalog = coloured();
+        let mut session = flown(&catalog, Rulebook::default());
+        session.pilot.explore(SystemId(131));
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_destroyed(StellarId(140), Some(Countdown { days_left: 3 }));
+        });
+        assert_eq!(
+            session.system_color_code(SystemId(131)),
+            SystemColorCode::Uninhabited,
+            "140, its only stellar, destroyed"
+        );
+    }
+
+    #[test]
+    fn the_always_dominated_bit_turns_a_system_green() {
+        let mut catalog = coloured();
+        catalog.sites[1].1[0].flags2 = DOMINATED;
+        let mut session = flown(&catalog, Rulebook::default());
+        session.pilot.explore(SystemId(131));
+        assert_eq!(
+            session.system_color_code(SystemId(131)),
+            SystemColorCode::Dominated
+        );
     }
 
     // The mission systems.
