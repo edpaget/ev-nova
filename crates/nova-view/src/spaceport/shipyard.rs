@@ -941,6 +941,8 @@ pub struct ShipyardScreen {
     /// The info screens asked for, until taken.
     asks: InfoAsks,
     closed: bool,
+    /// The `dësc` shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
     sounds: Vec<Sound>,
 }
 
@@ -1013,6 +1015,7 @@ impl ShipyardScreen {
             offering: None,
             asks: InfoAsks::default(),
             closed: false,
+            description_request: None,
             sounds: Vec::new(),
         };
         screen.read_pictures();
@@ -1206,6 +1209,36 @@ impl ShipyardScreen {
         self.naming.dialog()
     }
 
+    /// The `dësc` of the ship the shipyard has shown since this was last
+    /// taken, once, read raw until whoever flies the ship loads it as
+    /// `_ShipyardFilter` does (@0x607fc, @0x60c33) and answers with
+    /// `show_description`, in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request.take()
+    }
+
+    /// Shows `text`, `dësc` `id` loaded, as the description of the ship
+    /// shown, while it is the ship whose `dësc` that is.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        let Ok(Laid {
+            dialog,
+            metrics,
+            shown: Some((ship, shown)),
+            ..
+        }) = &mut self.laid
+        else {
+            return;
+        };
+        if nova_data::ship_desc_id(*ship) == Some(id) {
+            let area = dialog.item_bounds(DESCRIPTION_ITEM).unwrap_or(Bounds::at(
+                Point::new(0.0, 0.0),
+                0.0,
+                0.0,
+            ));
+            shown.retext(text, area, &metrics.0);
+        }
+    }
+
     /// The ship ordered at its name prompt since it was last taken, once.
     pub fn take_order(&mut self) -> Option<ShipOrder> {
         self.order.take()
@@ -1285,6 +1318,7 @@ impl ShipyardScreen {
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
         let description = nova_data::ship_desc_id(ship);
+        self.description_request = description;
         let shown = Shown::read(&*catalog, picture, description, area, &laid.metrics.0);
         laid.shown = Some((ship, shown));
     }
@@ -2215,6 +2249,22 @@ mod tests {
         press(&mut screen, Key::Right);
         let picture = item(&screen, PICTURE_ITEM);
         assert_eq!(in_picture(&screen), no_picture_lines(picture));
+    }
+
+    #[test]
+    fn each_description_read_is_asked_to_load_and_shows_loaded() {
+        let mut screen = screen();
+        assert_eq!(screen.take_description_request(), Some(13000));
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(13000, "Loaded.");
+        assert!(words(&screen).contains(&"Loaded.".to_owned()));
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.take_description_request(), Some(13001));
+        screen.show_description(13000, "Stale.");
+        assert!(
+            !words(&screen).contains(&"Stale.".to_owned()),
+            "not shown now"
+        );
     }
 
     #[test]

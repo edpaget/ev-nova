@@ -386,6 +386,8 @@ pub struct SpaceportView {
     outfitter_opened: bool,
     /// Whether the outfitter has closed since this was last taken.
     outfitter_closed: bool,
+    /// Whether the spaceport's own `dësc` waits to be loaded.
+    description_request: bool,
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
     sounds: Vec<Sound>,
@@ -452,6 +454,9 @@ impl SpaceportView {
                 metrics: MetricsHandle(metrics),
             })
         });
+        let description_request = port
+            .as_ref()
+            .is_ok_and(|port| port.description_problem.is_none());
         Self {
             stellar,
             port,
@@ -471,7 +476,47 @@ impl SpaceportView {
             recharge: false,
             outfitter_opened: false,
             outfitter_closed: false,
+            description_request,
             sounds: Vec::new(),
+        }
+    }
+
+    /// The `dësc` a screen of the spaceport has shown since this was last
+    /// taken, once, read raw until whoever flies the ship loads it as
+    /// `_LoadDescription` does and answers with
+    /// [`SpaceportView::show_description`], in the same input: the
+    /// spaceport's own as it opens (`_DoPortDialog` @0x5f96b), then the
+    /// open outfitter's, shipyard's, bar's or hire screen's.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        if std::mem::take(&mut self.description_request) {
+            return Some(self.stellar.0);
+        }
+        match &mut self.open {
+            Some(Open::Outfitter(screen)) => screen.take_description_request(),
+            Some(Open::Shipyard(screen)) => screen.take_description_request(),
+            Some(Open::Bar(screen)) => screen.take_description_request(),
+            _ => None,
+        }
+    }
+
+    /// Shows `text`, `dësc` `id` loaded, where it is shown: as the
+    /// spaceport's description when `id` is the stellar's (in the box
+    /// once a refusal there is over), and otherwise in the screen open.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        if id == self.stellar.0 {
+            if let Ok(port) = &mut self.port {
+                text.clone_into(&mut port.description);
+                if !port.refused {
+                    port.dialog.set_text(TEXT_ITEM, text);
+                }
+            }
+            return;
+        }
+        match &mut self.open {
+            Some(Open::Outfitter(screen)) => screen.show_description(id, text),
+            Some(Open::Shipyard(screen)) => screen.show_description(id, text),
+            Some(Open::Bar(screen)) => screen.show_description(id, text),
+            _ => {}
         }
     }
 
@@ -2239,6 +2284,23 @@ mod tests {
             view.recharged();
             assert_eq!(box_lines(&view), DESCRIPTION);
         }
+    }
+
+    #[test]
+    fn the_description_is_asked_to_load_and_shows_loaded_after_a_refusal() {
+        let mut view = earth();
+        assert_eq!(view.take_description_request(), Some(140));
+        assert_eq!(view.take_description_request(), None, "once");
+        view.show_description(140, "Loaded port.");
+        assert_eq!(box_lines(&view), ["Loaded port."]);
+        click_item(&mut view, RECHARGE_ITEM);
+        view.refuse_recharge(RechargeRefusal::Full);
+        view.show_description(140, "Loaded again.");
+        assert_eq!(box_lines(&view), [ALREADY_RECHARGED], "the refusal stays");
+        view.recharged();
+        assert_eq!(box_lines(&view), ["Loaded again."]);
+        view.show_description(141, "Another.");
+        assert_eq!(box_lines(&view), ["Loaded again."], "not the port's");
     }
 
     #[test]

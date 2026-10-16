@@ -404,6 +404,13 @@ pub fn outfit_picture(outfit: OutfitId, exists: impl Fn(i16) -> bool) -> Option<
     exists(picture).then_some(picture)
 }
 
+/// Outfit `outfit`'s `dësc`, 3000 plus its ID less 128
+/// (`_OutfitFilter` @0x58465, @0x588cc).
+#[must_use]
+pub fn outfit_desc_id(outfit: OutfitId) -> i16 {
+    FIRST_DESCRIPTION.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT))
+}
+
 /// What the outfitter reads about an outfit: its description, through
 /// [`DescriptionSource`], and whether its picture exists, through
 /// [`SpaceportCatalog::picture_exists`]. Anything that is both is one.
@@ -492,6 +499,8 @@ pub struct OutfitterScreen {
     /// Whether an order left nothing listed, so the outfitter closes
     /// once its alert is closed.
     leaving: bool,
+    /// The `dësc` shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
     sounds: Vec<Sound>,
 }
 
@@ -557,6 +566,7 @@ impl OutfitterScreen {
             info_requested: false,
             highlight: Highlight::Cell,
             leaving: false,
+            description_request: None,
             sounds: Vec::new(),
         };
         screen.read_pictures();
@@ -594,6 +604,36 @@ impl OutfitterScreen {
         self.offering
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request)
+    }
+
+    /// The `dësc` of the outfit the outfitter has shown since this was
+    /// last taken, once, read raw until whoever flies the ship loads it
+    /// as `_OutfitFilter` does (@0x58476, @0x588dd; `_DoOutfitDialog`
+    /// @0x5d3b4, @0x5d737) and answers with
+    /// [`OutfitterScreen::show_description`], in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request.take()
+    }
+
+    /// Shows `text`, `dësc` `id` loaded, as the description of the outfit
+    /// shown, while it is the outfit whose `dësc` that is.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        let Ok(Laid {
+            dialog,
+            metrics,
+            shown: Some((outfit, shown)),
+        }) = &mut self.laid
+        else {
+            return;
+        };
+        if outfit_desc_id(*outfit) == id {
+            let area = dialog.item_bounds(DESCRIPTION_ITEM).unwrap_or(Bounds::at(
+                Point::new(0.0, 0.0),
+                0.0,
+                0.0,
+            ));
+            shown.retext(text, area, &metrics.0);
+        }
     }
 
     /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
@@ -860,12 +900,13 @@ impl OutfitterScreen {
         {
             return;
         }
-        let description = FIRST_DESCRIPTION.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT));
+        let description = outfit_desc_id(outfit);
         let area = laid
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
         let description = if read {
+            self.description_request = Some(description);
             catalog.description(description).unwrap_or_default()
         } else {
             String::new()
@@ -3168,6 +3209,36 @@ mod tests {
             assert_eq!(arrowed(long(10), 0, 12, k), at(9, 0), "{k:?}");
             assert_eq!(arrowed(long(22), 2, 14, k), at(21, 2), "{k:?} scrolled");
         }
+    }
+
+    #[test]
+    fn each_description_read_is_asked_to_load_and_shows_loaded() {
+        let mut screen = screen();
+        assert_eq!(
+            screen.take_description_request(),
+            Some(3000),
+            "the first cell's"
+        );
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(3000, "Loaded blaster.");
+        assert!(words(&screen).contains(&"Loaded blaster.".to_owned()));
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.take_description_request(), Some(3001));
+        screen.show_description(3000, "Too late.");
+        assert!(
+            !words(&screen).contains(&"Too late.".to_owned()),
+            "another outfit's is not shown"
+        );
+        assert!(words(&screen).contains(&"dësc 3001.".to_owned()));
+        assert_eq!(outfit_desc_id(OutfitId(130)), 3002);
+    }
+
+    #[test]
+    fn by_the_engine_an_arrow_onto_the_reset_outfit_asks_no_load() {
+        let mut screen = reset(screen());
+        let _ = screen.take_description_request();
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.take_description_request(), None, "@0x58442-0x5844f");
     }
 
     #[test]

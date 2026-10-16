@@ -47,13 +47,6 @@
 //!
 //! ## Left out
 //!
-//! - The `l33t` message (@0x69623-0x6963e, the string at 0xd9962,
-//!   "Someone set up us the bomb!"): `_leetMode` is set only when the
-//!   data holds a `l33t` resource (`_LoadObjectData` @0x7e28c-0x7e2a2).
-//!   The engine's `l33t` mode reaches only the texts the session fills
-//!   (see [`text_tags`](crate::text_tags)); this message is
-//!   rdm:phase/missions-fidelity/phase-26-text-substitution-left-outs. A
-//!   kill outfit with none named always says `STR#` 2002 #38.
 //! - `_warpSoundDone` (cleared @0x695ef, @0x69612 after each warp-up
 //!   halt): it holds the original's warp-out until the warp-up sound ends
 //!   (@0x6bbc5); the engine's jump is not timed by the sound, and the kill

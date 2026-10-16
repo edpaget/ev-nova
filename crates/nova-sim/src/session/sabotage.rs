@@ -24,7 +24,9 @@
 //! halts the warp-up sounds ([`WARP_UP_HALTS`], @0x695ea, @0x6960d), and
 //! the comm line names the first owned kill outfit with a name for its
 //! count ([`kill_notice`]), or none, for 360 ticks
-//! ([`SimMessage::Sabotaged`], @0x6969d). Nothing is removed and nothing
+//! ([`SimMessage::Sabotaged`], @0x6969d); with none named and the data's
+//! `l33t` mode on, it says the original's own words instead
+//! ([`SimMessage::BombSetUp`], @0x69623-0x6963e). Nothing is removed and nothing
 //! refreshes, so the flag stays set; the player dies, and a dying player
 //! counts nothing, so the outfit goes off once.
 //!
@@ -143,7 +145,12 @@ impl Session {
         }
         let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
         self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
-        self.messages.push(SimMessage::Sabotaged { outfit });
+        // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
+        self.messages.push(if outfit.is_none() && self.leet {
+            SimMessage::BombSetUp
+        } else {
+            SimMessage::Sabotaged { outfit }
+        });
     }
 }
 
@@ -418,6 +425,31 @@ mod tests {
         assert_eq!(
             session.take_messages(),
             [SimMessage::Sabotaged { outfit: None }]
+        );
+    }
+
+    #[test]
+    fn with_leet_mode_a_kill_outfit_with_no_named_outfit_says_someone_set_up_the_bomb() {
+        let mut catalog = sabotaged();
+        for record in &mut catalog.outfits {
+            record.lc_name.clear();
+        }
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        session.leet = true;
+        fight(&mut session, &[]);
+        let messages = session.take_messages();
+        assert_eq!(messages, [SimMessage::BombSetUp]);
+        assert_eq!(messages[0].ticks(), 360);
+        let catalog = sabotaged();
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        session.leet = true;
+        fight(&mut session, &[]);
+        assert!(
+            matches!(
+                session.take_messages()[..],
+                [SimMessage::Sabotaged { outfit: Some(_) }]
+            ),
+            "an outfit named is named in l33t mode too"
         );
     }
 

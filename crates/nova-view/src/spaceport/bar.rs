@@ -232,6 +232,10 @@ pub struct BarScreen {
     /// What the bar has asked for since each was last taken.
     asks: Asks,
     closed: bool,
+    /// The bar's `dësc`.
+    desc: i16,
+    /// The bar's `dësc`, shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
     sounds: Vec<Sound>,
 }
 
@@ -254,8 +258,8 @@ impl BarScreen {
         style: ButtonStyle,
         room: bool,
     ) -> Self {
+        let desc = bar_desc_id(stellar);
         let laid = layout.and_then(|(templates, metrics)| {
-            let desc = bar_desc_id(stellar);
             let text = hiring.catalog.description(desc).unwrap_or_default();
             let picture = shown_graphic(hiring.catalog.description_graphic(desc))
                 .filter(|&id| hiring.catalog.picture_exists(id));
@@ -298,11 +302,14 @@ impl BarScreen {
                 said: None,
             })
         });
+        let description_request = laid.is_ok().then_some(desc);
         Self {
             laid,
             hiring,
             style,
             room,
+            desc,
+            description_request,
             hire: None,
             hire_closed: false,
             news_template: Err(format!("the news dialog (DLOG {NEWS_DIALOG}) is not given")),
@@ -453,6 +460,32 @@ impl BarScreen {
     #[must_use]
     pub fn closed(&self) -> bool {
         self.closed
+    }
+
+    /// The `dësc` the bar has shown since this was last taken, once: its
+    /// own, read raw as it opened until whoever flies the ship loads it
+    /// as `_DoBarDialog` does (@0x48f91), or the hire screen's ship's
+    /// ([`HireScreen::take_description_request`]). The answer comes
+    /// through [`BarScreen::show_description`], in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request
+            .take()
+            .or_else(|| self.hire.as_mut()?.take_description_request())
+    }
+
+    /// Shows `text`, `dësc` `id` loaded: as the bar's text when `id` is
+    /// the bar's, and otherwise in the hire screen, if it is open.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        if id == self.desc {
+            if let Ok(laid) = &mut self.laid {
+                text.clone_into(&mut laid.text);
+                if laid.said.is_none() {
+                    laid.dialog.set_text(TEXT_ITEM, text);
+                }
+            }
+        } else if let Some(hire) = &mut self.hire {
+            hire.show_description(id, text);
+        }
     }
 
     /// The hire screen, while it is open.
@@ -954,6 +987,19 @@ mod tests {
             cash: 25_000,
             room: true,
         }
+    }
+
+    #[test]
+    fn the_bars_text_is_asked_to_load_and_shows_loaded() {
+        let mut bar = bar();
+        let desc = bar.take_description_request().expect("asked");
+        assert_eq!(bar.take_description_request(), None, "once");
+        bar.show_description(desc, "Loaded bar.");
+        let words: Vec<String> = texts(&bar).into_iter().map(|(t, _)| t).collect();
+        assert!(words.contains(&"Loaded bar.".to_owned()), "{words:?}");
+        bar.show_description(desc + 1, "Another.");
+        let words: Vec<String> = texts(&bar).into_iter().map(|(t, _)| t).collect();
+        assert!(!words.contains(&"Another.".to_owned()), "not the bar's");
     }
 
     #[test]

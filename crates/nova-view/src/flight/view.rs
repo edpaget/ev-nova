@@ -445,6 +445,7 @@ use crate::system::starfield;
 use crate::text::TextMetrics;
 use crate::time::ticks;
 use crate::ui::PlunderShown;
+use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
@@ -649,6 +650,9 @@ pub const ESCAPING_IN: &str = "Escaping in";
 /// `STR#` 2002 #38: a sabotage kill outfit went off with none named
 /// (`_HandlePlayer` @0x69645-0x6965e).
 pub const BOMB_EXPLODED_ONBOARD: &str = "A bomb has exploded onboard your ship!";
+/// The `l33t` mode's words for a kill outfit with no outfit named, the
+/// string at 0xd9962 (`_HandlePlayer` @0x6962d-0x6963e).
+pub const BOMB_SET_UP: &str = "Someone set up us the bomb!";
 /// `STR#` 2002 #35: a disabled player's pre-jump collapsed
 /// (`_HandlePlayer` `_GetIndString` @0x68a04).
 pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
@@ -780,6 +784,7 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
             return Some(format!("{ESCAPING_IN} {name}."));
         }
         SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
+        SimMessage::BombSetUp => BOMB_SET_UP,
         SimMessage::Sabotaged {
             outfit: Some((outfit, one)),
         }
@@ -1025,6 +1030,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::JumpCollapsed
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
+        | SimMessage::BombSetUp
         | SimMessage::BombExploded { .. }
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
@@ -2933,6 +2939,32 @@ impl<
             );
             self.sheet_ship = Some(ship);
         }
+    }
+}
+
+impl<C: DescriptionSource> FlightView<C> {
+    /// `dësc` `id`, loaded as `_LoadDescription` loads one for a screen
+    /// that shows it now: read from the catalog, then taken in by the
+    /// session ([`Session::load_description`]), its conditional text
+    /// resolved for the pilot, the remembered rank governments reset and
+    /// parsed, and in the `l33t` mode its letters drawn on the flight's
+    /// chance. With a session that failed, only its conditional text is
+    /// resolved, for a new pilot ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)).
+    ///
+    /// # Errors
+    ///
+    /// Why the `dësc` cannot be read; the governments are kept, as a
+    /// missing one's are (@0x71a5e).
+    pub fn load_description(&mut self, id: i16) -> Result<String, String> {
+        let raw = self.catalog.description(id)?;
+        Ok(match &mut self.session {
+            Ok(session) => session.load_description(Some(&raw), &mut self.chance),
+            Err(_) => nova_sim::text_parse::conditional_text(
+                &raw,
+                nova_sim::control::Gate::FRESH.pilot,
+                nova_sim::text_parse::ParseRules::default(),
+            ),
+        })
     }
 }
 
@@ -4963,6 +4995,8 @@ mod tests {
         /// default.
         sol_more: Vec<StellarContents>,
         systems_read: RefCell<Vec<SystemId>>,
+        /// The `dësc`s: none, by default.
+        descriptions: Vec<(i16, String)>,
         /// The commodities: none, by default.
         commodities: CommodityStrings,
         /// The planetary events: none, by default.
@@ -5099,6 +5133,7 @@ mod tests {
                 site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
             ],
             systems_read: RefCell::default(),
+            descriptions: Vec::new(),
             commodities: CommodityStrings::default(),
             disasters: Vec::new(),
             outfits: Vec::new(),
@@ -5709,6 +5744,75 @@ mod tests {
         assert_eq!(view.camera().center(), at(0.0, 0.0));
         assert_eq!(view.shown_position(), at(0.0, 0.0));
         assert_eq!(view.frame(), Some(0));
+    }
+
+    impl DescriptionSource for FakeCatalog {
+        fn description(&self, id: i16) -> Result<String, String> {
+            self.descriptions
+                .iter()
+                .find(|(found, _)| *found == id)
+                .map(|(_, text)| text.clone())
+                .ok_or_else(|| format!("no dësc {id}"))
+        }
+
+        fn button_style(&self) -> crate::ui::ButtonStyle {
+            crate::ui::ButtonStyle::STOCK
+        }
+    }
+
+    /// [`catalog`] with `dësc`s 3000 "{b5 "set" "clear"}, sir.", 3001
+    /// "<SRK128>" and 3002 "{G "<SRK128>" "x"}".
+    fn described() -> FakeCatalog {
+        FakeCatalog {
+            descriptions: vec![
+                (3000, "{b5 \"set\" \"clear\"}, sir.".to_owned()),
+                (3001, "<SRK128>".to_owned()),
+                (3002, "{G \"x\" \"<SRK128>\"} ".to_owned()),
+            ],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn a_loaded_description_reads_the_pilot_as_it_is_now() {
+        let mut view = FlightView::new(described());
+        assert_eq!(view.load_description(3000).as_deref(), Ok("clear, sir."));
+        view.session
+            .as_mut()
+            .expect("flying")
+            .set_control_bit(nova_sim::Bit::new(5).expect("a bit"), true);
+        assert_eq!(view.load_description(3000).as_deref(), Ok("set, sir."));
+    }
+
+    #[test]
+    fn a_loaded_description_resets_and_parses_the_rank_governments() {
+        let mut view = FlightView::new(described());
+        let srk = |view: &View| view.session().expect("flying").plain_text("<SRK128>");
+        assert_eq!(srk(&view), "<SRK128>", "no government remembered");
+        assert_eq!(view.load_description(3001).as_deref(), Ok("<SRK128>"));
+        assert_eq!(srk(&view), "captain", "<SRK128> remembered, crossed");
+        assert_eq!(
+            view.load_description(9999),
+            Err("no dësc 9999".to_owned()),
+            "a missing one"
+        );
+        assert_eq!(srk(&view), "captain", "kept by a missing one");
+        assert_eq!(view.load_description(3002).as_deref(), Ok("x "));
+        assert_eq!(
+            srk(&view),
+            "<SRK128>",
+            "reset, and the string not chosen never scanned"
+        );
+    }
+
+    #[test]
+    fn with_no_session_a_loaded_description_reads_a_new_pilot() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..described()
+        });
+        assert_eq!(view.load_description(3000).as_deref(), Ok("clear, sir."));
+        assert_eq!(view.load_description(3002).as_deref(), Ok("x "));
     }
 
     #[test]
@@ -14810,6 +14914,17 @@ mod tests {
             "an empty name is spelled out as it is"
         );
         assert_eq!(arrival_lead(&exploded(275, true)), None);
+    }
+
+    #[test]
+    fn the_leet_sabotage_notice_says_someone_set_up_the_bomb() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(&SimMessage::BombSetUp, session).as_deref(),
+            Some("Someone set up us the bomb!")
+        );
+        assert_eq!(arrival_lead(&SimMessage::BombSetUp), None);
     }
 
     #[test]

@@ -286,7 +286,13 @@ fn game_data_with(extra: Vec<(ResType, i16, Vec<u8>)>) -> Rc<GameData> {
             131,
             outfit(40, 1, 5, (8, 900), 1, 100, "Warp Core"),
         ),
-        (Desc::TYPE, 3000, desc("Bolted-on thrusters.")),
+        // Conditional text, which the outfitter shows resolved for the
+        // pilot, a man, as `_OutfitFilter`'s `_LoadDescription` loads it.
+        (
+            Desc::TYPE,
+            3000,
+            desc("Bolted-on {G \"thrusters\" \"engines\"}{b9 \" (set)\" \"\"}."),
+        ),
     ];
     resources.extend(extra);
     for state in [7500, 7503, 7506] {

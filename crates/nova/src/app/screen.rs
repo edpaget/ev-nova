@@ -1617,6 +1617,7 @@ impl AppScreen {
             .with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG))
             .with_offer_clock(self.rules.source_for(RuleKey::OfferClock));
         self.spaceport = Some(spaceport);
+        self.serve_descriptions();
         self.switch_to(Side::Spaceport);
     }
 
@@ -1685,8 +1686,9 @@ impl AppScreen {
     /// ([`AppScreen::fade_once_dialogs_close`]). With none to show, no
     /// dialogs or no "Desc Dialog", it begins at once, on the same tick.
     ///
-    /// A `dësc` that cannot be read (`_LoadDescription` @0x687c9) is
-    /// skipped with a warning; what the original does with a missing one
+    /// Each is loaded through flight as `_LoadDescription` (@0x687c9)
+    /// loads it ([`FlightView::load_description`]). A `dësc` that cannot
+    /// be read is skipped with a warning; what the original does with a missing one
     /// was not checked. Mission texts the death's tick queued share the
     /// queue, after these, and the fade waits for them too.
     ///
@@ -1695,12 +1697,12 @@ impl AppScreen {
     /// no boundary the player sees lies between them and the original's
     /// order.
     fn at_hold_expiry(&mut self) {
-        let Some(flight) = &self.flight else {
+        let Some(flight) = &mut self.flight else {
             return;
         };
         let mut texts = Vec::new();
         for id in flight.sabotage_death_descs() {
-            match self.data.description(id) {
+            match flight.load_description(id) {
                 Ok(text) => texts.push((text, self.data.description_graphic(id))),
                 Err(reason) => self.warnings.push(format!(
                     "nova: cannot show the sabotage dësc {id}: {reason}"
@@ -1715,11 +1717,17 @@ impl AppScreen {
 
     /// Shows the escape pod's rescue's `dësc` `id` over flight, as
     /// `_HandlePlayer`'s `_ShowTextDialog` does (@0x68e80-0x68eac), in the
-    /// variant its `Graphic` picks; one that cannot be read is a warning.
-    /// The rescue settled before it, and flight goes on once it closes: no
+    /// variant its `Graphic` picks, loaded through flight as
+    /// `_LoadDescription` (@0x68e90) loads it
+    /// ([`FlightView::load_description`]); one that cannot be read is a
+    /// warning. The rescue settled before it, and flight goes on once it closes: no
     /// fade follows, unlike the death's.
     fn show_rescue_desc(&mut self, id: i16) {
-        match self.data.description(id) {
+        let loaded = match &mut self.flight {
+            Some(flight) => flight.load_description(id),
+            None => self.data.description(id),
+        };
+        match loaded {
             Ok(text) => {
                 let graphic = self.data.description_graphic(id);
                 self.show_over_flight(vec![(text, graphic)]);
@@ -2266,6 +2274,7 @@ impl AppScreen {
         }
         self.serve_closings();
         self.serve_mission_screens();
+        self.serve_descriptions();
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         if spaceport.left() {
             self.close_spaceport();
@@ -2298,6 +2307,22 @@ impl AppScreen {
             spaceport.show_computer_row(&row);
         }
         load_info_text(spaceport, flight);
+    }
+
+    /// The `dësc`s the spaceport's screens have shown, each loaded
+    /// through flight as `_LoadDescription` loads one
+    /// ([`FlightView::load_description`]) and shown in its place, in the
+    /// input that showed it, so no frame draws the raw read. One that
+    /// cannot be read keeps the raw read's blank.
+    fn serve_descriptions(&mut self) {
+        let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
+            return;
+        };
+        while let Some(id) = spaceport.take_description_request() {
+            if let Ok(text) = flight.load_description(id) {
+                spaceport.show_description(id, &text);
+            }
+        }
     }
 
     /// The mission info screen over flight's selected text, loaded
@@ -2623,13 +2648,56 @@ fn load_info_text(holder: &mut impl MissionInfoHolder, flight: &mut FlightView<R
 
 fn about_dialog(dialogs: &Dialogs, data: &GameData) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
-    let text = data.description(ABOUT_TEXT)?;
+    let text = about_words(&data.description(ABOUT_TEXT)?);
     Ok(DescDialog::new(
         &template,
         &text,
         data.button_style(),
         Rc::clone(&dialogs.metrics),
     ))
+}
+
+/// The about text `raw` as `_DoAboutBox` loads it (@0x16021): its
+/// conditional text resolved for [`StartUpPilot`], with no rank
+/// governments and no draws, as the box has no flight. Its tags are left
+/// as written: the original's `_MungeBriefing` (@0x16035) reads the last
+/// pilot's globals, which
+/// rdm:phase/missions-fidelity/phase-35-text-substitution-second-left-outs
+/// covers.
+fn about_words(raw: &str) -> String {
+    nova_sim::text_parse::conditional_text(
+        raw,
+        &StartUpPilot,
+        nova_sim::text_parse::ParseRules::default(),
+    )
+}
+
+/// The pilot the about box reads with none loaded: the original's
+/// globals as start-up leaves them zeroed, no bit set and gender 0,
+/// female; paid for, as the engine takes the game.
+#[derive(Debug)]
+struct StartUpPilot;
+
+impl nova_sim::control::PilotFacts for StartUpPilot {
+    fn bit(&self, _bit: nova_sim::Bit) -> bool {
+        false
+    }
+
+    fn gender(&self) -> nova_sim::Gender {
+        nova_sim::Gender::Female
+    }
+
+    fn paid(&self, _days: u16) -> bool {
+        true
+    }
+
+    fn has_outfit(&self, _outfit: nova_sim::OutfitId) -> bool {
+        false
+    }
+
+    fn explored(&self, _system: nova_sim::SystemId) -> bool {
+        false
+    }
 }
 
 /// Flight shows only once it has been built.
@@ -4166,6 +4234,18 @@ pub(super) mod tests {
         let mut screen = with_dialogs(data);
         screen.input(&key(Key::Tab, true));
         open_about(&mut screen);
+    }
+
+    #[test]
+    fn the_about_text_reads_its_conditional_text_for_a_pilot_not_yet_loaded() {
+        use nova_sim::control::PilotFacts;
+        assert_eq!(
+            about_words("By {G \"him\" \"her\"}{b1 \", set\" \"\"}{P30 \".\" \"!\"} <PN>"),
+            "By her. <PN>"
+        );
+        let pilot = StartUpPilot;
+        assert!(!pilot.has_outfit(nova_sim::OutfitId(128)));
+        assert!(!pilot.explored(nova_sim::SystemId(128)));
     }
 
     #[test]
