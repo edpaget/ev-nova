@@ -807,11 +807,7 @@ impl Traffic {
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
             let berth = self.next_berth();
             let name = person.map(|person| person.record.name.clone());
-            match name {
-                Some(name) => self.berth_persons.insert(berth, name),
-                None => self.berth_persons.remove(&berth),
-            };
-            self.npcs.push(Npc {
+            let npc = Npc {
                 id,
                 berth,
                 ship: ship.ship,
@@ -866,7 +862,9 @@ impl Traffic {
                 led_out: false,
                 self_repair: kind.self_repair,
                 former: None,
-            });
+            };
+            self.write_berth_person(berth, name);
+            self.npcs.push(npc);
         }
     }
 }
