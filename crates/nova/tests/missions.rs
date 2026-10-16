@@ -1656,17 +1656,34 @@ fn failing(mut mission: Vec<u8>) -> Vec<u8> {
     mission
 }
 
+/// `mission` with the `ShipDoneText` `dësc` 207.
+fn ship_done(mut mission: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut mission, 0x44, &[207]);
+    mission
+}
+
+/// `mission` picking its cargo up at its destination (`PickupMode` 1)
+/// and dropping it off at its return (`DropOffMode` 1), with the
+/// `LoadCargText` `dësc` 208.
+fn picking_up(mut mission: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut mission, 0x14, &[1, 1]);
+    put_i16s(&mut mission, 0x38, &[208]);
+    mission
+}
+
 /// The run's `Q`: `STR#` 25048.
 const LEAVE: &[u8] = b"Q25048\0";
 
 /// The game data with this run and bar job, `STR#` 25048 holding "Off
-/// you go.", and the `dësc`s 205 ("Unloaded at <DST>.") and 206
-/// ("Failed.").
+/// you go.", and the `dësc`s 205 ("Unloaded at <DST>."), 206
+/// ("Failed."), 207 ("Ships seen off.") and 208 ("Loaded at <DST>.").
 fn leaving_data(run: &[u8], bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
     game_data_built(run, bar_job, "Take this to <DST>.", |fork| {
         fork.resource(StrList::TYPE, 25048, None, &str_list(&["Off you go."]))
             .resource(Desc::TYPE, 205, None, &desc("Unloaded at <DST>."))
             .resource(Desc::TYPE, 206, None, &desc("Failed."))
+            .resource(Desc::TYPE, 207, None, &desc("Ships seen off."))
+            .resource(Desc::TYPE, 208, None, &desc("Loaded at <DST>."))
     })
 }
 
@@ -1796,10 +1813,80 @@ fn a_later_slots_fail_text_shows_after_a_qs_comp_text_before_the_leave() {
     assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
 }
 
-/// Lands Ada, holding the run, where the bar job is offered at the
-/// spaceport, and closes the run's `CompText`: the job's offer shows.
-fn offered_after_the_comp_text(store: &MemoryPilots) -> Game {
+#[test]
+fn a_landing_shows_the_ship_done_text_then_the_comp_text_before_a_q_leaves() {
+    let store = MemoryPilots::new();
+    let data = leaving_data(&ship_done(leaving_run()), bar_job());
+    let mut game = Game::with_data(&store, &running(), data);
+    game.frame();
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Ships seen off."));
+    assert!(leave_due(&game));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    assert!(leave_due(&game));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+/// Ada holding the run in slot 0 and, in slot 1, the bar job picking up
+/// `tons` of cargo at the Pad, with no return. Her ship has no holds, so
+/// none fits and more is refused.
+fn picking_up_at_the_pad(tons: i32) -> Pilot {
+    let pilot = holding(
+        &ada(),
+        &[(0, 128, None, Some(128)), (1, 130, None, Some(128))],
+    );
+    let pilot = with_mission_field(&pilot, 1, "return", serde_json::Value::Null);
+    with_mission_field(&pilot, 1, "cargo_tons", tons.into())
+}
+
+#[test]
+fn a_later_slots_pickup_shows_its_load_carg_text_after_a_qs_comp_text_before_the_leave() {
+    let store = MemoryPilots::new();
     let (job, offer) = bar_job();
+    let data = leaving_data(&leaving_run(), (picking_up(job), offer));
+    let mut game = Game::with_data(&store, &picking_up_at_the_pad(0), data);
+    game.frame();
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.shown_text().as_deref(), Some("Loaded at Pad."));
+    assert!(leave_due(&game));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), [(1, MissionId(130))], "carrying it on");
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+#[test]
+fn a_later_slots_pickup_refused_for_room_says_so_after_a_qs_comp_text_before_the_leave() {
+    let store = MemoryPilots::new();
+    let (job, offer) = bar_job();
+    let data = leaving_data(&leaving_run(), (picking_up(job), offer));
+    let mut game = Game::with_data(&store, &picking_up_at_the_pad(1), data);
+    game.frame();
+    game.land();
+    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(
+        game.shown_text().as_deref(),
+        Some("Your ship doesn't have enough cargo space to load this cargo.")
+    );
+    assert!(leave_due(&game));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+/// Lands Ada, holding the run, where `job`, as mission 130, is offered
+/// at the spaceport, and closes the run's `CompText`: the job's offer
+/// shows.
+fn offered_after_the_comp_text(store: &MemoryPilots, (job, offer): (Vec<u8>, &str)) -> Game {
     let data = leaving_data(&leaving_run(), (at_venue(job, 3), offer));
     let mut game = Game::with_data(store, &running(), data);
     game.frame();
@@ -1818,8 +1905,27 @@ fn offered_after_the_comp_text(store: &MemoryPilots) -> Game {
 #[test]
 fn the_ports_offer_shows_after_the_texts_and_a_refusal_leaves() {
     let store = MemoryPilots::new();
-    let mut game = offered_after_the_comp_text(&store);
+    let mut game = offered_after_the_comp_text(&store, bar_job());
     game.tap(Key::Char('n'));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), []);
+    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
+}
+
+#[test]
+fn the_ports_offer_refused_shows_its_refuse_text_then_leaves() {
+    let store = MemoryPilots::new();
+    let job = bar_mission(202, 203, b"I'm in\0", b"\0");
+    let mut game = offered_after_the_comp_text(&store, (job, "<PN>, join us."));
+    game.tap(Key::Char('n'));
+    assert_eq!(
+        game.showing(),
+        Showing::Spaceport,
+        "its RefuseText holds it"
+    );
+    assert_eq!(game.shown_text().as_deref(), Some("Suit yourself."));
+    assert!(leave_due(&game));
+    game.tap(Key::Enter);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), []);
     assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
@@ -1828,7 +1934,7 @@ fn the_ports_offer_shows_after_the_texts_and_a_refusal_leaves() {
 #[test]
 fn the_ports_offer_accepted_shows_its_brief_text_then_leaves() {
     let store = MemoryPilots::new();
-    let mut game = offered_after_the_comp_text(&store);
+    let mut game = offered_after_the_comp_text(&store, bar_job());
     game.tap(Key::Enter);
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(game.active(), [(0, MissionId(130))]);
