@@ -712,6 +712,10 @@ impl PilotCatalog for Probed<'_> {
         self.data.ranks()
     }
 
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        self.data.first_stellars()
+    }
+
     fn nebulae(&self) -> Vec<cat::NebulaRecord> {
         self.data.nebulae()
     }

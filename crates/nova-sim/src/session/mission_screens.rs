@@ -30,6 +30,7 @@ use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
 use crate::mission::{
     AcceptRefusal, AvailFacts, Offer, OfferPrompt, Venue, VenueOffer, availability, offer_labels,
 };
+use crate::navigation::NavMode;
 
 /// One offer the mission computer lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,9 +157,30 @@ impl Session {
     }
 
     /// The mission texts to show since they were last taken, in the order
-    /// they came.
+    /// they came. Taking them lets go of the nav noted with them
+    /// ([`Session::text_nav`]).
     pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
+        self.text_nav = None;
         std::mem::take(&mut self.shown_texts)
+    }
+
+    /// How many mission texts have been queued since the session started,
+    /// never reset: a view that notes it at each of its redraws can tell
+    /// whether the last text was queued after its last redraw.
+    #[must_use]
+    pub fn texts_queued(&self) -> u64 {
+        self.texts_queued
+    }
+
+    /// The nav mode ([`Session::nav_mode`]) as the last text since they
+    /// were last taken was queued, `None` with none: what that text's
+    /// dialog redraws the nav area with as it closes (`_ShowTextDialog`'s
+    /// `_RefreshSAT`), where a script run after it, such as an `OnSuccess`
+    /// after the `CompText` (@0xa048c, @0xa0491, then @0xa04f8), has
+    /// written the nav since.
+    #[must_use]
+    pub fn text_nav(&self) -> Option<NavMode> {
+        self.text_nav
     }
 
     /// Queues `mission`'s `kind` text to show, when it has one, filled
@@ -185,8 +207,12 @@ impl Session {
         true
     }
 
-    /// Queues `text`, `mission`'s `kind` text, to show as it is.
+    /// Queues `text`, `mission`'s `kind` text, to show as it is, counting
+    /// it ([`Session::texts_queued`]) and noting the nav mode as it is now
+    /// ([`Session::text_nav`]).
     pub(super) fn show_text(&mut self, kind: MissionTextKind, mission: MissionId, text: String) {
+        self.texts_queued += 1;
+        self.text_nav = Some(self.nav_mode());
         self.shown_texts.push(MissionText {
             kind,
             mission,
@@ -680,6 +706,105 @@ mod tests {
             [text(MissionTextKind::Comp, 130, "Delivered to Luna.")]
         );
         assert_eq!(session.take_mission_texts(), [], "taken");
+    }
+
+    // The nav each text notes as it is queued.
+
+    fn stellar(id: i16) -> NavMode {
+        NavMode::Stellar(Some(StellarId(id)))
+    }
+
+    #[test]
+    fn a_comp_text_notes_the_nav_from_before_on_success_moves() {
+        let catalog = screens(
+            vec![MissionRecord {
+                on_success: Script::parse("M131"),
+                ..to_luna(130)
+            }],
+            vec![MissionTexts {
+                comp: Some("Done.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "Run")
+            }],
+        );
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(session.text_nav(), Some(stellar(129)), "the landed stellar");
+        assert_eq!(session.nav_mode(), stellar(140), "Alpha's first, by M131");
+    }
+
+    #[test]
+    fn a_brief_text_notes_what_on_accept_wrote() {
+        let catalog = screens(
+            vec![MissionRecord {
+                on_accept: Script::parse("M131"),
+                ..to_mars(130)
+            }],
+            vec![MissionTexts {
+                brief: Some("Off.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "Run")
+            }],
+        );
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(session.text_nav(), Some(stellar(140)));
+        assert_eq!(session.nav_mode(), stellar(140));
+    }
+
+    #[test]
+    fn a_refuse_text_notes_the_nav_from_before_on_refuse() {
+        let catalog = screens(
+            vec![MissionRecord {
+                on_refuse: Script::parse("M131"),
+                ..to_mars(130)
+            }],
+            vec![MissionTexts {
+                refuse: Some("No.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "Run")
+            }],
+        );
+        let mut session = docked(&catalog);
+        session
+            .refuse_mission(MissionId(130), &mut NeverFires)
+            .expect("refused");
+        assert_eq!(session.text_nav(), Some(stellar(128)), "the landed stellar");
+        assert_eq!(session.nav_mode(), stellar(140), "Alpha's first, by M131");
+    }
+
+    #[test]
+    fn the_texts_are_counted_for_good_and_the_nav_noted_until_they_are_taken() {
+        let catalog = screens(
+            vec![to_mars(130), to_mars(131)],
+            vec![
+                MissionTexts {
+                    brief: Some("Off.".to_owned()),
+                    ..MissionTexts::named(MissionId(130), "Run")
+                },
+                MissionTexts {
+                    brief: Some("Away.".to_owned()),
+                    ..MissionTexts::named(MissionId(131), "Walk")
+                },
+            ],
+        );
+        let mut session = docked(&catalog);
+        assert_eq!((session.texts_queued(), session.text_nav()), (0, None));
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(session.texts_queued(), 1);
+        session.nav = NavMode::Off;
+        session
+            .accept_mission(MissionId(131), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(session.texts_queued(), 2);
+        assert_eq!(session.text_nav(), Some(NavMode::Off), "the last text's");
+        assert_eq!(session.take_mission_texts().len(), 2);
+        assert_eq!(session.texts_queued(), 2, "never reset");
+        assert_eq!(session.text_nav(), None, "taken");
     }
 
     #[test]

@@ -73,10 +73,15 @@
 //! - **Its blink flip** (@0x4c93d-0x4c94f), in the same branch, shows
 //!   only in the blank radar's centre arrow, as above. Ours keeps
 //!   landing's blink.
-//! - **`% 30` nav** (@0x4c88a-0x4c8b6) changes nothing while docked in
-//!   ours. The nav area can't change without a change of nav mode or
-//!   selection, which ours shows at once (`FlightView::nav_shown`), so the
-//!   redraw would draw what is already shown.
+//! - **`% 30` nav** (@0x4c88a-0x4c8b6). Recorded, not built, by operator
+//!   decision on 2026-10-15. While docked the nav area holds what the
+//!   port's last nav redraw drew (`FlightView::nav_shown`), so this redraw
+//!   would show a landed `M` or `N`'s write (`_EvalSetExp`
+//!   @0x156f2-0x15705, @0x158fd) a script made since: the destination's
+//!   first stellar, or "No Destination". On 1 in 30 of the port's
+//!   `_DrawStatus` calls the original shows it there, earlier than ours,
+//!   which waits for the next nav redraw it models. Nothing in stock does
+//!   that: every stock `M472` leaves the port after it (`Q25048`).
 //! - **`% 45` target** (@0x4c8b9-0x4c8eb) is unreachable in port. It needs
 //!   a target, and landing clears it (`_PlayerLandOnStellar` @0x6332f), as
 //!   a ship purchase does (@0x5f014). Nothing sets one while docked, and

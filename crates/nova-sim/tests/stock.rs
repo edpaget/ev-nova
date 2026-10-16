@@ -213,16 +213,10 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
 
     let port_kane = data.get::<Stellar>(137).expect("present").expect("decodes");
     assert_eq!(port_kane.name, Some("Port Kane"));
-    let port_kane_site = sites
-        .iter()
-        .find(|site| site.id.0 == 137)
-        .expect("Port Kane is in the start system");
-    assert_eq!(
-        port_kane_site.landing_sound,
-        Some(nova_sim::SoundId(10_032)),
-        "Federation Station.SFIL"
+    assert!(
+        sites.iter().any(|site| site.id.0 == 137),
+        "Port Kane is in the start system"
     );
-    assert_eq!(kania.landing_sound, None, "a hypergate's angle, 120");
     assert_eq!(
         services(port_kane.record.flags.bits()),
         [

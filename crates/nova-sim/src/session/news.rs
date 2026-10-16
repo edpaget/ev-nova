@@ -57,11 +57,14 @@ impl Session {
     /// Opens the bar of the stellar the ship is docked at: draws the
     /// visit's news on `chance` (see the module docs) and keeps it, and
     /// gives true. False, and nothing changes, when the ship has not
-    /// landed at a stellar with a bar.
+    /// landed at a stellar with a bar. It first saves the nav, as
+    /// `_DoBarDialog` does (@0x48efe-0x48f11), for the bar's map to put
+    /// back ([`Session::restore_bar_nav`]).
     pub fn open_bar(&mut self, chance: &mut dyn Chance) -> bool {
         let Some(site) = self.bar_site() else {
             return false;
         };
+        self.bar_nav = Some(self.nav);
         let commercial = self
             .pick_string(COMMERCIALS, chance)
             .or_else(|| self.nth_string(MISC_STRINGS, TOP_NEWS))
@@ -720,5 +723,55 @@ mod tests {
             overlay.set_stellar_govt(StellarId(128), Some(Some(GovtId(131))));
         });
         assert_eq!(session.news_picture(), Some(9000), "131's NewsPic is -1");
+    }
+
+    #[test]
+    fn the_bars_map_puts_back_the_nav_the_bar_opened_with() {
+        use crate::navigation::NavMode;
+        let catalog = barred(Some(130), Vec::new());
+        let mut session = landed(&catalog, lists());
+        let opening = session.nav_mode();
+        assert_eq!(opening, NavMode::Stellar(Some(StellarId(128))), "landed");
+        assert!(session.open_bar(&mut NeverFires));
+
+        session.plot_course(SystemId(131)).expect("a route");
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
+        session.restore_bar_nav();
+        assert_eq!(session.nav_mode(), opening, "put back");
+        assert_eq!(session.course_shown(), [SystemId(131)], "the route kept");
+
+        session.plot_course(SystemId(131)).expect("a route");
+        session.restore_bar_nav();
+        assert_eq!(session.nav_mode(), opening, "put back again");
+    }
+
+    #[test]
+    fn taking_off_or_landing_again_forgets_the_bars_nav() {
+        let catalog = barred(Some(130), vec![]);
+        let mut session = landed(&catalog, lists());
+        assert!(session.open_bar(&mut NeverFires));
+        session.take_off(&NoTraffic, &mut NeverFires);
+        assert_eq!(session.bar_nav, None, "took off");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        assert!(session.open_bar(&mut NeverFires));
+        session
+            .land_at(&catalog, SystemId(130), StellarId(128))
+            .expect("lands");
+        assert_eq!(session.bar_nav, None, "landed again");
+        assert!(session.open_bar(&mut NeverFires));
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert_eq!(session.bar_nav, None, "moved");
+    }
+
+    #[test]
+    fn without_a_bar_opened_the_bars_restore_changes_nothing() {
+        use crate::navigation::NavMode;
+        let catalog = barred(Some(130), Vec::new());
+        let mut session = landed(&catalog, lists());
+        session.plot_course(SystemId(131)).expect("a route");
+        session.restore_bar_nav();
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
     }
 }

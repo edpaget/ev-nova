@@ -18,6 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova::app::screen::QUIT_DELAY;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
@@ -33,7 +34,7 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
-use nova_data::{GameData, InterfaceData, Record};
+use nova_data::{GameData, InterfaceData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
@@ -300,12 +301,19 @@ struct Harness {
     frames: u64,
     /// What the app's audio was asked to play.
     log: AudioLog,
+    /// The app's audio, to say what is still playing.
+    audio: RecordingAudio,
 }
 
 impl Harness {
     /// The app on the main menu, keeping pilots in `store`, before any
     /// frame.
     fn opening(store: &MemoryPilots) -> Self {
+        Self::opening_with(store, AudioSettings::default())
+    }
+
+    /// [`Harness::opening`], its audio on `settings`.
+    fn opening_with(store: &MemoryPilots, settings: AudioSettings) -> Self {
         let data = game_data();
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
@@ -314,12 +322,14 @@ impl Harness {
             .with_dialogs(Rc::new(interface()), metrics);
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+        let handle = audio.clone();
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(settings);
         Self {
             app: App::new(&FakeWindow, data, screen).with_audio(core),
             gpu: RecordingGpu::new(),
             frames: 0,
             log,
+            audio: handle,
         }
     }
 
@@ -408,6 +418,34 @@ impl Harness {
                 )
             })
             .collect()
+    }
+
+    /// The `snd `s played since the last call; the rest let go.
+    fn played(&self) -> Vec<SoundId> {
+        std::mem::take(&mut *self.log.borrow_mut())
+            .into_iter()
+            .filter_map(|command| match command {
+                AudioCommand::Play { sound, .. } => Some(sound),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Sends the next redraw, 16 ms on, and says whether the app goes on.
+    fn redraw(&mut self) -> Control {
+        self.frames += 1;
+        let elapsed = Duration::from_millis(16 * self.frames);
+        self.handle(WindowEvent::Redraw { elapsed })
+    }
+
+    /// Redraws until the app exits, and says how many frames that took.
+    fn frames_until_exit(&mut self) -> u64 {
+        for frames in 1..=100 {
+            if self.redraw() == Control::Exit {
+                return frames;
+            }
+        }
+        panic!("the app never exits");
     }
 
     fn showing(&self) -> Showing {
@@ -577,13 +615,78 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
         button: MouseButton::Left,
         pressed: true,
     });
+    game.send(WindowEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+    });
     assert_eq!(
-        game.handle(WindowEvent::PointerButton {
-            button: MouseButton::Left,
-            pressed: false,
-        }),
-        Control::Exit
+        game.frames_until_exit(),
+        frames_to(QUIT_DELAY),
+        "Quit waits out its delay first"
     );
+}
+
+/// How many 16 ms frames it takes to reach `delay`.
+fn frames_to(delay: Duration) -> u64 {
+    u64::try_from(delay.as_millis().div_ceil(16)).expect("short")
+}
+
+const DOWN: SoundId = SoundId(600);
+const UP: SoundId = SoundId(601);
+
+#[test]
+fn a_keyed_new_pilot_opens_only_once_its_click_has_played() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    game.frame();
+    game.played();
+    game.audio.set_playing(DOWN, true);
+    game.type_key(KeyCode::KeyN, Some("n"));
+    for _ in 0..3 {
+        game.frame();
+        assert_eq!(game.showing(), Showing::MainMenu, "600 still plays");
+    }
+    assert_eq!(game.played(), [DOWN], "no 601 yet");
+    game.audio.set_playing(DOWN, false);
+    game.frame();
+    assert_eq!(game.played(), [UP]);
+    assert_eq!(
+        game.showing(),
+        Showing::NewPilot,
+        "in the frame that plays 601"
+    );
+}
+
+#[test]
+fn a_keyed_quit_exits_only_after_its_click_and_the_quit_delay() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    game.frame();
+    game.played();
+    game.audio.set_playing(DOWN, true);
+    game.type_key(KeyCode::KeyQ, Some("q"));
+    for _ in 0..frames_to(QUIT_DELAY) * 2 {
+        assert_eq!(game.redraw(), Control::Continue, "600 still plays");
+    }
+    assert_eq!(game.played(), [DOWN]);
+    game.audio.set_playing(DOWN, false);
+    assert_eq!(game.redraw(), Control::Continue, "601 starts");
+    assert_eq!(game.played(), [UP]);
+    assert_eq!(game.frames_until_exit(), frames_to(QUIT_DELAY));
+}
+
+#[test]
+fn with_sound_off_a_keyed_new_pilot_opens_at_once() {
+    let store = MemoryPilots::new();
+    let quiet = AudioSettings {
+        sound: false,
+        ..AudioSettings::default()
+    };
+    let mut game = Harness::opening_with(&store, quiet);
+    game.audio.set_playing(DOWN, true);
+    game.type_key(KeyCode::KeyN, Some("n"));
+    assert_eq!(game.showing(), Showing::NewPilot, "before any frame");
+    assert_eq!(game.played(), []);
 }
 
 #[test]

@@ -12,7 +12,9 @@
 //! ([`nova_sim::Session::load`], under the router's rules) is flown only
 //! once the note `STR#` 140 #52 over the menu is dismissed; its flight,
 //! built behind the note, doesn't tick meanwhile, and quitting with the
-//! note open saves the repaired pilot. Quit quits. Escape in
+//! note open saves the repaired pilot. Quit quits after
+//! [`QUIT_DELAY`], and each of the menu's keys first waits for its click
+//! to play (see `menu_input`). Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
 //! Each flight put away leaves its ship slots' draw-layer history, which
 //! every later flight of the run starts from, as the original's sprite
@@ -222,6 +224,9 @@
 //! reported once through [`Screen::take_prefs`] for the app to play
 //! and save. Flight follows the Hyperspace Effects preference: it is
 //! built with it, and a change reaches a flight already built. OK, Return or Escape closes it.
+//! Its close redraws nothing of the status bar, as the original's menu
+//! command `pref` calls `_DoPrefsDialog` alone (@0xcccf1); only the `pref`
+//! Apple Event's handler redraws (@0x56195).
 //!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`], and what it shows through
@@ -239,14 +244,14 @@ use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
     NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
-    Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
+    Rulebook, Session, Take, Taken, VenueOffer, pilot_key, text_tags,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::{FlightMissionDialogs, FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
-use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
+use nova_view::menu::{Chosen, ChosenBy, MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
@@ -304,6 +309,11 @@ pub const ABOUT_TEXT: i16 = 32767;
 /// `_LoadDescription(0x7ffe)`).
 pub const MENU_X_TEXT: i16 = 32766;
 
+/// How long the main menu's Quit waits after its click before the app
+/// quits: `_MainScreenChoice(2)` calls `Delay(15)` (@0x1a9f0-0x1a9fb)
+/// before it sends itself `quit`, which lets 601 sound.
+pub const QUIT_DELAY: Duration = nova_sim::mission::screens::mac_ticks(15);
+
 /// Why the spaceport cannot be laid out when the router has no dialogs.
 pub const NO_INTERFACE: &str = "no interface file";
 
@@ -320,6 +330,52 @@ enum Side {
     Galaxy,
     Flight,
     Spaceport,
+}
+
+/// What a main-menu key does once its click has played.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuAction {
+    /// The menu's own choice: New Pilot, Open Pilot or Quit.
+    Choice(MenuChoice),
+    /// E: Enter Ship, which with no pilot loaded is refused.
+    Enter,
+    /// P: the Preferences.
+    Preferences,
+    /// A: the About text.
+    About,
+    /// X: `dësc` 32766.
+    Text,
+}
+
+/// What the main menu waits on, as `_MainScreenKey` @0x1aba0 spins
+/// before its choice runs.
+///
+/// The original reads no event during the spin: what arrives meanwhile
+/// stays in the OS queue for whatever the choice opens. So while the
+/// menu waits, the router queues every input (and each letting go of the
+/// pointer or the keys, in its place) and replays them in order once
+/// the choice has run. The engine notices the click's end at its next
+/// audio feed, an input or a frame, not in a spin; the choice still runs
+/// in the pass that plays 601, before the next frame is drawn, so no
+/// frame shows the wait differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuHold {
+    /// E was typed with the physical E key held: the original spins on
+    /// `_QuickKeyCheck(0x0e)` (@0x1ac32-0x1ac57) until it is released,
+    /// and only then clicks.
+    EHeld,
+    /// A keyed click plays (`_PlayMainScreenClickSound` @0x177af); the
+    /// action runs once it has ([`Screen::keyed_click_ended`]).
+    Click(MenuAction),
+}
+
+/// An input held while the main menu waits, or a letting go in its
+/// place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Held {
+    Input(Input),
+    CancelPointer,
+    ReleaseKeys,
 }
 
 /// Every screen the app can show, and which side it is showing. The router
@@ -421,10 +477,30 @@ pub struct AppScreen {
     player_info: Option<PlayerInfoScreen>,
     /// Whether Command is held, for Command+comma.
     command_held: bool,
+    /// Whether the physical S, L and E keys are held: O does nothing
+    /// while S or L is (`_KeyCheck(0x01)`, `_KeyCheck(0x25)`
+    /// @0x1abd3-0x1abf5), and E waits for E's release.
+    keys_held: MenuKeys,
+    /// What the main menu waits on, if anything.
+    menu_hold: Option<MenuHold>,
+    /// What arrived while the main menu waited, in order.
+    held: Vec<Held>,
+    /// What is left of Quit's delay, while it runs ([`QUIT_DELAY`]).
+    quit_in: Option<Duration>,
+    /// Whether a quit is due, for [`Screen::take_quit`].
+    quit_due: bool,
     /// Whether double time is on: Caps Lock's presses toggle it, on any
     /// side, and every flight is told. Never saved, as the original's
     /// `_doubleTime` is not.
     double_time: bool,
+}
+
+/// The physical keys the main menu reads as held.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MenuKeys {
+    s: bool,
+    l: bool,
+    e: bool,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -508,6 +584,11 @@ impl AppScreen {
             fade_in: None,
             player_info: None,
             command_held: false,
+            keys_held: MenuKeys::default(),
+            menu_hold: None,
+            held: Vec::new(),
+            quit_in: None,
+            quit_due: false,
             double_time: false,
         }
     }
@@ -929,8 +1010,37 @@ impl AppScreen {
                 Showing::FlightMap
             }
             Side::Flight => Showing::Flight,
+            Side::Spaceport if self.port_map_open() => Showing::FlightMap,
             Side::Spaceport => Showing::Spaceport,
         }
+    }
+
+    /// The input to flight's course map open over the spaceport, taking
+    /// it all, and true; false, taking nothing, with no map open there. An
+    /// Escape press closes it ([`FlightView::close_map`]), as in flight,
+    /// and anything else goes to it ([`FlightView::port_map_input`]).
+    fn port_map_input(&mut self, input: &Input) -> bool {
+        if !self.port_map_open() {
+            return false;
+        }
+        let flight = self.flight.as_mut().expect(ENTERED);
+        let escape = Input::Key {
+            key: Key::Escape,
+            pressed: true,
+            repeat: false,
+        };
+        if *input == escape {
+            flight.close_map();
+        } else {
+            flight.port_map_input(input);
+        }
+        true
+    }
+
+    /// Whether flight's course map is open over the spaceport: the bar's
+    /// map ([`FlightView::open_bar_map`]).
+    fn port_map_open(&self) -> bool {
+        self.side == Side::Spaceport && self.flight.as_ref().is_some_and(FlightView::map_open)
     }
 
     /// The ship browser, shown or not.
@@ -969,22 +1079,32 @@ impl AppScreen {
         &self.galaxy
     }
 
+    /// The screen of the side shown: flight's while its course map is
+    /// open over the spaceport ([`AppScreen::port_map_open`]), so the
+    /// spaceport neither ticks nor draws beneath it, paused as under any
+    /// modal dialog. The bar's offer wait pausing under it too is ours'
+    /// existing reading
+    /// (rdm:phase/missions-fidelity/phase-15-offer-timer-under-nested-dialogs).
     fn shown(&self) -> &dyn Screen {
         match self.side {
             Side::MainMenu => &self.menu.as_ref().expect(MENU).screen,
             Side::Ships => &self.ships,
             Side::Galaxy => &self.galaxy,
             Side::Flight => self.flight.as_ref().expect(ENTERED),
+            Side::Spaceport if self.port_map_open() => self.flight.as_ref().expect(ENTERED),
             Side::Spaceport => self.spaceport.as_ref().expect(LANDED),
         }
     }
 
+    /// The screen of the side shown, as [`AppScreen::shown`] gives it.
     fn shown_mut(&mut self) -> &mut dyn Screen {
+        let port_map = self.port_map_open();
         match self.side {
             Side::MainMenu => &mut self.menu.as_mut().expect(MENU).screen,
             Side::Ships => &mut self.ships,
             Side::Galaxy => &mut self.galaxy,
             Side::Flight => self.flight.as_mut().expect(ENTERED),
+            Side::Spaceport if port_map => self.flight.as_mut().expect(ENTERED),
             Side::Spaceport => self.spaceport.as_mut().expect(LANDED),
         }
     }
@@ -1018,12 +1138,25 @@ impl AppScreen {
     }
 
     /// Opens "Desc Dialog" on `dësc` `id` over the side shown, as
-    /// [`open_about`](Self::open_about) opens the About text.
+    /// [`open_about`](Self::open_about) opens the About text. The main
+    /// menu's X text ([`MENU_X_TEXT`]) is first run through the briefing
+    /// munge as before any pilot is loaded, as `_MainScreenKey` runs
+    /// `_MungeBriefing(0, -1)` (@0x1aca2-0x1acb1) before
+    /// `_ShowTextDialog` ([`text_tags::expand_before_any_pilot`]). The
+    /// About text is shown as it is: `_DoAboutBox` is not read here.
     fn open_text(&mut self, id: i16) {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        match desc_dialog(dialogs, &self.data, id) {
+        let dialog = self.data.description(id).and_then(|text| {
+            let text = if id == MENU_X_TEXT {
+                text_tags::expand_before_any_pilot(&text, &*self.data)
+            } else {
+                text
+            };
+            desc_dialog(dialogs, &self.data, &text)
+        });
+        match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
                 below.cancel_pointer();
@@ -1252,7 +1385,9 @@ impl AppScreen {
 
     /// The input of the mission dialogs over flight: an Abort on the
     /// mission info screen goes through flight, and the screen shows the
-    /// missions left. They are dropped once nothing is open.
+    /// missions left. Its close, laid out, redraws the whole status bar
+    /// ([`FlightView::refresh_status`]), as `_DoMissionInfoDialog` ends in
+    /// `_RefreshSAT` (@0x9e769). They are dropped once nothing is open.
     fn missions_input(&mut self, input: &Input) -> ScreenAction {
         let missions = self.missions.as_mut().expect("open");
         missions.input(input);
@@ -1263,6 +1398,14 @@ impl AppScreen {
             if let Some(missions) = &mut self.missions {
                 missions.set_info(info);
             }
+        }
+        if self
+            .missions
+            .as_mut()
+            .is_some_and(FlightMissionDialogs::take_info_closed)
+            && let Some(flight) = &mut self.flight
+        {
+            flight.refresh_status();
         }
         self.drop_closed_missions();
         ScreenAction::None
@@ -1299,18 +1442,24 @@ impl AppScreen {
 
     /// The player info screen's input over flight: a confirmed Jettison
     /// jettisons everything through flight. Once it closes, the screen
-    /// below lets go of its keys.
+    /// below lets go of its keys, and, laid out, it redraws the whole
+    /// status bar ([`FlightView::refresh_status`]), as
+    /// `_DoPlayerInfoDialog` ends in `_RefreshSAT` (@0x5a725).
     fn player_info_input(&mut self, input: &Input) -> ScreenAction {
         let screen = self.player_info.as_mut().expect("open");
         screen.input(input);
         let jettison = screen.take_jettison();
         let closed = screen.closed();
+        let laid_out = screen.problem().is_none();
         if jettison && let Some(flight) = &mut self.flight {
             flight.jettison_all();
         }
         if closed {
             self.player_info = None;
             self.release_keys();
+            if laid_out && let Some(flight) = &mut self.flight {
+                flight.refresh_status();
+            }
         }
         ScreenAction::None
     }
@@ -1592,7 +1741,10 @@ impl AppScreen {
 
     /// Shows the spaceport of `stellar`, landed on, laid out by the
     /// "Spaceport" dialog when the router has dialogs, with the session's
-    /// exchange and outfitter when it has them.
+    /// exchange and outfitter when it has them, its ambient sound's waits
+    /// drawn on the router's chance. One already open, for another
+    /// stellar the pilot desk moved to, is dropped first
+    /// ([`AppScreen::drop_spaceport`]).
     fn show_spaceport(&mut self, stellar: nova_sim::StellarId) {
         let template = |id| match &self.dialogs {
             Some(dialogs) => dialogs
@@ -1648,8 +1800,10 @@ impl AppScreen {
                     template_of(DESC_DIALOG),
                 );
         }
-        spaceport =
-            spaceport.with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG));
+        spaceport = spaceport
+            .with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG))
+            .with_chance(self.chance.clone());
+        self.drop_spaceport();
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
     }
@@ -1667,7 +1821,7 @@ impl AppScreen {
     /// router's rules ([`FlightView::loaded`]), a new one is flown as it
     /// is.
     fn build_flight(&mut self, pilot: Pilot, loaded: bool) {
-        self.spaceport = None;
+        self.drop_spaceport();
         self.put_away_flight();
         let rules = self.rules;
         let flight = self.flight(|data| {
@@ -1697,7 +1851,7 @@ impl AppScreen {
         self.put_away_pilot();
         self.switch_to(side);
         self.put_away_flight();
-        self.spaceport = None;
+        self.drop_spaceport();
         self.plunder = None;
         self.assignment = None;
         self.comm = None;
@@ -1934,15 +2088,28 @@ impl AppScreen {
         self.drop_closed_missions();
     }
 
-    /// Closes the spaceport, if it is open, keeping its sounds, and shows
-    /// flight, letting go of the spaceport's keys.
+    /// Closes the spaceport, if it is open, and shows flight, letting go
+    /// of the spaceport's keys, then drops it
+    /// ([`AppScreen::drop_spaceport`]).
     fn close_spaceport(&mut self) {
-        let Some(spaceport) = self.spaceport.as_mut() else {
+        if self.spaceport.is_none() {
             return;
-        };
-        self.sounds.extend(spaceport.take_sounds());
+        }
         self.switch_to(Side::Flight);
-        self.spaceport = None;
+        self.drop_spaceport();
+    }
+
+    /// Drops the spaceport, if it is open, keeping its sounds and its
+    /// ambient sound's halt ([`SpaceportView::close_sounds`]): every way
+    /// the spaceport goes comes through here, Leave, a script's take-off,
+    /// the pilot put away or replaced, or the pilot desk moving it, as
+    /// `_DoPortDialog` halts `_planetSnd` however its loop ends
+    /// (@0x601d2-0x601eb). A move while landed keeps the spaceport open,
+    /// and its sound with it.
+    fn drop_spaceport(&mut self) {
+        if let Some(mut spaceport) = self.spaceport.take() {
+            self.sounds.extend(spaceport.close_sounds());
+        }
     }
 
     /// Saves the pilot if flight says a save is due: it has landed, taken
@@ -1953,15 +2120,36 @@ impl AppScreen {
         }
     }
 
-    /// The main menu's input: its choice opens the New Pilot dialog or the
-    /// saved pilots' list over it, or quits. Tab goes to the ship browser.
-    /// With dialogs, A and X click as `_MainScreenKey` does
-    /// (`_PlayMainScreenClickSound`), then A opens the About text (@0x1ac70)
-    /// and X `dësc` 32766 (@0x1ac7e). The X text shows as it is: the
-    /// original runs it through `_MungeBriefing` first, which needs a
-    /// pilot the menu has not got, so that is left out. With Command held
-    /// they, and the menu's typed N, O and Q, go to the original's menus
-    /// and do nothing here.
+    /// The main menu's input, as `_MainScreenKey` @0x1aba0 and
+    /// `_MainScreenMouse` read it.
+    ///
+    /// A click on New Pilot or Open Pilot opens the New Pilot dialog or
+    /// the saved pilots' list over the menu at once (its sounds have
+    /// played, under the pointer). A click on Quit waits out
+    /// [`QUIT_DELAY`] and then quits ([`Screen::take_quit`]), as
+    /// `_MainScreenMouse` (@0x1aea4-0x1aead) reaches the same
+    /// `_MainScreenChoice(2)` as the key. The engine's Escape quits at
+    /// once, silently. Tab goes to the ship browser.
+    ///
+    /// Each key clicks ([`UiSound::ButtonKeyed`]) and its choice waits
+    /// for the click to end ([`MenuHold`]): typed N, O and Q (the menu's
+    /// own), and, with dialogs, A (the About text, @0x1ac70) and X
+    /// (`dësc` 32766, @0x1ac7e, munged as before any pilot). P is the
+    /// router's ([`preferences_key`](Self::preferences_key)).
+    ///
+    /// - O does nothing while the physical S or L key is held
+    ///   (@0x1abd3-0x1abf5). No other code reads those two keys, so the
+    ///   guard's purpose is unknown; it is built as read.
+    /// - Typed E with the physical E key held waits for its release
+    ///   (@0x1ac32-0x1ac57) before it clicks; typed with the E key up
+    ///   (another layout) it clicks at once. Then it is Enter Ship
+    ///   (`_MainScreenChoice(3)`), which this menu, never holding a
+    ///   loaded pilot, always refuses: [`UiSound::EnterRefused`]. Choice
+    ///   3's entering the game and its dying-pilot refusal are left out
+    ///   (rdm:task/main-screen-loaded-pilot).
+    ///
+    /// With Command held, the typed keys and A and X go to the
+    /// original's menus and do nothing here.
     fn menu_input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: key @ Key::Char('a' | 'x'),
@@ -1972,11 +2160,10 @@ impl AppScreen {
             && !self.command_held
         {
             if pressed && !repeat {
-                self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
-                self.open_text(if key == Key::Char('a') {
-                    ABOUT_TEXT
+                self.click_then(if key == Key::Char('a') {
+                    MenuAction::About
                 } else {
-                    MENU_X_TEXT
+                    MenuAction::Text
                 });
             }
             return ScreenAction::None;
@@ -1998,15 +2185,93 @@ impl AppScreen {
         if matches!(input, Input::Text(_)) && self.command_held {
             return ScreenAction::None;
         }
+        match *input {
+            Input::Text('e' | 'E') => {
+                if self.keys_held.e {
+                    self.menu_hold = Some(MenuHold::EHeld);
+                } else {
+                    self.click_then(MenuAction::Enter);
+                }
+                return ScreenAction::None;
+            }
+            Input::Text('o' | 'O') if self.keys_held.s || self.keys_held.l => {
+                return ScreenAction::None;
+            }
+            _ => {}
+        }
         let menu = self.menu.as_mut().expect(MENU);
         menu.screen.input(input);
         match menu.screen.take_choice() {
-            Some(MenuChoice::NewPilot) => self.open_new_pilot(),
-            Some(MenuChoice::OpenPilot) => self.open_pilot_list(),
-            Some(MenuChoice::Quit) => return ScreenAction::Quit,
+            Some(Chosen {
+                choice,
+                by: ChosenBy::Shortcut,
+            }) => self.menu_hold = Some(MenuHold::Click(MenuAction::Choice(choice))),
+            Some(Chosen {
+                choice: MenuChoice::Quit,
+                by: ChosenBy::Escape,
+            }) => return ScreenAction::Quit,
+            Some(Chosen { choice, .. }) => self.run_menu_action(MenuAction::Choice(choice)),
             None => {}
         }
         ScreenAction::None
+    }
+
+    /// Clicks a main-menu key ([`UiSound::ButtonKeyed`]) and holds
+    /// `action` until the click has played.
+    fn click_then(&mut self, action: MenuAction) {
+        self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
+        self.menu_hold = Some(MenuHold::Click(action));
+    }
+
+    /// Runs a main-menu `action`, as `_MainScreenChoice` @0x1a72a does.
+    fn run_menu_action(&mut self, action: MenuAction) {
+        match action {
+            MenuAction::Choice(MenuChoice::NewPilot) => self.open_new_pilot(),
+            MenuAction::Choice(MenuChoice::OpenPilot) => self.open_pilot_list(),
+            MenuAction::Choice(MenuChoice::Quit) => self.quit_in = Some(QUIT_DELAY),
+            // `_MainScreenChoice(3)` with no game in progress beeps
+            // `_beepSnd[3]` and redraws (@0x1aa89-0x1aac2).
+            MenuAction::Enter => self.sounds.push(Sound::Ui(UiSound::EnterRefused)),
+            MenuAction::Preferences => self.open_preferences(),
+            MenuAction::About => self.open_text(ABOUT_TEXT),
+            MenuAction::Text => self.open_text(MENU_X_TEXT),
+        }
+    }
+
+    /// An input that arrives while the main menu waits ([`MenuHold`]):
+    /// queued for the replay, but for E's own while it is held. E's
+    /// release clicks and turns the wait into the click's; E's repeats
+    /// and their text are dropped (whether the OS queues autoKeys during
+    /// the original's spin is not read, and replaying them would type E
+    /// again).
+    fn hold_input(&mut self, hold: MenuHold, input: &Input) {
+        if hold == MenuHold::EHeld {
+            match *input {
+                Input::Key {
+                    key: Key::Char('e'),
+                    pressed: false,
+                    ..
+                } => {
+                    self.e_released();
+                    return;
+                }
+                Input::Key {
+                    key: Key::Char('e'),
+                    pressed: true,
+                    ..
+                }
+                | Input::Text('e' | 'E') => return,
+                _ => {}
+            }
+        }
+        self.held.push(Held::Input(*input));
+    }
+
+    /// E is let go of while E's wait holds: it clicks, and Enter Ship
+    /// waits on the click.
+    fn e_released(&mut self) {
+        self.keys_held.e = false;
+        self.click_then(MenuAction::Enter);
     }
 
     /// Opens the New Pilot dialog: the interface file's, or the built-in
@@ -2211,29 +2476,35 @@ impl AppScreen {
     /// ship named there is bought, and one declined there draws its roll
     /// again when the shipyard's list is next built, changing nothing
     /// else. Once it is left, the ship takes off
-    /// and flight shows.
+    /// and flight shows. Otherwise the input ends by redrawing the status
+    /// bar when a closing the original ends in `_RefreshSAT` came
+    /// (`refresh_status_bar`). Mission BBS and Hire Escort are answered
+    /// with the port dialogs' openings (`open_port_dialogs`).
+    ///
+    /// The bar's map key opens flight's course map over the spaceport
+    /// ([`FlightView::open_bar_map`]). While it is open it takes every
+    /// input: an Escape press closes it ([`FlightView::close_map`]), as in
+    /// flight, and anything else goes to it ([`FlightView::port_map_input`],
+    /// where M closes it too).
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
+        if self.port_map_input(input) {
+            return ScreenAction::None;
+        }
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
+        open_bar_map(spaceport, self.flight.as_mut().expect(ENTERED));
         // A new opening clears what lasts one, and the outfitter it opened
-        // on was the cached one: it shows the flight's afresh.
-        if spaceport.take_outfitter_opened() {
-            let flight = self.flight.as_mut().expect(ENTERED);
-            flight.open_outfitter();
-            if let Some(outfitter) = flight.outfitter() {
-                spaceport.set_outfitter(outfitter);
-            }
-        }
+        // on was the cached one: it shows the flight's afresh, or, listing
+        // nothing, says so and never opens, the port's `_DrawStatus` after
+        // it still drawing a marked nav.
+        open_outfitter(spaceport, self.flight.as_mut().expect(ENTERED));
         let trade = spaceport.take_trade();
         let outfit = spaceport.take_outfit();
         let ship = spaceport.take_ship();
         let recharge = spaceport.take_recharge();
         let hire = spaceport.take_hire();
         let accepted = spaceport.take_mission_accept();
-        if spaceport.take_mission_computer_request() {
-            let computer = self.flight.as_ref().expect(ENTERED).mission_computer();
-            spaceport.open_mission_computer(computer);
-        }
+        open_port_dialogs(spaceport, self.flight.as_mut().expect(ENTERED));
         if spaceport.take_mission_info_request() {
             let info = self.flight.as_ref().expect(ENTERED).mission_info();
             spaceport.open_mission_info(info);
@@ -2255,11 +2526,6 @@ impl AppScreen {
             if let (Some(news), Some(picture)) = (flight.news(), flight.news_picture()) {
                 spaceport.open_news(news, picture);
             }
-        }
-        if spaceport.take_hire_request()
-            && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()
-        {
-            spaceport.open_hire(list);
         }
         if let Some(ship) = spaceport.take_ship_request()
             && let Ok(naming) = self.flight.as_mut().expect(ENTERED).ship_naming(ship)
@@ -2283,7 +2549,10 @@ impl AppScreen {
             if let Some(order) = trade {
                 let _ = flight.trade(order);
             }
-            // A plain click's count of 1 is exactly one order. A sale
+            // A plain click's count of 1 is exactly one order; the
+            // quantity dialog's Cancel orders none, which still runs what
+            // follows the original's loop once its button's check passed:
+            // the buy's reset and either's status draw. A sale
             // refused in the sell loop shows its words over the
             // outfitter, at whatever pass it is refused; the sales before
             // it stand. Any other refusal changes nothing. Then the
@@ -2337,6 +2606,9 @@ impl AppScreen {
         }
         self.serve_offers();
         self.serve_player_info();
+        if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
+            refresh_status_bar(spaceport, flight);
+        }
         ScreenAction::None
     }
 
@@ -2346,8 +2618,9 @@ impl AppScreen {
     /// after its hire, on Cancel, or a bar with nothing for hire), each
     /// read once its order or hire went through: flight is told
     /// ([`FlightView::close_outfitter`], [`FlightView::close_hire`]), whose
-    /// reset can trim the cargo, and the shops are handed back. Then a shop
-    /// that closed redraws the status bar (`redraw_after_shop`).
+    /// reset can trim the cargo, and the shops are handed back. Then a port
+    /// dialog that closed redraws what its close draws and restores the
+    /// nav saved as it opened (`close_port_dialogs`).
     fn serve_closings(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
@@ -2363,7 +2636,7 @@ impl AppScreen {
         if outfitter || hire {
             refresh_spaceport(spaceport, flight);
         }
-        redraw_after_shop(spaceport, flight);
+        close_port_dialogs(spaceport, flight);
     }
 
     /// The spaceport's player info screen: asked for, it opens on what
@@ -2448,23 +2721,26 @@ impl AppScreen {
         if pressed && !repeat {
             // `_MainScreenKey`'s P (@0x1ac59) clicks first; a Command key
             // goes to the original's menus (`MenuKey`), which do not.
+            // It opens once the click has played.
             if self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held {
-                self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
+                self.click_then(MenuAction::Preferences);
+            } else {
+                self.open_preferences();
             }
-            self.open_preferences();
         }
         true
     }
 
     /// Routes one input, as [`Screen::input`] describes.
     fn route(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key: Key::Command,
-            pressed,
-            ..
-        } = *input
-        {
-            self.command_held = pressed;
+        if let Input::Key { key, pressed, .. } = *input {
+            match key {
+                Key::Command => self.command_held = pressed,
+                Key::Char('s') => self.keys_held.s = pressed,
+                Key::Char('l') => self.keys_held.l = pressed,
+                Key::Char('e') => self.keys_held.e = pressed,
+                _ => {}
+            }
         }
         if self.about.is_some() {
             return self.about_input(input);
@@ -2559,13 +2835,77 @@ impl AppScreen {
     }
 }
 
-/// Redraws `flight`'s status bar when an exchange, outfitter or shipyard
-/// of `spaceport` has closed ([`FlightView::shop_closed`]), as each of the
-/// original's shops ends in `_RefreshSAT`: after the input's last order,
-/// and before any frame is drawn.
-fn redraw_after_shop(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
-    if spaceport.take_shop_closed() {
-        flight.shop_closed();
+/// Shows `spaceport`'s outfitter as `flight` has it, once it has opened
+/// ([`SpaceportView::take_outfitter_opened`]): `flight` clears what lasts
+/// one opening first. Listing nothing, the outfitter says so and never
+/// opens ([`SpaceportView::set_opened_outfitter`]), and the port's
+/// `_DrawStatus` after it still draws a marked nav
+/// ([`FlightView::empty_outfitter_returned`]), before any port dialog's
+/// opening is told.
+fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if !spaceport.take_outfitter_opened() {
+        return;
+    }
+    flight.open_outfitter();
+    if let Some(outfitter) = flight.outfitter() {
+        spaceport.set_opened_outfitter(outfitter);
+    }
+    if spaceport.take_empty_outfitter() {
+        flight.empty_outfitter_returned();
+    }
+}
+
+/// Opens `flight`'s course map over `spaceport` when the bar's map key
+/// asked for it (`_BarFilter` item 8, `_DoSystemMap` @0x492b2), the
+/// spaceport letting go of its gesture and keys as it is covered.
+fn open_bar_map(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_map_request() {
+        spaceport.cancel_pointer();
+        spaceport.release_keys();
+        flight.open_bar_map();
+    }
+}
+
+/// Answers `spaceport`'s Mission BBS with `flight`'s mission computer and
+/// the bar's Hire Escort with the ships for hire, then tells `flight` of
+/// the port dialog that has opened ([`FlightView::open_port_dialog`]),
+/// which saves the nav before any order or offer run inside it, in the
+/// input that opened it.
+fn open_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_mission_computer_request() {
+        spaceport.open_mission_computer(flight.mission_computer());
+    }
+    if spaceport.take_hire_request()
+        && let Some(list) = flight.escorts_for_hire()
+    {
+        spaceport.open_hire(list);
+    }
+    if spaceport.take_port_dialog_opened().is_some() {
+        flight.open_port_dialog();
+    }
+}
+
+/// Tells `flight` of the port dialog of `spaceport` that has closed
+/// ([`FlightView::close_port_dialog`]): its `_RefreshSAT`, then the nav's
+/// restore, as each of the original's dialogs closes, the bar's hire
+/// screen among them; after the input's last order, and before any frame
+/// is drawn. A mission computer that closed under mission texts is told
+/// once they have closed.
+fn close_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if let Some(dialog) = spaceport.take_port_dialog_closed() {
+        flight.close_port_dialog(dialog);
+    }
+}
+
+/// Redraws `flight`'s whole status bar ([`FlightView::refresh_status`])
+/// when a closing of `spaceport` that the original ends in `_RefreshSAT`
+/// has come ([`SpaceportView::take_status_refresh`]): the bar, News, a
+/// ship description, player info or mission info. It runs at the end of
+/// the spaceport's input, after the input's last order (an abort's
+/// mission info, a jettison), and before any frame is drawn.
+fn refresh_status_bar(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_status_refresh() {
+        flight.refresh_status();
     }
 }
 
@@ -2583,14 +2923,13 @@ fn refresh_spaceport(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<G
     }
 }
 
-/// "Desc Dialog" showing `dësc` `id`'s text as it is, from the dialogs
-/// and the game data.
-fn desc_dialog(dialogs: &Dialogs, data: &GameData, id: i16) -> Result<DescDialog, String> {
+/// "Desc Dialog" showing `text`, from the dialogs, in the game data's
+/// button style.
+fn desc_dialog(dialogs: &Dialogs, data: &GameData, text: &str) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
-    let text = data.description(id)?;
     Ok(DescDialog::new(
         &template,
-        &text,
+        text,
         data.button_style(),
         Rc::clone(&dialogs.metrics),
     ))
@@ -2651,7 +2990,11 @@ impl Screen for AppScreen {
     /// pilot flies it; one whose load fell back first shows its note over
     /// the menu, which takes every event until Return, Escape or OK
     /// dismisses it and flight shows. Escape in flight goes back to the menu, saving
-    /// the pilot and putting it away. Quit, or Escape, quits. I and P work
+    /// the pilot and putting it away. Escape quits at once; Quit quits
+    /// after [`QUIT_DELAY`] ([`Screen::take_quit`]), and its key first
+    /// waits for its click, as every main-menu key does
+    /// ([`Screen::keyed_click_ended`]): input meanwhile is held and
+    /// replayed after, and input during the delay is dropped. I and P work
     /// on the menu, and Tab goes to the ship browser; on the ship browser
     /// and the galaxy map, Escape goes back to the menu instead of
     /// quitting.
@@ -2667,6 +3010,14 @@ impl Screen for AppScreen {
     /// off, after a change in the spaceport ([`AppScreen::transact`]) and
     /// after a move by set operator.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // The original is inside Quit's `Delay`, then exits.
+        if self.quit_in.is_some() || self.quit_due {
+            return ScreenAction::None;
+        }
+        if let Some(hold) = self.menu_hold {
+            self.hold_input(hold, input);
+            return ScreenAction::None;
+        }
         self.double_time_key(input);
         let action = self.route(input);
         self.settle_script();
@@ -2683,8 +3034,25 @@ impl Screen for AppScreen {
     /// fade is over. What the set expressions queued is settled, and a
     /// save that is due is made.
     fn tick(&mut self, dt: Duration) {
+        if let Some(left) = self.quit_in {
+            match left.checked_sub(dt) {
+                Some(left) if !left.is_zero() => self.quit_in = Some(left),
+                _ => {
+                    self.quit_in = None;
+                    self.quit_due = true;
+                }
+            }
+        }
         match self.overlay_mut() {
-            Some(overlay) => overlay.tick(dt),
+            Some(overlay) => {
+                overlay.tick(dt);
+                // The spaceport isn't ticked under it, so says so: the
+                // original's port window comes back to the front once the
+                // overlay closes.
+                if let Some(spaceport) = &mut self.spaceport {
+                    spaceport.cover();
+                }
+            }
             None => self.shown_mut().tick(dt),
         }
         self.advance_fade_in(dt);
@@ -2702,7 +3070,7 @@ impl Screen for AppScreen {
     /// the original's port dialog leaves it beside the dialog and its shops
     /// cover its left edge (`_DoPortDialog` @0x5fbca).
     fn draw(&self, list: &mut DrawList) {
-        if self.side == Side::Spaceport {
+        if self.side == Side::Spaceport && !self.port_map_open() {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
         }
         self.shown().draw(list);
@@ -2757,19 +3125,64 @@ impl Screen for AppScreen {
         }
     }
 
+    /// While the main menu waits, the cancel waits too, in its place
+    /// among the inputs.
     fn cancel_pointer(&mut self) {
+        if self.menu_hold.is_some() {
+            self.held.push(Held::CancelPointer);
+            return;
+        }
         match self.overlay_mut() {
             Some(overlay) => overlay.cancel_pointer(),
             None => self.shown_mut().cancel_pointer(),
         }
     }
 
+    /// While the main menu waits, the letting go waits too, in its place
+    /// among the inputs; while E's wait holds, it counts as E's release.
     fn release_keys(&mut self) {
+        if let Some(hold) = self.menu_hold {
+            self.held.push(Held::ReleaseKeys);
+            if hold == MenuHold::EHeld {
+                self.e_released();
+            }
+            return;
+        }
         self.command_held = false;
+        self.keys_held = MenuKeys::default();
         match self.overlay_mut() {
             Some(overlay) => overlay.release_keys(),
             None => self.shown_mut().release_keys(),
         }
+    }
+
+    /// Runs the main-menu action held for its keyed click, if any (E's
+    /// wait is left alone), then replays what arrived meanwhile, in
+    /// order, through [`Screen::input`]: a replayed key that holds again
+    /// queues the rest. A quit a replayed input asks is kept for
+    /// [`Screen::take_quit`].
+    fn keyed_click_ended(&mut self) {
+        let Some(MenuHold::Click(action)) = self.menu_hold else {
+            return;
+        };
+        self.menu_hold = None;
+        self.run_menu_action(action);
+        for held in std::mem::take(&mut self.held) {
+            match held {
+                Held::Input(input) => {
+                    if self.input(&input) == ScreenAction::Quit {
+                        self.quit_due = true;
+                    }
+                }
+                Held::CancelPointer => self.cancel_pointer(),
+                Held::ReleaseKeys => self.release_keys(),
+            }
+        }
+    }
+
+    /// Whether Quit's delay has run out, or a replayed input quit.
+    fn take_quit(&mut self) -> bool {
+        std::mem::take(&mut self.quit_due)
     }
 
     /// The sounds of the screens closed since, then of every live screen.
@@ -3060,6 +3473,13 @@ pub(super) mod tests {
         ))
     }
 
+    /// Alpha Prime's `CustSndID`, its ambient sound: Port Kane's in the
+    /// stock data.
+    const AMBIENT: i16 = 10_032;
+
+    /// Beta Prime's `CustSndID`, another ambient sound.
+    const BETA_AMBIENT: i16 = 10_033;
+
     /// The resources of [`game_data_full`], before they are loaded.
     #[allow(clippy::fn_params_excessive_bools)] // A fixture's switches.
     fn game_data_fork(
@@ -3084,6 +3504,9 @@ pub(super) mod tests {
         let mut character = vec![0; Character::SIZE.expect("fixed")];
         character[0x32..0x32 + on_start.len()].copy_from_slice(on_start);
         let mut stellar = landable();
+        stellar[0x1A..0x1C].copy_from_slice(&AMBIENT.to_be_bytes());
+        let mut beta = landable();
+        beta[0x1A..0x1C].copy_from_slice(&BETA_AMBIENT.to_be_bytes());
         let mut fork = ForkBuilder::new();
         if trading {
             average[0x00..0x02].copy_from_slice(&10_i16.to_be_bytes());
@@ -3135,7 +3558,7 @@ pub(super) mod tests {
             .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128]))
             .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[129]))
             .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar)
-            .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &landable())
+            .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &beta)
             .resource(Spin::TYPE, 1000, None, &spin)
             .resource(Spin::TYPE, 650, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
@@ -3265,10 +3688,14 @@ pub(super) mod tests {
         bytes
     }
 
-    /// The About text's `dësc`: ten short lines.
+    /// The About text's `dësc`: ten short lines, the third holding a pilot
+    /// and a mission tag that the briefing munge would replace.
     fn about_text() -> Vec<u8> {
         let mut bytes: Vec<u8> = (0..10)
-            .map(|n| format!("line {n}"))
+            .map(|n| match n {
+                2 => "line 2 <PN> <DST>".to_owned(),
+                n => format!("line {n}"),
+            })
             .collect::<Vec<_>>()
             .join("\r")
             .into_bytes();
@@ -3278,9 +3705,10 @@ pub(super) mod tests {
         bytes
     }
 
-    /// The main menu's X text's `dësc`: two short lines.
+    /// The main menu's X text's `dësc`: two short lines, the second naming
+    /// the pilot, the ship type and a mission's destination.
     fn x_text() -> Vec<u8> {
-        let mut bytes = b"x 0\rx 1\0".to_vec();
+        let mut bytes = b"x 0\rx <PN>1 <PST> <DST>\0".to_vec();
         bytes.extend([0xFF; 2]);
         bytes.extend([0; 34]);
         bytes
@@ -4626,9 +5054,7 @@ pub(super) mod tests {
             screen.take_sounds(),
             [
                 Sound::Sim(SimSound::TrafficControl),
-                Sound::Sim(SimSound::Landed {
-                    stellar_sound: None
-                })
+                Sound::Sim(SimSound::Landed)
             ],
             "the greeting, then the landing"
         );
@@ -4640,9 +5066,195 @@ pub(super) mod tests {
             .center();
         assert_eq!(
             press_and_release(&mut screen, leave),
-            [vec![], vec![Sound::Sim(SimSound::TookOff)]]
+            [vec![], vec![halted(), Sound::Sim(SimSound::TookOff)]],
+            "the ambient sound halts with the spaceport"
         );
         assert!(screen.spaceport_view().is_none(), "gone");
+    }
+
+    fn ambient() -> Sound {
+        Sound::Ui(UiSound::PortAmbient {
+            sound: nova_sim::SoundId(AMBIENT),
+            until_stopped: false,
+        })
+    }
+
+    fn halted() -> Sound {
+        Sound::Ui(UiSound::PortAmbientHalted(nova_sim::SoundId(AMBIENT)))
+    }
+
+    fn beta_ambient() -> Sound {
+        Sound::Ui(UiSound::PortAmbient {
+            sound: nova_sim::SoundId(BETA_AMBIENT),
+            until_stopped: false,
+        })
+    }
+
+    /// No UI puts a landed pilot away: flight's Escape and a game over
+    /// both come from flight. So the put-away is driven through
+    /// [`AppScreen::end_flight`] itself.
+    #[test]
+    fn putting_a_landed_pilot_away_halts_the_ambient_sound() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        screen.end_flight(Side::MainMenu);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert!(screen.spaceport_view().is_none(), "gone");
+        let sounds = screen.take_sounds();
+        assert!(sounds.contains(&halted()), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_pilot_desk_move_to_another_stellar_halts_the_old_sound_before_the_new_one_starts() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        edit(
+            &mut screen,
+            PilotEdit::MoveTo {
+                system: SystemId(129),
+                stellar: nova_sim::StellarId(129),
+            },
+        );
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(129));
+        // The new spaceport's offer is served after its first frame
+        // ([`AppScreen::tick`]), which it covers, so its sound starts on
+        // the second.
+        let sounds = [
+            screen.take_sounds(),
+            frame_sounds(&mut screen, TICK),
+            frame_sounds(&mut screen, TICK),
+        ]
+        .concat();
+        let halt = sounds.iter().position(|&sound| sound == halted());
+        let started = sounds.iter().position(|&sound| sound == beta_ambient());
+        assert!(
+            halt.is_some() && started.is_some() && halt < started,
+            "Alpha Prime's halt, then Beta Prime's sound: {sounds:?}"
+        );
+        assert!(!sounds.contains(&ambient()), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_pilot_desk_edit_that_stays_landed_keeps_the_ambient_sound_and_its_wait() {
+        use nova_sim::mission::screens::mac_ticks;
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(FirstOutcome));
+        let mut screen = with_dialogs(data()).with_chance(SharedChance::new(shared));
+        land(&mut screen);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        assert_eq!(frame_sounds(&mut screen, mac_ticks(240)), []);
+        edit(&mut screen, PilotEdit::Credits(5000));
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(128));
+        let sounds = screen.take_sounds();
+        assert!(!sounds.contains(&halted()), "{sounds:?}");
+        assert_eq!(
+            frame_sounds(&mut screen, mac_ticks(120)),
+            [],
+            "not started again"
+        );
+        assert_eq!(
+            frame_sounds(&mut screen, mac_ticks(120)),
+            [ambient()],
+            "480 ticks after the first, the wait carried on"
+        );
+    }
+
+    /// No UI replaces a docked pilot's flight: the menu that opens or
+    /// creates a pilot is reached only once flight is put away. So the
+    /// replacement is driven through [`AppScreen::build_flight`] itself,
+    /// and its sounds read from the router's queue, as the spaceport side
+    /// is left showing with no spaceport to show.
+    #[test]
+    fn replacing_a_docked_pilot_halts_the_ambient_sound() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
+        screen.build_flight(bea, false);
+        assert!(screen.spaceport_view().is_none(), "gone");
+        let sounds = std::mem::take(&mut screen.sounds);
+        assert!(sounds.contains(&halted()), "{sounds:?}");
+    }
+
+    /// One frame of `dt`'s sounds.
+    fn frame_sounds(screen: &mut AppScreen, dt: Duration) -> Vec<Sound> {
+        screen.tick(dt);
+        screen.take_sounds()
+    }
+
+    #[test]
+    fn the_stellars_ambient_sound_starts_on_the_spaceports_first_frame_not_at_touchdown() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        let landing = screen.take_sounds();
+        assert!(!landing.contains(&ambient()), "{landing:?}");
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        assert_eq!(frame_sounds(&mut screen, TICK), []);
+    }
+
+    /// The landing's input settles its texts and the spaceport's offer
+    /// ([`AppScreen::settle_script`]) before the spaceport's first frame,
+    /// so nothing holds the sound back there.
+    #[test]
+    fn with_a_pilot_the_ambient_sound_starts_once_the_landings_offer_is_served() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, data());
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+    }
+
+    #[test]
+    fn the_ambient_sounds_waits_are_drawn_on_the_routers_chance() {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(FirstOutcome));
+        let mut screen = with_dialogs(data()).with_chance(SharedChance::new(shared));
+        land(&mut screen);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        assert_eq!(
+            frame_sounds(&mut screen, nova_sim::mission::screens::mac_ticks(480)),
+            [ambient()],
+            "480 ticks, as the first outcome draws"
+        );
+    }
+
+    /// A source whose every draw is the first outcome.
+    struct FirstOutcome;
+
+    impl Chance for FirstOutcome {
+        fn fires(&mut self, _percent: u8) -> bool {
+            true
+        }
+
+        fn below(&mut self, _n: u32) -> u32 {
+            0
+        }
+    }
+
+    #[test]
+    fn the_preferences_closing_over_the_spaceport_rearms_the_ambient_sound() {
+        use nova_sim::mission::screens::mac_ticks;
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        screen.take_sounds();
+        assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
+        assert_eq!(frame_sounds(&mut screen, mac_ticks(900)), []);
+        open_prefs(&mut screen);
+        assert_eq!(frame_sounds(&mut screen, mac_ticks(900)), [], "paused");
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, false));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen.take_sounds();
+        assert_eq!(
+            frame_sounds(&mut screen, mac_ticks(100)),
+            [],
+            "the wait began again"
+        );
+        assert_eq!(frame_sounds(&mut screen, mac_ticks(959)), [ambient()]);
     }
 
     #[test]
@@ -4685,6 +5297,8 @@ pub(super) mod tests {
             command_comma(screen);
         } else {
             assert_eq!(screen.input(&key(PREFS, true)), ScreenAction::None);
+            // The menu's P opens them once its click has played.
+            screen.keyed_click_ended();
         }
         assert_eq!(screen.showing(), Showing::Preferences);
         assert_eq!(screen.now_showing(), Some(Showing::Preferences));
@@ -5309,13 +5923,101 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn quit_or_escape_on_the_main_menu_quits() {
+    fn quit_waits_out_the_quit_delay_and_escape_quits_at_once() {
         let store = MemoryPilots::new();
         let mut screen = menu(&store);
-        assert_eq!(choose(&mut screen, MenuChoice::Quit), ScreenAction::Quit);
+        ui_sounds(&mut screen);
+        assert_eq!(choose(&mut screen, MenuChoice::Quit), ScreenAction::None);
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::ButtonDown, UiSound::ButtonUp],
+            "601 already played, on the release"
+        );
+        assert!(!screen.take_quit());
+        screen.tick(QUIT_DELAY.saturating_sub(Duration::from_millis(1)));
+        assert!(!screen.take_quit(), "still waiting");
+        screen.tick(Duration::from_millis(1));
+        assert!(screen.take_quit(), "the delay is over");
+        assert!(!screen.take_quit(), "once");
+
         let mut screen = menu(&store);
         assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
         assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    #[test]
+    fn quits_delay_is_fifteen_ticks() {
+        assert_eq!(QUIT_DELAY, nova_sim::mission::screens::mac_ticks(15));
+    }
+
+    #[test]
+    fn input_during_the_quit_delay_does_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        choose(&mut screen, MenuChoice::Quit);
+        ui_sounds(&mut screen);
+        let new_pilot = screen
+            .main_menu()
+            .expect("a main menu")
+            .button(MenuChoice::NewPilot)
+            .rect
+            .center();
+        click_at(&mut screen, new_pilot);
+        screen.input(&Input::Text('o'));
+        screen.input(&key(Key::Char('p'), true));
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert_eq!(ui_sounds(&mut screen), [], "nothing clicked");
+        screen.tick(QUIT_DELAY);
+        assert!(screen.take_quit());
+    }
+
+    #[test]
+    fn keyed_q_quits_only_after_its_click_and_the_quit_delay() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        ui_sounds(&mut screen);
+        assert_eq!(screen.input(&Input::Text('q')), ScreenAction::None);
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed]);
+        screen.tick(QUIT_DELAY * 2);
+        assert!(!screen.take_quit(), "the click still plays");
+        screen.keyed_click_ended();
+        assert!(!screen.take_quit(), "601 has only started");
+        screen.tick(QUIT_DELAY.saturating_sub(Duration::from_millis(1)));
+        assert!(!screen.take_quit());
+        screen.tick(Duration::from_millis(1));
+        assert!(screen.take_quit());
+        assert!(!screen.take_quit(), "once");
+    }
+
+    #[test]
+    fn an_escape_typed_during_a_keyed_click_quits_once_it_is_replayed() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        // E is refused with no pilot: the replay reaches the menu.
+        screen.input(&Input::Text('e'));
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert!(!screen.take_quit(), "held for the click");
+        screen.keyed_click_ended();
+        assert!(screen.take_quit(), "the replayed Escape quit");
+        assert!(!screen.take_quit(), "once");
+    }
+
+    #[test]
+    fn input_while_a_replayed_quit_is_untaken_does_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        // E is refused with no pilot: the replay reaches the menu.
+        screen.input(&Input::Text('e'));
+        screen.input(&key(Key::Escape, true));
+        screen.keyed_click_ended();
+        ui_sounds(&mut screen);
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.input(&Input::Text('q')), ScreenAction::None);
+        assert_eq!(ui_sounds(&mut screen), [], "nothing clicked");
+        assert!(screen.take_quit());
     }
 
     /// The interface sounds `screen` reports.
@@ -5331,39 +6033,225 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn p_a_and_x_on_the_main_menu_click_then_open_their_screen() {
+    fn keyed_n_o_p_a_and_x_click_then_open_their_screen_once_the_click_ends() {
+        let store = MemoryPilots::new();
+        for (press, opens) in [
+            (Input::Text('n'), Showing::NewPilot),
+            (Input::Text('O'), Showing::OpenPilot),
+            (key(Key::Char('p'), true), Showing::Preferences),
+            (key(Key::Char('a'), true), Showing::About),
+            (key(Key::Char('x'), true), Showing::Note),
+        ] {
+            let mut screen = menu_with_dialogs(&store);
+            ui_sounds(&mut screen);
+            assert_eq!(screen.input(&press), ScreenAction::None);
+            assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "{press:?}");
+            screen.tick(Duration::from_secs(1));
+            assert_eq!(screen.showing(), Showing::MainMenu, "{press:?} waits");
+            screen.keyed_click_ended();
+            assert_eq!(screen.showing(), opens, "{press:?}");
+            screen.keyed_click_ended();
+            assert_eq!(ui_sounds(&mut screen), [], "{press:?} once");
+        }
+    }
+
+    #[test]
+    fn a_and_x_show_the_about_text_and_desc_32766_munged_before_any_pilot() {
         let store = MemoryPilots::new();
         let mut screen = menu_with_dialogs(&store);
-        ui_sounds(&mut screen);
-        screen.input(&key(Key::Char('p'), true));
-        assert_eq!(screen.showing(), Showing::Preferences);
-        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "p");
-        screen.input(&key(Key::Char('p'), false));
-        screen.input(&key(Key::Escape, true));
-        screen.input(&key(Key::Escape, false));
-        ui_sounds(&mut screen);
-
         screen.input(&key(Key::Char('a'), true));
-        assert_eq!(screen.showing(), Showing::About);
+        screen.keyed_click_ended();
         assert_eq!(about(&screen).lines()[..2], ["line 0", "line 1"]);
-        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "a");
+        assert_eq!(
+            about(&screen).lines()[2],
+            "line 2 <PN> <DST>",
+            "the About text is shown unmunged"
+        );
         screen.input(&key(Key::Char('a'), false));
         screen.input(&key(Key::Enter, true));
         screen.input(&key(Key::Enter, false));
         assert_eq!(screen.showing(), Showing::MainMenu);
-        ui_sounds(&mut screen);
 
         screen.input(&key(Key::Char('x'), true));
+        screen.keyed_click_ended();
         assert_eq!(
             screen.showing(),
             Showing::Note,
             "a text over the menu, not the About box"
         );
-        assert_eq!(about(&screen).lines(), ["x 0", "x 1"], "dësc 32766, raw");
-        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "x");
+        assert_eq!(
+            about(&screen).lines(),
+            ["x 0", "x 1 First [Error]"],
+            "no pilot's name, ship 128's class, no mission"
+        );
         screen.input(&key(Key::Char('x'), false));
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::MainMenu);
+    }
+
+    #[test]
+    fn input_during_a_keyed_click_is_replayed_in_order_once_it_ends() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        screen.input(&Input::Text('n'));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&Input::Text('b'));
+        screen.input(&key(Key::Char('b'), false));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::NewPilot);
+        assert_eq!(screen.new_pilot().expect("open").name(), "b");
+    }
+
+    #[test]
+    fn letting_go_during_a_keyed_click_happens_in_its_place_in_the_replay() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        ui_sounds(&mut screen);
+        // E with the E key not held (another layout) clicks at once.
+        screen.input(&Input::Text('e'));
+        screen.input(&key(Key::Command, true));
+        screen.release_keys();
+        screen.input(&Input::Text('n'));
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed]);
+        screen.keyed_click_ended();
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::EnterRefused, UiSound::ButtonKeyed],
+            "Command let go before the N, which holds again"
+        );
+        assert_eq!(screen.showing(), Showing::MainMenu, "N's click plays");
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::NewPilot);
+    }
+
+    #[test]
+    fn a_pointer_cancelled_during_a_keyed_click_is_cancelled_in_its_place() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        let at = screen
+            .main_menu()
+            .expect("a main menu")
+            .button(MenuChoice::NewPilot)
+            .rect
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&Input::Text('e'));
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        ui_sounds(&mut screen);
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::MainMenu, "cancelled, no click");
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::EnterRefused, UiSound::ButtonDown]
+        );
+    }
+
+    // E.
+
+    #[test]
+    fn e_held_waits_for_its_release_to_click_then_refuses_with_no_pilot() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        ui_sounds(&mut screen);
+        screen.input(&key(Key::Char('e'), true));
+        screen.input(&Input::Text('e'));
+        assert_eq!(ui_sounds(&mut screen), [], "no click while E is held");
+        screen.keyed_click_ended();
+        assert_eq!(ui_sounds(&mut screen), [], "no click hold yet");
+        screen.input(&key(Key::Char('e'), false));
+        assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "on release");
+        screen.keyed_click_ended();
+        assert_eq!(ui_sounds(&mut screen), [UiSound::EnterRefused]);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+    }
+
+    #[test]
+    fn typed_e_without_the_e_key_held_clicks_at_once() {
+        let store = MemoryPilots::new();
+        for typed in ['e', 'E'] {
+            let mut screen = menu(&store);
+            ui_sounds(&mut screen);
+            screen.input(&Input::Text(typed));
+            assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "{typed}");
+            screen.keyed_click_ended();
+            assert_eq!(ui_sounds(&mut screen), [UiSound::EnterRefused], "{typed}");
+        }
+    }
+
+    #[test]
+    fn while_e_is_held_its_repeats_are_dropped_and_the_rest_waits() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        screen.input(&key(Key::Char('e'), true));
+        screen.input(&Input::Text('e'));
+        for _ in 0..3 {
+            screen.input(&held(Key::Char('e')));
+            screen.input(&Input::Text('e'));
+        }
+        screen.input(&Input::Text('n'));
+        ui_sounds(&mut screen);
+        screen.release_keys();
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::ButtonKeyed],
+            "letting go of the keys releases E"
+        );
+        assert_eq!(screen.showing(), Showing::MainMenu, "N waits");
+        screen.keyed_click_ended();
+        assert_eq!(
+            ui_sounds(&mut screen),
+            [UiSound::EnterRefused, UiSound::ButtonKeyed],
+            "one refusal, then N clicks"
+        );
+        screen.keyed_click_ended();
+        assert_eq!(screen.showing(), Showing::NewPilot);
+    }
+
+    #[test]
+    fn command_e_does_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        ui_sounds(&mut screen);
+        screen.input(&key(Key::Command, true));
+        screen.input(&key(Key::Char('e'), true));
+        screen.input(&Input::Text('e'));
+        screen.input(&key(Key::Char('e'), false));
+        screen.keyed_click_ended();
+        assert_eq!(ui_sounds(&mut screen), []);
+    }
+
+    // O's guard.
+
+    #[test]
+    fn o_does_nothing_while_s_or_l_is_held() {
+        let store = MemoryPilots::new();
+        for guard in [Key::Char('s'), Key::Char('l')] {
+            let mut screen = menu_with_dialogs(&store);
+            ui_sounds(&mut screen);
+            screen.input(&key(guard, true));
+            screen.input(&Input::Text('o'));
+            screen.keyed_click_ended();
+            assert_eq!(ui_sounds(&mut screen), [], "{guard:?}");
+            assert_eq!(screen.showing(), Showing::MainMenu, "{guard:?}");
+            screen.input(&key(guard, false));
+            screen.input(&Input::Text('o'));
+            screen.keyed_click_ended();
+            assert_eq!(screen.showing(), Showing::OpenPilot, "{guard:?} let go");
+
+            let mut screen = menu_with_dialogs(&store);
+            screen.input(&key(guard, true));
+            screen.release_keys();
+            screen.input(&Input::Text('O'));
+            screen.keyed_click_ended();
+            assert_eq!(screen.showing(), Showing::OpenPilot, "{guard:?} released");
+        }
     }
 
     #[test]
@@ -5379,6 +6267,7 @@ pub(super) mod tests {
         }
         screen.input(&key(Key::Command, false));
         screen.input(&Input::Text('n'));
+        screen.keyed_click_ended();
         assert_eq!(screen.showing(), Showing::NewPilot, "without Command");
     }
 
@@ -6635,6 +7524,115 @@ pub(super) mod tests {
 
     const BOOSTER: OutfitId = OutfitId(128);
 
+    /// [`data`] with the status bar ([`barred`]), its planet an
+    /// outfitter selling nothing, as no `oütf` exists.
+    fn empty_outfitter_data() -> Rc<GameData> {
+        let mut built = barred(game_data_fork(false, false, false, 100, b"", b"", None)).build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        loaded_bytes(built.bytes)
+    }
+
+    #[test]
+    fn an_empty_outfitter_shows_its_text_and_restores_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, empty_outfitter_data());
+        assert!(
+            spaceport(&screen)
+                .offered()
+                .contains(&nova_sim::Service::Outfitter)
+        );
+        let bar = bar_drawn(&screen);
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::outfitter::NO_ITEMS.to_owned())
+        );
+        assert_eq!(bar_drawn(&screen), bar, "the status bar as it was");
+        screen.input(&key(Key::Enter, true));
+        assert!(
+            spaceport(&screen).mission_text().is_none(),
+            "the text closed"
+        );
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    /// [`data`] with the status bar ([`barred`]), its planet, of tech
+    /// level 1, a shipyard ([`shipbuying_data`]) and an outfitter selling
+    /// nothing, as no `oütf` exists. Ship 129 carries nothing, is listed
+    /// only while `!b7` (`Flags3` 0x0100), and its `OnPurchase` `M129 b7` moves the pilot to
+    /// Beta Prime and empties the shipyard.
+    fn empty_shops_after_a_move_data() -> Rc<GameData> {
+        let mut built = barred(game_data_fork(true, false, true, 100, b"", b"", None)).build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        built.put_u16(stellar + 0x0C, 1);
+        let ship = built.layout.data_entry(Ship::TYPE, 129) + 4;
+        built.put_u16(ship + 0x4E, 0xFFFF);
+        built.put_u16(ship + 0x56, 0);
+        built.put_u16(ship + 0x726, 0x0100);
+        built.bytes[ship + 0x6C..ship + 0x6F].copy_from_slice(b"!b7");
+        built.bytes[ship + 0x26A..ship + 0x271].copy_from_slice(b"M129 b7");
+        loaded_bytes(built.bytes)
+    }
+
+    /// The stellar named in the status bar's nav area.
+    fn nav_named(screen: &AppScreen) -> Vec<String> {
+        bar_drawn(screen)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } if text.ends_with(" Prime") => Some(text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The shipyard's restore after a landed `M` leaves the nav marked
+    /// but undrawn; an empty shipyard draws nothing after it, while an
+    /// empty outfitter's `_DrawStatus` (@0x5ff09-0x5ff10) draws it.
+    #[test]
+    fn an_empty_outfitter_draws_the_nav_a_shipyard_left_marked_and_an_empty_shipyard_does_not() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard_of(empty_shops_after_a_move_data(), &store);
+        assert_eq!(nav_named(&screen), ["Alpha Prime"], "landed");
+        click_port_item(&mut screen, 9);
+        press_b(&mut screen);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
+        assert_eq!(pilot(&screen).stellar(), Some(nova_sim::StellarId(129)));
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_shipyard().is_none(), "closed");
+        assert_eq!(nav_named(&screen), ["Beta Prime"], "the move held");
+
+        click_port_item(&mut screen, 9);
+        assert!(spaceport(&screen).open_shipyard().is_none(), "empty");
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::shipyard::NO_SHIPS.to_owned())
+        );
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(
+            nav_named(&screen),
+            ["Beta Prime"],
+            "no draw after the shipyard"
+        );
+
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(nav_named(&screen), ["Alpha Prime"], "the restore drawn");
+    }
+
     #[test]
     fn the_outfitter_opens_the_stellars_outfitter() {
         let store = MemoryPilots::new();
@@ -6965,6 +7963,85 @@ pub(super) mod tests {
         assert_eq!(food_shown(&screen), Some(3), "the shops shown afresh");
     }
 
+    /// [`data`] with system 128 linked to 129, landed at Alpha Prime's
+    /// bar, the bar open.
+    fn in_the_bar() -> AppScreen {
+        let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
+        let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
+        built.put_u16(alpha + 0x04, 129);
+        let mut screen = AppScreen::new(loaded_bytes(built.bytes))
+            .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
+        land(&mut screen);
+        click_port_item(&mut screen, 10);
+        assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
+        screen
+    }
+
+    #[test]
+    fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
+        let mut screen = in_the_bar();
+        let nav = |screen: &AppScreen| {
+            flight(screen)
+                .session()
+                .ok()
+                .map(nova_sim::Session::nav_mode)
+        };
+        let landed = Some(nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128))));
+        assert_eq!(nav(&screen), landed);
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::FlightMap);
+        assert!(spaceport(&screen).open_bar().is_some(), "the bar beneath");
+        let mut list = DrawList::new();
+        flight(&screen).course_map().draw(&mut list);
+        assert_eq!(
+            drawn(&screen).iter().cloned().collect::<Vec<_>>(),
+            list.iter().cloned().collect::<Vec<_>>(),
+            "the map drawn alone"
+        );
+        screen.input(&key(MAP, false));
+        let map = flight(&screen).course_map();
+        let beta = map
+            .view()
+            .world_to_screen(map.model().system(SystemId(129)).expect("Beta").position());
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: beta,
+        };
+        screen.input(&left(true));
+        screen.cancel_pointer();
+        screen.input(&left(false));
+        assert_eq!(nav(&screen), landed, "the map's click abandoned");
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: beta,
+            });
+        }
+        assert_eq!(
+            nav(&screen),
+            Some(nova_sim::NavMode::Hyperspace(Some(SystemId(129)))),
+            "plotted and cued"
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert!(spaceport(&screen).open_bar().is_some(), "still in the bar");
+        assert_eq!(nav(&screen), landed, "the bar's nav put back");
+        assert_eq!(
+            flight(&screen)
+                .session()
+                .map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(129)]),
+            "the course kept"
+        );
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::FlightMap, "again");
+        screen.input(&key(MAP, false));
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::Spaceport, "M closes it too");
+    }
+
     #[test]
     fn p_in_flight_resets_before_the_info_is_built() {
         let mut screen = past_the_holds(&MemoryPilots::new());
@@ -7186,9 +8263,16 @@ pub(super) mod tests {
         assert_eq!(store.writes(), writes + 1, "saved once, after the input");
         assert_eq!(saved(&store, "Ada").owned(BOOSTER), 1);
         let sounds = screen.take_sounds();
+        let took_off = sounds
+            .iter()
+            .position(|&sound| sound == Sound::Sim(nova_sim::SimSound::TookOff));
+        assert!(took_off.is_some(), "{sounds:?}");
         assert!(
-            sounds.contains(&Sound::Sim(nova_sim::SimSound::TookOff)),
-            "{sounds:?}"
+            sounds
+                .iter()
+                .position(|&sound| sound == halted())
+                .is_some_and(|halt| Some(halt) < took_off),
+            "the ambient sound halts with the spaceport: {sounds:?}"
         );
         assert!(
             !sounds.contains(&Sound::Sim(nova_sim::SimSound::ScriptMessage)),
@@ -7669,7 +8753,10 @@ pub(super) mod tests {
         assert_eq!(rolls.borrow().asked, 2, "drawn again");
         screen.input(&key(Key::Escape, true));
         click_port_item(&mut screen, 9);
-        assert!(!lists_second(&screen), "the new roll missed");
+        assert!(
+            spaceport(&screen).open_shipyard().is_none(),
+            "the new roll missed: nothing listed, it never opens"
+        );
     }
 
     #[test]
@@ -8988,6 +10075,46 @@ pub(super) mod tests {
         assert_eq!(shop_offer(OUTFITTER, 8), Some(MissionId(130)));
     }
 
+    /// [`shipbuying_data`] with an outfitter selling nothing, as no `oütf`
+    /// exists, and mission 130 at the outfitter ([`venue_mission`]),
+    /// unrefusable and with no offer text, so an offer of it is its
+    /// accept at once.
+    fn empty_outfitter_offering_data() -> Rc<GameData> {
+        let mut mission = venue_mission(OUTFITTER);
+        mission[0x50..0x52].copy_from_slice(&0x0004_u16.to_be_bytes());
+        let mut built = game_data_fork(true, false, true, 100, b"", b"", None)
+            .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
+            .build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        loaded_bytes(built.bytes)
+    }
+
+    /// An outfitter listing nothing never opens, so it offers nothing
+    /// (`_DoOutfitDialog` @0x5bbf7 → @0x5dbd6 skips its offer): its
+    /// mission, accepted at once on any offer, stays unaccepted.
+    #[test]
+    fn an_empty_outfitter_offers_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, empty_outfitter_offering_data());
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::outfitter::NO_ITEMS.to_owned())
+        );
+        screen.input(&key(Key::Enter, true));
+        screen.tick(Duration::from_secs(5));
+        assert!(spaceport(&screen).offer_dialog().is_none());
+        assert_eq!(active(&screen), [], "nothing offered, nothing accepted");
+        assert_eq!(pilot(&screen).cash(), 1000);
+    }
+
     #[test]
     fn entering_the_shipyard_offers_its_mission_at_once() {
         assert_eq!(shop_offer(SHIPYARD, 9), Some(MissionId(130)));
@@ -9337,6 +10464,132 @@ pub(super) mod tests {
         let list = drawn(&screen);
         assert!(radar_black(&list));
         assert!(player_cyan(&list));
+    }
+
+    /// The mission info screen's shape, smaller: 300 x 150, fixed at
+    /// (0, 0), with Done (1), the list (2), the heading (3), the text (4),
+    /// Abort (5) and the date (7).
+    fn mission_info_template() -> DialogTemplate {
+        let item = |x, y, w, h| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 150.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(190.0, 120.0, 99.0, 25.0),
+                item(10.0, 24.0, 100.0, 84.0),
+                item(10.0, 1.0, 190.0, 12.0),
+                item(120.0, 26.0, 170.0, 80.0),
+                item(60.0, 120.0, 99.0, 25.0),
+                item(0.0, 300.0, 1.0, 1.0),
+                item(200.0, 4.0, 90.0, 12.0),
+            ],
+        }
+    }
+
+    /// Flies `screen` up, the thrust held, until the radar, refreshed
+    /// every 8 ticks, has just refreshed, then 7 ticks more: it holds the
+    /// ship as it was 7 ticks back.
+    fn stale_radar(screen: &mut AppScreen) {
+        screen.input(&key(Key::Up, true));
+        for _ in 0..200 {
+            screen.tick(TICK);
+        }
+        let mut before = radar_dots(&drawn(screen));
+        for _ in 0..8 {
+            screen.tick(TICK);
+            let after = radar_dots(&drawn(screen));
+            if after != before {
+                break;
+            }
+            before = after;
+        }
+        for _ in 0..7 {
+            screen.tick(TICK);
+        }
+    }
+
+    #[test]
+    fn player_infos_and_mission_infos_close_over_flight_redraw_the_whole_bar() {
+        type Close = fn(&mut AppScreen);
+        let rows: [(&str, Close); 2] = [
+            ("player info (@0x5a725)", |screen| {
+                screen.input(&key(PLAYER_INFO_KEY, true));
+                screen.input(&key(PLAYER_INFO_KEY, false));
+                assert!(screen.flight_player_info().is_some(), "open");
+                screen.input(&key(Key::Escape, true));
+                assert!(screen.flight_player_info().is_none(), "closed");
+            }),
+            ("mission info (@0x9e769)", |screen| {
+                let mut missions = FlightMissionDialogs::new(
+                    Err("no DLOG 3003".to_owned()),
+                    Ok(mission_info_template()),
+                    Rc::new(MonoMetrics),
+                    screen.data.button_style(),
+                );
+                missions.open_info(nova_sim::MissionInfo {
+                    rows: vec![nova_sim::InfoRow {
+                        slot: 0,
+                        name: "Run".to_owned(),
+                        failed: false,
+                        text: "Go.".to_owned(),
+                        abortable: true,
+                    }],
+                    today: String::new(),
+                });
+                assert!(missions.info().is_some(), "open");
+                screen.missions = Some(missions);
+                screen.input(&key(Key::Escape, true));
+                assert!(screen.missions.is_none(), "closed");
+            }),
+        ];
+        for (what, close) in rows {
+            let mut screen = AppScreen::new(barred_outfitting_data())
+                .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics));
+            fly(&mut screen);
+            stale_radar(&mut screen);
+            let held = radar_dots(&drawn(&screen));
+            close(&mut screen);
+            let shown = radar_dots(&drawn(&screen));
+            screen.flight.as_mut().expect("flying").refresh_status();
+            let now = radar_dots(&drawn(&screen));
+            assert_ne!(held, now, "{what}: the radar held what it drew before");
+            assert_eq!(shown, now, "{what}: redrawn as it closed");
+        }
+    }
+
+    #[test]
+    fn player_infos_close_over_flight_without_its_dialog_redraws_nothing() {
+        /// [`Dialogs`] without "Player Info" (1017): the original, failing
+        /// to get it, neither shows the dialog nor redraws (@0x5a0a5).
+        struct NoPlayerInfo;
+
+        impl DialogResources for NoPlayerInfo {
+            fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+                if id == PLAYER_INFO_DIALOG {
+                    return Err(format!("no DLOG {id}"));
+                }
+                Dialogs.dialog_template(id)
+            }
+        }
+
+        let mut screen = AppScreen::new(barred_outfitting_data())
+            .with_dialogs(Rc::new(NoPlayerInfo), Rc::new(MonoMetrics));
+        fly(&mut screen);
+        stale_radar(&mut screen);
+        let held = radar_dots(&drawn(&screen));
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        screen.input(&key(PLAYER_INFO_KEY, false));
+        let info = screen.flight_player_info().expect("open");
+        assert!(info.problem().is_some(), "not laid out");
+        screen.input(&key(Key::Escape, true));
+        assert!(screen.flight_player_info().is_none(), "closed");
+        assert_eq!(radar_dots(&drawn(&screen)), held, "not redrawn");
+        screen.flight.as_mut().expect("flying").refresh_status();
+        assert_ne!(radar_dots(&drawn(&screen)), held, "stale as it closed");
     }
 
     const TANK: OutfitId = OutfitId(133);

@@ -30,12 +30,12 @@
 //!   writes +0x6c alone.
 //! - Nav Off, backquote ([`Session::nav_off`], @0x69a94-0x69b63): off,
 //!   the course kept, with [`SimSound::NavSelected`] on every press
-//!   (@0x69b19).
+//!   (@0x69b19). It shares its block with H ([`Session::nav_mode_keys`]).
 //! - Option-backquote ([`Session::clear_target`], @0x69a17-0x69a90): the
 //!   ship target let go, with [`SimSound::TargetCleared`] when there was
 //!   one (@0x69a7d). The nav mode is untouched.
 //! - Hyperspace Mode, H ([`Session::hyperspace_mode`], @0x69b76-0x69b89):
-//!   the beep, then, unless the mode is 3 already, mode 3 with nothing
+//!   the beep and the dock request dropped, then, unless the mode is 3 already, mode 3 with nothing
 //!   selected and the course cued.
 //! - The cue ([`Session::cue_course`], `_CueNextHyperRouteDest`
 //!   @0xe2dc-0xe35f): when the course's first hop is a system the ship
@@ -65,7 +65,17 @@
 //!   having selected first.
 //! - The take-off's tail ([`Session::take_off`], `_HandlePlayerDockRequest`
 //!   @0x674d2-0x674d8): the selection let go, the mode kept, then the
-//!   cue.
+//!   cue. The take-off notes the nav as it begins
+//!   ([`Session::take_takeoff_nav`]), as the original's take-off redraw
+//!   (@0x633a0) draws it before the deselect; the flight view holds it
+//!   for a tick. That is the selection held while docked, so every
+//!   take-off has one to show: the landed stellar in mode 2, which the
+//!   original keeps at +0x6c as the stellar docked at
+//!   (`_PlayerLandOnStellar` @0x632b2, @0x6336e, @0x6353e), or a landed
+//!   `M`'s; none only after an `N` or an `M` to a system with no stellar.
+//!   With a course, the land key's mode 2 replaced its mode-3 cue, so
+//!   the landed stellar shows until the cue (@0x674d8 →
+//!   `_CueNextHyperRouteDest` @0xe33c-0xe344) brings mode 3 back.
 //! - A hyperspace arrival (@0x6be25-0x6be2b, @0x6c4cd): off, then, after
 //!   the course's step, the cue, so mode 3 comes back while hops remain
 //!   (the `entry` module's table).
@@ -76,27 +86,97 @@
 //! - A hypergate (`_PlayerEnterHypergate`): off on every outcome
 //!   (@0x637e4-0x637f2, @0x63fa2-0x63faa), and when it has no links.
 //! - `M` or `N` in flight (`_EvalSetExp` @0x157e3, @0x158fd): the
-//!   selection let go, the mode kept; landed, neither is written here
-//!   (see below). The developer tools' relocation, which has no
-//!   original, does the same as in flight.
+//!   selection let go, the mode kept, as the move settles (the `entry`
+//!   module's table). The developer tools' relocation, which has no
+//!   original, does the same.
+//! - `M` or `N` landed, at its operator, before its move is queued
+//!   (`Session::select_for_landed_move`; `M` @0x1570e-0x157f5, `N`
+//!   @0x158d9-0x158fd): `M` in mode 2 selects the destination's first
+//!   stellar that can be read (+0x6c, @0x156f2-0x15705), or none with
+//!   none; any other `M`, and every `N`, lets go of the selection. The
+//!   mode is never written, and a system that doesn't exist writes
+//!   nothing (@0x15715-0x1571d, @0x158e0-0x158e8), as its move is
+//!   skipped. In mode 2 the nav area names the stellar by its `spöb`
+//!   name, though the system shown is still the one docked in
+//!   (`_DrawStatusNav` @0x4a0fd-0x4a149), from the port's next nav
+//!   redraw (see the flight view); the take-off lets go of it (@0x674d2).
+//! - The port dialogs' restore ([`Session::restore_port_nav`]): each
+//!   dialog saves both as it opens ([`Session::save_port_nav`]) and
+//!   restores them, mode and selection exactly as saved, as it closes,
+//!   after the close's whole-bar redraw (save / restore): the outfitter
+//!   @0x5bafc-0x5bb12 / @0x5dbb8-0x5dbc5, the exchange @0x5dbed-0x5dc08 /
+//!   @0x5e64d-0x5e65d, the shipyard @0x5e70f-0x5e71e / @0x5f8e8-0x5f8f5,
+//!   the mission computer @0x5ffc0-0x5ffd0 / @0x60084-0x60096. So a
+//!   landed `M` or `N` run inside one is undone as it closes. When the
+//!   restored nav shows is the flight view's.
+//! - The bar's restore ([`Session::restore_bar_nav`]): the bar saves both
+//!   as it opens ([`Session::open_bar`], `_DoBarDialog` @0x48efe-0x48f11,
+//!   the raw selection) and puts them back after each map opened from it
+//!   (@0x492b7-0x492d3), keeping the save for the next map. Its own close
+//!   restores nothing (@0x49414-0x4946f).
 //! - A map click ([`Session::plot_course`], `_DoSystemMap`
 //!   @0x136d7-0x137c7): a route cues its first hop, the original's click on
 //!   a system the current one lists (@0x137b3-0x137bb), or its cue as the
 //!   map closes for a longer route (@0x13c16); no route lets go of the
 //!   selection and keeps the mode (@0x13788-0x13790).
+//! - A click on the floating map ([`Session::select_on_floating_map`],
+//!   `_HandlePlayer` @0x6a16c-0x6a762): on the current system's centre,
+//!   mode 3 with nothing selected (@0x6a1d5-0x6a1de); on the box of one of
+//!   its links ([`Session::floating_map_links`]), mode 3 with that link
+//!   (@0x6a719-0x6a727). Either with [`SimSound::HyperSelected`]
+//!   (`_beepSnd[2]`, @0x6a73a-0x6a75d). The flight view shows the map and
+//!   tests the click.
 //!
-//! **Left out.** The floating map that shows while H or `\` is held, its
-//! clicks (@0x6a1d5-0x6a1e4, @0x6a719-0x6a762) and its preselect
-//! (`_ShowFloatingMap` @0x11488); the map dialog's Tab / `\` cycling
+//! **Left out.** The floating map's preselect
+//! (`_ShowFloatingMap` @0x11488), which only its names would read (the
+//! galaxy-map-fidelity roadmap's); the map dialog's Tab / `\` cycling
 //! (`_MapFilter` @0x13f0f-0x13fac); the map panel's titles by the mode
 //! (`_MapDialogUpdate` @0x10b68-0x10c76); and the destroyed player's and the ship swap's per-frame clears
-//! (@0x68712-0x68718, @0x6f41b-0x6f421). The landed `M` / `N`'s +0x6c, the
-//! stellar docked at (@0x156f2-0x15709), shows nowhere while docked and
-//! the take-off lets go of it. Mode 4, the hypergate map's, is never
-//! drawn.
+//! (@0x68712-0x68718, @0x6f41b-0x6f421). Mode 4, the hypergate map's, is
+//! never drawn.
+//!
+//! Of the landed `M`:
+//!
+//! - **The first stellar.** The original selects the first of the
+//!   system's 16 `NavDefs` slots that isn't −1 (@0x15756-0x157f5), which
+//!   is the first naming a `spöb` that loaded, so ours' first stellar
+//!   that can be read is the original's. The loader (`_LoadObjectData`)
+//!   sets a slot to −1 for an ID outside 128-2175 (@0x78199-0x781a3),
+//!   and for one whose `spöb` didn't load (its +0x45 clear,
+//!   @0x780f8-0x7817f). A missing `spöb` clears +0x45 (@0x779bd-0x779c6),
+//!   and `_FlipSpob` refuses a record of 0x45d bytes or fewer
+//!   (@0xa6047-0xa6051), ours' 1118-byte bound on a `spöb`. An ID past
+//!   the last `spöb` reads a +0x45 the loader never writes (its pass
+//!   stops at the last, @0x779cb-0x779d9) from memory `NewPtr` didn't
+//!   clear (@0x1b7cd-0x1b7d4): not modelled.
+//! - **A system with no `sÿst`.** For an ID in range with no `sÿst`
+//!   (@0x15715-0x1571d), the original writes +0x74 and scans 16
+//!   `NavDefs` words the loader never writes for a missing `sÿst`: it
+//!   writes only +0x8, the links, +0x1eb, +0x1ed (@0x77a7e-0x77aaf) and
+//!   +0xec (@0x7837e-0x7838c), and visits no ID past the last `sÿst`
+//!   (@0x78393-0x783a1), in a table from `NewPtr` (@0x1b7f9-0x1b800).
+//!   That reads uninitialised memory, so it can't be modelled; ours
+//!   writes nothing, as its move skips the system.
+//!
+//! Off and mode 3 while docked: the original lands in mode 2
+//! only (@0x6a8ed-0x6a932). In Off, a pilot resumed docked
+//! (`_ResetPlayer` @0x1d4cd-0x1d4d5), a landed `M`'s +0x6c shows nowhere
+//! ("Nav System Off") and the take-off lets go of it (@0x674d2), so ours,
+//! with no selection in Off, writes nothing. Mode 3 docked is reachable
+//! only through [`Session::land_at`], which has no original; there `M`
+//! lets go of the selection.
+//!
+//! Of the port dialogs' save and restore: the original's mode 3 +0x6c is
+//! a link slot of the current system, where ours keeps the system, and
+//! mode 3 docked has no original, so its restore is not modelled apart;
+//! each dialog's Map button (`_DoSystemMap`, with its own save and
+//! restore), as ours has no map in port; and the flag at
+//! @0x5ffb2-0x5ffba that gates the mission computer's branch, before its
+//! save (@0x5ffc0-0x5ffd0), as ours opens the computer only where the
+//! port offers Mission BBS.
 //!
 //! **The dock request** (`_dockTarget` / `_dockPermission`, see the
-//! `clearance` module) is dropped by Nav Off, by a stellar key or a click
+//! `clearance` module) is dropped by Nav Off and Hyperspace Mode, by a stellar key or a click
 //! that changes the selection or the mode, and on every frame in mode 3;
 //! the land key's own selection keeps it, and so does a script's `M` or
 //! `N`.
@@ -105,7 +185,7 @@ use super::Session;
 use crate::StellarPick;
 use crate::catalog::{StellarId, SystemId};
 use crate::hyperspace::{HyperSelectRule, next_hyper_destination};
-use crate::landing::nearest_landable;
+use crate::landing::nearest_stellar;
 use crate::navigation::NavMode;
 use crate::sound::SimSound;
 
@@ -121,6 +201,15 @@ impl Session {
             }
             mode => mode,
         }
+    }
+
+    /// The nav mode and selection as the last take-off began, before
+    /// the stay's days and its deselect, or `None` once taken: what the
+    /// original's take-off redraw (`_PlayerLandOnStellar` @0x633a0) draws,
+    /// as its deselect (@0x674d2) comes later in the same dock request
+    /// (see the flight view's `took_off`).
+    pub fn take_takeoff_nav(&mut self) -> Option<NavMode> {
+        self.takeoff_nav.take()
     }
 
     /// The system the galaxy map selects as it opens, as `_DoSystemMap`
@@ -160,6 +249,60 @@ impl Session {
         self.nav = self.nav.deselected();
     }
 
+    /// A landed `M` (`first`) or `N` into `system` writes the selection
+    /// at its operator, as `_EvalSetExp` does (`M` @0x1570e-0x157f5, `N`
+    /// @0x158d9-0x158fd), before its move is queued: `M` in mode 2 selects
+    /// the system's first stellar that can be read, or none with none;
+    /// any other `M`, and every `N`, lets go of the selection and keeps
+    /// the mode, so Off stays off. Nothing is written for a system that
+    /// doesn't exist, as the move skips it too, nor in flight, where the
+    /// move's settling lets go of the selection (the `entry` module's
+    /// table). The original lets go of it in flight at the operator too
+    /// (@0x157e3, @0x158fd); ours' settling comes later in the same input
+    /// or tick, before any frame is drawn, so the player never sees it.
+    /// Why the first stellar that can be read and a system that doesn't
+    /// exist are the original's, as far as it can be modelled, is in the
+    /// module docs.
+    pub(super) fn select_for_landed_move(&mut self, system: SystemId, first: bool) {
+        if self.landed.is_none() || !self.galaxy.exists(system) {
+            return;
+        }
+        self.nav = match self.nav {
+            NavMode::Stellar(_) if first => {
+                NavMode::Stellar(self.first_stellars.get(&system).copied())
+            }
+            mode => mode.deselected(),
+        };
+    }
+
+    /// Saves the nav mode and its selection as a port dialog opens, as the
+    /// original saves +0x6a and +0x6c (see the module's **Setters**). The
+    /// raw selection is saved, not the one resolved by place.
+    pub fn save_port_nav(&mut self) {
+        self.port_nav = Some(self.nav);
+    }
+
+    /// Restores the nav saved as the port dialog opened
+    /// ([`Session::save_port_nav`]), mode and selection exactly as saved,
+    /// as the dialog closes. With nothing saved it changes nothing, and a
+    /// save is restored once.
+    pub fn restore_port_nav(&mut self) {
+        if let Some(saved) = self.port_nav.take() {
+            self.nav = saved;
+        }
+    }
+
+    /// Puts back the nav saved as the bar opened ([`Session::open_bar`]),
+    /// mode and selection exactly as saved, as a map opened from the bar
+    /// closes (see the module's **Setters**). The save is kept, as the
+    /// bar's locals outlive each map, so every map is put back to the
+    /// same nav. With nothing saved it changes nothing.
+    pub fn restore_bar_nav(&mut self) {
+        if let Some(saved) = self.bar_nav {
+            self.nav = saved;
+        }
+    }
+
     /// Cues the course's next hop, as `_CueNextHyperRouteDest` (@0xe2dc)
     /// does: when the course's first hop as it is flown
     /// ([`Session::course_shown`]) is a system the ship can jump to from
@@ -179,34 +322,49 @@ impl Session {
         }
     }
 
-    /// Presses Nav Off (backquote): the nav system off, the course kept,
-    /// the dock request dropped (@0x69b2f-0x69b3c), with
-    /// [`SimSound::NavSelected`] on every press. During a jump
-    /// (pre-jump stage too) nothing changes and it says so.
-    pub fn nav_off(&mut self) -> bool {
+    /// Runs `_HandlePlayer`'s Nav Off / Hyperspace Mode block for one
+    /// press (@0x69ade-0x69b89), with `nav_off` the backquote (without
+    /// Option) and `hyperspace` H: one [`SimSound::NavSelected`]
+    /// (@0x69b19) and the dock request dropped (@0x69b1e-0x69b3c) for
+    /// either key; then, with `nav_off`, the nav system off, the course
+    /// kept (@0x69b41-0x69b5a); then, with `hyperspace`, unless the mode
+    /// is 3 already, mode 3 with nothing selected and the course's next
+    /// hop cued ([`Session::cue_course`], @0x69b63-0x69b89). Both in one
+    /// press give one beep, the nav off, then mode 3 and the cue. During
+    /// a jump (pre-jump stage too) nothing changes and it says so. The
+    /// flight view keeps the block's latch (0xdee04), which says when a
+    /// held key presses again.
+    pub fn nav_mode_keys(&mut self, nav_off: bool, hyperspace: bool) -> bool {
         if self.jump.is_some() {
             return false;
         }
         self.sounds.push(SimSound::NavSelected);
-        self.nav = NavMode::Off;
         self.dock = None;
-        true
-    }
-
-    /// Presses Hyperspace Mode (H): [`SimSound::NavSelected`], then,
-    /// unless the mode is 3 already, mode 3 with nothing selected and the
-    /// course's next hop cued ([`Session::cue_course`]). During a jump
-    /// (pre-jump stage too) nothing changes and it says so.
-    pub fn hyperspace_mode(&mut self) -> bool {
-        if self.jump.is_some() {
-            return false;
+        if nav_off {
+            self.nav = NavMode::Off;
         }
-        self.sounds.push(SimSound::NavSelected);
-        if !matches!(self.nav, NavMode::Hyperspace(_)) {
+        if hyperspace && !matches!(self.nav, NavMode::Hyperspace(_)) {
             self.nav = NavMode::Hyperspace(None);
             self.cue_course();
         }
         true
+    }
+
+    /// Presses Nav Off (backquote) alone ([`Session::nav_mode_keys`]):
+    /// the nav system off, the course kept, the dock request dropped,
+    /// with [`SimSound::NavSelected`] on every press. During a jump
+    /// (pre-jump stage too) nothing changes and it says so.
+    pub fn nav_off(&mut self) -> bool {
+        self.nav_mode_keys(true, false)
+    }
+
+    /// Presses Hyperspace Mode (H) alone ([`Session::nav_mode_keys`]):
+    /// [`SimSound::NavSelected`] and the dock request dropped, then,
+    /// unless the mode is 3 already, mode 3 with nothing selected and the
+    /// course's next hop cued ([`Session::cue_course`]). During a jump
+    /// (pre-jump stage too) nothing changes and it says so.
+    pub fn hyperspace_mode(&mut self) -> bool {
+        self.nav_mode_keys(false, true)
     }
 
     /// Presses Option-backquote: lets go of the ship target, with
@@ -226,7 +384,7 @@ impl Session {
     /// is left alone. `None`, and nothing changes, during a jump
     /// (pre-jump stage too, as the original skips its nav inputs while
     /// jumping) or when `pick` finds nothing: an empty slot or no
-    /// landable stellar.
+    /// stellar with the can-land flag.
     ///
     /// A key that finds a stellar raises [`SimSound::NavSelected`], even
     /// for the one selected (@0x69ebc). Selecting changes the mode to 2
@@ -242,7 +400,7 @@ impl Session {
         }
         let picked = match pick {
             StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
-            StellarPick::Nearest => nearest_landable(self.player.position, &self.sites),
+            StellarPick::Nearest => nearest_stellar(self.player.position, &self.sites),
         }?;
         let selected = self.nav == NavMode::Stellar(Some(picked));
         self.sounds.push(SimSound::NavSelected);
@@ -294,6 +452,39 @@ impl Session {
         }
         self.nav = NavMode::Hyperspace(Some(next));
         Some(next)
+    }
+
+    /// The links the floating map's clicks test, as `_HandlePlayer` walks
+    /// them (@0x6a1e9-0x6a332): the current system's raw Con slots, in
+    /// record order, repeats and itself kept, each only when it is in the
+    /// catalog and a visible system stands at its place
+    /// (`_FindActiveCoLocatedSystem` @0x6a21f). Each is the raw slot, not
+    /// the system standing for it: its box is at the slot's own position
+    /// (@0x6a25c-0x6a2af), and mode 3 selects it raw (@0x6a719-0x6a727).
+    #[must_use]
+    pub fn floating_map_links(&self) -> Vec<SystemId> {
+        self.galaxy
+            .con_slots(self.pilot.system)
+            .iter()
+            .copied()
+            .filter(|&slot| self.galaxy.exists(slot) && self.galaxy.same_place(slot).is_some())
+            .collect()
+    }
+
+    /// A click hit on the floating map, as `_HandlePlayer` takes it: mode
+    /// 3 with `link` selected, one of [`Session::floating_map_links`]
+    /// (@0x6a719-0x6a727), or with nothing for the current system's centre
+    /// (@0x6a1d5-0x6a1de), with [`SimSound::HyperSelected`] (`_beepSnd[2]`,
+    /// @0x6a73a-0x6a75d). The course is kept. During a jump (pre-jump
+    /// stage too) nothing changes and it says so, as the click is gated
+    /// on the jump state (@0x6a145).
+    pub fn select_on_floating_map(&mut self, link: Option<SystemId>) -> bool {
+        if self.jump.is_some() {
+            return false;
+        }
+        self.nav = NavMode::Hyperspace(link);
+        self.sounds.push(SimSound::HyperSelected);
+        true
     }
 }
 
@@ -438,6 +629,62 @@ mod tests {
         assert!(session.hyperspace_mode());
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None), "not cued");
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+    }
+
+    // The Nav Off / Hyperspace Mode block.
+
+    /// A session in mode 3 at the course's first hop, with a dock request
+    /// standing, and its sounds taken.
+    fn cued_with_a_request() -> Session {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.nav_mode(), hyperspace(131));
+        session.dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(128),
+            permission: 0,
+        });
+        quiet(session)
+    }
+
+    #[test]
+    fn the_block_with_both_keys_beeps_once_turns_off_then_cues_and_drops_the_request() {
+        let mut session = cued_with_a_request();
+        session.nav = NavMode::Hyperspace(None);
+        assert!(session.nav_mode_keys(true, true));
+        assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+        assert_eq!(session.nav_mode(), hyperspace(131), "off, then cued");
+        assert_eq!(session.dock_request(), None);
+    }
+
+    #[test]
+    fn the_block_with_h_alone_in_mode_3_keeps_the_selection_beeps_and_drops_the_request() {
+        let mut session = cued_with_a_request();
+        session.nav = NavMode::Hyperspace(Some(SystemId(130)));
+        assert!(session.nav_mode_keys(false, true));
+        assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+        assert_eq!(session.nav_mode(), hyperspace(130), "kept");
+        assert_eq!(session.dock_request(), None);
+    }
+
+    #[test]
+    fn the_block_with_nav_off_alone_turns_off_and_does_not_cue() {
+        let mut session = cued_with_a_request();
+        assert!(session.nav_mode_keys(true, false));
+        assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
+        assert_eq!(session.nav_mode(), NavMode::Off);
+        assert_eq!(session.dock_request(), None);
+    }
+
+    #[test]
+    fn the_block_is_refused_in_silence_during_a_jump() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        let mut session = quiet(session);
+        assert!(!session.nav_mode_keys(true, true));
+        assert_eq!(session.take_sounds(), []);
+        assert_eq!(session.nav_mode(), hyperspace(131));
     }
 
     // Hyper Select.
@@ -738,13 +985,165 @@ mod tests {
     }
 
     #[test]
-    fn an_m_landed_writes_neither() {
-        let catalog = three_stellars();
+    fn in_flight_the_operator_leaves_the_selection_to_the_settling() {
+        let catalog = catalog();
+        for expr in ["M131", "N131"] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.nav = stellar(128);
+            run(&mut session, expr);
+            assert_eq!(session.nav_mode(), stellar(128), "{expr}");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.nav_mode(), NavMode::Stellar(None), "{expr}");
+        }
+    }
+
+    /// [`three_stellars`], where 132 exists with no stellar, landed on
+    /// 128 in mode 2.
+    fn landed() -> (FakePilotCatalog, Session) {
+        let mut catalog = three_stellars();
+        catalog.systems.push(SystemId(132));
         let mut session = Session::start(&catalog).expect("starts");
-        land_now(&mut session).expect("lands");
-        move_to_131(&mut session, &catalog);
-        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         assert_eq!(session.nav_mode(), stellar(128));
+        (catalog, session)
+    }
+
+    /// Runs `expr`, unsettled.
+    fn run(session: &mut Session, expr: &str) {
+        session.run_set(&SetExpr::parse(expr).expect("parses"), &mut NeverFires);
+    }
+
+    #[test]
+    fn an_m_landed_selects_the_destinations_first_stellar_at_once() {
+        let (catalog, mut session) = landed();
+        run(&mut session, "M131");
+        assert_eq!(session.nav_mode(), stellar(140), "at the operator");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
+        assert_eq!(session.nav_mode(), stellar(140), "settled");
+        session.take_off(&catalog, &mut NeverFires);
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Stellar(None),
+            "the take-off lets go of it"
+        );
+    }
+
+    #[test]
+    fn the_take_off_notes_the_nav_held_before_its_deselect() {
+        let (catalog, mut session) = landed();
+        assert_eq!(session.take_takeoff_nav(), None, "no take-off yet");
+        run(&mut session, "M131");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
+        assert_eq!(session.nav_mode(), NavMode::Stellar(None), "let go");
+        assert_eq!(session.take_takeoff_nav(), Some(stellar(140)), "as held");
+        assert_eq!(session.take_takeoff_nav(), None, "taken");
+        session.take_off(&catalog, &mut NeverFires);
+        assert_eq!(session.take_takeoff_nav(), None, "not landed");
+    }
+
+    #[test]
+    fn an_m_landed_to_a_system_with_no_stellar_lets_go() {
+        let (catalog, mut session) = landed();
+        run(&mut session, "M132");
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Stellar(None),
+            "at the operator"
+        );
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.pilot().system(), SystemId(132));
+        assert_eq!(session.nav_mode(), NavMode::Stellar(None), "settled");
+    }
+
+    #[test]
+    fn an_m_landed_in_off_or_mode_3_selects_no_stellar() {
+        for (before, after) in [
+            (NavMode::Off, NavMode::Off),
+            (hyperspace(131), NavMode::Hyperspace(None)),
+        ] {
+            let (catalog, mut session) = landed();
+            session.nav = before;
+            run(&mut session, "M131");
+            assert_eq!(session.nav_mode(), after, "{before:?} at the operator");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.pilot().system(), SystemId(131));
+            assert_eq!(session.nav_mode(), after, "{before:?} settled");
+        }
+    }
+
+    #[test]
+    fn an_n_landed_lets_go_and_keeps_the_mode() {
+        for (before, after) in [
+            (stellar(128), NavMode::Stellar(None)),
+            (hyperspace(131), NavMode::Hyperspace(None)),
+            (NavMode::Off, NavMode::Off),
+        ] {
+            let (catalog, mut session) = landed();
+            session.nav = before;
+            run(&mut session, "N131");
+            assert_eq!(session.nav_mode(), after, "{before:?} at the operator");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.pilot().system(), SystemId(131));
+            assert_eq!(session.nav_mode(), after, "{before:?} settled");
+        }
+    }
+
+    #[test]
+    fn a_landed_move_to_a_system_that_does_not_exist_writes_nothing() {
+        for expr in ["M999", "N999"] {
+            for before in [stellar(128), hyperspace(131)] {
+                let (catalog, mut session) = landed();
+                session.nav = before;
+                run(&mut session, expr);
+                assert_eq!(session.nav_mode(), before, "{expr} {before:?}");
+                let _ = session.settle_script(&catalog, &mut NeverFires);
+                assert_eq!(session.pilot().system(), SystemId(130), "no move");
+                assert_eq!(session.nav_mode(), before, "{expr} {before:?}");
+            }
+        }
+    }
+
+    // The port dialogs' save and restore.
+
+    #[test]
+    fn a_port_dialogs_restore_undoes_a_landed_m_or_n() {
+        for expr in ["M131", "N131"] {
+            for before in [stellar(128), hyperspace(131), NavMode::Off] {
+                let (catalog, mut session) = landed();
+                session.nav = before;
+                session.save_port_nav();
+                run(&mut session, expr);
+                let _ = session.settle_script(&catalog, &mut NeverFires);
+                session.restore_port_nav();
+                assert_eq!(session.nav_mode(), before, "{expr} {before:?}");
+                assert_eq!(
+                    session.pilot().system(),
+                    SystemId(131),
+                    "only the nav is restored"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_port_nav_restore_without_a_save_changes_nothing_and_restores_once() {
+        let (catalog, mut session) = landed();
+        session.restore_port_nav();
+        assert_eq!(session.nav_mode(), stellar(128), "nothing saved");
+
+        session.save_port_nav();
+        session.restore_port_nav();
+        run(&mut session, "N131");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        session.restore_port_nav();
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Stellar(None),
+            "the save was restored already"
+        );
     }
 
     // The map.
@@ -875,5 +1274,62 @@ mod tests {
             None,
             "nothing stands there: no selection, not the current system"
         );
+    }
+
+    // The floating map.
+
+    #[test]
+    fn the_floating_maps_links_are_the_raw_slots_in_order_that_exist() {
+        let session = Session::start(&hub()).expect("starts");
+        assert_eq!(
+            session.floating_map_links(),
+            ids(&[134, 131, 131, 130, 135]),
+            "repeats and itself kept, 999 left out"
+        );
+    }
+
+    #[test]
+    fn a_floating_map_link_with_nothing_visible_at_its_place_is_left_out() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.floating_map_links(), ids(&[131]));
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.floating_map_links(),
+            ids(&[131]),
+            "134 stands at its place: the raw slot is kept"
+        );
+        hide(&mut session, &catalog, &[134]);
+        assert_eq!(session.floating_map_links(), []);
+    }
+
+    #[test]
+    fn a_floating_map_click_sets_mode_3_with_its_system_or_nothing_and_beeps() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        session.take_sounds();
+        assert!(session.select_on_floating_map(Some(SystemId(135))));
+        assert_eq!(session.nav_mode(), hyperspace(135));
+        assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+        assert_eq!(session.course(), ids(&[131]), "the course kept");
+        session.select_stellar(StellarPick::Slot(0));
+        session.take_sounds();
+        assert!(session.select_on_floating_map(None));
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+        assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+    }
+
+    #[test]
+    fn a_floating_map_click_does_nothing_during_a_jump() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        let mode = session.nav_mode();
+        session.take_sounds();
+        assert!(!session.select_on_floating_map(None));
+        assert_eq!(session.nav_mode(), mode);
+        assert_eq!(session.take_sounds(), []);
     }
 }

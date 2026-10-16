@@ -239,7 +239,6 @@ mod tests {
             frame_size: Some((100, 100)),
             flags: StellarFlags::CAN_LAND,
             min_status: 10,
-            landing_sound: None,
             tech_level: 0,
             special_tech: [0; 8],
             govt: Some(GovtId(140)),

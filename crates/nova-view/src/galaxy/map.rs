@@ -64,7 +64,7 @@ use nova_sim::story::OverlaidGalaxy;
 
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
 use super::model::{GalaxyModel, placement};
-use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP};
+use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
 use crate::draw::fill_rect;
 use crate::{Color, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction};
 
@@ -173,6 +173,25 @@ struct Press {
     last: Point,
     /// How far the pointer has travelled since the press.
     travelled: f32,
+}
+
+/// What [`GalaxyMap::draw_marks`] draws over the galaxy, besides its
+/// systems and links.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapMarks<'a> {
+    /// The system the player is in, marked; `None` draws no course, no
+    /// selected link and no arrows.
+    pub current: Option<SystemId>,
+    /// The course from it: the systems still to jump to, in order.
+    pub route: &'a [SystemId],
+    /// The system selected in nav mode 3, drawn as a link from the current
+    /// system.
+    pub hyper_selection: Option<SystemId>,
+    /// The systems a hypergate offers, each with an arrow from the current
+    /// system.
+    pub offered: &'a [SystemId],
+    /// The system drawn with a square round it.
+    pub selected: Option<SystemId>,
 }
 
 /// What the map is for.
@@ -470,19 +489,38 @@ impl GalaxyMap {
                 );
             }
         }
+        let marks = MapMarks {
+            current: self.current,
+            route: &self.route,
+            hyper_selection: self.hyper_selection,
+            offered: &self.offered,
+            selected: self.selected,
+        };
+        self.draw_marks(list, &self.view.transform(), &marks);
+    }
+
+    /// Draws everything the map draws over its nebulae, through
+    /// `transform`, with `marks`: every hyperlink, the course from the
+    /// current system, the link to the system selected in nav mode 3, the
+    /// current system's mark and the arrows to the gates offered, every
+    /// system's outline and dot (coloured as the map's galaxy and explored
+    /// systems say), and the square round the system selected. Only lines
+    /// and dots. The course map draws its own view and state through it;
+    /// the floating map (the flight's) its own centre, zoom and marks.
+    pub fn draw_marks(&self, list: &mut DrawList, transform: &Transform, marks: &MapMarks<'_>) {
         let screen = |id| {
             self.model
                 .system(id)
-                .map(|system| self.view.world_to_screen(system.position()))
+                .map(|system| transform.world_to_screen(system.position()))
         };
         for &(from, to) in self.model.links() {
             if let (Some(from), Some(to)) = (screen(from), screen(to)) {
                 list.line(from, to, LINK_WIDTH, LINK);
             }
         }
-        if let Some(current) = self.current {
+        if let Some(current) = marks.current {
             let stops: Vec<Option<Point>> = std::iter::once(current)
-                .chain(self.route.iter().copied())
+                .chain(marks.route.iter().copied())
                 .map(screen)
                 .collect();
             for hop in stops.windows(2) {
@@ -490,13 +528,14 @@ impl GalaxyMap {
                     list.line(from, to, ROUTE_WIDTH, ROUTE);
                 }
             }
-            if let (Some(from), Some(to)) = (screen(current), self.hyper_selection.and_then(screen))
+            if let (Some(from), Some(to)) =
+                (screen(current), marks.hyper_selection.and_then(screen))
             {
                 list.line(from, to, HYPER_SELECTED_WIDTH, HYPER_SELECTED);
             }
             if let Some(at) = screen(current) {
                 list.dot(at, CURRENT_SIZE, CURRENT);
-                for to in self.offered.iter().filter_map(|&id| screen(id)) {
+                for to in marks.offered.iter().filter_map(|&id| screen(id)) {
                     arrow(list, at, to);
                 }
             }
@@ -505,11 +544,11 @@ impl GalaxyMap {
         // ID, the one a first click selects, is on top.
         let systems = self.model.systems().iter().rev();
         for system in systems.clone() {
-            let at = self.view.world_to_screen(system.position());
+            let at = transform.world_to_screen(system.position());
             list.dot(at, OUTLINE_SIZE, OUTLINE);
         }
         for system in systems {
-            let at = self.view.world_to_screen(system.position());
+            let at = transform.world_to_screen(system.position());
             let color = if self.is_explored(system.entry.id) {
                 system.color
             } else {
@@ -517,7 +556,7 @@ impl GalaxyMap {
             };
             list.dot(at, DOT_SIZE, color);
         }
-        if let Some(at) = self.selected.and_then(screen) {
+        if let Some(at) = marks.selected.and_then(screen) {
             let half = HIGHLIGHT_SIZE / 2.0;
             let corners = [
                 Point::new(at.x - half, at.y - half),
@@ -2478,5 +2517,63 @@ mod tests {
                 .any(|command| matches!(command, DrawCommand::StretchedPicture { .. })),
             "the nebula is inactive"
         );
+    }
+
+    // The marks, drawn through another transform (the floating map's).
+
+    #[test]
+    fn the_marks_follow_the_transform_given_with_no_nebula_text_or_own_state() {
+        let mut map = map();
+        map.show_course(SystemId(129), &[]);
+        map.show_hyper_selection(Some(SystemId(129)));
+        map.preselect(Some(SystemId(129)));
+        map.show_explored([SystemId(128), SystemId(129), SystemId(130)]);
+        let transform = Transform {
+            screen: at(686.0, 278.0),
+            world: at(0.0, 0.0),
+            scale: 0.5,
+        };
+        let marks = MapMarks {
+            current: Some(SystemId(128)),
+            route: &[SystemId(129)],
+            hyper_selection: Some(SystemId(130)),
+            offered: &[],
+            selected: None,
+        };
+        let mut list = DrawList::new();
+        map.draw_marks(&mut list, &transform, &marks);
+        assert!(
+            list.iter().all(|command| matches!(
+                command,
+                DrawCommand::Line { .. } | DrawCommand::Dot { .. }
+            )),
+            "no nebula and no panel: {list:?}"
+        );
+        let (alpha, beta, gamma) = (at(686.0, 278.0), at(986.0, 278.0), at(686.0, 428.0));
+        assert_eq!(
+            lines(&list, LINK),
+            [(alpha, beta, 1.0), (alpha, gamma, 1.0)]
+        );
+        assert_eq!(lines(&list, ROUTE), [(alpha, beta, ROUTE_WIDTH)]);
+        assert_eq!(lines(&list, HYPER_SELECTED), [(alpha, gamma, 1.0)]);
+        assert_eq!(dots(&list, CURRENT_SIZE), [(alpha, CURRENT)]);
+        assert_eq!(
+            dots(&list, DOT_SIZE),
+            [
+                (alpha, UNEXPLORED),
+                (gamma, Color::from_rgb24(BLUE)),
+                (beta, NEUTRAL),
+                (alpha, Color::from_rgb24(BLUE)),
+            ],
+            "the map's own explored systems, highest ID first"
+        );
+        assert_eq!(lines(&list, Color::WHITE), [], "no selection square");
+        let mut selected = DrawList::new();
+        let marks = MapMarks {
+            selected: Some(SystemId(130)),
+            ..marks
+        };
+        map.draw_marks(&mut selected, &transform, &marks);
+        assert_eq!(lines(&selected, Color::WHITE).len(), 4, "one when asked");
     }
 }

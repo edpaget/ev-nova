@@ -39,9 +39,9 @@ use crate::catalog::{
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    RankId, RankRecord, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic,
+    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -58,6 +58,9 @@ const WARP_UP_SOUND: i16 = 128;
 /// the warp's clock reads in double time (`_LoadSounds`
 /// @0x1c0b5-0x1c12d, `_WarpSoundDuration` @0x8210-0x8219).
 const WARP_UP_DOUBLE_SOUND: i16 = 129;
+/// The warp-out sound, `snd ` 130, which an arrival plays (`_LoadSounds`
+/// @0x1c152, `_HandlePlayer` @0x6bc08 and @0x6c706).
+const WARP_OUT_SOUND: i16 = 130;
 
 /// The length of `data`'s `snd ` `id` as `_ParseSndHeader` gives it: its
 /// frames and the whole part of its rate; none when it is missing or
@@ -233,7 +236,6 @@ impl PilotCatalog for GameData {
                     frame_size,
                     flags: stellar.flags.bits(),
                     min_status: stellar.min_status,
-                    landing_sound: landing_sound(stellar.cust_snd_id),
                     tech_level: stellar.tech_level,
                     special_tech,
                     govt: stellar.govt,
@@ -417,6 +419,24 @@ impl PilotCatalog for GameData {
                     id: SystemId(id),
                     visibility: self.test_expr(system.visibility.as_str()).into(),
                 })
+            })
+            .collect()
+    }
+
+    /// One pass over every system's `nav_def`, reading each stellar but
+    /// not its sprites, as [`GameData::landing_sites`] would for every
+    /// system.
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let first = system
+                    .ok()?
+                    .record
+                    .nav_def
+                    .into_iter()
+                    .flatten()
+                    .find(|stellar| matches!(self.get::<Stellar>(stellar.0), Some(Ok(_))))?;
+                Some((SystemId(id), first))
             })
             .collect()
     }
@@ -639,6 +659,10 @@ impl PilotCatalog for GameData {
 
     fn warp_sound_double_time(&self) -> Option<SoundLength> {
         sound_length(self, WARP_UP_DOUBLE_SOUND)
+    }
+
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        sound_length(self, WARP_OUT_SOUND)
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
@@ -1136,17 +1160,6 @@ fn strings(data: &GameData, id: i16) -> Vec<String> {
         .iter()
         .map(|string| string.as_str().to_owned())
         .collect()
-}
-
-/// The first stellar landing sound: the community *EV Nova Resource ID
-/// Guide* gives `snd ` 10000 and up to "custom stellar landing sounds".
-const FIRST_LANDING_SOUND: i16 = 10_000;
-
-/// A `spöb`'s `CustSndID` as its landing sound: from
-/// [`FIRST_LANDING_SOUND`] up. Anything below is none: -1, 0, and the
-/// angle hypergates and wormholes keep in the field (stock 120).
-fn landing_sound(cust_snd_id: i16) -> Option<SoundId> {
-    (cust_snd_id >= FIRST_LANDING_SOUND).then_some(SoundId(cust_snd_id))
 }
 
 #[cfg(test)]
@@ -1888,6 +1901,40 @@ mod tests {
     }
 
     #[test]
+    fn the_warp_out_sound_is_snd_130s() {
+        let data = store(&[warp_up(1000), warp_up_as(130, 44_508)]);
+        assert_eq!(
+            data.warp_out_sound(),
+            Some(SoundLength {
+                frames: 44_508,
+                rate: 22_254
+            })
+        );
+        assert_eq!(
+            data.warp_sound().map(|sound| sound.frames),
+            Some(1000),
+            "128 apart"
+        );
+    }
+
+    #[test]
+    fn without_a_readable_snd_130_there_is_no_warp_out_sound() {
+        assert_eq!(store(&[]).warp_out_sound(), None);
+        assert_eq!(
+            store(&[warp_up(44_508), warp_up_as(129, 44_508)]).warp_out_sound(),
+            None,
+            "128 and 129 are not it"
+        );
+        let (ty, id, bytes) = warp_up_as(130, 44_508);
+        let broken = bytes[..bytes.len() - 10].to_vec();
+        assert_eq!(
+            store(&[(ty, id, broken)]).warp_out_sound(),
+            None,
+            "undecodable"
+        );
+    }
+
+    #[test]
     fn without_a_readable_snd_129_there_is_no_double_time_warp_sound() {
         assert_eq!(store(&[]).warp_sound_double_time(), None);
         assert_eq!(
@@ -2087,6 +2134,36 @@ mod tests {
     }
 
     #[test]
+    fn each_systems_first_stellar_is_the_first_of_its_landing_sites() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[999, 129, 128])),
+            (System::TYPE, 131, system_with(&[])),
+            (System::TYPE, 132, system_with(&[129, 128, 130])),
+            (System::TYPE, 133, short(system_with(&[128]))),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+            (Stellar::TYPE, 130, stellar(0, 0, 0, 1, 0)),
+        ]);
+        let first = data.first_stellars();
+        assert_eq!(
+            first,
+            [
+                (SystemId(130), StellarId(128)),
+                (SystemId(132), StellarId(128))
+            ],
+            "missing 999 and undecodable 129 passed over; 131 lists none and \
+             undecodable 133 is none"
+        );
+        let landing: Vec<_> = data
+            .star_map()
+            .iter()
+            .filter_map(|system| Some((system.id, data.landing_sites(system.id).first()?.id)))
+            .collect();
+        assert_eq!(first, landing, "as the landing sites give it");
+        assert_eq!(store(&[]).first_stellars(), []);
+    }
+
+    #[test]
     fn the_place_names_are_every_readable_stellars_and_systems_as_shown() {
         let data = store_named(&[
             (Stellar::TYPE, 128, Some("Earth"), stellar(0, 0, 0, 1, 0)),
@@ -2187,7 +2264,6 @@ mod tests {
                     frame_size: Some((12, 30)),
                     flags: 0x2001,
                     min_status: -32767,
-                    landing_sound: None,
                     tech_level: 0,
                     special_tech: [0; 8],
                     govt: None,
@@ -2211,7 +2287,6 @@ mod tests {
                     frame_size: None,
                     flags: 0x13,
                     min_status: 25,
-                    landing_sound: None,
                     tech_level: 0,
                     special_tech: [0; 8],
                     govt: None,
@@ -2529,38 +2604,6 @@ mod tests {
         let mut bytes = stellar(0, 0, 0, 1, 0);
         put_i16s(&mut bytes, 0x1A, &[cust_snd_id]);
         bytes
-    }
-
-    #[test]
-    fn a_landing_sites_sound_is_its_custom_sound_from_10000_up() {
-        // Port Kane's 10032; none (-1), 0, the 120 a hypergate keeps there
-        // as an angle, and 9999, are no landing sound.
-        let sounds = [10_032, -1, 0, 120, 9_999, 10_000];
-        let mut resources = vec![(
-            System::TYPE,
-            130,
-            system_with(&[128, 129, 130, 131, 132, 133]),
-        )];
-        for (id, sound) in (128..).zip(sounds) {
-            resources.push((Stellar::TYPE, id, sounding(sound)));
-        }
-        let data = store(&resources);
-        let found: Vec<_> = data
-            .landing_sites(SystemId(130))
-            .iter()
-            .map(|site| site.landing_sound)
-            .collect();
-        assert_eq!(
-            found,
-            [
-                Some(SoundId(10_032)),
-                None,
-                None,
-                None,
-                None,
-                Some(SoundId(10_000)),
-            ]
-        );
     }
 
     #[test]

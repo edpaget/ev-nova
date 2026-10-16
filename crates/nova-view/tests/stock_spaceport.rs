@@ -9,11 +9,13 @@ mod common;
 
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::{GameData, InterfaceData};
 use nova_sim::{Chance, Pilot, Service, Session};
 use nova_view::geometry::{Bounds, Point};
+use nova_view::sound::{Sound, SoundId, UiSound};
 use nova_view::spaceport::layout::{BACKGROUND, LEAVE_ITEM, SPACEPORT_DIALOG};
 use nova_view::spaceport::trade::{
     BACKGROUND as TRADE_BACKGROUND, BUY_ITEM, DONE_ITEM, SELL_ITEM, TRADE_DIALOG,
@@ -37,14 +39,16 @@ fn builds() -> Vec<(PathBuf, PathBuf)> {
 
 /// Port Kane's spaceport: its landscape, name and description over the
 /// 618 x 517 "Spaceport" background, centred, with Leave bottom right and a
-/// button for each service its flags offer.
+/// button for each service its flags offer; its ambient sound, "Federation
+/// Station.SFIL" (`snd ` 10032), plays on its first frame.
 #[test]
 fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
     for (dir, ui) in builds() {
         let data = GameData::open(&dir, None).expect("the stock data opens");
         let ui = InterfaceData::open(&ui).expect("the interface file opens");
         let template = ui.dialog_template(SPACEPORT_DIALOG).expect("Spaceport");
-        let view = SpaceportView::new(&data, StellarId(137), Ok((template, Rc::new(MonoMetrics))));
+        let mut view =
+            SpaceportView::new(&data, StellarId(137), Ok((template, Rc::new(MonoMetrics))));
         assert_eq!(view.problem(), None);
         assert_eq!(view.missing_landscape(), None);
         assert_eq!(view.description_problem(), None);
@@ -87,6 +91,15 @@ fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
         assert!(
             list.iter()
                 .any(|c| matches!(c, DrawCommand::Text { text, .. } if text == "Port Kane"))
+        );
+
+        view.tick(Duration::from_millis(50));
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Ui(UiSound::PortAmbient {
+                sound: SoundId(10_032),
+                until_stopped: false,
+            })]
         );
     }
 }

@@ -185,7 +185,6 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         frame_size: Some((200, 200)),
         flags,
         min_status,
-        landing_sound: None,
         tech_level: 0,
         special_tech: [0; 8],
         govt: None,
@@ -253,16 +252,12 @@ fn a_ship_over_no_stellar_is_too_far() {
     assert_eq!(session.nav_target(), Some(StellarId(128)));
 }
 
+/// Untargeted, with nothing landable, L selects nothing and makes no dock
+/// request (@0x6a94c).
 #[test]
 fn a_stellar_that_cannot_be_landed_on_refuses() {
     let mut session = session(vec![at_centre(0, 0)]);
-    assert_eq!(
-        session.land(),
-        Err(LandingRefusal::NotLandable {
-            stellar: StellarId(128),
-            station: false,
-        })
-    );
+    assert_eq!(session.land(), Err(LandingRefusal::NothingLandable));
     assert_eq!(session.nav_target(), None, "nothing selected");
 }
 

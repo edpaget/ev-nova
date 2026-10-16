@@ -85,12 +85,12 @@
 //! original's +0x6a and +0x6c; see the session's `nav` module) say what
 //! the nav area shows and where J jumps. The player selects one of the
 //! system's stellars ([`Session::select_stellar`]) by its slot in the
-//! system's navigation defaults, as the nearest landable one, or by
+//! system's navigation defaults, as the nearest with the can-land flag, or by
 //! clicking it, as the [`navigation`](crate::navigation) rules say;
 //! turns the nav system off with Nav Off ([`Session::nav_off`]), the
 //! course kept; selects the course's next hop with Hyperspace Mode
 //! ([`Session::hyperspace_mode`]); or presses the land key
-//! ([`Session::land`]), which selects the nearest landable stellar when
+//! ([`Session::land`]), which selects the nearest stellar with the can-land flag when
 //! none is selected and lands on the one selected when there is one.
 //! Landing keeps the selection, and the take-off lets go of it. The mode
 //! is not part of the pilot, so it is not saved.
@@ -406,7 +406,7 @@ mod target_panel;
 mod tutorial;
 
 pub use hooks::HookRules;
-pub use ship_change::ShipChangeRules;
+pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
 pub use edit::RelocateRefusal;
@@ -613,8 +613,8 @@ pub enum StellarPick {
     /// The stellar in this slot of the system's navigation defaults,
     /// from 0: the original's keys 1-4 and F1-F4 (@0x69cf6-0x69f17).
     Slot(usize),
-    /// The nearest landable stellar, the one the land key selects with no
-    /// target ([`nearest_landable`]): the original's F5, which picks
+    /// The nearest stellar with the can-land flag, destroyed or not, the one the land key selects with no
+    /// target ([`nearest_stellar`]): the original's F5, which picks
     /// through the same `_FindNearestStellar` (@0x276c) its land key does.
     Nearest,
 }
@@ -680,6 +680,14 @@ pub struct Session {
     /// The player's nav mode and its selection (see the `nav` module): a
     /// stellar selected is one of `sites`.
     nav: NavMode,
+    /// The nav saved as a port dialog opened, until its close restores it
+    /// ([`Session::save_port_nav`], [`Session::restore_port_nav`]).
+    port_nav: Option<NavMode>,
+    /// The nav saved as the bar opened, put back after each map opened
+    /// from it ([`Session::open_bar`], [`Session::restore_bar_nav`]),
+    /// forgotten with the news at landing and take-off, so no later
+    /// stay can put back a nav saved in an earlier one.
+    bar_nav: Option<NavMode>,
     /// The sprite of each hypergate shown, as it opens and closes (see
     /// the `gate_sprites` module).
     gate_sprites: BTreeMap<StellarId, GateSprite>,
@@ -698,6 +706,13 @@ pub struct Session {
     /// warp start's still-playing skip and the double-time switch (see
     /// [`warp::WarpUps`]); not saved, as the original's sounds are not.
     warp_ups: warp::WarpUps,
+    /// The warp-out's duration, in Mac ticks, read when the session
+    /// starts from `snd ` 130 ([`warp::warp_out_duration`]).
+    warp_out_sound: u32,
+    /// Whether the warp-out, `snd ` 130, is still playing, for a jump's
+    /// natural end (see [`warp::WarpOut`]); not saved, as the original's
+    /// sounds are not.
+    warp_out: warp::WarpOut,
     /// The rule a multi-jump follows.
     multi_jump: MultiJumpRule,
     /// The rule Hyper Select follows.
@@ -1061,6 +1076,9 @@ pub struct Session {
     /// Every stellar's and system's name, read when the session starts:
     /// what the text tags read (see the `missions` module).
     place_names: PlaceNames,
+    /// Each system's first stellar that can be read, read when the session
+    /// starts: what a landed `M` selects (see the `nav` module).
+    first_stellars: BTreeMap<SystemId, StellarId>,
     /// Every stellar's place and name, read when the session starts: what
     /// a mission's stop is matched by (see the `missions` module).
     stellar_marks: StellarMarks,
@@ -1090,6 +1108,22 @@ pub struct Session {
     /// The mission texts to show, until they are taken (see the
     /// `mission_screens` module); never saved.
     shown_texts: Vec<MissionText>,
+    /// How many mission texts have been queued, never reset (see the
+    /// `mission_screens` module); never saved.
+    texts_queued: u64,
+    /// The nav mode as the last text queued since they were last taken
+    /// was queued: what its dialog's redraw shows (see the
+    /// `mission_screens` module); never saved.
+    text_nav: Option<NavMode>,
+    /// The `C`, `E` and `H` run while docked since the last outfit order
+    /// or ship purchase began, in order (see the `ship_change` module's
+    /// [`InterfaceLoad`]); never saved.
+    interface_loads: Vec<InterfaceLoad>,
+    /// The nav mode as the last take-off began, before its deselect: what
+    /// the original's take-off redraw shows (`_PlayerLandOnStellar`
+    /// @0x633a0), until taken ([`Session::take_takeoff_nav`]); never
+    /// saved.
+    takeoff_nav: Option<NavMode>,
     /// The outside offers whose accept was refused, passed over until
     /// another venue is entered (see the `mission_screens` module); never
     /// saved, as the original saves none of it.
@@ -1308,12 +1342,16 @@ impl Session {
             shown: system,
             landed: None,
             nav: NavMode::Off,
+            port_nav: None,
+            bar_nav: None,
             gate_sprites: BTreeMap::new(),
             galaxy,
             jump: None,
             warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
                 .map(warp::sound_duration),
             warp_ups: warp::WarpUps::default(),
+            warp_out_sound: warp::warp_out_duration(catalog.warp_out_sound()),
+            warp_out: warp::WarpOut::default(),
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
             hyperlinks: HyperlinkRule::default(),
@@ -1432,6 +1470,7 @@ impl Session {
             nebulae: catalog.nebulae().into(),
             galaxy_stale: false,
             place_names: catalog.place_names(),
+            first_stellars: catalog.first_stellars().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
             reoffer_due: false,
@@ -1439,6 +1478,10 @@ impl Session {
             swap_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
+            texts_queued: 0,
+            text_nav: None,
+            interface_loads: Vec::new(),
+            takeoff_nav: None,
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),
@@ -1671,9 +1714,11 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
-        // The warp-ups play in real time, a frame's worth on each advance
-        // pass, and the switch reads them.
+        // The warp-ups and the warp-out play in real time, a frame's worth
+        // on each advance pass, and the switch and the natural end read
+        // them.
         self.warp_ups.step();
+        self.warp_out.step();
         self.latch_double_time();
         self.takeoff_grace_tick();
         self.sound_script();
@@ -2748,6 +2793,13 @@ impl Session {
         self.condition
     }
 
+    /// Sets the player's condition directly, for
+    /// [`fixture::set_player_condition`](crate::fixture::set_player_condition).
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn set_player_condition(&mut self, to: Condition) {
+        self.condition = to;
+    }
+
     /// Where the player's ship is in its lifecycle: its condition, whether
     /// it exploded on the latest fight tick, how far the game's end has
     /// got since, and the escape pod's countdown.
@@ -3049,9 +3101,10 @@ impl Session {
     }
 
     /// Halts each of `sounds` that is playing ([`SimSound::Halt`]), the
-    /// warp-ups among them over for the session too.
+    /// warp-ups and the warp-out among them over for the session too.
     pub(super) fn halt_sounds(&mut self, sounds: &'static [crate::catalog::SoundId]) {
         self.warp_ups.halt(sounds);
+        self.warp_out.halt(sounds);
         self.sounds.push(SimSound::Halt(sounds));
     }
 
@@ -3196,6 +3249,24 @@ impl Session {
     /// harmless: the fill reads nothing the days change, and the days
     /// don't read the table. Only the order of the draws differs, and the
     /// engine doesn't match that.
+    ///
+    /// It first halts the warp-ups, a [`SimSound::Halt`] of
+    /// [`WARP_UP_HALTS`](crate::sound::WARP_UP_HALTS), once for a whole
+    /// chain, then raises [`SimSound::Arrived`]: the warp end's order
+    /// (`_HandlePlayer` @0x6c6b7, @0x6c6d2, then the warp-out @0x6c706).
+    /// The original's fallback end halts them and plays the warp-out a
+    /// frame before it switches systems; its natural end switches once
+    /// they have finished. The engine has no separate fallback frame: it
+    /// does both in the arrival's tick, the halt first. No frame, dialog
+    /// or save falls between them, so the player can't see the
+    /// difference.
+    ///
+    /// Which end it is is read before the halt: the natural end, with
+    /// both warp-ups finished ([`warp::WarpUps`]), plays the warp-out only
+    /// when it is not still playing ([`warp::WarpOut`]; `ST_IsSoundPlaying`
+    /// @0x6bbe1-0x6bbe9), so a skipped one raises no [`SimSound::Arrived`]
+    /// and leaves the last one's countdown running. The fallback end, a
+    /// warp-up still playing, plays it unasked (@0x6c6d7-0x6c706).
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -3205,9 +3276,16 @@ impl Session {
             return None;
         };
         self.jump = None;
-        // The warp-up has ended, or the warp's end halted it
-        // (`_HandlePlayer` @0x6c69d-0x6c6d2).
-        self.warp_ups.clear();
+        // The natural end, the warp-ups finished (`_warpSoundDone`
+        // @0x6bb5e-0x6bba4), read before the halt ends them.
+        let natural_end = !self.warp_ups.playing(false) && !self.warp_ups.playing(true);
+        // The warp's end halts the warp-ups, 128 then 129, each if it is
+        // playing (`_HandlePlayer` @0x6c69d-0x6c6d2), before the warp-out
+        // plays (@0x6c706); on the natural end they have already finished
+        // and the halt does nothing. Raised whatever the session's
+        // countdown says, as the countdown stands still under a dialog
+        // while the sound plays on.
+        self.halt_sounds(&crate::sound::WARP_UP_HALTS);
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
@@ -3277,7 +3355,13 @@ impl Session {
             self.emit(SessionEvent::GalaxyChanged);
         }
         self.pilot.jumped_from = Some(from);
-        self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
+        self.enter_system(
+            Entry::Jump { hops, natural_end },
+            entered,
+            catalog,
+            catalog,
+            chance,
+        );
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).
         self.reset_precalced();
@@ -3407,8 +3491,11 @@ impl Session {
     /// A disabled ship's press goes as far as `_HandlePlayerDockRequest`
     /// does for it and no further: with no target it selects one, starting
     /// its fly-in, as the land key does before the dock request
-    /// (@0x6a8fb-0x6a932); a target that can't be landed on, or none, is
-    /// refused as an intact ship's is (@0x66977-0x669aa). Then the dock
+    /// (@0x6a8fb-0x6a932); a target that can't be landed on is refused as
+    /// an intact ship's is (@0x66977-0x669aa), and with nothing to select
+    /// ([`LandingRefusal::NoStellars`], [`LandingRefusal::NothingLandable`])
+    /// the press makes no dock request, as an intact ship's makes none
+    /// (@0x6a94c). Then the dock
     /// request's `_IsDisabled` test (@0x66af7) goes to its bare epilogue
     /// (0x67eef): [`LandingRefusal::Disabled`], said nothing of, before
     /// the range and speed checks (@0x67838) and the clearance
@@ -3422,19 +3509,17 @@ impl Session {
     /// A refusal from the dock request that [`LandingRefusal::beeps`]
     /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
     /// @0x676fe), once a press, a disabled ship's not-landable target
-    /// too. A press with no target and nothing landable makes no dock
-    /// request in the original (`_FindNearestStellar` gives -1,
-    /// @0x6a94c), so its [`LandingRefusal::NotLandable`] is silent.
+    /// too, and a not-landable stellar the press selected itself, as its
+    /// dock request refuses it. A press with no target and nothing with
+    /// the can-land flag makes no dock request in the original
+    /// (`_FindNearestStellar` gives -1, @0x6a94c), so its
+    /// [`LandingRefusal::NothingLandable`] is silent.
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
-        let requested = self
-            .nav_target()
-            .is_some_and(|id| self.sites.iter().any(|site| site.id == id));
         let press = self.land_press();
-        if let Err(refusal) = &press {
-            let untargeted = !requested && matches!(refusal, LandingRefusal::NotLandable { .. });
-            if refusal.beeps() && !untargeted {
-                self.sounds.push(SimSound::Refused);
-            }
+        if let Err(refusal) = &press
+            && refusal.beeps()
+        {
+            self.sounds.push(SimSound::Refused);
         }
         press
     }
@@ -3464,7 +3549,9 @@ impl Session {
             self.select_pressed(press.selected);
             return match press.outcome {
                 Err(
-                    refusal @ (LandingRefusal::NotLandable { .. } | LandingRefusal::NoStellars),
+                    refusal @ (LandingRefusal::NotLandable { .. }
+                    | LandingRefusal::NoStellars
+                    | LandingRefusal::NothingLandable),
                 ) => Err(refusal),
                 Ok(_) | Err(_) => Err(LandingRefusal::Disabled),
             };
@@ -3719,13 +3806,15 @@ impl Session {
         if let Some(site) = site {
             self.player.position = site.position;
         }
-        let stellar_sound = site.and_then(|site| site.landing_sound);
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
-        // A warp-up still playing is taken as over (see `warp::WarpUps`).
+        // A warp-up or warp-out still playing is taken as over (see
+        // `warp::WarpUps`, `warp::WarpOut`).
         self.warp_ups.clear();
+        self.warp_out.clear();
         self.pilot.stellar = Some(stellar);
         self.bar_news = None;
+        self.bar_nav = None;
         self.combat.clear();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
         self.clear_boxes();
@@ -3739,7 +3828,7 @@ impl Session {
         self.stop_thrust();
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
         self.red_alert.clear_icon();
-        self.sounds.push(SimSound::Landed { stellar_sound });
+        self.sounds.push(SimSound::Landed);
         // `_PlayerLandOnStellar`'s reset (@0x63211; see the `precalced`
         // module), before the port opens.
         self.reset_precalced();
@@ -3846,8 +3935,13 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
         let stellar = self.landed.take()?;
+        // The take-off's whole-bar redraw (`_PlayerLandOnStellar`
+        // @0x633a0), before the stay's days (@0x63440) and the deselect
+        // (@0x674d2); see the flight view's `took_off`.
+        self.takeoff_nav = Some(self.nav_mode());
         let stay = std::mem::take(&mut self.stay);
         self.bar_news = None;
+        self.bar_nav = None;
         let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
             self.pass_days(stay.escort_days(), chance);
@@ -3896,6 +3990,9 @@ impl Session {
         // Its tail: the dock request dropped (@0x6374a-0x63759; see the
         // `clearance` module), the nav selection let go, the mode kept,
         // then the course cued (@0x674d2-0x674d8; see the `nav` module).
+        // The original's bar is redrawn before this with the selection
+        // still held (@0x633a0), noted as `takeoff_nav` above; see the
+        // flight view's `took_off`.
         self.dock = None;
         self.deselect();
         self.cue_course();
@@ -4201,10 +4298,17 @@ impl Session {
     /// pass and a Cancel's count of none included, a buy refused at the
     /// button not. A sale resets after each pass (@0x5cffb).
     ///
-    /// A `count` of none runs no pass and moves nothing; a buy of none
-    /// asks the outfitter whether Buy passes, drawing any roll not drawn
-    /// yet, for its reset; [`outfit_counted`](Self::outfit_counted) is the
-    /// one that counts a Cancel's outfit day.
+    /// The run's `button_passed` says whether the order's button passed
+    /// its own check ([`Outfitter::can`]), so the dialog falls through
+    /// its loop to the reset and the draw (@0x5c2fc-0x5c2ff): for a sale,
+    /// or an order of none, asked of the outfitter before the loop; for a
+    /// buy that runs a pass, unless its first pass, whose check is the
+    /// button's, was refused.
+    ///
+    /// A `count` of none runs no pass and moves nothing; it asks the
+    /// outfitter whether its button passes, drawing any roll not drawn
+    /// yet; [`outfit_counted`](Self::outfit_counted) is the one that
+    /// counts a Cancel's outfit day.
     ///
     /// A sale need not lower a count owned: an `OnSell` can grant the
     /// outfit sold back and change the listing again (`^b7 G128`), so
@@ -4225,6 +4329,9 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> OutfitRun {
+        // The bar's loads are this order's alone (see
+        // [`Session::take_interface_loads`]).
+        self.interface_loads.clear();
         let follows = self.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
         // An order of another outfit names another cell: the selection
         // moved, so the relisting's selection is let go.
@@ -4232,8 +4339,15 @@ impl Session {
             self.outfit_reselected = None;
         }
         let asked = self.outfit_reselected;
+        // The button's own check comes before the loop (@0x5c087-0x5c0a2
+        // for Buy, @0x5c5d5-0x5c5dd for Sell). A buy's first pass checks
+        // the same, so a buy that runs a pass reads it off the run
+        // instead ([`button_passed`](Self::button_passed)).
+        let checked = (count == 0 || order.direction == Direction::Sell)
+            .then(|| self.outfit_button_passes(order, chance));
         let mut alert = None;
         let mut relisting = Relisting::default();
+        let mut button_passed = false;
         let run = match order.direction {
             Direction::Sell
                 if self.rules.source_for(RuleKey::RelistedSale) == RuleSource::Engine =>
@@ -4260,7 +4374,8 @@ impl Session {
                 // The buy loop's reset, once after the loop (@0x5c305),
                 // whenever Buy passed its own check: a Cancel's count of
                 // none and a loop stopped by a refusal included.
-                if self.buy_button_passed(order, count, &run, chance, asked) {
+                button_passed = Self::button_passed(checked, &run);
+                if button_passed {
                     self.reset_precalced();
                 }
                 // The buy loop rebuilds the list once, after the loop
@@ -4279,28 +4394,40 @@ impl Session {
         if after != Reselection::Kept {
             self.outfit_reselected = Some(FIRST_OUTFIT);
         }
-        OutfitRun { run, alert, after }
+        if order.direction == Direction::Sell {
+            button_passed = Self::button_passed(checked, &run);
+        }
+        OutfitRun {
+            run,
+            alert,
+            after,
+            button_passed,
+        }
     }
 
-    /// Whether a buy order's button passed its own check
-    /// (`_CanBuyOutfitItem`, [`Outfitter::can`]), so the buy loop's reset
-    /// runs after it (@0x5c305): for a `count` of none, asked of the
-    /// outfitter now; otherwise unless `run` was refused at its first
-    /// pass, whose check is the button's.
-    fn buy_button_passed(
-        &mut self,
-        order: OutfitOrder,
-        count: u32,
-        run: &OrderRun<OutfitRefusal>,
-        chance: &mut dyn Chance,
-        asked: Option<OutfitId>,
-    ) -> bool {
-        if count == 0 {
-            return self
-                .outfitter_with(chance, asked)
-                .is_some_and(|outfitter| outfitter.can(order).is_ok());
-        }
-        run.stopped.as_ref().is_none_or(|stopped| stopped.pass > 0)
+    /// Whether an order's button passed its own check ([`Outfitter::can`]):
+    /// `checked`, when it was asked of the outfitter before the loop (a
+    /// sale, or an order of none); otherwise, for a buy that ran a pass,
+    /// unless `run` was refused at its first pass, whose check
+    /// (`_CanBuyOutfitItem`) is the button's.
+    fn button_passed(checked: Option<bool>, run: &OrderRun<OutfitRefusal>) -> bool {
+        checked.unwrap_or_else(|| run.stopped.as_ref().is_none_or(|stopped| stopped.pass > 0))
+    }
+
+    /// Whether `order`'s Buy or Sell button passes its own check now
+    /// ([`Outfitter::can`]: `_CanBuyOutfitItem` @0x5c087-0x5c0a2 for a
+    /// buy, the Sell flag @0x5c5d5-0x5c5dd for a sale), the outfitter
+    /// carrying the outfit a relisting selected when `order` names it
+    /// ([`outfit_order`](Self::outfit_order)'s `after`); false with no
+    /// outfitter. It draws any roll not drawn yet and changes nothing
+    /// else. An order of none (the quantity dialog's Cancel) runs what
+    /// follows its loop only when this passed.
+    pub fn outfit_button_passes(&mut self, order: OutfitOrder, chance: &mut dyn Chance) -> bool {
+        let asked = self
+            .outfit_reselected
+            .filter(|&reselected| reselected == order.outfit);
+        self.outfitter_with(chance, asked)
+            .is_some_and(|outfitter| outfitter.can(order).is_ok())
     }
 
     /// The listing before an order's first pass, when
@@ -4485,14 +4612,24 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> Result<u32, OutfitRefusal> {
-        if count == 0
-            && self
-                .outfitter(chance)
-                .is_some_and(|outfitter| outfitter.can(order).is_ok())
-        {
+        self.outfit_counted_run(order, count, chance).run.counted()
+    }
+
+    /// [`outfit_counted`](Self::outfit_counted)'s whole run, as
+    /// [`outfit_order`](Self::outfit_order) gives it: a Cancel's count of
+    /// none whose button passed its own check
+    /// ([`OutfitRun::button_passed`]) counts the outfit day too.
+    pub fn outfit_counted_run(
+        &mut self,
+        order: OutfitOrder,
+        count: u32,
+        chance: &mut dyn Chance,
+    ) -> OutfitRun {
+        let run = self.outfit_order(order, count, chance);
+        if count == 0 && run.button_passed {
             self.stay.outfit_traded = true;
         }
-        self.outfit_run(order, count, chance).counted()
+        run
     }
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
@@ -4605,6 +4742,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<ShipPurchase, ShipRefusal> {
         let (shipyard, record) = self.buyable(ship, chance)?;
+        self.interface_loads.clear();
         let quote = Quote {
             price: shipyard.row(ship).map_or(0, |row| row.price),
             trade_in: shipyard.trade_in,
@@ -6263,7 +6401,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_first_l_selects_the_nearest_landable_stellar_and_does_not_land() {
+    fn the_first_l_selects_the_nearest_stellar_and_does_not_land() {
         let mut session = Session::start(&catalog()).expect("starts");
         let before = *session.player();
         assert_eq!(
@@ -6312,12 +6450,7 @@ pub(super) mod tests {
             "landing writes neither nav word"
         );
         assert!(session.take_save_due());
-        assert_eq!(
-            session.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: None
-            }]
-        );
+        assert_eq!(session.take_sounds(), [SimSound::Landed]);
         // Once off again, L requests clearance afresh.
         session.take_off(&NoTraffic, &mut NeverFires);
         assert!(matches!(
@@ -7714,7 +7847,7 @@ pub(super) mod tests {
             session
                 .take_sounds()
                 .iter()
-                .any(|sound| matches!(sound, SimSound::Landed { .. }))
+                .any(|sound| matches!(sound, SimSound::Landed))
         );
     }
 
@@ -8103,7 +8236,7 @@ pub(super) mod tests {
 
     #[test]
     fn the_session_is_thrusting_while_the_last_tick_flew_thrust() {
-        let mut session = Session::start(&sounding()).expect("starts");
+        let mut session = Session::start(&catalog()).expect("starts");
         assert!(!session.thrusting(), "at rest");
         session.tick(THRUST);
         assert!(session.thrusting());
@@ -8219,43 +8352,16 @@ pub(super) mod tests {
         assert_eq!(session.take_sounds(), []);
     }
 
-    /// The catalog with planet 128 playing `snd ` 10032 when landed on.
-    fn sounding() -> FakePilotCatalog {
-        FakePilotCatalog {
-            sites: vec![(
-                SystemId(130),
-                vec![LandingSite {
-                    landing_sound: Some(SoundId(10_032)),
-                    ..planet(128, 30.0, -40.0)
-                }],
-            )],
-            ..catalog()
-        }
-    }
-
     #[test]
-    fn landing_emits_landed_with_the_stellars_sound() {
-        let mut session = Session::start(&sounding()).expect("starts");
+    fn landing_emits_landed() {
+        let mut session = Session::start(&catalog()).expect("starts");
         land_now(&mut session).expect("lands");
-        assert_eq!(
-            session.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: Some(SoundId(10_032))
-            }]
-        );
-        let mut silent = Session::start(&catalog()).expect("starts");
-        land_now(&mut silent).expect("lands");
-        assert_eq!(
-            silent.take_sounds(),
-            [SimSound::Landed {
-                stellar_sound: None
-            }]
-        );
+        assert_eq!(session.take_sounds(), [SimSound::Landed]);
     }
 
     #[test]
     fn landing_while_thrusting_stops_the_thrust_first() {
-        let mut session = Session::start(&sounding()).expect("starts");
+        let mut session = Session::start(&catalog()).expect("starts");
         session.tick(Controls {
             turn: Turn::Right,
             ..THRUST
@@ -8264,12 +8370,7 @@ pub(super) mod tests {
         land_now(&mut session).expect("lands");
         assert_eq!(
             session.take_sounds(),
-            [
-                SimSound::ThrustStopped,
-                SimSound::Landed {
-                    stellar_sound: Some(SoundId(10_032))
-                }
-            ]
+            [SimSound::ThrustStopped, SimSound::Landed]
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "docked, nothing thrusts");
@@ -8330,9 +8431,242 @@ pub(super) mod tests {
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "jumping, nothing thrusts");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
-        assert_eq!(session.take_sounds(), [SimSound::Arrived]);
+        assert_eq!(
+            session.take_sounds(),
+            [
+                SimSound::Halt(&crate::sound::WARP_UP_HALTS),
+                SimSound::Arrived
+            ]
+        );
         session.arrive(&catalog, &mut NeverFires);
         assert_eq!(session.take_sounds(), [], "no jump under way");
+    }
+
+    /// The sounds `session` raises arriving with the warp-ups begun in
+    /// `double_times` (`false` 128, `true` 129) still playing, as a stock
+    /// 128 outlasts the engine's jump effect. The arrival ends them all.
+    fn arriving_with_warp_ups(double_times: &[bool]) -> Vec<SimSound> {
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
+        session.begin_jump().expect("jumps");
+        for &double_time in double_times {
+            session.warp_ups.start(double_time, 100_000);
+        }
+        session.take_sounds();
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        session.take_sounds()
+    }
+
+    #[test]
+    fn an_arrival_halts_the_warp_ups_before_the_warp_out() {
+        let sounds = arriving_with_warp_ups(&[false, true]);
+        let halt = SimSound::Halt(&crate::sound::WARP_UP_HALTS);
+        let halted = sounds.iter().position(|sound| *sound == halt);
+        let arrived = sounds.iter().position(|sound| *sound == SimSound::Arrived);
+        assert!(
+            halted.is_some() && halted < arrived,
+            "@0x6c6b7, @0x6c6d2 before @0x6c706: {sounds:?}"
+        );
+        assert_eq!(
+            sounds.iter().filter(|sound| **sound == halt).count(),
+            1,
+            "{sounds:?}"
+        );
+    }
+
+    #[test]
+    fn an_arrival_halts_a_warp_up_begun_in_double_time() {
+        // 129, `_warpUpSnd[1]`, is halted by the same pair (@0x6c6d2).
+        let sounds = arriving_with_warp_ups(&[true]);
+        let halted: Vec<_> = sounds
+            .iter()
+            .filter_map(|sound| match sound {
+                SimSound::Halt(ids) => Some(*ids),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(halted, [&[SoundId(128), SoundId(129)][..]]);
+    }
+
+    // The warp-out, `snd ` 130, skipped by a natural end while it plays.
+
+    /// A warp-up of no length: every jump's warp-ups have finished by its
+    /// arrival, its natural end.
+    const SILENT: crate::warp::SoundLength = crate::warp::SoundLength {
+        frames: 0,
+        rate: 22_050,
+    };
+
+    /// A warp-out of 60 Mac ticks: 30 of the engine's.
+    const WARP_OUT_60: crate::warp::SoundLength = crate::warp::SoundLength {
+        frames: 22_050,
+        rate: 22_050,
+    };
+
+    /// `base` with 131 linked back to 130, west of it, the warp-up
+    /// `warp_up` and the warp-out `warp_out`.
+    fn warping(
+        base: FakePilotCatalog,
+        warp_up: Option<crate::warp::SoundLength>,
+        warp_out: Option<crate::warp::SoundLength>,
+    ) -> FakePilotCatalog {
+        let mut catalog = FakePilotCatalog {
+            warp_sound: warp_up,
+            warp_out_sound: warp_out,
+            ..base
+        };
+        catalog.star_map[1] = crate::testkit::star(131, (600.0, 0.0), &[130, 132]);
+        catalog
+    }
+
+    /// The sounds `session` raises jumping from 131 back to 130, at rest
+    /// facing west, from the J to the arrival, the J's own left out.
+    fn jumping_back_to_130(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<SimSound> {
+        session.plot_course(SystemId(130)).expect("a route");
+        session.player = ShipState {
+            position: OUT,
+            velocity: Vec2::ZERO,
+            heading: 270.0,
+        };
+        session.begin_jump().expect("jumps");
+        session.take_sounds();
+        session.arrive(catalog, &mut NeverFires).expect("arrives");
+        session.take_sounds()
+    }
+
+    /// The sounds of a jump from 130 to 131 with `catalog`.
+    fn jumping_to_131(catalog: &FakePilotCatalog) -> (Session, Vec<SimSound>) {
+        let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
+        session.begin_jump().expect("jumps");
+        session.take_sounds();
+        session.arrive(catalog, &mut NeverFires).expect("arrives");
+        let sounds = session.take_sounds();
+        (session, sounds)
+    }
+
+    const HALT_ONLY: [SimSound; 1] = [SimSound::Halt(&crate::sound::WARP_UP_HALTS)];
+    const HALT_THEN_ARRIVED: [SimSound; 2] = [
+        SimSound::Halt(&crate::sound::WARP_UP_HALTS),
+        SimSound::Arrived,
+    ];
+
+    #[test]
+    fn a_natural_end_plays_no_warp_out_while_the_last_one_plays() {
+        // `_HandlePlayer` @0x6bbe1-0x6bbe9 skips the play @0x6bc08.
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, first) = jumping_to_131(&catalog);
+        assert_eq!(first, HALT_THEN_ARRIVED, "130 was not playing");
+        assert!(session.warp_out.playing());
+        assert_eq!(
+            jumping_back_to_130(&mut session, &catalog),
+            HALT_ONLY,
+            "130 still plays"
+        );
+    }
+
+    #[test]
+    fn a_skipped_warp_out_leaves_the_last_ones_countdown_running() {
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, _) = jumping_to_131(&catalog);
+        for _ in 0..20 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(jumping_back_to_130(&mut session, &catalog), HALT_ONLY);
+        for _ in 0..10 {
+            session.tick(Controls::default());
+        }
+        assert!(!session.warp_out.playing(), "not restarted by the skip");
+    }
+
+    #[test]
+    fn a_natural_end_plays_the_warp_out_once_the_last_one_has_run_out() {
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, _) = jumping_to_131(&catalog);
+        for _ in 0..29 {
+            session.tick(Controls::default());
+        }
+        assert!(session.warp_out.playing(), "2 Mac ticks left");
+        session.tick(Controls::default());
+        assert!(!session.warp_out.playing(), "over after 30 engine ticks");
+        assert_eq!(
+            jumping_back_to_130(&mut session, &catalog),
+            HALT_THEN_ARRIVED
+        );
+        assert!(session.warp_out.playing(), "started again");
+    }
+
+    #[test]
+    fn a_fallback_end_plays_the_warp_out_while_the_last_one_plays() {
+        // The warp-up still playing: @0x6c6d7-0x6c706 plays 130 unasked,
+        // and the countdown starts over.
+        let catalog = warping(catalog(), None, Some(WARP_OUT_60));
+        let (mut session, first) = jumping_to_131(&catalog);
+        assert_eq!(first, HALT_THEN_ARRIVED);
+        for _ in 0..20 {
+            session.tick(Controls::default());
+        }
+        assert!(session.warp_out.playing());
+        assert_eq!(
+            jumping_back_to_130(&mut session, &catalog),
+            HALT_THEN_ARRIVED
+        );
+        for _ in 0..20 {
+            session.tick(Controls::default());
+        }
+        assert!(session.warp_out.playing(), "restarted: 20 Mac ticks left");
+    }
+
+    #[test]
+    fn a_gate_exit_plays_the_warp_out_while_it_plays_and_a_natural_end_then_skips_it() {
+        // `_PlayerEnterHypergate` plays 130 unasked (@0x63e57).
+        let catalog = warping(gated(), Some(SILENT), Some(WARP_OUT_60));
+        let mut session = at_gate(&catalog);
+        session.warp_out.start(2);
+        session.take_sounds();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
+            .expect("enters");
+        assert_eq!(session.take_sounds(), [SimSound::Arrived]);
+        for _ in 0..20 {
+            session.tick(Controls::default());
+        }
+        assert!(session.warp_out.playing(), "restarted by the exit");
+        assert_eq!(jumping_back_to_130(&mut session, &catalog), HALT_ONLY);
+    }
+
+    #[test]
+    fn without_a_warp_out_sound_every_natural_end_plays_it() {
+        // 130 missing: `_LoadSounds` has no 350-tick fallback for it.
+        let catalog = warping(catalog(), Some(SILENT), None);
+        let (mut session, first) = jumping_to_131(&catalog);
+        assert_eq!(first, HALT_THEN_ARRIVED);
+        assert!(!session.warp_out.playing());
+        assert_eq!(
+            jumping_back_to_130(&mut session, &catalog),
+            HALT_THEN_ARRIVED
+        );
+    }
+
+    #[test]
+    fn landing_ends_the_warp_out() {
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, _) = jumping_to_131(&catalog);
+        assert!(session.warp_out.playing());
+        // At rest over 131's planet 140.
+        session.player = ShipState::default();
+        land_now(&mut session).expect("lands");
+        assert!(!session.warp_out.playing());
+    }
+
+    #[test]
+    fn landing_at_a_stellar_from_flight_ends_the_warp_out() {
+        let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
+        let (mut session, _) = jumping_to_131(&catalog);
+        session
+            .land_at(&catalog, SystemId(130), StellarId(128))
+            .expect("relocates");
+        assert!(!session.warp_out.playing());
     }
 
     #[test]
@@ -10068,6 +10402,21 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_multi_jump_halts_the_warp_ups_once() {
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        begin_jump_now(&mut session).expect("jumps");
+        session.take_sounds();
+        session.arrive(&catalog, &mut NeverFires);
+        let halts = session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == SimSound::Halt(&crate::sound::WARP_UP_HALTS))
+            .count();
+        assert_eq!(halts, 1, "one warp end");
+    }
+
+    #[test]
     fn a_multi_jump_rolls_the_events_for_one_jumps_days() {
         let catalog = chained(surplus(), 2);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
@@ -10591,7 +10940,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10662,7 +11012,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10710,7 +11061,8 @@ pub(super) mod tests {
                     })
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10860,7 +11212,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10891,7 +11244,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_sale_of_none_draws_no_roll_and_changes_nothing_by_either_reading() {
+    fn a_sale_of_none_draws_only_its_buttons_rolls_and_changes_nothing_else_by_either_reading() {
         // A booster of `BuyRandom` 50, not owned and not rolled yet.
         let mut catalog = relisting_catalog();
         catalog.outfits.push(OutfitRecord {
@@ -10904,7 +11257,11 @@ pub(super) mod tests {
                 relisted_by(source),
                 &[(BLASTER, 3), (CONTRABAND, 2)],
             );
-            let before = session.clone();
+            // The button's own check draws the rolls the outfitter
+            // needs, and nothing past it does.
+            let mut checked = session.clone();
+            let mut button = Scripted::default();
+            assert!(checked.outfit_button_passes(sell(CONTRABAND), &mut button));
             let mut chance = Scripted::default();
             let order = session.outfit_order(sell(CONTRABAND), 0, &mut chance);
             assert_eq!(
@@ -10915,12 +11272,13 @@ pub(super) mod tests {
                 },
                 "{source:?}"
             );
+            assert!(order.button_passed, "{source:?}");
             assert_eq!(
                 (chance.asked, chance.sides_asked),
-                (vec![], vec![]),
+                (button.asked, button.sides_asked),
                 "{source:?}"
             );
-            assert!(session == before, "{source:?}: unchanged");
+            assert!(session == checked, "{source:?}: unchanged past the check");
         }
     }
 
@@ -11053,6 +11411,19 @@ pub(super) mod tests {
         let sold = session.outfit_order(sell(BLASTER), 1, &mut NeverFires);
         assert_eq!(sold.run.done, 1);
         assert_eq!(session.pilot().owned(BLASTER), 1);
+    }
+
+    #[test]
+    fn by_the_engine_after_a_reset_the_button_of_an_unlisted_outfit_128_passes() {
+        let mut session = landed_owning(
+            &unlisted_blaster_catalog(),
+            Rulebook::default(),
+            &[(BLASTER, 2), (CONTRABAND, 1)],
+        );
+        assert!(!session.outfit_button_passes(sell(BLASTER), &mut NeverFires));
+        let order = session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        assert!(session.outfit_button_passes(sell(BLASTER), &mut NeverFires));
     }
 
     #[test]
@@ -11543,6 +11914,23 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_order_buttons_check_is_the_outfitters_and_changes_nothing() {
+        let catalog = outfitting();
+        let mut flying = Session::start(&catalog).expect("starts");
+        assert!(
+            !flying.outfit_button_passes(buy(SPEED), &mut NeverFires),
+            "no outfitter in flight"
+        );
+        let mut session = outfitted(&catalog);
+        let before = session.pilot().clone();
+        assert!(session.outfit_button_passes(buy(SPEED), &mut NeverFires));
+        assert!(!session.outfit_button_passes(sell(SPEED), &mut NeverFires));
+        assert!(!session.outfit_button_passes(buy(OutfitId(999)), &mut NeverFires));
+        assert_eq!(session.pilot(), &before);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
     fn a_count_of_none_buys_nothing_and_makes_no_save_due() {
         let mut session = outfitted(&outfitting());
         let before = session.pilot().clone();
@@ -11729,6 +12117,7 @@ pub(super) mod tests {
                 },
                 alert: None,
                 after: Reselection::Kept,
+                button_passed: true,
             }
         );
         assert_eq!(session.pilot().owned(SPEED), 10);
@@ -11737,6 +12126,91 @@ pub(super) mod tests {
             counted.outfit_counted(buy(SPEED), 12, &mut NeverFires),
             Ok(10)
         );
+    }
+
+    #[test]
+    fn an_order_reports_whether_its_button_passed_its_own_check() {
+        let mut broke = outfitted(&outfitting());
+        broke.pilot.cash = 0;
+        let bible = || {
+            over_the_mass_limit_by(
+                Rulebook::default().with_override(RuleKey::SaleRefusal, RuleSource::Bible),
+            )
+        };
+        let cases = vec![
+            ("buy through", outfitted(&outfitting()), buy(SPEED), 2, true),
+            (
+                "buy stopped part way",
+                outfitted(&outfitting()),
+                buy(SPEED),
+                12,
+                true,
+            ),
+            (
+                "buy cancelled",
+                outfitted(&outfitting()),
+                buy(SPEED),
+                0,
+                true,
+            ),
+            (
+                "buy refused at the button",
+                broke.clone(),
+                buy(SPEED),
+                1,
+                false,
+            ),
+            ("buy cancelled, refused", broke, buy(SPEED), 0, false),
+            (
+                "buy unlisted",
+                outfitted(&outfitting()),
+                buy(OutfitId(999)),
+                0,
+                false,
+            ),
+            (
+                "sell none owned",
+                outfitted(&outfitting()),
+                sell(SPEED),
+                1,
+                false,
+            ),
+            (
+                "sell cancelled, none owned",
+                outfitted(&outfitting()),
+                sell(SPEED),
+                0,
+                false,
+            ),
+            (
+                "sell refused in the loop",
+                over_the_mass_limit(RuleSource::Engine),
+                sell(POD),
+                1,
+                true,
+            ),
+            ("sell refused on the button", bible(), sell(POD), 1, false),
+        ];
+        for (name, mut session, order, count, passed) in cases {
+            let run = session.outfit_order(order, count, &mut NeverFires);
+            assert_eq!(run.button_passed, passed, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cancel_on_the_relistings_unlisted_outfit_128_counts_its_day() {
+        let mut session = landed_owning(
+            &unlisted_blaster_catalog(),
+            Rulebook::default(),
+            &[(BLASTER, 2), (CONTRABAND, 1)],
+        );
+        session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        session.stay.outfit_traded = false;
+        assert_eq!(
+            session.outfit_counted(sell(BLASTER), 0, &mut NeverFires),
+            Ok(0)
+        );
+        assert!(session.stay.outfit_traded);
     }
 
     #[test]
@@ -12918,6 +13392,92 @@ pub(super) mod tests {
         assert_eq!(
             session.take_events(),
             [SessionEvent::ShipChanged, SessionEvent::ShipChanged]
+        );
+    }
+
+    /// A disable rule that has every ship disabled, so a ship change's
+    /// armour bump raises the armour to its most.
+    #[derive(Debug)]
+    struct AlwaysDisabled;
+
+    impl crate::combat::hull::DisableRule for AlwaysDisabled {
+        fn disabled(&self, _armor: Gauge, _hull: &crate::combat::hull::HullSpec) -> bool {
+            true
+        }
+    }
+
+    fn run_expr(session: &mut Session, text: &str) {
+        let expr = crate::control::SetExpr::parse(text).expect("parses");
+        session.run_set(&expr, &mut NeverFires);
+    }
+
+    #[test]
+    fn docked_ship_changes_are_noted_as_each_ran_and_cleared_as_an_order_begins() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].inherent_govt = Some(GovtId(150));
+        let tank = catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == TANK)
+            .expect("the tank");
+        tank.on_purchase = crate::control::Script::parse("H129 H128");
+        let mut session = outfitted(&catalog).with_disable_rule(Rc::new(AlwaysDisabled));
+        let selected = NavMode::Stellar(Some(StellarId(140)));
+        session.nav = selected;
+        session.pilot.reserves.armor.now = 1.0;
+        assert_eq!(session.outfit(buy(TANK), &mut NeverFires), Ok(()));
+        let loads = session.take_interface_loads();
+        let governments: Vec<_> = loads.iter().map(|load| load.government).collect();
+        assert_eq!(
+            governments,
+            [Some(GovtId(150)), None],
+            "each class's, in order"
+        );
+        for load in &loads {
+            assert_eq!(load.nav, selected, "as it was");
+            assert_eq!(load.reserves.armor.now, load.reserves.armor.max, "bumped");
+        }
+        assert_ne!(
+            loads[0].reserves.fuel.max, loads[1].reserves.fuel.max,
+            "each at its own operator: 129 carries a tank"
+        );
+        assert_eq!(session.take_interface_loads(), [], "taken");
+        run_expr(&mut session, "H129");
+        assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
+        assert_eq!(session.take_interface_loads(), [], "the order cleared it");
+        let mut flying = Session::start(&catalog).expect("starts");
+        run_expr(&mut flying, "H129");
+        assert_eq!(flying.ship(), NEW);
+        assert_eq!(flying.take_interface_loads(), [], "in flight");
+    }
+
+    #[test]
+    fn a_purchases_on_purchase_change_is_noted_before_the_fill() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].on_purchase = crate::control::Script::parse("H128");
+        let mut session = outfitted(&catalog);
+        run_expr(&mut session, "C128");
+        session.pilot.reserves.fuel.now = 10.0;
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        let loads = session.take_interface_loads();
+        assert_eq!(loads.len(), 1, "the purchase's alone: it cleared the C");
+        assert!(
+            loads[0].reserves.fuel.now < session.reserves().fuel.now,
+            "{:?} before the fill",
+            loads[0].reserves
+        );
+        run_expr(&mut session, "H129");
+        assert!(
+            session
+                .buy_ship(ShipId(999), "Kestrel", &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(
+            session.take_interface_loads().len(),
+            1,
+            "a refusal clears nothing"
         );
     }
 
@@ -17148,7 +17708,7 @@ pub(super) mod tests {
             ..catalog()
         };
         let mut session = disabled(&empty);
-        assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x669aa");
+        assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x6a94c");
         session.condition = Condition::Intact;
         assert_eq!(
             session.land(),
@@ -17194,14 +17754,32 @@ pub(super) mod tests {
             let mut session = Session::start(&unlandable()).expect("starts");
             session.condition = condition;
             let _ = session.take_sounds();
-            assert!(matches!(
-                session.land(),
-                Err(LandingRefusal::NotLandable { .. })
-            ));
+            assert_eq!(session.land(), Err(LandingRefusal::NothingLandable));
             assert_eq!(
                 session.take_sounds(),
                 [],
                 "_FindNearestStellar gives -1, no dock request (@0x6a94c): {condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn l_with_no_target_beeps_as_the_nearest_it_selects_is_refused() {
+        let mut catalog = catalog();
+        for site in &mut catalog.sites[0].1 {
+            site.flags = StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED;
+        }
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.condition = condition;
+            let _ = session.take_sounds();
+            assert!(matches!(
+                session.land(),
+                Err(LandingRefusal::NotLandable { .. })
+            ));
+            assert!(
+                session.take_sounds().contains(&SimSound::Refused),
+                "the dock request refuses the pick (@0x66977, @0x67e8f): {condition:?}"
             );
         }
     }
@@ -17295,6 +17873,28 @@ pub(super) mod tests {
         let _ = session.take_sounds();
         let _ = session.land();
         assert!(!session.take_sounds().contains(&SimSound::Refused));
+    }
+
+    #[test]
+    fn a_disabled_players_l_with_nothing_landable_selects_nothing_as_an_intact_one_does() {
+        let mut catalog = catalog();
+        for site in &mut catalog.sites[0].1 {
+            site.flags = 0;
+        }
+        let mut session = disabled(&catalog);
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NothingLandable),
+            "@0x6a94c"
+        );
+        assert_eq!(session.nav_target(), None, "nothing selected");
+        session.condition = Condition::Intact;
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NothingLandable),
+            "the same refusal"
+        );
+        assert_eq!(session.nav_target(), None, "nothing selected");
     }
 
     #[test]
@@ -17749,6 +18349,17 @@ pub(super) mod tests {
         from_the_breakup(&mut session, &catalog, 9);
         assert_eq!(session.condition, Condition::Destroyed);
         assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+    }
+
+    #[test]
+    fn the_players_explosion_ends_the_warp_out() {
+        // 130 halted @0x2d8d0-0x2d8ea.
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        session.warp_out.start(100_000);
+        from_the_breakup(&mut session, &catalog, 9);
+        assert_eq!(session.condition, Condition::Destroyed);
+        assert!(!session.warp_out.playing());
     }
 
     #[test]
@@ -22693,7 +23304,7 @@ pub(super) mod tests {
             !session
                 .take_sounds()
                 .iter()
-                .any(|sound| matches!(sound, SimSound::Landed { .. })),
+                .any(|sound| matches!(sound, SimSound::Landed)),
             "no landing sound"
         );
         assert_eq!(
@@ -22771,6 +23382,21 @@ pub(super) mod tests {
             Err(GateRefusal::NotAtGate),
             "the entry is over"
         );
+    }
+
+    #[test]
+    fn a_hypergate_exit_keeps_a_warp_up_playing() {
+        // `_PlayerEnterHypergate` plays 130 (@0x63e57-0x63e61) and never
+        // touches `_warpUpSnd` or `_warpSoundDone`.
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        session.warp_ups.start(false, 100_000);
+        session.take_sounds();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
+            .expect("enters");
+        assert_eq!(session.take_sounds(), [SimSound::Arrived], "no halt");
+        assert!(session.warp_ups.playing(false));
     }
 
     #[test]
@@ -22945,6 +23571,21 @@ pub(super) mod tests {
             session.enter_wormhole(&catalog, &mut chance),
             Err(GateRefusal::NotAtGate)
         );
+    }
+
+    #[test]
+    fn a_wormhole_exit_keeps_a_warp_up_playing() {
+        // `_PlayerEnterWormhole` plays 130 (@0x6443d-0x64447) and never
+        // touches `_warpUpSnd` or `_warpSoundDone`.
+        let catalog = wormholes();
+        let mut session = at_wormhole(&catalog);
+        session.warp_ups.start(false, 100_000);
+        session.take_sounds();
+        session
+            .enter_wormhole(&catalog, &mut Scripted::rolling(&[0]))
+            .expect("enters");
+        assert_eq!(session.take_sounds(), [SimSound::Arrived], "no halt");
+        assert!(session.warp_ups.playing(false));
     }
 
     /// Holds `P300` in `session`, by the engine's `script_sound` reading.

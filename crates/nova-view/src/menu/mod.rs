@@ -7,5 +7,5 @@
 pub mod main_menu;
 pub mod pilot_list;
 
-pub use main_menu::{MainMenu, MenuChoice};
+pub use main_menu::{Chosen, ChosenBy, MainMenu, MenuChoice};
 pub use pilot_list::{PilotList, PilotListOutcome};

@@ -24,7 +24,7 @@
 //! frames where the flag is 1 or below and the frame counter is a multiple
 //! of [`HINT_FRAMES`] (signed, @0x7094d-0x70981), reading the ship's
 //! squared distance from the system's centre (@0x7098f-0x709a7):
-//! 1. At −3 (@0x709b2), the nearest landable stellar (`_FindNearestStellar`
+//! 1. At −3 (@0x709b2), the nearest stellar (`_FindNearestStellar`
 //!    @0x709e8), if any, gives [`TutorialHint::Land`] (@0x70a1c-0x70b9a);
 //!    then the flag is −2 either way (@0x70baa).
 //! 2. At −1 (@0x70bb5), a nearest stellar gives [`TutorialHint::Hyperspace`]
@@ -60,7 +60,7 @@ pub const NOTHING_OUT_HERE_SQUARED: f32 = 10_000_000.0;
 /// A tutorial hint, in the order of the hint block's steps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TutorialHint {
-    /// Land on the nearest landable stellar: `STR#` 2002 #22 for a station
+    /// Land on the nearest stellar (with the can-land flag): `STR#` 2002 #22 for a station
     /// (`spöb` `Flags` 0x10, @0x70a31) or #23, then #24 and #25 around the
     /// land key's name.
     Land {
@@ -105,7 +105,7 @@ impl Tutorial {
 
     /// The hint block on `frame` (see the module docs), with the ship
     /// `intact` or not, `distance_squared` from the centre, and `nearest`
-    /// finding the nearest landable stellar and whether it is a station:
+    /// finding the nearest stellar and whether it is a station:
     /// the hints it gives, in order.
     pub fn check(
         &mut self,
