@@ -1671,6 +1671,8 @@ impl Session {
         self.combat.set_asteroid_fuse(AsteroidFuse::from(
             rules.source_for(RuleKey::FuseIgnoresAsteroids),
         ));
+        self.combat
+            .set_proximity_fuse(rules.source_for(RuleKey::ProximityFuse));
         self.rules = rules;
         self
     }
@@ -2471,23 +2473,24 @@ impl Session {
     /// (see the `eject` module), both before the scans. The player's
     /// "Ship disabled." and "Ship destroyed." lines are spoken as the
     /// fight's hits leave it (see the `player_downed` module), before the
-    /// eject on a breakup's first tick takes it into a new ship. Before
+    /// eject on a breakup's first tick takes it into a new ship. After
     /// all of it, landed or jumping, the pass's asteroid work runs
     /// ([`Session::tick_asteroids`]), so the shots meet the asteroids
-    /// where they are this pass. Each ship fires from the exit points of
-    /// the frame it was drawn on after the last fight tick, its heading as
-    /// that tick ended ([`Fighter::drawn_heading`]), as every ship fires
-    /// before the original draws it again.
+    /// where the last pass left them, as the frame before drew them, and
+    /// a hit's push moves its asteroid in this pass's step. Each ship
+    /// fires from the exit points of the frame it was drawn on after the
+    /// last fight tick, its heading as that tick ended
+    /// ([`Fighter::drawn_heading`]), as every ship fires before the
+    /// original draws it again.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        // The pass's asteroid work comes first, landed or jumping (see the
-        // `asteroids` module).
-        self.tick_asteroids(&mut *chance);
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
             // The fight stands still, but a scan a lead-in step's traffic
-            // tick queued still settles (see `take_scans`).
+            // tick queued still settles (see `take_scans`), and the pass's
+            // asteroid work runs (see the `asteroids` module).
             self.take_scans(rules.law, &mut &mut *chance);
             self.drawn.clear();
+            self.tick_asteroids(&mut *chance);
             return;
         }
         self.before_fight(rules, &mut &mut *chance);
@@ -2495,7 +2498,10 @@ impl Session {
         let pass = GamePass::Advance {
             double_time: self.double_time,
         };
-        self.fight(pass, rules, chance);
+        self.fight(pass, rules, &mut *chance);
+        // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
+        // come after the collision passes (see the `asteroids` module).
+        self.tick_asteroids(chance);
     }
 
     /// `_HandlePlayer`'s part of a game-work pass that comes before the
@@ -21832,6 +21838,45 @@ pub(super) mod tests {
     fn fight(session: &mut Session, catalog: &FakePilotCatalog) {
         session.tick_combat(Rules::default(), &mut NeverFires);
         session.tick_traffic(catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+    }
+
+    #[test]
+    fn a_players_shot_strikes_an_npc_the_tick_after_its_move_reaches_it() {
+        // The trader 100 ahead of the player, at rest.
+        let catalog = skirmish(&[(1, 140, 129)], Some(140));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut placing(1, &[(0, 0, -100, 0)]));
+        stop_npcs(&mut session);
+        let full = session.npcs()[0].reserves;
+        session.hold_trigger(FIRE);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_trigger(Trigger::default());
+        let mut reached = false;
+        for _ in 0..30 {
+            let npc = &session.npcs()[0];
+            if let Some(shot) = session.shots().first() {
+                let from = shot.moved_from.expect("moved");
+                let met = crate::combat::projectile::contact(
+                    from,
+                    shot.position,
+                    npc.state.position,
+                    npc.hull.hit_radius,
+                );
+                reached = met.is_some();
+            }
+            if reached {
+                assert_eq!(npc.reserves, full, "drawn over it, not yet struck");
+                break;
+            }
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert!(reached, "its move reached the trader");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert!(
+            session.npcs()[0].reserves.shield.now < full.shield.now,
+            "struck"
+        );
+        assert_eq!(session.shots(), [], "gone as it hits");
     }
 
     #[test]

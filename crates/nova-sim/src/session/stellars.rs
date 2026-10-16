@@ -1160,8 +1160,9 @@ mod tests {
     }
 
     /// [`catalog`] with `lives`, its ship carrying a [`planet_gun`]. The
-    /// ship starts over 128, so each shot hits 128 on the tick it is
-    /// fired: 128 of `Strength` 100 is shot down by the third.
+    /// ship starts over 128, so each shot hits 128 in the hit pass of the
+    /// tick after it is fired, testing its first move: 128 of `Strength`
+    /// 100 is shot down by the third.
     fn shooting(lives: impl IntoIterator<Item = StellarLife>) -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![planet_gun()],
@@ -1197,12 +1198,16 @@ mod tests {
         keep: None,
     };
 
-    /// Fires every tick for `ticks` ticks under `law`, then lets go: the
+    /// Fires every tick for `ticks` ticks under `law`, then lets go for a
+    /// tick more, whose hit pass tests the last shot's first move: the
     /// fight's events.
     fn fire_by(session: &mut Session, ticks: u32, law: &dyn LegalCode) -> Vec<CombatEvent> {
         session.hold_trigger(FIRE);
         let mut events = Vec::new();
-        for _ in 0..ticks {
+        for tick in 0..=ticks {
+            if tick == ticks {
+                session.hold_trigger(Trigger::default());
+            }
             let rules = Rules {
                 law,
                 ..Rules::default()
@@ -1210,7 +1215,6 @@ mod tests {
             session.tick_combat(rules, &mut NeverFires);
             events.extend(session.take_combat_events());
         }
-        session.hold_trigger(Trigger::default());
         events
     }
 
@@ -1464,7 +1468,17 @@ mod tests {
             velocity: Vec2::ZERO,
             heading: 90.0,
         };
-        fire_by(&mut session, 1, &fine);
+        session.hold_trigger(FIRE);
+        let rules = Rules {
+            law: &fine,
+            ..Rules::default()
+        };
+        session.tick_combat(rules, &mut NeverFires);
+        session.hold_trigger(Trigger::default());
+        // The player moves off, and the hit pass meets it where it stood a
+        // tick later, before the shot can turn on it.
+        session.player.position.y += 1000.0;
+        session.tick_combat(rules, &mut NeverFires);
         assert_eq!(destroyed(&session, 128), None, "still in flight");
         if turned {
             for shot in session.combat.shots_mut() {
@@ -1473,7 +1487,6 @@ mod tests {
                 shot.aimed_at = Some(ShipRef::Player);
             }
         }
-        session.player.position.y += 1000.0;
         for _ in 0..20 {
             let rules = Rules {
                 law: &fine,
@@ -2097,9 +2110,16 @@ mod tests {
         let mut session = quiet(&catalog);
         run(&mut session, "Y128");
         settle(&mut session, &catalog, "M130");
+        // A shot fired while it lies dead, which a frame samples dead.
+        session.hold_trigger(FIRE);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_trigger(Trigger::default());
+        assert!(session.dead_since_rebuild(StellarId(128)));
         run(&mut session, "U128");
         session.strength.insert(StellarId(128), 0);
-        fire(&mut session, 1);
+        // The next frame's hit pass shoots it down before the frame
+        // samples it.
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
         assert!(session.dead_since_rebuild(StellarId(128)));
     }

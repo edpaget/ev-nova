@@ -83,10 +83,10 @@
 //! stops after one pass over the ships, should leaders form a loop.
 //!
 //! A shot on the move that spends it is not tested at all (@0x447c2): its
-//! end of life takes it ([`Combat`](super::Combat)'s step 7).
+//! end of life takes it ([`Combat`](super::Combat)'s step 2).
 //!
-//! The rules read each ship as it was when the tick began
-//! ([`Combat`](super::Combat)'s step 7), where the original reads it as
+//! The rules read each ship as it was when the hit pass began
+//! ([`Combat`](super::Combat)'s step 2), where the original reads it as
 //! each hit before it in the frame has left it: a turret shot rolling over
 //! a fighter that an earlier shot that tick disabled passes it here, and
 //! hits it there (weapons-fidelity phase 21).
@@ -394,6 +394,7 @@ mod tests {
             velocity: Vec2::ZERO,
             radius: 5.0,
             sprite_x: 15.0,
+            sheet: true,
             condition: Condition::Intact,
             miss_class: 100,
         }

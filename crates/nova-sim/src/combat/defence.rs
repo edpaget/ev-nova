@@ -67,8 +67,8 @@
 //!   meets. A point-defence shot meets every homing missile its box
 //!   overlaps, with no other test: lost, untargetable, friendly or aimed
 //!   elsewhere (`_PointDefenseCollisionHandler` @0x37776-0x3785d), but not
-//!   one that touches a ship that tick, whose hit comes first
-//!   ([`Combat`](super::Combat), step 5).
+//!   one that touched a ship on its move, whose hit comes first
+//!   ([`Combat`](super::Combat), step 2).
 //! - Each hit takes [`pd_damage`], `MassDmg` plus half the `EnergyDmg`
 //!   (truncated), off the missile's durability while that is above none;
 //!   the hit after that destroys it ([`Shot::take_pd_hit`]), shot down
@@ -1001,6 +1001,7 @@ mod tests {
                 velocity: Vec2::ZERO,
                 radius: 10.0,
                 sprite_x: 30.0,
+                sheet: true,
                 condition: Condition::Intact,
                 miss_class: 80,
             },

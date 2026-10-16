@@ -838,12 +838,14 @@ impl PointDefenceRule for Unalarmed {
 }
 
 /// The app in flight with the player carrying the Quad and the trader,
-/// 200 pixels above it, firing the IR Missile at it, the router as
-/// `router` makes it.
+/// 205 pixels above it, firing the IR Missile at it, the router as
+/// `router` makes it. The player's point defence fires the tick after
+/// the missile, as `_HandlePlayer` runs before the NPCs fire, and its
+/// 3-pixel shots end a move on the missile's, 160 above.
 fn defending(router: impl FnOnce(AppScreen) -> AppScreen) -> Harness {
     Harness::flying_over(
         data_arming(&[133], &[134]),
-        &[6, 6, 0, 0, 750, 550, 180],
+        &[6, 6, 0, 0, 750, 545, 180],
         |screen| router(screen.with_behaviour(Rc::new(Attacking))),
     )
 }

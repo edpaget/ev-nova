@@ -1635,10 +1635,11 @@ fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
                 fight(&mut combat, &mut ships);
                 lived += 1;
             }
-            assert_eq!(lived, spec.lifetime.max(1), "{id}");
-            // Seen last a tick before it flies its last tick and goes: a
-            // tick short of its range.
-            let flown = last.length() + spec.speed;
+            // Seen last at the end of its last move, which spends it, and
+            // gone the tick after, as its end of life comes in that tick's
+            // hit pass.
+            assert_eq!(lived, spec.lifetime + 1, "{id}");
+            let flown = last.length();
             let range = spec.speed * spec.lifetime as f32;
             assert!((spec.flight() - range).abs() < 1e-3, "{id}");
             if spec.guidance == Guidance::FreefallBomb {
@@ -2292,11 +2293,13 @@ fn a_stock_point_defence_shot_downs_a_polaron_torpedo_it_touches_but_never_aims_
             _ => None,
         })
         .collect();
-    // The torpedo, 13 pixels a tick, at -61 after the third tick; the
-    // Quad's shot, 20 a tick, at -60: their 32- and 35-pixel sprites
-    // overlap.
+    // The Quad fires the tick after the missiles, as the player's point
+    // defence runs before the NPCs fire. After the third tick the
+    // torpedo, 13 pixels a tick, is at -61 and the Quad's shot, 20 a
+    // tick, at -40: the next tick's hit pass finds their 32- and 35-pixel
+    // sprites overlapping.
     assert_eq!(downed.len(), 1, "{events:?}");
-    assert!(close(downed[0], Vec2::new(0.0, -60.0)), "{downed:?}");
+    assert!(close(downed[0], Vec2::new(0.0, -40.0)), "{downed:?}");
     assert!(
         !strikes.iter().any(|strike| strike.ship == ShipRef::Player),
         "the torpedo never reached the player: {strikes:?}"
@@ -6348,6 +6351,7 @@ fn a_stock_fed_destroyers_quad_leads_and_hits_a_viper_attacking_it() {
         velocity: viper.velocity,
         radius: 0.0,
         sprite_x: 0.0,
+        sheet: true,
         condition: Condition::Intact,
         miss_class: 0,
     };
@@ -6576,4 +6580,59 @@ fn fifty_six_stock_weapons_throw_off_hit_particles() {
         .filter(|spec| spec.hit_particles.is_some())
         .count();
     assert_eq!(spraying, 56);
+}
+
+/// The stock weapons of a proximity fuse: 39 of `ProxRadius` above none.
+/// None flies fast enough to pass a ship of the smallest reach, 32 pixels
+/// wide (`_GetSpriteXSize`'s width with no sheet), between two moves'
+/// ends without ending one within trunc(`ProxRadius` + 32 x 0.333) of it,
+/// which needs a move longer than twice that reach. No stock weapon has a
+/// `Count` of none or below, the shot of no life the fight drops unseen.
+#[test]
+#[allow(clippy::float_cmp)]
+fn stock_proximity_fuses_reach_every_ship_they_pass() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    let fused: Vec<(i16, f32, f64)> = weapons
+        .iter()
+        .filter(|record| record.prox_radius > 0)
+        .map(|record| {
+            let reach = (f64::from(record.prox_radius) + 32.0 * 0.333).trunc();
+            (record.id.0, WeaponSpec::new(record).speed, reach)
+        })
+        .collect();
+    let ids: Vec<i16> = fused.iter().map(|&(id, _, _)| id).collect();
+    assert_eq!(
+        ids,
+        [
+            128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 140, 141, 142, 146, 147, 148, 160,
+            164, 165, 166, 167, 168, 170, 171, 172, 173, 174, 181, 182, 184, 185, 196, 198, 199,
+            201, 230, 231, 232, 234
+        ]
+    );
+    let least = fused
+        .iter()
+        .map(|&(_, _, reach)| reach)
+        .fold(f64::INFINITY, f64::min);
+    assert_eq!(least, 11.0, "trunc(1 + 10.656)");
+    let fastest = fused
+        .iter()
+        .map(|&(_, speed, _)| speed)
+        .fold(0.0_f32, f32::max);
+    assert_eq!(fastest, 20.0, "133 and 231");
+    let passing: Vec<i16> = fused
+        .iter()
+        .filter(|&&(_, speed, reach)| f64::from(speed) > 2.0 * reach)
+        .map(|&(id, _, _)| id)
+        .collect();
+    assert_eq!(passing, [] as [i16; 0], "none passes a ship between moves");
+    let lifeless: Vec<i16> = weapons
+        .iter()
+        .filter(|record| record.count <= 0)
+        .map(|record| record.id.0)
+        .collect();
+    assert_eq!(lifeless, [] as [i16; 0]);
 }

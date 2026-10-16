@@ -16748,11 +16748,13 @@ mod tests {
         catalog
     }
 
-    /// Fires one detonating shot, which explodes.
+    /// Fires one detonating shot, which explodes as its end of life comes,
+    /// the tick after its one move.
     fn detonate(view: &mut View) {
         view.input(&key(FIRE_KEY, true));
         view.tick(TICK);
         view.input(&key(FIRE_KEY, false));
+        view.tick(TICK);
         assert_eq!(view.effects().explosions().len(), 1);
     }
 
@@ -17342,18 +17344,22 @@ mod tests {
             .with_point_defence_rule(rule.clone());
         view.tick(TICK);
         assert_eq!(shots_of(&view, IR), 1, "fired at the player");
-        assert_eq!(rule.asked.get(), 1, "of the one missile");
+        assert_eq!(
+            rule.asked.get(),
+            0,
+            "after the player's point defence, which runs before the NPCs fire"
+        );
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3);
+        assert_eq!(rule.asked.get(), 2, "of the one missile, each step");
         assert_eq!(shots_of(&view, QUAD), 0, "never hostile");
         view.input(&key(MAP_KEY, true));
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3, "not while the map is open");
+        assert_eq!(rule.asked.get(), 2, "not while the map is open");
         view.input(&key(MAP_KEY, true));
         tap(&mut view, LAND);
         assert!(view.take_landing().is_some(), "one press, uninhabited");
         ticks(&mut view, 2);
-        assert_eq!(rule.asked.get(), 3, "not while landed");
+        assert_eq!(rule.asked.get(), 2, "not while landed");
     }
 
     #[test]
@@ -24652,16 +24658,14 @@ mod tests {
 
     #[test]
     fn a_shot_detonating_on_the_second_pass_is_drawn_that_tick() {
-        let lasting_two = || {
-            let mut catalog = detonating();
-            catalog.weapons[0].count = 2;
-            fighting(catalog, &[])
-        };
-        let mut single = lasting_two();
+        // Its one move, on the advance pass, spends it; its end of life
+        // comes in the next pass's hit pass.
+        let lasting_one = || fighting(detonating(), &[]);
+        let mut single = lasting_one();
         single.input(&key(FIRE_KEY, true));
         single.tick(TICK);
         assert!(single.effects().explosions().is_empty(), "not yet");
-        let mut view = lasting_two().with_double_time(true);
+        let mut view = lasting_one().with_double_time(true);
         view.input(&key(FIRE_KEY, true));
         view.tick(TICK);
         assert_eq!(view.effects().explosions().len(), 1);

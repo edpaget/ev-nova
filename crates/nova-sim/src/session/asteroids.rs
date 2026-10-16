@@ -6,16 +6,17 @@
 //!
 //! **The pass.** [`Session::tick_asteroids`] is one pass's asteroid work:
 //! `_DoPlayGameWork`'s edge spawn (@0x44243) and `_HandleAsteroids`
-//! (@0x444f5). [`Session::tick_combat`] runs it first, landed or jumping,
-//! so it steps the field through a jump's lead-in, and
-//! [`Session::tick_again`] runs it ahead of the second pass's fight. The
-//! original spawns before the AI, the ships and the shots, as here, so
-//! the shots meet the asteroids where they are this pass. It steps them
-//! after `_HandleBoxes`, after the shots; here the step comes with the
-//! spawn, before them, so a shot meets an asteroid a pass's drift
-//! further on than the original's does. The fight's hits and the frame
-//! drawn both see the asteroids where the step left them, so no boundary
-//! the player sees falls between the two orders.
+//! (@0x444f5). [`Session::tick_combat`] runs it after the fight, landed
+//! or jumping, so it steps the field through a jump's lead-in, and
+//! [`Session::tick_again`] runs it after the second pass's fight. The
+//! original spawns and steps the field after the collision passes, which
+//! test the shots' last moves, as the fight's hit pass does here (see
+//! [`Combat`](crate::combat::Combat)): so a shot meets an asteroid where
+//! the last pass's step left it, where the frame before drew it, and a
+//! hit's push moves the asteroid in this pass's step. The spawn comes
+//! before the AI and the ships' fire in the original and after them
+//! here; a new asteroid is met by no shot until the next pass either way,
+//! so that crosses no boundary the player sees.
 //!
 //! **The shots** (see [`asteroid_hit`](crate::combat::asteroid_hit)).
 //! The fight hands its tick the field's asteroids
@@ -952,9 +953,10 @@ mod tests {
     #[test]
     fn a_ship_that_sets_the_fuse_off_takes_the_shot_and_leaves_the_asteroids_whole() {
         let catalog = rocky_arming(fused_gun(), npc_gun(), vec![rock_type(0, 100, 10)]);
-        // The NPC at (48, -90): within 9.9 + 40 of the shot's way to
-        // (0, -80), not to (0, -60).
-        let mut session = with_an_npc_at(&catalog, 798, 660, 180);
+        // The NPC at (45, -90), 30 wide: within trunc(40 + 30 x 0.333) =
+        // 49 of where the shot's fourth move ends, (0, -80), not of where
+        // its third does, (0, -60).
+        let mut session = with_an_npc_at(&catalog, 795, 660, 180);
         let first = put(&mut session, 0, 100, 35.0, -80.0);
         let second = put(&mut session, 0, 100, 5.0, -100.0);
         shoot_once(&mut session, 6);
@@ -1177,7 +1179,7 @@ mod tests {
         }
     }
 
-    // The pass ahead of the fight.
+    // The pass after the fight.
 
     /// A gun whose shots stand still where they were fired, for 100
     /// ticks.
@@ -1198,19 +1200,28 @@ mod tests {
     }
 
     #[test]
-    fn the_fights_pass_steps_the_field_first_so_a_shot_meets_an_asteroid_where_it_now_is() {
+    fn a_shot_meets_an_asteroid_where_the_last_pass_left_it() {
         let catalog = rocky_arming(still_gun(), npc_gun(), vec![rock_type(0, 100, 20)]);
         let mut session = flying(&catalog);
         let at = drifting_in(&mut session);
         session.hold_fire(true, false);
         session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_fire(false, false);
         let rock = slot(&session, at);
-        assert_eq!(rock.position, Vec2::new(-5.0, 0.0), "stepped once");
-        assert_eq!(rock.strength, 95, "met where it now is");
+        assert_eq!(
+            rock.position,
+            Vec2::new(-5.0, 0.0),
+            "stepped after the shots"
+        );
+        assert_eq!(rock.strength, 100, "the shot's move not yet tested");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let rock = slot(&session, at);
+        assert_eq!(rock.strength, 95, "met where the last pass left it");
+        assert_eq!(rock.position, Vec2::new(20.0, 0.0), "then stepped on");
     }
 
     #[test]
-    fn the_second_pass_steps_the_field_before_its_fight_too() {
+    fn the_second_pass_steps_the_field_after_its_fight_too() {
         let catalog = rocky_arming(still_gun(), npc_gun(), vec![rock_type(0, 100, 20)]);
         let mut session = flying(&catalog);
         session.hold_fire(true, false);
@@ -1220,7 +1231,15 @@ mod tests {
         let at = drifting_in(&mut session);
         session.set_double_time_key(true);
         session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
-        assert_eq!(slot(&session, at).strength, 95);
+        let rock = slot(&session, at);
+        assert_eq!(rock.strength, 100, "30 off as the pass's shots met it");
+        assert_eq!(rock.position, Vec2::new(-5.0, 0.0), "then stepped");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(
+            slot(&session, at).strength,
+            95,
+            "met where the step left it"
+        );
     }
 
     #[test]

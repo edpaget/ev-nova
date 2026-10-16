@@ -755,6 +755,7 @@ mod tests {
             velocity: Vec2::ZERO,
             radius: 8.0,
             sprite_x: 24.0,
+            sheet: true,
             condition: Condition::Intact,
             miss_class: 100,
         }

@@ -350,6 +350,9 @@ fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_a_later_dispatch_sees() {
     for _ in 0..2 {
         session.tick_combat(Rules::default(), &mut NeverFires);
     }
+    // The second shot's first move is tested in the next tick's hit pass.
+    session.hold_trigger(Trigger::default());
+    session.tick_combat(Rules::default(), &mut NeverFires);
     assert!(
         session.galaxy().destroyed(StellarId(128)),
         "60 twice: shot down"

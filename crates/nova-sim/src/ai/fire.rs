@@ -249,6 +249,7 @@ pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
         velocity: at.velocity,
         radius: 0.0,
         sprite_x: 0.0,
+        sheet: true,
         condition: crate::combat::hull::Condition::Intact,
         miss_class: crate::combat::hull::HEAVY_MISS_CLASS,
     };

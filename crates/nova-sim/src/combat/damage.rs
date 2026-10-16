@@ -46,7 +46,7 @@
 //! The caller says whether the ship was disabled before the hit: a
 //! shockwave reads it from the ship's condition, a sabotage bomb from its
 //! armour, and a weapon's hit from both (see
-//! [`Combat`](super::Combat)'s step 7).
+//! [`Combat`](super::Combat)'s steps 3 and 8).
 
 use super::ShipRef;
 use super::hull::{DisableRule, HullSpec};
