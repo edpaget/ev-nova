@@ -1312,6 +1312,15 @@ impl SpaceportView {
         self.dialogs.as_ref()?.text()
     }
 
+    /// Whether a mission text's movie or an offer's is in front, playing
+    /// or about to: `_PlayQTMovie`'s modal loop, which takes no menu
+    /// events (`WaitNextEvent` with mask 0 @0x55e4e).
+    #[must_use]
+    pub fn playing(&self) -> bool {
+        self.dialogs.as_ref().is_some_and(MissionDialogs::playing)
+            || self.offer_dialog().is_some_and(OfferDialog::playing)
+    }
+
     /// Whether a mission text or the mission info screen is open.
     fn mission_dialogs_open(&self) -> bool {
         self.dialogs.as_ref().is_some_and(MissionDialogs::is_open)
@@ -4778,6 +4787,22 @@ mod tests {
         assert!(!view.left(), "the movie took the Escape");
         view.tick(ms(100));
         assert!(view.left(), "which reached the spaceport as it ended");
+    }
+
+    #[test]
+    fn the_spaceport_plays_while_a_mission_texts_movie_or_an_offers_is_in_front() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut view = missioned().with_movies(movies_of(&player));
+        assert!(!view.playing(), "nothing open");
+        view.show_mission_texts([queued_movie("Accepted.mov", 0)]);
+        assert!(view.playing(), "a mission text's");
+        view.tick(ms(100));
+        assert!(!view.playing(), "ended");
+        view.open_offer(filmed_offer(0));
+        assert!(view.playing(), "an offer's");
+        view.tick(ms(100));
+        assert!(offer_shown(&view));
+        assert!(!view.playing(), "the offer's dialog shows");
     }
 
     #[test]

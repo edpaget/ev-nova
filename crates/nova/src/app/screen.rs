@@ -2570,6 +2570,20 @@ impl AppScreen {
         true
     }
 
+    /// Whether the spaceport takes every input, the Preferences keys
+    /// included: while a ship's name is typed into its prompt, P and all;
+    /// and while a movie plays in front, as `_PlayQTMovie`'s modal loop
+    /// takes no menu events (`WaitNextEvent` with mask 0 @0x55e4e).
+    fn spaceport_takes_every_key(&self) -> bool {
+        let Some(spaceport) = &self.spaceport else {
+            return false;
+        };
+        let naming = spaceport
+            .open_shipyard()
+            .is_some_and(|shipyard| shipyard.naming().is_some());
+        naming || (self.side == Side::Spaceport && spaceport.playing())
+    }
+
     /// Routes one input, as [`Screen::input`] describes.
     fn route(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
@@ -2616,13 +2630,7 @@ impl AppScreen {
         if self.load_note.is_some() {
             return self.load_note_input(input);
         }
-        // A ship's name is typed into its prompt, P and all.
-        if self
-            .spaceport
-            .as_ref()
-            .and_then(SpaceportView::open_shipyard)
-            .is_some_and(|shipyard| shipyard.naming().is_some())
-        {
+        if self.spaceport_takes_every_key() {
             return self.spaceport_input(input);
         }
         if self.preferences_key(input) {
@@ -3016,13 +3024,18 @@ impl Screen for AppScreen {
     }
 
     /// Flight's ([`FlightView`]'s cursor), while it shows with nothing
-    /// over it; and while a cinematic movie plays, over flight or the
-    /// spaceport (`_HideTheCursor` @0x55a73).
+    /// over it; and while a cinematic movie plays in front, over flight or
+    /// the spaceport (`_HideTheCursor` @0x55a73), never under a dialog
+    /// opened over it.
     fn hides_pointer(&self) -> bool {
-        let movie = self.missions.as_ref().is_some_and(Screen::hides_pointer)
-            || self.offer.as_ref().is_some_and(Screen::hides_pointer)
-            || self.spaceport.as_ref().is_some_and(Screen::hides_pointer);
-        movie || (self.showing() == Showing::Flight && self.shown().hides_pointer())
+        match self.showing() {
+            Showing::Movie => match &self.offer {
+                Some(offer) => offer.hides_pointer(),
+                None => self.missions.as_ref().is_some_and(Screen::hides_pointer),
+            },
+            Showing::Flight | Showing::Spaceport => self.shown().hides_pointer(),
+            _ => false,
+        }
     }
 
     /// Puts the pilot flying away, in flight or in the spaceport, when it
@@ -9159,6 +9172,37 @@ pub(super) mod tests {
         let (mut screen, _) = landed_filmed(0x0004, "", 0x0004, Prefs::default());
         screen.tick(Duration::from_secs(1));
         assert!(screen.hides_pointer());
+    }
+
+    #[test]
+    fn command_comma_over_a_spaceport_movie_opens_no_preferences_and_the_movie_plays_on() {
+        let (mut screen, reel) = landed_filmed(0, "Job.", 0x0004, Prefs::default());
+        screen.tick(Duration::from_secs(1));
+        assert!(screen.hides_pointer(), "the cinematic movie plays");
+        command_comma(&mut screen);
+        assert!(screen.preferences().is_none());
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert!(screen.hides_pointer(), "still hidden");
+        for _ in 0..8 {
+            screen.tick(Duration::from_secs(1));
+        }
+        assert_eq!(reeled(&reel), ["start Offer.mov", "stop"], "played on");
+        assert!(
+            spaceport(&screen)
+                .offer_dialog()
+                .is_some_and(|offer| !offer.playing()),
+            "the offer shows"
+        );
+    }
+
+    #[test]
+    fn an_overlay_over_a_spaceport_movie_shows_the_pointer() {
+        let (mut screen, _) = landed_filmed(0, "Job.", 0x0004, Prefs::default());
+        screen.tick(Duration::from_secs(1));
+        assert!(screen.hides_pointer());
+        screen.open_preferences();
+        assert_eq!(screen.showing(), Showing::Preferences);
+        assert!(!screen.hides_pointer());
     }
 
     #[test]
