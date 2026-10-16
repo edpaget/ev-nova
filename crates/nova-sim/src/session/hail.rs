@@ -1156,7 +1156,7 @@ mod tests {
         });
         session.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 5.0,
             downed: None,
             direct: true,
@@ -1775,7 +1775,7 @@ mod tests {
         });
         session.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 5.0,
             downed: None,
             direct: true,

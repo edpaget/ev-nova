@@ -76,11 +76,16 @@ pub fn answer(
         ShipRef::Player => false,
     };
     if strike.ship == me || escort_hit {
-        return if ignores(npc, strike.by, around) {
+        // A hit by no ship provokes no one (`_DamageShip` sets a target
+        // only for a ship source, @0x3bcf0, @0x3bd64).
+        let Some(by) = strike.by else {
+            return Reaction::default();
+        };
+        return if ignores(npc, by, around) {
             Reaction::default()
         } else {
             Reaction {
-                target: Some(strike.by),
+                target: Some(by),
                 provoked: strike.damage,
                 goal: None,
             }
@@ -90,7 +95,7 @@ pub fn answer(
         RuleSource::Engine => true,
         RuleSource::Bible => npc.ai_type == AiType::Interceptor,
     };
-    let samaritans = strike.by == ShipRef::Player && strike.intended;
+    let samaritans = strike.by == Some(ShipRef::Player) && strike.intended;
     if samaritans && polices && good_samaritan(npc, strike.ship, around) {
         return Reaction {
             target: Some(ShipRef::Player),
@@ -229,7 +234,7 @@ mod tests {
     fn strike(ship: ShipRef, by: ShipRef) -> Strike {
         Strike {
             ship,
-            by,
+            by: Some(by),
             damage: 12.0,
             downed: None,
             direct: true,
@@ -280,6 +285,27 @@ mod tests {
             Reaction::default(),
             "the attacker"
         );
+    }
+
+    #[test]
+    fn a_hit_by_no_ship_provokes_no_one() {
+        let govts = relations(0, 0);
+        let mut escort = ship(2, Some(TRADERS), AiType::Warship, 50.0);
+        escort.leader = Some(NpcId(1));
+        let npcs = [ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0), escort];
+        for hit in [n(1), n(2)] {
+            let by_none = Strike {
+                by: None,
+                ..strike(hit, n(1))
+            };
+            for who in 0..2 {
+                assert_eq!(
+                    answered(&govts, &npcs, who, &by_none),
+                    Reaction::default(),
+                    "{hit:?} {who}"
+                );
+            }
+        }
     }
 
     #[test]

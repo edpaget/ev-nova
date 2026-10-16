@@ -2414,7 +2414,10 @@ impl Session {
     /// then takes the ranks its crime reaches (see [`rank`](crate::rank)'s
     /// **Crimes**).
     fn punish(&mut self, strikes: &[Strike], was: &[NpcBefore], law: &dyn LegalCode) {
-        for strike in strikes.iter().filter(|strike| strike.by == ShipRef::Player) {
+        for strike in strikes
+            .iter()
+            .filter(|strike| strike.by == Some(ShipRef::Player))
+        {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };
@@ -2461,8 +2464,9 @@ impl Session {
                 continue;
             };
             let by_players_fleet = match strike.by {
-                ShipRef::Player => true,
-                ShipRef::Npc(by) => self
+                None => false,
+                Some(ShipRef::Player) => true,
+                Some(ShipRef::Npc(by)) => self
                     .traffic
                     .npcs()
                     .iter()
@@ -4680,7 +4684,7 @@ impl Session {
         // calls `_DoGoodSamaritan` itself, with no aim to test.
         self.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
             direct: true,
@@ -5340,7 +5344,7 @@ impl Session {
     fn stage_scene(&mut self, npc: NpcId) {
         self.strikes = vec![Strike {
             ship: ShipRef::Npc(npc),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 1.0,
             downed: None,
             direct: true,
@@ -14829,7 +14833,7 @@ pub(super) mod tests {
             for strike in struck {
                 assert_eq!(
                     (strike.ship, strike.by),
-                    (ShipRef::Npc(NpcId(0)), ShipRef::Player)
+                    (ShipRef::Npc(NpcId(0)), Some(ShipRef::Player))
                 );
             }
         }
@@ -15456,7 +15460,7 @@ pub(super) mod tests {
         }];
         let broken_up_by = |by| Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by,
+            by: Some(by),
             damage: 9.0,
             downed: Some(Downed::BreakingUp),
             direct: true,
@@ -15506,7 +15510,7 @@ pub(super) mod tests {
         session.credit_kills(
             &[Strike {
                 ship: ShipRef::Npc(NpcId(0)),
-                by: ShipRef::Npc(fighter),
+                by: Some(ShipRef::Npc(fighter)),
                 damage: 9.0,
                 downed: Some(Downed::BreakingUp),
                 direct: true,
@@ -15535,7 +15539,7 @@ pub(super) mod tests {
         }];
         let strike = |ship, downed| Strike {
             ship,
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 9.0,
             downed,
             direct: true,
@@ -16008,13 +16012,71 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_hit_by_no_ship_never_cloaks_its_ship_and_still_uncloaks_it() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let by_none = Strike {
+            ship: ShipRef::Npc(NpcId(0)),
+            by: None,
+            damage: 5.0,
+            downed: None,
+            direct: true,
+            intended: true,
+            lock: false,
+        };
+        session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
+            flags2: crate::cloak::CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        session.cloak_hits(&[by_none]);
+        assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            decloaks_when_hit: true,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        session.cloak_hits(&[by_none]);
+        assert_eq!(session.npcs()[0].cloak.direction, -1);
+    }
+
+    #[test]
+    fn a_kill_or_a_disabling_by_no_ship_credits_no_one_and_is_no_crime() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let was = [NpcBefore {
+            id: NpcId(0),
+            condition: Condition::Intact,
+            govt: Some(GovtId(140)),
+            marked: false,
+        }];
+        let rating = session.pilot().combat_rating();
+        let witness = Witness::default();
+        for downed in [Downed::BreakingUp, Downed::Disabled] {
+            let by_none = Strike {
+                ship: ShipRef::Npc(NpcId(0)),
+                by: None,
+                damage: 9.0,
+                downed: Some(downed),
+                direct: true,
+                intended: true,
+                lock: false,
+            };
+            session.credit_kills(&[by_none], &was);
+            session.punish(&[by_none], &was, &witness);
+        }
+        assert_eq!(session.pilot().combat_rating(), rating);
+        assert_eq!(witness.seen.take(), []);
+    }
+
+    #[test]
     fn a_blast_or_a_shockwave_neither_cloaks_nor_uncloaks_the_ship_it_hits() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         // A blast's strike and a shockwave's alike: no direct hit.
         let shockwave = Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 32.0,
             downed: None,
             direct: false,
@@ -16724,7 +16786,7 @@ pub(super) mod tests {
             struck += session
                 .strikes
                 .iter()
-                .filter(|strike| strike.by == ShipRef::Player)
+                .filter(|strike| strike.by == Some(ShipRef::Player))
                 .count();
         }
         assert!(struck > 0, "the hulk is hit");
@@ -20152,7 +20214,7 @@ pub(super) mod tests {
             session.strikes,
             [Strike {
                 ship: ShipRef::Npc(NpcId(0)),
-                by: ShipRef::Player,
+                by: Some(ShipRef::Player),
                 damage: 0.0,
                 downed: None,
                 direct: true,

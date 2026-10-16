@@ -1858,7 +1858,7 @@ mod tests {
                 .push(format!("react {} {:?}", npc.id.0, strike.ship));
             if strike.ship == ShipRef::Npc(npc.id) {
                 Reaction {
-                    target: Some(strike.by),
+                    target: strike.by,
                     provoked: strike.damage,
                     goal: None,
                 }
@@ -1871,7 +1871,7 @@ mod tests {
     fn struck(ship: u32, damage: f32) -> Strike {
         Strike {
             ship: ShipRef::Npc(NpcId(ship)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage,
             downed: None,
             direct: true,

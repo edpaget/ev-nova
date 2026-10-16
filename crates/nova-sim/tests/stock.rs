@@ -2209,7 +2209,7 @@ fn in_the_way(data: &GameData, arsenal: &Arsenal) -> Combatant {
 /// Whether `strikes` hold a hit by the player on NPC 0.
 fn struck_in_the_way(strikes: &[Strike]) -> bool {
     strikes.iter().any(|strike| {
-        strike.ship == ShipRef::Npc(nova_sim::NpcId(0)) && strike.by == ShipRef::Player
+        strike.ship == ShipRef::Npc(nova_sim::NpcId(0)) && strike.by == Some(ShipRef::Player)
     })
 }
 
@@ -2835,7 +2835,7 @@ fn every_stock_player_homing_missile_locks_its_target_at_31_ticks() {
         let (tick, strike) = locks[0];
         assert_eq!(tick, 31, "wëap {id}");
         assert!(strike.lock && strike.direct && strike.intended, "{id}");
-        assert_eq!((strike.ship, strike.by), (QUARRY, ShipRef::Player));
+        assert_eq!((strike.ship, strike.by), (QUARRY, Some(ShipRef::Player)));
         assert_eq!((strike.damage, strike.downed), (0.0, None), "{id}");
         assert_eq!(ships[1].reserves, full, "wëap {id}");
     }
@@ -6108,7 +6108,7 @@ fn a_stock_fed_destroyers_quad_leads_and_hits_a_viper_attacking_it() {
     assert!(
         strikes
             .iter()
-            .any(|strike| strike.ship == QUARRY && strike.by == ships[0].id && strike.direct),
+            .any(|strike| strike.ship == QUARRY && strike.by == Some(ships[0].id) && strike.direct),
         "{strikes:?}"
     );
 }
@@ -6137,7 +6137,7 @@ fn a_stock_aurora_carriers_storm_chaingun_hits_a_thunderhead_attacking_it_by_con
     assert!(
         strikes
             .iter()
-            .any(|strike| strike.ship == QUARRY && strike.by == ships[0].id),
+            .any(|strike| strike.ship == QUARRY && strike.by == Some(ships[0].id)),
         "{strikes:?}"
     );
 }

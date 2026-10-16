@@ -266,7 +266,7 @@ impl Session {
     pub(super) fn hold_grudges(&mut self, strikes: &[Strike]) {
         for strike in strikes
             .iter()
-            .filter(|strike| strike.by == ShipRef::Player && strike.direct)
+            .filter(|strike| strike.by == Some(ShipRef::Player) && strike.direct)
         {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
@@ -686,12 +686,28 @@ mod tests {
     }
 
     #[test]
+    fn a_hit_by_no_ship_holds_no_grudge() {
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        session.hold_grudges(&[Strike {
+            ship: ShipRef::Npc(NpcId(0)),
+            by: None,
+            damage: 1.0,
+            downed: None,
+            direct: true,
+            intended: true,
+            lock: false,
+        }]);
+        assert!(!session.pilot().grudge(PersonId(600)));
+    }
+
+    #[test]
     fn an_escorts_hit_holds_no_grudge() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         let hit = |by| Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by,
+            by: Some(by),
             damage: 1.0,
             downed: None,
             direct: true,
@@ -711,7 +727,7 @@ mod tests {
         // A blast's strike and a shockwave's alike: no direct hit.
         session.hold_grudges(&[Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 32.0,
             downed: None,
             direct: false,
@@ -743,7 +759,7 @@ mod tests {
         let mut session = facing_ace(&catalog, ada(&catalog));
         let downed = |ship| Strike {
             ship,
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 9.0,
             downed: Some(crate::combat::Downed::Disabled),
             direct: true,

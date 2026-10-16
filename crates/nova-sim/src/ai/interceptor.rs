@@ -353,7 +353,7 @@ mod tests {
         );
         let hit = Strike {
             ship: n(1),
-            by: P,
+            by: Some(P),
             damage: 3.0,
             downed: None,
             direct: true,

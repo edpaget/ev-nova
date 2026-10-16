@@ -379,8 +379,10 @@ pub struct Strike {
     /// The ship hit.
     pub ship: ShipRef,
     /// The ship whose shot, beam, blast or shockwave it was, or that
-    /// boarded it.
-    pub by: ShipRef,
+    /// boarded it; none for a shot no ship launched (`_DamageShip`'s
+    /// source -1), such as one turned on its firer, whose hit provokes no
+    /// one, is no crime and credits no kill.
+    pub by: Option<ShipRef>,
     /// The shield and armour it took.
     pub damage: f32,
     /// How it left the ship, for the last hit on a ship whose condition
@@ -601,8 +603,9 @@ pub struct Field {
 struct Landed {
     /// The ship hit.
     ship: ShipRef,
-    /// The ship whose shot, blast or beam it was.
-    by: ShipRef,
+    /// The ship whose shot, blast or beam it was, if a ship launched it
+    /// ([`Strike::by`]).
+    by: Option<ShipRef>,
     /// What it does.
     hit: Hit,
     /// Whether it was a shot's or beam's own hit ([`Strike::direct`]).
@@ -821,7 +824,7 @@ impl Combat {
                 at,
                 radius: hull.death_size(),
                 direct: None,
-                firer: wreck,
+                firer: Some(wreck),
                 spares_player: true,
             };
             let reached = blast.reaches(
@@ -854,7 +857,7 @@ impl Combat {
                 };
                 self.strikes.push(Strike {
                     ship,
-                    by: wreck,
+                    by: Some(wreck),
                     damage: before - taken(fighter.reserves),
                     downed,
                     direct: false,
@@ -1523,7 +1526,7 @@ impl Combat {
                 };
                 pass.push(Landed {
                     ship,
-                    by: shot.firer,
+                    by: shot.attacker(),
                     hit: hit.decayed(shot.decay_steps(self.decay)),
                     direct: true,
                     intended: shot.aimed_at == Some(ship),
@@ -1558,7 +1561,7 @@ impl Combat {
                 let reached = reached(&blast, sides.targets);
                 pass.extend(reached.into_iter().map(|ship| Landed {
                     ship,
-                    by: shot.firer,
+                    by: shot.attacker(),
                     hit,
                     direct: false,
                     intended: false,
@@ -1613,7 +1616,7 @@ impl Combat {
             });
             hits.push(Landed {
                 ship,
-                by: beam.firer,
+                by: Some(beam.firer),
                 hit: Hit {
                     cant_kill: beam.disable_only,
                     ..Hit::of(&beam.weapon)
@@ -1672,14 +1675,17 @@ impl Combat {
             };
             let Push { from, impact, beam } = landed.push;
             let impact = if beam && impact < 0.0 {
-                self.tractor(fighters, index, landed.by, from, impact)
+                // A beam always has a firer; with none it would pull nothing.
+                landed
+                    .by
+                    .map_or(0.0, |by| self.tractor(fighters, index, by, from, impact))
             } else {
                 impact
             };
             let source = landed
-                .direct
-                .then(|| fighters.iter().find(|fighter| fighter.ship == landed.by))
-                .flatten()
+                .by
+                .filter(|_| landed.direct)
+                .and_then(|by| fighters.iter().find(|fighter| fighter.ship == by))
                 .map(|firer| firer.state.position);
             let fighter = &mut fighters[index];
             if let Some(dose) = landed.ion {
@@ -2241,7 +2247,7 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
     }
     Some(Landed {
         ship,
-        by: ShipRef::Player,
+        by: Some(ShipRef::Player),
         hit: Hit {
             cant_kill: true,
             cant_disable: true,
@@ -2301,7 +2307,9 @@ mod tests {
     use crate::combat::defence::Side;
     use crate::combat::exits::{Compression, ExitCursors, ExitKind, ExitPoints};
     use crate::combat::hull::{DEFAULT_HIT_RADIUS, ESCAPE_POD_SHIP, NovaDisable};
-    use crate::combat::weapon::{LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, WeaponSpec};
+    use crate::combat::weapon::{
+        LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, TURNS_ON_FIRER, WeaponSpec,
+    };
     use crate::testkit::{Ranged, weapon};
 
     /// A ship in a test fight, owning what a fighter borrows.
@@ -3126,7 +3134,7 @@ mod tests {
             strikes,
             [Strike {
                 ship: A,
-                by: WRECK,
+                by: Some(WRECK),
                 damage: 32.0,
                 downed: None,
                 direct: false,
@@ -3169,7 +3177,7 @@ mod tests {
         assert_eq!(left(&ships[1]), (68.0, 300.0));
         let strikes = combat.take_strikes();
         assert_eq!(strikes.len(), 1, "{strikes:?}");
-        assert_eq!((strikes[0].ship, strikes[0].by), (A, ShipRef::Player));
+        assert_eq!((strikes[0].ship, strikes[0].by), (A, Some(ShipRef::Player)));
         let shoves = combat.take_shoves();
         assert_eq!(shoves.len(), 1, "{shoves:?}");
         assert_eq!(shoves[0].ship, A);
@@ -3187,7 +3195,10 @@ mod tests {
         assert_eq!(left(&ships[1]), (68.0, 300.0));
         let strikes = combat.take_strikes();
         assert_eq!(strikes.len(), 1, "{strikes:?}");
-        assert_eq!((strikes[0].ship, strikes[0].by), (ShipRef::Player, WRECK));
+        assert_eq!(
+            (strikes[0].ship, strikes[0].by),
+            (ShipRef::Player, Some(WRECK))
+        );
         let shoves = combat.take_shoves();
         assert_eq!(shoves.len(), 1, "{shoves:?}");
         assert_eq!(shoves[0].ship, ShipRef::Player);
@@ -3215,7 +3226,7 @@ mod tests {
             [
                 Strike {
                     ship: A,
-                    by: WRECK,
+                    by: Some(WRECK),
                     damage: 32.0,
                     downed: None,
                     direct: false,
@@ -3224,7 +3235,7 @@ mod tests {
                 },
                 Strike {
                     ship: B,
-                    by: WRECK,
+                    by: Some(WRECK),
                     damage: 17.0,
                     downed: Some(Downed::Disabled),
                     direct: false,
@@ -3457,7 +3468,7 @@ mod tests {
             .iter()
             .map(|&hit| Landed {
                 ship: ship.id,
-                by: A,
+                by: Some(A),
                 hit,
                 direct: true,
                 intended: true,
@@ -3983,7 +3994,7 @@ mod tests {
             strikes.extend(combat.take_strikes());
         }
         assert_eq!(strikes.len(), 1, "{strikes:?}");
-        assert_eq!((strikes[0].ship, strikes[0].by), (B, A));
+        assert_eq!((strikes[0].ship, strikes[0].by), (B, Some(A)));
         assert_eq!(strikes[0].downed, None, "it was down already");
         assert_eq!(
             strikes[0].damage, 14.0,
@@ -4654,7 +4665,7 @@ mod tests {
                 31,
                 Strike {
                     ship: B,
-                    by: ShipRef::Player,
+                    by: Some(ShipRef::Player),
                     damage: 0.0,
                     downed: None,
                     direct: true,
@@ -6142,7 +6153,7 @@ mod tests {
             strikes,
             [Strike {
                 ship: B,
-                by: A,
+                by: Some(A),
                 damage: 14.0,
                 downed: None,
                 direct: true,
@@ -6157,7 +6168,7 @@ mod tests {
             combat.take_strikes(),
             [Strike {
                 ship: B,
-                by: A,
+                by: Some(A),
                 damage: 5.0,
                 downed: None,
                 direct: true,
@@ -6181,7 +6192,7 @@ mod tests {
         }
         let hit = vec![Strike {
             ship: B,
-            by: A,
+            by: Some(A),
             damage: 5.0,
             downed: None,
             direct: true,
@@ -6215,7 +6226,7 @@ mod tests {
         let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
         let of = |ship, direct| Strike {
             ship,
-            by: A,
+            by: Some(A),
             damage: 14.0,
             downed: None,
             direct,
@@ -6253,7 +6264,7 @@ mod tests {
             strikes,
             [Strike {
                 ship: B,
-                by: A,
+                by: Some(A),
                 damage: 3.0,
                 downed: None,
                 direct: true,
@@ -6296,7 +6307,7 @@ mod tests {
         assert!(
             struck
                 .iter()
-                .all(|strike| strike.ship == B && strike.by == A)
+                .all(|strike| strike.ship == B && strike.by == Some(A))
         );
     }
 
@@ -6334,7 +6345,7 @@ mod tests {
             [
                 Strike {
                     ship: B,
-                    by: A,
+                    by: Some(A),
                     damage: 5.0,
                     downed: None,
                     direct: true,
@@ -6343,7 +6354,7 @@ mod tests {
                 },
                 Strike {
                     ship: B,
-                    by: C,
+                    by: Some(C),
                     damage: 4.0,
                     downed: Some(Downed::Disabled),
                     direct: true,
@@ -9020,7 +9031,7 @@ mod tests {
         let strikes = strikes_until_a_hit(&mut combat, &mut ships);
         assert_eq!(strikes.len(), 1, "no proximity fuse: by contact");
         let strike = strikes[0];
-        assert_eq!((strike.ship, strike.by), (B, A));
+        assert_eq!((strike.ship, strike.by), (B, Some(A)));
         assert!(strike.direct, "direct");
         assert!(!strike.intended, "aimed at no ship");
         assert!(strike.damage > 0.0);
@@ -9065,7 +9076,7 @@ mod tests {
         let strikes = combat.take_strikes();
         assert_eq!(strikes.len(), 1, "{strikes:?}");
         let strike = strikes[0];
-        assert_eq!((strike.ship, strike.by), (B, A));
+        assert_eq!((strike.ship, strike.by), (B, Some(A)));
         assert!(strike.direct && strike.intended, "{strike:?}");
         assert!(strike.damage > 0.0, "its damage taken: {strike:?}");
     }
@@ -9592,6 +9603,108 @@ mod tests {
                 ships[0].trigger = QUIET;
             }
             assert_eq!(combat.shots()[0].target.is_some(), kept, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_missile_turned_on_its_firer_strikes_it_as_a_hit_by_no_ship() {
+        let mut ships = at_a_jammer([100, 0, 0, 0]);
+        ships[0] = Ship::at(1, 0.0, 0.0)
+            .armed(vulnerable(TURNS_ON_FIRER, [100, 0, 0, 0]))
+            .targeting(B);
+        let mut combat = Combat::default();
+        let mut chance = Ranged::of(&[(101, 100), (500, 0)]);
+        let mut strikes = Vec::new();
+        for _ in 0..100 {
+            tick_in(
+                &mut combat,
+                &mut ships,
+                (&Arsenal::default(), Field::default()),
+                &mut chance,
+            );
+            ships[0].trigger = QUIET;
+            strikes.extend(combat.take_strikes());
+        }
+        let on_firer: Vec<&Strike> = strikes.iter().filter(|strike| strike.ship == A).collect();
+        assert_eq!(on_firer.len(), 1, "{strikes:?}");
+        let strike = on_firer[0];
+        assert_eq!(strike.by, None);
+        assert!(
+            strike.damage > 0.0 && strike.direct && strike.intended,
+            "{strike:?}"
+        );
+        assert!(ships[0].reserves.shield.now < 10.0, "the damage lands");
+    }
+
+    #[test]
+    fn the_blast_of_a_shot_no_ship_launched_spares_no_one() {
+        let shell = WeaponRecord {
+            blast_radius: 40,
+            ..blaster()
+        };
+        for (source, by, firer_hit) in [
+            (Source::Other, None, true),
+            (Source::Ship(Ties::default()), Some(A), false),
+        ] {
+            let shot = Shot {
+                source,
+                aimed_at: Some(B),
+                ..Shot::launch(
+                    WeaponSpec::new(&shell),
+                    A,
+                    A,
+                    &Ship::at(1, 0.0, 0.0).state,
+                    90.0,
+                )
+            };
+            let mut combat = Combat {
+                shots: vec![shot],
+                ..Combat::default()
+            };
+            let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 20.0, 0.0)];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let strikes = combat.take_strikes();
+            assert!(
+                strikes
+                    .iter()
+                    .any(|strike| strike.ship == B && strike.by == by && strike.direct),
+                "{source:?}: {strikes:?}"
+            );
+            assert_eq!(
+                strikes
+                    .iter()
+                    .any(|strike| strike.ship == A && strike.by == by),
+                firer_hit,
+                "{source:?}: {strikes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_one_at_a_time_missile_turned_on_its_firer_no_longer_holds_its_reload() {
+        let single = WeaponRecord {
+            reload: 3,
+            flags3: 0x0004,
+            ..vulnerable(TURNS_ON_FIRER, [100, 0, 0, 0])
+        };
+        for (odds, again) in [(0, true), (1, false)] {
+            let mut ships = at_a_jammer([100, 0, 0, 0]);
+            ships[0] = Ship::at(1, 0.0, 0.0).armed(single).targeting(B);
+            let mut combat = Combat::default();
+            let mut chance = Ranged::of(&[(101, 100), (500, odds)]);
+            let mut fires = Vec::new();
+            for tick in 0..30 {
+                tick_in(
+                    &mut combat,
+                    &mut ships,
+                    (&Arsenal::default(), Field::default()),
+                    &mut chance,
+                );
+                if fired(&combat.take_events(), A) > 0 {
+                    fires.push(tick);
+                }
+            }
+            assert_eq!(fires.len() > 1, again, "{odds}: {fires:?}");
         }
     }
 }

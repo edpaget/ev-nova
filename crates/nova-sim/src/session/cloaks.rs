@@ -157,7 +157,9 @@ impl Session {
                 continue;
             };
             let can_cloak = npc.can_cloak();
-            let attacking = npc.goal.attacking() == Some(strike.by);
+            // A hit by no ship never cloaks it: `_DamageShip` cloaks on a
+            // hit only for a ship source (@0x3bb9f), as if it were attacking.
+            let attacking = strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
             cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, attacking);
         }
     }

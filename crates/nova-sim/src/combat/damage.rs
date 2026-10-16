@@ -177,8 +177,10 @@ pub struct Blast {
     pub radius: f32,
     /// The ship hit directly, which it leaves alone.
     pub direct: Option<ShipRef>,
-    /// The ship that fired it.
-    pub firer: ShipRef,
+    /// The ship that fired it, which it spares; none for a shot no ship
+    /// launched, whose blast spares no one (the blast pass skips the
+    /// source slot, @0x35fd5-0x36003, and -1 is none).
+    pub firer: Option<ShipRef>,
     /// Whether it spares the player who fired it.
     pub spares_player: bool,
 }
@@ -206,7 +208,7 @@ impl Blast {
 
     /// Whether it may hurt `ship`, as far as who fired it goes.
     fn may_hurt(&self, ship: ShipRef) -> bool {
-        ship != self.firer || (ship == ShipRef::Player && !self.spares_player)
+        Some(ship) != self.firer || (ship == ShipRef::Player && !self.spares_player)
     }
 }
 
@@ -582,7 +584,7 @@ mod tests {
             at: Vec2::new(100.0, 100.0),
             radius: 10.0,
             direct,
-            firer,
+            firer: Some(firer),
             spares_player,
         }
     }

@@ -791,6 +791,17 @@ impl Shot {
         self.jam_rolls = super::jamming::roll(self.weapon.jam_vuln, chance);
     }
 
+    /// The ship it is a hit by: its firer, or none for a shot no ship
+    /// launched ([`Source::Other`]), as `_DamageShip` and the blast pass
+    /// read the source slot -1 (see [`Strike::by`](super::Strike::by)).
+    #[must_use]
+    pub fn attacker(&self) -> Option<ShipRef> {
+        match self.source {
+            Source::Ship(_) => Some(self.firer),
+            Source::Other => None,
+        }
+    }
+
     /// Its firer's government as it fired, or `None` for an independent
     /// ship, the player, or a shot no ship fired.
     #[must_use]
@@ -912,7 +923,7 @@ impl Shot {
             at: self.position,
             radius: self.weapon.blast_radius,
             direct,
-            firer: self.firer,
+            firer: self.attacker(),
             spares_player: self.weapon.spares_player(),
         }
     }
@@ -1229,7 +1240,7 @@ mod tests {
                 at: Vec2::new(3.0, 4.0),
                 radius: 90.0,
                 direct: None,
-                firer: FIRER,
+                firer: Some(FIRER),
                 spares_player: true,
             }
         );

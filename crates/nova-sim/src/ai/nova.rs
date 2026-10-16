@@ -292,7 +292,7 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
             ship: ShipRef::Player,
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
             direct: true,
@@ -364,7 +364,7 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
             ship: ShipRef::Player,
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
             direct: true,
@@ -572,7 +572,7 @@ mod tests {
         };
         let hit = Strike {
             ship: ShipRef::Npc(NpcId(1)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
             direct: true,
@@ -674,7 +674,7 @@ mod tests {
         );
         let strike = Strike {
             ship: ShipRef::Npc(NpcId(1)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 1.0,
             downed: None,
             direct: true,
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(ai.trigger(&npcs[0], &around).only, Some(WeaponId(9)));
         let strike = Strike {
             ship: ShipRef::Npc(NpcId(1)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 1.0,
             downed: None,
             direct: true,

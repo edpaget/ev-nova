@@ -604,7 +604,7 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
             ship: ShipRef::Npc(NpcId(1)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 30.0,
             downed: None,
             direct: true,

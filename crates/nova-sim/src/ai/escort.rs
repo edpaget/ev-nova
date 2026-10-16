@@ -770,7 +770,7 @@ mod tests {
         };
         let strike = crate::combat::Strike {
             ship: n(1),
-            by: n(2),
+            by: Some(n(2)),
             damage: 10.0,
             downed: None,
             direct: true,
