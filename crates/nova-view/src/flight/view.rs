@@ -16692,6 +16692,34 @@ mod tests {
         assert_eq!(view.shield_flash(npc), Some(32.0));
     }
 
+    #[test]
+    fn a_destroyed_npcs_shield_flash_is_dropped() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].energy_dmg = 20;
+        catalog.weapons[0].mass_dmg = 20;
+        catalog.weapons[0].explod_type = -1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
+        view.input(&key(FIRE_KEY, true));
+        let mut flashed = false;
+        for _ in 0..20 {
+            view.tick(TICK);
+            if view.session().expect("flying").npcs().is_empty() {
+                break;
+            }
+            flashed |= view.shield_flash(npc) == Some(32.0);
+        }
+        assert!(
+            view.session().expect("flying").npcs().is_empty(),
+            "destroyed"
+        );
+        assert!(flashed, "hit before it was destroyed");
+        assert_eq!(view.shield_flash(npc), None);
+        view.tick(TICK);
+        assert_eq!(view.shield_flash(npc), None, "nor on the next tick");
+    }
+
     /// [`armed`] with a blaster whose shots detonate after a tick.
     fn detonating() -> FakeCatalog {
         let mut catalog = armed(0, &[BLASTER]);
@@ -16729,6 +16757,55 @@ mod tests {
         arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(*view.effects(), Effects::default());
+    }
+
+    /// [`detonating`] with a blast of radius 100 doing 1 energy damage,
+    /// which reaches the player who fired it.
+    fn self_blasting() -> FakeCatalog {
+        let mut catalog = detonating();
+        catalog.weapons[0].blast_radius = 100;
+        catalog.weapons[0].energy_dmg = 1;
+        catalog
+    }
+
+    /// Fires one [`self_blasting`] shot and ticks until its blast flashes
+    /// the player's shield.
+    fn flash_the_player(view: &mut View) {
+        detonate(view);
+        for _ in 0..5 {
+            if view.shield_flash(ShipRef::Player).is_some() {
+                return;
+            }
+            view.tick(TICK);
+        }
+        panic!("the player was never hit: {:?}", player(view));
+    }
+
+    #[test]
+    fn landing_clears_the_shield_flashes() {
+        let mut catalog = self_blasting();
+        catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        let mut view = fighting(catalog, &[]);
+        flash_the_player(&mut view);
+        land_now(&mut view);
+        assert!(view.take_landing().is_some());
+        assert_eq!(view.shield_flash(ShipRef::Player), None);
+    }
+
+    #[test]
+    fn passing_through_a_wormhole_clears_the_shield_flashes() {
+        let holes = holed();
+        let catalog = FakeCatalog {
+            sites: holes.sites,
+            gates: holes.gates,
+            gate_listers: holes.gate_listers,
+            ..self_blasting()
+        };
+        let mut view = fighting(catalog, &[]);
+        flash_the_player(&mut view);
+        land_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(view.shield_flash(ShipRef::Player), None);
     }
 
     #[test]
