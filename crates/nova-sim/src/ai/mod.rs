@@ -154,6 +154,30 @@ impl Goal {
         self.quarry().is_some()
     }
 
+    /// Whether it is scooping up asteroid boxes: `_AIShipIsScooping`
+    /// (@0x88727), the original's goal 0x11, which the scoop branch of
+    /// `_ShipCollisionHandler` asks of an NPC (see
+    /// [`scoop`](crate::scoop)). No goal answers yes until
+    /// rdm:phase/asteroids/phase-5-ai-mining adds the miner's.
+    #[must_use]
+    pub fn scooping(self) -> bool {
+        match self {
+            Self::Idle
+            | Self::Land(_)
+            | Self::EnterGate(_)
+            | Self::JumpOut
+            | Self::Follow(_)
+            | Self::Attack(_)
+            | Self::Snipe(_)
+            | Self::Flee(_)
+            | Self::Inspect(_)
+            | Self::Assist(_)
+            | Self::Formation { .. }
+            | Self::Dock(_)
+            | Self::Hold => false,
+        }
+    }
+
     /// Whether a ship in this goal is no threat to the player by its
     /// target, as `_ExtendedIsThreatToPlayer` leaves out the original's
     /// goals 7, 9, 0xf, 0xa, 0xb, 5, 0xc and 0x12 (@0x81bf3-0x81c28, again
@@ -564,6 +588,29 @@ mod tests {
 
     const TRADERS: [AiType; 2] = [AiType::WimpyTrader, AiType::BraveTrader];
     const FIGHTERS: [AiType; 2] = [AiType::Warship, AiType::Interceptor];
+
+    #[test]
+    fn no_goal_scoops_until_the_miners_goal() {
+        let ship = ShipRef::Npc(NpcId(2));
+        for goal in [
+            Goal::Idle,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(129)),
+            Goal::JumpOut,
+            Goal::Follow(NpcId(2)),
+            Goal::Attack(ship),
+            Goal::Snipe(ship),
+            Goal::Flee(ship),
+            Goal::Inspect(ship),
+            Goal::Assist(Help::Refuel),
+            Goal::Formation { guard: None },
+            Goal::Dock(ShipRef::Player),
+            Goal::Hold,
+        ] {
+            assert!(!goal.scooping(), "{goal:?}");
+        }
+        assert!(!npc(1, AiType::WimpyTrader).is_scooping());
+    }
 
     #[test]
     fn every_ai_type_lands_on_a_landable_stellar_picked_at_random() {

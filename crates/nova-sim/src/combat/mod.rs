@@ -61,6 +61,21 @@
 //!    sub-munitions at its own target; a beam damages the nearest ship
 //!    along it, every tick, until its life is over.
 //!
+//!    7a. Each shot meets the asteroids the session hands the tick
+//!    ([`AsteroidTarget`](asteroid_hit::AsteroidTarget)) as the original
+//!    collides them (`_DoPlayGameWork` @0x43e70-0x43fd8, then
+//!    `_CheckShotProximities` @0x44015): a ship it touched first, then an
+//!    asteroid it touched, then a ship that set its fuse off, then an
+//!    asteroid that set it off ([`asteroid_hit`]). Point-defence shots
+//!    meet them too, but one spent on a missile does not. A hit on an
+//!    asteroid explodes, throws off the weapon's hit particles
+//!    ([`CombatEvent::Particles`]), blasts the ships about it if it is the
+//!    player's, takes the weapon's mass damage off the asteroid's strength
+//!    and pushes it, and the shot is used up with no sub-munitions. An
+//!    asteroid below 0 is broken: the later shots pass through it, and
+//!    the session takes its slot ([`Combat::take_broken_asteroids`]) and
+//!    destroys it.
+//!
 //!    7b. Each planet-type shot still in flight, past its `ProxSafety`,
 //!    that met a stellar still standing among those the session hands
 //!    the tick ([`StellarTarget`]) is spent on it: it explodes where it
@@ -117,6 +132,7 @@
 
 pub mod aim;
 pub mod armament;
+pub mod asteroid_hit;
 pub mod beam;
 pub mod damage;
 pub mod defence;
@@ -132,6 +148,7 @@ pub mod weapon;
 use std::collections::BTreeMap;
 
 use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
+use asteroid_hit::{AsteroidFuse, AsteroidTarget};
 use beam::{Aiming, Beam};
 use damage::{Blast, Hit};
 use defence::{INTERCEPT_RADIUS, PointDefenceRule, Side};
@@ -202,6 +219,9 @@ pub enum CombatEvent {
         /// Its `Explode1`, if any.
         explosion: Option<Explosion>,
     },
+    /// Particles were thrown off: a shot's hit on an asteroid, or an
+    /// asteroid destroyed (see [`asteroid_hit`]).
+    Particles(ParticleBurst),
     /// A ship was destroyed: the view draws its explosion and debris.
     Destroyed {
         /// The ship.
@@ -218,6 +238,47 @@ pub enum CombatEvent {
         /// extra explosions scatter, and how many there are.
         size: f32,
     },
+}
+
+/// A burst of particles: `_SpawnParticles`' arguments (@0x44b70-0x44d4e),
+/// for the view to draw. Each of `count` particles starts at `at`, or
+/// within `spread` of it, and flies off at `speed`, varied by
+/// `variation` percent either way, in a direction of its own, living a
+/// tick count from `life`'s first to its second. None takes on any
+/// source's velocity.
+///
+/// Left out: the original's seventh argument, the constant 0x20, passed
+/// straight on to `_NewParticle` and not read here; it is
+/// rdm:phase/weapons-fidelity/phase-14-combat-presentation's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParticleBurst {
+    /// Where it goes off.
+    pub at: Vec2,
+    /// Each particle's speed, in pixels a tick.
+    pub speed: f32,
+    /// How far, in percent, a particle's speed varies either way: none
+    /// unless 1-99.
+    pub variation: u32,
+    /// A particle's least and most life, in ticks.
+    pub life: (u32, u32),
+    /// Its colour, `00RRGGBB`.
+    pub color: u32,
+    /// How many particles.
+    pub count: u32,
+    /// How far from `at` a particle may start, in pixels: none for all
+    /// at `at`.
+    pub spread: f32,
+}
+
+/// What a fight's tick may hit besides ships: the destroyable stellars
+/// shown and the asteroids in the field, each borrowed from the session,
+/// which writes back what the shots left of them.
+#[derive(Debug, Default)]
+pub struct Scenery<'a> {
+    /// The stellars ([`stellar`]).
+    pub stellars: &'a mut [StellarTarget],
+    /// The asteroids ([`asteroid_hit`]).
+    pub asteroids: &'a mut [AsteroidTarget],
 }
 
 /// How a strike left the ship it hit.
@@ -420,26 +481,32 @@ pub struct Combat {
     next_shot: u32,
     /// What becomes of a breakup that never reaches the explosion band.
     breakup: Breakup,
+    /// Which asteroids an armed proximity fuse is set off by.
+    asteroid_fuse: AsteroidFuse,
+    /// The slots of the asteroids broken since they were last taken, in
+    /// the order they broke.
+    broken_asteroids: Vec<usize>,
 }
 
 impl Combat {
-    /// Advances the fight among `fighters` and `stellars` a tick (see the
+    /// Advances the fight among `fighters` and `scenery` a tick (see the
     /// module docs), by `rules`, with the relations between governments in
     /// `govts`, each sub-munition's weapon read from `arsenal` and each
     /// shot's inaccuracy and spread drawn on `chance`. Each stellar's
-    /// strength is left as the shots left it. It is the advance pass at
-    /// single speed ([`Combat::tick_on`]).
+    /// strength, and each asteroid's strength and velocity, is left as the
+    /// shots left it. It is the advance pass at single speed
+    /// ([`Combat::tick_on`]).
     pub fn tick(
         &mut self,
         fighters: &mut [Fighter],
         arsenal: &Arsenal,
         govts: &Governments,
         rules: Rules,
-        stellars: &mut [StellarTarget],
+        scenery: Scenery<'_>,
         chance: &mut (impl Chance + ?Sized),
     ) {
         let pass = GamePass::Advance { double_time: false };
-        self.tick_on(pass, fighters, arsenal, govts, rules, stellars, chance);
+        self.tick_on(pass, fighters, arsenal, govts, rules, scenery, chance);
     }
 
     /// Advances the fight a tick as [`Combat::tick`] does, on `pass`,
@@ -452,9 +519,13 @@ impl Combat {
         arsenal: &Arsenal,
         govts: &Governments,
         rules: Rules,
-        stellars: &mut [StellarTarget],
+        scenery: Scenery<'_>,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        let Scenery {
+            stellars,
+            asteroids,
+        } = scenery;
         // A `dyn` source over the caller's, which may be unsized.
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
@@ -492,7 +563,9 @@ impl Combat {
             self.hold_on_missiles(&mut gone, pass.beam_damage());
         }
         let first_strike = self.strikes.len();
-        self.resolve(fighters, &targets, &was, &gone, arsenal, chance, pass);
+        self.resolve(
+            fighters, &targets, &was, &gone, arsenal, chance, pass, asteroids,
+        );
         self.strike_stellars(stellars, &from);
         for fighter in fighters.iter_mut() {
             let struck = self.strikes[first_strike..]
@@ -600,6 +673,12 @@ impl Combat {
     /// `breakup` says: by default, [`Breakup::Explodes`].
     pub fn set_breakup(&mut self, breakup: Breakup) {
         self.breakup = breakup;
+    }
+
+    /// Has an armed proximity fuse set off by asteroids as `fuse` says:
+    /// by default, [`AsteroidFuse::Original`].
+    pub fn set_asteroid_fuse(&mut self, fuse: AsteroidFuse) {
+        self.asteroid_fuse = fuse;
     }
 
     /// The next shot's number.
@@ -834,6 +913,12 @@ impl Combat {
     /// flown from `was`, those `gone` taken out first; each sub-munition's
     /// weapon is read from `arsenal`, its spread drawn on `chance`. The
     /// beams hit as `pass` says ([`GamePass`]).
+    ///
+    /// Each shot is checked against the ships and `asteroids` in the
+    /// original's order (`_DoPlayGameWork` @0x43e70-0x43fd8, then
+    /// `_CheckShotProximities` @0x44015): a ship it touched, then an
+    /// asteroid it touched, then a ship that set its fuse off, then an
+    /// asteroid that set it off ([`asteroid_hit`]).
     #[allow(clippy::too_many_arguments)]
     fn resolve(
         &mut self,
@@ -844,17 +929,35 @@ impl Combat {
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
         pass: GamePass,
+        asteroids: &mut [AsteroidTarget],
     ) {
         // Each ship hit, by whom, and the hit.
         let mut hits: Vec<(ShipRef, ShipRef, Hit)> = Vec::new();
         let mut kept = Vec::with_capacity(self.shots.len());
         let mut released: Vec<(Shot, Option<ShipRef>)> = Vec::new();
-        let flown = self.shots.drain(..).zip(was).zip(gone);
+        let shots = std::mem::take(&mut self.shots);
+        let flown = shots.into_iter().zip(was).zip(gone);
         for ((mut shot, &from), &gone) in flown {
             if gone {
                 continue;
             }
-            let (blast, subs) = if let Some((ship, at)) = shot.hit(from, targets) {
+            let ship_hit = shot.hit(from, targets);
+            let contact = ship_hit.is_some() && shot.touches(from, targets).is_some();
+            let rock = if contact {
+                None
+            } else if let Some(touched) = asteroid_hit::touched(&shot, from, asteroids) {
+                Some(touched)
+            } else if ship_hit.is_some() {
+                None
+            } else {
+                asteroid_hit::fused(&shot, asteroids, self.asteroid_fuse)
+                    .map(|index| (index, shot.position))
+            };
+            if let Some((index, at)) = rock {
+                self.hit_asteroid(&shot, &mut asteroids[index], at, fighters, &mut hits);
+                continue;
+            }
+            let (blast, subs) = if let Some((ship, at)) = ship_hit {
                 hits.push((ship, shot.firer, Hit::of(&shot.weapon)));
                 shot.position = at;
                 (Some(shot.blast(Some(ship))), Some(Some(ship)))
@@ -924,6 +1027,48 @@ impl Combat {
                     provokes: true,
                 });
             }
+        }
+    }
+
+    /// `shot`'s hit on `target` at `at` (`_HandleAsteroidHit`
+    /// @0x36637-0x369c7, see [`asteroid_hit`]): its explosion and its hit
+    /// particles go off there; a player's shot blasts the ships among
+    /// `fighters` in its square into `hits`; the asteroid takes its damage
+    /// and is broken, or pushed. The shot is used up, and releases
+    /// nothing.
+    fn hit_asteroid(
+        &mut self,
+        shot: &Shot,
+        target: &mut AsteroidTarget,
+        at: Vec2,
+        fighters: &[Fighter],
+        hits: &mut Vec<(ShipRef, ShipRef, Hit)>,
+    ) {
+        let weapon = &shot.weapon;
+        if let Some(explosion) = weapon.explosion {
+            self.events.push(CombatEvent::Exploded { at, explosion });
+        }
+        if let Some(particles) = weapon.hit_particles {
+            self.particles(asteroid_hit::hit_burst(at, &particles));
+        }
+        if let Some(blast) = asteroid_hit::blast(shot, at) {
+            let ships = fighters
+                .iter()
+                .filter(|fighter| fighter.condition.hittable() && !fighter.hull.planet_type)
+                .map(|fighter| (fighter.ship, fighter.state.position));
+            hits.extend(
+                blast
+                    .reaches(ships)
+                    .into_iter()
+                    .map(|ship| (ship, shot.firer, Hit::of(weapon))),
+            );
+        }
+        target.strength = asteroid_hit::damaged(target.strength, weapon);
+        if asteroid_hit::broken(target.strength) {
+            self.broken_asteroids.push(target.slot);
+        } else if weapon.impact != 0.0 && target.mass > 0 {
+            target.velocity =
+                asteroid_hit::push(target.velocity, shot.heading, weapon.impact, target.mass);
         }
     }
 
@@ -1161,6 +1306,19 @@ impl Combat {
     /// scatter from it.
     pub(crate) fn explode(&mut self, at: Vec2, explosion: Explosion) {
         self.events.push(CombatEvent::Exploded { at, explosion });
+    }
+
+    /// Reports `burst`'s particles: a shot's hit on an asteroid's, or an
+    /// asteroid's as it is destroyed.
+    pub(crate) fn particles(&mut self, burst: ParticleBurst) {
+        self.events.push(CombatEvent::Particles(burst));
+    }
+
+    /// The slots of the asteroids the shots broke since they were last
+    /// taken, in the order they broke; taking them empties the list. The
+    /// session destroys each.
+    pub fn take_broken_asteroids(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.broken_asteroids)
     }
 
     /// The fighters launched since they were last taken, in order; taking
@@ -1433,7 +1591,7 @@ mod tests {
             arsenal,
             govts,
             rules,
-            &mut [],
+            Scenery::default(),
             &mut NeverFires,
         );
     }
@@ -1447,7 +1605,7 @@ mod tests {
             &Arsenal::default(),
             &Governments::default(),
             Rules::default(),
-            &mut [],
+            Scenery::default(),
             &mut NeverFires,
         );
     }
@@ -1465,7 +1623,10 @@ mod tests {
             arsenal,
             &Governments::default(),
             Rules::default(),
-            stellars,
+            Scenery {
+                stellars,
+                ..Scenery::default()
+            },
             &mut NeverFires,
         );
     }
@@ -2780,12 +2941,12 @@ mod tests {
 
     #[test]
     fn diagnostics_are_taken_once() {
-        let mining = WeaponRecord {
-            flags2: 0x8000,
+        let disabling = WeaponRecord {
+            flags2: 0x1000,
             ..blaster()
         };
         let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(mining)];
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(disabling)];
         for _ in 0..3 {
             tick(&mut combat, &mut ships, &NovaDisable);
         }
@@ -3580,7 +3741,7 @@ mod tests {
             guidance: 1,
             count: 50,
             speed: 500,
-            seeker: 0x0001,
+            seeker: 0x0002,
             ..weapon(148)
         });
         let mut combat = Combat::default();
@@ -3598,7 +3759,7 @@ mod tests {
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(148),
                 field: flags::FlagField::Seeker,
-                bit: 0x0001,
+                bit: 0x0002,
             }]
         );
     }
@@ -4342,5 +4503,440 @@ mod tests {
         let mut ships = [ship];
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_ne!(ships[0].condition, Condition::Intact);
+    }
+
+    // Asteroids.
+
+    use crate::combat::asteroid_hit::{AsteroidFuse, AsteroidTarget};
+
+    /// An asteroid in slot `slot` at (`x`, `y`), of radius 10, strength 10
+    /// and `Mass` 20, at rest.
+    fn rock(slot: usize, x: f32, y: f32) -> AsteroidTarget {
+        AsteroidTarget {
+            slot,
+            position: Vec2::new(x, y),
+            velocity: Vec2::ZERO,
+            radius: 10.0,
+            strength: 10,
+            mass: 20,
+        }
+    }
+
+    /// [`blaster`] exploding in `bööm` 130 with an `Impact` of 10, its
+    /// hits throwing off 5 particles of `HitPartVel` 150, `HitPartLife`
+    /// 30 and orange.
+    fn rock_gun() -> WeaponRecord {
+        WeaponRecord {
+            explod_type: 2,
+            impact: 10,
+            hit_particles: 5,
+            hit_part_vel: 150,
+            hit_part_life: 30,
+            hit_part_color: 0x00FF_8000,
+            ..blaster()
+        }
+    }
+
+    /// A tick among `ships` and `rocks`, with `arsenal`, by `rules`.
+    fn tick_amid(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        arsenal: &Arsenal,
+        rules: Rules,
+        rocks: &mut [AsteroidTarget],
+    ) {
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        let scenery = Scenery {
+            asteroids: rocks,
+            ..Scenery::default()
+        };
+        combat.tick(
+            &mut fighters,
+            arsenal,
+            &Governments::default(),
+            rules,
+            scenery,
+            &mut NeverFires,
+        );
+    }
+
+    /// `firer` at the centre fires `record` once to the right, among
+    /// `others`; then the fight goes on for `ticks` ticks in all among
+    /// `rocks`, with `record` and its sub-munition, weapon 148, in the
+    /// arsenal. The ships and the events, in order.
+    fn shoot_rocks(
+        combat: &mut Combat,
+        firer: ShipRef,
+        record: WeaponRecord,
+        others: Vec<Ship>,
+        rocks: &mut [AsteroidTarget],
+        ticks: u32,
+    ) -> (Vec<Ship>, Vec<CombatEvent>) {
+        let sub = WeaponRecord {
+            count: 50,
+            speed: 500,
+            ..weapon(148)
+        };
+        let arsenal = Arsenal::new(&[record, sub], Vec::new());
+        let mut gun = Ship::at(1, 0.0, 0.0).armed(record);
+        gun.id = firer;
+        gun.fleet = firer;
+        let mut ships = vec![gun];
+        ships.extend(others);
+        let mut events = Vec::new();
+        for _ in 0..ticks {
+            tick_amid(combat, &mut ships, &arsenal, Rules::default(), rocks);
+            ships[0].trigger = QUIET;
+            events.extend(combat.take_events());
+        }
+        (ships, events)
+    }
+
+    /// The events but the firing.
+    fn unfired(events: &[CombatEvent]) -> Vec<CombatEvent> {
+        events
+            .iter()
+            .filter(|event| !matches!(event, CombatEvent::Fired { .. }))
+            .copied()
+            .collect()
+    }
+
+    #[test]
+    fn a_shot_that_meets_an_asteroid_damages_pushes_explodes_sprays_and_is_gone() {
+        let mut combat = Combat::default();
+        let mut rocks = [rock(3, 100.0, 0.0)];
+        let shell = WeaponRecord {
+            sub_count: 2,
+            sub_type: Some(WeaponId(148)),
+            ..rock_gun()
+        };
+        let (_, events) = shoot_rocks(&mut combat, A, shell, Vec::new(), &mut rocks, 8);
+        assert_eq!(
+            rocks[0].strength, 6,
+            "its 4 mass damage, none of its 10 energy"
+        );
+        assert!(
+            (rocks[0].velocity - Vec2::new(0.5, 0.0)).length() < 1e-5,
+            "{:?}",
+            rocks[0].velocity
+        );
+        assert_eq!(combat.shots(), [], "used up");
+        let seen = unfired(&events);
+        let Some(&CombatEvent::Exploded { at, .. }) = seen.first() else {
+            panic!("{seen:?}");
+        };
+        assert!((at - Vec2::new(90.0, 0.0)).length() < 1e-3, "{at:?}");
+        assert_eq!(
+            seen,
+            [
+                CombatEvent::Exploded {
+                    at,
+                    explosion: Explosion::decode(2).expect("bööm 130"),
+                },
+                CombatEvent::Particles(ParticleBurst {
+                    at,
+                    speed: (150.0_f64 * 0.01) as f32,
+                    variation: 20,
+                    life: (30, 37),
+                    color: 0x00FF_8000,
+                    count: 5,
+                    spread: 0.0,
+                }),
+            ]
+        );
+        assert_eq!(fired(&events, A), 1, "no sub-munitions released");
+        assert_eq!(combat.take_broken_asteroids(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_hit_without_hit_particles_or_an_explosion_raises_neither() {
+        let mut combat = Combat::default();
+        let mut rocks = [rock(0, 100.0, 0.0)];
+        let (_, events) = shoot_rocks(&mut combat, A, blaster(), Vec::new(), &mut rocks, 8);
+        assert_eq!(rocks[0].strength, 6);
+        assert_eq!(unfired(&events), []);
+    }
+
+    #[test]
+    fn an_asteroid_is_not_pushed_without_an_impact_or_a_mass() {
+        for (impact, mass) in [(0, 20), (10, 0), (10, -5)] {
+            let mut combat = Combat::default();
+            let mut rocks = [AsteroidTarget {
+                mass,
+                velocity: Vec2::new(0.25, 0.0),
+                ..rock(0, 100.0, 0.0)
+            }];
+            let gun = WeaponRecord {
+                impact,
+                ..blaster()
+            };
+            shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 8);
+            assert_eq!(rocks[0].strength, 6, "{impact} {mass}");
+            assert_eq!(rocks[0].velocity, Vec2::new(0.25, 0.0), "{impact} {mass}");
+        }
+    }
+
+    /// [`blaster`] at 100 pixels a tick, with a `ProxRadius` of `prox`.
+    fn fast_gun(prox: i16) -> WeaponRecord {
+        WeaponRecord {
+            speed: 10_000,
+            prox_radius: prox,
+            ..blaster()
+        }
+    }
+
+    #[test]
+    fn a_ship_the_shot_touches_is_hit_before_an_asteroid_nearer_along_its_path() {
+        let mut combat = Combat::default();
+        let mut rocks = [rock(0, 40.0, 0.0)];
+        let (ships, _) = shoot_rocks(
+            &mut combat,
+            A,
+            fast_gun(0),
+            vec![Ship::at(2, 90.0, 0.0)],
+            &mut rocks,
+            1,
+        );
+        assert_eq!(rocks[0].strength, 10, "untouched");
+        assert!(ships[1].reserves.shield.now < 10.0, "the ship took it");
+    }
+
+    #[test]
+    fn an_asteroid_the_shot_touches_is_hit_before_a_ship_that_only_sets_its_fuse_off() {
+        let mut combat = Combat::default();
+        let mut rocks = [rock(0, 80.0, 0.0)];
+        // 16 + 30 reaches the path; 16 does not.
+        let (ships, _) = shoot_rocks(
+            &mut combat,
+            A,
+            fast_gun(30),
+            vec![Ship::at(2, 40.0, 30.0)],
+            &mut rocks,
+            1,
+        );
+        assert_eq!(rocks[0].strength, 6);
+        assert_eq!(ships[1].reserves, Reserves::full(10.0, 30.0, 100.0));
+    }
+
+    #[test]
+    fn a_ship_that_sets_the_fuse_off_is_hit_before_an_asteroid_in_the_fuses_reach() {
+        let mut combat = Combat::default();
+        // Off the path, but 25 from where the shot ends.
+        let mut rocks = [rock(0, 100.0, 25.0)];
+        let (ships, _) = shoot_rocks(
+            &mut combat,
+            A,
+            fast_gun(30),
+            vec![Ship::at(2, 40.0, 30.0)],
+            &mut rocks,
+            1,
+        );
+        assert_eq!(rocks[0].strength, 10);
+        assert!(ships[1].reserves.shield.now < 10.0);
+    }
+
+    #[test]
+    fn an_armed_fuse_with_no_ship_in_reach_takes_the_asteroid_where_the_shot_is() {
+        let mut combat = Combat::default();
+        let mut rocks = [rock(4, 100.0, 25.0)];
+        let gun = WeaponRecord {
+            explod_type: 2,
+            ..fast_gun(30)
+        };
+        let (_, events) = shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 1);
+        assert_eq!(rocks[0].strength, 6);
+        let seen = unfired(&events);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        let CombatEvent::Exploded { at, explosion } = seen[0] else {
+            panic!("{seen:?}");
+        };
+        assert!((at - Vec2::new(100.0, 0.0)).length() < 1e-3, "{at:?}");
+        assert_eq!(Some(explosion), Explosion::decode(2));
+        assert_eq!(combat.shots(), []);
+    }
+
+    #[test]
+    fn the_fuse_rule_decides_whether_flags2_0x0004_spares_asteroids() {
+        for (fuse, hit) in [(AsteroidFuse::Original, true), (AsteroidFuse::Bible, false)] {
+            let mut combat = Combat::default();
+            combat.set_asteroid_fuse(fuse);
+            let mut rocks = [rock(0, 100.0, 25.0)];
+            let gun = WeaponRecord {
+                flags2: 0x0004,
+                ..fast_gun(30)
+            };
+            shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 1);
+            assert_eq!(rocks[0].strength < 10, hit, "{fuse:?}");
+            assert_eq!(combat.shots().is_empty(), hit, "{fuse:?}");
+        }
+    }
+
+    #[test]
+    fn a_second_shot_the_same_tick_passes_through_an_asteroid_the_first_broke() {
+        let mut combat = Combat::default();
+        let mut rocks = [AsteroidTarget {
+            strength: 2,
+            ..rock(5, 100.0, 0.0)
+        }];
+        let arsenal = Arsenal::default();
+        // A and its escort C side by side, neither's shots hitting the
+        // other.
+        let mut escort = Ship::at(3, 0.0, 0.0).armed(fast_gun(0));
+        escort.fleet = A;
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(fast_gun(0)), escort];
+        // Both meet it on the first tick; the second shot flies on.
+        tick_amid(
+            &mut combat,
+            &mut ships,
+            &arsenal,
+            Rules::default(),
+            &mut rocks,
+        );
+        for ship in &mut ships {
+            ship.trigger = QUIET;
+        }
+        tick_amid(
+            &mut combat,
+            &mut ships,
+            &arsenal,
+            Rules::default(),
+            &mut rocks,
+        );
+        assert_eq!(rocks[0].strength, -2, "the first shot's alone");
+        assert_eq!(combat.shots().len(), 1, "the second flies on");
+        assert_eq!(combat.take_broken_asteroids(), [5]);
+        assert_eq!(combat.take_broken_asteroids(), Vec::<usize>::new(), "taken");
+    }
+
+    #[test]
+    fn asteroids_broken_in_a_tick_are_taken_in_the_order_they_broke() {
+        let mut combat = Combat::default();
+        let mut rocks = [
+            AsteroidTarget {
+                strength: 1,
+                ..rock(2, 100.0, 50.0)
+            },
+            AsteroidTarget {
+                strength: 1,
+                ..rock(5, 100.0, 0.0)
+            },
+        ];
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(fast_gun(0)),
+            Ship::at(3, 0.0, 50.0).armed(fast_gun(0)),
+        ];
+        for _ in 0..2 {
+            tick_amid(
+                &mut combat,
+                &mut ships,
+                &Arsenal::default(),
+                Rules::default(),
+                &mut rocks,
+            );
+            for ship in &mut ships {
+                ship.trigger = QUIET;
+            }
+        }
+        assert_eq!(combat.take_broken_asteroids(), [5, 2]);
+    }
+
+    /// A gun of the player's with a `BlastRadius` of 30 and these `Flags`
+    /// and `Flags2`.
+    fn blasting(flags: u16, flags2: u16) -> WeaponRecord {
+        WeaponRecord {
+            blast_radius: 30,
+            flags,
+            flags2,
+            ..blaster()
+        }
+    }
+
+    /// The ships struck when `firer` shoots `weapon` at an asteroid at
+    /// (100, 0), with NPCs B in the blast's square, C outside it and D,
+    /// planet-type, in it: the strikes, in order.
+    fn blasted(firer: ShipRef, weapon: WeaponRecord) -> Vec<Strike> {
+        let mut combat = Combat::default();
+        let mut rocks = [rock(0, 100.0, 0.0)];
+        let mut planet = Ship::at(4, 100.0, -25.0);
+        planet.hull.planet_type = true;
+        let others = vec![Ship::at(2, 110.0, 20.0), Ship::at(3, 100.0, 60.0), planet];
+        shoot_rocks(&mut combat, firer, weapon, others, &mut rocks, 8);
+        combat.take_strikes()
+    }
+
+    #[test]
+    fn a_players_shot_at_an_asteroid_blasts_the_ships_in_its_square_but_a_planet_type_one() {
+        let strikes = blasted(ShipRef::Player, blasting(0, 0));
+        assert_eq!(
+            strikes,
+            [Strike {
+                ship: B,
+                by: ShipRef::Player,
+                damage: 14.0,
+                downed: None,
+                provokes: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn an_npcs_shot_or_a_planet_type_weapons_blasts_nobody_through_an_asteroid() {
+        assert_eq!(blasted(A, blasting(0, 0)), []);
+        assert_eq!(blasted(ShipRef::Player, blasting(0, PLANET_TYPE)), []);
+    }
+
+    #[test]
+    fn the_players_blast_at_an_asteroid_hurts_the_player_unless_its_weapon_spares_it() {
+        for (flags, hurt) in [(0, true), (0x0100, false)] {
+            let mut combat = Combat::default();
+            // Met at (10, 0): the player in the square.
+            let mut rocks = [rock(0, 20.0, 0.0)];
+            shoot_rocks(
+                &mut combat,
+                ShipRef::Player,
+                blasting(flags, 0),
+                Vec::new(),
+                &mut rocks,
+                1,
+            );
+            let strikes = combat.take_strikes();
+            assert_eq!(
+                strikes.iter().any(|strike| strike.ship == ShipRef::Player),
+                hurt,
+                "{flags:#x}: {strikes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_point_defence_shot_meets_an_asteroid_on_its_way_to_a_missile() {
+        let rule = Hostility {
+            hostile: true,
+            ..Hostility::default()
+        };
+        let rules = Rules {
+            defence: &rule,
+            ..Rules::default()
+        };
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(quad());
+        let mut rocks = [rock(0, 0.0, -40.0)];
+        for _ in 0..12 {
+            tick_amid(
+                &mut combat,
+                &mut ships,
+                &Arsenal::default(),
+                rules,
+                &mut rocks,
+            );
+            ships[1].trigger = QUIET;
+        }
+        assert!(rocks[0].strength < 10, "{rocks:?}");
+        let downed = combat
+            .take_events()
+            .iter()
+            .filter(|event| matches!(event, CombatEvent::ShotDown { .. }))
+            .count();
+        assert_eq!(downed, 0, "its shots spent on the asteroid");
     }
 }

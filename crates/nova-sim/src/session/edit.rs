@@ -938,7 +938,8 @@ mod tests {
         let catalog = atlas();
         let flying =
             Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
-        for session in [landed(&catalog), flying] {
+        // Boxed: two sessions side by side outgrow clippy's stack-array limit.
+        for session in [Box::new(landed(&catalog)), Box::new(flying)] {
             for (to, refusal) in [
                 ((132, 140), RelocateRefusal::NoSystem),
                 ((999, 140), RelocateRefusal::NoSystem),
@@ -948,7 +949,7 @@ mod tests {
                 ((131, 142), RelocateRefusal::NotLandable),
                 ((131, 143), RelocateRefusal::NotLandable),
             ] {
-                assert_landing_refused(session.clone(), &catalog, to, refusal);
+                assert_landing_refused((*session).clone(), &catalog, to, refusal);
             }
         }
     }

@@ -64,7 +64,7 @@ pub fn damage(weapon: &WeaponSpec) -> i64 {
 /// flown past its proximity safety (@0x371fc-0x3721e).
 #[must_use]
 pub fn can_hit(shot: &Shot) -> bool {
-    shot.weapon.planet_type() && shot.age > shot.weapon.prox_safety
+    shot.weapon.planet_type() && shot.fuse_armed()
 }
 
 /// The stellar among `stellars`, by its index, that `shot`, having flown

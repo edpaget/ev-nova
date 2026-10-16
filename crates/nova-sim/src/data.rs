@@ -1,8 +1,8 @@
-//! The pilot, traffic, combat and comm catalogs over the game data: a
-//! thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
-//! `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt` and `mïsn` records, its
-//! string lists and its stellar sprites; and a `shän`'s blink fields as a
-//! [`Blink`].
+//! The pilot, traffic, combat, asteroid and comm catalogs over the game
+//! data: a thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`,
+//! `wëap`, `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt`,
+//! `mïsn` and `röid` records, its string lists and its stellar and
+//! asteroid sprites; and a `shän`'s blink fields as a [`Blink`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,6 +19,7 @@ use nova_data::records::nebula::Nebula;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
 use nova_data::records::rank::Rank;
+use nova_data::records::roid::Roid;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -31,23 +32,36 @@ use nova_data::sound::decode_snd;
 use nova_data::{GameData, Record, stellar_spin_id};
 use nova_rsrc::ResType;
 
+use crate::asteroid::KINDS;
 use crate::blink::Blink;
 use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
-    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
-    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic,
-    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
+    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite,
+    GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
+    ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId, StellarLife,
+    StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
+    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::nebula;
 use crate::warp::SoundLength;
+
+/// The `spïn` of asteroid type 0's master sprite: type `n`'s is 800 +
+/// `n` (`_LoadSprites` @0x20bb7).
+pub const FIRST_ASTEROID_SPIN: i16 = 800;
+
+/// The `spïn` of box graphic 0's master sprite: graphic `n`'s is 500 +
+/// `n`, the box masters `_InitSprites` loads (500-504).
+pub const FIRST_BOX_SPIN: i16 = 500;
+
+/// The first `röid`, asteroid type 0's.
+const FIRST_ROID: i16 = 128;
 
 /// The `snd ` resource type.
 const SND: ResType = ResType::new(*b"snd ");
@@ -713,13 +727,25 @@ fn counts_frames(data: &GameData, graphic: i16) -> bool {
 /// `yTiles` as [`counts_frames`] reckons it: 0 when it does not read or is
 /// not above 0, and at most `u16::MAX`.
 fn frame_count(data: &GameData, graphic: i16) -> u16 {
-    tiles(data, graphic).map_or(0, |tiles| u16::try_from(tiles.max(0)).unwrap_or(u16::MAX))
+    stellar_spin_id(graphic).map_or(0, |spin_id| spin_frame_count(data, spin_id))
+}
+
+/// `spïn` `spin_id`'s frame count in `data`, its `xTiles` × `yTiles` in
+/// 32 bits: 0 when it does not read or is not above 0, and at most
+/// `u16::MAX`.
+fn spin_frame_count(data: &GameData, spin_id: i16) -> u16 {
+    spin_tiles(data, spin_id).map_or(0, |tiles| u16::try_from(tiles.max(0)).unwrap_or(u16::MAX))
 }
 
 /// Graphic type `graphic`'s `spïn`'s `xTiles` × `yTiles` in 32 bits, when
 /// it reads.
 fn tiles(data: &GameData, graphic: i16) -> Option<i32> {
-    let spin = data.get::<Spin>(stellar_spin_id(graphic)?)?.ok()?;
+    spin_tiles(data, stellar_spin_id(graphic)?)
+}
+
+/// `spïn` `spin_id`'s `xTiles` × `yTiles` in 32 bits, when it reads.
+fn spin_tiles(data: &GameData, spin_id: i16) -> Option<i32> {
+    let spin = data.get::<Spin>(spin_id)?.ok()?;
     Some(i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles))
 }
 
@@ -919,6 +945,10 @@ impl CombatCatalog for GameData {
                     sub_limit: record.sub_limit,
                     max_ammo: record.max_ammo,
                     prox_safety: record.prox_safety,
+                    hit_particles: record.hit_particles,
+                    hit_part_life: record.hit_part_life,
+                    hit_part_vel: record.hit_part_vel,
+                    hit_part_color: record.hit_part_color,
                 })
             })
             .collect()
@@ -978,6 +1008,63 @@ impl CombatCatalog for GameData {
                     scan_fine: record.scan_fine,
                     news_pic: record.news_pic,
                     require: record.require.bits(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Reads the records afresh on every call; a session asks once, when it
+/// starts.
+impl AsteroidCatalog for GameData {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (0..KINDS as u8)
+            .filter_map(|kind| {
+                let roid = self.get::<Roid>(FIRST_ROID + i16::from(kind))?.ok()?.record;
+                let spin_id = FIRST_ASTEROID_SPIN + i16::from(kind);
+                let frame_size = self
+                    .spin_sheet(spin_id)
+                    .ok()
+                    .map(|spin| (spin.sheet.frame_width(), spin.sheet.frame_height()));
+                Some(AsteroidTypeRecord {
+                    kind,
+                    strength: roid.strength,
+                    spin_rate: roid.spin_rate,
+                    frames: spin_frame_count(self, spin_id),
+                    frame_size,
+                    yield_type: roid.yield_type,
+                    yield_qty: roid.yield_qty,
+                    part_count: roid.part_count,
+                    part_color: roid.part_color,
+                    frag_types: [roid.frag_type1, roid.frag_type2]
+                        .map(|frag| frag.map_or(-1, |id| id.0)),
+                    frag_count: roid.frag_count,
+                    explode_type: roid.explode_type,
+                    mass: roid.mass,
+                })
+            })
+            .collect()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        std::array::from_fn(|graphic| {
+            // In 0..5.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let spin_id = FIRST_BOX_SPIN + graphic as i16;
+            self.spin_sheet(spin_id)
+                .ok()
+                .map(|spin| (spin.sheet.frame_width(), spin.sheet.frame_height()))
+        })
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let record = system.ok()?.record;
+                Some(AsteroidFieldRecord {
+                    system: SystemId(id),
+                    count: record.asteroids,
+                    types: record.ast_types.bits(),
                 })
             })
             .collect()
@@ -1171,6 +1258,7 @@ mod tests {
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::disaster::Disaster;
     use nova_data::records::junk::Junk;
+    use nova_data::records::roid::Roid;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
     use nova_data::records::string_list::StrList;
@@ -1181,8 +1269,9 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
-        StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
+        AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, DisasterId, GateSite, GovtId,
+        GovtRecord, HullRecord, JunkId, Penalties, StarSystem, StartDate, StellarId, StockWeapon,
+        SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test, TestExpr};
@@ -2413,6 +2502,144 @@ mod tests {
         assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
     }
 
+    /// A `röid` of this `Strength` and `SpinRate`, with no yield, no
+    /// fragments and no explosion (-1 each) and nothing else.
+    fn roid(strength: i16, spin_rate: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Roid::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[strength, spin_rate, -1]);
+        put_i16s(&mut bytes, 0x0E, &[-1, -1, 0, -1]);
+        bytes
+    }
+
+    /// A `spïn` naming `rlëD` `image`, `x_tiles` across and `y_tiles` down.
+    fn spin_tiled(image: i16, x_tiles: i16, y_tiles: i16) -> Vec<u8> {
+        let mut bytes = spin(image);
+        put_i16s(&mut bytes, 0x08, &[x_tiles, y_tiles]);
+        bytes
+    }
+
+    #[test]
+    fn the_asteroid_types_are_each_roid_with_its_spins_frames_and_size() {
+        let data = store(&[
+            (Roid::TYPE, 128, roid(0, 120)),
+            (Roid::TYPE, 132, roid(250, -40)),
+            // Past the 16 types.
+            (Roid::TYPE, 144, roid(9, 9)),
+            (Spin::TYPE, 800, spin_tiled(1800, 6, 6)),
+            (RLED, 1800, sheet(48, 40)),
+            // Frames, but no sheet to size them.
+            (Spin::TYPE, 804, spin_tiled(1804, 2, 3)),
+        ]);
+        assert_eq!(
+            data.asteroid_types(),
+            [
+                AsteroidTypeRecord {
+                    kind: 0,
+                    strength: 0,
+                    spin_rate: 120,
+                    frames: 36,
+                    frame_size: Some((48, 40)),
+                    ..AsteroidTypeRecord::default()
+                },
+                AsteroidTypeRecord {
+                    kind: 4,
+                    strength: 250,
+                    spin_rate: -40,
+                    frames: 6,
+                    frame_size: None,
+                    ..AsteroidTypeRecord::default()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_box_frame_sizes_are_spins_500_to_504s_where_a_sheet_reads() {
+        let data = store(&[
+            (Spin::TYPE, 501, spin_tiled(1501, 6, 6)),
+            (RLED, 1501, sheet(22, 18)),
+            // Frames, but no sheet to size them.
+            (Spin::TYPE, 503, spin_tiled(1503, 6, 6)),
+            // Past the five box graphics.
+            (Spin::TYPE, 505, spin_tiled(1505, 6, 6)),
+            (RLED, 1505, sheet(30, 30)),
+        ]);
+        assert_eq!(
+            data.box_frame_sizes(),
+            [None, Some((22, 18)), None, None, None]
+        );
+    }
+
+    #[test]
+    fn an_asteroid_type_with_no_spin_has_no_frames_and_no_size() {
+        let data = store(&[(Roid::TYPE, 143, roid(5, 100))]);
+        assert_eq!(
+            data.asteroid_types(),
+            [AsteroidTypeRecord {
+                kind: 15,
+                strength: 5,
+                spin_rate: 100,
+                frames: 0,
+                frame_size: None,
+                ..AsteroidTypeRecord::default()
+            }]
+        );
+    }
+
+    #[test]
+    fn an_asteroid_type_carries_its_yield_particles_fragments_explosion_and_mass_raw() {
+        let mut bytes = roid(40, 150);
+        put_i16s(&mut bytes, 0x04, &[1003, 6, 9]);
+        bytes[0x0A..0x0E].copy_from_slice(&0x00AB_CDEF_u32.to_be_bytes());
+        put_i16s(&mut bytes, 0x0E, &[129, -1, 3, 1002, 75]);
+        let data = store(&[(Roid::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.asteroid_types(),
+            [AsteroidTypeRecord {
+                kind: 0,
+                strength: 40,
+                spin_rate: 150,
+                frames: 0,
+                frame_size: None,
+                yield_type: 1003,
+                yield_qty: 6,
+                part_count: 9,
+                part_color: 0x00AB_CDEF,
+                frag_types: [129, -1],
+                frag_count: 3,
+                explode_type: 1002,
+                mass: 75,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_asteroid_fields_are_each_systems_asteroids_and_ast_types() {
+        let mut rocky = system();
+        put_i16s(&mut rocky, 0x6A, &[12]);
+        rocky[0x94..0x96].copy_from_slice(&0x8011_u16.to_be_bytes());
+        let data = store(&[
+            (System::TYPE, 130, system()),
+            (System::TYPE, 131, rocky),
+            (System::TYPE, 132, short(system())),
+        ]);
+        assert_eq!(
+            data.asteroid_fields(),
+            [
+                AsteroidFieldRecord {
+                    system: SystemId(130),
+                    count: 0,
+                    types: 0,
+                },
+                AsteroidFieldRecord {
+                    system: SystemId(131),
+                    count: 12,
+                    types: 0x8011,
+                },
+            ]
+        );
+    }
+
     #[test]
     fn a_landing_site_reads_its_animation_fields_and_its_sheets_frame_counts() {
         let mut gate = dead_as(stellar(0, 0, 3, 1, 0), 6);
@@ -3207,6 +3434,8 @@ mod tests {
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
         put_i16s(&mut bytes, 0x68, &[4, 70, 6]);
+        put_i16s(&mut bytes, 0x4C, &[12, 45, 300]);
+        bytes[0x52..0x56].copy_from_slice(&0x0012_3456_u32.to_be_bytes());
         bytes
     }
 
@@ -3247,6 +3476,10 @@ mod tests {
             sub_limit: 2,
             max_ammo: 6,
             prox_safety: 8,
+            hit_particles: 12,
+            hit_part_life: 45,
+            hit_part_vel: 300,
+            hit_part_color: 0x0012_3456,
         };
         assert_eq!(
             data.weapons(),

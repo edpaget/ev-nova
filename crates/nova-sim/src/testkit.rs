@@ -1,17 +1,18 @@
-//! A canned [`PilotCatalog`], [`TrafficCatalog`], [`CombatCatalog`] and
-//! [`CommCatalog`] for the crate's own tests.
+//! A canned [`PilotCatalog`], [`TrafficCatalog`], [`CombatCatalog`],
+//! [`AsteroidCatalog`] and [`CommCatalog`] for the crate's own tests.
 
 use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
-    HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
-    MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
-    PersonRecord, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
-    StartDate, StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
+    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord,
+    JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts,
+    NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
+    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemTraffic,
+    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -26,7 +27,7 @@ use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
 use crate::session::LandPress;
 use crate::session::Session;
 use crate::stats::ShipStats;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::warp::SoundLength;
 
 /// A canned first `chär`, ships and systems; records the ships asked
@@ -122,6 +123,12 @@ pub(crate) struct FakePilotCatalog {
     /// The double-time warp-up sound's length: none, by default, so the
     /// warp's clock takes 350 Mac ticks in double time too.
     pub(crate) warp_sound_double_time: Option<SoundLength>,
+    /// Every `röid`, with its sprite's frames and size: none, by default.
+    pub(crate) asteroid_types: Vec<AsteroidTypeRecord>,
+    /// Every system's asteroid field: none, by default.
+    pub(crate) asteroid_fields: Vec<AsteroidFieldRecord>,
+    /// Each box graphic's frame size: none, by default.
+    pub(crate) box_frames: [Option<(u32, u32)>; BOX_GRAPHICS],
     /// The warp-out sound's length: none, by default, so an arrival's
     /// warp-out never plays on and every jump arrival plays it.
     pub(crate) warp_out_sound: Option<SoundLength>,
@@ -419,6 +426,10 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         sub_limit: 0,
         max_ammo: 0,
         prox_safety: 0,
+        hit_particles: 0,
+        hit_part_life: 0,
+        hit_part_vel: 0,
+        hit_part_color: 0,
     }
 }
 
@@ -526,7 +537,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         booty: 0,
         boarded: false,
         info_types: 0,
-        cargo: None,
+        cargo: NpcHold::default(),
         spared: false,
         assisting: 0,
         carrier: None,
@@ -616,6 +627,9 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         nebulae: Vec::new(),
         warp_sound: None,
         warp_sound_double_time: None,
+        asteroid_types: Vec::new(),
+        asteroid_fields: Vec::new(),
+        box_frames: [None; BOX_GRAPHICS],
         warp_out_sound: None,
     }
 }
@@ -973,6 +987,21 @@ impl CombatCatalog for FakePilotCatalog {
 
     fn governments(&self) -> Vec<GovtRecord> {
         self.govts.clone()
+    }
+}
+
+/// No asteroids unless a test sets them.
+impl AsteroidCatalog for FakePilotCatalog {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        self.asteroid_types.clone()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        self.asteroid_fields.clone()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        self.box_frames
     }
 }
 

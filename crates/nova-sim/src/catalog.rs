@@ -1,6 +1,7 @@
 //! The catalog ports: what a flight session starts from
 //! ([`PilotCatalog`]), what its NPC traffic is spawned from
-//! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]) and
+//! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]),
+//! what its asteroid fields hold ([`AsteroidCatalog`]) and
 //! the game's string lists ([`CommCatalog`]), which a hailed ship answers
 //! from and the `T` set operator names the ship from, in the simulation's
 //! own terms.
@@ -1141,6 +1142,15 @@ pub struct WeaponRecord {
     /// Its `ProxSafety`: the ticks a shot of it flies before its fuse is
     /// armed.
     pub prox_safety: i16,
+    /// Its `HitParticles`: how many particles a hit throws off.
+    pub hit_particles: i16,
+    /// Its `HitPartLife`: the hit particles' least life, in ticks.
+    pub hit_part_life: i16,
+    /// Its `HitPartVel`: the hit particles' speed, in hundredths of a
+    /// pixel a tick.
+    pub hit_part_vel: i16,
+    /// Its `HitPartColor`, `00RRGGBB`.
+    pub hit_part_color: u32,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`
@@ -1289,6 +1299,122 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
 
     fn governments(&self) -> Vec<GovtRecord> {
         (**self).governments()
+    }
+}
+
+/// One asteroid type, `röid` 128 + `kind`, with its master sprite's
+/// frames and frame size (see [`asteroid`](crate::asteroid)), raw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AsteroidTypeRecord {
+    /// Its type, 0-15: `röid` 128 + `kind`, bit `kind` of a system's
+    /// `AstTypes`.
+    pub kind: u8,
+    /// Its `Strength`, raw.
+    pub strength: i16,
+    /// Its `SpinRate`, raw: frames a tick, in hundredths.
+    pub spin_rate: i16,
+    /// Its master sprite's frame count, `spïn` 800 + `kind`'s `xTiles` ×
+    /// `yTiles`: 0 when it does not read or is not above 0.
+    pub frames: u16,
+    /// Its master sprite's frame width and height, when the sheet reads.
+    pub frame_size: Option<(u32, u32)>,
+    /// Its `YieldType`, raw: 0-6 a commodity, 1000-1127 a `jünk`.
+    pub yield_type: i16,
+    /// Its `YieldQty`, raw: the boxes it drops on average.
+    pub yield_qty: i16,
+    /// Its `PartCount`: the particles it throws off as it is destroyed.
+    pub part_count: i16,
+    /// Its `PartColor`, `00RRGGBB`.
+    pub part_color: u32,
+    /// Its `FragType1` and `FragType2`, raw: a `röid` ID (or a kind
+    /// 0-15), -1 for none.
+    pub frag_types: [i16; 2],
+    /// Its `FragCount`: the fragments it breaks into on average.
+    pub frag_count: i16,
+    /// Its `ExplodeType`, encoded: -1 for none.
+    pub explode_type: i16,
+    /// Its `Mass`: what a shot's `Impact` pushes against.
+    pub mass: i16,
+}
+
+/// A record of kind 0 with nothing set: no strength, spin, frames or
+/// sprite, no particles or mass, and -1 (none) for its `YieldType`,
+/// `FragType`s and `ExplodeType`.
+impl Default for AsteroidTypeRecord {
+    fn default() -> Self {
+        Self {
+            kind: 0,
+            strength: 0,
+            spin_rate: 0,
+            frames: 0,
+            frame_size: None,
+            yield_type: -1,
+            yield_qty: 0,
+            part_count: 0,
+            part_color: 0,
+            frag_types: [-1, -1],
+            frag_count: 0,
+            explode_type: -1,
+            mass: 0,
+        }
+    }
+}
+
+/// One `sÿst`'s asteroid field: its `Asteroids` and `AstTypes`, raw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AsteroidFieldRecord {
+    /// The system.
+    pub system: SystemId,
+    /// Its `Asteroids`: how many asteroids it holds at most, 0-16.
+    pub count: i16,
+    /// Its `AstTypes`: bit `n` set for each `röid` 128 + `n` it holds.
+    pub types: u16,
+}
+
+/// The game data a session's asteroid fields are read from (see
+/// [`asteroid`](crate::asteroid)).
+pub trait AsteroidCatalog {
+    /// `röid` 128 + `kind`, `kind` 0-15, for each that reads, by kind,
+    /// with `spïn` 800 + `kind`'s frames and frame size.
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord>;
+    /// Every `sÿst` that reads: its `Asteroids` and `AstTypes`, raw.
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord>;
+    /// The frame width and height of each box graphic 0-4, `spïn` 500 +
+    /// graphic, by graphic: none where the sheet does not read. A scoop
+    /// tests a ship against the box's frame (see [`scoop`](crate::scoop)).
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS];
+}
+
+/// The cargo boxes' graphics: `spïn` 500-504.
+pub const BOX_GRAPHICS: usize = 5;
+
+/// A borrowed catalog is a catalog.
+impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for &T {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (**self).asteroid_types()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        (**self).asteroid_fields()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        (**self).box_frame_sizes()
+    }
+}
+
+/// A shared catalog is a catalog.
+impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for Rc<T> {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (**self).asteroid_types()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        (**self).asteroid_fields()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        (**self).box_frame_sizes()
     }
 }
 
@@ -2538,6 +2664,56 @@ mod tests {
         assert!(direct[2].contains("\"Federation\""), "{direct:?}");
         assert_eq!(combat(&One), direct);
         assert_eq!(combat(Rc::new(One)), direct);
+    }
+
+    /// Asteroid type 4, `röid` 132, and system 130's field.
+    impl AsteroidCatalog for One {
+        fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+            vec![AsteroidTypeRecord {
+                kind: 4,
+                strength: 30,
+                spin_rate: 120,
+                frames: 36,
+                frame_size: Some((48, 40)),
+                ..AsteroidTypeRecord::default()
+            }]
+        }
+
+        fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+            vec![AsteroidFieldRecord {
+                system: SystemId(130),
+                count: 6,
+                types: 0x0011,
+            }]
+        }
+
+        fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+            [None, None, Some((22, 20)), None, None]
+        }
+    }
+
+    type Asteroids = (
+        Vec<AsteroidTypeRecord>,
+        Vec<AsteroidFieldRecord>,
+        [Option<(u32, u32)>; BOX_GRAPHICS],
+    );
+
+    fn asteroids(catalog: impl AsteroidCatalog) -> Asteroids {
+        (
+            catalog.asteroid_types(),
+            catalog.asteroid_fields(),
+            catalog.box_frame_sizes(),
+        )
+    }
+
+    #[test]
+    fn borrowed_and_shared_asteroid_catalogs_are_catalogs() {
+        let direct = asteroids(One);
+        assert_eq!(direct.0[0].kind, 4);
+        assert_eq!(direct.1[0].types, 0x0011);
+        assert_eq!(direct.2[2], Some((22, 20)));
+        assert_eq!(asteroids(&One), direct);
+        assert_eq!(asteroids(Rc::new(One)), direct);
     }
 
     /// `STR#` 3000 holds two replies; no other list exists.

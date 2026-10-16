@@ -11,6 +11,10 @@
 //!   come to each other's help, and which weapon they fire; the
 //!   player's escorts to [`EscortAi`], which flies them by their standing
 //!   orders; and an NPC carrier's fighters to [`CarriedAi`].
+//! - [`asteroid`]: a system's asteroid field: the 16 slots
+//!   ([`Asteroids`](asteroid::Asteroids)), how an asteroid spawns at the
+//!   field's edge or in place, how it drifts and spins, and when it is
+//!   culled.
 //! - [`bay`]: fighter bays: the fighters a bay holds ([`capacity`]), how
 //!   one is launched, the window it docks in ([`dock_window`]) with its
 //!   [`Carrier`], and what the flight is told of fighters abandoned
@@ -38,8 +42,9 @@
 //!   `crön`s the day's cron pass runs and the `ränk`s the pilot can hold; the
 //!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
 //!   traffic is spawned from; the [`CombatCatalog`] port, the `wëap`s,
-//!   each `shïp`'s combat fields and the `gövt`s ships fight by; and the
-//!   [`CommCatalog`] port, the string lists a hailed ship's words come
+//!   each `shïp`'s combat fields and the `gövt`s ships fight by; the
+//!   [`AsteroidCatalog`] port, the `röid`s and each `sÿst`'s asteroid
+//!   field; and the [`CommCatalog`] port, the string lists a hailed ship's words come
 //!   from.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
@@ -277,6 +282,7 @@
 //!   duration, and when the warp's lead-in ends and scans are held.
 
 pub mod ai;
+pub mod asteroid;
 pub mod bay;
 pub mod blink;
 pub mod board;
@@ -340,6 +346,7 @@ pub mod sabotage;
 pub mod save;
 pub mod saves;
 pub mod scan;
+pub mod scoop;
 pub mod self_repair;
 pub mod session;
 pub mod ship_change;
@@ -372,14 +379,14 @@ pub use board::{
     Plunder, PlunderView, Take, Taken,
 };
 pub use catalog::{
-    BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
-    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
-    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
+    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DisasterId,
+    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
+    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
+    ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife,
+    StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clearance::{Approach, DockKind, DockRequest, approach, approach_clears};

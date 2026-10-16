@@ -327,6 +327,20 @@ mod tests {
         }
     }
 
+    impl nova_sim::AsteroidCatalog for Catalog {
+        fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+            Vec::new()
+        }
+
+        fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+            Vec::new()
+        }
+
+        fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+            [None; nova_sim::BOX_GRAPHICS]
+        }
+    }
+
     impl CombatCatalog for Catalog {
         fn weapons(&self) -> Vec<WeaponRecord> {
             Vec::new()

@@ -721,6 +721,20 @@ impl PilotCatalog for Probed<'_> {
     }
 }
 
+impl nova_sim::AsteroidCatalog for Probed<'_> {
+    fn asteroid_types(&self) -> Vec<cat::AsteroidTypeRecord> {
+        nova_sim::AsteroidCatalog::asteroid_types(self.data)
+    }
+
+    fn asteroid_fields(&self) -> Vec<cat::AsteroidFieldRecord> {
+        nova_sim::AsteroidCatalog::asteroid_fields(self.data)
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        nova_sim::AsteroidCatalog::box_frame_sizes(self.data)
+    }
+}
+
 impl CombatCatalog for Probed<'_> {
     fn weapons(&self) -> Vec<cat::WeaponRecord> {
         self.data.weapons()

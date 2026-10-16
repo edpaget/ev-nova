@@ -350,6 +350,7 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod asteroids;
 mod aux_ships;
 mod brackets;
 mod buoys;
@@ -440,22 +441,23 @@ use crate::board::{
     check_board,
 };
 use crate::catalog::{
-    CombatCatalog, CronRecord, DateAffixes, DudeId, GateSite, GovtId, JunkId, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord,
-    PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError,
-    StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DudeId, GateSite, GovtId, JunkId,
+    LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId,
+    OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord,
+    StartError, StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
     Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
+use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::weapon::Ammo;
 use crate::combat::{
-    Combat, CombatEvent, Downed, Fighter, GamePass, Rules, ShipRef, Shove, Strike,
+    Combat, CombatEvent, Downed, Fighter, GamePass, Rules, Scenery, ShipRef, Shove, Strike,
 };
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
@@ -808,6 +810,26 @@ pub struct Session {
     /// The cargo boxes jettisons left in space (see the `cargo_boxes`
     /// module); never saved, as the original saves none.
     boxes: crate::cargo_box::CargoBoxes,
+    /// The asteroid field about the player (see the `asteroids` module);
+    /// never saved, as the original saves none.
+    asteroids: crate::asteroid::Asteroids,
+    /// Every asteroid type, by kind, read when the session starts.
+    asteroid_types: Rc<[crate::asteroid::AsteroidType; crate::asteroid::KINDS]>,
+    /// Each box graphic's frame size, read when the session starts, which
+    /// a scoop tests ships against (see [`scoop`](crate::scoop)).
+    box_frames: crate::scoop::BoxFrames,
+    /// Every system's asteroid field, read when the session starts; a
+    /// system not here holds none.
+    asteroid_fields: BTreeMap<SystemId, crate::asteroid::FieldSpec>,
+    /// The pass frame a kill of the asteroid field holds through, as
+    /// `_killAsteroids` holds to the frame's end (see the `asteroids`
+    /// module); never saved.
+    asteroid_kill: Option<i16>,
+    /// Whether a session started or loaded in flight is still to place
+    /// its asteroid field, as the other reading of
+    /// [`RuleKey::AsteroidEntryField`] places it (see the `asteroids`
+    /// module); never saved.
+    asteroid_field_due: bool,
     /// What the session reports outside combat.
     reports: Reports,
     /// The NPC the player targets, if any.
@@ -1145,7 +1167,9 @@ pub struct Session {
 impl Session {
     /// A new pilot's session, read from `catalog`: an unnamed
     /// [`Pilot::new`], flown.
-    pub fn start(catalog: &(impl PilotCatalog + CombatCatalog)) -> Result<Self, StartError> {
+    pub fn start(
+        catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
+    ) -> Result<Self, StartError> {
         Self::fly(catalog, Pilot::new(catalog, "")?)
     }
 
@@ -1205,7 +1229,7 @@ impl Session {
     ///
     /// When the ship cannot be read, or no system exists at all.
     pub fn fly(
-        catalog: &(impl PilotCatalog + CombatCatalog),
+        catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
         pilot: Pilot,
     ) -> Result<Self, StartError> {
         Self::load(catalog, pilot, &Rulebook::default())
@@ -1242,7 +1266,7 @@ impl Session {
     /// ([`StartError::NoSystem`] with the pilot's saved system).
     #[allow(clippy::too_many_lines)] // one line for each of the session's fields
     pub fn load(
-        catalog: &(impl PilotCatalog + CombatCatalog),
+        catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
         mut pilot: Pilot,
         rules: &Rulebook,
     ) -> Result<Self, StartError> {
@@ -1385,6 +1409,18 @@ impl Session {
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
+            asteroids: crate::asteroid::Asteroids::default(),
+            asteroid_types: Rc::new(crate::asteroid::AsteroidType::table(
+                &catalog.asteroid_types(),
+            )),
+            box_frames: crate::scoop::BoxFrames::new(catalog.box_frame_sizes()),
+            asteroid_fields: asteroids::fields(&catalog.asteroid_fields()),
+            asteroid_kill: None,
+            // A session starts or loads in flight, as `_DoNewPilot`
+            // (@0x19384) and the main screen's entries (@0x1a8cf,
+            // @0x1aff0) do, and places a field (see the `asteroids`
+            // module).
+            asteroid_field_due: true,
             reports: Reports::default(),
             target: None,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
@@ -1557,6 +1593,9 @@ impl Session {
         ));
         self.combat
             .set_breakup(Breakup::from(rules.source_for(RuleKey::BreakupStall)));
+        self.combat.set_asteroid_fuse(AsteroidFuse::from(
+            rules.source_for(RuleKey::FuseIgnoresAsteroids),
+        ));
         self.rules = rules;
         self
     }
@@ -1757,6 +1796,7 @@ impl Session {
         }
         self.tutorial_tick(frame);
         self.brackets_tick();
+        self.scoop_boxes();
         self.boxes_tick();
         if self.pod.is_some() {
             self.pod_tick();
@@ -2353,8 +2393,14 @@ impl Session {
     /// (see the `eject` module), both before the scans. The player's
     /// "Ship disabled." and "Ship destroyed." lines are spoken as the
     /// fight's hits leave it (see the `player_downed` module), before the
-    /// eject on a breakup's first tick takes it into a new ship.
+    /// eject on a breakup's first tick takes it into a new ship. Before
+    /// all of it, landed or jumping, the pass's asteroid work runs
+    /// ([`Session::tick_asteroids`]), so the shots meet the asteroids
+    /// where they are this pass.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
+        // The pass's asteroid work comes first, landed or jumping (see the
+        // `asteroids` module).
+        self.tick_asteroids(&mut *chance);
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
             // The fight stands still, but a scan a lead-in step's traffic
@@ -2391,6 +2437,7 @@ impl Session {
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let (player_terms, terms) = self.fight_terms();
         let mut stellars = self.stellar_targets();
+        let mut rocks = self.asteroid_targets();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -2429,7 +2476,10 @@ impl Session {
             &self.arsenal,
             &self.govts,
             rules,
-            &mut stellars,
+            Scenery {
+                stellars: &mut stellars,
+                asteroids: &mut rocks,
+            },
             chance,
         );
         // The lines are `_DamageShip`'s, said as each hit lands, so before
@@ -2464,6 +2514,7 @@ impl Session {
         self.orphan_fighters();
         self.clear_lost_target();
         self.strike_stellars(&stellars, rules.law, chance);
+        self.settle_asteroid_hits(&rocks, chance);
         self.see_stellars();
         self.lay_out_ships();
     }
@@ -3816,8 +3867,10 @@ impl Session {
         self.bar_news = None;
         self.bar_nav = None;
         self.combat.clear();
-        // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
+        // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40) and
+        // `_killAsteroids` (@0x66f57).
         self.clear_boxes();
+        self.kill_asteroids();
         self.target = None;
         self.talk = None;
         self.leave_with_fighters(true);
@@ -15084,7 +15137,7 @@ pub(super) mod tests {
 
     /// A blaster firing every other tick, 20 pixels a tick for 30 ticks,
     /// doing 5 mass and 10 energy damage.
-    fn blaster() -> WeaponRecord {
+    pub(super) fn blaster() -> WeaponRecord {
         WeaponRecord {
             reload: 2,
             count: 30,
@@ -18567,7 +18620,7 @@ pub(super) mod tests {
     #[test]
     fn diagnostics_are_drained_once() {
         let mut catalog = armed();
-        catalog.weapons[0].flags2 = 0x8000;
+        catalog.weapons[0].flags2 = 0x1000;
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
         for _ in 0..5 {
@@ -18578,7 +18631,7 @@ pub(super) mod tests {
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(128),
                 field: crate::combat::flags::FlagField::Flags2,
-                bit: 0x8000
+                bit: 0x1000
             }]
         );
         assert_eq!(session.take_diagnostics(), []);
@@ -19629,7 +19682,7 @@ pub(super) mod tests {
     /// [`trafficked`] with the player carrying `player` and its traffic
     /// carrying `npc`, the player's ship type's `Flags` `flags`; outfit
     /// 250 holds the player's weapon.
-    fn arming(player: WeaponRecord, npc: WeaponRecord, flags: u16) -> FakePilotCatalog {
+    pub(super) fn arming(player: WeaponRecord, npc: WeaponRecord, flags: u16) -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![player, npc],
             outfits: vec![outfit(250, &[(MOD_WEAPON, player.id.0)])],
@@ -19646,7 +19699,12 @@ pub(super) mod tests {
 
     /// `catalog`'s session with its one NPC at (`x`, `y`) from the player
     /// (at the centre, facing up), facing `heading`, at rest.
-    fn with_an_npc_at(catalog: &FakePilotCatalog, x: u32, y: u32, heading: u32) -> Session {
+    pub(super) fn with_an_npc_at(
+        catalog: &FakePilotCatalog,
+        x: u32,
+        y: u32,
+        heading: u32,
+    ) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, x, y, heading]));
         stop_npcs(&mut session);
@@ -19699,7 +19757,7 @@ pub(super) mod tests {
 
     /// A homing missile: 10 pixels a tick for 60 ticks, turning 7 degrees
     /// a tick, standing 4 of point defence.
-    fn homing_missile(id: i16, reload: i16) -> WeaponRecord {
+    pub(super) fn homing_missile(id: i16, reload: i16) -> WeaponRecord {
         WeaponRecord {
             id: WeaponId(id),
             guidance: 1,
@@ -19737,7 +19795,7 @@ pub(super) mod tests {
 
     /// Every NPC idles, targets the player and holds its trigger.
     #[derive(Debug)]
-    struct Attacking;
+    pub(super) struct Attacking;
 
     impl Behaviour for Attacking {
         fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
@@ -20563,7 +20621,7 @@ pub(super) mod tests {
         // A `Flags` 0x0001 fleet's trader: no düde, so no booty, and its
         // random cargo in its hold.
         trader.booty = 0;
-        trader.cargo = Some((Good::Commodity(3), 7));
+        trader.cargo = crate::traffic::npc::NpcHold::of(Some((Good::Commodity(3), 7)));
         let boarding = session.board(
             &NovaLaw::default(),
             &NovaBoarding::default(),
@@ -20574,8 +20632,8 @@ pub(super) mod tests {
         };
         assert_eq!(view.cargo, None, "_SetPlunderValues reads the Booty alone");
         assert_eq!(
-            session.npcs()[0].cargo,
-            Some((Good::Commodity(3), 7)),
+            session.npcs()[0].cargo.held().collect::<Vec<_>>(),
+            [(Good::Commodity(3), 7)],
             "still in its hold"
         );
     }

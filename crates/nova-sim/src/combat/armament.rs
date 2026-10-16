@@ -1657,7 +1657,7 @@ mod tests {
     #[test]
     fn each_unimplemented_flag_is_reported_once_however_often_it_fires() {
         let mining = WeaponRecord {
-            flags2: 0x8000,
+            flags2: 0x1000,
             ..blaster(181, 0)
         };
         let mut armament = mounted(mining, 1);
@@ -1669,7 +1669,7 @@ mod tests {
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(181),
                 field: FlagField::Flags2,
-                bit: 0x8000
+                bit: 0x1000
             }]
         );
     }
@@ -1937,7 +1937,7 @@ mod tests {
     fn point_defence_reports_its_flags_as_it_fires() {
         let mut armament = mounted(
             WeaponRecord {
-                flags2: 0x8000,
+                flags2: 0x1000,
                 ..defence(133, 9, 5, 0)
             },
             1,

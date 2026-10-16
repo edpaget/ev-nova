@@ -11,7 +11,7 @@
 //! | `N` | @0x158d9-0x159ad | the system set and +0x6c = -1, landed or not (@0x158fd), with no stellar looked for; the position and velocity are never touched, and `_dontMovePlayerAfterLanding` (0x316951) is set |
 //! | both | @0x15807-0x1583e | every active ship whose parent is the player (+0x9a 0: its escorts and fighters out) takes the new system; the others keep the old one, and `_DoPlayGameWork` runs only the ships in the player's system, so they stay behind |
 //! | both, landed | | `_dockedPortMissions` is filled with -1, and that is all |
-//! | both, in flight | @0x158a4 | the shots, cargo boxes (here the entry table's `Reset::Boxes`), explosions, smoke and asteroids are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
+//! | both, in flight | @0x158a4 | the shots, cargo boxes (here the entry table's `Reset::Boxes`), explosions, smoke and asteroids (here `Reset::Asteroids`) are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
 //! | `Q` | @0x15bee-0x15c6c | `_absquatulateStr` (0x1635a0) becomes one of `STR#` `xxx`'s strings, the raw ID, with no range check, drawn as `T` draws (`_GetRandomIndString`: `Rand(count) + 1`); only inside a mission's set expression (`_currentMissionIndexForSetParser` 0-15, set by `_EvalCurrentMissionBitSetString` @0x99a6b alone, and -1 after it @0x99a79) is it run through `_MungeBriefing(0, slot)` (@0x15c37-0x15c4b), so a hook's text, and `OnRefuse`'s, is shown as it is. A missing or empty list, or an empty pick, leaves it empty (strcpy over an earlier one) |
 //!
 //! Neither calls `_SetupShipsInSystem` or `_AutoSetExploration`, whose
@@ -1023,7 +1023,8 @@ mod tests {
         let catalog = moving();
         for reading in READINGS {
             for text in ["M131", "N130"] {
-                for mut session in [flying(&catalog), landed(&catalog)] {
+                for start in [flying as fn(&FakePilotCatalog) -> Session, landed] {
+                    let mut session = start(&catalog);
                     session = session.with_rules(arrival(reading));
                     run(&mut session, text);
                     let mut chance = crate::testkit::Draws::of(&[]);
