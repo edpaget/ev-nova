@@ -178,6 +178,7 @@ fn seeded() -> MemorySettings {
                 music_volume: level_volume(6),
             },
             hyperspace_effects: true,
+            quicktime_movies: true,
         })
         .expect("seeds");
     store
@@ -386,7 +387,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
     assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
-    for _ in 0..5 {
+    for _ in 0..6 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -562,6 +563,39 @@ fn hyperspace_effects_toggle_by_click_and_key_and_survive_a_restart() {
     let json = saved(&store);
     assert_eq!(json["hyperspace_effects"], true);
     assert_eq!(json["music"], false, "the audio change kept");
+}
+
+#[test]
+fn quicktime_movies_toggle_by_click_and_key_and_survive_a_restart() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('p'));
+    assert!(harness.dialog().quicktime_movies().on(), "on at first");
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text == "QuickTime Movies")
+    );
+    let box_at = harness.dialog().quicktime_movies().rect().center();
+    harness.click(box_at);
+    assert!(!harness.dialog().quicktime_movies().on());
+    assert_eq!(saved(&store)["quicktime_movies"], false);
+    assert_eq!(saved(&store)["hyperspace_effects"], true, "the rest kept");
+    harness.press(Key::Enter);
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    let mut again = Harness::new(&store);
+    again.press(Key::Char('p'));
+    assert!(
+        !again.dialog().quicktime_movies().on(),
+        "off after a restart"
+    );
+    for _ in 0..4 {
+        again.press(Key::Tab);
+    }
+    again.press(Key::Space);
+    assert!(again.dialog().quicktime_movies().on());
+    assert_eq!(saved(&store)["quicktime_movies"], true);
 }
 
 /// Where flight draws its hover cursor.

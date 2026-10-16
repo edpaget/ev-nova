@@ -381,6 +381,7 @@ mod tests {
                 ..AudioSettings::default()
             },
             hyperspace_effects: false,
+            quicktime_movies: true,
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);

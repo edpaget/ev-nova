@@ -4846,6 +4846,7 @@ pub(super) mod tests {
                 music_level: 5,
             },
             hyperspace_effects: true,
+            quicktime_movies: true,
         }
     }
 
