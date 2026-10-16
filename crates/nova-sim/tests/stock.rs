@@ -2326,6 +2326,7 @@ fn a_stock_quad_light_blaster_turret_on_two_mounts_fires_every_two_and_a_half_ti
                 &mut fuel,
                 &mut Straight,
                 &mut reports,
+                true,
                 &mut |_| {
                     Some((
                         nova_sim::combat::aim::Pointing::Along(0.0),
@@ -5653,6 +5654,7 @@ fn stock_classes_carrying_the_hail_and_storm_chainguns_keep_separate_rounds() {
                 &mut fuel,
                 &mut NeverFires,
                 &mut Reports::default(),
+                true,
                 &mut |_| Some((nova_sim::combat::aim::Pointing::Along(0.0), ShotId(1))),
             );
             shots += u32::from(fired.is_some());
@@ -5866,6 +5868,99 @@ fn stock_weapons_fire_ai_ship_weapon_reads() {
     assert_eq!(
         ids(&|w| WeaponSpec::new(w).is_bay() && w.flags & 0x0002 == 0),
         [0_i16; 0]
+    );
+}
+
+/// The stock reads behind `_FirePlayerWeapon`'s port (weapons-fidelity
+/// phase 15): no weapon has `AmmoType` -999 or a `Recoil` above none or
+/// below -1, and none is exclusive (`Flags3` 0x0020), so neither the
+/// self-destruct, the recoil nor the exclusive hold reaches stock play. The
+/// quadrant turrets (7 and 8) set no blind spot of their own, so the 18
+/// classes of a hull blind spot carrying one are
+/// `quadrant_turret_blind_spots`'s stock reach. Three classes carry two of
+/// a `Flags` 0x0040 bay, the Aurora Carrier variants 297, 302 and 396, none
+/// sold (`BuyRandom` 0): a player's only by capture.
+#[test]
+fn stock_weapons_fire_player_weapon_reads() {
+    use nova_sim::CombatCatalog;
+    use nova_sim::combat::weapon::{EXCLUSIVE, SIMULTANEOUS};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weapons = data.weapons();
+    let ids = |keep: &dyn Fn(&nova_sim::WeaponRecord) -> bool| -> Vec<i16> {
+        weapons.iter().filter(|w| keep(w)).map(|w| w.id.0).collect()
+    };
+    assert_eq!(ids(&|w| w.ammo_type == -999), [0_i16; 0]);
+    assert_eq!(ids(&|w| w.recoil > 0 || w.recoil < -1), [0_i16; 0]);
+    assert_eq!(ids(&|w| w.flags3 & EXCLUSIVE != 0), [0_i16; 0]);
+    let quadrant = |w: &nova_sim::WeaponRecord| matches!(w.guidance, 7 | 8);
+    let blind = ids(&|w| quadrant(w) && w.flags & 0x7000 != 0);
+    assert_eq!(blind, [0_i16; 0], "no quadrant turret is blind of its own");
+    let quadrants = ids(&|w| quadrant(w));
+    let hulls = data.hulls();
+    let blind_hulls: Vec<(i16, Vec<i16>)> = hulls
+        .iter()
+        .filter(|hull| hull.flags & 0x7000 != 0)
+        .filter_map(|hull| {
+            let carried: Vec<i16> = hull
+                .weapons
+                .iter()
+                .map(|slot| slot.weapon.0)
+                .filter(|weapon| quadrants.contains(weapon))
+                .collect();
+            (!carried.is_empty()).then_some((hull.id.0, carried))
+        })
+        .collect();
+    let expected: Vec<(i16, Vec<i16>)> = [
+        (154, vec![158, 156]),
+        (211, vec![143]),
+        (222, vec![143]),
+        (247, vec![158]),
+        (248, vec![158, 155]),
+        (249, vec![158]),
+        (250, vec![156, 155]),
+        (251, vec![158, 156]),
+        (252, vec![158, 156]),
+        (253, vec![158, 156]),
+        (254, vec![158, 156]),
+        (255, vec![158, 156]),
+        (348, vec![158]),
+        (349, vec![158, 219]),
+        (358, vec![158]),
+        (359, vec![158, 219]),
+        (380, vec![157]),
+        (397, vec![158, 156]),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(blind_hulls, expected, "blind classes carrying a 7 or an 8");
+    let simultaneous = ids(&|w| w.flags & SIMULTANEOUS != 0);
+    let doubled: Vec<(i16, i16, i16)> = hulls
+        .iter()
+        .flat_map(|hull| {
+            hull.weapons
+                .iter()
+                .filter(|slot| slot.count >= 2 && simultaneous.contains(&slot.weapon.0))
+                .map(|slot| (hull.id.0, slot.weapon.0, slot.count))
+        })
+        .collect();
+    assert_eq!(
+        doubled,
+        [
+            (297, 152, 2),
+            (297, 151, 2),
+            (302, 151, 2),
+            (302, 152, 2),
+            (302, 186, 2),
+            (302, 187, 2),
+            (396, 151, 2),
+            (396, 152, 2),
+            (396, 186, 2),
+            (396, 187, 2)
+        ],
+        "two of a simultaneous bay"
     );
 }
 

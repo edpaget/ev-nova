@@ -59,10 +59,20 @@
 //!    weapon's `JamVuln` ([`jamming`]), and a `Seeker` 0x0008 homing one
 //!    the [`Field`]'s `Interference` ([`Shot::roll_at_launch`]). A fighter
 //!    bay's launch is no shot but a [`Sortie`], which the session takes
-//!    ([`Combat::take_sorties`]) and puts in the system as a ship. An NPC
-//!    fires its pick as `_FireAIShipWeapon` does ([`ai_fire`]): a copy
-//!    that spawns nothing still spends, by the engine, and a recoil sets
-//!    the firer's velocity, reported as a [`Shove`].
+//!    ([`Combat::take_sorties`]) and puts in the system as a ship. The
+//!    player fires each weapon its trigger picks as `_FirePlayerWeapon`
+//!    does ([`Armament::fire_player`]): its copies together, sounding once
+//!    a call at [`PLAYER_FIRE_PRIORITY`] or
+//!    [`PLAYER_SECONDARY_FIRE_PRIORITY`], and a `Recoil` above none pushing
+//!    it back. An NPC fires its pick as `_FireAIShipWeapon` does
+//!    ([`ai_fire`]): a copy that spawns nothing still spends, by the
+//!    engine, and a recoil sets the firer's velocity, reported as a
+//!    [`Shove`]. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
+//!    destroys its firer, which breaks up in step 8. Under the original's
+//!    caps ([`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps)'s engine
+//!    reading, not the default) a shot or beam finding its table full
+//!    ([`MAX_SHOTS`], [`MAX_BEAMS`]) fails quietly, still spent and
+//!    heard.
 //! 2. Each ship's point defence fires at the missile it picks, with no
 //!    target needed ([`defence`]), or, with none, at a ship of `Flags2`
 //!    0x0008 fighting it or its leader, leading it, from its exit point,
@@ -409,8 +419,8 @@ pub enum CombatEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FireSound {
     /// The priority it plays at; none where the function firing it isn't
-    /// ported yet (the player's `_FirePlayerWeapon` and a fighter bay's
-    /// launch).
+    /// ported yet: an NPC's bay launch with [`Trigger::bays`] and an
+    /// escort's formation trigger ([`Armament::fire`]).
     pub priority: Option<u8>,
 }
 
@@ -861,7 +871,50 @@ pub struct Combat {
     /// The slots of the asteroids broken since they were last taken, in
     /// the order they broke.
     broken_asteroids: Vec<usize>,
+    /// Whether the player's quadrant turrets test their blind spots
+    /// ([`RuleKey::QuadrantTurretBlindSpots`](crate::RuleKey::QuadrantTurretBlindSpots)).
+    quadrant_blind: RuleSource,
+    /// Whether a player's weapon of negative `Recoil` pushes it forward
+    /// ([`RuleKey::PlayerForwardRecoil`](crate::RuleKey::PlayerForwardRecoil)).
+    forward_recoil: RuleSource,
+    /// Whether the original's shot and beam tables cap them
+    /// ([`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps)'s engine
+    /// reading); by default, not.
+    capped: bool,
+    /// The shots that left the table since step 5 began: this tick's while
+    /// it runs, the last tick's from the next until then. Under the caps
+    /// each still holds its slot until the player has fired (see
+    /// [`Combat::shot_room`]).
+    ended_shots: usize,
+    /// The beams that ended in the last tick's step 4 and after: under the
+    /// caps each still holds its slot through the next tick's firing (see
+    /// [`Combat::beam_room`]).
+    ended_beams: usize,
 }
+
+/// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
+/// caps ([`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps)) a shot finding
+/// it full does not spawn.
+pub const MAX_SHOTS: usize = 128;
+
+/// The original's beam table (`_SpawnBeam` @0x4505e-0x452e2): under the
+/// caps a beam finding it full does not spawn.
+pub const MAX_BEAMS: usize = 64;
+
+/// The priority the player's weapon plays its sound at, once a call
+/// (`_FirePlayerWeapon` @0x62e74, `_PlaySoundDistance(-1, snd, 5, …)`):
+/// a primary weapon's, but a beam's.
+pub const PLAYER_FIRE_PRIORITY: u8 = 5;
+
+/// The priority the player's beam (guidance 0 and 3), fighter bay or
+/// secondary weapon plays its sound at (`_FirePlayerWeapon` @0x62dff,
+/// @0x62e58). A beam passes channel 2 (@0x62e1a), which
+/// `_PlaySoundDistance` never reads.
+pub const PLAYER_SECONDARY_FIRE_PRIORITY: u8 = 6;
+
+/// The `AmmoType` that destroys its firer as its shot spawns
+/// (`_SpawnShot` @0x3f005, the binary's only compare with -999).
+pub const SELF_DESTRUCT: i16 = -999;
 
 impl Combat {
     /// Advances the fight among `fighters` and `scenery` a tick (see the
@@ -921,6 +974,7 @@ impl Combat {
         for fighter in fighters.iter_mut() {
             fighter.armament.reload();
         }
+        let beams_held = self.beams.len();
         let sights: Vec<Sight> = fighters.iter().map(Fighter::sight).collect();
         let guide = Guide {
             sights: &sights,
@@ -933,24 +987,7 @@ impl Combat {
             .iter_mut()
             .map(|shot| shot.step(&guide, chance))
             .collect();
-        let shots = &self.shots;
-        let compression = self.compression;
-        let advance = pass.beams_act();
-        self.beams.retain_mut(|beam| {
-            if !beam.live_on(advance) {
-                return false;
-            }
-            // On double time's second pass a beam only spends its life: it
-            // neither follows nor hits (`_HandleBeams` @0x303a8-0x303af).
-            if !advance {
-                return true;
-            }
-            let firer = fighters
-                .iter()
-                .find(|fighter| fighter.ship == beam.firer && fighter.condition.active())
-                .map(|firer| (&firer.state, firer.hull.exits.as_ref()));
-            beam.follow(firer, compression, &targets, shots, chance)
-        });
+        self.move_beams(fighters, &targets, pass, chance);
         let locks: Vec<Landed> = self
             .shots
             .iter()
@@ -965,6 +1002,7 @@ impl Combat {
             .map(|shot| shot.id)
             .zip(was.iter().copied())
             .collect();
+        self.ended_shots = 0;
         let mut gone = vec![false; self.shots.len()];
         let camera = fighters
             .iter()
@@ -1006,6 +1044,37 @@ impl Combat {
         for fighter in fighters.iter_mut() {
             regenerate(fighter);
         }
+        self.ended_beams = beams_held.saturating_sub(self.beams.len());
+    }
+
+    /// Step 4's beams: each spends a tick of its life on `pass`, and on
+    /// the advance pass follows its firer among `fighters`, at `targets`,
+    /// turned by its jitter drawn on `chance` (see the module docs).
+    fn move_beams(
+        &mut self,
+        fighters: &[Fighter],
+        targets: &[Target],
+        pass: GamePass,
+        chance: &mut dyn Chance,
+    ) {
+        let shots = &self.shots;
+        let compression = self.compression;
+        let advance = pass.beams_act();
+        self.beams.retain_mut(|beam| {
+            if !beam.live_on(advance) {
+                return false;
+            }
+            // On double time's second pass a beam only spends its life: it
+            // neither follows nor hits (`_HandleBeams` @0x303a8-0x303af).
+            if !advance {
+                return true;
+            }
+            let firer = fighters
+                .iter()
+                .find(|fighter| fighter.ship == beam.firer && fighter.condition.active())
+                .map(|firer| (&firer.state, firer.hull.exits.as_ref()));
+            beam.follow(firer, compression, targets, shots, chance)
+        });
     }
 
     /// Step 9b: the shockwave of each ship destroyed this tick, in the
@@ -1180,6 +1249,54 @@ impl Combat {
         self.asteroid_fuse = fuse;
     }
 
+    /// Has the player's quadrant turrets (7 and 8) test their blind spots
+    /// as `source` says ([`aim::aim`]): by default, the engine's, never.
+    pub fn set_quadrant_blind_spots(&mut self, source: RuleSource) {
+        self.quadrant_blind = source;
+    }
+
+    /// Has a player's weapon of negative `Recoil` push it as `source`
+    /// says (see `Combat::fire`): by default, the engine's, not at all.
+    pub fn set_player_forward_recoil(&mut self, source: RuleSource) {
+        self.forward_recoil = source;
+    }
+
+    /// Has the original's shot and beam tables cap them as `source` says
+    /// ([`MAX_SHOTS`], [`MAX_BEAMS`]): by the engine, capped; by the other
+    /// reading, the default, not.
+    pub fn set_combat_caps(&mut self, source: RuleSource) {
+        self.capped = source == RuleSource::Engine;
+    }
+
+    /// Whether a shot `ship` fires now finds a free slot: always uncapped;
+    /// under the caps, while the shots in flight are fewer than
+    /// [`MAX_SHOTS`], counting for the player the shots that ended since
+    /// the last tick's step 5. The original frees a shot's slot only on
+    /// the `_HandleShot` pass after it ends (life -1.0 then -2.0,
+    /// @0x356c1, @0x3617c; free below -1.0, @0x3e5be), and that pass
+    /// comes after `_HandlePlayer` fires and before `_HandleShip`
+    /// (`_DoPlayGameWork` @0x43e19, @0x44385, @0x44483): so the player
+    /// finds the last tick's ended shots still holding their slots, and an
+    /// NPC finds them free.
+    fn shot_room(&self, ship: ShipRef) -> bool {
+        let held = if ship == ShipRef::Player {
+            self.ended_shots
+        } else {
+            0
+        };
+        !self.capped || self.shots.len() + held < MAX_SHOTS
+    }
+
+    /// Whether a beam fired now finds a free slot: always uncapped; under
+    /// the caps, while the beams held, the last tick's ended ones counted,
+    /// are fewer than [`MAX_BEAMS`]. The original marks a beam ended
+    /// (+0x10 = -1) and frees it (-2) on the next `_HandleBeams` pass
+    /// (@0x31df6), the frame's last (@0x4453d), so it holds its slot
+    /// through every ship's firing the next tick.
+    fn beam_room(&self) -> bool {
+        !self.capped || self.beams.len() + self.ended_beams < MAX_BEAMS
+    }
+
     /// The next shot's number.
     fn next_id(&mut self) -> ShotId {
         let id = ShotId(self.next_shot);
@@ -1277,6 +1394,13 @@ impl Combat {
     ///   any other carries none (@0x3e95c). See [`sides`] for the misses.
     /// - A beam's exit is kept, and it starts there every tick
     ///   ([`Beam::follow`]).
+    ///
+    /// Under the caps a shot or beam finding no free slot
+    /// ([`Combat::shot_room`], [`Combat::beam_room`]) fails quietly, as
+    /// `_SpawnShot` (@0x3e5d0) and `_SpawnBeam` (@0x452e2) return before
+    /// they place it or step its exit: its firing is still heard, and
+    /// nothing flies. Whether a shot was put in flight, which an `AmmoType`
+    /// of [`SELF_DESTRUCT`] reads; never for a beam or a fighter.
     #[allow(clippy::too_many_arguments)]
     fn launch(
         &mut self,
@@ -1287,7 +1411,7 @@ impl Combat {
         sound: Option<FireSound>,
         targets: &[Target],
         chance: &mut dyn Chance,
-    ) {
+    ) -> bool {
         let Side { ship, fleet, .. } = side;
         let from = muzzle.from;
         self.events.push(CombatEvent::Fired {
@@ -1310,7 +1434,11 @@ impl Combat {
                 heading: launch.heading_from(&from),
                 target: launch.target,
             });
+            false
         } else if weapon.is_beam() {
+            if !self.beam_room() {
+                return false;
+            }
             let aiming = match (quarry, launch.target) {
                 (Some(Quarry::Missile(missile)), _) => Aiming::Shot(missile),
                 (Some(Quarry::Ship(target)), _) => Aiming::Ship(target.ship),
@@ -1337,7 +1465,11 @@ impl Combat {
                 beam.exit = Some(exit);
             }
             self.beams.push(beam);
+            false
         } else {
+            if !self.shot_room(ship) {
+                return false;
+            }
             let defended = quarry.and_then(|quarry| match quarry {
                 Quarry::Missile(id) => self
                     .shots
@@ -1384,6 +1516,7 @@ impl Combat {
             };
             shot.velocity = projectile::launch_velocity(&weapon, &from, out, thrown);
             self.shots.push(shot);
+            true
         }
     }
 
@@ -1432,28 +1565,31 @@ impl Combat {
 
     /// Step 1: each ship fires what its trigger holds, aimed at its target
     /// among `targets` while that can be hit. The player fires as
-    /// `_FirePlayerWeapon` does ([`Armament::fire`]). An NPC launches its
-    /// fighters with [`Trigger::bays`] and fires an escort's formation
-    /// trigger the same way, then fires its pick ([`Trigger::only`]) as
-    /// `_FireAIShipWeapon` does ([`Armament::fire_pick`], [`ai_fire`]), its
-    /// first copy sounding at [`AI_FIRE_PRIORITY`]; a recoil sets its
-    /// velocity, reported as a [`Shove`].
+    /// `_HandlePlayer` calls `_FirePlayerWeapon` ([`Combat::fire_player`]).
+    /// An NPC launches its fighters with [`Trigger::bays`] and fires an
+    /// escort's formation trigger through [`Armament::fire`], its quadrant
+    /// turrets testing their blind spots as the original's AI picks them
+    /// (`_AIFireTurret` @0x80d0b), then fires its pick
+    /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
+    /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
+    /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
+    /// [`Shove`]. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
+    /// destroys its firer ([`self_destruct`]).
     fn fire(&mut self, fighters: &mut [Fighter], targets: &[Target], chance: &mut dyn Chance) {
         for fighter in fighters.iter_mut() {
-            let (state, hull) = (fighter.state, fighter.hull);
             let target = fighter.target.and_then(|ship| {
                 targets
                     .iter()
                     .find(|target| target.ship == ship && target.condition.standing())
             });
-            let npc = matches!(fighter.ship, ShipRef::Npc(_));
-            let trigger = if npc {
-                Trigger {
-                    only: None,
-                    ..fighter.trigger
-                }
-            } else {
-                fighter.trigger
+            if fighter.ship == ShipRef::Player {
+                self.fire_player(fighter, target, targets, chance);
+                continue;
+            }
+            let (state, hull) = (fighter.state, fighter.hull);
+            let trigger = Trigger {
+                only: None,
+                ..fighter.trigger
             };
             let launches = fighter.armament.fire(
                 trigger,
@@ -1463,14 +1599,15 @@ impl Combat {
                 &mut fighter.reserves.fuel,
                 chance,
                 &mut self.reports,
-                &mut |spec| aim::aim(spec, &state, &hull, target),
+                &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
             );
             let sides = (fighter.side(), fighter.ties());
             let drawn = fighter.drawn_heading;
             let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
+            let mut destructs = false;
             for launch in launches {
                 let aimed_at = aimed_at(&launch, fighter.target);
-                self.launch(
+                let shot = self.launch(
                     sides,
                     &mut muzzle,
                     &launch,
@@ -1479,8 +1616,12 @@ impl Combat {
                     targets,
                     chance,
                 );
+                destructs |= shot && launch.weapon.ammo_type == SELF_DESTRUCT;
             }
-            let Some(pick) = fighter.trigger.only.filter(|_| npc) else {
+            if destructs {
+                self_destruct(fighter);
+            }
+            let Some(pick) = fighter.trigger.only else {
                 continue;
             };
             let arc = self.quadrant_arc;
@@ -1499,12 +1640,13 @@ impl Combat {
                 continue;
             };
             let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
+            let mut destructs = false;
             for (copy, launch) in volley.launches.into_iter().enumerate() {
                 let aimed_at = aimed_at(&launch, fighter.target);
                 let sound = (copy == 0).then_some(FireSound {
                     priority: Some(AI_FIRE_PRIORITY),
                 });
-                self.launch(
+                let shot = self.launch(
                     sides,
                     &mut muzzle,
                     &launch,
@@ -1513,9 +1655,97 @@ impl Combat {
                     targets,
                     chance,
                 );
+                destructs |= shot && launch.weapon.ammo_type == SELF_DESTRUCT;
+            }
+            if destructs {
+                self_destruct(fighter);
             }
             let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
             if let Some(velocity) = pushed {
+                self.shove(fighter, velocity);
+            }
+        }
+    }
+
+    /// The player's trigger, as `_HandlePlayer` fires it (@0x6ab39-0x6abc7):
+    /// each weapon it picks ([`Armament::player_picks`]) fired in turn as
+    /// `_FirePlayerWeapon` does ([`Armament::fire_player`]), each aimed at
+    /// `target` among `targets` as [`aim::aim`] says, its quadrant turrets
+    /// testing their blind spots as the fight's
+    /// [`RuleKey::QuadrantTurretBlindSpots`](crate::RuleKey::QuadrantTurretBlindSpots)
+    /// reading says. Of each call:
+    ///
+    /// - Its first copy sounds, at [`PLAYER_SECONDARY_FIRE_PRIORITY`] for a
+    ///   beam (0 and 3), a fighter bay or a secondary, and at
+    ///   [`PLAYER_FIRE_PRIORITY`] otherwise (@0x62d8d-0x62e9d); its later
+    ///   copies carry no sound.
+    /// - Each copy launches in turn, a copy finding no free slot failing
+    ///   quietly ([`Combat::launch`]) though it was spent and counted.
+    /// - A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns destroys the
+    ///   player ([`self_destruct`]).
+    /// - A `Recoil` above none pushes the player back, opposite its heading,
+    ///   by `Recoil` over its mass up to its class speed, once a call
+    ///   (@0x62ea2-0x62f35, the signed `jle` @0x62eb5), reported as a
+    ///   [`Shove`]; by the other reading of
+    ///   [`RuleKey::PlayerForwardRecoil`](crate::RuleKey::PlayerForwardRecoil),
+    ///   a negative one but -1 pushes it forward, as an NPC's does
+    ///   ([`ai_fire::recoil`]).
+    ///
+    /// Each call reads the ship as the call before left it, as the
+    /// original's does: a recoil moves the later weapons' shots on.
+    fn fire_player(
+        &mut self,
+        fighter: &mut Fighter,
+        target: Option<&Target>,
+        targets: &[Target],
+        chance: &mut dyn Chance,
+    ) {
+        let blind = self.quadrant_blind;
+        for weapon in fighter.armament.player_picks(fighter.trigger) {
+            let (state, hull) = (fighter.state, fighter.hull);
+            let volley = fighter.armament.fire_player(
+                weapon,
+                *fighter.condition,
+                fighter.shooter(),
+                fighter.rounds,
+                &mut fighter.reserves.fuel,
+                chance,
+                &mut self.reports,
+                &mut |spec| aim::aim(spec, &state, &hull, target, blind),
+            );
+            let Some(volley) = volley else {
+                continue;
+            };
+            let sides = (fighter.side(), fighter.ties());
+            let drawn = fighter.drawn_heading;
+            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
+            let priority = player_fire_priority(&volley.weapon);
+            let mut destructs = false;
+            for (copy, launch) in volley.launches.iter().enumerate() {
+                let aimed_at = aimed_at(launch, fighter.target);
+                let sound = (copy == 0).then_some(FireSound {
+                    priority: Some(priority),
+                });
+                let shot = self.launch(
+                    sides,
+                    &mut muzzle,
+                    launch,
+                    (None, aimed_at),
+                    sound,
+                    targets,
+                    chance,
+                );
+                destructs |= shot && launch.weapon.ammo_type == SELF_DESTRUCT;
+            }
+            if destructs {
+                self_destruct(fighter);
+            }
+            let recoils = match self.forward_recoil {
+                RuleSource::Engine => volley.weapon.recoil > 0.0,
+                RuleSource::Bible => volley.weapon.recoils(),
+            };
+            let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
+            if let Some(velocity) = pushed.filter(|_| recoils) {
                 self.shove(fighter, velocity);
             }
         }
@@ -1564,6 +1794,7 @@ impl Combat {
             let shots = &self.shots;
             let candidates = &candidates;
             let rule = (self.pd_hostility == RuleSource::Bible).then_some(rule);
+            let room = self.shot_room(fighter.ship);
             let fired = fighter.armament.fire_point_defence(
                 *fighter.condition,
                 fighter.shooter(),
@@ -1571,6 +1802,7 @@ impl Combat {
                 &mut fighter.reserves.fuel,
                 chance,
                 &mut self.reports,
+                room,
                 &mut |spec| {
                     if let Some(missile) =
                         defence::choose(side, &state, &hull, spec, shots, rule, govts)
@@ -1594,7 +1826,7 @@ impl Combat {
                 let drawn = fighter.drawn_heading;
                 let mut muzzle =
                     Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
-                self.launch(
+                let shot = self.launch(
                     (side, ties),
                     &mut muzzle,
                     &launch,
@@ -1605,6 +1837,9 @@ impl Combat {
                     targets,
                     chance,
                 );
+                if shot && launch.weapon.ammo_type == SELF_DESTRUCT {
+                    self_destruct(fighter);
+                }
             }
         }
     }
@@ -1748,6 +1983,7 @@ impl Combat {
         let mut kept = Vec::with_capacity(self.shots.len());
         let mut released: Vec<(Shot, Option<ShipRef>)> = Vec::new();
         let shots = std::mem::take(&mut self.shots);
+        let flying = shots.len();
         let flown = shots.into_iter().zip(was).zip(gone);
         for ((mut shot, &from), &gone) in flown {
             if gone {
@@ -1832,6 +2068,7 @@ impl Combat {
         hits.extend(contacts);
         hits.extend(proximities);
         hits.extend(expiries);
+        self.ended_shots += flying - kept.len();
         self.shots = kept;
         for (parent, target) in released {
             self.release(&parent, target, sides, arsenal, chance);
@@ -2159,6 +2396,7 @@ impl Combat {
                 damage,
                 destroyed: stellar::shot_down(target.strength),
             });
+            self.ended_shots += 1;
         }
         self.shots = kept;
     }
@@ -2167,7 +2405,12 @@ impl Combat {
     /// among `targets`, their weapon read from `arsenal` (none when it
     /// cannot be read), heard from where the parent is. Released, they
     /// report their weapon's unimplemented flags as a weapon fired does;
-    /// of a guidance not flown yet, they report it and none fly.
+    /// of a guidance not flown yet, they report it and none fly. Under the
+    /// caps the release ends at the first that finds no free slot, the
+    /// shots ended this tick, the parent among them, still holding theirs
+    /// (`_SpawnShotSubmunitions` @0x3f32d-0x3f331): those already placed
+    /// fly, and the release is heard all the same, its sound coming before
+    /// its loop.
     fn release(
         &mut self,
         parent: &Shot,
@@ -2209,6 +2452,9 @@ impl Combat {
             }),
         });
         for mut shot in shots {
+            if self.capped && self.shots.len() + self.ended_shots >= MAX_SHOTS {
+                break;
+            }
             shot.id = self.next_id();
             shot.roll_at_launch(self.field.interference, chance);
             self.shots.push(shot);
@@ -2418,6 +2664,8 @@ impl Combat {
     pub fn clear(&mut self) {
         self.shots.clear();
         self.beams.clear();
+        self.ended_shots = 0;
+        self.ended_beams = 0;
     }
 }
 
@@ -2516,6 +2764,30 @@ impl Fighter<'_> {
             miss_class: self.hull.miss_class,
         }
     }
+}
+
+/// The priority the player's `spec` plays its sound at (see
+/// `Combat::fire_player`).
+fn player_fire_priority(spec: &weapon::WeaponSpec) -> u8 {
+    let beam = matches!(spec.guidance, Guidance::Beam | Guidance::TurretBeam);
+    if beam || spec.guidance_99() || spec.secondary() {
+        PLAYER_SECONDARY_FIRE_PRIORITY
+    } else {
+        PLAYER_FIRE_PRIORITY
+    }
+}
+
+/// What a shot of `AmmoType` [`SELF_DESTRUCT`] does to `fighter`, its
+/// firer, as it spawns (`_SpawnShot` @0x3efed-0x3f04d): its shield and
+/// armour go to none, for a ship's own shot (source 0-63), a point
+/// defence's too, never a sub-munition's (`_SpawnShot`'s fourth argument)
+/// nor a beam's or a fighter's, which `_SpawnShot` never places. Step 8
+/// then starts its breakup in the same tick. No strike is made: nothing
+/// hit it, and no one is to blame. The original also marks the HUD's
+/// reserves dirty (@0x3f04d), which redraws them anyway.
+fn self_destruct(fighter: &mut Fighter) {
+    fighter.reserves.shield.now = 0.0;
+    fighter.reserves.armor.now = 0.0;
 }
 
 /// The ship `launch`'s damage is aimed at, its firer's `target`: none for
@@ -7230,7 +7502,7 @@ mod tests {
                 (WeaponId(128), None)
             ]
         );
-        // The player's still sound as before, by no priority of its own.
+        // The player's sound at its own priority (`_FirePlayerWeapon`).
         let player = Ship {
             id: ShipRef::Player,
             fleet: ShipRef::Player,
@@ -7240,7 +7512,12 @@ mod tests {
         tick(&mut combat, &mut [player], &NovaDisable);
         assert_eq!(
             sounds(&combat.take_events()),
-            [(WeaponId(128), Some(FireSound::UNPORTED))]
+            [(
+                WeaponId(128),
+                Some(FireSound {
+                    priority: Some(PLAYER_FIRE_PRIORITY)
+                })
+            )]
         );
         assert_eq!(AI_FIRE_PRIORITY, 4);
     }
@@ -11366,5 +11643,601 @@ mod tests {
                 assert_eq!(released, shown, "{count} {:#x}", record.flags);
             }
         }
+    }
+
+    // The player's fire (`_FirePlayerWeapon`), `AmmoType` -999 and the
+    // caps (`_SpawnShot`, `_SpawnBeam`).
+
+    use crate::combat::aim::{BLIND_FRONT, BLIND_REAR};
+    use crate::combat::weapon::{SECONDARY, SIMULTANEOUS};
+
+    /// The player at the centre, facing right, carrying `count` of
+    /// `record` with 9 rounds of its own, its triggers as `trigger`.
+    fn player_carrying(record: WeaponRecord, count: u32, trigger: Trigger) -> Ship {
+        let mut player = player_with(record);
+        player.armament = Armament::new([(WeaponSpec::new(&record), count)]);
+        player.rounds = LauncherRounds::from([(record.id, 9)]);
+        player.trigger = trigger;
+        player
+    }
+
+    const PRIMARY_HELD: Trigger = Trigger {
+        primary: true,
+        ..QUIET
+    };
+
+    #[test]
+    fn the_players_weapon_sounds_once_a_call_at_5_and_a_beam_bay_or_secondary_at_6() {
+        let heard = |player: Ship| -> Vec<Option<u8>> {
+            let mut combat = Combat::default();
+            let mut ships = [player, Ship::at(2, 100.0, 0.0)];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            sounds(&combat.take_events())
+                .into_iter()
+                .map(|(_, sound)| sound.and_then(|sound| sound.priority))
+                .collect()
+        };
+        let together = WeaponRecord {
+            flags: SIMULTANEOUS,
+            ..blaster()
+        };
+        let player = player_carrying(together, 3, PRIMARY_HELD);
+        assert_eq!(heard(player), [Some(5), None, None], "later copies unheard");
+        for guidance in [0, 3] {
+            let beam = WeaponRecord {
+                guidance,
+                count: 5,
+                beam_length: 300,
+                ..weapon(146)
+            };
+            let player = player_carrying(beam, 1, PRIMARY_HELD);
+            assert_eq!(heard(player), [Some(6)], "{guidance}");
+        }
+        let missile = WeaponRecord {
+            flags: SECONDARY,
+            ..blaster()
+        };
+        let secondary = Trigger {
+            secondary: Some(WeaponId(128)),
+            ..QUIET
+        };
+        assert_eq!(heard(player_carrying(missile, 1, secondary)), [Some(6)]);
+        let bay = WeaponRecord {
+            guidance: 99,
+            ammo_type: 200,
+            flags: SECONDARY,
+            ..weapon(150)
+        };
+        let launching = Trigger {
+            secondary: Some(WeaponId(150)),
+            ..QUIET
+        };
+        assert_eq!(heard(player_carrying(bay, 1, launching)), [Some(6)]);
+        assert_eq!(
+            (PLAYER_FIRE_PRIORITY, PLAYER_SECONDARY_FIRE_PRIORITY),
+            (5, 6)
+        );
+    }
+
+    /// The pushes on the player, of mass 50, after it fires 2 of `record`
+    /// together a tick, its forward recoil read as `forward`.
+    fn recoiled(record: WeaponRecord, forward: RuleSource) -> Vec<Shove> {
+        let together = WeaponRecord {
+            flags: SIMULTANEOUS,
+            ..record
+        };
+        let mut player = player_carrying(together, 2, PRIMARY_HELD);
+        player.hull.mass = 50.0;
+        let mut combat = Combat::default();
+        combat.set_player_forward_recoil(forward);
+        tick(&mut combat, &mut [player], &NovaDisable);
+        combat.take_shoves()
+    }
+
+    #[test]
+    fn the_players_recoil_shoves_it_back_once_a_call() {
+        let kicking = WeaponRecord {
+            recoil: 100,
+            ..blaster()
+        };
+        for forward in RuleSource::ALL {
+            let back = recoiled(kicking, forward);
+            assert_eq!(back.len(), 1, "once, whatever its copies: {back:?}");
+            assert_eq!(back[0].ship, ShipRef::Player);
+            assert!(
+                (back[0].velocity - Vec2::new(-2.0, 0.0)).length() < 1e-4,
+                "{back:?}"
+            );
+        }
+        // A recoiling turret with no target attempts nothing, and pushes
+        // nothing.
+        let turret = WeaponRecord {
+            recoil: 100,
+            ..turret(4)
+        };
+        let mut player = player_carrying(turret, 1, PRIMARY_HELD);
+        player.target = None;
+        player.hull.mass = 50.0;
+        let mut combat = Combat::default();
+        tick(&mut combat, &mut [player], &NovaDisable);
+        assert_eq!(combat.take_shoves(), []);
+    }
+
+    #[test]
+    fn a_players_negative_recoil_pushes_it_forward_only_by_the_other_reading() {
+        let pulling = WeaponRecord {
+            recoil: -100,
+            ..blaster()
+        };
+        assert_eq!(recoiled(pulling, RuleSource::Engine), [], "the engine's");
+        let forward = recoiled(pulling, RuleSource::Bible);
+        assert_eq!(forward.len(), 1, "{forward:?}");
+        assert!(
+            (forward[0].velocity - Vec2::new(2.0, 0.0)).length() < 1e-4,
+            "{forward:?}"
+        );
+        let none = WeaponRecord {
+            recoil: -1,
+            ..blaster()
+        };
+        assert_eq!(recoiled(none, RuleSource::Bible), [], "-1 is no recoil");
+    }
+
+    #[test]
+    fn a_players_recoil_moves_the_shots_of_its_later_weapons() {
+        let kicking = WeaponRecord {
+            recoil: 100,
+            ..blaster()
+        };
+        let later = WeaponRecord {
+            speed: 0,
+            id: WeaponId(129),
+            ..blaster()
+        };
+        let mut player = player_with(kicking);
+        player.armament =
+            Armament::new([(WeaponSpec::new(&later), 1), (WeaponSpec::new(&kicking), 1)]);
+        player.hull.mass = 50.0;
+        player.target = None;
+        let mut combat = Combat::default();
+        tick(&mut combat, &mut [player], &NovaDisable);
+        let still = combat
+            .shots()
+            .iter()
+            .find(|shot| shot.weapon.id == WeaponId(129))
+            .expect("fired");
+        assert!(
+            (still.velocity - Vec2::new(-2.0, 0.0)).length() < 1e-4,
+            "fired after 128's recoil: {:?}",
+            still.velocity
+        );
+    }
+
+    /// The shots `id`, carrying a front-quadrant turret blind in front,
+    /// fires on `trigger` at B dead ahead, its quadrant turrets read as
+    /// `reading`.
+    fn blind_front_shots(id: ShipRef, trigger: Trigger, reading: RuleSource) -> usize {
+        let blind = WeaponRecord {
+            flags: BLIND_FRONT,
+            ..turret(7)
+        };
+        let shooter = Ship {
+            id,
+            fleet: id,
+            trigger,
+            ..Ship::at(1, 0.0, 0.0).armed(blind).targeting(B)
+        };
+        let mut combat = Combat::default();
+        combat.set_quadrant_blind_spots(reading);
+        let mut ships = [shooter, Ship::at(2, 100.0, 0.0)];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.firer == id)
+            .count()
+    }
+
+    #[test]
+    fn the_players_quadrant_turret_tests_its_blind_spots_only_by_the_other_reading() {
+        let player = ShipRef::Player;
+        assert_eq!(
+            blind_front_shots(player, PRIMARY_HELD, RuleSource::Engine),
+            1
+        );
+        assert_eq!(
+            blind_front_shots(player, PRIMARY_HELD, RuleSource::Bible),
+            0
+        );
+        let formation = Trigger {
+            turrets_only: true,
+            ..PRIMARY_HELD
+        };
+        for reading in RuleSource::ALL {
+            assert_eq!(
+                blind_front_shots(A, formation, reading),
+                0,
+                "an escort's formation trigger: {reading:?}"
+            );
+        }
+        // A full turret holds fire in its blind spot under both readings.
+        for reading in RuleSource::ALL {
+            let blind = WeaponRecord {
+                flags: BLIND_REAR,
+                ..turret(4)
+            };
+            let mut combat = Combat::default();
+            combat.set_quadrant_blind_spots(reading);
+            let mut ships = [
+                Ship {
+                    id: ShipRef::Player,
+                    fleet: ShipRef::Player,
+                    ..Ship::at(1, 0.0, 0.0).armed(blind).targeting(B)
+                },
+                Ship::at(2, -100.0, 0.0),
+            ];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.shots(), [], "{reading:?}");
+        }
+    }
+
+    /// `record` with `AmmoType` -999.
+    fn self_destructing(record: WeaponRecord) -> WeaponRecord {
+        WeaponRecord {
+            ammo_type: SELF_DESTRUCT,
+            ..record
+        }
+    }
+
+    #[test]
+    fn a_shot_of_ammo_type_minus_999_breaks_its_firer_up_as_it_spawns() {
+        let player = player_with(self_destructing(blaster()));
+        let npc = Ship::at(1, 0.0, 0.0)
+            .armed(self_destructing(blaster()))
+            .picking(128);
+        for shooter in [player, npc] {
+            let id = shooter.id;
+            let mut combat = Combat::default();
+            let mut ships = [shooter];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let reserves = ships[0].reserves;
+            assert_eq!((reserves.shield.now, reserves.armor.now), (0.0, 0.0));
+            assert!(
+                about(&combat.take_events(), id)
+                    .iter()
+                    .any(|event| matches!(event, CombatEvent::BreakingUp { .. })),
+                "{id:?}"
+            );
+            assert_eq!(combat.shots().len(), 1, "the shot still flies");
+            assert_eq!(combat.take_strikes(), [], "no strike: no one hit it");
+        }
+    }
+
+    #[test]
+    fn a_point_defence_shot_of_ammo_type_minus_999_breaks_its_firer_up() {
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(self_destructing(quad()));
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].reserves.armor.now, 0.0);
+        assert!(
+            about(&combat.take_events(), A)
+                .iter()
+                .any(|event| matches!(event, CombatEvent::BreakingUp { .. }))
+        );
+    }
+
+    #[test]
+    fn a_sub_munition_or_beam_of_ammo_type_minus_999_spares_its_firer() {
+        let (shell, _) = cluster(0);
+        let sub = self_destructing(WeaponRecord {
+            count: 50,
+            speed: 500,
+            ..weapon(148)
+        });
+        let arsenal = Arsenal::new(&[shell, sub], Vec::new());
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+        for _ in 0..3 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            ships[0].trigger = QUIET;
+        }
+        assert_eq!(sub_shots(&combat).len(), 2, "released");
+        assert_eq!(ships[0].reserves.armor.now, 30.0, "spared");
+        let mut combat = Combat::default();
+        let mut ships = [player_with(self_destructing(laser()))];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.beams().len(), 1);
+        assert_eq!(ships[0].reserves.armor.now, 30.0, "a beam spares it");
+    }
+
+    /// `n` shots of a long-lived blaster, fired by no ship in the fight,
+    /// in flight far from every ship.
+    fn filler(n: usize) -> Vec<Shot> {
+        let weapon = WeaponSpec::new(&WeaponRecord {
+            count: 1000,
+            speed: 0,
+            ..weapon(140)
+        });
+        let far = ShipState {
+            position: Vec2::new(50_000.0, 50_000.0),
+            ..ShipState::default()
+        };
+        (0..n)
+            .map(|_| Shot::launch(weapon, C, C, &far, 0.0))
+            .collect()
+    }
+
+    /// A combat with `n` [`filler`] shots in flight, capped or not.
+    fn crowded(n: usize, capped: bool) -> Combat {
+        let mut combat = Combat {
+            shots: filler(n),
+            ..Combat::default()
+        };
+        if capped {
+            combat.set_combat_caps(RuleSource::Engine);
+        }
+        combat
+    }
+
+    /// A launcher reloading every 10 ticks, firing its own rounds.
+    fn launcher() -> WeaponRecord {
+        WeaponRecord {
+            reload: 10,
+            ammo_type: 10,
+            ..blaster()
+        }
+    }
+
+    #[test]
+    fn uncapped_by_default_the_players_129th_shot_flies() {
+        let mut combat = crowded(MAX_SHOTS, false);
+        assert_eq!(combat, crowded(MAX_SHOTS, false), "the default");
+        tick(&mut combat, &mut [player_with(blaster())], &NovaDisable);
+        assert_eq!(combat.shots().len(), MAX_SHOTS + 1);
+        let mut set = Combat::default();
+        set.set_combat_caps(RuleSource::Bible);
+        assert_eq!(set, Combat::default(), "the other reading");
+        assert_eq!((MAX_SHOTS, MAX_BEAMS), (128, 64));
+    }
+
+    #[test]
+    fn under_the_caps_a_shot_finding_the_table_full_fails_quietly_and_still_spends() {
+        let player = player_with(launcher());
+        let npc = Ship::at(1, 0.0, 0.0).armed(launcher()).picking(128);
+        for mut shooter in [player, npc] {
+            let id = shooter.id;
+            // The player reads its ammunition's slot, an NPC its own.
+            shooter.rounds = LauncherRounds::from([(WeaponId(128), 5), (WeaponId(138), 5)]);
+            let mut combat = crowded(MAX_SHOTS, true);
+            let mut ships = [shooter];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.shots().len(), MAX_SHOTS, "{id:?}: nothing flies");
+            let heard = sounds(&combat.take_events());
+            assert_eq!(heard.len(), 1, "{id:?}: still heard");
+            assert!(heard[0].1.is_some_and(|sound| sound.priority.is_some()));
+            let rounds = &ships[0].rounds;
+            let left = rounds.slot(WeaponId(128)) + rounds.slot(WeaponId(138));
+            assert_eq!(left, 9, "{id:?}: still spent");
+            assert_eq!(ships[0].armament.mounts()[0].reload, 9.0, "{id:?}");
+        }
+        let mut combat = crowded(MAX_SHOTS - 1, true);
+        tick(&mut combat, &mut [player_with(blaster())], &NovaDisable);
+        assert_eq!(combat.shots().len(), MAX_SHOTS, "the 128th flies");
+    }
+
+    #[test]
+    fn under_the_caps_a_minus_999_shot_finding_the_table_full_spares_its_firer() {
+        let mut combat = crowded(MAX_SHOTS, true);
+        let mut ships = [player_with(self_destructing(blaster()))];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].reserves.armor.now, 30.0);
+        assert_eq!(ships[0].condition, Condition::Intact);
+    }
+
+    /// `n` beams of a long-lived laser held by no ship in the fight.
+    fn held_beams(n: usize) -> Vec<Beam> {
+        let laser = WeaponSpec::new(&WeaponRecord {
+            count: 1000,
+            ..laser()
+        });
+        (0..n)
+            .map(|_| Beam::launch(laser, C, C, &ShipState::default(), Aiming::Ahead))
+            .collect()
+    }
+
+    #[test]
+    fn under_the_caps_a_beam_finding_the_table_full_fails_quietly() {
+        for capped in [false, true] {
+            let mut combat = Combat {
+                beams: held_beams(MAX_BEAMS),
+                ..Combat::default()
+            };
+            if capped {
+                combat.set_combat_caps(RuleSource::Engine);
+            }
+            let player = player_with(laser());
+            let npc = Ship::at(1, 0.0, 0.0).armed(laser()).picking(146);
+            let mut ships = [player, npc];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let fired = combat.beams().iter().filter(|beam| beam.firer != C).count();
+            assert_eq!(fired, if capped { 0 } else { 2 }, "{capped}");
+            assert_eq!(sounds(&combat.take_events()).len(), 2, "both heard");
+            assert_eq!(ships[0].armament.mounts()[0].reload, 9.0);
+        }
+    }
+
+    #[test]
+    fn under_the_caps_a_release_stops_at_the_first_sub_munition_finding_no_slot() {
+        let (shell, arsenal) = cluster(0);
+        // 126 others, the shell and its first sub-munition: the shell holds
+        // its slot as it releases them.
+        for (capped, released) in [(false, 2), (true, 1)] {
+            let mut combat = crowded(MAX_SHOTS - 2, capped);
+            let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+            let mut events = Vec::new();
+            for _ in 0..3 {
+                tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+                ships[0].trigger = QUIET;
+                events.extend(combat.take_events());
+            }
+            assert_eq!(sub_shots(&combat).len(), released, "{capped}");
+            let heard = sounds(&events)
+                .into_iter()
+                .filter(|&(weapon, _)| weapon == WeaponId(148))
+                .count();
+            assert_eq!(heard, 1, "the release is heard: {capped}");
+        }
+        let mut combat = crowded(MAX_SHOTS - 1, true);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+        for _ in 0..3 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            ships[0].trigger = QUIET;
+        }
+        assert_eq!(
+            sub_shots(&combat),
+            [] as [&Shot; 0],
+            "no slot for the first"
+        );
+    }
+
+    #[test]
+    fn under_the_caps_point_defence_finding_the_shot_table_full_fires_and_spends_nothing() {
+        let launching = WeaponRecord {
+            ammo_type: 10,
+            burst_count: 3,
+            ..quad()
+        };
+        for capped in [false, true] {
+            // The missile takes the 128th slot.
+            let mut combat = crowded(MAX_SHOTS - 1, capped);
+            let mut ships = missile_attack(launching);
+            ships[0].rounds = LauncherRounds::from([(WeaponId(133), 5)]);
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let pd = sounds(&combat.take_events())
+                .into_iter()
+                .filter(|&(weapon, _)| weapon == WeaponId(133))
+                .count();
+            assert_eq!(pd, usize::from(!capped), "{capped}");
+            assert_eq!(ships[0].rounds.slot(WeaponId(133)), 5 - i32::from(!capped));
+            let mount = ships[0].armament.mounts()[0];
+            assert_eq!(mount.burst, u32::from(!capped), "{capped}");
+            assert_eq!(mount.reload > 0.0, !capped, "{capped}");
+        }
+    }
+
+    #[test]
+    fn under_the_caps_a_point_defence_beam_runs_its_tail_though_no_beam_is_kept() {
+        let beam = WeaponRecord {
+            guidance: 10,
+            reload: 30,
+            count: 5,
+            beam_length: 300,
+            ..weapon(150)
+        };
+        let mut combat = Combat {
+            beams: held_beams(MAX_BEAMS),
+            ..Combat::default()
+        };
+        combat.set_combat_caps(RuleSource::Engine);
+        let mut ships = missile_attack(beam);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert!(
+            combat.beams().iter().all(|beam| beam.firer == C),
+            "none kept"
+        );
+        let heard = sounds(&combat.take_events())
+            .into_iter()
+            .filter(|&(weapon, _)| weapon == WeaponId(150))
+            .count();
+        assert_eq!(heard, 1, "heard");
+        assert!(ships[0].armament.mounts()[0].reload > 0.0, "reloading");
+    }
+
+    #[test]
+    fn under_the_caps_a_shot_ended_last_tick_holds_its_slot_while_the_player_fires() {
+        let ending = WeaponSpec::new(&WeaponRecord {
+            count: 1,
+            speed: 0,
+            ..weapon(141)
+        });
+        let far = ShipState {
+            position: Vec2::new(-50_000.0, 0.0),
+            ..ShipState::default()
+        };
+        for capped in [false, true] {
+            let mut combat = crowded(MAX_SHOTS - 1, capped);
+            combat.shots.push(Shot::launch(ending, C, C, &far, 0.0));
+            // It ends this tick, nothing firing.
+            let mut ships = [player_with(blaster()), Ship::at(1, 0.0, 300.0)];
+            ships[0].trigger = QUIET;
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.shots().len(), MAX_SHOTS - 1, "ended");
+            // The player finds its slot still held; the NPC after it finds
+            // it free.
+            ships[0].trigger = PRIMARY_HELD;
+            ships[1] = Ship::at(1, 0.0, 300.0).armed(blaster()).picking(128);
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let by = |ship| {
+                combat
+                    .shots()
+                    .iter()
+                    .filter(|shot| shot.firer == ship)
+                    .count()
+            };
+            assert_eq!(by(ShipRef::Player), usize::from(!capped), "{capped}");
+            assert_eq!(by(A), 1, "{capped}");
+        }
+    }
+
+    #[test]
+    fn under_the_caps_a_beam_ended_last_tick_holds_its_slot_through_the_next_firing() {
+        let short = WeaponSpec::new(&WeaponRecord {
+            count: 0,
+            ..laser()
+        });
+        for capped in [false, true] {
+            let mut combat = Combat {
+                beams: held_beams(MAX_BEAMS - 1),
+                ..Combat::default()
+            };
+            if capped {
+                combat.set_combat_caps(RuleSource::Engine);
+            }
+            combat.beams.push(Beam::launch(
+                short,
+                C,
+                C,
+                &ShipState::default(),
+                Aiming::Ahead,
+            ));
+            let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser()).picking(146)];
+            ships[0].trigger = QUIET;
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.beams().len(), MAX_BEAMS - 1, "ended");
+            ships[0].trigger = Trigger {
+                only: Some(WeaponId(146)),
+                ..QUIET
+            };
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let fired = combat.beams().iter().filter(|beam| beam.firer == A).count();
+            assert_eq!(fired, usize::from(!capped), "{capped}");
+            // A tick on, reloaded, the slot is free.
+            for _ in 0..10 {
+                ships[0].armament.reload();
+            }
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let fired = combat.beams().iter().filter(|beam| beam.firer == A).count();
+            assert_eq!(fired, 2 - usize::from(capped), "{capped}: a tick later");
+        }
+    }
+
+    #[test]
+    fn clearing_the_fight_frees_the_slots_ended_shots_and_beams_hold() {
+        let mut combat = crowded(1, true);
+        combat.ended_shots = 5;
+        combat.ended_beams = 5;
+        combat.clear();
+        assert_eq!((combat.ended_shots, combat.ended_beams), (0, 0));
+        assert_eq!(combat.shots(), []);
     }
 }

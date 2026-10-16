@@ -15,6 +15,12 @@
 //! - the reload it sets ([`reload`]);
 //! - and its recoil ([`recoil`], `_AdjustedAccel`).
 //!
+//! A copy counts as spawned whatever `_SpawnShot` or `_SpawnBeam`
+//! returned (@0x889e2, @0x88cd0): under the rulebook's
+//! [`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps) one finding no free
+//! slot still spends, sounds, recoils and reloads, and nothing flies
+//! ([`Combat`](super::Combat)'s `launch`).
+//!
 //! Every copy that has its ammunition spends, spawned or not, by the
 //! engine (the rulebook's
 //! [`RuleKey::AiSpendWithoutShot`](crate::RuleKey::AiSpendWithoutShot)).
@@ -40,8 +46,6 @@
 //! - Playing the sound by its priority, and a looped weapon (`Flags`
 //!   0x0010) skipped while its sound plays anywhere (@0x88e00): rdm phase
 //!   audio-fidelity/phase-15-weapon-sounds-by-priority.
-//! - A copy counted though `_SpawnShot` or `_SpawnBeam` found no free slot
-//!   (@0x889e2, @0x88cd0): weapons-fidelity phase 15's caps.
 //! - `_SpawnShot`'s exit points and its turret miss and launch speed:
 //!   weapons-fidelity phases 6 and 10.
 //! - The whole degrees and pixels: the box's reach (@0x888bf, @0x88a24),

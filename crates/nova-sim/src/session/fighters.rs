@@ -791,7 +791,9 @@ mod tests {
                 ship: ShipRef::Player,
                 weapon: BAY,
                 at: session.player().position,
-                sound: Some(crate::combat::FireSound::UNPORTED),
+                sound: Some(crate::combat::FireSound {
+                    priority: Some(crate::combat::PLAYER_SECONDARY_FIRE_PRIORITY),
+                }),
             }),
             "the bay's sound is heard"
         );

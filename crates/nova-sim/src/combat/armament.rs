@@ -2,17 +2,24 @@
 //! firing them when its trigger is pulled, and its point defence.
 //!
 //! Firing is the original's (`_FirePlayerWeapon`, `_WeaponBurstInterval`
-//! and `_SpawnShot` in the `EV Nova` executable), which every ship goes
-//! through:
+//! and `_SpawnShot` in the `EV Nova` executable):
 //!
 //! - The [`Trigger`] picks the weapons: the primary trigger every weapon
 //!   that is not a secondary, and the secondary trigger the one secondary
 //!   selected.
-//! - A ship carrying n of a weapon fires one shot once its reload timer
-//!   has run out, and sets the timer to `Reload / n` ticks; a timer counts
-//!   down a tick at a time ([`Armament::reload`]), so `Reload` 0 fires
-//!   every tick. (The player's `Flags` 0x0040 simultaneous fire is not
-//!   done yet: weapons-fidelity phase 15.)
+//! - The player fires each weapon its trigger picks as `_HandlePlayer`
+//!   calls `_FirePlayerWeapon` on it ([`Armament::player_picks`],
+//!   [`Armament::fire_player`]): the primaries by ascending weapon ID, a
+//!   fighter bay that is not a secondary among them, then the secondary;
+//!   its copies together under `Flags` 0x0040, each attempted copy
+//!   spending, its burst counting one a call, and an exclusive weapon
+//!   (`Flags3` 0x0020) holding the others by its shot's reload, before its
+//!   burst.
+//! - On an NPC's bay launch and an escort's formation trigger
+//!   ([`Armament::fire`]), a ship carrying n of a weapon fires one shot
+//!   once its reload timer has run out, and sets the timer to `Reload / n`
+//!   ticks; a timer counts down a tick at a time ([`Armament::reload`]),
+//!   so `Reload` 0 fires every tick.
 //! - An NPC fires its pick ([`Trigger::only`]) as `_FireAIShipWeapon`
 //!   does instead ([`Armament::fire_pick`], [`ai_fire`]): its copies
 //!   together under `Flags` 0x0040, each spending whether or not it
@@ -650,7 +657,11 @@ impl Armament {
     /// has the ammunition for ([`Armament::has_ammo`]) and that `aim`
     /// aims, on a ship in `condition`, paying from `rounds` and `fuel`, the
     /// inaccuracy drawn on `chance`, and gives what it launched; what it
-    /// reports goes to `reports` (see the module docs). A bay launching
+    /// reports goes to `reports` (see the module docs): an NPC's bay launch
+    /// and an escort's formation trigger, whose owners
+    /// (`_AILaunchFighter`, `_AIEscortFireUnprovoked`) are rdm phases
+    /// escort-fleet-fidelity/phase-4 and phase-1; the player fires through
+    /// [`Armament::fire_player`]. A bay launching
     /// with [`Trigger::bays`] reads its own rounds alone, as
     /// `_AILaunchFighter` (@0x813cc-0x813e8) never asks `_WeaponHasAmmo`.
     // Each is a separate borrow the fight holds: the ship's command, its
@@ -792,29 +803,15 @@ impl Armament {
         }
         let spawned = u32::try_from(launches.len()).unwrap_or(u32::MAX);
         let mut held = ai_fire::reload(&spec, spawned, count);
-        let mount = &mut self.mounts[index];
-        if spec.burst_count > 0 {
-            mount.burst += 1;
-            if spec.ammo_at_burst_end() && mount.burst.is_multiple_of(spec.burst_count) {
-                let amount = if spec.flags & SIMULTANEOUS == 0 {
-                    1
-                } else {
-                    spawned
-                };
-                burst_end(&spec, amount, rounds, fuel);
-            }
-            if mount.burst >= burst_interval(&spec, count) {
-                mount.burst = 0;
-                held = spec.burst_reload;
-            }
+        // The NPC's burst end spends its own slot while it holds any
+        // (@0x890a5).
+        let own = (spec.guidance_99() || rounds.held(spec.id) > 0).then_some(spec.id);
+        if let Some(burst_reload) = self.burst_step(index, spawned, own, rounds, fuel) {
+            held = burst_reload;
         }
-        mount.reload = held;
+        self.mounts[index].reload = held;
         if spec.flags3 & EXCLUSIVE != 0 {
-            for (other, mount) in self.mounts.iter_mut().enumerate() {
-                if other != index {
-                    mount.reload = mount.reload.max(held + EXCLUSIVE_HOLD);
-                }
-            }
+            self.hold_others(index, held);
         }
         if matches!(spec.guidance, Guidance::Unguided | Guidance::Rocket) {
             self.last_gun = Some(pick);
@@ -823,6 +820,180 @@ impl Armament {
             weapon: spec,
             launches,
         })
+    }
+
+    /// The weapons the player's `trigger` fires this tick, in the order
+    /// `_HandlePlayer` calls `_FirePlayerWeapon` on them (@0x6ab39-0x6abc7):
+    /// on the primary trigger every weapon carried that is not a secondary
+    /// (`Flags` 0x0002), a fighter bay too, by ascending weapon ID; then
+    /// the secondary selected, on the secondary trigger.
+    #[must_use]
+    pub fn player_picks(&self, trigger: Trigger) -> Vec<WeaponId> {
+        let mut picks: Vec<WeaponId> = self
+            .mounts
+            .iter()
+            .filter(|mount| trigger.primary && !mount.spec.secondary())
+            .map(|mount| mount.spec.id)
+            .collect();
+        picks.sort_unstable();
+        picks.extend(
+            trigger
+                .secondary
+                .filter(|&weapon| self.mounts.iter().any(|mount| mount.spec.id == weapon)),
+        );
+        picks
+    }
+
+    /// Fires `weapon` as the player's trigger does, as `_FirePlayerWeapon`
+    /// does (@0x62702-0x631c3), paying from `rounds` and `fuel`, each
+    /// copy's inaccuracy drawn on `chance`; what it reports goes to
+    /// `reports`. None when nothing was attempted.
+    ///
+    /// 1. Nothing fires unless the ship is [`Condition::Intact`]
+    ///    (`_HandlePlayer`'s `_IsDisabled` gate, @0x6ab1c), it carries
+    ///    `weapon`, `weapon` has reloaded (@0x6287b) and its guidance is
+    ///    one the simulation flies (else it is reported, as
+    ///    [`Armament::fire`] does).
+    /// 2. It fires [`ai_fire::copies`] copies (`_WeaponMaxSimultShots`
+    ///    @0x628a0). Each copy `shooter` has the ammunition for
+    ///    ([`Armament::has_ammo`], @0x628dc) is attempted as `spawn` says,
+    ///    and an attempted copy pays a round of the slot it reads
+    ///    ([`slot`]: the `AmmoType`'s weapon, or a fighter bay's own), or
+    ///    its fuel floored at none, unless it spends only at the end of a
+    ///    burst (@0x62ca4-0x62d6d); a copy not attempted spends nothing.
+    /// 3. With nothing attempted, nothing else changes (@0x62d82).
+    /// 4. Otherwise it reloads by [`ai_fire::reload`] (@0x62f42-0x62f96);
+    ///    an exclusive weapon ([`EXCLUSIVE`]) holds every other weapon's
+    ///    reload at that plus [`EXCLUSIVE_HOLD`] (@0x62fa9-0x62ff8), before
+    ///    the burst; and a burst counts one a call, spends the slot it reads
+    ///    or its fuel at a multiple of its `BurstCount` when it spends at the
+    ///    burst's end, and past its interval starts again on its
+    ///    `BurstReload` (@0x62ffa-0x631b1).
+    ///
+    /// The sound and the recoil, once a call, are the fight's
+    /// ([`Combat`](super::Combat)). The hook for folding before fire
+    /// (@0x62837-0x62864, the +0xa8 stamp @0x6282d) is the top of this
+    /// function (rdm phase ship-handling-fidelity/phase-10-ship-drawing).
+    // Each is a separate borrow the fight holds, as for `fire`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fire_player(
+        &mut self,
+        weapon: WeaponId,
+        condition: Condition,
+        shooter: Shooter,
+        rounds: &mut dyn Rounds,
+        fuel: &mut Gauge,
+        chance: &mut dyn Chance,
+        reports: &mut Reports,
+        spawn: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
+    ) -> Option<Volley> {
+        if condition != Condition::Intact {
+            return None;
+        }
+        let index = self
+            .mounts
+            .iter()
+            .position(|mount| mount.spec.id == weapon)?;
+        let Mount {
+            spec,
+            count,
+            reload,
+            ..
+        } = self.mounts[index];
+        if reload > 0.0 {
+            return None;
+        }
+        if let Guidance::Other(guidance) = spec.guidance {
+            reports.report(SimDiagnostic::UnimplementedGuidance {
+                weapon: spec.id,
+                guidance,
+            });
+            return None;
+        }
+        let mut launches = Vec::new();
+        for _ in 0..ai_fire::copies(&spec, count, rounds, *fuel) {
+            if !self.has_ammo(&self.mounts[index], rounds, *fuel, shooter) {
+                continue;
+            }
+            let Some(aimed) = spawn(&spec) else {
+                continue;
+            };
+            reports.fired(&spec);
+            launches.push(Launch {
+                weapon: spec,
+                pointing: aimed.pointing,
+                inaccuracy: inaccuracy(spec.inaccuracy, chance),
+                target: aimed.target,
+            });
+            if !spec.ammo_at_burst_end() {
+                self.mounts[index].pay(rounds, fuel, false, false);
+                fuel.now = fuel.now.max(0.0);
+            }
+        }
+        if launches.is_empty() {
+            return None;
+        }
+        let spawned = u32::try_from(launches.len()).unwrap_or(u32::MAX);
+        let held = ai_fire::reload(&spec, spawned, count);
+        self.mounts[index].reload = held;
+        if spec.flags3 & EXCLUSIVE != 0 {
+            self.hold_others(index, held);
+        }
+        let slot = slot(&spec, false);
+        if let Some(burst_reload) = self.burst_step(index, spawned, slot, rounds, fuel) {
+            self.mounts[index].reload = burst_reload;
+        }
+        Some(Volley {
+            weapon: spec,
+            launches,
+        })
+    }
+
+    /// Counts a call of `self.mounts[index]` that spawned `spawned` copies
+    /// in its burst, as both `_FirePlayerWeapon` (@0x62ffa-0x631b1) and
+    /// `_FireAIShipWeapon` (@0x8901f-0x891ad) do: one a call; at a multiple
+    /// of its `BurstCount`, when it spends at the burst's end, it pays
+    /// [`burst_end`] from `slot` (its copies' worth when they fire
+    /// together, else one); and past [`burst_interval`] it starts again,
+    /// giving its `BurstReload`.
+    fn burst_step(
+        &mut self,
+        index: usize,
+        spawned: u32,
+        slot: Option<WeaponId>,
+        rounds: &mut dyn Rounds,
+        fuel: &mut Gauge,
+    ) -> Option<f32> {
+        let mount = &mut self.mounts[index];
+        let spec = mount.spec;
+        if spec.burst_count == 0 {
+            return None;
+        }
+        mount.burst += 1;
+        if spec.ammo_at_burst_end() && mount.burst.is_multiple_of(spec.burst_count) {
+            let amount = if spec.flags & SIMULTANEOUS == 0 {
+                1
+            } else {
+                spawned
+            };
+            burst_end(&spec, amount, slot, rounds, fuel);
+        }
+        if mount.burst >= burst_interval(&spec, mount.count) {
+            mount.burst = 0;
+            return Some(spec.burst_reload);
+        }
+        None
+    }
+
+    /// Holds every weapon's reload but `self.mounts[index]`'s at `held`
+    /// plus [`EXCLUSIVE_HOLD`], or what it is if more: an exclusive
+    /// weapon's hold (`Flags3` 0x0020).
+    fn hold_others(&mut self, index: usize, held: f32) {
+        for (other, mount) in self.mounts.iter_mut().enumerate() {
+            if other != index {
+                mount.reload = mount.reload.max(held + EXCLUSIVE_HOLD);
+            }
+        }
     }
 
     /// The exit each `ExitType`'s next shot or beam leaves from, each 0
@@ -866,8 +1037,12 @@ impl Armament {
     /// the lowest ID, pointing as `pick` says at the quarry it gives, if
     /// any: the fight's [`Quarry`](super::defence::Quarry), a missile or a
     /// ship, which goes through the same tail either way (@0x39931). Nothing
-    /// fires, and nothing is spent, when `pick` gives none. What it reports
-    /// goes to `reports`.
+    /// fires, and nothing is spent, when `pick` gives none, nor for a shot
+    /// (guidance 9) when the shot table has no `room`: `_SpawnShot` failing
+    /// returns before the reload, the ammunition, the sound and the burst
+    /// (@0x396ea-0x396ee). A beam (10) never asks (`_SpawnBeam` @0x3992c
+    /// is unchecked), so its tail runs whether or not it spawns. What it
+    /// reports goes to `reports`.
     // Each is a separate borrow the fight holds, as for `fire`.
     #[allow(clippy::too_many_arguments)]
     pub fn fire_point_defence<Q>(
@@ -878,6 +1053,7 @@ impl Armament {
         fuel: &mut Gauge,
         chance: &mut dyn Chance,
         reports: &mut Reports,
+        room: bool,
         pick: &mut dyn FnMut(&WeaponSpec) -> Option<(Pointing, Q)>,
     ) -> Option<(Launch, Q)> {
         if condition != Condition::Intact {
@@ -898,6 +1074,9 @@ impl Armament {
             .0;
         let mount = &mut self.mounts[index];
         let (pointing, quarry) = pick(&mount.spec)?;
+        if mount.spec.guidance == Guidance::PointDefence && !room {
+            return None;
+        }
         let inaccuracy = if mount.spec.guidance == Guidance::PointDefenceBeam {
             0.0
         } else {
@@ -1052,16 +1231,24 @@ fn burst_interval(spec: &WeaponSpec, count: u32) -> u32 {
 const MAX_AMMO_SLOT: i16 = 255;
 
 /// What the end of a burst of `spec` spends, `amount` shots' worth, from
-/// `rounds` and `fuel` (`_FireAIShipWeapon` @0x890a5-0x8913d): a round
-/// each of its own slot, floored at none, for a guidance-99 weapon or a
-/// slot holding any, whatever its `AmmoType`; otherwise, for `AmmoType`
-/// -1000 and below, its fuel, floored at none. The original also floors
-/// a guidance-99 slot already below none up to none; a slot below none
-/// keeps its value here.
-fn burst_end(spec: &WeaponSpec, amount: u32, rounds: &mut dyn Rounds, fuel: &mut Gauge) {
-    if spec.guidance_99() || rounds.held(spec.id) > 0 {
+/// `rounds` and `fuel`: a round each of `slot`, floored at none, when it
+/// names one; otherwise, for `AmmoType` -1000 and below, its fuel, floored
+/// at none. An NPC's slot is its own, for a guidance-99 weapon or a slot
+/// holding any, whatever its `AmmoType` (`_FireAIShipWeapon`
+/// @0x890a5-0x8913d); the player's is the one its shots read ([`slot`]:
+/// a fighter bay's own, or its `AmmoType`'s 0-255, @0x6307a-0x630f6).
+/// The original also floors a slot already below none up to none; a slot
+/// below none keeps its value here.
+fn burst_end(
+    spec: &WeaponSpec,
+    amount: u32,
+    slot: Option<WeaponId>,
+    rounds: &mut dyn Rounds,
+    fuel: &mut Gauge,
+) {
+    if let Some(slot) = slot {
         for _ in 0..amount {
-            rounds.spend(spec.id);
+            rounds.spend(slot);
         }
     } else if let Ammo::Fuel(cost) = spec.ammo {
         fuel.now = (fuel.now - cost * amount as f32).max(0.0);
@@ -2567,6 +2754,361 @@ mod tests {
         }
     }
 
+    // The player's fire (`_FirePlayerWeapon`).
+
+    impl Supplies {
+        /// One call of `_FirePlayerWeapon` on `weapon`, spawned as `spawn`
+        /// says, without the reload after it.
+        fn player(
+            &mut self,
+            armament: &mut Armament,
+            weapon: i16,
+            spawn: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
+        ) -> Option<Volley> {
+            armament.fire_player(
+                WeaponId(weapon),
+                Condition::Intact,
+                self.shooter,
+                &mut self.rounds,
+                &mut self.fuel,
+                &mut NeverFires,
+                &mut self.reports,
+                spawn,
+            )
+        }
+
+        /// One tick of the player's trigger: each weapon `trigger` picks
+        /// fired in `_HandlePlayer`'s order, then the reload; the weapons
+        /// that fired, in order.
+        fn player_tick(&mut self, armament: &mut Armament, trigger: Trigger) -> Vec<WeaponId> {
+            let fired = armament
+                .player_picks(trigger)
+                .into_iter()
+                .filter(|&weapon| self.player(armament, weapon.0, &mut ahead).is_some())
+                .collect();
+            armament.reload();
+            fired
+        }
+    }
+
+    /// A weapon `id` firing the rounds of `wëap` 138 (`AmmoType` 10) every
+    /// `reload` ticks, its copies together under `flags`.
+    fn player_launcher(id: i16, flags: u16, reload: i16) -> WeaponRecord {
+        WeaponRecord {
+            flags,
+            ammo_type: 10,
+            reload,
+            ..weapon(id)
+        }
+    }
+
+    #[test]
+    fn a_players_simultaneous_weapon_fires_every_copy_and_reloads_by_its_whole_reload() {
+        let mut armament = mounted(player_launcher(130, SIMULTANEOUS, 30), 2);
+        let mut supplies = Supplies::none();
+        supplies.rounds.set(WeaponId(138), 5);
+        let volley = supplies
+            .player(&mut armament, 130, &mut ahead)
+            .expect("fired");
+        assert_eq!(volley.launches.len(), 2);
+        assert_eq!(supplies.rounds.slot(WeaponId(138)), 3, "a round a copy");
+        assert_eq!(armament.mounts()[0].reload, 30.0, "Reload, not Reload / 2");
+        let mut apart = mounted(player_launcher(130, 0, 30), 2);
+        let volley = supplies.player(&mut apart, 130, &mut ahead).expect("fired");
+        assert_eq!(volley.launches.len(), 1, "one copy a call");
+        assert_eq!(apart.mounts()[0].reload, 15.0, "Reload / 2");
+    }
+
+    #[test]
+    fn a_players_copies_stop_when_its_ammunition_runs_out() {
+        let mut armament = mounted(player_launcher(130, SIMULTANEOUS, 0), 3);
+        let mut supplies = Supplies::none();
+        supplies.rounds.set(WeaponId(138), 2);
+        supplies.rounds.set(WeaponId(130), 9);
+        let volley = supplies
+            .player(&mut armament, 130, &mut ahead)
+            .expect("fired");
+        assert_eq!(volley.launches.len(), 2, "the third copy has no round");
+        assert_eq!(supplies.rounds.slot(WeaponId(138)), 0);
+        assert_eq!(supplies.rounds.slot(WeaponId(130)), 9, "the launcher's own");
+    }
+
+    #[test]
+    fn at_the_burst_end_a_players_copies_are_capped_by_its_ammunition_or_its_fuel() {
+        let late = WeaponRecord {
+            flags3: AMMO_AT_BURST_END,
+            burst_count: 5,
+            ..player_launcher(130, SIMULTANEOUS, 0)
+        };
+        let mut armament = mounted(late, 4);
+        let mut supplies = Supplies::none();
+        supplies.rounds.set(WeaponId(138), 3);
+        let volley = supplies
+            .player(&mut armament, 130, &mut ahead)
+            .expect("fired");
+        assert_eq!(volley.launches.len(), 3, "the rounds of the ammunition");
+        assert_eq!(supplies.rounds.slot(WeaponId(138)), 3, "none spent yet");
+        let fuelled = WeaponRecord {
+            ammo_type: -1010,
+            ..late
+        };
+        let mut armament = mounted(fuelled, 4);
+        supplies.fuel = Gauge {
+            now: 2.5,
+            max: 10.0,
+        };
+        let volley = supplies
+            .player(&mut armament, 130, &mut ahead)
+            .expect("fired");
+        assert_eq!(volley.launches.len(), 2, "two shots of a unit each");
+    }
+
+    #[test]
+    fn a_players_weapon_that_attempts_nothing_spends_nothing_and_does_not_reload() {
+        let turret = WeaponRecord {
+            guidance: 4,
+            burst_count: 2,
+            ..player_launcher(130, SIMULTANEOUS, 30)
+        };
+        let mut armament = mounted(turret, 2);
+        let mut supplies = Supplies::none();
+        supplies.rounds.set(WeaponId(138), 5);
+        assert_eq!(supplies.player(&mut armament, 130, &mut nothing), None);
+        assert_eq!(supplies.rounds.slot(WeaponId(138)), 5);
+        let mount = armament.mounts()[0];
+        assert_eq!((mount.reload, mount.burst), (0.0, 0));
+    }
+
+    #[test]
+    fn a_players_copy_spends_its_fuel_floored_at_none() {
+        let fuelled = WeaponRecord {
+            ammo_type: -1010,
+            ..player_launcher(130, SIMULTANEOUS, 0)
+        };
+        let mut armament = mounted(fuelled, 2);
+        let mut supplies = Supplies::none();
+        supplies.fuel = Gauge {
+            now: 1.5,
+            max: 10.0,
+        };
+        let volley = supplies
+            .player(&mut armament, 130, &mut ahead)
+            .expect("fired");
+        assert_eq!(volley.launches.len(), 1, "the second has not the unit");
+        assert!(
+            (supplies.fuel.now - 0.5).abs() < 1e-5,
+            "{:?}",
+            supplies.fuel
+        );
+    }
+
+    #[test]
+    fn a_players_simultaneous_burst_counts_one_a_call_and_spends_its_ammunition_at_the_end() {
+        let bursting = WeaponRecord {
+            flags3: AMMO_AT_BURST_END,
+            burst_count: 2,
+            burst_reload: 50,
+            ..player_launcher(130, SIMULTANEOUS, 0)
+        };
+        let mut armament = mounted(bursting, 3);
+        let mut supplies = Supplies::none();
+        supplies.rounds.set(WeaponId(138), 10);
+        supplies.rounds.set(WeaponId(130), 10);
+        let first = supplies.player(&mut armament, 130, &mut ahead);
+        assert_eq!(first.map(|volley| volley.launches.len()), Some(3));
+        assert_eq!(
+            supplies.rounds.slot(WeaponId(138)),
+            10,
+            "no spend mid-burst"
+        );
+        assert_eq!(armament.mounts()[0].burst, 1, "one a call");
+        let second = supplies.player(&mut armament, 130, &mut ahead);
+        assert_eq!(second.map(|volley| volley.launches.len()), Some(3));
+        assert_eq!(
+            supplies.rounds.slot(WeaponId(138)),
+            7,
+            "the three copies, from the ammunition's slot"
+        );
+        assert_eq!(supplies.rounds.slot(WeaponId(130)), 10, "not its own");
+        let mount = armament.mounts()[0];
+        assert_eq!((mount.burst, mount.reload), (0, 50.0));
+        let one_at_a_time = WeaponRecord {
+            flags: 0,
+            ammo_type: -1010,
+            ..bursting
+        };
+        let mut armament = mounted(one_at_a_time, 1);
+        supplies.fuel = Gauge {
+            now: 5.0,
+            max: 10.0,
+        };
+        for _ in 0..2 {
+            supplies.player(&mut armament, 130, &mut ahead);
+        }
+        assert!((supplies.fuel.now - 4.0).abs() < 1e-5, "a shot's fuel");
+    }
+
+    #[test]
+    fn a_players_one_copy_weapon_fires_every_reload_and_two_every_half() {
+        let mut one = mounted(blaster(128, 10), 1);
+        let mut supplies = Supplies::none();
+        let fired: Vec<u32> = (0..31)
+            .filter(|_| !supplies.player_tick(&mut one, PRIMARY).is_empty())
+            .collect();
+        assert_eq!(fired, [0, 10, 20, 30]);
+        let mut two = mounted(blaster(129, 13), 2);
+        let fired: Vec<u32> = (0..15)
+            .filter(|_| !supplies.player_tick(&mut two, PRIMARY).is_empty())
+            .collect();
+        assert_eq!(fired, [0, 7, 14]);
+    }
+
+    #[test]
+    fn a_player_carrier_launches_both_its_simultaneous_bays_in_one_call() {
+        let bay = WeaponRecord {
+            guidance: 99,
+            ammo_type: 200,
+            flags: SIMULTANEOUS | super::super::weapon::SECONDARY,
+            reload: 60,
+            ..weapon(150)
+        };
+        let mut armament = mounted(bay, 2);
+        let mut supplies = Supplies::none();
+        supplies.rounds.set(WeaponId(150), 5);
+        let volley = supplies
+            .player(&mut armament, 150, &mut ahead)
+            .expect("launched");
+        assert_eq!(volley.launches.len(), 2);
+        assert_eq!(supplies.rounds.slot(WeaponId(150)), 3, "its own slot");
+        assert_eq!(armament.mounts()[0].reload, 60.0);
+    }
+
+    #[test]
+    fn a_players_exclusive_weapon_holds_the_others_by_its_shot_reload_before_its_burst() {
+        let exclusive = WeaponRecord {
+            flags3: EXCLUSIVE,
+            ammo_type: -1,
+            burst_count: 1,
+            burst_reload: 40,
+            ..blaster(130, 10)
+        };
+        let mut armament = Armament::new([
+            (WeaponSpec::new(&exclusive), 1),
+            (WeaponSpec::new(&blaster(131, 0)), 1),
+            (WeaponSpec::new(&blaster(132, 50)), 1),
+        ]);
+        armament.hold(WeaponId(132));
+        Supplies::none().player(&mut armament, 130, &mut ahead);
+        let reloads: Vec<f32> = armament.mounts().iter().map(|mount| mount.reload).collect();
+        assert_eq!(reloads, [40.0, 12.0, 50.0], "10 + 2, not 40 + 2; 50 kept");
+    }
+
+    #[test]
+    fn the_players_primaries_fire_by_weapon_id_and_its_secondary_after_them() {
+        let missile = WeaponRecord {
+            flags: super::super::weapon::SECONDARY,
+            ..blaster(140, 0)
+        };
+        let armament = Armament::new([
+            (WeaponSpec::new(&blaster(131, 0)), 1),
+            (WeaponSpec::new(&missile), 1),
+            (WeaponSpec::new(&blaster(128, 0)), 1),
+            (WeaponSpec::new(&blaster(129, 0)), 1),
+        ]);
+        let both = Trigger {
+            secondary: Some(WeaponId(140)),
+            ..PRIMARY
+        };
+        assert_eq!(armament.player_picks(both), ids(&[128, 129, 131, 140]));
+        assert_eq!(armament.player_picks(PRIMARY), ids(&[128, 129, 131]));
+        let secondary = Trigger {
+            primary: false,
+            ..both
+        };
+        assert_eq!(armament.player_picks(secondary), ids(&[140]));
+        assert_eq!(
+            armament.player_picks(Trigger::default()),
+            ids(&[]),
+            "nothing held"
+        );
+    }
+
+    #[test]
+    fn an_exclusive_primary_holds_the_weapons_after_it_in_the_same_tick() {
+        let exclusive = WeaponRecord {
+            flags3: EXCLUSIVE,
+            ammo_type: -1,
+            ..blaster(129, 10)
+        };
+        let missile = WeaponRecord {
+            flags: super::super::weapon::SECONDARY,
+            ..blaster(140, 0)
+        };
+        let mut armament = Armament::new([
+            (WeaponSpec::new(&blaster(131, 0)), 1),
+            (WeaponSpec::new(&missile), 1),
+            (WeaponSpec::new(&exclusive), 1),
+            (WeaponSpec::new(&blaster(128, 0)), 1),
+        ]);
+        let both = Trigger {
+            secondary: Some(WeaponId(140)),
+            ..PRIMARY
+        };
+        assert_eq!(
+            Supplies::none().player_tick(&mut armament, both),
+            ids(&[128, 129]),
+            "131 and the secondary held"
+        );
+    }
+
+    #[test]
+    fn a_players_fighter_bay_that_is_not_a_secondary_fires_on_the_primary() {
+        let bay = WeaponRecord {
+            guidance: 99,
+            ammo_type: 200,
+            ..weapon(150)
+        };
+        let armament = mounted(bay, 1);
+        assert_eq!(armament.player_picks(PRIMARY), ids(&[150]));
+    }
+
+    #[test]
+    fn the_player_fires_nothing_unless_intact_and_reports_an_unflown_guidance() {
+        let mut armament = mounted(blaster(128, 0), 1);
+        let mut supplies = Supplies::none();
+        let fired = armament.fire_player(
+            WeaponId(128),
+            Condition::Disabled,
+            supplies.shooter,
+            &mut supplies.rounds,
+            &mut supplies.fuel,
+            &mut NeverFires,
+            &mut supplies.reports,
+            &mut ahead,
+        );
+        assert_eq!(fired, None);
+        let mut odd = mounted(
+            WeaponRecord {
+                guidance: 42,
+                ..blaster(130, 0)
+            },
+            1,
+        );
+        assert_eq!(supplies.player(&mut odd, 130, &mut ahead), None);
+        assert_eq!(
+            supplies.reports.take(),
+            [SimDiagnostic::UnimplementedGuidance {
+                weapon: WeaponId(130),
+                guidance: 42,
+            }]
+        );
+        assert_eq!(
+            supplies.player(&mut odd, 131, &mut ahead),
+            None,
+            "not carried"
+        );
+    }
+
     // Point defence.
 
     /// A point-defence weapon `id` of `guidance` reloading every `reload`
@@ -2595,6 +3137,7 @@ mod tests {
             &mut supplies.fuel,
             chance,
             &mut supplies.reports,
+            true,
             &mut |spec: &WeaponSpec| {
                 asked.push(spec.id);
                 pick.map(|(heading, missile)| (Pointing::Along(heading), missile))
@@ -2756,6 +3299,7 @@ mod tests {
                 &mut supplies.fuel,
                 &mut NeverFires,
                 &mut supplies.reports,
+                true,
                 &mut |_: &WeaponSpec| Some((Pointing::Along(0.0), ShotId(0))),
             );
             assert_eq!(fired, None, "{condition:?}");
@@ -2993,6 +3537,7 @@ mod tests {
             &mut supplies.fuel,
             &mut NeverFires,
             &mut supplies.reports,
+            true,
             &mut |spec: &WeaponSpec| {
                 asked.push(spec.id);
                 // Only the longer-reaching beam has a missile in reach.
@@ -3019,7 +3564,13 @@ mod tests {
                 &mut supplies.reports,
                 &mut |spec: &WeaponSpec| {
                     asked.push(spec.id);
-                    super::super::aim::aim(spec, &ShipState::default(), &HullSpec::default(), None)
+                    super::super::aim::aim(
+                        spec,
+                        &ShipState::default(),
+                        &HullSpec::default(),
+                        None,
+                        RuleSource::Engine,
+                    )
                 },
             );
             assert_eq!(launches, [], "{guidance}");

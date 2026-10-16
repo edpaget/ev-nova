@@ -1662,6 +1662,12 @@ impl Session {
             .set_pd_hostility(rules.source_for(RuleKey::PdHostility));
         self.combat
             .set_seeker_lock_angle(rules.source_for(RuleKey::SeekerLockAngle));
+        self.combat
+            .set_quadrant_blind_spots(rules.source_for(RuleKey::QuadrantTurretBlindSpots));
+        self.combat
+            .set_player_forward_recoil(rules.source_for(RuleKey::PlayerForwardRecoil));
+        self.combat
+            .set_combat_caps(rules.source_for(RuleKey::CombatCaps));
         self.combat.set_asteroid_fuse(AsteroidFuse::from(
             rules.source_for(RuleKey::FuseIgnoresAsteroids),
         ));
@@ -15896,7 +15902,9 @@ pub(super) mod tests {
             ship: ShipRef::Player,
             weapon: WeaponId(128),
             at: Vec2::ZERO,
-            sound: Some(crate::combat::FireSound::UNPORTED),
+            sound: Some(crate::combat::FireSound {
+                priority: Some(crate::combat::PLAYER_FIRE_PRIORITY),
+            }),
         }));
         assert_eq!(session.npcs().len(), 1, "disabled, and still alive");
         for _ in 0..60 {
@@ -16210,6 +16218,30 @@ pub(super) mod tests {
         assert_ne!(asking, Combat::default());
         let other = Rulebook::default().with_override(RuleKey::PdHostility, RuleSource::Bible);
         assert_eq!(session(other).combat, asking);
+    }
+
+    #[test]
+    fn the_rulebook_says_how_the_player_fires_and_whether_the_fight_is_capped() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session(Rulebook::default()).combat, Combat::default());
+        let mut blind = Combat::default();
+        blind.set_quadrant_blind_spots(RuleSource::Bible);
+        assert_ne!(blind, Combat::default());
+        let other =
+            Rulebook::default().with_override(RuleKey::QuadrantTurretBlindSpots, RuleSource::Bible);
+        assert_eq!(session(other).combat, blind);
+        let mut forward = Combat::default();
+        forward.set_player_forward_recoil(RuleSource::Bible);
+        assert_ne!(forward, Combat::default());
+        let other =
+            Rulebook::default().with_override(RuleKey::PlayerForwardRecoil, RuleSource::Bible);
+        assert_eq!(session(other).combat, forward);
+        let mut capped = Combat::default();
+        capped.set_combat_caps(RuleSource::Engine);
+        assert_ne!(capped, Combat::default());
+        let engine = Rulebook::default().with_override(RuleKey::CombatCaps, RuleSource::Engine);
+        assert_eq!(session(engine).combat, capped);
     }
 
     #[test]

@@ -13,8 +13,15 @@
 //! - A turret is blind in the sectors its weapon's `Flags` or its ship's
 //!   `Flags` mark ([`blind`]): the front up to [`FRONT_ARC`] off the nose
 //!   (0x1000), the sides up to [`SIDE_ARC`] (0x2000), and the rear beyond
-//!   (0x4000). The original's player checks them for 3 and 4 only; here
-//!   every turret does, as the original's AI does.
+//!   (0x4000). 3 and 4 always test them (`_FirePlayerWeapon` @0x629fe,
+//!   @0x62a94). 7 and 8 test them as the reading [`aim`] is given says
+//!   ([`RuleKey::QuadrantTurretBlindSpots`](crate::RuleKey::QuadrantTurretBlindSpots)):
+//!   by the engine, as `_FirePlayerWeapon` and `_FireAIShipWeapon` fire
+//!   them, never (@0x62aeb-0x62c38); by the other reading, as
+//!   `_AIFireTurret` picks them (@0x80d0b) and the Bible has it ("Turreted
+//!   weapon has a blind spot"), as 3 and 4 do. The fight passes the key's
+//!   reading for the player's trigger, and the testing reading for an
+//!   escort's formation trigger, whose turrets the original's AI picks.
 //! - What each guidance fires ([`aim`]):
 //!   - -1, 0, 5 and 6 fire along the ship's heading, at nothing.
 //!   - 1 fires along the heading at the target, when there is one, and
@@ -24,7 +31,8 @@
 //!     the lead angle, only with a target not in a blind spot.
 //!   - 7 fires at the lead angle at a target within [`FRONT_ARC`] of the
 //!     nose, and otherwise (no target, or one out of the arc) straight
-//!     ahead at nothing.
+//!     ahead at nothing; one testing blind spots fires nothing at a target
+//!     in its arc but in a blind spot.
 //!   - 8 fires at the lead angle at a target within [`FRONT_ARC`] of the
 //!     tail, and otherwise not at all.
 //!   - 9 and 10 never fire on the trigger: only point defence fires them
@@ -181,21 +189,25 @@ pub fn lead(firer: &ShipState, target: &Target, speed: f32) -> f32 {
 }
 
 /// Which way `spec` fires from `firer`, of `hull`, at its `target`, if it
-/// fires at all (see the module docs).
+/// fires at all, its quadrant turrets testing their blind spots as
+/// `quadrant_blind` says (see the module docs).
 #[must_use]
 pub fn aim(
     spec: &WeaponSpec,
     firer: &ShipState,
     hull: &HullSpec,
     target: Option<&Target>,
+    quadrant_blind: RuleSource,
 ) -> Option<Aim> {
     let ahead = Aim::along(firer.heading, None);
     let blind_spots = spec.flags | hull.blind_spots;
+    let quadrant = matches!(spec.guidance, Guidance::FrontTurret | Guidance::RearTurret);
+    let tested = !quadrant || quadrant_blind == RuleSource::Bible;
     // The target, its bearing's angle off the nose, and whether it is in a
-    // blind spot.
+    // blind spot that holds the weapon.
     let sighted = target.map(|target| {
         let off = angle_off(firer.heading, bearing(firer.position, target.position));
-        (target, off, blind(blind_spots, off))
+        (target, off, tested && blind(blind_spots, off))
     });
     match spec.guidance {
         Guidance::Homing | Guidance::FighterBay => Some(Aim {
@@ -392,8 +404,21 @@ mod tests {
     }
 
     /// `spec` aimed from a ship facing `heading` at the target dead ahead
-    /// of the centre, 100 pixels up, crossing to the right.
+    /// of the centre, 100 pixels up, crossing to the right, its quadrant
+    /// turrets testing no blind spot, as the engine's player fires them.
     fn aimed(spec: &WeaponSpec, heading: f32, hull_blind: u16, with_target: bool) -> Option<Aim> {
+        aimed_by(spec, heading, hull_blind, with_target, RuleSource::Engine)
+    }
+
+    /// As [`aimed`], its quadrant turrets testing blind spots as
+    /// `quadrant_blind` says.
+    fn aimed_by(
+        spec: &WeaponSpec,
+        heading: f32,
+        hull_blind: u16,
+        with_target: bool,
+        quadrant_blind: RuleSource,
+    ) -> Option<Aim> {
         let hull = HullSpec {
             blind_spots: hull_blind,
             ..HullSpec::default()
@@ -404,6 +429,7 @@ mod tests {
             &firer(heading),
             &hull,
             with_target.then_some(&crossing),
+            quadrant_blind,
         )
     }
 
@@ -473,16 +499,21 @@ mod tests {
 
     #[test]
     fn a_turret_does_not_fire_into_a_blind_spot_of_its_weapon_or_its_ship() {
+        let tested = |raw, (flags, hull_blind)| {
+            let readings = if raw == 8 {
+                vec![RuleSource::Bible]
+            } else {
+                RuleSource::ALL.to_vec()
+            };
+            readings.into_iter().all(|reading| {
+                aimed_by(&spec(raw, flags), 180.0, hull_blind, true, reading).is_none()
+            })
+        };
         for raw in [3, 4, 8] {
             // The target is astern of a ship facing down.
-            let rear_blind = spec(raw, BLIND_REAR);
-            assert_eq!(aimed(&rear_blind, 180.0, 0, true), None, "{raw}");
-            assert_eq!(aimed(&spec(raw, 0), 180.0, BLIND_REAR, true), None, "{raw}");
-            assert_eq!(
-                aimed(&rear_blind, 180.0, BLIND_REAR, true),
-                None,
-                "{raw}: both"
-            );
+            assert!(tested(raw, (BLIND_REAR, 0)), "{raw}");
+            assert!(tested(raw, (0, BLIND_REAR)), "{raw}");
+            assert!(tested(raw, (BLIND_REAR, BLIND_REAR)), "{raw}: both");
         }
         for raw in [3, 4] {
             assert!(
@@ -513,7 +544,49 @@ mod tests {
                 "{heading} {with_target}"
             );
         }
-        assert_eq!(aimed(&spec(7, BLIND_FRONT), 0.0, 0, true), None, "blind");
+        let blind = aimed_by(&spec(7, BLIND_FRONT), 0.0, 0, true, RuleSource::Bible);
+        assert_eq!(blind, None, "blind, by the other reading");
+    }
+
+    #[test]
+    fn by_the_engine_a_quadrant_turret_tests_no_blind_spot() {
+        let front = aimed(&spec(7, BLIND_FRONT), 0.0, 0, true).expect("fires");
+        assert!(close(pointed(&front), led()), "{front:?}");
+        let hull_blind = aimed(&spec(7, 0), 0.0, BLIND_FRONT, true).expect("fires");
+        assert_eq!(hull_blind.target, Some(TARGET), "the hull's blind spot too");
+        let rear = aimed(&spec(8, BLIND_REAR), 180.0, 0, true).expect("fires");
+        assert!(close(pointed(&rear), led()), "{rear:?}");
+        assert!(aimed(&spec(8, 0), 180.0, BLIND_REAR, true).is_some());
+        for raw in [7, 8] {
+            for (flags, hull_blind) in [(0x7000, 0), (0, 0x7000)] {
+                let heading = if raw == 7 { 0.0 } else { 180.0 };
+                assert_eq!(
+                    aimed_by(
+                        &spec(raw, flags),
+                        heading,
+                        hull_blind,
+                        true,
+                        RuleSource::Bible
+                    ),
+                    None,
+                    "{raw}: the other reading"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_full_turret_tests_its_blind_spots_under_both_readings() {
+        for raw in [3, 4] {
+            for reading in RuleSource::ALL {
+                assert_eq!(
+                    aimed_by(&spec(raw, BLIND_FRONT), 0.0, 0, true, reading),
+                    None,
+                    "{raw} {reading:?}"
+                );
+                assert!(aimed_by(&spec(raw, BLIND_REAR), 0.0, 0, true, reading).is_some());
+            }
+        }
     }
 
     #[test]

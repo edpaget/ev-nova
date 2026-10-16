@@ -188,8 +188,8 @@ pub enum Ammo {
     Rounds(WeaponId),
     /// This much fuel.
     Fuel(f32),
-    /// Anything else (-999 destroys the firer, which a later phase does):
-    /// for now, nothing.
+    /// Anything else: nothing. A shot of -999 destroys its firer as it
+    /// spawns ([`SELF_DESTRUCT`](super::SELF_DESTRUCT)), spending nothing.
     Other(i16),
 }
 
