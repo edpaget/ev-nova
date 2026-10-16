@@ -591,7 +591,9 @@ impl StarMap {
     }
 
     /// System `id`'s raw Con slots, as its `sÿst` lists them: in record
-    /// order, repeats and itself kept, hidden or not, unresolved. Empty
+    /// order, repeats and itself kept, hidden or not, unresolved, an empty
+    /// slot before the last link as −1 in its place
+    /// ([`StarSystem::links`](crate::catalog::StarSystem::links)). Empty
     /// when the catalog does not hold it.
     #[must_use]
     pub fn con_slots(&self, id: SystemId) -> &[SystemId] {

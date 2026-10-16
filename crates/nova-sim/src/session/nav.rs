@@ -593,13 +593,13 @@ impl Session {
         if self.landed.is_some() {
             return false;
         }
-        let from = self.cycle_from();
-        let start = match from + 1 {
-            next if next > 15 => 0,
-            next => usize::try_from(next).unwrap_or(15),
-        };
+        // The step goes on from +0x6c, past the last slot to the first and
+        // below the first to the last (@0x13f77-0x13f9b): a start past the
+        // slots begins the walk at the first.
+        let start = usize::try_from(self.cycle_from() + 1).unwrap_or(CON_SLOTS - 1);
         let slots = self.galaxy.con_slots(self.pilot.system);
-        let next = (start..CON_SLOTS).chain(0..start).find_map(|at| {
+        let slots = &slots[..slots.len().min(CON_SLOTS)];
+        let next = (start..slots.len()).chain(0..start).find_map(|at| {
             slots
                 .get(at)
                 .copied()
@@ -1593,6 +1593,42 @@ mod tests {
                     "{stellar_id} by {source:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_map_cycle_from_a_system_no_slot_stands_for_starts_at_the_first_link() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.nav = hyperspace(132);
+        assert_eq!(cycle(&mut session), hyperspace(134));
+    }
+
+    #[test]
+    fn a_map_cycle_from_a_system_no_slot_names_steps_on_from_the_slot_at_its_place() {
+        // 134 shares 131's place, and 131, the lower, stands for it.
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[132, 131]);
+        with_alternate(&mut catalog);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.nav = hyperspace(134);
+        assert_eq!(cycle(&mut session), hyperspace(132), "after 131's slot");
+    }
+
+    #[test]
+    fn a_map_cycle_steps_from_below_the_first_slot_to_the_last() {
+        let mut catalog = hub();
+        let mut links = [-1; 16];
+        (links[0], links[15]) = (134, 135);
+        catalog.star_map[0] = star(130, (0.0, 0.0), &links);
+        for (stellar_id, expected) in [(100, 135), (142, 135), (143, 134)] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.nav = stellar(stellar_id);
+            assert_eq!(
+                cycle(&mut session),
+                hyperspace(expected),
+                "index {}",
+                stellar_id - 128
+            );
         }
     }
 
