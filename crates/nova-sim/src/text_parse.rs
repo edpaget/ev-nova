@@ -108,14 +108,7 @@ pub fn conditional_text(
     let mut negate_before = false;
     for c in text.chars() {
         state = match state {
-            State::Copy if c == '{' => {
-                opened = String::from('{');
-                negate_before = negate;
-                if rules.negation == RuleSource::Bible {
-                    negate = false;
-                }
-                State::Open
-            }
+            State::Copy if c == '{' => open(&mut opened, &mut negate_before, &mut negate, rules),
             State::Copy => {
                 out.push(c);
                 State::Copy
@@ -131,9 +124,13 @@ pub fn conditional_text(
                 }
                 _ if rules.stray_brace == RuleSource::Bible => {
                     out.push_str(&opened);
-                    out.push(c);
                     negate = negate_before;
-                    State::Copy
+                    if c == '{' {
+                        open(&mut opened, &mut negate_before, &mut negate, rules)
+                    } else {
+                        out.push(c);
+                        State::Copy
+                    }
                 }
                 _ => State::Open,
             },
@@ -168,7 +165,27 @@ pub fn conditional_text(
             State::SkipRest => State::SkipRest,
         };
     }
+    if state == State::Open && rules.stray_brace == RuleSource::Bible {
+        out.push_str(&opened);
+    }
     out
+}
+
+/// Opens a conditional at a `{`: `opened` starts again from it,
+/// `negate_before` keeps the negation as it was, and by the Bible's
+/// reading of [`RuleKey::TextNegation`] the negation is cleared.
+fn open(
+    opened: &mut String,
+    negate_before: &mut bool,
+    negate: &mut bool,
+    rules: ParseRules,
+) -> State {
+    *opened = String::from('{');
+    *negate_before = *negate;
+    if rules.negation == RuleSource::Bible {
+        *negate = false;
+    }
+    State::Open
 }
 
 /// Whether `test` of number `n` holds for `facts`: `paid(n)`, the days
@@ -444,6 +461,37 @@ mod tests {
         assert_eq!(
             conditional_text("{!x} {G \"m\" \"f\"}", &male(), engine_negation),
             "{!x} m",
+            "even when negation would reach on"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_stray_brace_ending_the_text_is_copied_as_written() {
+        assert_eq!(conditional_text("Price: {", &male(), bible()), "Price: {");
+        assert_eq!(conditional_text("x {!", &male(), bible()), "x {!");
+        assert_eq!(
+            engine("Price: {", &male()),
+            "Price: ",
+            "the engine's drops it"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_stray_brace_before_a_brace_is_copied_and_the_next_opens() {
+        let text = "{{G \"m\" \"f\"}";
+        assert_eq!(conditional_text(text, &male(), bible()), "{m");
+        assert_eq!(
+            conditional_text("{!{G \"m\" \"f\"}", &male(), bible()),
+            "{!m",
+            "its negation goes with it"
+        );
+        let engine_negation = ParseRules {
+            stray_brace: RuleSource::Bible,
+            ..ParseRules::default()
+        };
+        assert_eq!(
+            conditional_text("{!{G \"m\" \"f\"}", &male(), engine_negation),
+            "{!m",
             "even when negation would reach on"
         );
     }
