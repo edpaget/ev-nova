@@ -56,13 +56,17 @@ pub struct DescShown {
     pub movie: Option<DescMovie>,
 }
 
-/// One of the things shown one after another: a movie or a text.
+/// One of the things shown one after another: a movie or a text, or
+/// the mark that a mission text is done.
 #[derive(Clone, Debug)]
 enum Stage {
     /// A `dësc`'s movie.
     Movie(MovieStage),
     /// A text in "Desc Dialog".
     Text(DescDialog),
+    /// A mission text and its movies are done, shown or dropped
+    /// ([`MissionDialogs::take_texts_closed`]).
+    Closed,
 }
 
 /// The mission texts shown one after another, and the mission info
@@ -92,6 +96,8 @@ pub struct MissionDialogs {
     /// What was pressed under a movie that ended with nothing after it,
     /// for what is beneath, until it is taken.
     unclaimed: Vec<Input>,
+    /// How many mission texts have closed since this was last taken.
+    texts_closed: usize,
 }
 
 impl std::fmt::Debug for MissionDialogs {
@@ -127,6 +133,7 @@ impl MissionDialogs {
             info_closed: false,
             info_closed_laid_out: false,
             unclaimed: Vec::new(),
+            texts_closed: 0,
         }
     }
 
@@ -141,19 +148,46 @@ impl MissionDialogs {
     /// movie before or after it, and each offer movie among them in the
     /// place the session gave it. Without that variant's template the
     /// dialog is dropped, as the spaceport drops it, and its movies still
-    /// play.
+    /// play. Each mission text is told closed once it and its movies are
+    /// done ([`MissionDialogs::take_texts_closed`]).
     pub fn show_texts(&mut self, texts: impl IntoIterator<Item = impl Into<MissionShown>>) {
         for shown in texts {
             match shown.into() {
-                MissionShown::Text(text) => self.queue_desc(&DescShown {
-                    text: text.text,
-                    graphic: text.graphic,
-                    movie: text.movie,
-                }),
+                MissionShown::Text(text) => {
+                    self.queue_desc(&DescShown {
+                        text: text.text,
+                        graphic: text.graphic,
+                        movie: text.movie,
+                    });
+                    self.texts.push_back(Stage::Closed);
+                }
                 MissionShown::Movie(movie) => self.queue_movie(&movie),
             }
         }
         self.settle();
+    }
+
+    /// How many of the mission texts shown ([`MissionDialogs::show_texts`])
+    /// have closed since this was last taken, in order, each once: closed
+    /// by its Done and its after-movie ended, or dropped, as an empty text
+    /// or one with no template is. `_ShowTextDialog` returns there
+    /// (@0x5b40b-0x5b44f), and every caller of a mission text redraws the
+    /// whole bar as it returns (`_RefreshSAT`, e.g. @0xa1f13), which
+    /// whoever flies the ship then does
+    /// ([`FlightView::close_mission_text`](crate::flight::FlightView::close_mission_text)).
+    /// A `dësc` with no mission ([`MissionDialogs::show_descs`]) is not
+    /// counted.
+    pub fn take_texts_closed(&mut self) -> usize {
+        std::mem::take(&mut self.texts_closed)
+    }
+
+    /// Lets go of the marks of the mission texts done that are in front,
+    /// counting each closed.
+    fn pop_closed(&mut self) {
+        while matches!(self.texts.front(), Some(Stage::Closed)) {
+            self.texts.pop_front();
+            self.texts_closed += 1;
+        }
     }
 
     /// Queues each of `texts`, a `dësc` with no mission behind it, to
@@ -199,6 +233,7 @@ impl MissionDialogs {
     /// handing what was pressed under it to what comes next, until a
     /// text, or a movie still playing, is in front.
     fn settle(&mut self) {
+        self.pop_closed();
         while let Some(Stage::Movie(movie)) = self.texts.front_mut() {
             movie.begin();
             if !movie.ended() {
@@ -206,6 +241,7 @@ impl MissionDialogs {
             }
             let replay = movie.take_replay();
             self.texts.pop_front();
+            self.pop_closed();
             for input in replay {
                 if self.is_open() {
                     self.front_input(&input);
@@ -226,6 +262,7 @@ impl MissionDialogs {
     /// Gives `input` to what is in front: the movie or text shown, or else
     /// the mission info screen.
     fn front_input(&mut self, input: &Input) {
+        self.pop_closed();
         match self.texts.front_mut() {
             Some(Stage::Movie(movie)) => movie.input(input),
             Some(Stage::Text(text)) => {
@@ -233,8 +270,10 @@ impl MissionDialogs {
                 self.sounds.extend(text.take_sounds());
                 if text.closed() {
                     self.texts.pop_front();
+                    self.pop_closed();
                 }
             }
+            Some(Stage::Closed) => {}
             None => {
                 if let Some(info) = &mut self.info {
                     info.input(input);
@@ -382,14 +421,14 @@ impl Screen for MissionDialogs {
         match self.texts.front() {
             Some(Stage::Text(text)) => text.draw(list),
             Some(Stage::Movie(movie)) => movie.draw(list),
-            None => {}
+            Some(Stage::Closed) | None => {}
         }
     }
 
     fn cancel_pointer(&mut self) {
         match self.texts.front_mut() {
             Some(Stage::Text(text)) => text.cancel_pointer(),
-            Some(Stage::Movie(_)) => {}
+            Some(Stage::Movie(_) | Stage::Closed) => {}
             None => {
                 if let Some(info) = &mut self.info {
                     info.cancel_pointer();
@@ -812,6 +851,42 @@ mod tests {
         dialogs.show_texts(vec![brief(128, "Lost.")]);
         assert!(dialogs.text().is_none());
         assert!(!dialogs.is_open());
+    }
+
+    #[test]
+    fn each_mission_text_close_is_reported_once() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![
+            brief(128, "First."),
+            brief(129, ""),
+            filmed("Last.", 0x0001),
+        ]);
+        dialogs.show_descs(vec![shown_desc("No mission.", None)]);
+        assert_eq!(dialogs.take_texts_closed(), 0, "the first shows");
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(
+            dialogs.take_texts_closed(),
+            2,
+            "the first, then the empty one"
+        );
+        assert_eq!(dialogs.take_texts_closed(), 0, "once");
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(dialogs.take_texts_closed(), 0, "its after-movie plays");
+        dialogs.tick(TICK);
+        assert_eq!(dialogs.take_texts_closed(), 1, "after its after-movie");
+        assert_eq!(shown(&dialogs).as_deref(), Some("No mission."));
+        dialogs.input(&key(Key::Enter));
+        assert!(!dialogs.is_open());
+        assert_eq!(dialogs.take_texts_closed(), 0, "a `dësc` with no mission");
+        let mut dropped = MissionDialogs::new(
+            texts(Err("no DLOG 3003".to_owned())),
+            Ok(info_template()),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        );
+        dropped.show_texts(vec![brief(128, "Lost."), brief(129, "Gone.")]);
+        assert_eq!(dropped.take_texts_closed(), 2, "dropped, so closed at once");
     }
 
     fn widths(dialogs: &mut MissionDialogs) -> Vec<(f32, Option<i16>)> {

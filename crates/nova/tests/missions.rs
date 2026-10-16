@@ -1406,14 +1406,18 @@ fn a_landed_m_in_on_accept_is_undone_as_the_mission_computer_closes() {
     game.click_port(MISSION_BBS);
     game.accept();
 
-    // Under the BriefText the accept's redraw names the Dock.
+    // Under the BriefText the bar is still the one held before the accept,
+    // naming the Pad: the computer redraws nothing before it
+    // (`_DoMissionDialog` @0xa3b37-0xa3bb4), and `OnAccept`'s `M` marks
+    // nothing. The brief's close redraws it.
     assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
     assert_eq!(
         game.session().nav_mode(),
         nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
     );
     let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
+    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
+    assert!(!bar.contains(&"Dock".to_owned()), "{bar:?}");
 
     // The computer's close restores the Pad and draws it.
     game.tap(Key::Enter);

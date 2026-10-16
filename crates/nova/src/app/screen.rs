@@ -2209,9 +2209,13 @@ impl AppScreen {
     /// those in flight are dropped, as the spaceport drops them without
     /// its template. On any other side they stay queued in the session.
     /// An offer's movies come in the places the session queued them.
+    /// Over the spaceport, the texts it closed or dropped are told to
+    /// flight first and last (`close_mission_texts`).
     fn show_mission_texts(&mut self) {
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
+            close_mission_texts(spaceport, flight);
             spaceport.show_mission_texts(flight.take_mission_texts());
+            close_mission_texts(spaceport, flight);
             return;
         }
         if self.side != Side::Flight {
@@ -2657,6 +2661,7 @@ impl AppScreen {
         }
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
+        close_mission_texts(spaceport, self.flight.as_mut().expect(ENTERED));
         open_bar_map(spaceport, self.flight.as_mut().expect(ENTERED));
         // A new opening clears what lasts one, and the outfitter it opened
         // on was the cached one: it shows the flight's afresh, or, listing
@@ -3111,6 +3116,20 @@ fn open_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<G
 fn close_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
     if let Some(dialog) = spaceport.take_port_dialog_closed() {
         flight.close_port_dialog(dialog);
+    }
+}
+
+/// Tells `flight` of each mission text the spaceport has closed since it
+/// was last told, as it closed or was dropped
+/// ([`SpaceportView::take_texts_closed`]): flight redraws the bar as the
+/// original's caller of each text does as it returns
+/// ([`FlightView::close_mission_text`]). It runs after the spaceport's
+/// input, before the closings that wait for the texts redraw, and as the
+/// texts queued since are shown, after every input and tick, so a text
+/// closed on a movie's tick, or dropped, redraws before the next frame.
+fn close_mission_texts(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    for _ in 0..spaceport.take_texts_closed() {
+        flight.close_mission_text();
     }
 }
 
@@ -11311,6 +11330,61 @@ pub(super) mod tests {
             }
             _ => None,
         })
+    }
+
+    /// [`barred_outfitting_data`]'s ship and tank, where Alpha Prime's
+    /// spaceport offers mission 130 ([`venue_mission`]), whose `OnAccept`
+    /// is `G133`, the tank, and whose `BriefText` is `dësc` 5000, "Go.".
+    fn barred_briefing_data() -> Rc<GameData> {
+        let mut tank = booster_record(b"");
+        put_i16s(&mut tank, 0x02, &[0]);
+        put_i16s(&mut tank, 0x06, &[12, 100]);
+        tank[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+        let mut mission = venue_mission(SPACEPORT);
+        put_i16s(&mut mission, 0x34, &[5000]);
+        mission[0x15B..0x15F].copy_from_slice(b"G133");
+        let fork = barred(game_data_fork(true, true, true, 100, b"", b"", None))
+            .resource(Outfit::TYPE, 133, Some(b"Tank"), &tank)
+            .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
+            .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &desc_of("Job."))
+            .resource(Desc::TYPE, 5000, Some(b"Brief"), &desc_of("Go."));
+        let mut built = fork.build();
+        let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
+        built.put_u16(first + 0x0A, 300);
+        loaded_bytes(built.bytes)
+    }
+
+    #[test]
+    fn a_spaceport_brief_text_shows_over_the_pre_accept_bar_and_its_done_redraws_it() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, barred_briefing_data());
+        assert!(spaceport(&screen).offer_dialog().is_some(), "offered");
+        let full = fuel_width(&drawn(&screen)).expect("some fuel");
+        edit(
+            &mut screen,
+            PilotEdit::Reserve(nova_sim::Reserve::Fuel, 150.0),
+        );
+        assert_eq!(fuel_width(&drawn(&screen)), Some(full), "held");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(130)]);
+        assert!(
+            spaceport(&screen).mission_text().is_some(),
+            "the brief shows"
+        );
+        let half = fuel_width(&drawn(&screen)).expect("some fuel");
+        assert!(
+            half < full,
+            "the dialog's redraw before the accept: {half} of {full}"
+        );
+        screen.input(&key(Key::Enter, true));
+        assert!(spaceport(&screen).mission_text().is_none(), "closed");
+        let width = fuel_width(&drawn(&screen)).expect("some fuel");
+        assert!(
+            width > half,
+            "its close redraws OnAccept's tank, fuel and all: {width}"
+        );
+        screen.flight.as_mut().expect("flying").refresh_status();
+        assert_eq!(fuel_width(&drawn(&screen)), Some(width), "as it is now");
     }
 
     #[test]

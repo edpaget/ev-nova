@@ -490,6 +490,10 @@ pub struct SpaceportView {
     /// mission info screen under them, over whatever else is open: given
     /// with the mission screens, when the spaceport has its dialog.
     dialogs: Option<MissionDialogs>,
+    /// How many mission texts were dropped, with no dialogs to show them,
+    /// since the texts closed were last taken
+    /// ([`SpaceportView::take_texts_closed`]).
+    texts_dropped: usize,
     /// The player info screen's dialog and its Yes/No dialog, once given.
     #[allow(clippy::type_complexity)] // Two templates.
     player_info_dialogs: Option<(
@@ -615,6 +619,7 @@ impl SpaceportView {
             offer_clock: RuleSource::Engine,
             movies: Movies::none(),
             dialogs: None,
+            texts_dropped: 0,
             player_info_dialogs: None,
             player_info_requested: false,
             player_info: None,
@@ -1500,9 +1505,29 @@ impl SpaceportView {
     /// it closes (`_ShowTextDialog` @0x5a752), and each offer movie among
     /// them in its place ([`MissionDialogs::show_texts`]).
     pub fn show_mission_texts(&mut self, texts: impl IntoIterator<Item = impl Into<MissionShown>>) {
-        if let Some(dialogs) = &mut self.dialogs {
-            dialogs.show_texts(texts);
+        match &mut self.dialogs {
+            Some(dialogs) => dialogs.show_texts(texts),
+            None => {
+                self.texts_dropped += texts
+                    .into_iter()
+                    .map(Into::into)
+                    .filter(|shown| matches!(shown, MissionShown::Text(_)))
+                    .count();
+            }
         }
+    }
+
+    /// How many of the mission texts shown have closed since this was
+    /// last taken, each once ([`MissionDialogs::take_texts_closed`]);
+    /// without the dialogs to show them, each closes as it is dropped.
+    /// Whoever flies the ship redraws the bar for each
+    /// ([`FlightView::close_mission_text`](crate::flight::FlightView::close_mission_text)).
+    pub fn take_texts_closed(&mut self) -> usize {
+        std::mem::take(&mut self.texts_dropped)
+            + self
+                .dialogs
+                .as_mut()
+                .map_or(0, MissionDialogs::take_texts_closed)
     }
 
     /// The spaceport with the player info screen's dialog, `template`
@@ -4633,6 +4658,29 @@ mod tests {
             Some(PortDialog::MissionComputer)
         );
         assert_eq!(view.take_port_dialog_closed(), None, "once");
+    }
+
+    #[test]
+    fn each_mission_text_closing_is_told_once_and_with_no_dialogs_at_once() {
+        let text = |text: &str| MissionText {
+            kind: MissionTextKind::Brief,
+            mission: MissionId(130),
+            text: text.to_owned(),
+            graphic: None,
+            movie: None,
+        };
+        let mut view = missioned();
+        view.show_mission_texts(vec![text("First."), text("Second.")]);
+        assert_eq!(view.take_texts_closed(), 0, "shown");
+        done(&mut view);
+        assert_eq!(view.take_texts_closed(), 1, "the first");
+        assert_eq!(view.take_texts_closed(), 0, "once");
+        done(&mut view);
+        assert_eq!(view.take_texts_closed(), 1, "the second");
+        let mut bare = earth();
+        bare.show_mission_texts(vec![text("Lost."), text("Gone.")]);
+        assert_eq!(bare.take_texts_closed(), 2, "dropped, so closed at once");
+        assert_eq!(bare.take_texts_closed(), 0, "once");
     }
 
     #[test]
