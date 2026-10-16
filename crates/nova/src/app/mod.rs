@@ -246,6 +246,15 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// First, a change of the preferences the screen reports is applied to
     /// the core (the sound ones) and saved through the keeper (all of
     /// them), each when there is one; a failed save is kept as a warning.
+    ///
+    /// Then, unless the core is still waiting on a keyed click (its 600
+    /// playing, [`AudioCore::click_waiting`]), the screen is told the
+    /// click has ended ([`Screen::keyed_click_ended`]), and what that runs
+    /// is taken in the same way at once: its sounds and the screen it
+    /// opens reach the core before the frame is drawn. The original spins
+    /// until 600 ends (`_PlayMainScreenClickSound` @0x177e0-0x177f2); here
+    /// the end is noticed at the next feed, an input or a frame, which is
+    /// still before any frame shows the menu's choice undone.
     fn feed_audio(&mut self) {
         if let Some(prefs) = self.screen.take_prefs() {
             let current = match (&self.settings, &self.audio) {
@@ -266,11 +275,21 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 self.warnings.push(warning);
             }
         }
+        self.update_audio();
+        if !self.audio.as_ref().is_some_and(AudioCore::click_waiting) {
+            self.screen.keyed_click_ended();
+            self.update_audio();
+        }
+        self.write_diagnostics();
+    }
+
+    /// Gives the audio core, if there is one, the screen shown and the
+    /// sounds the screen has made; without one, the sounds are let go.
+    fn update_audio(&mut self) {
         let sounds = self.screen.take_sounds();
         if let Some(core) = &mut self.audio {
             core.update(self.screen.now_showing(), &sounds);
         }
-        self.write_diagnostics();
     }
 
     /// Writes each diagnostic the screen reports as a line through the
@@ -323,6 +342,17 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// time since the last redraw, renders its draw list through `gpu` and
     /// asks the window for the next redraw. Closing the window, or a screen
     /// asking to quit, exits.
+    ///
+    /// The original's `_MyModalDialog` also redraws the whole status bar
+    /// on an update event for its game window (@0x59b17-0x59be6:
+    /// `_RedrawStatus(0)` and `_RefreshSAT`). Under Mac OS X's buffered
+    /// windows that window gets one only when something invalidates it:
+    /// the main screen, a resume from the background in full screen
+    /// (@0x59a58), or a Quit the player declines (`_QuitAEVTHandler`
+    /// @0x56228-0x56258). Ours always runs in a window, with no full-screen
+    /// mode, and a close quits without asking, so that redraw is
+    /// unreachable and isn't ported. The main screen's leaves the bar to
+    /// be drawn at the start of flight, as ours does.
     ///
     /// With a developer overlay, see [`App::handle_routed`].
     pub fn handle(
@@ -439,6 +469,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 self.feed_audio();
                 self.take_screen_warnings();
                 self.last_redraw = self.last_redraw.max(elapsed);
+                if self.screen.take_quit() {
+                    self.quit();
+                    return game(Control::Exit);
+                }
                 let resync = self.resync_pointer();
                 let mut list = DrawList::new();
                 self.screen.draw(&mut list);
@@ -548,13 +582,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.forget_sync_unless_drawing();
         self.feed_audio();
         self.take_screen_warnings();
-        match action {
-            ScreenAction::None => Control::Continue,
-            ScreenAction::Quit => {
-                self.quit();
-                Control::Exit
-            }
+        if action == ScreenAction::Quit || self.screen.take_quit() {
+            self.quit();
+            return Control::Exit;
         }
+        Control::Continue
     }
 
     /// Tells the screen the app is quitting, and keeps what it reports.
@@ -674,6 +706,8 @@ mod tests {
         warnings: Vec<String>,
         diagnostics: Vec<Diagnostic>,
         hides_pointer: bool,
+        /// Whether to ask to quit, once, outside an input's action.
+        asks_quit: bool,
         /// How many inputs had arrived at each draw.
         drawn_after: std::cell::RefCell<Vec<usize>>,
     }
@@ -719,6 +753,10 @@ mod tests {
 
         fn hides_pointer(&self) -> bool {
             self.hides_pointer
+        }
+
+        fn take_quit(&mut self) -> bool {
+            std::mem::take(&mut self.asks_quit)
         }
     }
 
@@ -1699,21 +1737,25 @@ mod tests {
         }
     }
 
+    /// `id` played at the default effects volume.
     fn play(id: i16) -> AudioCommand {
         AudioCommand::Play {
             sound: nova_data::SoundId(id),
-            volume: Volume::FULL,
+            volume: AudioSettings::default().effects_volume,
         }
     }
 
-    const MUSIC: AudioCommand = AudioCommand::StartMusic {
-        volume: Volume::FULL,
-    };
+    /// The music started at its default volume.
+    fn music() -> AudioCommand {
+        AudioCommand::StartMusic {
+            volume: AudioSettings::default().music_volume,
+        }
+    }
 
-    /// An app over a screen on the galaxy map, with audio recorded.
+    /// An app over a screen on the main menu, with audio recorded.
     fn sounding(window: &FakeWindow) -> (App<NoImages, SoundingScreen>, AudioLog) {
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: vec![Sound::Sim(SimSound::JumpBegan)],
         };
         let audio = RecordingAudio::new();
@@ -1726,7 +1768,7 @@ mod tests {
     fn attaching_audio_takes_in_the_screen_and_its_sounds_at_once() {
         let window = FakeWindow::new((1024, 768), 1.0);
         let (app, log) = sounding(&window);
-        assert_eq!(*log.borrow(), [MUSIC, play(128)]);
+        assert_eq!(*log.borrow(), [music(), play(128)]);
         assert_eq!(app.screen().sounds, [], "taken");
     }
 
@@ -1755,7 +1797,12 @@ mod tests {
         app.handle(key(Key::Tab, true), &mut window, &mut gpu);
         assert_eq!(
             log.borrow()[3..],
-            [AudioCommand::StopMusic, play(600)],
+            [
+                AudioCommand::FadeOutMusic(nova_audio::music_fade(
+                    AudioSettings::default().music_volume
+                )),
+                play(600)
+            ],
             "the screen shown, then its sounds"
         );
     }
@@ -1776,6 +1823,156 @@ mod tests {
         };
         app.handle(redraw, &mut window, &mut gpu);
         assert_eq!(app.screen().sounds, []);
+    }
+
+    /// Clicks a key on each key press, holding an action for the click;
+    /// when told the click has ended, runs it: counts it, notes what the
+    /// audio had been asked for by then, and sounds a jump.
+    struct KeyedScreen {
+        held: bool,
+        ran: usize,
+        logged_when_run: Vec<AudioCommand>,
+        log: AudioLog,
+        sounds: Vec<Sound>,
+    }
+
+    impl Screen for KeyedScreen {
+        fn input(&mut self, input: &Input) -> ScreenAction {
+            if let Input::Key { pressed: true, .. } = input {
+                self.held = true;
+                self.sounds.push(Sound::Ui(UiSound::ButtonKeyed));
+            }
+            ScreenAction::None
+        }
+
+        fn tick(&mut self, _dt: Duration) {}
+
+        fn draw(&self, _list: &mut DrawList) {}
+
+        fn keyed_click_ended(&mut self) {
+            if std::mem::take(&mut self.held) {
+                self.ran += 1;
+                self.logged_when_run = self.log.borrow().clone();
+                self.sounds.push(Sound::Sim(SimSound::JumpBegan));
+            }
+        }
+
+        fn take_sounds(&mut self) -> Vec<Sound> {
+            std::mem::take(&mut self.sounds)
+        }
+
+        fn now_showing(&self) -> Option<Showing> {
+            Some(Showing::ShipBrowser)
+        }
+    }
+
+    /// An app over a [`KeyedScreen`], its audio recorded, and a handle on
+    /// the audio to say what is playing.
+    fn keyed(window: &FakeWindow) -> (App<NoImages, KeyedScreen>, AudioLog, RecordingAudio) {
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let handle = audio.clone();
+        let screen = KeyedScreen {
+            held: false,
+            ran: 0,
+            logged_when_run: Vec::new(),
+            log: log.clone(),
+            sounds: Vec::new(),
+        };
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+        (
+            App::new(window, NoImages, screen).with_audio(core),
+            log,
+            handle,
+        )
+    }
+
+    #[test]
+    fn a_keyed_click_is_ended_only_at_a_feed_after_600_has_stopped() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let (mut app, log, audio) = keyed(&window);
+        let mut gpu = RecordingGpu::new();
+        audio.set_playing(nova_data::SoundId(600), true);
+        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        assert_eq!(*log.borrow(), [play(600)]);
+        assert_eq!(app.screen().ran, 0, "600 playing");
+        let redraw = |ms| WindowEvent::Redraw {
+            elapsed: Duration::from_millis(ms),
+        };
+        app.handle(redraw(16), &mut window, &mut gpu);
+        app.handle(key(Key::Up, false), &mut window, &mut gpu);
+        assert_eq!(app.screen().ran, 0, "still playing");
+        audio.set_playing(nova_data::SoundId(600), false);
+        app.handle(redraw(32), &mut window, &mut gpu);
+        assert_eq!(app.screen().ran, 1, "600 has stopped");
+        assert_eq!(
+            app.screen().logged_when_run,
+            [play(600), play(601)],
+            "after 601 has started"
+        );
+        assert_eq!(
+            *log.borrow(),
+            [play(600), play(601), play(128)],
+            "what it ran sounded in the same pass"
+        );
+        app.handle(redraw(48), &mut window, &mut gpu);
+        assert_eq!(app.screen().ran, 1, "once");
+    }
+
+    #[test]
+    fn with_sound_off_or_no_audio_a_keyed_click_is_ended_in_its_own_input() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut gpu = RecordingGpu::new();
+        let (mut app, log, audio) = keyed(&window);
+        audio.set_playing(nova_data::SoundId(600), true);
+        app.audio.as_mut().expect("audio").set_sound(false);
+        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        assert_eq!(app.screen().ran, 1, "sound off");
+        assert_eq!(*log.borrow(), [AudioCommand::StopEffects], "nothing played");
+
+        let screen = KeyedScreen {
+            held: false,
+            ran: 0,
+            logged_when_run: Vec::new(),
+            log: AudioLog::default(),
+            sounds: Vec::new(),
+        };
+        let mut app = App::new(&window, NoImages, screen);
+        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        assert_eq!(app.screen().ran, 1, "no audio");
+        assert_eq!(app.screen().sounds, [], "the sounds let go");
+    }
+
+    #[test]
+    fn a_quit_asked_on_a_tick_exits_before_the_frame_is_drawn() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        app.screen.asks_quit = true;
+        let redraw = WindowEvent::Redraw {
+            elapsed: Duration::from_millis(16),
+        };
+        assert_eq!(handle(&mut app, &mut window, redraw), Control::Exit);
+        assert_eq!(app.screen.quits, 1, "told the app quits");
+        assert_eq!(app.screen.ticks.len(), 1, "after its tick");
+        assert!(app.screen.drawn_after.borrow().is_empty(), "not drawn");
+        assert_eq!(app.take_warnings(), ["quit 1"]);
+    }
+
+    #[test]
+    fn a_quit_asked_after_an_input_exits() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        app.screen.asks_quit = true;
+        assert_eq!(
+            handle(&mut app, &mut window, key(Key::Up, true)),
+            Control::Exit
+        );
+        assert_eq!(app.screen.quits, 1);
+        assert_eq!(
+            handle(&mut app, &mut window, key(Key::Up, false)),
+            Control::Continue,
+            "asked once"
+        );
     }
 
     // Settings.
@@ -1866,7 +2063,7 @@ mod tests {
         let (saved, _) = crate::settings::SettingsKeeper::open(store.clone());
         assert_eq!(
             saved.settings().audio.effects_volume,
-            Volume::new(4.0 / 7.0)
+            nova_audio::settings::effects_level_volume(4)
         );
         app.handle(key(Key::Space, true), &mut window, &mut gpu);
         assert_eq!(store.writes(), 2, "no change, no save");
@@ -1917,7 +2114,7 @@ mod tests {
         let log = audio.log();
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: Vec::new(),
         };
         let mut app = App::new(
@@ -1934,7 +2131,14 @@ mod tests {
         app.handle(key(Key::Up, true), &mut window, &mut gpu);
         assert_eq!(
             *log.borrow(),
-            [AudioCommand::StopMusic, play(600)],
+            [
+                AudioCommand::SetMusicVolume(nova_audio::settings::music_level_volume(7)),
+                AudioCommand::StopMusic,
+                AudioCommand::Play {
+                    sound: nova_data::SoundId(600),
+                    volume: nova_audio::settings::effects_level_volume(7),
+                },
+            ],
             "the change, then the sounds"
         );
     }
@@ -1946,13 +2150,13 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let between = Volume::new(0.5);
+        let between = Volume::new(0.26);
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(AudioSettings {
             effects_volume: between,
             ..AudioSettings::default()
         });
         let screen = SoundingScreen {
-            showing: Showing::GalaxyMap,
+            showing: Showing::MainMenu,
             sounds: Vec::new(),
         };
         let mut app = App::new(
@@ -1969,13 +2173,14 @@ mod tests {
         assert_eq!(
             *log.borrow(),
             [
+                AudioCommand::SetMusicVolume(nova_audio::settings::music_level_volume(7)),
                 AudioCommand::StopMusic,
                 AudioCommand::Play {
                     sound: nova_data::SoundId(600),
                     volume: between,
                 },
             ],
-            "level 4 already: the effects volume is kept"
+            "effects level 4 already: the effects volume is kept"
         );
     }
 

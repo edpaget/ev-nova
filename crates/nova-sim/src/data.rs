@@ -1,8 +1,8 @@
-//! The pilot, traffic, combat and comm catalogs over the game data: a
-//! thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
-//! `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt` and `mïsn` records, its
-//! string lists and its stellar sprites; and a `shän`'s blink fields as a
-//! [`Blink`].
+//! The pilot, traffic, combat, asteroid and comm catalogs over the game
+//! data: a thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`,
+//! `wëap`, `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt`,
+//! `mïsn` and `röid` records, its string lists and its stellar and
+//! asteroid sprites; and a `shän`'s blink fields as a [`Blink`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,6 +19,7 @@ use nova_data::records::nebula::Nebula;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
 use nova_data::records::rank::Rank;
+use nova_data::records::roid::Roid;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -31,16 +32,19 @@ use nova_data::sound::decode_snd;
 use nova_data::{GameData, Record, shot_spin_id, stellar_spin_id};
 use nova_rsrc::ResType;
 
+use crate::asteroid::KINDS;
 use crate::blink::Blink;
+use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
-    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
-    FleetRecord, FrameSize, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
-    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipExits, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
+    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, FrameSize,
+    GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
+    ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
+    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::escort::EscortClass;
@@ -49,11 +53,41 @@ use crate::handling::ShipFields;
 use crate::nebula;
 use crate::warp::SoundLength;
 
+/// The `spïn` of asteroid type 0's master sprite: type `n`'s is 800 +
+/// `n` (`_LoadSprites` @0x20bb7).
+pub const FIRST_ASTEROID_SPIN: i16 = 800;
+
+/// The `spïn` of box graphic 0's master sprite: graphic `n`'s is 500 +
+/// `n`, the box masters `_InitSprites` loads (500-504).
+pub const FIRST_BOX_SPIN: i16 = 500;
+
+/// The first `röid`, asteroid type 0's.
+const FIRST_ROID: i16 = 128;
+
 /// The `snd ` resource type.
 const SND: ResType = ResType::new(*b"snd ");
 /// The warp-up sound, `snd ` 128, whose length the warp's clock reads
 /// (`_LoadSounds` @0x1c0b5-0x1c12d).
 const WARP_UP_SOUND: i16 = 128;
+/// The double-time warp-up sound, `snd ` 129 "Warp up x2", whose length
+/// the warp's clock reads in double time (`_LoadSounds`
+/// @0x1c0b5-0x1c12d, `_WarpSoundDuration` @0x8210-0x8219).
+const WARP_UP_DOUBLE_SOUND: i16 = 129;
+/// The warp-out sound, `snd ` 130, which an arrival plays (`_LoadSounds`
+/// @0x1c152, `_HandlePlayer` @0x6bc08 and @0x6c706).
+const WARP_OUT_SOUND: i16 = 130;
+
+/// The length of `data`'s `snd ` `id` as `_ParseSndHeader` gives it: its
+/// frames and the whole part of its rate; none when it is missing or
+/// cannot be decoded.
+fn sound_length(data: &GameData, id: i16) -> Option<SoundLength> {
+    let snd = data.resource(SND, id)?;
+    let pcm = decode_snd(snd.resource.data()).ok()?;
+    Some(SoundLength {
+        frames: u32::try_from(pcm.frames()).unwrap_or(u32::MAX),
+        rate: pcm.sample_rate().fixed() >> 16,
+    })
+}
 
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
@@ -217,7 +251,6 @@ impl PilotCatalog for GameData {
                     frame_size,
                     flags: stellar.flags.bits(),
                     min_status: stellar.min_status,
-                    landing_sound: landing_sound(stellar.cust_snd_id),
                     tech_level: stellar.tech_level,
                     special_tech,
                     govt: stellar.govt,
@@ -229,6 +262,14 @@ impl PilotCatalog for GameData {
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
                     exit_angle: stellar.cust_snd_id,
                     tribute: stellar.tribute,
+                    animation: SiteAnimation {
+                        delay: stellar.anim_delay,
+                        frame0_bias: stellar.frame0_bias,
+                        open_frame: stellar.cust_pic_id,
+                        type_frames: frame_count(self, stellar.graphic_type),
+                        dead_frames: dead_frame_size
+                            .map_or(0, |_| frame_count(self, stellar.dead_type)),
+                    },
                 })
             })
             .collect()
@@ -244,6 +285,7 @@ impl PilotCatalog for GameData {
                     links: system.con.into_iter().flatten().collect(),
                     govt: system.govt,
                     interference: system.interference,
+                    message: system.message,
                     stellars: system
                         .nav_def
                         .iter()
@@ -264,6 +306,14 @@ impl PilotCatalog for GameData {
             base_prices: strings(self, BASE_PRICES),
             price_patches: patches(self, PRICE_PATCHES),
         }
+    }
+
+    fn string_patch(&self, id: i16) -> StringPatch {
+        string_patch(self, id)
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        strings(self, BUOY_STRINGS)
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -384,6 +434,24 @@ impl PilotCatalog for GameData {
                     id: SystemId(id),
                     visibility: self.test_expr(system.visibility.as_str()).into(),
                 })
+            })
+            .collect()
+    }
+
+    /// One pass over every system's `nav_def`, reading each stellar but
+    /// not its sprites, as [`GameData::landing_sites`] would for every
+    /// system.
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let first = system
+                    .ok()?
+                    .record
+                    .nav_def
+                    .into_iter()
+                    .flatten()
+                    .find(|stellar| matches!(self.get::<Stellar>(stellar.0), Some(Ok(_))))?;
+                Some((SystemId(id), first))
             })
             .collect()
     }
@@ -601,12 +669,15 @@ impl PilotCatalog for GameData {
     }
 
     fn warp_sound(&self) -> Option<SoundLength> {
-        let snd = self.resource(SND, WARP_UP_SOUND)?;
-        let pcm = decode_snd(snd.resource.data()).ok()?;
-        Some(SoundLength {
-            frames: u32::try_from(pcm.frames()).unwrap_or(u32::MAX),
-            rate: pcm.sample_rate().fixed() >> 16,
-        })
+        sound_length(self, WARP_UP_SOUND)
+    }
+
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        sound_length(self, WARP_UP_DOUBLE_SOUND)
+    }
+
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        sound_length(self, WARP_OUT_SOUND)
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
@@ -650,9 +721,33 @@ const LAST_RANK: i16 = 255;
 /// original's `_LoadMasterStellarSprite` multiplies them
 /// (@0x1ed8c-0x1ed97).
 fn counts_frames(data: &GameData, graphic: i16) -> bool {
-    stellar_spin_id(graphic)
-        .and_then(|spin| data.get::<Spin>(spin)?.ok())
-        .is_some_and(|spin| i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles) > 0)
+    tiles(data, graphic).is_some_and(|tiles| tiles > 0)
+}
+
+/// Graphic type `graphic`'s frame count in `data`, its `spïn`'s `xTiles` ×
+/// `yTiles` as [`counts_frames`] reckons it: 0 when it does not read or is
+/// not above 0, and at most `u16::MAX`.
+fn frame_count(data: &GameData, graphic: i16) -> u16 {
+    stellar_spin_id(graphic).map_or(0, |spin_id| spin_frame_count(data, spin_id))
+}
+
+/// `spïn` `spin_id`'s frame count in `data`, its `xTiles` × `yTiles` in
+/// 32 bits: 0 when it does not read or is not above 0, and at most
+/// `u16::MAX`.
+fn spin_frame_count(data: &GameData, spin_id: i16) -> u16 {
+    spin_tiles(data, spin_id).map_or(0, |tiles| u16::try_from(tiles.max(0)).unwrap_or(u16::MAX))
+}
+
+/// Graphic type `graphic`'s `spïn`'s `xTiles` × `yTiles` in 32 bits, when
+/// it reads.
+fn tiles(data: &GameData, graphic: i16) -> Option<i32> {
+    spin_tiles(data, stellar_spin_id(graphic)?)
+}
+
+/// `spïn` `spin_id`'s `xTiles` × `yTiles` in 32 bits, when it reads.
+fn spin_tiles(data: &GameData, spin_id: i16) -> Option<i32> {
+    let spin = data.get::<Spin>(spin_id)?.ok()?;
+    Some(i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles))
 }
 
 /// Reads the records afresh on every call; a session asks each time it
@@ -705,6 +800,8 @@ impl TrafficCatalog for GameData {
                     govt: fleet.govt,
                     link_syst: fleet.link_syst,
                     appear_on: self.test_expr(fleet.appear_on.as_str()).into(),
+                    quote: fleet.quote.map(|id| id.0).filter(|&quote| quote > 0),
+                    flags: fleet.flags.0,
                 })
             })
             .collect()
@@ -869,6 +966,10 @@ impl CombatCatalog for GameData {
                     ionize_color: record.ionize_color,
                     jam_vuln: record.jam_vuln,
                     frame: shot_frame(self, record.graphic),
+                    hit_particles: record.hit_particles,
+                    hit_part_life: record.hit_part_life,
+                    hit_part_vel: record.hit_part_vel,
+                    hit_part_color: record.hit_part_color,
                 })
             })
             .collect()
@@ -945,10 +1046,71 @@ impl CombatCatalog for GameData {
     }
 }
 
+/// Reads the records afresh on every call; a session asks once, when it
+/// starts.
+impl AsteroidCatalog for GameData {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (0..KINDS as u8)
+            .filter_map(|kind| {
+                let roid = self.get::<Roid>(FIRST_ROID + i16::from(kind))?.ok()?.record;
+                let spin_id = FIRST_ASTEROID_SPIN + i16::from(kind);
+                let frame_size = self
+                    .spin_sheet(spin_id)
+                    .ok()
+                    .map(|spin| (spin.sheet.frame_width(), spin.sheet.frame_height()));
+                Some(AsteroidTypeRecord {
+                    kind,
+                    strength: roid.strength,
+                    spin_rate: roid.spin_rate,
+                    frames: spin_frame_count(self, spin_id),
+                    frame_size,
+                    yield_type: roid.yield_type,
+                    yield_qty: roid.yield_qty,
+                    part_count: roid.part_count,
+                    part_color: roid.part_color,
+                    frag_types: [roid.frag_type1, roid.frag_type2]
+                        .map(|frag| frag.map_or(-1, |id| id.0)),
+                    frag_count: roid.frag_count,
+                    explode_type: roid.explode_type,
+                    mass: roid.mass,
+                })
+            })
+            .collect()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        std::array::from_fn(|graphic| {
+            // In 0..5.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let spin_id = FIRST_BOX_SPIN + graphic as i16;
+            self.spin_sheet(spin_id)
+                .ok()
+                .map(|spin| (spin.sheet.frame_width(), spin.sheet.frame_height()))
+        })
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let record = system.ok()?.record;
+                Some(AsteroidFieldRecord {
+                    system: SystemId(id),
+                    count: record.asteroids,
+                    types: record.ast_types.bits(),
+                })
+            })
+            .collect()
+    }
+}
+
 /// Reads the string list afresh on every call.
 impl CommCatalog for GameData {
     fn string_list(&self, id: i16) -> Vec<String> {
         strings(self, id)
+    }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        string_patch(self, id)
     }
 }
 
@@ -1103,26 +1265,29 @@ const BASE_PRICES: i16 = 4004;
 /// 9300 + n patches commodity n's base price.
 const PRICE_PATCHES: i16 = 9300;
 
-/// `data`'s six `'STR '` patches from `first` up, raw. A zero-byte one is
-/// [`StringPatch::Empty`]; any other that cannot be read is
+/// `data`'s six `'STR '` patches from `first` up, raw, each as
+/// [`string_patch`] reads it.
+fn patches(data: &GameData, first: i16) -> [StringPatch; 6] {
+    std::array::from_fn(|n| string_patch(data, first + i16::try_from(n).expect("one of six")))
+}
+
+/// `data`'s `'STR '` `id`, raw, from whichever file holds it. A zero-byte
+/// one is [`StringPatch::Empty`]; any other that cannot be read is
 /// [`StringPatch::Unreadable`]. Bytes past a readable string are ignored,
 /// as the original reads only as many as its length byte says.
-fn patches(data: &GameData, first: i16) -> [StringPatch; 6] {
-    std::array::from_fn(|n| {
-        let id = first + i16::try_from(n).expect("one of six");
-        match data.get::<StrResource>(id) {
-            None => StringPatch::Absent,
-            Some(Ok(entry)) => StringPatch::Text(entry.record.text.as_str().to_owned()),
-            Some(Err(_)) => {
-                let bytes = data.resource(StrResource::TYPE, id);
-                if bytes.is_some_and(|bytes| bytes.resource.data().is_empty()) {
-                    StringPatch::Empty
-                } else {
-                    StringPatch::Unreadable
-                }
+fn string_patch(data: &GameData, id: i16) -> StringPatch {
+    match data.get::<StrResource>(id) {
+        None => StringPatch::Absent,
+        Some(Ok(entry)) => StringPatch::Text(entry.record.text.as_str().to_owned()),
+        Some(Err(_)) => {
+            let bytes = data.resource(StrResource::TYPE, id);
+            if bytes.is_some_and(|bytes| bytes.resource.data().is_empty()) {
+                StringPatch::Empty
+            } else {
+                StringPatch::Unreadable
             }
         }
-    })
+    }
 }
 
 /// Every string of `data`'s `STR#` `id`; none when it is missing or
@@ -1138,17 +1303,6 @@ fn strings(data: &GameData, id: i16) -> Vec<String> {
         .collect()
 }
 
-/// The first stellar landing sound: the community *EV Nova Resource ID
-/// Guide* gives `snd ` 10000 and up to "custom stellar landing sounds".
-const FIRST_LANDING_SOUND: i16 = 10_000;
-
-/// A `spöb`'s `CustSndID` as its landing sound: from
-/// [`FIRST_LANDING_SOUND`] up. Anything below is none: -1, 0, and the
-/// angle hypergates and wormholes keep in the field (stock 120).
-fn landing_sound(cust_snd_id: i16) -> Option<SoundId> {
-    (cust_snd_id >= FIRST_LANDING_SOUND).then_some(SoundId(cust_snd_id))
-}
-
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -1158,6 +1312,7 @@ mod tests {
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::disaster::Disaster;
     use nova_data::records::junk::Junk;
+    use nova_data::records::roid::Roid;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
     use nova_data::records::string_list::StrList;
@@ -1168,9 +1323,9 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, FrameSize, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties,
-        ShipExits, StarSystem, StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId,
-        WeaponRecord,
+        AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, DisasterId, FrameSize, GateSite,
+        GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipExits, StarSystem, StartDate,
+        StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test, TestExpr};
@@ -1818,6 +1973,12 @@ mod tests {
 
     /// `snd ` 128 of `samples` 8-bit mono samples at 22254.54 Hz.
     fn warp_up(samples: usize) -> (ResType, i16, Vec<u8>) {
+        let (ty, _, bytes) = warp_up_as(129, samples);
+        (ty, 128, bytes)
+    }
+
+    /// `snd ` `id` of `samples` 8-bit mono samples at 22254.54 Hz.
+    fn warp_up_as(id: i16, samples: usize) -> (ResType, i16, Vec<u8>) {
         use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
         let snd = SndBuilder::new(
             SndFormat::One,
@@ -1828,7 +1989,7 @@ mod tests {
                 samples: vec![0x80; samples],
             },
         );
-        (ResType::new(*b"snd "), 128, snd.bytes())
+        (ResType::new(*b"snd "), id, snd.bytes())
     }
 
     #[test]
@@ -1860,6 +2021,74 @@ mod tests {
         let broken = bytes[..bytes.len() - 10].to_vec();
         assert_eq!(
             store(&[(ty, 128, broken)]).warp_sound(),
+            None,
+            "undecodable"
+        );
+    }
+
+    #[test]
+    fn the_double_time_warp_sound_is_snd_129s() {
+        let data = store(&[warp_up(1000), warp_up_as(129, 44_508)]);
+        assert_eq!(
+            data.warp_sound_double_time(),
+            Some(SoundLength {
+                frames: 44_508,
+                rate: 22_254
+            })
+        );
+        assert_eq!(
+            data.warp_sound().map(|sound| sound.frames),
+            Some(1000),
+            "128 apart"
+        );
+    }
+
+    #[test]
+    fn the_warp_out_sound_is_snd_130s() {
+        let data = store(&[warp_up(1000), warp_up_as(130, 44_508)]);
+        assert_eq!(
+            data.warp_out_sound(),
+            Some(SoundLength {
+                frames: 44_508,
+                rate: 22_254
+            })
+        );
+        assert_eq!(
+            data.warp_sound().map(|sound| sound.frames),
+            Some(1000),
+            "128 apart"
+        );
+    }
+
+    #[test]
+    fn without_a_readable_snd_130_there_is_no_warp_out_sound() {
+        assert_eq!(store(&[]).warp_out_sound(), None);
+        assert_eq!(
+            store(&[warp_up(44_508), warp_up_as(129, 44_508)]).warp_out_sound(),
+            None,
+            "128 and 129 are not it"
+        );
+        let (ty, id, bytes) = warp_up_as(130, 44_508);
+        let broken = bytes[..bytes.len() - 10].to_vec();
+        assert_eq!(
+            store(&[(ty, id, broken)]).warp_out_sound(),
+            None,
+            "undecodable"
+        );
+    }
+
+    #[test]
+    fn without_a_readable_snd_129_there_is_no_double_time_warp_sound() {
+        assert_eq!(store(&[]).warp_sound_double_time(), None);
+        assert_eq!(
+            store(&[warp_up(44_508)]).warp_sound_double_time(),
+            None,
+            "128 is not it"
+        );
+        let (ty, id, bytes) = warp_up_as(129, 44_508);
+        let broken = bytes[..bytes.len() - 10].to_vec();
+        assert_eq!(
+            store(&[(ty, id, broken)]).warp_sound_double_time(),
             None,
             "undecodable"
         );
@@ -2048,6 +2277,36 @@ mod tests {
     }
 
     #[test]
+    fn each_systems_first_stellar_is_the_first_of_its_landing_sites() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[999, 129, 128])),
+            (System::TYPE, 131, system_with(&[])),
+            (System::TYPE, 132, system_with(&[129, 128, 130])),
+            (System::TYPE, 133, short(system_with(&[128]))),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+            (Stellar::TYPE, 130, stellar(0, 0, 0, 1, 0)),
+        ]);
+        let first = data.first_stellars();
+        assert_eq!(
+            first,
+            [
+                (SystemId(130), StellarId(128)),
+                (SystemId(132), StellarId(128))
+            ],
+            "missing 999 and undecodable 129 passed over; 131 lists none and \
+             undecodable 133 is none"
+        );
+        let landing: Vec<_> = data
+            .star_map()
+            .iter()
+            .filter_map(|system| Some((system.id, data.landing_sites(system.id).first()?.id)))
+            .collect();
+        assert_eq!(first, landing, "as the landing sites give it");
+        assert_eq!(store(&[]).first_stellars(), []);
+    }
+
+    #[test]
     fn the_place_names_are_every_readable_stellars_and_systems_as_shown() {
         let data = store_named(&[
             (Stellar::TYPE, 128, Some("Earth"), stellar(0, 0, 0, 1, 0)),
@@ -2148,7 +2407,6 @@ mod tests {
                     frame_size: Some((12, 30)),
                     flags: 0x2001,
                     min_status: -32767,
-                    landing_sound: None,
                     tech_level: 0,
                     special_tech: [0; 8],
                     govt: None,
@@ -2160,6 +2418,11 @@ mod tests {
                     type_counts_frames: true,
                     exit_angle: 0,
                     tribute: 0,
+                    animation: SiteAnimation {
+                        type_frames: 1,
+                        dead_frames: 1,
+                        ..SiteAnimation::default()
+                    },
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -2167,7 +2430,6 @@ mod tests {
                     frame_size: None,
                     flags: 0x13,
                     min_status: 25,
-                    landing_sound: None,
                     tech_level: 0,
                     special_tech: [0; 8],
                     govt: None,
@@ -2179,6 +2441,10 @@ mod tests {
                     type_counts_frames: false,
                     exit_angle: 0,
                     tribute: 250,
+                    animation: SiteAnimation {
+                        dead_frames: 1,
+                        ..SiteAnimation::default()
+                    },
                 },
             ]
         );
@@ -2290,6 +2556,201 @@ mod tests {
         assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
     }
 
+    /// A `röid` of this `Strength` and `SpinRate`, with no yield, no
+    /// fragments and no explosion (-1 each) and nothing else.
+    fn roid(strength: i16, spin_rate: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Roid::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[strength, spin_rate, -1]);
+        put_i16s(&mut bytes, 0x0E, &[-1, -1, 0, -1]);
+        bytes
+    }
+
+    /// A `spïn` naming `rlëD` `image`, `x_tiles` across and `y_tiles` down.
+    fn spin_tiled(image: i16, x_tiles: i16, y_tiles: i16) -> Vec<u8> {
+        let mut bytes = spin(image);
+        put_i16s(&mut bytes, 0x08, &[x_tiles, y_tiles]);
+        bytes
+    }
+
+    #[test]
+    fn the_asteroid_types_are_each_roid_with_its_spins_frames_and_size() {
+        let data = store(&[
+            (Roid::TYPE, 128, roid(0, 120)),
+            (Roid::TYPE, 132, roid(250, -40)),
+            // Past the 16 types.
+            (Roid::TYPE, 144, roid(9, 9)),
+            (Spin::TYPE, 800, spin_tiled(1800, 6, 6)),
+            (RLED, 1800, sheet(48, 40)),
+            // Frames, but no sheet to size them.
+            (Spin::TYPE, 804, spin_tiled(1804, 2, 3)),
+        ]);
+        assert_eq!(
+            data.asteroid_types(),
+            [
+                AsteroidTypeRecord {
+                    kind: 0,
+                    strength: 0,
+                    spin_rate: 120,
+                    frames: 36,
+                    frame_size: Some((48, 40)),
+                    ..AsteroidTypeRecord::default()
+                },
+                AsteroidTypeRecord {
+                    kind: 4,
+                    strength: 250,
+                    spin_rate: -40,
+                    frames: 6,
+                    frame_size: None,
+                    ..AsteroidTypeRecord::default()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_box_frame_sizes_are_spins_500_to_504s_where_a_sheet_reads() {
+        let data = store(&[
+            (Spin::TYPE, 501, spin_tiled(1501, 6, 6)),
+            (RLED, 1501, sheet(22, 18)),
+            // Frames, but no sheet to size them.
+            (Spin::TYPE, 503, spin_tiled(1503, 6, 6)),
+            // Past the five box graphics.
+            (Spin::TYPE, 505, spin_tiled(1505, 6, 6)),
+            (RLED, 1505, sheet(30, 30)),
+        ]);
+        assert_eq!(
+            data.box_frame_sizes(),
+            [None, Some((22, 18)), None, None, None]
+        );
+    }
+
+    #[test]
+    fn an_asteroid_type_with_no_spin_has_no_frames_and_no_size() {
+        let data = store(&[(Roid::TYPE, 143, roid(5, 100))]);
+        assert_eq!(
+            data.asteroid_types(),
+            [AsteroidTypeRecord {
+                kind: 15,
+                strength: 5,
+                spin_rate: 100,
+                frames: 0,
+                frame_size: None,
+                ..AsteroidTypeRecord::default()
+            }]
+        );
+    }
+
+    #[test]
+    fn an_asteroid_type_carries_its_yield_particles_fragments_explosion_and_mass_raw() {
+        let mut bytes = roid(40, 150);
+        put_i16s(&mut bytes, 0x04, &[1003, 6, 9]);
+        bytes[0x0A..0x0E].copy_from_slice(&0x00AB_CDEF_u32.to_be_bytes());
+        put_i16s(&mut bytes, 0x0E, &[129, -1, 3, 1002, 75]);
+        let data = store(&[(Roid::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.asteroid_types(),
+            [AsteroidTypeRecord {
+                kind: 0,
+                strength: 40,
+                spin_rate: 150,
+                frames: 0,
+                frame_size: None,
+                yield_type: 1003,
+                yield_qty: 6,
+                part_count: 9,
+                part_color: 0x00AB_CDEF,
+                frag_types: [129, -1],
+                frag_count: 3,
+                explode_type: 1002,
+                mass: 75,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_asteroid_fields_are_each_systems_asteroids_and_ast_types() {
+        let mut rocky = system();
+        put_i16s(&mut rocky, 0x6A, &[12]);
+        rocky[0x94..0x96].copy_from_slice(&0x8011_u16.to_be_bytes());
+        let data = store(&[
+            (System::TYPE, 130, system()),
+            (System::TYPE, 131, rocky),
+            (System::TYPE, 132, short(system())),
+        ]);
+        assert_eq!(
+            data.asteroid_fields(),
+            [
+                AsteroidFieldRecord {
+                    system: SystemId(130),
+                    count: 0,
+                    types: 0,
+                },
+                AsteroidFieldRecord {
+                    system: SystemId(131),
+                    count: 12,
+                    types: 0x8011,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_landing_site_reads_its_animation_fields_and_its_sheets_frame_counts() {
+        let mut gate = dead_as(stellar(0, 0, 3, 1, 0), 6);
+        put_i16s(&mut gate, 0x18, &[17]);
+        put_i16s(&mut gate, 0x22, &[-1, 4]);
+        let tiles = |image, x: i16, y: i16| {
+            let mut bytes = spin(image);
+            put_i16s(&mut bytes, 0x08, &[x, y]);
+            bytes
+        };
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130])),
+            (Stellar::TYPE, 128, gate),
+            // A DeadType sheet that is not there counts no frames.
+            (Stellar::TYPE, 129, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+            // Tiles that multiply to 0 or less, or past a u16.
+            (Stellar::TYPE, 130, dead_as(stellar(0, 0, 7, 1, 0), 8)),
+            (Spin::TYPE, 1003, tiles(1003, 6, 7)),
+            (RLED, 1003, sheet(12, 30)),
+            (Spin::TYPE, 1004, tiles(1004, 2, 3)),
+            (RLED, 1004, sheet(12, 30)),
+            (Spin::TYPE, 1005, tiles(1005, 1, 9)),
+            (Spin::TYPE, 1006, tiles(1006, 4, 2)),
+            (RLED, 1006, sheet(50, 20)),
+            (Spin::TYPE, 1007, tiles(1007, -2, 3)),
+            (RLED, 1007, sheet(12, 30)),
+            (Spin::TYPE, 1008, tiles(1008, 300, 300)),
+            (RLED, 1008, sheet(12, 30)),
+        ]);
+        let animations: Vec<SiteAnimation> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.animation)
+            .collect();
+        assert_eq!(
+            animations,
+            [
+                SiteAnimation {
+                    delay: -1,
+                    frame0_bias: 4,
+                    open_frame: 17,
+                    type_frames: 42,
+                    dead_frames: 8,
+                },
+                SiteAnimation {
+                    type_frames: 6,
+                    ..SiteAnimation::default()
+                },
+                SiteAnimation {
+                    type_frames: 0,
+                    dead_frames: u16::MAX,
+                    ..SiteAnimation::default()
+                },
+            ]
+        );
+    }
+
     #[test]
     fn the_fallback_frame_size_is_spin_1000s_frame_when_it_reads() {
         assert_eq!(
@@ -2367,15 +2828,19 @@ mod tests {
     }
 
     #[test]
-    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_and_interference() {
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_interference_and_buoy()
+     {
         let data = store(&[
             (
                 System::TYPE,
                 131,
-                interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
+                buoyed(
+                    interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
+                    7,
+                ),
             ),
             (System::TYPE, 129, short(linked(0, 0, &[130]))),
-            (System::TYPE, 130, linked(-20, 40, &[])),
+            (System::TYPE, 130, buoyed(linked(-20, 40, &[]), -1)),
         ]);
         assert_eq!(
             data.star_map(),
@@ -2387,6 +2852,7 @@ mod tests {
                     govt: None,
                     stellars: vec![None; 16],
                     interference: 0,
+                    message: -1,
                 },
                 StarSystem {
                     id: SystemId(131),
@@ -2395,10 +2861,17 @@ mod tests {
                     govt: Some(GovtId(140)),
                     stellars: vec![None; 16],
                     interference: 45,
+                    message: 7,
                 },
             ]
         );
         assert_eq!(store(&[]).star_map(), []);
+    }
+
+    /// `bytes`, a `sÿst`, with this `Message` (offset 0x68).
+    fn buoyed(mut bytes: Vec<u8>, message: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x68, &[message]);
+        bytes
     }
 
     /// `bytes`, a `sÿst`, with this `Interference` (offset 0x6C).
@@ -2412,38 +2885,6 @@ mod tests {
         let mut bytes = stellar(0, 0, 0, 1, 0);
         put_i16s(&mut bytes, 0x1A, &[cust_snd_id]);
         bytes
-    }
-
-    #[test]
-    fn a_landing_sites_sound_is_its_custom_sound_from_10000_up() {
-        // Port Kane's 10032; none (-1), 0, the 120 a hypergate keeps there
-        // as an angle, and 9999, are no landing sound.
-        let sounds = [10_032, -1, 0, 120, 9_999, 10_000];
-        let mut resources = vec![(
-            System::TYPE,
-            130,
-            system_with(&[128, 129, 130, 131, 132, 133]),
-        )];
-        for (id, sound) in (128..).zip(sounds) {
-            resources.push((Stellar::TYPE, id, sounding(sound)));
-        }
-        let data = store(&resources);
-        let found: Vec<_> = data
-            .landing_sites(SystemId(130))
-            .iter()
-            .map(|site| site.landing_sound)
-            .collect();
-        assert_eq!(
-            found,
-            [
-                Some(SoundId(10_032)),
-                None,
-                None,
-                None,
-                None,
-                Some(SoundId(10_000)),
-            ]
-        );
     }
 
     #[test]
@@ -2675,6 +3116,48 @@ mod tests {
             ],
             "only 9300-9305 patch prices"
         );
+    }
+
+    #[test]
+    fn a_str_arrives_raw_from_any_file_by_its_id() {
+        let data = layered(
+            &[
+                (StrResource::TYPE, 1001, str_resource("base")),
+                (StrResource::TYPE, 1002, str_resource("base")),
+            ],
+            &[
+                (StrResource::TYPE, 1002, str_resource("plug-in")),
+                (StrResource::TYPE, 1003, Vec::new()),
+                (StrResource::TYPE, 1004, b"\x05ab".to_vec()),
+                (StrResource::TYPE, 1005, b"\x03Buoxyz".to_vec()),
+                (StrList::TYPE, 1006, str_list(&["a list"])),
+            ],
+        );
+        let cases = [
+            (1000, StringPatch::Absent),
+            (1001, StringPatch::Text("base".into())),
+            (1002, StringPatch::Text("plug-in".into())),
+            (1003, StringPatch::Empty),
+            (1004, StringPatch::Unreadable),
+            (1005, StringPatch::Text("Buo".into())),
+            (1006, StringPatch::Absent),
+        ];
+        for (id, patch) in cases {
+            assert_eq!(data.string_patch(id), patch, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_buoy_strings_are_str_1000_whole_and_none_when_missing() {
+        let data = layered(
+            &[
+                (StrList::TYPE, 1000, str_list(&["one", "two"])),
+                (StrList::TYPE, 1001, str_list(&["other"])),
+            ],
+            &[],
+        );
+        assert_eq!(data.buoy_strings(), ["one", "two"]);
+        assert_eq!(store(&[]).buoy_strings(), Vec::<String>::new());
     }
 
     const STOCK_NAMES: [&str; 6] = [
@@ -3009,6 +3492,8 @@ mod tests {
         put_i16s(&mut bytes, 0x68, &[4, 70, 6, 3]);
         put_i16s(&mut bytes, 0x4A, &[-40]);
         bytes[0x72..0x76].copy_from_slice(&0x0034_c2ff_u32.to_be_bytes());
+        put_i16s(&mut bytes, 0x4C, &[12, 45, 300]);
+        bytes[0x52..0x56].copy_from_slice(&0x0012_3456_u32.to_be_bytes());
         bytes
     }
 
@@ -3057,6 +3542,10 @@ mod tests {
             ionize_color: 0x0034_c2ff,
             jam_vuln: [40, 0, 7, 0],
             frame: None,
+            hit_particles: 12,
+            hit_part_life: 45,
+            hit_part_vel: 300,
+            hit_part_color: 0x0012_3456,
         };
         assert_eq!(
             data.weapons(),
@@ -3529,6 +4018,8 @@ mod tests {
                     govt: Some(GovtId(129)),
                     link_syst: -1,
                     appear_on: Test::default(),
+                    quote: None,
+                    flags: 0,
                 },
                 FleetRecord {
                     id: FleetId(130),
@@ -3541,6 +4032,8 @@ mod tests {
                     govt: None,
                     link_syst: 10_000,
                     appear_on: Test::parse("b42"),
+                    quote: None,
+                    flags: 0,
                 },
             ],
             "by ID, the undecodable one skipped and the unused escort slots left out"
@@ -3553,6 +4046,35 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    #[test]
+    fn a_fleets_quote_above_0_is_carried() {
+        let quoting = |quote: i16| {
+            let mut bytes = fleet(140, &[], 129, -1);
+            put_i16s(&mut bytes, 0x11E, &[quote]);
+            store(&[(Fleet::TYPE, 128, bytes)])
+                .fleets()
+                .first()
+                .and_then(|record| record.quote)
+        };
+        assert_eq!(quoting(7600), Some(7600));
+        assert_eq!(quoting(0), None);
+        assert_eq!(quoting(-1), None);
+    }
+
+    #[test]
+    fn a_fleets_flags_are_carried() {
+        let flagged = |flags: i16| {
+            let mut bytes = fleet(140, &[], 129, -1);
+            put_i16s(&mut bytes, 0x120, &[flags]);
+            store(&[(Fleet::TYPE, 128, bytes)])
+                .fleets()
+                .first()
+                .map(|record| record.flags)
+        };
+        assert_eq!(flagged(0x0001), Some(0x0001));
+        assert_eq!(flagged(0), Some(0));
     }
 
     /// A `përs` linked to `link_syst`, of `govt`, AI type 3, `Aggress` 2

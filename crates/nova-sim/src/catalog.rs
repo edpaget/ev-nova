@@ -1,6 +1,7 @@
 //! The catalog ports: what a flight session starts from
 //! ([`PilotCatalog`]), what its NPC traffic is spawned from
-//! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]) and
+//! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]),
+//! what its asteroid fields hold ([`AsteroidCatalog`]) and
 //! the game's string lists ([`CommCatalog`]), which a hailed ship answers
 //! from and the `T` set operator names the ship from, in the simulation's
 //! own terms.
@@ -86,6 +87,9 @@ pub struct StarSystem {
     /// Its `Interference`, raw: the radar's static
     /// ([`iff::interference`](crate::iff::interference)).
     pub interference: i16,
+    /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
+    /// −1 for none ([`StarMap::buoy`](crate::StarMap::buoy)).
+    pub message: i16,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -103,11 +107,6 @@ pub struct LandingSite {
     pub flags: u32,
     /// Its `MinStatus`: the legal record below which landing is refused.
     pub min_status: i16,
-    /// The sound it plays when the player lands, from its `CustSndID`:
-    /// stellar landing sounds are `snd ` 10000 and up, and any other value
-    /// (-1 for none, 0, or the angle hypergates and wormholes keep there)
-    /// is none.
-    pub landing_sound: Option<SoundId>,
     /// Its `TechLevel`: the [`outfitter`](crate::outfitter) sells outfits
     /// up to it.
     pub tech_level: i16,
@@ -150,6 +149,29 @@ pub struct LandingSite {
     /// Its `Tribute`, raw: what it pays a day while dominated, as
     /// [`tribute_of`](crate::player_info::tribute_of) reads it.
     pub tribute: i16,
+    /// Its animation fields and frame counts, which a hypergate's sprite
+    /// reads ([`gate_sprite`](crate::gate_sprite)).
+    pub animation: SiteAnimation,
+}
+
+/// A stellar's animation fields, raw from its `spöb`, and the frame counts
+/// of its sheets, as the original's sprite tick reads them
+/// (`_LoadObjectData` @0x7761b-0x77631, `_LoadMasterStellarSprite`
+/// @0x1ed8c-0x1ed97).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiteAnimation {
+    /// Its `AnimDelay`, raw.
+    pub delay: i16,
+    /// Its `Frame0Bias`, raw.
+    pub frame0_bias: i16,
+    /// Its `CustPicID`, raw: a hypergate's open frame, when it is one.
+    pub open_frame: i16,
+    /// Its `Type`'s `spïn` frame count, `xTiles` × `yTiles`: 0 when that
+    /// does not read or is not above 0, and at most 65535.
+    pub type_frames: u16,
+    /// Its `DeadType`'s, likewise, when [`dead_graphic`](LandingSite::dead_graphic)
+    /// is `Some`; 0 otherwise.
+    pub dead_frames: u16,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -447,6 +469,62 @@ pub enum StringPatch {
     Unreadable,
 }
 
+impl StringPatch {
+    /// What this patch shows in place of the `STR#` line it patches: its
+    /// text, an empty line for one that is [`Empty`](Self::Empty) or
+    /// [`Unreadable`](Self::Unreadable), or `None` when it is
+    /// [`Absent`](Self::Absent) and the line stands.
+    ///
+    /// `_LoadPluginString` (@0x71a8e-0x71af4) calls `GetResource`, not
+    /// `Get1Resource`, so a `STR ` in any open file patches, the base
+    /// data's included. It answers that the `STR ` exists even when it is
+    /// empty, skipping the copy (@0x71ac5), and copies one too short for
+    /// its length byte raw, so the original shows whatever its buffer held
+    /// before. The engine cannot model stale buffers and shows an empty
+    /// line for both; a caller whose buffer the original reuses in a way
+    /// the player can see (the market's prices) reads the patch itself.
+    #[must_use]
+    pub fn shown(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Empty | Self::Unreadable => Some(""),
+            Self::Absent => None,
+        }
+    }
+}
+
+/// The ID of the `STR ` that patches line `index` of a `STR#` whose
+/// patches start `offset` before it (`_LoadPluginString(offset + index)`,
+/// @0x71a8e), or `None` when the sum does not fit.
+///
+/// The original adds in 32 bits and cuts the sum to 16, so a large
+/// `index` looks up a negative ID. The engine keeps wider numbers and
+/// gives no ID on overflow; the caller then looks up no `STR `
+/// ([`StringPatch::Absent`]).
+#[must_use]
+pub fn patch_id(index: i16, offset: i16) -> Option<i16> {
+    index.checked_add(offset)
+}
+
+/// The string line `index` (from 1) of a `STR#` shows, given the `STR `
+/// `patch` of its [`patch_id`] and `lines`, the `STR#` whole: what the
+/// patch [shows](StringPatch::shown) when there is one, else `lines`'
+/// #`index` (`GetIndString`), else `None`, an index the list does not
+/// hold: 0, below 0, past its count, or with no `STR#` at all. What a
+/// missing line shows is the caller's.
+#[must_use]
+pub fn patched_string(index: i16, patch: StringPatch, lines: &[String]) -> Option<String> {
+    match patch {
+        StringPatch::Text(text) => Some(text),
+        StringPatch::Absent => usize::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|at| lines.get(at))
+            .cloned(),
+        patch => patch.shown().map(str::to_owned),
+    }
+}
+
 /// A special commodity, raw from its `jünk`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JunkRecord {
@@ -568,6 +646,13 @@ pub struct FleetRecord {
     pub link_syst: i16,
     /// Its `AppearOn` control-bit test, parsed.
     pub appear_on: Test,
+    /// Its `Quote`: the `STR#` an announced arrival of it shows a line
+    /// of, when above 0 (+0x1e > 0, `_HyperSpawnFleet` @0x42621-0x42629;
+    /// see [`quote`](crate::traffic::quote)).
+    pub quote: Option<i16>,
+    /// Its `Flags`, raw: 0x0001 gives its trader ships random cargo (see
+    /// [`spawn::fleet`](crate::traffic::spawn::fleet)).
+    pub flags: u16,
 }
 
 /// One of a person's weapon slots that names a weapon, raw from its
@@ -1063,6 +1148,15 @@ pub struct WeaponRecord {
     /// Its `ProxSafety`: the ticks a shot of it flies before its fuse is
     /// armed.
     pub prox_safety: i16,
+    /// Its `HitParticles`: how many particles a hit throws off.
+    pub hit_particles: i16,
+    /// Its `HitPartLife`: the hit particles' least life, in ticks.
+    pub hit_part_life: i16,
+    /// Its `HitPartVel`: the hit particles' speed, in hundredths of a
+    /// pixel a tick.
+    pub hit_part_vel: i16,
+    /// Its `HitPartColor`, `00RRGGBB`.
+    pub hit_part_color: u32,
     /// Its `Recoil`: the push its firer takes away from its heading, over
     /// the firer's mass; none at 0 or -1.
     pub recoil: i16,
@@ -1276,12 +1370,138 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
     }
 }
 
+/// One asteroid type, `röid` 128 + `kind`, with its master sprite's
+/// frames and frame size (see [`asteroid`](crate::asteroid)), raw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AsteroidTypeRecord {
+    /// Its type, 0-15: `röid` 128 + `kind`, bit `kind` of a system's
+    /// `AstTypes`.
+    pub kind: u8,
+    /// Its `Strength`, raw.
+    pub strength: i16,
+    /// Its `SpinRate`, raw: frames a tick, in hundredths.
+    pub spin_rate: i16,
+    /// Its master sprite's frame count, `spïn` 800 + `kind`'s `xTiles` ×
+    /// `yTiles`: 0 when it does not read or is not above 0.
+    pub frames: u16,
+    /// Its master sprite's frame width and height, when the sheet reads.
+    pub frame_size: Option<(u32, u32)>,
+    /// Its `YieldType`, raw: 0-6 a commodity, 1000-1127 a `jünk`.
+    pub yield_type: i16,
+    /// Its `YieldQty`, raw: the boxes it drops on average.
+    pub yield_qty: i16,
+    /// Its `PartCount`: the particles it throws off as it is destroyed.
+    pub part_count: i16,
+    /// Its `PartColor`, `00RRGGBB`.
+    pub part_color: u32,
+    /// Its `FragType1` and `FragType2`, raw: a `röid` ID (or a kind
+    /// 0-15), -1 for none.
+    pub frag_types: [i16; 2],
+    /// Its `FragCount`: the fragments it breaks into on average.
+    pub frag_count: i16,
+    /// Its `ExplodeType`, encoded: -1 for none.
+    pub explode_type: i16,
+    /// Its `Mass`: what a shot's `Impact` pushes against.
+    pub mass: i16,
+}
+
+/// A record of kind 0 with nothing set: no strength, spin, frames or
+/// sprite, no particles or mass, and -1 (none) for its `YieldType`,
+/// `FragType`s and `ExplodeType`.
+impl Default for AsteroidTypeRecord {
+    fn default() -> Self {
+        Self {
+            kind: 0,
+            strength: 0,
+            spin_rate: 0,
+            frames: 0,
+            frame_size: None,
+            yield_type: -1,
+            yield_qty: 0,
+            part_count: 0,
+            part_color: 0,
+            frag_types: [-1, -1],
+            frag_count: 0,
+            explode_type: -1,
+            mass: 0,
+        }
+    }
+}
+
+/// One `sÿst`'s asteroid field: its `Asteroids` and `AstTypes`, raw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AsteroidFieldRecord {
+    /// The system.
+    pub system: SystemId,
+    /// Its `Asteroids`: how many asteroids it holds at most, 0-16.
+    pub count: i16,
+    /// Its `AstTypes`: bit `n` set for each `röid` 128 + `n` it holds.
+    pub types: u16,
+}
+
+/// The game data a session's asteroid fields are read from (see
+/// [`asteroid`](crate::asteroid)).
+pub trait AsteroidCatalog {
+    /// `röid` 128 + `kind`, `kind` 0-15, for each that reads, by kind,
+    /// with `spïn` 800 + `kind`'s frames and frame size.
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord>;
+    /// Every `sÿst` that reads: its `Asteroids` and `AstTypes`, raw.
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord>;
+    /// The frame width and height of each box graphic 0-4, `spïn` 500 +
+    /// graphic, by graphic: none where the sheet does not read. A scoop
+    /// tests a ship against the box's frame (see [`scoop`](crate::scoop)).
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS];
+}
+
+/// The cargo boxes' graphics: `spïn` 500-504.
+pub const BOX_GRAPHICS: usize = 5;
+
+/// A borrowed catalog is a catalog.
+impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for &T {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (**self).asteroid_types()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        (**self).asteroid_fields()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        (**self).box_frame_sizes()
+    }
+}
+
+/// A shared catalog is a catalog.
+impl<T: AsteroidCatalog + ?Sized> AsteroidCatalog for Rc<T> {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        (**self).asteroid_types()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        (**self).asteroid_fields()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        (**self).box_frame_sizes()
+    }
+}
+
 /// The game's string lists (`STR#`), read whole: a hailed ship's words
 /// come from them, and the names the `T` set operator gives the ship.
 pub trait CommCatalog {
     /// Every string of `STR#` `id`, in order; none when it is missing or
     /// cannot be read.
     fn string_list(&self, id: i16) -> Vec<String>;
+
+    /// The `'STR '` `id`, raw, from whichever open file holds it, the base
+    /// data's or a plug-in's, as `_LoadPluginString` (@0x71a8e) looks it up
+    /// with `GetResource`: a person's hail quote's patch (see
+    /// [`hail_quote_text`](crate::person::hail_quote_text)). None by
+    /// default.
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        let _ = id;
+        StringPatch::Absent
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1289,12 +1509,20 @@ impl<T: CommCatalog + ?Sized> CommCatalog for &T {
     fn string_list(&self, id: i16) -> Vec<String> {
         (**self).string_list(id)
     }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        (**self).plugin_string(id)
+    }
 }
 
 /// A shared catalog is a catalog.
 impl<T: CommCatalog + ?Sized> CommCatalog for Rc<T> {
     fn string_list(&self, id: i16) -> Vec<String> {
         (**self).string_list(id)
+    }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        (**self).plugin_string(id)
     }
 }
 
@@ -1354,6 +1582,13 @@ pub trait PilotCatalog {
     fn star_map(&self) -> Vec<StarSystem>;
     /// The standard commodities' names and base prices.
     fn commodity_strings(&self) -> CommodityStrings;
+    /// The `'STR '` `id`, raw, from whichever file holds it, the base
+    /// data's or a plug-in's: a message buoy's patch (see the
+    /// [`buoy`](crate::buoy) module).
+    fn string_patch(&self, id: i16) -> StringPatch;
+    /// Every string of `STR#` 1000, the message buoys', in order; none
+    /// when it is missing.
+    fn buoy_strings(&self) -> Vec<String>;
     /// Every `jünk` that can be read, by ascending ID.
     fn junk(&self) -> Vec<JunkRecord>;
     /// Every `öops` that can be read, by ascending ID.
@@ -1406,6 +1641,21 @@ pub trait PilotCatalog {
     fn warp_sound(&self) -> Option<SoundLength> {
         None
     }
+    /// The length of the double-time warp-up sound, `snd ` 129 "Warp up
+    /// x2", whose duration the warp's clock reads in double time
+    /// ([`warp_sound_duration`](crate::warp::warp_sound_duration)); none
+    /// when there is none or it cannot be read, as by default.
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        None
+    }
+    /// The length of the warp-out sound, `snd ` 130, which every
+    /// arrival plays and whose play state decides whether a jump's
+    /// natural end plays it again
+    /// ([`WarpOut`](crate::warp::WarpOut)); none when there is none or it
+    /// cannot be read, as by default.
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        None
+    }
     /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
     /// of `Flags` 0x0800 draws its ships' one type from at accept (see
     /// [`SpecialShips::uniform_type`](crate::mission::SpecialShips::uniform_type)).
@@ -1413,6 +1663,22 @@ pub trait PilotCatalog {
     /// at the ships' first spawn.
     fn mission_dude(&self, _id: DudeId) -> Option<DudeRecord> {
         None
+    }
+    /// Each system's first stellar that can be read, the first of its
+    /// [`PilotCatalog::landing_sites`], by ascending system ID; a system
+    /// with none is left out. A landed `M` selects it (see the `nav`
+    /// module of [`Session`](crate::Session)): the original's first
+    /// `NavDefs` slot that isn't −1, as its loader clears the slot of a
+    /// `spöb` that didn't load (@0x780f8-0x7817f). By default it is read
+    /// through [`PilotCatalog::star_map`] and the landing sites of each
+    /// system that exists; a catalog that reads sprites for its landing
+    /// sites reads it without them.
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        self.star_map()
+            .into_iter()
+            .filter(|system| self.system_exists(system.id))
+            .filter_map(|system| Some((system.id, self.landing_sites(system.id).first()?.id)))
+            .collect()
     }
 }
 
@@ -1452,6 +1718,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn commodity_strings(&self) -> CommodityStrings {
         (**self).commodity_strings()
+    }
+
+    fn string_patch(&self, id: i16) -> StringPatch {
+        (**self).string_patch(id)
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        (**self).buoy_strings()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -1522,8 +1796,20 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).warp_sound()
     }
 
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        (**self).warp_sound_double_time()
+    }
+
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        (**self).warp_out_sound()
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
+    }
+
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        (**self).first_stellars()
     }
 }
 
@@ -1566,6 +1852,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
         (**self).commodity_strings()
     }
 
+    fn string_patch(&self, id: i16) -> StringPatch {
+        (**self).string_patch(id)
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        (**self).buoy_strings()
+    }
+
     fn junk(&self) -> Vec<JunkRecord> {
         (**self).junk()
     }
@@ -1634,14 +1928,62 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
         (**self).warp_sound()
     }
 
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        (**self).warp_sound_double_time()
+    }
+
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        (**self).warp_out_sound()
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
+    }
+
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        (**self).first_stellars()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `_LoadPluginString` (@0x71a8e-0x71af4) with its `GetIndString`
+    // fallback.
+
+    #[test]
+    fn a_str_patch_shows_its_text_or_an_empty_line_and_absent_shows_nothing() {
+        assert_eq!(StringPatch::Text("patched".into()).shown(), Some("patched"));
+        assert_eq!(StringPatch::Empty.shown(), Some(""));
+        assert_eq!(StringPatch::Unreadable.shown(), Some(""));
+        assert_eq!(StringPatch::Absent.shown(), None);
+    }
+
+    #[test]
+    fn a_patched_string_is_the_patch_else_the_lists_line_from_one() {
+        let lines = ["one", "two", "three"].map(str::to_owned);
+        let string = |index, patch| patched_string(index, patch, &lines);
+        assert_eq!(string(2, StringPatch::Text("p".into())), Some("p".into()));
+        assert_eq!(string(9, StringPatch::Text("p".into())), Some("p".into()));
+        assert_eq!(string(2, StringPatch::Empty), Some(String::new()));
+        assert_eq!(string(2, StringPatch::Unreadable), Some(String::new()));
+        assert_eq!(string(1, StringPatch::Absent), Some("one".into()));
+        assert_eq!(string(3, StringPatch::Absent), Some("three".into()));
+        for index in [0, -1, 4, i16::MIN, i16::MAX] {
+            assert_eq!(string(index, StringPatch::Absent), None, "{index}");
+        }
+        assert_eq!(patched_string(1, StringPatch::Absent, &[]), None);
+    }
+
+    #[test]
+    fn a_patch_id_is_the_index_past_its_offset_and_none_past_the_word() {
+        assert_eq!(patch_id(1, 999), Some(1000));
+        assert_eq!(patch_id(-1000, 999), Some(-1));
+        assert_eq!(patch_id(i16::MAX - 4999, 4999), Some(i16::MAX));
+        assert_eq!(patch_id(i16::MAX - 4998, 4999), None);
+        assert_eq!(patch_id(i16::MIN, -1), None);
+    }
 
     #[test]
     fn the_loader_rebases_a_low_weapon_or_government_mod_val_to_an_id() {
@@ -1764,7 +2106,6 @@ mod tests {
                 frame_size: Some((10, 20)),
                 flags: 0x01,
                 min_status: 0,
-                landing_sound: None,
                 tech_level: 3,
                 special_tech: [0; 8],
                 govt: None,
@@ -1776,6 +2117,7 @@ mod tests {
                 type_counts_frames: true,
                 exit_angle: -1,
                 tribute: 0,
+                animation: crate::catalog::SiteAnimation::default(),
             }]
         }
 
@@ -1801,6 +2143,7 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
                 interference: 0,
+                message: -1,
             }]
         }
 
@@ -1812,6 +2155,18 @@ mod tests {
                 base_prices: vec!["75".to_owned()],
                 price_patches: Default::default(),
             }
+        }
+
+        fn string_patch(&self, id: i16) -> StringPatch {
+            if id == 1000 {
+                StringPatch::Text("Patched buoy".into())
+            } else {
+                StringPatch::Absent
+            }
+        }
+
+        fn buoy_strings(&self) -> Vec<String> {
+            vec!["First buoy".into(), "Second buoy".into()]
         }
 
         /// Opals, sold at stellar 128.
@@ -1947,6 +2302,28 @@ mod tests {
             })
         }
 
+        /// System 130's first stellar is 129, unlike its landing sites'
+        /// 128, so a forward that falls to the default shows.
+        fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+            vec![(SystemId(130), StellarId(129))]
+        }
+
+        /// Half a second at 44100 Hz.
+        fn warp_sound_double_time(&self) -> Option<SoundLength> {
+            Some(SoundLength {
+                frames: 22_050,
+                rate: 44_100,
+            })
+        }
+
+        /// Two seconds at 11025 Hz.
+        fn warp_out_sound(&self) -> Option<SoundLength> {
+            Some(SoundLength {
+                frames: 22_050,
+                rate: 11_025,
+            })
+        }
+
         /// Düde 150 flies ship 128.
         fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
             (id == DudeId(150)).then(|| DudeRecord {
@@ -1993,9 +2370,149 @@ mod tests {
             format!("{:?}", catalog.ranks()),
             format!("{:?}", catalog.system_visibility()),
             format!("{:?}", catalog.nebulae()),
+            format!("{:?}", catalog.string_patch(1000)),
+            format!("{:?}", catalog.buoy_strings()),
             format!("{:?}", catalog.warp_sound()),
+            format!("{:?}", catalog.warp_sound_double_time()),
+            format!("{:?}", catalog.warp_out_sound()),
             format!("{:?}", catalog.mission_dude(DudeId(150))),
+            format!("{:?}", catalog.first_stellars()),
         ]
+    }
+
+    /// A star map of 130, which holds stellars 128 and 129, 131, which
+    /// exists with none, and 132, which doesn't exist; nothing else, and
+    /// [`PilotCatalog::first_stellars`] left to its default.
+    struct Mapped;
+
+    impl PilotCatalog for Mapped {
+        fn first_character(&self) -> Result<CharacterStart, StartError> {
+            Err(StartError::NoCharacter)
+        }
+
+        fn ship_fields(&self, _id: ShipId) -> Result<ShipFields, String> {
+            Err(String::new())
+        }
+
+        fn default_outfits(&self, _id: ShipId) -> Vec<(OutfitId, u16)> {
+            Vec::new()
+        }
+
+        fn outfits(&self) -> Vec<OutfitRecord> {
+            Vec::new()
+        }
+
+        fn ships(&self) -> Vec<ShipRecord> {
+            Vec::new()
+        }
+
+        fn system_exists(&self, id: SystemId) -> bool {
+            matches!(id.0, 130 | 131)
+        }
+
+        /// Asked only of a system that exists.
+        fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
+            match system.0 {
+                130 => vec![
+                    crate::testkit::planet(128, 0.0, 0.0),
+                    crate::testkit::planet(129, 9.0, 0.0),
+                ],
+                131 => Vec::new(),
+                other => panic!("asked for sÿst {other}'s sites"),
+            }
+        }
+
+        fn star_map(&self) -> Vec<StarSystem> {
+            [130, 131, 132]
+                .into_iter()
+                .map(|id| crate::testkit::star(id, (0.0, 0.0), &[]))
+                .collect()
+        }
+
+        fn commodity_strings(&self) -> CommodityStrings {
+            CommodityStrings::default()
+        }
+
+        fn string_patch(&self, _id: i16) -> StringPatch {
+            StringPatch::Absent
+        }
+
+        fn buoy_strings(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn junk(&self) -> Vec<JunkRecord> {
+            Vec::new()
+        }
+
+        fn disasters(&self) -> Vec<DisasterRecord> {
+            Vec::new()
+        }
+
+        fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+            Vec::new()
+        }
+
+        fn date_affixes(&self) -> DateAffixes {
+            DateAffixes::default()
+        }
+
+        fn gate_sites(&self) -> Vec<GateSite> {
+            Vec::new()
+        }
+
+        fn stellar_lives(&self) -> Vec<StellarLife> {
+            Vec::new()
+        }
+
+        fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+            None
+        }
+
+        fn missions(&self) -> Vec<MissionRecord> {
+            Vec::new()
+        }
+
+        fn mission_texts(&self) -> Vec<MissionTexts> {
+            Vec::new()
+        }
+
+        fn listed_stellars(&self) -> Vec<ListedStellar> {
+            Vec::new()
+        }
+
+        fn system_visibility(&self) -> Vec<SystemVisibility> {
+            Vec::new()
+        }
+
+        fn place_names(&self) -> PlaceNames {
+            PlaceNames::default()
+        }
+
+        fn stellar_marks(&self) -> Vec<StellarMark> {
+            Vec::new()
+        }
+
+        fn crons(&self) -> Vec<CronRecord> {
+            Vec::new()
+        }
+
+        fn ranks(&self) -> Vec<RankRecord> {
+            Vec::new()
+        }
+
+        fn nebulae(&self) -> Vec<NebulaRecord> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn by_default_each_existing_systems_first_stellar_is_its_first_landing_site() {
+        assert_eq!(
+            Mapped.first_stellars(),
+            [(SystemId(130), StellarId(128))],
+            "131 has none; 132 doesn't exist and isn't asked"
+        );
     }
 
     #[test]
@@ -2046,11 +2563,25 @@ mod tests {
         assert!(direct[27].contains("Bit(5)"), "{direct:?}");
         assert!(direct[28].contains("NebulaId(141)"), "{direct:?}");
         assert!(direct[28].contains("width: 300"), "{direct:?}");
+        assert_eq!(direct[29], r#"Text("Patched buoy")"#);
+        assert_eq!(direct[30], r#"["First buoy", "Second buoy"]"#);
         assert_eq!(
-            direct[29], "Some(SoundLength { frames: 22050, rate: 22050 })",
+            direct[31], "Some(SoundLength { frames: 22050, rate: 22050 })",
             "forwarded, not a default"
         );
-        assert!(direct[30].contains("ShipId(128), 40"), "{direct:?}");
+        assert_eq!(
+            direct[32], "Some(SoundLength { frames: 22050, rate: 44100 })",
+            "forwarded, not a default"
+        );
+        assert_eq!(
+            direct[33], "Some(SoundLength { frames: 22050, rate: 11025 })",
+            "forwarded, not a default"
+        );
+        assert!(direct[34].contains("ShipId(128), 40"), "{direct:?}");
+        assert_eq!(
+            direct[35], "[(SystemId(130), StellarId(129))]",
+            "forwarded, not the default's 128"
+        );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
@@ -2106,6 +2637,8 @@ mod tests {
                 govt: None,
                 link_syst: -1,
                 appear_on: Test::default(),
+                quote: None,
+                flags: 0,
             }]
         }
 
@@ -2199,6 +2732,56 @@ mod tests {
         assert!(direct[2].contains("\"Federation\""), "{direct:?}");
         assert_eq!(combat(&One), direct);
         assert_eq!(combat(Rc::new(One)), direct);
+    }
+
+    /// Asteroid type 4, `röid` 132, and system 130's field.
+    impl AsteroidCatalog for One {
+        fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+            vec![AsteroidTypeRecord {
+                kind: 4,
+                strength: 30,
+                spin_rate: 120,
+                frames: 36,
+                frame_size: Some((48, 40)),
+                ..AsteroidTypeRecord::default()
+            }]
+        }
+
+        fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+            vec![AsteroidFieldRecord {
+                system: SystemId(130),
+                count: 6,
+                types: 0x0011,
+            }]
+        }
+
+        fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+            [None, None, Some((22, 20)), None, None]
+        }
+    }
+
+    type Asteroids = (
+        Vec<AsteroidTypeRecord>,
+        Vec<AsteroidFieldRecord>,
+        [Option<(u32, u32)>; BOX_GRAPHICS],
+    );
+
+    fn asteroids(catalog: impl AsteroidCatalog) -> Asteroids {
+        (
+            catalog.asteroid_types(),
+            catalog.asteroid_fields(),
+            catalog.box_frame_sizes(),
+        )
+    }
+
+    #[test]
+    fn borrowed_and_shared_asteroid_catalogs_are_catalogs() {
+        let direct = asteroids(One);
+        assert_eq!(direct.0[0].kind, 4);
+        assert_eq!(direct.1[0].types, 0x0011);
+        assert_eq!(direct.2[2], Some((22, 20)));
+        assert_eq!(asteroids(&One), direct);
+        assert_eq!(asteroids(Rc::new(One)), direct);
     }
 
     /// `STR#` 3000 holds two replies; no other list exists.

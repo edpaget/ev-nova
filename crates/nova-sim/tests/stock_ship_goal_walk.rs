@@ -528,6 +528,8 @@ fn set_up(data: &GameData, record: &MissionRecord, extra: &[&Test]) -> Session {
         mission: record.id,
     };
     let mut session = Session::fly(&probed, docked).expect("flies");
+    let system = session.pilot().system();
+    session.land_at(&probed, system, site.id).expect("lands");
     let _ = session.settle_script(data, &mut NeverFires);
     session.set_credits(100_000_000);
     for test in std::iter::once(&record.avail_bits).chain(extra.iter().copied()) {
@@ -635,6 +637,14 @@ impl PilotCatalog for Probed<'_> {
         self.data.commodity_strings()
     }
 
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn junk(&self) -> Vec<cat::JunkRecord> {
         self.data.junk()
     }
@@ -702,8 +712,26 @@ impl PilotCatalog for Probed<'_> {
         self.data.ranks()
     }
 
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        self.data.first_stellars()
+    }
+
     fn nebulae(&self) -> Vec<cat::NebulaRecord> {
         self.data.nebulae()
+    }
+}
+
+impl nova_sim::AsteroidCatalog for Probed<'_> {
+    fn asteroid_types(&self) -> Vec<cat::AsteroidTypeRecord> {
+        nova_sim::AsteroidCatalog::asteroid_types(self.data)
+    }
+
+    fn asteroid_fields(&self) -> Vec<cat::AsteroidFieldRecord> {
+        nova_sim::AsteroidCatalog::asteroid_fields(self.data)
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        nova_sim::AsteroidCatalog::box_frame_sizes(self.data)
     }
 }
 

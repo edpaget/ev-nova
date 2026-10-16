@@ -107,8 +107,8 @@
 //!   has. Its one caller, `_HandlePlayerDockRequest` @0x66f29, sends a
 //!   hypergate to `_PlayerEnterHypergate` (@0x66ed6) and a wormhole to
 //!   `_PlayerEnterWormhole` (@0x66f0d) first, so the original never takes
-//!   off from a gate. A pilot resumed docked at one is the engine's own,
-//!   and its take-off passes the day as any other.
+//!   off from a gate. A pilot docked at one, by the engine's own
+//!   relocation, passes the day on its take-off as any other.
 //! - `_DoPortDialog` clears both flags as the port opens
 //!   (@0x5f93d-0x5f95a). The ship flag is set only once the name prompt
 //!   is confirmed (@0x5ebc2-0x5ebce).
@@ -241,7 +241,9 @@
 //!   ([`left_respawn`](crate::RuleKey::LeftRespawn) has the other
 //!   reading). An AI ship that lands stays in the system, waiting at the
 //!   stellar, so a landing counts nothing
-//!   ([`landed_leaves`](crate::RuleKey::LandedLeaves)). Here the
+//!   ([`landed_leaves`](crate::RuleKey::LandedLeaves)). One that leaves
+//!   through a hypergate or wormhole is gone, but counts nothing either
+//!   ([`gate_exit_counts`](crate::RuleKey::GateExitCounts)). Here the
 //!   traffic's tick raises [`Fate::Departed`] for such a ship and counts
 //!   it. Chase off is met while those destroyed and those chased off
 //!   together reach `ShipCount`, and unmet otherwise (@0x9eb48-0x9eb78).
@@ -438,7 +440,7 @@
 //! | Event | Its one source | The original's |
 //! |---|---|---|
 //! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] | the enter-system hook |
-//! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks; [`Session::fly`](crate::Session::fly), for a pilot resumed docked, after its `Explored` | the spaceport opening |
+//! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks | the spaceport opening |
 //! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
 //! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores but a gate's or wormhole's exit; a take-off; a map granted, for each system it reaches; [`Session::fly`](crate::Session::fly), for each visible explored system (a new pilot's withdrawn by [`Session::begin`](crate::Session::begin) under the engine's [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot)). `X` raises none | `_ExploreNebulaeFromSystem` |
@@ -459,11 +461,10 @@
 //! `Explored` of every visible explored system, by ascending ID, as the
 //! original's load sweeps their nebulae (`_OpenLastPilotFile`
 //! @0x765a2-0x765ce; a new pilot has explored only its own,
-//! `_DoNewPilot` @0x19118), then, for a
-//! pilot resumed docked, its stellar's `Landed`: a load forgets the
-//! stellar the offers were rolled at (@0x75ef5) and opens the spaceport,
-//! whose land check runs (@0x5fbeb), so the offers are rolled afresh and
-//! the missions' landing hooks run, as the original's do.
+//! `_DoNewPilot` @0x19118), and no `Landed`: a load resumes in flight and
+//! lands nothing, as `_EnterGameFromMainScreen` and `_PlayGame` call no
+//! landing, but forgets the stellar the offers were rolled at (@0x75ef5),
+//! so the first landing rolls them afresh.
 //!
 //! The events wait on the session, in the order raised, for its next
 //! [`Session::settle_script`](crate::Session::settle_script), which
@@ -801,9 +802,10 @@
 //! and every ship in the system stays with it; it raises no story event,
 //! explores nothing and passes no day. A landed player stays docked: the
 //! spaceport stays its stellar's, and the new system's stellars wait for
-//! the take-off, as after a landed `M`; a pilot loaded landed at a stellar
-//! of a hidden system at its place resumes docked there the same way, and
-//! so does a relocation to a stellar of a system resolved to another. One
+//! the take-off, as after a landed `M`; a pilot loaded last landed at a
+//! stellar of a hidden system at its place resumes in flight over it,
+//! among the visible system's stellars, and a relocation to a stellar of a
+//! system resolved to another docks there as a landed `M` does. One
 //! owner decides this for every move of the player's system, the session's
 //! `set_player_system` (see the session's `entry` module): docked, the
 //! stellars shown are always those of the system whose stellar the ship is
@@ -893,7 +895,7 @@
 //! `Y` destroys stays docked: the spaceport stays open, the stellar stays
 //! among those shown, flagged destroyed, the take-off works and passes its
 //! days, and only landing there again is refused until it regenerates. A
-//! pilot saved docked there resumes docked there.
+//! pilot saved docked there resumes in flight over it.
 //!
 //! The galaxy map has no service, trade or colour mode and no stellar
 //! panel yet; when built, they read `is_landable`. Defence fleets,

@@ -6,10 +6,23 @@
 //!
 //! - **The victim**, and the lead of an escort hit, add the damage to
 //!   their provocation and take the attacker as their target, unless the
-//!   attacker is of their government or their fleet, they are still
-//!   jumping in, or they already attack another ship nearer than half the
-//!   attacker's distance ([`FOCUS`] of its distance squared) while facing
-//!   within [`FOCUS_ANGLE`] of it: then the hit changes nothing.
+//!   attacker is of their government or their fleet, or they already
+//!   attack another ship nearer than half the attacker's distance
+//!   ([`FOCUS`] of its distance squared) while facing within
+//!   [`FOCUS_ANGLE`] of it: then the hit changes nothing. A ship still
+//!   coming into the system answers so too, gliding in, waiting in its
+//!   gate or bursting out of it: `_DamageShip` drops the reaction only
+//!   while the victim's (or the lead's) hyperspace state +0x50 is above
+//!   0 (@0x3b4b0-0x3b4c2, @0x3b97e-0x3b995, @0x3bab7-0x3bae4), which is a
+//!   ship jumping out, and an arrival's never is: -1.0 waiting in a gate
+//!   (@0x89555), -999.0 gliding in or bursting out (@0x82ece,
+//!   @0x8f3c8-0x8f3d9), until `_AIMakeShipStopJumping` zeroes it
+//!   (@0x82eb0). (Phase 6 read +0x50 as running through an arrival; it
+//!   does not.) Which ships answer is the traffic's to say
+//!   ([`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits)). A victim
+//!   with a wait that answers has it cut to 20 ticks (@0x3be6e-0x3be7c),
+//!   which the traffic does
+//!   ([`autopilot::HIT_WAIT`](crate::traffic::autopilot::HIT_WAIT)).
 //! - **A Good Samaritan**: for a hit by the player on the ship it was
 //!   meant for ([`Strike::intended`], @0x3bed2), every warship or
 //!   interceptor W not already attacking takes the player as its target
@@ -52,7 +65,7 @@ use crate::combat::aim::{angle_off, bearing};
 use crate::combat::{ShipRef, Strike};
 use crate::govt::{DERELICT, IGNORED_WHEN_ATTACKED, NOSY};
 use crate::rulebook::RuleSource;
-use crate::traffic::npc::{AiType, Mode, Npc};
+use crate::traffic::npc::{AiType, Npc};
 
 /// The share of the attacker's distance squared within which a ship
 /// keeps attacking its own target (0.25 @0x3bc3b).
@@ -107,8 +120,10 @@ pub fn answer(
 }
 
 /// Whether `npc`, hit (or its escort hit) by `attacker`, lets it be: the
-/// attacker is of its government or fleet, it is still jumping in, or it
-/// keeps to its own nearer target ahead of it.
+/// attacker is of its government or fleet, or it keeps to its own nearer
+/// target ahead of it. Its mode is not read: `_DamageShip` skips a
+/// reaction only while +0x50 is above 0 (@0x3b4b0-0x3b4c2), a ship
+/// jumping out, never one coming in (see the module docs).
 fn ignores(npc: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
     let kin = match attacker {
         ShipRef::Player => false,
@@ -116,7 +131,7 @@ fn ignores(npc: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
             (npc.govt.is_some() && other.govt == npc.govt) || other.fleet() == npc.fleet()
         }),
     };
-    if kin || npc.mode != Mode::Flying {
+    if kin {
         return true;
     }
     let squared = |ship: ShipRef| {
@@ -179,7 +194,7 @@ mod tests {
     use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, govt};
-    use crate::traffic::npc::{AiType, NpcId};
+    use crate::traffic::npc::{AiType, Mode, NpcId};
 
     const TRADERS: GovtId = GovtId(140);
     const POLICE: GovtId = GovtId(141);
@@ -324,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_by_its_own_government_or_fleet_or_while_jumping_in_is_ignored() {
+    fn a_hit_by_its_own_government_or_fleet_is_ignored() {
         let govts = relations(0, 0);
         let mut npcs = [
             ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0),
@@ -340,11 +355,6 @@ mod tests {
             "its escort"
         );
         npcs[1].leader = None;
-        npcs[0].mode = Mode::JumpingIn { ticks_left: 4 };
-        assert_eq!(answered(&govts, &npcs, 0, &hit), Reaction::default());
-        npcs[0].mode = Mode::Emerging { ticks_left: 4 };
-        assert_eq!(answered(&govts, &npcs, 0, &hit), Reaction::default());
-        npcs[0].mode = Mode::Flying;
         npcs[0].govt = None;
         npcs[1].govt = None;
         assert_eq!(
@@ -352,6 +362,45 @@ mod tests {
             TAKES(n(2)),
             "two independents are no government"
         );
+    }
+
+    #[test]
+    fn a_ship_gliding_in_waiting_in_its_gate_or_bursting_out_answers_a_hit_as_a_flying_one() {
+        // `_DamageShip` drops a reaction only while +0x50 is above 0, a
+        // ship jumping out (@0x3b4b0-0x3b4c2, @0x3b97e-0x3b995,
+        // @0x3bab7-0x3bae4); an arrival's +0x50 is -1.0 in its gate
+        // (@0x89555) and -999.0 gliding or bursting (@0x82ece, @0x8f3c8).
+        let govts = relations(0, 0);
+        for mode in [
+            Mode::JumpingIn { tick: 0 },
+            Mode::Emerging { ticks_left: 4 },
+            Mode::HeldAtGate { ticks_left: 4 },
+            Mode::LeavingGate { tick: 1 },
+            Mode::Coasting { ticks_left: 30 },
+        ] {
+            let mut npcs = [
+                ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0),
+                ship(2, Some(PIRATES), AiType::Warship, 500.0),
+                ship(3, Some(TRADERS), AiType::WimpyTrader, 900.0),
+            ];
+            npcs[0].mode = mode;
+            assert_eq!(
+                answered(&govts, &npcs, 0, &strike(n(1), n(2))),
+                TAKES(n(2)),
+                "{mode:?}"
+            );
+            assert_eq!(
+                answered(&govts, &npcs, 0, &strike(n(1), ShipRef::Player)),
+                TAKES(ShipRef::Player),
+                "{mode:?}"
+            );
+            npcs[2].leader = Some(NpcId(1));
+            assert_eq!(
+                answered(&govts, &npcs, 0, &strike(n(3), n(2))),
+                TAKES(n(2)),
+                "{mode:?}: its escort hit"
+            );
+        }
     }
 
     #[test]

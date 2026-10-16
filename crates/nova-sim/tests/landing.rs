@@ -1,21 +1,36 @@
 //! Landing through a flight session, headless: the land key's first press
-//! requesting clearance and its second landing, each reason a landing is
-//! refused, and a landing and take-off, with the session flown by its
-//! controls alone.
+//! requesting clearance, the dock approach on the tick after, and the
+//! second press landing, each reason a landing is refused, and a landing
+//! and take-off, with the session flown by its controls alone.
 
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    CharacterStart, Clearance, CombatCatalog, CommodityStrings, Controls, DateAffixes,
-    DisasterRecord, DudeId, DudeRecord, FleetRecord, GovtRecord, HullRecord, JunkRecord,
-    LandOutcome, LandPress, LandingRefusal, LandingSite, NeverFires, OutfitId, OutfitRecord,
-    PersonRecord, PilotCatalog, Session, ShipFields, ShipId, StarSystem, StartDate, StartError,
-    StellarId, SystemId, SystemTraffic, TrafficCatalog, Vec2, WeaponRecord,
+    CharacterStart, CombatCatalog, CommodityStrings, Controls, DateAffixes, DisasterRecord, DudeId,
+    DudeRecord, FleetRecord, GovtRecord, HullRecord, JunkRecord, LandOutcome, LandPress,
+    LandingRefusal, LandingSite, NeverFires, OutfitId, OutfitRecord, PersonRecord, PilotCatalog,
+    Session, ShipFields, ShipId, StarSystem, StartDate, StartError, StellarId, SystemId,
+    SystemTraffic, TrafficCatalog, Vec2, WeaponRecord,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
 /// 130, which holds `sites`.
 struct Pilot {
     sites: Vec<LandingSite>,
+}
+
+/// No asteroids anywhere.
+impl nova_sim::AsteroidCatalog for Pilot {
+    fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+        Vec::new()
+    }
+
+    fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+        Vec::new()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        [None; nova_sim::BOX_GRAPHICS]
+    }
 }
 
 /// Unarmed and ungoverned.
@@ -101,6 +116,14 @@ impl PilotCatalog for Pilot {
         CommodityStrings::default()
     }
 
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn junk(&self) -> Vec<JunkRecord> {
         Vec::new()
     }
@@ -177,7 +200,6 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         frame_size: Some((200, 200)),
         flags,
         min_status,
-        landing_sound: None,
         tech_level: 0,
         special_tech: [0; 8],
         govt: None,
@@ -189,6 +211,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         type_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
+        animation: nova_sim::catalog::SiteAnimation::default(),
     }
 }
 
@@ -203,27 +226,27 @@ fn a_system_without_stellars_refuses() {
     assert_eq!(session(Vec::new()).land(), Err(LandingRefusal::NoStellars));
 }
 
-fn selected(station: bool, clearance: Clearance) -> LandPress {
-    LandOutcome::Selected {
+fn requested(station: bool) -> LandPress {
+    LandOutcome::Requested {
         stellar: StellarId(128),
         station,
-        clearance,
     }
     .into()
 }
 
 #[test]
-fn the_first_l_requests_clearance_and_the_second_lands() {
+fn the_first_l_requests_clearance_and_the_second_lands_after_a_tick() {
     let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
-    assert_eq!(session.land(), Ok(selected(false, Clearance::Granted)));
+    assert_eq!(session.land(), Ok(requested(false)));
     assert_eq!(session.nav_target(), Some(StellarId(128)));
     assert_eq!(session.landed(), None);
+    session.tick(Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandOutcome::Landed(StellarId(128)).into())
     );
     assert_eq!(session.landed(), Some(StellarId(128)));
-    assert_eq!(session.nav_target(), None);
+    assert_eq!(session.nav_target(), Some(StellarId(128)), "kept");
 }
 
 #[test]
@@ -233,7 +256,8 @@ fn a_ship_over_no_stellar_is_too_far() {
         ..at_centre(STATION, 0)
     };
     let mut session = session(vec![far]);
-    assert_eq!(session.land(), Ok(selected(true, Clearance::Granted)));
+    assert_eq!(session.land(), Ok(requested(true)));
+    session.tick(Controls::default());
     let too_far = Err(LandingRefusal::TooFar {
         stellar: StellarId(128),
         station: true,
@@ -243,31 +267,26 @@ fn a_ship_over_no_stellar_is_too_far() {
     assert_eq!(session.nav_target(), Some(StellarId(128)));
 }
 
+/// Untargeted, with nothing landable, L selects nothing and makes no dock
+/// request (@0x6a94c).
 #[test]
 fn a_stellar_that_cannot_be_landed_on_refuses() {
     let mut session = session(vec![at_centre(0, 0)]);
-    assert_eq!(
-        session.land(),
-        Err(LandingRefusal::NotLandable {
-            stellar: StellarId(128),
-            station: false,
-        })
-    );
+    assert_eq!(session.land(), Err(LandingRefusal::NothingLandable));
     assert_eq!(session.nav_target(), None, "nothing selected");
 }
 
 #[test]
 fn a_new_pilot_is_denied_where_a_record_is_needed() {
     let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 32767)]);
-    assert_eq!(session.land(), Ok(selected(false, Clearance::Denied)));
-    assert_eq!(
-        session.land(),
-        Err(LandingRefusal::Denied {
-            stellar: StellarId(128),
-            station: false,
-            min_status: 32767,
-        })
-    );
+    let denied = Err(LandingRefusal::Denied {
+        stellar: StellarId(128),
+        station: false,
+        min_status: 32767,
+    });
+    assert_eq!(session.land(), denied);
+    session.tick(Controls::default());
+    assert_eq!(session.land(), denied, "asked again");
 }
 
 #[test]
@@ -280,7 +299,8 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     for _ in 0..15 {
         session.tick(thrust);
     }
-    assert_eq!(session.land(), Ok(selected(false, Clearance::Granted)));
+    assert_eq!(session.land(), Ok(requested(false)));
+    session.tick(thrust);
     let Err(LandingRefusal::TooFast {
         stellar,
         station,

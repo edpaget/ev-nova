@@ -1,16 +1,17 @@
-//! A canned [`PilotCatalog`], [`TrafficCatalog`], [`CombatCatalog`] and
-//! [`CommCatalog`] for the crate's own tests.
+//! A canned [`PilotCatalog`], [`TrafficCatalog`], [`CombatCatalog`],
+//! [`AsteroidCatalog`] and [`CommCatalog`] for the crate's own tests.
 
 use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
-    DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
-    HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
-    MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
-    PersonRecord, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
-    StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId, SystemTraffic,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
+    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord,
+    JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts,
+    NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
+    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemTraffic,
     SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
@@ -28,7 +29,7 @@ use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
 use crate::session::LandPress;
 use crate::session::Session;
 use crate::stats::ShipStats;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::warp::SoundLength;
 
 /// A canned first `chär`, ships and systems; records the ships asked
@@ -78,6 +79,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) govts: Vec<GovtRecord>,
     /// Each `STR#`; any other is missing.
     pub(crate) strings: Vec<(i16, Vec<String>)>,
+    /// Each `'STR '` patch; any other is [`StringPatch::Absent`].
+    pub(crate) string_patches: Vec<(i16, StringPatch)>,
     /// The first `chär`'s date prefix and suffix.
     pub(crate) date_affixes: DateAffixes,
     /// How many times the date affixes were read.
@@ -119,6 +122,18 @@ pub(crate) struct FakePilotCatalog {
     /// The warp-up sound's length: none, by default, so the warp's clock
     /// takes 350 Mac ticks.
     pub(crate) warp_sound: Option<SoundLength>,
+    /// The double-time warp-up sound's length: none, by default, so the
+    /// warp's clock takes 350 Mac ticks in double time too.
+    pub(crate) warp_sound_double_time: Option<SoundLength>,
+    /// Every `röid`, with its sprite's frames and size: none, by default.
+    pub(crate) asteroid_types: Vec<AsteroidTypeRecord>,
+    /// Every system's asteroid field: none, by default.
+    pub(crate) asteroid_fields: Vec<AsteroidFieldRecord>,
+    /// Each box graphic's frame size: none, by default.
+    pub(crate) box_frames: [Option<(u32, u32)>; BOX_GRAPHICS],
+    /// The warp-out sound's length: none, by default, so an arrival's
+    /// warp-out never plays on and every jump arrival plays it.
+    pub(crate) warp_out_sound: Option<SoundLength>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -295,7 +310,6 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         frame_size: Some((100, 100)),
         flags: StellarFlags::CAN_LAND,
         min_status: 0,
-        landing_sound: None,
         tech_level: 0,
         special_tech: [0; 8],
         govt: None,
@@ -307,6 +321,7 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         type_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
+        animation: crate::catalog::SiteAnimation::default(),
     }
 }
 
@@ -415,6 +430,10 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         sub_limit: 0,
         max_ammo: 0,
         prox_safety: 0,
+        hit_particles: 0,
+        hit_part_life: 0,
+        hit_part_vel: 0,
+        hit_part_color: 0,
         recoil: 0,
         exit_type: -1,
         ionization: 0,
@@ -535,6 +554,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         booty: None,
         boarded: false,
         info_types: 0,
+        cargo: NpcHold::default(),
         spared: false,
         assisting: 0,
         carrier: None,
@@ -544,6 +564,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         cloak: crate::cloak::Cloak::default(),
         cloak_gear: crate::cloak::CloakGear::default(),
         led_out: false,
+        emerges_from: None,
         self_repair: false,
         former: None,
         tractor: None,
@@ -602,6 +623,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         hulls: Vec::new(),
         govts: Vec::new(),
         strings: Vec::new(),
+        string_patches: Vec::new(),
         date_affixes: DateAffixes {
             prefix: String::new(),
             suffix: " NC".to_owned(),
@@ -623,7 +645,25 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         ranks: Vec::new(),
         nebulae: Vec::new(),
         warp_sound: None,
+        warp_sound_double_time: None,
+        asteroid_types: Vec::new(),
+        asteroid_fields: Vec::new(),
+        box_frames: [None; BOX_GRAPHICS],
+        warp_out_sound: None,
     }
+}
+
+/// `catalog` with system 130's planet 129 at (-2000, 0): as far out as
+/// at (2000, 0), but on the side the 999 bound on a destination does not
+/// reach (see [`destination`](crate::traffic::destination)), so an idle
+/// NPC drawing the last candidate heads for it, far from 128.
+pub(crate) fn far_129_reachable(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+    for (_, sites) in &mut catalog.sites {
+        for site in sites.iter_mut().filter(|site| site.id == StellarId(129)) {
+            site.position = Vec2::new(-2000.0, 0.0);
+        }
+    }
+    catalog
 }
 
 /// `catalog` with variants in system 130 marked as `_StellarsAreIdentical`
@@ -706,6 +746,7 @@ pub(crate) fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         govt: None,
         stellars: Vec::new(),
         interference: 0,
+        message: -1,
     }
 }
 
@@ -798,6 +839,18 @@ impl PilotCatalog for FakePilotCatalog {
         self.commodities.clone()
     }
 
+    fn string_patch(&self, id: i16) -> StringPatch {
+        self.string_patches
+            .iter()
+            .find(|(patch, _)| *patch == id)
+            .map_or(StringPatch::Absent, |(_, patch)| patch.clone())
+    }
+
+    /// [`FakePilotCatalog::strings`]' `STR#` 1000.
+    fn buoy_strings(&self) -> Vec<String> {
+        self.string_list(crate::buoy::BUOY_STRINGS)
+    }
+
     fn junk(&self) -> Vec<JunkRecord> {
         *self.goods_reads.borrow_mut() += 1;
         self.junk.clone()
@@ -885,8 +938,33 @@ impl PilotCatalog for FakePilotCatalog {
         self.warp_sound
     }
 
+    fn warp_sound_double_time(&self) -> Option<SoundLength> {
+        self.warp_sound_double_time
+    }
+
+    fn warp_out_sound(&self) -> Option<SoundLength> {
+        self.warp_out_sound
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         TrafficCatalog::dude(self, id)
+    }
+
+    /// The first of each existing system's [`FakePilotCatalog::sites`], as
+    /// [`PilotCatalog::landing_sites`] gives them, read without counting
+    /// as a read of the star map or the sites.
+    fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
+        let mut first = std::collections::BTreeMap::new();
+        for (system, sites) in &self.sites {
+            first
+                .entry(*system)
+                .or_insert_with(|| sites.first().map(|site| site.id));
+        }
+        first
+            .into_iter()
+            .filter(|(system, _)| self.systems.contains(system))
+            .filter_map(|(system, stellar)| Some((system, stellar?)))
+            .collect()
     }
 }
 
@@ -931,6 +1009,21 @@ impl CombatCatalog for FakePilotCatalog {
     }
 }
 
+/// No asteroids unless a test sets them.
+impl AsteroidCatalog for FakePilotCatalog {
+    fn asteroid_types(&self) -> Vec<AsteroidTypeRecord> {
+        self.asteroid_types.clone()
+    }
+
+    fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord> {
+        self.asteroid_fields.clone()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS] {
+        self.box_frames
+    }
+}
+
 /// No strings unless a test sets them.
 impl CommCatalog for FakePilotCatalog {
     fn string_list(&self, id: i16) -> Vec<String> {
@@ -938,6 +1031,12 @@ impl CommCatalog for FakePilotCatalog {
             .iter()
             .find(|(list, _)| *list == id)
             .map_or_else(Vec::new, |(_, strings)| strings.clone())
+    }
+
+    /// [`FakePilotCatalog::string_patches`]' `'STR '` `id`, as
+    /// [`PilotCatalog::string_patch`] reads it.
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        self.string_patch(id)
     }
 }
 
@@ -981,19 +1080,41 @@ pub(crate) fn fly_out(session: &mut Session) {
     panic!("never got out: {:?}", session.player());
 }
 
-/// Presses L until it lands or is refused: a first press that selects a
-/// stellar is followed by a second. Gives the stellar landed on, or the
-/// refusal.
+/// Presses L until it lands or is refused, the dock approach alone run
+/// between presses (not a whole tick, whose motion, fuel and timers the
+/// tests calling this do not expect): a press that requests is followed
+/// by the approach and another press, up to three. The dock request's
+/// own messages and sounds raised on the way (its line, "No response.",
+/// the greeting and traffic control's sound) are forgotten, as the
+/// `clearance` module's tests pin them. Gives the stellar landed on, or
+/// the refusal.
 pub(crate) fn land_now(session: &mut Session) -> Result<StellarId, LandingRefusal> {
-    for _ in 0..2 {
-        if let LandPress::Outcome(LandOutcome::Landed(stellar)) = session.land()? {
-            return Ok(stellar);
+    let before = session.chatter_marks();
+    let landed = (|| {
+        for press in 0..3 {
+            if press > 0 {
+                session.dock_approach();
+            }
+            if let LandPress::Outcome(LandOutcome::Landed(stellar)) = session.land()? {
+                return Ok(stellar);
+            }
         }
-    }
-    panic!(
-        "L selected twice and never landed: {:?}",
-        session.nav_target()
-    );
+        panic!(
+            "L requested three times and never landed: {:?}",
+            session.nav_target()
+        );
+    })();
+    session.forget_dock_chatter(before);
+    landed
+}
+
+/// The stellar a session just flown from a save resumed on: asserts it
+/// flies, at rest, nothing about a landing run, and gives the stellar the
+/// pilot last landed on, which the load keeps (see [`Session::load`]).
+pub(crate) fn resumed_on(session: &Session) -> Option<StellarId> {
+    assert_eq!(session.landed(), None, "resumed in flight");
+    assert_eq!(session.player().velocity, Vec2::ZERO, "at rest");
+    session.pilot().stellar()
 }
 
 /// Plots a course to `to`, flies out and jumps, and arrives, no chance
@@ -1226,6 +1347,28 @@ pub(crate) fn among(
         targets,
         govts: &NO_GOVERNMENTS,
         pass_through: crate::combat::sides::PassThrough::default(),
+    }
+}
+
+/// No ship drawn anywhere, so a click in space falls through to the
+/// stellars.
+pub(crate) struct NoShips;
+
+impl crate::hover::DrawnShips for NoShips {
+    fn npc(&self, _id: NpcId) -> Option<crate::hover::DrawnBox> {
+        None
+    }
+
+    fn player(&self) -> Option<crate::hover::DrawnBox> {
+        None
+    }
+}
+
+/// The stellar a click at `at` in space, with no ship drawn, selects.
+pub(crate) fn click_stellar(session: &mut Session, at: Vec2) -> Option<StellarId> {
+    match session.click_in_space(at, &NoShips) {
+        Some(crate::hover::Hover::Stellar(id)) => Some(id),
+        _ => None,
     }
 }
 

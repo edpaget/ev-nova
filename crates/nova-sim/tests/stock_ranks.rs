@@ -209,6 +209,7 @@ fn the_hypergate_access_rank_clears_every_hypergate() {
             meets_require: true,
             mission_stellar: false,
             blessed,
+            granted: false,
         };
         for source in RuleSource::ALL {
             assert!(

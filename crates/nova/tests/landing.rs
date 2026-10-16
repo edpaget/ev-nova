@@ -22,7 +22,7 @@ use std::time::Duration;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
-use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -147,12 +147,12 @@ fn system() -> Vec<u8> {
 /// and a bar.
 const FLAGS: u32 = 0x01 | 0x02 | 0x40;
 
-/// Alpha Prime's landing sound, its `CustSndID`: Port Kane's
+/// Alpha Prime's ambient sound, its `CustSndID`: Port Kane's
 /// "Federation Station.SFIL" in the stock data.
 const LANDING_SOUND: i16 = 10_032;
 
 /// Alpha Prime: a planet at (0, `y`) of graphic type 4 and no custom
-/// picture, so its landscape is `PICT` 10004, with its own landing sound.
+/// picture, so its landscape is `PICT` 10004, with its own ambient sound.
 fn stellar(y: i16) -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[0, y, 4]);
@@ -383,9 +383,10 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// the second lands.
+    /// a few frames let the dock approach clear it, and the second lands.
     fn land(&mut self) {
         self.press_physical(KeyCode::KeyL);
+        self.approach();
         self.press_physical(KeyCode::KeyL);
     }
 
@@ -436,6 +437,19 @@ impl Harness {
         assert_eq!(self.app.take_failures(), []);
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
+
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_millis(16 * self.frames);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
+    }
 }
 
 fn texts(frame: &Frame) -> Vec<String> {
@@ -477,8 +491,9 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
     assert_eq!(
         harness.showing(),
         Showing::Flight,
-        "cleared, not yet landed"
+        "requested, not yet landed"
     );
+    harness.approach();
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     let frame = harness.frame();
@@ -638,49 +653,57 @@ fn drain(log: &AudioLog) -> Vec<AudioCommand> {
 fn play(id: i16) -> AudioCommand {
     AudioCommand::Play {
         sound: nova_data::SoundId(id),
-        volume: Volume::FULL,
+        volume: AudioSettings::default().effects_volume,
     }
 }
 
 #[test]
-fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
+fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
     let (mut harness, log) = Harness::sounding(0);
     harness.frame();
     assert_eq!(drain(&log), [], "the ship browser is silent");
 
     harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(
-        drain(&log),
-        [AudioCommand::StartMusic {
-            volume: Volume::FULL
-        }],
-        "music in space"
-    );
+    assert_eq!(drain(&log), [], "no music in space");
     harness.frame();
 
-    // Requesting clearance is silent.
+    // Requesting clearance over the planet is silent; the approach's
+    // greeting sounds traffic control's beep.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(drain(&log), []);
-    // The clearance beep, then the planet's own sound; the music plays on.
+    harness.approach();
+    assert_eq!(drain(&log), [play(151)], "traffic control");
+    // The landing beep, then, on the spaceport's first frame, the
+    // planet's own ambient sound.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
-    assert_eq!(drain(&log), [play(151), play(LANDING_SOUND)]);
+    assert_eq!(drain(&log), [play(151)]);
     harness.frame();
+    assert_eq!(drain(&log), [play(LANDING_SOUND)]);
+    harness.frame();
+    assert_eq!(drain(&log), [], "not again until its wait is out");
 
-    // Leave's button going down and coming up; taking off is silent.
+    // Leave is silent under the pointer, as `_TrackPlanetButtons`
+    // @0x2996f plays nothing; taking off is silent too, but halts the
+    // planet's sound.
     let leave = harness.item(LEAVE_ITEM).center();
     harness.click(leave);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(drain(&log), [play(600), play(601)]);
+    assert_eq!(
+        drain(&log),
+        [AudioCommand::Halt {
+            sound: nova_data::SoundId(LANDING_SOUND)
+        }]
+    );
     harness.frame();
     assert_eq!(drain(&log), []);
 
-    // Back to the ship browser flight was entered from: the music stops.
+    // Back to the ship browser flight was entered from: still silent.
     harness.press_physical(KeyCode::Escape);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
-    assert_eq!(drain(&log), [AudioCommand::StopMusic]);
+    assert_eq!(drain(&log), []);
 }
 
 /// Where flight draws its hover cursor.

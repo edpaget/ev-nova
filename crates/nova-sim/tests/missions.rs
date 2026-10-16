@@ -26,6 +26,21 @@ struct Courier {
 /// The courier carrying nothing.
 const COURIER: Courier = Courier { drop_off: None };
 
+/// No asteroids anywhere.
+impl nova_sim::AsteroidCatalog for Courier {
+    fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+        Vec::new()
+    }
+
+    fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+        Vec::new()
+    }
+
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+        [None; nova_sim::BOX_GRAPHICS]
+    }
+}
+
 /// Unarmed and ungoverned.
 impl CombatCatalog for Courier {
     fn weapons(&self) -> Vec<WeaponRecord> {
@@ -49,7 +64,6 @@ fn planet(id: i16, x: f32) -> LandingSite {
         frame_size: Some((100, 100)),
         flags: StellarFlags::CAN_LAND,
         min_status: 0,
-        landing_sound: None,
         tech_level: 0,
         special_tech: [0; 8],
         govt: None,
@@ -61,6 +75,7 @@ fn planet(id: i16, x: f32) -> LandingSite {
         type_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
+        animation: nova_sim::catalog::SiteAnimation::default(),
     }
 }
 
@@ -127,12 +142,21 @@ impl PilotCatalog for Courier {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            message: -1,
         };
         vec![star(130, 0.0, 131), star(131, 600.0, 130)]
     }
 
     fn commodity_strings(&self) -> CommodityStrings {
         CommodityStrings::default()
+    }
+
+    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+        nova_sim::catalog::StringPatch::Absent
+    }
+
+    fn buoy_strings(&self) -> Vec<String> {
+        Vec::new()
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -262,23 +286,28 @@ impl nova_sim::TrafficCatalog for Courier {
     }
 }
 
-/// A new pilot of `courier`'s, docked at 128 through a save that says so,
-/// flown and settled.
+/// A new pilot of `courier`'s, resumed on 128 through a save that says
+/// so, flown, landed there and settled.
 fn docked_at_128(courier: &Courier) -> Session {
     let pilot = Pilot::new(courier, "Courier").expect("starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(128);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(courier, docked).expect("flies");
-    assert_eq!(session.landed(), Some(StellarId(128)));
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(courier, saved).expect("flies");
+    assert_eq!(session.landed(), None, "resumed in flight");
+    assert_eq!(land(&mut session), StellarId(128));
     let _ = session.settle_script(courier, &mut NeverFires);
     session
 }
 
-/// Presses L until it lands, the first press selecting a stellar.
+/// Presses L until it lands, the first press requesting a stellar and a
+/// tick between presses for the dock approach.
 fn land(session: &mut Session) -> StellarId {
-    for _ in 0..2 {
+    for press in 0..3 {
+        if press > 0 {
+            session.tick(nova_sim::Controls::default());
+        }
         if let Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) = session.land() {
             return stellar;
         }

@@ -10,7 +10,6 @@ use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::Input;
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -144,15 +143,6 @@ impl Screen for DescDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// Done's sounds as it is clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -161,7 +151,6 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
-    use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -336,8 +325,9 @@ mod tests {
         assert_eq!(desc.first_line(), 0);
     }
 
+    /// `_TrackTextButtons` @0x26bb0 plays nothing under the pointer.
     #[test]
-    fn a_click_on_done_sounds_it_going_down_then_up_and_keys_are_silent() {
+    fn pointer_click_is_silent_as_the_original() {
         let mut desc = desc();
         let done = desc.dialog().item_bounds(DONE_ITEM).expect("Done").center();
         let button = |pressed| Input::PointerButton {
@@ -346,12 +336,29 @@ mod tests {
             at: done,
         };
         desc.input(&button(true));
-        assert_eq!(desc.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(desc.take_sounds(), []);
         desc.input(&button(false));
-        assert_eq!(desc.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
         assert_eq!(desc.take_sounds(), []);
-        let mut desc = self::desc();
-        desc.input(&key(Key::Enter));
         assert_eq!(desc.take_sounds(), []);
+    }
+
+    /// A key that activates Done plays nothing in the original:
+    /// `_ShipDescFilter` @0x510e5 and `_TextDialogFilter` @0x51f77 map
+    /// Return, Enter and Escape to item 1 (@0x51fca-0x51fef) with no
+    /// sound, and `_MyModalDialog` @0x59954 calls no sound routine.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for input in [key(Key::Enter), key(Key::Escape)] {
+            let mut desc = desc();
+            assert_eq!(desc.take_sounds(), []);
+            desc.input(&input);
+            assert!(desc.closed(), "{input:?}");
+            assert_eq!(desc.take_sounds(), [], "{input:?}");
+        }
+        let mut desc = desc();
+        desc.input(&key(Key::Tab));
+        desc.input(&key(Key::Space));
+        assert!(desc.closed(), "Space on Done");
+        assert_eq!(desc.take_sounds(), [], "Space");
     }
 }

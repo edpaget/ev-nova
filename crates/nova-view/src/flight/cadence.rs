@@ -46,9 +46,54 @@
 //! selection and the dialogs among them), so drawing it every frame
 //! shows the same: it has no timer here.
 //!
-//! `_RedrawStatus` (@0x4cac0) redraws everything at once but leaves the
-//! time and the blink as they are; the view does the same by taking a
-//! fresh snapshot without advancing a [`HudCadence`].
+//! `_RedrawStatus` (@0x4cac0) redraws everything at once, then calls
+//! `_DrawStatus` (@0x4cc74), whose radar timer can record the time and
+//! flip the blink when 15 Mac ticks have passed. The view takes a fresh
+//! snapshot without advancing a [`HudCadence`], leaving the time and the
+//! blink to the next advance: in flight that shows the same, as the
+//! frame's own `_DrawStatus` would flip it in the same frame. In port,
+//! where flight doesn't advance, the blink stays as landing left it
+//! through the port's redraws too; the original's flips there show only
+//! in the blank radar's centre arrow, which no landable stock stellar is
+//! far enough out to draw.
+//!
+//! In port ours keeps no Mac-tick clock, so the port's `_DrawStatus`
+//! calls run none of these timers. Each is recorded here, not built:
+//!
+//! - **The 15-Mac-tick radar gate** (@0x4c911-0x4c923). Recorded, not
+//!   built, by operator decision on 2026-10-15. While landed the radar is
+//!   blank: the player's pixel, IFF's black fill and cyan player, and the
+//!   centre arrow. So a radar redraw the gate skips can hide only an IFF
+//!   change, when an outfitter order that buys or sells IFF comes within
+//!   15 Mac ticks (0.25 s) of the last radar redraw, as selling then
+//!   buying IFF with the outfitter's B and S keys can. Ours retakes the
+//!   radar at every port redraw. A refused order runs no timer in the
+//!   original (@0x5c09f-0x5c0ba, @0x5c5d5-0x5c5dd), and one `_DrawStatus`
+//!   follows a whole multi-item buy (@0x5c5a1).
+//! - **Its blink flip** (@0x4c93d-0x4c94f), in the same branch, shows
+//!   only in the blank radar's centre arrow, as above. Ours keeps
+//!   landing's blink.
+//! - **`% 30` nav** (@0x4c88a-0x4c8b6). Recorded, not built, by operator
+//!   decision on 2026-10-15. While docked the nav area holds what the
+//!   port's last nav redraw drew (`FlightView::nav_shown`), so this redraw
+//!   would show a landed `M` or `N`'s write (`_EvalSetExp`
+//!   @0x156f2-0x15705, @0x158fd) a script made since: the destination's
+//!   first stellar, or "No Destination". On 1 in 30 of the port's
+//!   `_DrawStatus` calls the original shows it there, earlier than ours,
+//!   which waits for the next nav redraw it models. Nothing in stock does
+//!   that: every stock `M472` leaves the port after it (`Q25048`).
+//! - **`% 45` target** (@0x4c8b9-0x4c8eb) is unreachable in port. It needs
+//!   a target, and landing clears it (`_PlayerLandOnStellar` @0x6332f), as
+//!   a ship purchase does (@0x5f014). Nothing sets one while docked, and
+//!   ours' `Session::dock` clears it too.
+//! - **The port points where the timer runs with no hook in ours**: the
+//!   port opening's `_DrawStatus` (@0x5fc5c), a recharge's (@0x5fe05;
+//!   ours redraws only the fuel gauge, `FlightView::recharge`), a trade's
+//!   (@0x5e33a, @0x5e59e), the mission computer's close (@0x600a6) and
+//!   `_DoPlayerInfoDialog`'s `_RefreshSAT` (@0x5a725). None of these can
+//!   change the blank radar, and no outfitter order can follow one within
+//!   15 Mac ticks, as the outfitter has to be opened first. Their blink
+//!   flips show only in the arrow.
 //!
 //! The reading of
 //! [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence) says whether the

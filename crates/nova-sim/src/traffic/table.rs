@@ -262,6 +262,11 @@ pub struct ShipKind {
     /// class's: the original reads the class's items (+0x76,
     /// `_ShipCanSelfRepair` @0x91e5-0x922d).
     pub self_repair: bool,
+    /// Its `Holds` in tons, the size of a negative one (ship-class +0x00,
+    /// as `_LoadObjectData` negates it @0x7a6a5-0x7a6d3): the most a
+    /// fleet's random cargo gives it (see
+    /// [`spawn::fleet`](crate::traffic::spawn::fleet)).
+    pub holds: u16,
     /// The `shïp`'s own `Armor` (+0x60), before its default items: what a
     /// derelict's armour is cut from ([`derelict_armor`](crate::person::derelict_armor)).
     /// A person's fitted ship keeps its ship type's, unscaled by its
@@ -551,6 +556,7 @@ pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arse
         appear_on: record.appear_on.clone(),
         cloak: CloakGear::of(record.fields.flags2, &defaults, outfits),
         self_repair: self_repair::has_gear(&defaults, outfits),
+        holds: crate::market::hold_tons(record.fields.holds),
         base_armor: f32::from(record.fields.armor.max(0)),
     }
 }
@@ -907,6 +913,8 @@ mod tests {
                 govt: Some(GovtId(131)),
                 link_syst,
                 appear_on: Test::default(),
+                quote: None,
+                flags: 0,
             };
             vec![
                 fleet(140, 201, 202, 131),
@@ -1281,6 +1289,17 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_type_carries_its_holds_size() {
+        let holding = |holds| {
+            let record = ship(204, ShipFields { holds, ..FAST });
+            kind(&record, &[], &arsenal()).holds
+        };
+        assert_eq!(holding(20), 20);
+        assert_eq!(holding(-35), 35, "a negative Holds is its size");
+        assert_eq!(holding(0), 0);
+    }
+
+    #[test]
     fn a_tables_appear_on_is_its_listed_ship_types_and_none_for_the_rest() {
         let mut table = SpawnTable::default();
         table.ships.insert(
@@ -1446,6 +1465,8 @@ mod tests {
                 govt: Some(GovtId(131)),
                 link_syst: 131,
                 appear_on: Test::default(),
+                quote: None,
+                flags: 0,
             };
             let escort = EscortRecord {
                 ship: ShipId(206),

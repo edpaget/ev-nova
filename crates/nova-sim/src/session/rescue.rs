@@ -269,7 +269,13 @@ impl Session {
         self.condition = Condition::Intact;
         self.pod = None;
         self.target = None;
-        self.nav_target = None;
+        // The nav mode and the dock request go to -1, and the pilot is past
+        // the tutorial, as at every flight start (`_ResetPlayer`
+        // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
+        // modules).
+        self.nav = crate::navigation::NavMode::Off;
+        self.dock = None;
+        self.tutorial = crate::tutorial::Tutorial::SEASONED;
         self.secondary = None;
         self.pilot.jumped_from = None;
         self.pilot.course.clear();
@@ -927,7 +933,7 @@ mod tests {
         session.recent_rank = Some(RankId(140));
         session.queued.sound = Some(SoundId(200));
         session.target = Some(NpcId(5));
-        session.nav_target = Some(StellarId(128));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         session.pilot.ranks.insert(RankId(141));
         session.blessing_ranks.clear();
         session.scan_latches = Latches {
@@ -946,7 +952,7 @@ mod tests {
         assert_eq!(session.recent_rank, None);
         assert_eq!(session.queued.sound, None);
         assert_eq!(session.target, None);
-        assert_eq!(session.nav_target, None);
+        assert_eq!(session.nav, crate::navigation::NavMode::Off, "_ResetPlayer");
         assert_eq!(session.blessing_ranks, session.pilot.ranks, "taken again");
         assert_eq!(session.scan_latches, Latches::ARMED);
     }
@@ -1050,14 +1056,13 @@ mod tests {
     }
 
     #[test]
-    fn a_strict_rescued_pilot_flown_again_resumes_docked_at_the_first_stellar() {
+    fn a_strict_rescued_pilot_flown_again_resumes_on_the_first_stellar() {
         let catalog = rescuing();
         let mut session = strict(due(&catalog));
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("decodes");
         let resumed = Session::fly(&catalog, saved).expect("flies");
-        resumed.assert_docked_among_shown();
         assert_eq!(resumed.system(), SystemId(131));
-        assert_eq!(resumed.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&resumed), Some(StellarId(140)));
     }
 }

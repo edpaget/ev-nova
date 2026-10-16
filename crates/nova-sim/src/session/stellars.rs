@@ -115,11 +115,13 @@ use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
-use crate::landing::{LandingReach, StellarShown, landing_radius, landing_reach};
+use crate::gate::GateKind;
+use crate::landing::{LandingReach, StellarShown, TypeWidth, landing_radius, landing_reach};
 use crate::legal::{self, Crime, LegalCode};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Countdown;
 use crate::story::wreck::{self, Tick};
+use std::collections::BTreeMap;
 
 /// How many killings the player is convicted of for shooting a stellar
 /// down: `_SlapWithPenalty` runs ten times (@0x374e1-0x3751f).
@@ -207,6 +209,17 @@ impl Session {
             type_width: self.rebuilt.type_width(site),
         };
         landing_reach(site, shown, self.rules.source_for(RuleKey::LandingDistance))
+    }
+
+    /// The width each hypergate and wormhole shown takes its entry box
+    /// by: the one `_GetStellarSpriteXSize` reads of its `Type` master
+    /// (see [`gate_entry`](crate::traffic::gate_entry)).
+    pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
+        self.sites
+            .iter()
+            .filter(|site| GateKind::of(site.flags2).is_some())
+            .map(|site| (site.id, self.rebuilt.type_width(site)))
+            .collect()
     }
 
     /// `Y`: destroys `stellar` (see the module docs), drawing on `chance`
@@ -519,24 +532,81 @@ mod tests {
         assert_eq!(session.landed(), None);
     }
 
+    /// F5 picks as `_FindNearestStellar` does (@0x276c-0x2888), a
+    /// destroyed can-land stellar included, and beeps (@0x69e9a).
     #[test]
-    fn f5_skips_a_destroyed_stellar() {
+    fn f5_picks_a_destroyed_stellar_as_find_nearest_stellar_does() {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        session.take_sounds();
         assert_eq!(
             session.select_stellar(StellarPick::Nearest),
             Some(StellarId(128))
         );
-        run(&mut session, "Y128");
-        assert_eq!(
-            session.select_stellar(StellarPick::Nearest),
-            Some(StellarId(129))
+        assert!(
+            session
+                .take_sounds()
+                .contains(&crate::SimSound::NavSelected)
         );
         run(&mut session, "U128");
         assert_eq!(
             session.select_stellar(StellarPick::Nearest),
             Some(StellarId(128))
         );
+    }
+
+    /// `catalog` with every stellar but 128 stripped of its flags.
+    fn only_128_can_land(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+        for (_, sites) in &mut catalog.sites {
+            for site in sites {
+                if site.id.0 != 128 {
+                    site.flags = 0;
+                }
+            }
+        }
+        catalog
+    }
+
+    /// An untargeted L selects `_FindNearestStellar`'s pick silently
+    /// (@0x276c-0x2888, @0x6a8ed-0x6a932) and the dock request refuses it
+    /// as not landable (@0x66977 → 0x67cda).
+    fn assert_l_selects_128_and_cannot_land(session: &mut Session) {
+        session.take_sounds();
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(128),
+                station: false,
+            })
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(128)));
+        assert_eq!(
+            session.nav_mode(),
+            crate::navigation::NavMode::Stellar(Some(StellarId(128)))
+        );
+        assert_eq!(session.dock_request(), None);
+        assert!(
+            !session
+                .take_sounds()
+                .contains(&crate::SimSound::NavSelected)
+        );
+    }
+
+    #[test]
+    fn an_untargeted_l_selects_the_only_can_land_stellar_destroyed_and_says_it_cannot_land() {
+        let catalog = only_128_can_land(wrecking());
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        assert_l_selects_128_and_cannot_land(&mut session);
+    }
+
+    #[test]
+    fn an_untargeted_l_selects_an_intact_stellar_landable_only_once_destroyed_and_says_it_cannot_land()
+     {
+        let catalog = only_128_can_land(ruins());
+        let mut session = quiet(&catalog);
+        assert_l_selects_128_and_cannot_land(&mut session);
     }
 
     /// [`wrecking`] with 128 and 140 landable only once destroyed.
@@ -838,7 +908,8 @@ mod tests {
     // The NPCs' destinations.
 
     /// [`wrecking`] with two ships of düde 128, fast ship 129, flying in
-    /// 130.
+    /// 130, its stellar 129 within the bound on a destination
+    /// ([`far_129_reachable`](crate::testkit::far_129_reachable)).
     fn trafficked() -> FakePilotCatalog {
         use crate::catalog::{DudeId, DudeRecord, GovtId, ShipId, SystemTraffic};
         let mut dude_types = [(-1, 0); 8];
@@ -863,7 +934,7 @@ mod tests {
                 },
             )],
             ship_records: vec![crate::testkit::ship(129, crate::testkit::FAST)],
-            ..wrecking()
+            ..crate::testkit::far_129_reachable(wrecking())
         }
     }
 
@@ -918,11 +989,10 @@ mod tests {
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(catalog, saved).expect("flies");
         assert_eq!(
-            flown.landed(),
+            crate::testkit::resumed_on(&flown),
             Some(StellarId(140)),
-            "{script}: docked there"
+            "{script}: on it"
         );
-        flown.assert_docked_among_shown();
         session
     }
 
@@ -1046,14 +1116,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_saved_docked_at_a_stellar_destroyed_since_resumes_docked_there() {
+    fn a_pilot_saved_docked_at_a_stellar_destroyed_since_resumes_on_it() {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
         land_now(&mut session).expect("lands");
         run(&mut session, "Y128");
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
-        assert_eq!(flown.landed(), Some(StellarId(128)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(128)));
         assert!(shown_destroyed(&flown, 128));
         assert_eq!(destroyed(&flown, 128), Some(left(2)));
     }
@@ -2091,7 +2161,11 @@ mod tests {
             position: offset,
             ..ShipState::default()
         };
-        session.nav_target = Some(StellarId(128));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(128),
+            permission: crate::clearance::CLEARED,
+        });
         match session.land()? {
             LandPress::Outcome(LandOutcome::Landed(stellar)) => Ok(stellar),
             other => panic!("not a landing: {other:?}"),
@@ -2234,6 +2308,31 @@ mod tests {
     }
 
     #[test]
+    fn an_npc_enters_a_gate_by_the_width_its_type_master_gives() {
+        // 128, destroyed, a hypergate 100 wide: a reach of 25, and of 37
+        // once a rebuild point has unloaded its master (150 wide).
+        let mut catalog = ruin(100, false);
+        catalog.sites[0].1[0].flags2 = crate::gate::HYPERGATE;
+        let entering = |rebuilt: bool| {
+            let mut session = quiet(&catalog);
+            run(&mut session, "Y128");
+            if rebuilt {
+                rebuild(&mut session, &catalog);
+            }
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            let mut npc =
+                crate::testkit::npc(0, crate::stats::ShipStats::new(crate::testkit::FAST, &[]));
+            npc.goal = Goal::EnterGate(StellarId(128));
+            npc.state.position = Vec2::new(30.0, 0.0);
+            let id = session.traffic.add_npc(npc);
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            session.npc(id).expect("there").entering_gate()
+        };
+        assert!(!entering(false), "30 out of 25");
+        assert!(entering(true), "30 within 37");
+    }
+
+    #[test]
     fn a_session_flown_has_rebuilt_its_masters_at_once() {
         let catalog = ruin(100, false);
         let session = quiet(&catalog);
@@ -2260,9 +2359,11 @@ mod tests {
         catalog
     }
 
-    /// The stellar a click at (`x`, `y`) picks.
+    /// The stellar a click at (`x`, `y`) picks, with none selected
+    /// before it (a click passes over the one selected).
     fn click(session: &mut Session, x: f32, y: f32) -> Option<StellarId> {
-        session.select_stellar(StellarPick::At(Vec2::new(x, y)))
+        session.nav = crate::NavMode::Off;
+        crate::testkit::click_stellar(session, Vec2::new(x, y))
     }
 
     #[test]
@@ -2490,7 +2591,7 @@ mod tests {
         pilot.system = SystemId(131);
         pilot.stellar = Some(StellarId(200));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert_eq!(session.landed(), Some(StellarId(200)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(200)));
         assert_eq!(
             session.system(),
             SystemId(130),

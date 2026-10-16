@@ -10,6 +10,13 @@
 //!
 //! The blink follows the session's frame counter (see
 //! [`nova_sim::red_alert`]), not the HUD's `TickCount` cadence.
+//!
+//! The double-time icon (`_HandleDoubleTimeSprite` @0x2e5a7-0x2e61c):
+//! `cïcn` [`DOUBLE_TIME_CICN`], one frame (`_LoadSprites`
+//! @0x21a0e-0x21a3d), shown at (0, 0) while double time is on
+//! (@0x2e5ae-0x2e5df). It is on the interface layer too, added after the
+//! Red Alert's sprite (@0x20390-0x203a4 against @0x20304-0x20312), so it
+//! is drawn over it.
 
 use nova_sim::AlertIcon;
 
@@ -30,6 +37,14 @@ pub fn draw_red_alert(list: &mut DrawList, icon: AlertIcon, width: u32) {
     list.picture(ImageKey::icon(icon.cicn()), alert_origin(width));
 }
 
+/// The `cïcn` of the double-time icon (0x4e20, @0x21a0e).
+pub const DOUBLE_TIME_CICN: i16 = 20000;
+
+/// Draws the double-time icon at the top left.
+pub fn draw_double_time(list: &mut DrawList) {
+    list.picture(ImageKey::icon(DOUBLE_TIME_CICN), Point::new(0.0, 0.0));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,6 +54,20 @@ mod tests {
     fn the_icon_sits_at_the_playfields_top_right() {
         assert_eq!(alert_origin(24), Point::new(806.0, 0.0));
         assert_eq!(alert_origin(32), Point::new(798.0, 0.0));
+    }
+
+    #[test]
+    fn the_double_time_icon_is_cicn_20000_at_the_top_left() {
+        let mut list = DrawList::new();
+        draw_double_time(&mut list);
+        let commands: Vec<_> = list.iter().cloned().collect();
+        assert_eq!(
+            commands,
+            [DrawCommand::Picture {
+                image: ImageKey::icon(20000),
+                top_left: Point::new(0.0, 0.0),
+            }]
+        );
     }
 
     #[test]

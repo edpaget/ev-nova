@@ -362,6 +362,22 @@ impl From<RuleSource> for DecayStep {
     }
 }
 
+/// Which of `circles`, each an item with its centre and reach, the segment
+/// from `from` to `to` meets first, and where: the one of least
+/// [`contact`], the earlier of a tie; `from` itself for one it starts
+/// within.
+pub(super) fn nearest_contact<T>(
+    from: Vec2,
+    to: Vec2,
+    circles: impl IntoIterator<Item = (T, Vec2, f32)>,
+) -> Option<(T, Vec2)> {
+    circles
+        .into_iter()
+        .filter_map(|(item, centre, reach)| Some((contact(from, to, centre, reach)?, item)))
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(t, item)| (item, from + (to - from) * t))
+}
+
 /// A shot's number in its fight, never reused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShotId(pub u32);
@@ -849,6 +865,13 @@ impl Shot {
         sides.shot_can_hit(self, target)
     }
 
+    /// Whether its proximity fuse is armed: it has flown past its
+    /// weapon's `ProxSafety` (@0x371fc-0x3721e, @0x3720e-0x3721e).
+    #[must_use]
+    pub fn fuse_armed(&self) -> bool {
+        self.age > self.weapon.prox_safety
+    }
+
     /// Whether it has flown its life.
     #[must_use]
     pub fn expired(&self) -> bool {
@@ -912,23 +935,16 @@ impl Shot {
     #[must_use]
     pub fn hit(&self, was: Vec2, sides: &Sides) -> Option<Meeting> {
         let first = |fuse: Fuse, prox: f32| {
-            sides
-                .targets
-                .iter()
-                .filter(|target| self.can_hit(target, sides))
-                .filter_map(|target| {
-                    let reach = target.radius + prox;
-                    Some((
-                        contact(was, self.position, target.position, reach)?,
-                        target.ship,
-                    ))
-                })
-                .min_by(|(a, _), (b, _)| a.total_cmp(b))
-                .map(|(t, ship)| Meeting {
-                    ship,
-                    at: was + (self.position - was) * t,
-                    fuse,
-                })
+            nearest_contact(
+                was,
+                self.position,
+                sides
+                    .targets
+                    .iter()
+                    .filter(|target| self.can_hit(target, sides))
+                    .map(|target| (target.ship, target.position, target.radius + prox)),
+            )
+            .map(|(ship, at)| Meeting { ship, at, fuse })
         };
         let safety = self.weapon.prox_safety;
         let prox = self.weapon.prox_radius;
@@ -939,7 +955,7 @@ impl Shot {
             .then(|| first(Fuse::Contact, 0.0))
             .flatten();
         touched.or_else(|| {
-            (self.age > safety && prox > 0.0)
+            (self.fuse_armed() && prox > 0.0)
                 .then(|| first(Fuse::Proximity, prox))
                 .flatten()
         })
@@ -1048,6 +1064,24 @@ mod tests {
             -4.0,
         );
         assert!((back.heading - 356.0).abs() < 1e-4, "{back:?}");
+    }
+
+    #[test]
+    fn a_shots_fuse_is_armed_once_it_has_flown_past_its_prox_safety() {
+        let mut shot = Shot::launch(
+            WeaponSpec::new(&WeaponRecord {
+                prox_safety: 3,
+                ..weapon(128)
+            }),
+            FIRER,
+            FIRER,
+            &state(0.0, 0.0, 0.0, 0.0, 0.0),
+            0.0,
+        );
+        for (age, armed) in [(0, false), (3, false), (4, true), (40, true)] {
+            shot.age = age;
+            assert_eq!(shot.fuse_armed(), armed, "{age}");
+        }
     }
 
     #[test]
@@ -1370,6 +1404,34 @@ mod tests {
                 &among(&[target(2, 50.0, 8.1, Condition::Intact)])
             ),
             None
+        );
+    }
+
+    #[test]
+    fn a_shot_touches_a_ship_within_its_radius_alone_not_its_fuses_reach() {
+        let shot = passing(3);
+        let met = |was: Vec2, targets: &[Target]| shot.hit(was, &among(targets));
+        let fused = [target(2, 50.0, 7.9, Condition::Intact)];
+        assert_eq!(
+            met(Vec2::ZERO, &fused).map(|met| met.fuse),
+            Some(Fuse::Proximity),
+            "the fuse alone"
+        );
+        let touched = [
+            target(3, 80.0, 4.9, Condition::Intact),
+            target(2, 50.0, 4.9, Condition::Intact),
+        ];
+        let first = met(Vec2::ZERO, &touched).expect("touched");
+        assert_eq!(
+            (first.ship, first.fuse),
+            (ShipRef::Npc(NpcId(2)), Fuse::Contact),
+            "the nearer along the way"
+        );
+        assert!(first.at.x > 48.0 && first.at.x < 50.0, "{first:?}");
+        let from_20 = met(Vec2::new(20.0, 0.0), &touched).expect("touched");
+        assert!(
+            (from_20.at.x - first.at.x).abs() < 1e-3 && from_20.at.y.abs() < 1e-3,
+            "met at the same point on a shorter way: {from_20:?}"
         );
     }
 
@@ -2856,5 +2918,31 @@ mod tests {
         let mut never = Ranged::of(&[(1000, 0)]);
         at_frame(&mut plain, 0, &[below()], &mut never);
         assert!(!never.was_asked(1000));
+    }
+
+    #[test]
+    fn the_nearest_contact_is_the_first_met_and_a_tie_goes_to_the_earlier() {
+        let (was, now) = (Vec2::ZERO, Vec2::new(40.0, 0.0));
+        let circle = |name, x, r| (name, Vec2::new(x, 0.0), r);
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 30.0, 5.0), circle('a', 20.0, 5.0)]),
+            Some(('a', Vec2::new(15.0, 0.0))),
+            "the nearest along the way, whatever the order"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 20.0, 5.0), circle('a', 20.0, 5.0)]),
+            Some(('b', Vec2::new(15.0, 0.0))),
+            "a tie goes to the earlier"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 30.0, 5.0), circle('a', 2.0, 5.0)]),
+            Some(('a', was)),
+            "one it starts within, met where it was"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('a', 60.0, 5.0)]),
+            None,
+            "none on its way"
+        );
     }
 }

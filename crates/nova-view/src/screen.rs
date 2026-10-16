@@ -112,6 +112,22 @@ pub trait Screen {
     /// it. A screen that acts on held keys over time stops acting on them.
     /// Does nothing by default.
     fn release_keys(&mut self) {}
+    /// The audio side is not waiting on a keyed click: its button-down
+    /// sound has ended and its button-up sound has started, or there was
+    /// nothing to wait for (sound off, no button-down sound, no audio).
+    /// The app calls it after each time it feeds the audio side, so an
+    /// action held for the click ([`UiSound::ButtonKeyed`]) runs now.
+    /// Does nothing by default.
+    ///
+    /// [`UiSound::ButtonKeyed`]: crate::sound::UiSound::ButtonKeyed
+    fn keyed_click_ended(&mut self) {}
+    /// Whether the screen has asked to quit since this was last taken,
+    /// outside an input's own [`ScreenAction`]: a quit that waited out a
+    /// delay on a tick, or one asked by an input replayed after a keyed
+    /// click. Each ask is reported once. `false` by default.
+    fn take_quit(&mut self) -> bool {
+        false
+    }
     /// The sounds the screen has made since they were last taken, in
     /// order; taking them empties the list. None by default.
     fn take_sounds(&mut self) -> Vec<Sound> {
@@ -257,6 +273,16 @@ mod tests {
         assert_eq!(Diagnostic::Sim(sim).to_string(), sim.to_string());
         let unreadable = Diagnostic::Unreadable("wëap 140: no spïn 3005".to_owned());
         assert_eq!(unreadable.to_string(), "wëap 140: no spïn 3005");
+    }
+
+    #[test]
+    fn a_keyed_click_ending_does_nothing_and_no_quit_is_asked_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        screen.keyed_click_ended();
+        assert!(!screen.take_quit());
+        assert_eq!(screen.take_sounds(), []);
+        assert_eq!(counter.elapsed, Duration::ZERO);
     }
 
     #[test]

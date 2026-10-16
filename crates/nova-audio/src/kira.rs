@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::io::{self, Cursor, Write};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ::kira::backend::Backend;
 use ::kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
@@ -167,6 +168,9 @@ pub struct KiraAudio<B: Backend = DefaultBackend> {
     track: Option<StreamingSoundHandle<FromFileError>>,
     /// The level last applied to the music.
     music_level: Option<Decibels>,
+    /// Whether the music last started was stopped or faded out by a
+    /// command, so its stopping is not its end.
+    music_stopped: bool,
 }
 
 impl KiraAudio<DefaultBackend> {
@@ -202,6 +206,7 @@ impl<B: Backend> KiraAudio<B> {
             engine_level: None,
             track: None,
             music_level: None,
+            music_stopped: false,
         }
     }
 
@@ -357,24 +362,30 @@ impl<B: Backend> KiraAudio<B> {
         }
     }
 
-    /// Stops the music, if it is playing.
-    fn stop_music(&mut self) {
+    /// Stops the music, if it is playing, over `fade`.
+    fn stop_music(&mut self, fade: Duration) {
         if let Some(track) = &mut self.track {
-            track.stop(Tween::default());
+            track.stop(Tween {
+                duration: fade,
+                ..Tween::default()
+            });
+            self.music_stopped = true;
         }
     }
 
-    /// Streams the soundtrack from the top, looping, at `level`. Music that
-    /// does not decode is reported once and never tried again.
+    /// Streams the soundtrack from the top, once, at `level`: it plays to
+    /// its end and stops. Music that does not decode is reported once and
+    /// never tried again.
     fn start_music(&mut self, level: Decibels) {
-        self.stop_music();
+        self.stop_music(Tween::default().duration);
         self.track = None;
+        self.music_stopped = false;
         let Some(bytes) = &self.music else {
             return;
         };
         match StreamingSoundData::from_cursor(Cursor::new(Arc::clone(bytes))) {
             Ok(data) => {
-                if let Ok(track) = self.manager.play(data.loop_region(..).volume(level)) {
+                if let Ok(track) = self.manager.play(data.volume(level)) {
                     self.track = Some(track);
                     self.music_level = Some(level);
                 }
@@ -417,7 +428,8 @@ impl<B: Backend> Audio for KiraAudio<B> {
                     track.set_volume(level, Tween::default());
                 }
             }
-            AudioCommand::StopMusic => self.stop_music(),
+            AudioCommand::StopMusic => self.stop_music(Tween::default().duration),
+            AudioCommand::FadeOutMusic(fade) => self.stop_music(fade),
             AudioCommand::Halt { sound } => self.halt(sound),
             AudioCommand::StopEffects => {
                 for (effect, _, _) in &mut self.effects {
@@ -432,6 +444,22 @@ impl<B: Backend> Audio for KiraAudio<B> {
                 self.stop_loop();
             }
         }
+    }
+
+    fn music_ended(&self) -> bool {
+        !self.music_stopped
+            && self
+                .track
+                .as_ref()
+                .is_some_and(|track| track.state() == PlaybackState::Stopped)
+    }
+
+    /// Whether one of the one-shot effects started of `sound` has not
+    /// stopped.
+    fn playing(&self, sound: SoundId) -> bool {
+        self.effects
+            .iter()
+            .any(|(handle, _, id)| *id == sound && handle.state() != PlaybackState::Stopped)
     }
 }
 
@@ -735,6 +763,37 @@ mod tests {
     }
 
     #[test]
+    fn a_played_sound_is_playing_until_it_is_over() {
+        let (mut audio, _) = adapter(None);
+        assert!(!audio.playing(SoundId(1)), "never played");
+        run(&mut audio, play(1, 1.0));
+        assert!(audio.playing(SoundId(1)));
+        assert!(!audio.playing(SoundId(3)), "another snd");
+
+        let short = FakeBank {
+            sounds: vec![(SoundId(1), mono(vec![0x80; 2]))],
+            ..FakeBank::default()
+        };
+        let mut audio = KiraAudio::with_manager(audio.manager, short, None);
+        run(&mut audio, play(1, 1.0));
+        assert!(!audio.playing(SoundId(1)), "over");
+        // Started, before the backend has played any of it.
+        audio.run(play(1, 1.0));
+        assert!(audio.playing(SoundId(1)), "again");
+    }
+
+    #[test]
+    fn only_a_sound_played_as_an_effect_counts_as_playing() {
+        let (mut audio, _) = adapter(None);
+        run(&mut audio, exclusive(1));
+        run(&mut audio, unless_playing(1));
+        run(&mut audio, start_loop(1, 1.0));
+        assert!(!audio.playing(SoundId(1)));
+        run(&mut audio, play(3, 1.0));
+        assert!(!audio.playing(SoundId(3)), "a missing snd never plays");
+    }
+
+    #[test]
     fn a_missing_sound_warns_once_and_plays_nothing() {
         let (mut audio, warnings) = adapter(None);
         run(&mut audio, play(3, 1.0));
@@ -1017,13 +1076,80 @@ mod tests {
         assert_eq!(warnings.text(), "");
     }
 
+    /// Processes `audio` until the music has stopped, or gives up after
+    /// a few seconds of wall time: the soundtrack decodes on its own
+    /// thread, which the processing may have to wait for.
+    fn process_until_the_music_stops(audio: &mut Adapter) {
+        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while audio.music_state() != Some(PlaybackState::Stopped)
+            && std::time::Instant::now() < give_up
+        {
+            let backend = audio.manager.backend_mut();
+            backend.on_start_processing();
+            backend.process();
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
+    }
+
+    #[test]
+    fn the_music_plays_once_to_its_end_and_is_not_looped() {
+        let (mut audio, _) = adapter(Some(silent_mp3(40)));
+        run(&mut audio, start_music(1.0));
+        assert!(!audio.music_ended(), "still playing");
+        process_until_the_music_stops(&mut audio);
+        assert_eq!(audio.music_state(), Some(PlaybackState::Stopped));
+        assert!(audio.music_ended());
+        run(&mut audio, start_music(1.0));
+        assert!(!audio.music_ended(), "started again");
+    }
+
+    #[test]
+    fn restarted_music_counts_as_ended_when_it_plays_out() {
+        let (mut audio, _) = adapter(Some(silent_mp3(40)));
+        run(&mut audio, start_music(1.0));
+        run(&mut audio, AudioCommand::StopMusic);
+        run(&mut audio, start_music(1.0));
+        process_until_the_music_stops(&mut audio);
+        assert_eq!(audio.music_state(), Some(PlaybackState::Stopped));
+        assert!(audio.music_ended(), "the restart played to its end");
+    }
+
+    #[test]
+    fn fading_the_music_out_stops_it_once_the_fade_is_over() {
+        let (mut audio, _) = adapter(Some(silent_mp3(400)));
+        run(&mut audio, start_music(1.0));
+        run(
+            &mut audio,
+            AudioCommand::FadeOutMusic(std::time::Duration::from_millis(20)),
+        );
+        assert_eq!(audio.music_state(), Some(PlaybackState::Stopping));
+        process_until_the_music_stops(&mut audio);
+        assert_eq!(audio.music_state(), Some(PlaybackState::Stopped));
+        assert!(!audio.music_ended(), "faded out, not played to its end");
+    }
+
+    #[test]
+    fn stopped_music_has_not_ended() {
+        let (mut audio, _) = adapter(Some(silent_mp3(40)));
+        assert!(!audio.music_ended(), "never started");
+        run(&mut audio, start_music(1.0));
+        run(&mut audio, AudioCommand::StopMusic);
+        process_until_the_music_stops(&mut audio);
+        assert!(!audio.music_ended());
+    }
+
     #[test]
     fn without_music_nothing_plays_and_nothing_warns() {
         let (mut audio, warnings) = adapter(None);
         run(&mut audio, start_music(1.0));
         run(&mut audio, AudioCommand::SetMusicVolume(Volume::FULL));
         run(&mut audio, AudioCommand::StopMusic);
+        run(
+            &mut audio,
+            AudioCommand::FadeOutMusic(std::time::Duration::ZERO),
+        );
         assert_eq!(audio.music_state(), None);
+        assert!(!audio.music_ended());
         assert_eq!(warnings.text(), "");
     }
 

@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::RecordingAudio;
-use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
+use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -42,6 +42,7 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record};
@@ -180,14 +181,14 @@ fn ship_anim() -> Vec<u8> {
 }
 
 /// An independent `sÿst` at map (`x`, 0) with these hyperlinks and one
-/// stellar; every other slot is -1.
+/// stellar, and no message buoy; every other slot is -1.
 fn system(x: i16, links: &[i16], stellar: i16) -> Vec<u8> {
     let mut bytes = vec![0; System::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[x, 0]);
     put_i16s(&mut bytes, 0x04, &[-1; 32]);
     put_i16s(&mut bytes, 0x04, links);
     put_i16s(&mut bytes, 0x24, &[stellar]);
-    put_i16s(&mut bytes, 0x66, &[-1]);
+    put_i16s(&mut bytes, 0x66, &[-1, -1]);
     bytes
 }
 
@@ -233,13 +234,38 @@ fn data() -> Rc<GameData> {
 
 /// [`data`], with `ship` as `shïp` 128.
 fn data_with(ship: &[u8]) -> Rc<GameData> {
-    let fork = ForkBuilder::new()
+    data_of(ship, &system(100, &[130], 129), None)
+}
+
+/// The buoy Beta shows in [`buoyed_data`].
+const HELLO: &str = "Message Buoy: hello.";
+
+/// [`data`], with Beta's `Message` 1 and `STR#` 1000 holding [`HELLO`].
+fn buoyed_data() -> Rc<GameData> {
+    buoyed_beta(1, 129)
+}
+
+/// [`data`], with Beta's `Message` `message`, its one stellar `stellar`
+/// (-1 for none), and `STR#` 1000 holding [`HELLO`].
+fn buoyed_beta(message: i16, stellar: i16) -> Rc<GameData> {
+    let mut beta = system(100, &[130], stellar);
+    put_i16s(&mut beta, 0x68, &[message]);
+    let mut list = 1u16.to_be_bytes().to_vec();
+    list.push(u8::try_from(HELLO.len()).expect("short"));
+    list.extend(HELLO.as_bytes());
+    data_of(&ship(), &beta, Some(&list))
+}
+
+/// [`data`], with `ship` as `shïp` 128, `beta` as Beta's `sÿst`, and
+/// `buoys`, if any, as `STR#` 1000.
+fn data_of(ship: &[u8], beta: &[u8], buoys: Option<&[u8]>) -> Rc<GameData> {
+    let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Courier"), ship)
         .resource(ShipAnim::TYPE, 128, None, &ship_anim())
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[129], 128))
-        .resource(System::TYPE, 129, Some(b"Beta"), &system(100, &[130], 129))
+        .resource(System::TYPE, 129, Some(b"Beta"), beta)
         .resource(System::TYPE, 130, Some(b"Gamma"), &system(200, &[], 130))
         .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar())
         .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &stellar())
@@ -258,10 +284,11 @@ fn data_with(ship: &[u8]) -> Rc<GameData> {
             128,
             Some(b"A food surplus"),
             &food_surplus(),
-        )
-        .build()
-        .bytes;
-    let file = OneFile(fork);
+        );
+    if let Some(list) = buoys {
+        fork = fork.resource(StrList::TYPE, 1000, Some(b"Message Buoy Strings"), list);
+    }
+    let file = OneFile(fork.build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
@@ -532,6 +559,19 @@ impl Harness {
         frame
     }
 
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
+    }
+
     /// Sends `seconds` of redraws and returns the last frame.
     fn run(&mut self, seconds: u64) -> Frame {
         let mut last = None;
@@ -577,7 +617,9 @@ impl Harness {
     fn steer(&mut self, out: bool) {
         let ship = self.ship();
         let outward = ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y;
-        let drifting_wrong = if out { outward < 0.0 } else { outward > 0.0 };
+        // A crawl, as a ship at rest off the centre can drift, isn't
+        // drifting wrong: Down would hold it there.
+        let drifting_wrong = if out { outward < -1e-3 } else { outward > 1e-3 };
         let facing = ship.position.length() == 0.0 || {
             let away = nova_sim::flight::heading_of(ship.position);
             let way = if out { away } else { away + 180.0 };
@@ -782,6 +824,34 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
 }
 
 #[test]
+fn a_jump_into_a_system_with_a_message_buoy_shows_the_buoy_in_place_of_the_arrival() {
+    let mut harness = Harness::flying_over(buoyed_data(), SharedChance::default());
+    harness.jump_to_beta();
+    assert_eq!(harness.flight().message(), Some(HELLO));
+    let mut plain = Harness::flying();
+    plain.jump_to_beta();
+    assert_eq!(
+        plain.flight().message(),
+        Some("Jumping into the Beta system on June 24, 1177."),
+        "no buoy at -1"
+    );
+}
+
+#[test]
+fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
+    let mut harness = Harness::flying_over(buoyed_beta(1, -1), SharedChance::default());
+    harness.jump_to_beta();
+    assert_eq!(harness.flight().message(), Some(HELLO), "the buoy alone");
+    let mut plain = Harness::flying_over(buoyed_beta(-1, -1), SharedChance::default());
+    plain.jump_to_beta();
+    assert_eq!(
+        plain.flight().message(),
+        Some("Jumping into the Beta system on June 24, 1177. No stellar objects present."),
+        "no buoy at -1: the suffix shows"
+    );
+}
+
+#[test]
 fn j_straight_after_arriving_jumps_on_to_the_next_system() {
     let mut harness = Harness::flying();
     harness.out_towards(130);
@@ -862,9 +932,50 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
         .collect();
     let play = |id| AudioCommand::Play {
         sound: nova_data::SoundId(id),
-        volume: Volume::FULL,
+        volume: AudioSettings::default().effects_volume,
     };
     assert_eq!(plays, [play(128), play(130)]);
+}
+
+/// The fixture has no `snd `s, so the warp-up's length is the engine's
+/// stand-in, far longer than the jump's effect: it still plays as the
+/// ship arrives, as stock 128 does. The arrival halts it, 128 then 129,
+/// before the warp-out, as `_HandlePlayer`'s warp end does (@0x6c6b7,
+/// @0x6c6d2, then 130 @0x6c706).
+#[test]
+fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
+    let audio = RecordingAudio::new();
+    let log = audio.log();
+    let mut harness = Harness::flying();
+    harness.app = harness
+        .app
+        .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
+    harness.press(Key::Char('m'));
+    let beta = harness.on_map(129);
+    harness.click(beta);
+    harness.press(Key::Char('m'));
+    harness.fly_out();
+    log.borrow_mut().clear();
+    harness.jump_into(129);
+    assert_eq!(harness.session().system(), SystemId(129));
+    let warp = |sound: nova_data::SoundId| (128..=130).contains(&sound.0);
+    let commands: Vec<AudioCommand> = log
+        .borrow()
+        .iter()
+        .copied()
+        .filter(|command| match *command {
+            AudioCommand::Play { sound, .. } | AudioCommand::Halt { sound } => warp(sound),
+            _ => false,
+        })
+        .collect();
+    let play = |id| AudioCommand::Play {
+        sound: nova_data::SoundId(id),
+        volume: AudioSettings::default().effects_volume,
+    };
+    let halt = |id| AudioCommand::Halt {
+        sound: nova_data::SoundId(id),
+    };
+    assert_eq!(commands, [play(128), halt(128), halt(129), play(130)]);
 }
 
 /// Fires every time, recording each percent it is asked.
@@ -1284,6 +1395,7 @@ impl Harness {
         let mut harness = Self::flying_over(gate_data(), SharedChance::default());
         harness.frame();
         harness.press(Key::Char('l'));
+        harness.approach();
         harness.press(Key::Char('l'));
         assert_eq!(harness.showing(), Showing::FlightMap);
         assert_eq!(harness.flight().course_map().mode(), MapMode::Hypergate);

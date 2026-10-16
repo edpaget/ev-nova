@@ -8,10 +8,9 @@
 //! consumer effect rolls the offers at the stellar landed on
 //! (`_HandlePlayerDockRequest` @0x66d2b-0x66d77), before the mission
 //! ships' goal checks and every mission slot's landing hooks (see the
-//! [`story`](crate::story) module's "Dispatch"). A pilot flown docked has
-//! `Landed` raised for its stellar, after its `Explored`, as a load
-//! forgets the stellar rolled at (@0x75ef5) and opens the spaceport, so
-//! the first settling rolls its offers afresh.
+//! [`story`](crate::story) module's "Dispatch"). A load forgets the
+//! stellar rolled at (@0x75ef5) and lands nothing, so a pilot flown from a
+//! save has its offers rolled afresh at its first landing.
 //!
 //! What forgets the stellar rolled at, so that the next landing rolls the
 //! offers afresh, is [`Session::forget_offers`]: the developer tools'
@@ -940,9 +939,11 @@ impl Session {
             return;
         }
         let record = self.lifecycle_record(active.mission);
-        // The comm message, `STR#` 2002 #285, before the failure, unless
+        // The beep, `_beepSnd[3]` (`snd ` 153, @0x9ebd9-0x9ec02), and the
+        // comm message, `STR#` 2002 #285, before the failure, unless
         // `Flags` has 0x0400 (@0x9ebd0-0x9ec53).
         if record.flags & HIDDEN == 0 {
+            self.sounds.push(crate::SimSound::Refused);
             self.messages.push(SimMessage::DeadlineMissed);
         }
         self.quick_failure(slot, &record, chance);
@@ -1608,35 +1609,33 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_flown_docked_has_its_offers_rolled_as_it_settles() {
+    fn a_pilot_flown_from_a_save_has_its_offers_rolled_at_its_first_landing() {
         let catalog = offering();
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.stellar = Some(StellarId(128));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert!(session.mission_offers(Venue::Computer).is_empty());
         let mut chance = Draws::of(&[]);
+        let _ = session.settle_script(&catalog, &mut chance);
+        assert!(chance.asked.is_empty(), "nothing rolled on resuming");
+        assert!(session.mission_offers(Venue::Computer).is_empty());
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         let _ = session.settle_script(&catalog, &mut chance);
         assert_eq!(chance.asked, table_then(&[3]));
         assert_eq!(ids(session.mission_offers(Venue::Computer)), [130, 131]);
     }
 
     #[test]
-    fn flying_a_docked_pilot_raises_its_landing_after_its_exploration() {
+    fn flying_a_pilot_saved_at_a_stellar_raises_its_exploration_and_no_landing() {
         use crate::story::StoryEvent;
         let catalog = offering();
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.stellar = Some(StellarId(128));
-        let docked = Session::fly(&catalog, pilot).expect("flies");
+        let resumed = Session::fly(&catalog, pilot).expect("flies");
         assert_eq!(
-            docked.story_raised(),
-            [
-                StoryEvent::Explored {
-                    system: SystemId(130)
-                },
-                StoryEvent::Landed {
-                    stellar: StellarId(128)
-                },
-            ]
+            resumed.story_raised(),
+            [StoryEvent::Explored {
+                system: SystemId(130)
+            }]
         );
         let in_flight = Session::start(&catalog).expect("starts");
         assert_eq!(
@@ -3263,7 +3262,65 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         settle(&mut session, &catalog);
-        assert_eq!(session.take_messages(), [SimMessage::DeadlineMissed]);
+        assert_eq!(
+            session.take_messages(),
+            [took_off(), SimMessage::DeadlineMissed],
+            "after the greeting"
+        );
+    }
+
+    #[test]
+    fn a_deadline_missed_in_flight_beeps() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        let _ = session.take_sounds();
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        settle(&mut session, &catalog);
+        let refused = session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == crate::sound::SimSound::Refused)
+            .count();
+        assert_eq!(refused, 1, "_beepSnd[3], snd 153");
+    }
+
+    #[test]
+    fn a_hidden_missions_missed_deadline_does_not_beep() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            flags: crate::mission::screens::HIDDEN,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        settle(&mut session, &catalog);
+        assert_eq!(held(&session), [], "failed all the same");
+        assert!(
+            !session
+                .take_sounds()
+                .contains(&crate::sound::SimSound::Refused)
+        );
+    }
+
+    /// The take-off greeting from planet 128, its lead rolled 0.
+    fn took_off() -> SimMessage {
+        SimMessage::TookOff {
+            stellar: StellarId(128),
+            lead: 0,
+        }
     }
 
     #[test]
@@ -3282,7 +3339,7 @@ mod tests {
             .expect("takes off");
         settle(&mut session, &catalog);
         assert_eq!(held(&session), [], "failed all the same");
-        assert_eq!(session.take_messages(), []);
+        assert_eq!(session.take_messages(), [took_off()], "the greeting alone");
     }
 
     #[test]

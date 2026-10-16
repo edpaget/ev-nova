@@ -30,9 +30,10 @@
 //! threat still standing after take-off or arrival does not alert again.
 //! A hypergate or wormhole touches neither.
 //!
-//! The original's double time, which runs the check and the step twice on
-//! one frame-counter value (`_PlayGame` @0x45f20-0x45f31), is not modelled
-//! (rdm:phase/hud-fidelity/phase-13-double-time-icon-and-alert).
+//! The original's double time runs the check twice on one frame-counter
+//! value, once on each pass (`_PlayGame` @0x45f20-0x45f31), but the step
+//! only once, on the advance pass (`_DoPlayGameWork` @0x44518); see the
+//! session's `red_alert` module.
 
 /// The `cïcn` of the alert icon's first frame; its second is the next.
 pub const ALERT_CICN: i16 = 18000;

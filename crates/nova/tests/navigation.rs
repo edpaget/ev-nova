@@ -9,10 +9,12 @@
 //! "Hyperspace" over "Unexplored System". Tab, the original's Target
 //! Select for ships, selects no stellar and leaves the course shown.
 //! Arriving in Beta clears the course; a course back to Alpha, explored,
-//! shows its name.
+//! shows its name. Backquote, Nav Off, turns the nav system off with the
+//! course kept, so J goes nowhere until H, Hyperspace Mode, selects the
+//! course's next hop again.
 //!
-//! The date, at the foot of the cargo area, reads "June 23, 1177 NC" and
-//! moves on a day with each jump.
+//! The date reads "June 23, 1177 NC" and moves on a day with each jump;
+//! the cargo area lists the hold.
 
 use std::io;
 use std::path::Path;
@@ -439,18 +441,46 @@ fn the_course_map_sets_what_the_hud_navigation_area_shows() {
     assert_eq!(game.nav(), [NAV_HYPERSPACE, "Alpha"]);
 }
 
+#[test]
+fn nav_off_keeps_the_course_but_j_goes_nowhere_until_h_selects_it_again() {
+    let mut game = Harness::flying();
+    game.plot(129);
+    assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED]);
+
+    game.press(KeyCode::Backquote);
+    assert_eq!(game.nav(), [NAV_OFF]);
+    assert_eq!(
+        game.flight().course_map().route(),
+        [SystemId(129)],
+        "still on the map"
+    );
+
+    game.fly_out();
+    game.press(KeyCode::KeyJ);
+    for _ in 0..120 {
+        game.frame();
+    }
+    assert_eq!(game.session().system(), SystemId(128), "no jump");
+    assert_eq!(game.flight().jump_effect(), None);
+
+    game.press(KeyCode::KeyH);
+    assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED]);
+    game.jump_into(129);
+    assert_eq!(game.session().system(), SystemId(129));
+}
+
 /// The date the session shows.
 fn date(game: &Harness) -> String {
     game.session().date_text()
 }
 
 #[test]
-fn the_date_moves_on_a_day_with_each_jump_and_the_stock_cargo_area_lists_the_hold_not_it() {
+fn the_date_moves_on_a_day_with_each_jump_and_the_cargo_area_lists_the_hold() {
     let mut game = Harness::flying();
     assert_eq!(
         game.cargo_area(),
         ["Free:", "0", "Credits:", "0"],
-        "no room for the date under the cargo lines"
+        "the empty hold and the cash"
     );
     assert_eq!(date(&game), "June 23, 1177 NC");
 

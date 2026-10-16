@@ -405,12 +405,21 @@ impl Beam {
     /// ([`WeaponSpec::falloff`]) is at most [`FADE_END`]; and otherwise it
     /// has ended: false, and it neither hits nor is drawn again. So a beam
     /// of `Count` n hits on n ticks, and a decaying one on 15 − `Falloff`
-    /// more, each at full damage.
-    ///
-    /// The second pass of the original's double-time frame (main's
-    /// `GamePass`, not on this branch) fades but spends only a life above
-    /// none (@0x30371-0x30383).
+    /// more, each at full damage. It is [`Beam::live_on`] the advance pass.
     pub fn live(&mut self) -> bool {
+        self.live_on(true)
+    }
+
+    /// Spends a tick of its life as [`Beam::live`] does, on the advance
+    /// pass when `advance` is set and on double time's second pass
+    /// otherwise ([`GamePass`](super::GamePass)): the second pass fades a
+    /// decaying beam as the first does, but spends only a life above none
+    /// (`_HandleBeams` @0x30371-0x30383: it spends while its life is above
+    /// none or the pass advances), so a beam at none left that does not
+    /// fade waits, alive,
+    /// for the next advance pass to end it. It neither follows nor hits on
+    /// that pass.
+    pub fn live_on(&mut self, advance: bool) -> bool {
         if self.life == 0 && self.weapon.decay > 0 {
             self.fade += 1;
             if i64::from(self.weapon.falloff) + i64::from(self.fade) <= FADE_END {
@@ -422,7 +431,7 @@ impl Beam {
                 self.life = life;
                 true
             }
-            None => false,
+            None => !advance,
         }
     }
 }

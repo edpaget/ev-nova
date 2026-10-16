@@ -8,10 +8,10 @@
 //! | Operator | Where | What |
 //! |---|---|---|
 //! | `M` | @0x1570e-0x158d4 | the player's system is set (ship +0x74) and its stellar cleared (+0x6c = -1); the first of the new system's nav slots that is not -1 is found, with no check of landability or gates. Landed, that stellar becomes +0x6c and nothing else changes; in flight, the ship is put at its x/y at rest. With no stellar, nothing more: in flight the position and velocity are kept |
-//! | `N` | @0x158d9-0x159ad | as `M`, but the position and velocity are never touched, and `_dontMovePlayerAfterLanding` (0x316951) is set |
+//! | `N` | @0x158d9-0x159ad | the system set and +0x6c = -1, landed or not (@0x158fd), with no stellar looked for; the position and velocity are never touched, and `_dontMovePlayerAfterLanding` (0x316951) is set |
 //! | both | @0x15807-0x1583e | every active ship whose parent is the player (+0x9a 0: its escorts and fighters out) takes the new system; the others keep the old one, and `_DoPlayGameWork` runs only the ships in the player's system, so they stay behind |
 //! | both, landed | | `_dockedPortMissions` is filled with -1, and that is all |
-//! | both, in flight | @0x158a4 | the shots, cargo boxes (here the entry table's `Reset::Boxes`), explosions, smoke and asteroids are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
+//! | both, in flight | @0x158a4 | the shots, cargo boxes (here the entry table's `Reset::Boxes`), explosions, smoke and asteroids (here `Reset::Asteroids`) are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
 //! | `Q` | @0x15bee-0x15c6c | `_absquatulateStr` (0x1635a0) becomes one of `STR#` `xxx`'s strings, the raw ID, with no range check, drawn as `T` draws (`_GetRandomIndString`: `Rand(count) + 1`); only inside a mission's set expression (`_currentMissionIndexForSetParser` 0-15, set by `_EvalCurrentMissionBitSetString` @0x99a6b alone, and -1 after it @0x99a79) is it run through `_MungeBriefing(0, slot)` (@0x15c37-0x15c4b), so a hook's text, and `OnRefuse`'s, is shown as it is. A missing or empty list, or an empty pick, leaves it empty (strcpy over an earlier one) |
 //!
 //! Neither calls `_SetupShipsInSystem` or `_AutoSetExploration`, whose
@@ -36,7 +36,10 @@
 //! **Here.** `Mxxx` and `Nxxx`
 //! only queue their move: a set expression runs in the middle of a
 //! purchase, a capture or a hook, with no catalog to read the new system
-//! from. [`Session::settle_script`] applies the moves in order at a safe
+//! from. Landed, each writes the nav selection at once, at its operator,
+//! as the original does, from each system's first stellar read as the
+//! session starts (see the `nav` module), so a dialog's redraw after the
+//! script shows it. [`Session::settle_script`] applies the moves in order at a safe
 //! point, which whoever runs set expressions calls after each input and
 //! tick, before saving; a move to a system that does not exist changes
 //! nothing (the original indexes it blindly). Each move makes a save
@@ -97,7 +100,9 @@
 //! every ship the player leads (hired and mission escorts, fighters out)
 //! follows, as it is, the new
 //! system's ships coming only with its arrivals over time (see
-//! [`Traffic::retarget`](crate::Traffic::retarget)). By the other
+//! [`Traffic::retarget`](crate::Traffic::retarget)); the rest stay in
+//! the ship table through the next traffic tick, or are dropped at once,
+//! as [`RuleKey::MoveLeftBehind`] says. By the other
 //! reading the move is an arrival: the system is explored and the course
 //! cleared at once, and in flight the fighters out are kept or abandoned
 //! as the fighter rules say and the system is populated
@@ -318,7 +323,9 @@ impl Session {
     }
 
     /// Applies a `Q`'s leave, if one is pending, noting it on `settled`:
-    /// whether one was.
+    /// whether one was. Landed, the ship takes off as
+    /// [`Session::take_off`] does, greeted only when there is no message
+    /// to show in its place.
     pub(super) fn settle_leave(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -330,7 +337,15 @@ impl Session {
         };
         settled.message = Some(text).filter(|text| !text.is_empty());
         if self.landed.is_some() {
-            settled.took_off = self.take_off(catalog, chance);
+            settled.took_off = self.lift_off(catalog, chance);
+            // The `Q` message shows in place of the greeting, and leaves
+            // the tutorial as it was (`_PlayerLandOnStellar`
+            // @0x63593-0x635e3). An empty one greets, but only by
+            // [`ScriptEffectRules::blank_leave`]'s other reading: by the
+            // engine a blank `Q` never leaves.
+            if let (Some(stellar), None) = (settled.took_off, &settled.message) {
+                self.greet(stellar, chance);
+            }
         } else if settled.message.is_some() {
             self.sounds.push(SimSound::ScriptMessage);
         }
@@ -440,6 +455,7 @@ mod tests {
     use crate::gate::HYPERGATE;
     use crate::handling::ShipFields;
     use crate::hyperspace::JumpRefusal;
+    use crate::message::SimMessage;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
     use crate::save;
@@ -449,6 +465,7 @@ mod tests {
         ship, star, weapon,
     };
     use crate::traffic::npc::NpcId;
+    use crate::tutorial::Tutorial;
 
     /// A system of `avg` ships of düde 128, ship 129, for govt 140.
     fn traffic(system: i16, avg: i16) -> (SystemId, SystemTraffic) {
@@ -751,7 +768,11 @@ mod tests {
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
         let flown = reloaded(&catalog, session.pilot());
-        assert_eq!(flown.landed(), Some(StellarId(128)), "docked again");
+        assert_eq!(
+            crate::testkit::resumed_on(&flown),
+            Some(StellarId(128)),
+            "on it again"
+        );
     }
 
     #[test]
@@ -872,6 +893,69 @@ mod tests {
         );
     }
 
+    /// The rules with `MoveLeftBehind` read as `reading`.
+    fn left_behind(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::MoveLeftBehind, reading)
+    }
+
+    /// The berths of `session`'s NPCs, in order.
+    fn berths(session: &Session) -> Vec<u32> {
+        session.npcs().iter().map(|npc| npc.berth).collect()
+    }
+
+    #[test]
+    fn a_move_in_flight_holds_the_berths_left_behind_through_the_next_traffic_tick() {
+        let catalog = moving();
+        for (reading, berth) in [(RuleSource::Engine, 3), (RuleSource::Bible, 1)] {
+            let mut session = flying(&catalog).with_rules(left_behind(reading));
+            assert_eq!(berths(&session), [1, 2], "{reading:?}");
+            moved(&mut session, &catalog, "M131");
+            assert_eq!(session.npcs(), [], "{reading:?}");
+            let mut chance = crate::testkit::Draws::of(&[0, 6, 6, 0, 0, 0]);
+            session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut chance);
+            assert_eq!(berths(&session), [berth], "{reading:?}");
+            assert_eq!(
+                session.traffic.berths_taken(),
+                1,
+                "{reading:?}: freed by the tick's end"
+            );
+        }
+    }
+
+    #[test]
+    fn two_moves_in_one_settle_bring_the_ships_left_behind_back() {
+        let catalog = moving();
+        for (reading, back) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut session = flying(&catalog).with_rules(left_behind(reading));
+            let before = session.npcs().to_vec();
+            assert_eq!(before.len(), 2);
+            moved(&mut session, &catalog, "M131 M130");
+            assert_eq!(session.system(), SystemId(130), "{reading:?}");
+            let expected = if back { before } else { Vec::new() };
+            assert_eq!(session.npcs(), expected, "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn a_move_back_after_a_traffic_tick_brings_none_back() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        moved(&mut session, &catalog, "M131");
+        session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+        moved(&mut session, &catalog, "M130");
+        assert_eq!(session.npcs(), []);
+    }
+
+    #[test]
+    fn as_an_arrival_a_move_in_flight_holds_nothing_behind() {
+        let catalog = moving();
+        let mut session = flying(&catalog).with_rules(arrival(RuleSource::Bible));
+        moved(&mut session, &catalog, "M131");
+        assert_eq!(session.npcs().len(), 3, "populated");
+        assert_eq!(session.traffic.berths_taken(), 3, "none held");
+        assert_eq!(berths(&session), [1, 2, 3]);
+    }
+
     #[test]
     fn by_the_engine_a_move_within_the_system_keeps_its_traffic() {
         let catalog = moving();
@@ -939,7 +1023,8 @@ mod tests {
         let catalog = moving();
         for reading in READINGS {
             for text in ["M131", "N130"] {
-                for mut session in [flying(&catalog), landed(&catalog)] {
+                for start in [flying as fn(&FakePilotCatalog) -> Session, landed] {
+                    let mut session = start(&catalog);
                     session = session.with_rules(arrival(reading));
                     run(&mut session, text);
                     let mut chance = crate::testkit::Draws::of(&[]);
@@ -1077,14 +1162,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_saved_after_a_landed_m_flies_again_docked_at_the_new_stellar() {
+    fn a_pilot_saved_after_a_landed_m_flies_again_on_the_new_stellar() {
         let catalog = moving();
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M131");
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
         assert_eq!(flown.system(), SystemId(131));
-        assert_eq!(flown.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(100.0, 200.0));
     }
 
@@ -1249,6 +1334,23 @@ mod tests {
         assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "once");
+    }
+
+    #[test]
+    fn by_the_engine_p_waits_for_the_advance_pass_in_double_time() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.tick(crate::flight::Controls::default());
+        session.take_sounds();
+        run(&mut session, "P300");
+        session.tick_again(
+            crate::flight::Controls::default(),
+            crate::Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(session.take_sounds(), [], "the second pass plays none");
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
     }
 
     #[test]
@@ -1422,6 +1524,48 @@ mod tests {
         run_rolling(&mut session, "Q25048", &[1]);
         let settled = settle(&mut session, &catalog);
         assert_eq!(settled.message.as_deref(), Some("Leave now."), "as usual");
+    }
+
+    #[test]
+    fn a_q_take_off_with_a_message_neither_greets_nor_moves_the_tutorial() {
+        let catalog = moving();
+        for tutorial in [Tutorial::SEASONED, Tutorial::NEW_PILOT] {
+            let mut session = told(landed(&catalog));
+            session.tutorial = tutorial;
+            run_rolling(&mut session, "Q25048", &[0]);
+            let settled = settle(&mut session, &catalog);
+            assert_eq!(settled.took_off, Some(StellarId(128)));
+            assert_eq!(session.take_messages(), [], "{tutorial:?}");
+            assert_eq!(session.tutorial(), tutorial);
+        }
+    }
+
+    /// By the engine a blank `Q` never takes off (see
+    /// [`by_the_engine_a_blank_q_does_nothing_and_cancels_an_earlier_one`]),
+    /// so only by [`RuleKey::BlankLeave`]'s other reading does a `Q`'s
+    /// take-off with no message reach the greeting.
+    #[test]
+    fn a_q_take_off_with_an_empty_message_greets() {
+        let catalog = moving();
+        let rules = Rulebook::default().with_override(RuleKey::BlankLeave, RuleSource::Bible);
+        let mut session = told(landed(&catalog)).with_rules(rules);
+        run_rolling(&mut session, "Q25049", &[]);
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.took_off, Some(StellarId(128)));
+        assert_eq!(settled.message, None);
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::TookOff {
+                stellar: StellarId(128),
+                lead: 0
+            }]
+        );
+        let mut session = told(landed(&catalog)).with_rules(rules);
+        session.tutorial = Tutorial::NEW_PILOT;
+        run_rolling(&mut session, "Q25049", &[]);
+        let _ = settle(&mut session, &catalog);
+        assert_eq!(session.take_messages(), [], "a newbie is not greeted");
+        assert_eq!(session.tutorial().flag(), -1);
     }
 
     #[test]

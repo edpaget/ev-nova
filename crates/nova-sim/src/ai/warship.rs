@@ -38,7 +38,19 @@
 //!   marking a ship still jumping in (@0x8fcf5); the engine's
 //!   provocation is never below 0, so the gate here is 0 or less. The
 //!   player is always visible to NPCs here (its cloak is
-//!   cloaking-fidelity's). The word plays no sound.
+//!   cloaking-fidelity's).
+//!
+//!   The 0x0004 word turns the ship on the player through
+//!   `_AIMakeShipAttackPlayer` (@0x8b7da, @0x8cb8f), whose gate says a
+//!   person's attack quote at once, with `_ShowPersonHailQuote`'s beep
+//!   ([`Hunt::turns_on_player`], asked by the traffic's
+//!   [`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote)).
+//!   It is called before the rest of the think, so it holds whatever goal
+//!   the think ends in, a retreat, a hopeless chase or none. The 0x0040
+//!   word makes no call itself, but drops the target and goal first
+//!   ([`Hunt::dropped_target`]), so a person whose grudge then takes the
+//!   player again is no threat to the gate, and says its quote again
+//!   each think. The word plays no sound of its own.
 //! - **Fleeing**, it keeps fleeing while its attacker is live; then it
 //!   decides again.
 //! - **Its target**: provoked, the attacker it took on being hit;
@@ -80,8 +92,10 @@
 
 use crate::ai::fire::FireRules;
 use crate::ai::odds::{hopeless_chase, odds_against};
-use crate::ai::target::{dropped, select_target};
-use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, react};
+#[cfg(doc)]
+use crate::ai::target::select_target;
+use crate::ai::target::{dropped, pick_target};
+use crate::ai::{Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
@@ -135,45 +149,109 @@ pub struct Retreat {
 /// a target (@0x8b857, @0x8b881), so a ship outnumbered as it picks a
 /// target retreats one think later here than in the original: a
 /// one-think lag the player can't see, noted here and not filed.
+///
+/// The hunt also says whether the think turns the ship on the player
+/// through `_AIMakeShipAttackPlayer` ([`Hunt::turns_on_player`]): the
+/// 0x0004 word does (@0x8b7da, @0x8cb8f), even when the player is let go
+/// at once, and so does a pick that calls it ([`pick_target`]), the
+/// 0x0040 word's fresh pick included. A ship fleeing on, or turning on
+/// its provoker, makes no call.
 #[must_use]
 pub fn hunt(
     npc: &Npc,
     around: &Surroundings,
     retreat: Retreat,
     always_attacks: RuleSource,
-) -> Option<Goal> {
+) -> Hunt {
     let word = government_word(npc, around, always_attacks);
-    let target = match word {
+    let dropped_target = word == Some(Word::DropTarget);
+    let nothing = |turns_on_player| Hunt {
+        goal: None,
+        turns_on_player,
+        dropped_target,
+    };
+    let (target, turns_on_player) = match word {
         Some(Word::TakePlayer) => {
             if dropped(npc, ShipRef::Player, around) {
-                return None;
+                return nothing(true);
             }
-            ShipRef::Player
+            (ShipRef::Player, true)
         }
-        Some(Word::DropTarget) => select_target(npc, None, around)?,
+        Some(Word::DropTarget) => match pick_target(npc, None, around) {
+            Some(pick) => (pick.ship, pick.turns_on_player),
+            None => return nothing(false),
+        },
         None => {
             if let Goal::Flee(attacker) = npc.goal
                 && around.live(attacker)
             {
-                return Some(Goal::Flee(attacker));
+                return Hunt::of(Goal::Flee(attacker));
             }
             let keep = |ship: ShipRef| !dropped(npc, ship, around);
             let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && keep(ship));
             if npc.goal == Goal::Hold {
-                return provoker.map(|ship| hunted(npc, ship, around, retreat));
+                return Hunt {
+                    goal: provoker.map(|ship| hunted(npc, ship, around, retreat)),
+                    ..nothing(false)
+                };
+            }
+            if let Some(ship) = provoker {
+                return Hunt::of(hunted(npc, ship, around, retreat));
             }
             let current = npc.goal.attacking().filter(|&ship| keep(ship));
-            provoker.or_else(|| select_target(npc, current, around))?
+            match pick_target(npc, current, around) {
+                Some(pick) => (pick.ship, pick.turns_on_player),
+                None => return nothing(false),
+            }
         }
     };
-    if word.is_some() {
+    let goal = if word.is_some() {
         let judged = Npc {
             goal: Goal::Attack(target),
             ..npc.clone()
         };
-        return Some(hunted(&judged, target, around, retreat));
+        hunted(&judged, target, around, retreat)
+    } else {
+        hunted(npc, target, around, retreat)
+    };
+    Hunt {
+        goal: Some(goal),
+        turns_on_player,
+        dropped_target,
     }
-    Some(hunted(npc, target, around, retreat))
+}
+
+/// What a hunter's think gives ([`hunt`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hunt {
+    /// Its goal, or none when it has nothing to fight.
+    pub goal: Option<Goal>,
+    /// Whether the think calls `_AIMakeShipAttackPlayer`
+    /// ([`Decision::turns_on_player`](crate::ai::Decision::turns_on_player)).
+    pub turns_on_player: bool,
+    /// Whether the government's 0x0040 word dropped its target and goal
+    /// first ([`Decision::dropped_target`](crate::ai::Decision::dropped_target)).
+    pub dropped_target: bool,
+}
+
+impl Hunt {
+    /// A hunt for `goal` that makes no call and drops nothing.
+    fn of(goal: Goal) -> Self {
+        Self {
+            goal: Some(goal),
+            ..Self::default()
+        }
+    }
+
+    /// The decision this hunt makes, its goal or else `otherwise`.
+    #[must_use]
+    pub fn or(self, otherwise: impl FnOnce() -> Goal) -> Decision {
+        Decision {
+            goal: self.goal.unwrap_or_else(otherwise),
+            turns_on_player: self.turns_on_player,
+            dropped_target: self.dropped_target,
+        }
+    }
 }
 
 /// What a hunter `npc`, judged by the goal it holds, does about
@@ -275,6 +353,12 @@ pub const WARSHIP_RETREAT: Retreat = Retreat {
 
 impl Behaviour for Warship {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        self.decision(npc, around, chance).goal
+    }
+
+    /// Its [`hunt`], or with nothing to fight its business ([`idle`]),
+    /// the hunt's call on the player kept either way.
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
             ..WARSHIP_RETREAT
@@ -289,7 +373,7 @@ impl Behaviour for Warship {
         } else {
             npc
         };
-        hunt(npc, around, retreat, self.always_attacks).unwrap_or_else(|| idle(npc, around, chance))
+        hunt(npc, around, retreat, self.always_attacks).or(|| idle(npc, around, chance))
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -1218,6 +1302,119 @@ mod tests {
             blessed_word(ALWAYS, &[police()], false, bible),
             Goal::Attack(P),
             "unblessed, the word holds"
+        );
+    }
+
+    // The quote call (`_AIMakeShipAttackPlayer` @0x8b7da, @0x8cb8f).
+
+    /// The whole decision of `npcs[0]`, a warship of the police with
+    /// `flags`, the player 100 above in `condition`, moving up at `speed`.
+    fn worded_decision(flags: u16, npcs: &[Npc], condition: Condition, speed: f32) -> Decision {
+        let govts = govts(0, flags);
+        let sites = sites();
+        let mut seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+        if let Some(player) = seen.player.as_mut() {
+            player.condition = condition;
+            player.state.velocity = Vec2::new(0.0, -speed);
+        }
+        Warship::default().decision(&npcs[0], &seen, &mut Draws::of(&[0]))
+    }
+
+    /// A decision of `goal` that turns on the player or not as `turns`
+    /// says, dropping no target first.
+    fn turning(goal: Goal, turns: bool) -> Decision {
+        Decision {
+            goal,
+            turns_on_player: turns,
+            dropped_target: false,
+        }
+    }
+
+    #[test]
+    fn the_governments_0x0004_word_turns_on_the_player_whatever_the_goal_it_ends_in() {
+        let intact = Condition::Intact;
+        let npcs = [attacking(n(2)), pirate()];
+        assert_eq!(
+            worded_decision(ALWAYS, &npcs, intact, 0.0),
+            turning(Goal::Attack(P), true),
+            "an attack"
+        );
+        let mut heavy = attacking(n(2));
+        heavy.hull.mass = 100.0;
+        assert_eq!(
+            worded_decision(ALWAYS, &[heavy, pirate()], intact, 1.0),
+            turning(Goal::Snipe(P), true),
+            "a hopeless chase"
+        );
+        let tired = [worn(4.4, 2, Goal::Attack(n(2))), pirate()];
+        assert_eq!(
+            worded_decision(ALWAYS | WARSHIPS_RETREAT, &tired, intact, 0.0),
+            turning(Goal::Flee(P), true),
+            "a retreat"
+        );
+        assert_eq!(
+            worded_decision(ALWAYS, &npcs, Condition::Disabled, 0.0),
+            turning(IDLE, true),
+            "a disabled player let go (@0x8bc58-0x8bca9)"
+        );
+        assert_eq!(
+            worded_decision(ALWAYS, &[attacking(P), pirate()], intact, 0.0),
+            turning(Goal::Attack(P), false),
+            "already a threat"
+        );
+        let mut provoked = attacking(n(2));
+        provoked.provoked = 5.0;
+        provoked.target = Some(n(2));
+        assert_eq!(
+            worded_decision(ALWAYS, &[provoked, pirate()], intact, 0.0),
+            turning(Goal::Attack(n(2)), false),
+            "provoked"
+        );
+        let mut stateless = attacking(n(2));
+        stateless.govt = None;
+        assert!(
+            !worded_decision(ALWAYS, &[stateless, pirate()], intact, 0.0).turns_on_player,
+            "no government"
+        );
+        assert_eq!(
+            worded_decision(0, &npcs, intact, 0.0),
+            turning(Goal::Attack(n(2)), false),
+            "no word"
+        );
+    }
+
+    #[test]
+    fn a_0x0040_ship_holding_a_grudge_turns_on_the_player_again_after_its_word_drops_it() {
+        let grudge = crate::person::GRUDGE;
+        let mut grudger = attacking(P);
+        grudger.person = Some(crate::traffic::npc::NpcPerson {
+            flags: grudge,
+            grudge: true,
+            ..person()
+        });
+        // @0x8b800 clears the target and goal, then `_SelectWarshipTarget`'s
+        // grudge calls `_AIMakeShipAttackPlayer` (@0x89f20).
+        assert_eq!(
+            worded_decision(NEVER, &[grudger.clone(), pirate()], Condition::Intact, 0.0),
+            Decision {
+                goal: Goal::Attack(P),
+                turns_on_player: true,
+                dropped_target: true,
+            }
+        );
+        let mut calm = grudger;
+        calm.person = Some(crate::traffic::npc::NpcPerson {
+            flags: grudge,
+            ..person()
+        });
+        assert_eq!(
+            worded_decision(NEVER, &[calm, pirate()], Condition::Intact, 0.0),
+            Decision {
+                goal: IDLE,
+                turns_on_player: false,
+                dropped_target: true,
+            },
+            "no grudge: dropped, and nothing picked"
         );
     }
 }

@@ -6,7 +6,8 @@
 //!   player's too, steps each fly-in while there is a target and settles
 //!   it while there is none, as `_HandleNavTargetSprites` (@0x2fcaf) and
 //!   `_HandleWeapTargetSprites` (@0x2ff1a) do on every pass. A landed
-//!   tick doesn't, and landing clears the nav target.
+//!   tick doesn't: landing keeps the stellar selected, and the take-off
+//!   lets go of it before the first flight tick.
 //! - **A nav pick** that changes the nav target, by a stellar slot key,
 //!   the nearest-stellar key or a click ([`Session::select_stellar`]), or
 //!   the land key selecting one ([`Session::land`]), starts the nav
@@ -19,8 +20,9 @@
 //!   ([`Session::swap_in_mission_ship`]) is targeted settled (@0x62538).
 //!   A plain hail touches nothing.
 //!
-//! Nav Off, Hyper Select, docking and system entry change no fly-in: the
-//! next tick settles it, and with no target there are no brackets.
+//! Nav Off, Hyper Select, docking, the take-off and system entry change no
+//! fly-in: the next tick settles it, and with no target there are no
+//! brackets.
 
 use super::Session;
 use crate::brackets::{self, NavBrackets, TargetBrackets};
@@ -29,20 +31,19 @@ use crate::traffic::npc::{Npc, NpcId};
 impl Session {
     /// The brackets round the nav target, if there is one.
     ///
-    /// They show while [`Session::nav_target`] is set, which is the
-    /// original's nav mode 2 with a stellar (@0x2fcbf-0x2fccf):
-    /// rdm:phase/hud-fidelity/phase-11-track-nav-mode must keep them keyed
-    /// to mode 2. A dominated stellar takes the green frames: the same
+    /// They show while [`Session::nav_target`] is set: nav mode 2 with a
+    /// stellar selected (@0x2fcbf-0x2fccf), so neither mode 2 with none
+    /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
     /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
-    /// [`Session::stellar_iff`]'s standing models.
+    /// `Session::iff_dominated` models.
     #[must_use]
     pub fn nav_brackets(&self) -> Option<NavBrackets> {
-        let stellar = self.nav_target?;
+        let stellar = self.nav_target()?;
         let dominated = self
             .sites
             .iter()
             .find(|site| site.id == stellar)
-            .is_some_and(|site| Self::iff_standing(site).dominated);
+            .is_some_and(Self::iff_dominated);
         Some(NavBrackets {
             stellar,
             expand: self.nav_fly_in.expand(),
@@ -73,7 +74,7 @@ impl Session {
 
     /// The brackets' part of a flight tick (see the module docs).
     pub(super) fn brackets_tick(&mut self) {
-        if self.nav_target.is_some() {
+        if self.nav_target().is_some() {
             self.nav_fly_in.step();
         } else {
             self.nav_fly_in.settle();
@@ -213,7 +214,7 @@ mod tests {
         let mut session = session(&three_stellars());
         assert!(matches!(
             session.land(),
-            Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
+            Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
         ));
         assert_eq!(nav_expand(&session), 196.0);
         assert_eq!(nav_over(&mut session, 5), FLIGHT);
@@ -234,7 +235,7 @@ mod tests {
         let mut session = session(&hub());
         session.select_stellar(StellarPick::Slot(0));
         nav_over(&mut session, 1);
-        assert!(session.clear_nav_target());
+        assert!(session.nav_off());
         assert_eq!(session.nav_brackets(), None);
         session.tick(Controls::default());
         assert_eq!(session.nav_fly_in, FlyIn::default(), "settled");
@@ -244,6 +245,28 @@ mod tests {
         assert_eq!(session.nav_brackets(), None);
         session.select_stellar(StellarPick::Slot(0));
         assert_eq!(nav_expand(&session), 196.0);
+    }
+
+    #[test]
+    fn after_a_take_off_no_stellar_is_bracketed_and_picking_it_again_flies_it_in() {
+        let catalog = three_stellars();
+        let mut session = session(&catalog);
+        assert_eq!(crate::testkit::land_now(&mut session), Ok(StellarId(128)));
+        session.take_off(&catalog, &mut crate::chance::NeverFires);
+        assert_eq!(
+            session.nav_mode(),
+            crate::navigation::NavMode::Stellar(None)
+        );
+        assert_eq!(session.nav_brackets(), None);
+        session.tick(Controls::default());
+        assert_eq!(session.nav_brackets(), None);
+        session.select_stellar(StellarPick::Slot(1));
+        assert_eq!(nav_expand(&session), 196.0, "128 again, flown in");
+        nav_over(&mut session, 5);
+        assert!(session.hyperspace_mode());
+        assert_eq!(session.nav_brackets(), None, "mode 3");
+        session.select_stellar(StellarPick::Slot(1));
+        assert_eq!(nav_expand(&session), 196.0, "from mode 3, flown in again");
     }
 
     #[test]

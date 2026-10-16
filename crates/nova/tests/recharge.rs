@@ -373,9 +373,10 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// the second lands.
+    /// a few frames let the dock approach clear it, and the second lands.
     fn land(&mut self) {
         self.press(KeyCode::KeyL);
+        self.approach();
         self.press(KeyCode::KeyL);
     }
 
@@ -427,6 +428,19 @@ impl Harness {
         assert_eq!(self.app.take_failures(), []);
         assert_eq!(self.app.take_warnings(), Vec::<String>::new());
         (*self.gpu.submits().last().expect("a frame")).clone()
+    }
+
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_millis(16 * self.frames);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
     }
 
     /// Clicks Recharge, item 4 of the spaceport as laid out.
@@ -485,8 +499,10 @@ impl Harness {
                 self.hold(&mut held, &[]);
                 return;
             }
+            // Drifting in at a crawl, as a ship at rest off the centre
+            // can, isn't moving in: Down would hold it there.
             let moving_in =
-                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < 0.0;
+                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < -1e-3;
             let facing_out = ship.position.length() == 0.0
                 || shortest_turn(ship.heading, heading_of(ship.position)).abs() < 1e-3;
             let codes = if moving_in && !facing_out {

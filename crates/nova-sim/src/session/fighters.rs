@@ -5,8 +5,10 @@
 //! ([`Sortie`]) is put in the system at its carrier, its shield and
 //! armour full, its class's stock weapons and rounds aboard, its AI type
 //! its `InherentAI`, pushed out at the bay's speed ([`launch_velocity`])
-//! along the launch heading. With no ship slot free
-//! ([`MAX_SHIPS_IN_SYSTEM`], the player counted), or no record of its
+//! along the launch heading. With no ship slot free below the
+//! reserve `_LaunchFighter` leaves (8 @0x3d648, so it stops at 55 NPCs,
+//! as [`RuleKey::SpawnReserve`] reads; see
+//! [`SPAWN_RESERVE`]), or no record of its
 //! ship type, it goes back into its bay, a round again.
 //!
 //! - **The player's fighter** joins the fleet as a carried escort
@@ -38,7 +40,6 @@ use std::collections::BTreeMap;
 use super::Session;
 use crate::ai::Goal;
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
-use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
@@ -50,8 +51,9 @@ use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
 use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
+use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
@@ -69,7 +71,11 @@ impl Session {
     /// Puts the fighter of `sortie` in the system, and says whether it
     /// did.
     fn launch_fighter(&mut self, sortie: &Sortie) -> bool {
-        if self.traffic.npcs().len() + 1 >= MAX_SHIPS_IN_SYSTEM {
+        if self
+            .traffic
+            .free_berth(self.spawn_reserve(SPAWN_RESERVE))
+            .is_none()
+        {
             return false;
         }
         let Some(record) = self.ship_record(sortie.ship).cloned() else {
@@ -463,6 +469,7 @@ fn fighter(
         booty: None,
         boarded: false,
         info_types: 0,
+        cargo: NpcHold::default(),
         spared: false,
         assisting: 0,
         carrier: Some(carrier),
@@ -472,6 +479,7 @@ fn fighter(
         cloak: crate::cloak::Cloak::default(),
         cloak_gear: kind.cloak,
         led_out: false,
+        emerges_from: None,
         self_repair: kind.self_repair,
         former: None,
         tractor: None,
@@ -970,22 +978,56 @@ mod tests {
     }
 
     #[test]
-    fn with_no_room_in_the_system_no_fighter_launches_and_its_round_is_kept() {
+    fn a_fighter_finds_no_slot_once_fifty_five_ships_are_in_the_system() {
+        let catalog = carrying();
+        let crowded = |ships: u32, reserve: RuleSource| {
+            let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+            session.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
+            for n in 0..ships {
+                pirate(&mut session, 1000.0 + n as f32, 1000.0);
+            }
+            launch(&mut session);
+            session
+        };
+        let session = crowded(55, RuleSource::Engine);
+        assert_eq!(session.pilot().owned(VIPERS), 2, "the round put back");
+        assert_eq!(session.npcs().len(), 55, "no fighter");
+        assert_eq!(session.pilot().escorts(), []);
+        let session = crowded(54, RuleSource::Engine);
+        assert_eq!(session.npcs().len(), 55, "the last slot below 56 taken");
+        let session = crowded(55, RuleSource::Bible);
+        assert_eq!(session.npcs().len(), 56, "by the Bible, any slot");
+        let session = crowded(63, RuleSource::Bible);
+        assert_eq!(session.npcs().len(), 63, "by the Bible, the table full");
+    }
+
+    #[test]
+    fn a_ship_left_behind_takes_a_slot_from_the_fighters() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-        for n in 0..63 {
+        for n in 0..55 {
             pirate(&mut session, 1000.0 + n as f32, 1000.0);
         }
+        let last = session.npcs().last().expect("55 pirates").id;
+        let keep: std::collections::BTreeSet<NpcId> = session
+            .npcs()
+            .iter()
+            .map(|npc| npc.id)
+            .filter(|&id| id != last)
+            .collect();
+        let table = session.traffic.table().clone();
+        let system = session.system();
+        session.traffic.retarget(
+            table,
+            &keep,
+            crate::traffic::Leave::Held {
+                from: crate::catalog::SystemId(system.0 + 1),
+                to: system,
+            },
+        );
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 2, "the round put back");
-        assert_eq!(session.npcs().len(), 63, "no fighter");
-        assert_eq!(session.pilot().escorts(), []);
-        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-        for n in 0..62 {
-            pirate(&mut session, 1000.0 + n as f32, 1000.0);
-        }
-        launch(&mut session);
-        assert_eq!(session.npcs().len(), 63, "the last slot taken");
+        assert_eq!(session.npcs().len(), 54, "no fighter");
     }
 
     // Return to Hangar and docking.
@@ -1178,6 +1220,28 @@ mod tests {
         assert_eq!(session.pilot().owned(VIPERS), 2, "aboard again");
         assert_eq!(session.secondary_line_count(), Some(2));
         assert!(!session.take_save_due(), "as rounds are");
+    }
+
+    #[test]
+    fn a_fighter_docking_on_double_times_second_pass_is_aboard_again() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 0, vec![out()]);
+        let id = session.fleet[0].expect("placed");
+        session.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        assert!(matches!(session.npcs()[0].goal, Goal::Dock(_)), "decided");
+        let docked = (1..=600).find(|_| {
+            session.tick_again(
+                Controls::default(),
+                crate::Rules::default(),
+                &mut NeverFires,
+            );
+            session.pilot().escorts().is_empty()
+        });
+        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        assert_eq!(session.npcs(), []);
+        assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
     }
 
     #[test]
@@ -1600,6 +1664,67 @@ mod tests {
         assert!(session.take_save_due());
     }
 
+    /// [`two_bays`] with `STR#` 1000 "one", "two", and system 131's
+    /// `Message` `message`.
+    fn buoyed_131(message: i16) -> FakePilotCatalog {
+        let mut catalog = two_bays();
+        catalog
+            .strings
+            .push((crate::buoy::BUOY_STRINGS, vec!["one".into(), "two".into()]));
+        let system = catalog
+            .star_map
+            .iter_mut()
+            .find(|system| system.id == crate::catalog::SystemId(131))
+            .expect("on the map");
+        system.message = message;
+        catalog
+    }
+
+    /// The fighter notes, messages and fighters left of a jump to 131 with
+    /// both fighters out by the engine, `Message` `message` there and
+    /// `MissingBuoyString` read as `buoy`.
+    fn abandoning_into(
+        message: i16,
+        buoy: RuleSource,
+    ) -> (Vec<FighterNote>, Vec<crate::SimMessage>, usize, bool) {
+        let catalog = buoyed_131(message);
+        let mut session = both_out(&catalog, RuleSource::Engine);
+        session.rules = session
+            .rules
+            .with_override(RuleKey::MissingBuoyString, buoy);
+        session.take_messages();
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        (
+            session.take_fighter_notes(),
+            session.take_messages(),
+            session.pilot().escorts().len(),
+            session.take_save_due(),
+        )
+    }
+
+    #[test]
+    fn a_buoy_drops_the_abandoned_fighters_note_and_the_fighters_still_go() {
+        let (notes, messages, escorts, save_due) = abandoning_into(2, RuleSource::Engine);
+        assert_eq!(notes, [], "the buoy replaces the suffix");
+        assert_eq!(messages, [crate::SimMessage::Buoy("two".into())]);
+        assert_eq!(escorts, 1, "the Dart is still abandoned");
+        assert!(save_due);
+        let (notes, messages, ..) = abandoning_into(3, RuleSource::Engine);
+        assert_eq!(notes, [], "an empty line replaces it too");
+        assert_eq!(messages, [crate::SimMessage::Buoy(String::new())]);
+    }
+
+    #[test]
+    fn with_no_buoy_shown_the_abandoned_fighters_note_stays() {
+        let arrived = [crate::SimMessage::Arrived(crate::catalog::SystemId(131))];
+        for (message, buoy) in [(-1, RuleSource::Engine), (3, RuleSource::Bible)] {
+            let (notes, messages, escorts, _) = abandoning_into(message, buoy);
+            assert_eq!(notes, [FighterNote::Abandoned(1)], "{message} {buoy:?}");
+            assert_eq!(messages, arrived, "{message} {buoy:?}");
+            assert_eq!(escorts, 1);
+        }
+    }
+
     #[test]
     fn by_the_engine_landed_the_fighters_stay_out_and_take_off_restocked() {
         let catalog = two_bays();
@@ -1683,10 +1808,12 @@ mod tests {
         catalog
     }
 
-    /// Presses L twice over the hypergate and comes out of it in 131.
+    /// Presses L over the hypergate, runs the dock approach, presses L
+    /// again and comes out of it in 131.
     fn through_the_gate(session: &mut Session, catalog: &FakePilotCatalog) {
         use crate::catalog::SystemId;
         session.land().expect("selects the gate");
+        session.dock_approach();
         assert!(matches!(
             session.land(),
             Ok(crate::session::LandPress::AtGate { .. })
@@ -1869,13 +1996,13 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_resumed_docked_with_fighters_out_loses_them_buying_a_ship() {
+    fn a_pilot_resumed_and_landed_with_fighters_out_loses_them_buying_a_ship() {
         let catalog = spaceport();
         let mut pilot = pilot(&catalog, 0, vec![out(), warship(None), dart_out()]);
         pilot.cash = 1_000_000;
         pilot.stellar = Some(crate::catalog::StellarId(128));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert!(session.landed().is_some(), "resumed docked");
+        land_now(&mut session).expect("lands on resuming");
         assert!(session.fleet.is_empty(), "none placed yet");
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)

@@ -2498,11 +2498,11 @@ mod tests {
 
     #[test]
     fn each_unimplemented_flag_is_reported_once_however_often_it_fires() {
-        let mining = WeaponRecord {
-            flags2: 0x8000,
+        let planet_type = WeaponRecord {
+            flags2: 0x0400,
             ..blaster(181, 0)
         };
-        let mut armament = mounted(mining, 1);
+        let mut armament = mounted(planet_type, 1);
         let mut supplies = Supplies::none();
         assert_eq!(supplies.reports.take(), [], "not before it fires");
         assert_eq!(supplies.firing(&mut armament, PRIMARY, 5).len(), 5);
@@ -2511,7 +2511,7 @@ mod tests {
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(181),
                 field: FlagField::Flags2,
-                bit: 0x8000
+                bit: 0x0400
             }]
         );
     }
@@ -2779,7 +2779,7 @@ mod tests {
     fn point_defence_reports_its_flags_as_it_fires() {
         let mut armament = mounted(
             WeaponRecord {
-                flags2: 0x8000,
+                flags2: 0x0400,
                 ..defence(133, 9, 5, 0)
             },
             1,

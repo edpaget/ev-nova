@@ -56,7 +56,7 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
@@ -143,7 +143,6 @@ pub struct MissionComputerScreen {
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info_requested: bool,
     closed: bool,
-    sounds: Vec<Sound>,
 }
 
 impl MissionComputerScreen {
@@ -197,7 +196,6 @@ impl MissionComputerScreen {
             info_requested: false,
             player_info_requested: false,
             closed: false,
-            sounds: Vec::new(),
         };
         screen.set_computer(computer);
         screen
@@ -347,7 +345,6 @@ impl Screen for MissionComputerScreen {
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
-        self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
         }
@@ -382,11 +379,6 @@ impl Screen for MissionComputerScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
-    }
-
-    /// The buttons' sounds, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -471,7 +463,7 @@ impl MissionInfoScreen {
             },
             abort: None,
             closed: false,
-            sounds: Vec::new(),
+            sounds: vec![Sound::Ui(UiSound::MissionInfoOpened)],
         };
         screen.set_info(info);
         screen
@@ -519,7 +511,7 @@ impl MissionInfoScreen {
         let kept = self.selected_row().map(|row| row.slot);
         self.info = info;
         if self.info.rows.is_empty() {
-            self.closed = true;
+            self.close();
         }
         let Ok(laid) = &mut self.laid else {
             return;
@@ -568,9 +560,18 @@ impl MissionInfoScreen {
     /// selected slot. Anything else does nothing.
     fn activate(&mut self, item: usize) {
         match item {
-            INFO_DONE_ITEM => self.closed = true,
+            INFO_DONE_ITEM => self.close(),
             ABORT_ITEM => self.abort = self.selected_row().map(|row| row.slot),
             _ => {}
+        }
+    }
+
+    /// Closes it, beeping `_beepSnd[2]` (@0x9e791) the first time when it
+    /// was laid out; without its dialog the original returns before it
+    /// (@0x9e20b).
+    fn close(&mut self) {
+        if !std::mem::replace(&mut self.closed, true) && self.laid.is_ok() {
+            self.sounds.push(Sound::Ui(UiSound::MissionInfoClosed));
         }
     }
 }
@@ -597,7 +598,6 @@ impl Screen for MissionInfoScreen {
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
-        self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
         }
@@ -634,7 +634,7 @@ impl Screen for MissionInfoScreen {
         }
     }
 
-    /// The buttons' sounds, in order.
+    /// Its opening's and closing's sounds, in order.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -957,14 +957,12 @@ mod tests {
         assert!(screen.closed());
     }
 
-    const DOWN: Sound = Sound::Ui(crate::sound::UiSound::ButtonDown);
-    const UP: Sound = Sound::Ui(crate::sound::UiSound::ButtonUp);
-
+    /// `_TrackMissionButtons` @0x287f5 plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {
         let mut screen = screen();
         click_item(&mut screen, ACCEPT_ITEM);
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_accept(), Some(MissionId(130)));
         let at = screen
             .dialog()
@@ -980,7 +978,7 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_accept(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
     // The mission info screen.
@@ -1197,8 +1195,9 @@ mod tests {
         assert!(screen.closed());
     }
 
+    /// `_TrackMissionInfoButtons` @0x2850e plays nothing under the pointer.
     #[test]
-    fn mission_infos_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn mission_infos_pointer_click_is_silent_and_a_click_abandoned_does_nothing() {
         let mut screen = info_screen();
         let at = screen
             .dialog()
@@ -1214,10 +1213,45 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_abort(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), [OPENED], "its opening's alone");
         click_info(&mut screen, ABORT_ITEM);
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_abort(), Some(0));
+    }
+
+    const OPENED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoOpened);
+    const CLOSED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoClosed);
+
+    #[test]
+    fn mission_info_beeps_as_it_opens_and_as_it_closes_laid_out() {
+        let mut screen = info_screen();
+        assert_eq!(screen.take_sounds(), [OPENED], "_beepSnd[1] @0x9e1d5");
+        click_info(&mut screen, INFO_DONE_ITEM);
+        assert_eq!(screen.take_sounds(), [CLOSED], "_beepSnd[2] @0x9e791");
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [], "closed once");
+        for close in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            screen.take_sounds();
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds().last(), Some(&CLOSED), "{close:?}");
+        }
+        let mut screen = info_screen();
+        screen.take_sounds();
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [CLOSED], "an abort leaving nothing");
+        let mut bare =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
+        assert_eq!(bare.take_sounds(), [OPENED], "before GetNewDialog");
+        bare.input(&key(Key::Escape));
+        assert!(bare.closed());
+        assert_eq!(bare.take_sounds(), [], "@0x9e20b skips the close's");
     }
 
     #[test]
@@ -1237,6 +1271,51 @@ mod tests {
             for part in ["Dialog", "RowList", "TextMetrics"] {
                 assert!(debug.contains(part), "{part}: {debug}");
             }
+        }
+    }
+
+    fn press_and_release(key: Key) -> [Input; 2] {
+        [true, false].map(|pressed| Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        })
+    }
+
+    /// The original's `_MissionFilter` (@0x9f7a9) maps Tab, the arrows,
+    /// Return and Escape to items without a click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original_on_the_computer() {
+        for k in [
+            Key::Tab,
+            Key::Up,
+            Key::Down,
+            MISSION_INFO_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+            Key::Char('a'),
+        ]
+        .into_iter()
+        .chain(LEAVE_KEYS)
+        {
+            let mut screen = screen();
+            for input in press_and_release(k) {
+                screen.input(&input);
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
+    }
+
+    /// The original's `_MissionInfoFilter` (@0x9d6e5) maps Return and Escape
+    /// to Done without a click sound: only the close's beep plays.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original_on_the_info_screen() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            screen.take_sounds();
+            for input in press_and_release(k) {
+                screen.input(&input);
+            }
+            assert_eq!(screen.take_sounds(), [CLOSED], "{k:?}");
         }
     }
 }

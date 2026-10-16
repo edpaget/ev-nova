@@ -62,9 +62,10 @@ use crate::rulebook::RuleSource;
 /// The escape pod's ship class, `shïp` 895 "Escape Pod": the original's
 /// class index 0x2ff (the ID less 128), which `_EnterGameFromMainScreen`
 /// tests (@0x1a4c5) to spare a strict pilot who ejected in it. Only the
-/// pod branch of the player's eject sets it (@0x6f64a). It never breaks
-/// up (`_HandleShipDisplay` @0x2d803), and it and every class after it
-/// are never damaged ([`immune`]).
+/// pod branch of the player's eject sets it (@0x6f64a), but data may name
+/// it for any NPC, and a hail counts a target of it mute (@0x62145). It
+/// never breaks up (`_HandleShipDisplay` @0x2d803), and it and every class
+/// after it are never damaged ([`immune`]).
 pub const ESCAPE_POD_SHIP: ShipId = ShipId(895);
 
 /// Whether ships of class `ship` take no damage: the [`ESCAPE_POD_SHIP`]

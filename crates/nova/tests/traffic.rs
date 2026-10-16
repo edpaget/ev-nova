@@ -121,14 +121,13 @@ fn trader() -> Vec<u8> {
     bytes
 }
 
-/// A Mining Blaster-like `wëap`: unguided, 10 pixels a tick for 12 ticks,
-/// every 20, doing x10 mass damage to asteroids (`Flags2` 0x8000), which
-/// the simulation does not do yet.
-fn mining_blaster() -> Vec<u8> {
+/// A planet-type `wëap`: unguided, 10 pixels a tick for 12 ticks, every
+/// 20, of `Flags2` 0x0400, which the simulation does not do yet.
+fn planet_gun() -> Vec<u8> {
     let mut bytes = vec![0; Weapon::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[20, 12, 2, 2, -1, 1000, -1]);
     put_i16s(&mut bytes, 0x16, &[-1]);
-    bytes[0x48..0x4A].copy_from_slice(&0x8000_u16.to_be_bytes());
+    bytes[0x48..0x4A].copy_from_slice(&0x0400_u16.to_be_bytes());
     bytes
 }
 
@@ -236,12 +235,7 @@ fn data() -> Rc<GameData> {
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship(300, 300))
         .resource(Ship::TYPE, 129, Some(b"Trader"), &trader())
-        .resource(
-            Weapon::TYPE,
-            181,
-            Some(b"Mining Blaster"),
-            &mining_blaster(),
-        )
+        .resource(Weapon::TYPE, 181, Some(b"Planet Gun"), &planet_gun())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
         .resource(RLED, 2000, None, &sheet(36, 1))
@@ -656,9 +650,13 @@ fn a_flights_diagnostics_are_written_out_once_as_lines() {
         text,
         "nova: wëap 181: no spïn 3000\n\
          nova: cargo box 0: no spïn 500\n\
+         nova: cargo box 1: no spïn 501\n\
+         nova: cargo box 2: no spïn 502\n\
+         nova: cargo box 3: no spïn 503\n\
+         nova: cargo box 4: no spïn 504\n\
          nova: cursor: no spïn 650\n\
-         nova: wëap 181 Flags2 0x8000 not implemented\n",
-        "its shots', the cargo box's and the cursor's sheets missing from the fixture, as the flight \
+         nova: wëap 181 Flags2 0x0400 not implemented\n",
+        "its shots', the cargo boxes' and the cursor's sheets missing from the fixture, as the flight \
          opened; then the trader fired, again and again"
     );
 }

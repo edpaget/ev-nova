@@ -186,7 +186,7 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 }
 
 /// A `sÿst` at map (`x`, 0) with these hyperlinks and `stellar` if any;
-/// independent, with no traffic.
+/// independent, with no traffic and no message buoy.
 fn system(x: i16, links: &[i16], stellar: Option<i16>) -> Vec<u8> {
     let mut bytes = vec![0; System::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[x, 0]);
@@ -196,7 +196,7 @@ fn system(x: i16, links: &[i16], stellar: Option<i16>) -> Vec<u8> {
         put_i16s(&mut bytes, 0x24, &[stellar]);
     }
     put_i16s(&mut bytes, 0x44, &[-1; 8]);
-    put_i16s(&mut bytes, 0x64, &[0, -1]);
+    put_i16s(&mut bytes, 0x64, &[0, -1, -1]);
     bytes
 }
 
@@ -564,6 +564,19 @@ impl Game {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
+    }
+
     fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
@@ -581,8 +594,9 @@ impl Game {
         self.session().pilot().clone()
     }
 
-    /// Opens the saved pilot from the main menu, which then shows
-    /// `showing`.
+    /// Opens the saved pilot from the main menu, which resumes it in
+    /// flight over the stellar it last landed on, and, for `showing` the
+    /// spaceport, lands there; then `showing` shows.
     fn open_pilot(&mut self, showing: Showing) {
         let at = self
             .app
@@ -595,6 +609,13 @@ impl Game {
         self.click(at);
         assert_eq!(self.showing(), Showing::OpenPilot);
         self.tap(Key::Enter);
+        assert_eq!(self.showing(), Showing::Flight, "resumed in flight");
+        if showing == Showing::Spaceport {
+            // L requests clearance, a second L lands.
+            self.tap(Key::Char('l'));
+            self.approach();
+            self.tap(Key::Char('l'));
+        }
         assert_eq!(self.showing(), showing);
     }
 
@@ -780,6 +801,7 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     game.frame();
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
 
@@ -834,6 +856,7 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     // Landed again it is saved; a new app opens it still hired, and its
     // hail shows its pay. L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(saved(&store).escorts()[0].wage, Some(100));

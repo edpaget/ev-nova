@@ -115,7 +115,7 @@ use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::self_repair::FormerEscort;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
@@ -150,10 +150,25 @@ impl Session {
             .collect()
     }
 
+    /// The auxiliary-ship mark ([`Npc::aux`]) of each of the fleet's
+    /// escorts, by its index: its NPC's in the system, if any. As
+    /// `_DeleteAllComputerShips(0)` keeps the player's ships whole
+    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark across a
+    /// setup.
+    pub(super) fn fleet_aux_marks(&self) -> Vec<Option<u8>> {
+        (0..self.pilot.escorts.len())
+            .map(|index| {
+                let id = self.fleet.get(index).copied().flatten()?;
+                self.npc(id)?.aux
+            })
+            .collect()
+    }
+
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, and each is placed on its
-    /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`]).
-    pub(super) fn enter_escorts(&mut self, berths: &[u32]) {
+    /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
+    /// with the aux mark `marks[i]` ([`Session::fleet_aux_marks`]).
+    pub(super) fn enter_escorts(&mut self, berths: &[u32], marks: &[Option<u8>]) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
@@ -166,7 +181,13 @@ impl Session {
             self.class_orders = [None; 4];
         }
         self.fleet = (0..self.pilot.escorts.len())
-            .map(|index| self.place_escort_at(index, berths.get(index).copied()))
+            .map(|index| {
+                let id = self.place_escort_at(index, berths.get(index).copied())?;
+                if let Some(npc) = self.npc_mut(id) {
+                    npc.aux = marks.get(index).copied().flatten();
+                }
+                Some(id)
+            })
             .collect();
         self.traffic.reserve(BTreeSet::new());
         self.restock_persons = false;
@@ -235,6 +256,7 @@ impl Session {
             booty: None,
             boarded: false,
             info_types: 0,
+            cargo: NpcHold::default(),
             spared: false,
             assisting: 0,
             carrier,
@@ -244,6 +266,7 @@ impl Session {
             cloak: Cloak::default(),
             cloak_gear: kind.cloak,
             led_out: false,
+            emerges_from: None,
             self_repair: kind.self_repair,
             former: None,
             tractor: None,
@@ -1232,7 +1255,7 @@ mod tests {
 
     #[test]
     fn landed_the_record_keeps_the_reserves_and_taking_off_restocks_them() {
-        let catalog = fleeted();
+        let catalog = crate::testkit::far_129_reachable(fleeted());
         let mut session = flying(&catalog, RuleSource::Engine);
         let warship = session.fleet[0].expect("placed");
         session.npc_mut(warship).expect("there").reserves.shield.now = 4.0;
@@ -2259,7 +2282,7 @@ mod tests {
 
     #[test]
     fn a_person_escort_is_restocked_full_to_its_fitted_ship_on_flying_and_taking_off() {
-        let catalog = with_ace();
+        let catalog = crate::testkit::far_129_reachable(with_ace());
         let mut session = flying_ace(&catalog);
         let fitted = Reserves {
             fuel: worn().fuel,

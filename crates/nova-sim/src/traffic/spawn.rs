@@ -70,7 +70,14 @@
 //!   escort type, each at the lead's place plus `Rand(300) - 150` each way,
 //!   with its heading and velocity, its own ship's `InherentAI`, escorting
 //!   the lead. Fleets always arrive, at setup too: by hyperspace, or out
-//!   of a gate.
+//!   of a gate. An announced fleet's lead carries its `flët`'s `Quote`
+//!   ([`NewShip::quote`], see [`quote`](crate::traffic::quote)): every
+//!   arriving fleet is announced, setup's fleets never
+//!   ([`FleetCall::announced`]). A `flët` with `Flags` 0x0001
+//!   ([`RANDOM_CARGO`]) gives each of its ships whose class's
+//!   `InherentAI` is at most 2, the lead and each escort as it is placed,
+//!   one commodity `Rand(6)` of `Rand(holds) + 1` tons in its own hold
+//!   ([`NewShip::cargo`]).
 //! - **A `düde` ship** is a `düde` picked by weight, then a ship by its
 //!   `Probability`; its AI is the `düde`'s `AIType` when above 0, or else
 //!   its ship's `InherentAI`, and its government the `düde`'s.
@@ -222,13 +229,14 @@
 
 use std::collections::BTreeSet;
 
-use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId};
+use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::control::Gate;
 use crate::flight::{ShipState, facing, heading_of};
 use crate::gate::exit_heading;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::market::Good;
 use crate::mission::ShipGoal;
 use crate::mission::ships::{ShipBehav, ShipStart};
 use crate::person::{PersonRoll, PersonRules, PersonWorld, aggression_of};
@@ -263,14 +271,29 @@ pub const STATIONARY_DISTANCE: f32 = 100.0;
 pub const ESCORT_SPREAD: u32 = 300;
 /// `Rand(360)`: a heading, or an angle round the centre.
 pub const DEGREES: u32 = 360;
-/// How many ticks a ship glides in from hyperspace (`0x2b`).
+/// How many ticks of the glide a ship arriving by hyperspace is placed
+/// back from [`JUMP_IN_END`] (`0x2b`, `_HyperShipSpawn`): where it starts,
+/// not how long it glides, which its cap decides
+/// ([`TopSpeeds::burst_cap`](crate::traffic::autopilot::TopSpeeds::burst_cap)).
 pub const JUMP_IN_TICKS: u32 = 43;
 /// Its speed on the glide's first tick, in pixels a tick.
 pub const JUMP_IN_SPEED: f32 = 50.0;
-/// How much slower each tick of the glide is than the last.
+/// How much slower each tick of the glide is than the last: sub-goal
+/// 0xa's -1.165 (`_LowLevelAIHandler` @0x88136), which a burst out of a
+/// gate shares ([`EXIT_SLOWING`](crate::traffic::emerge::EXIT_SLOWING)).
 pub const JUMP_IN_SLOWING: f32 = 1.165;
-/// How far from the centre the glide ends.
+/// How far from the centre a glide of [`JUMP_IN_TICKS`] would end, the
+/// distance a ship's start is reckoned from.
 pub const JUMP_IN_END: f32 = 1000.0;
+/// The `flët` `Flags` bit that gives its trader ships random cargo
+/// (@0x41e56-0x41e5e).
+pub const RANDOM_CARGO: u16 = 0x0001;
+/// The most `InherentAI` a ship class may have, as a signed comparison,
+/// for a [`RANDOM_CARGO`] fleet to give it cargo: the traders'
+/// (@0x41e7b-0x41e81).
+const CARGO_AI_MAX: i16 = 2;
+/// `Rand(6)`: which of the six standard commodities its cargo is.
+const CARGO_COMMODITIES: u32 = 6;
 /// `Rand(3)`: the draw a ship's aggression is made from.
 pub const AGGRESSION_DRAW: u32 = 3;
 /// What the aggression draw is combined with, bit by bit, by exclusive
@@ -289,6 +312,8 @@ pub enum Entry {
     Emerging {
         /// The ticks of the wait.
         ticks_left: u32,
+        /// The gate it comes out of.
+        gate: StellarId,
     },
 }
 
@@ -361,9 +386,37 @@ pub struct NewShip {
     /// Whether it starts cloaking (`_DoShipCloak`): a `ShipStart` 2
     /// mission's ship set up in the system does ([`mission_ships`]).
     pub cloaked: bool,
+    /// The `STR#` its arrival shows a line of: only an announced fleet's
+    /// lead has one, and only when its `flët` has a `Quote`
+    /// ([`FleetCall::announced`], see [`quote`](crate::traffic::quote)).
+    pub quote: Option<i16>,
+    /// The commodity in its own hold and its tons, if any: the original's
+    /// six commodity words at ship +0x7a, all cleared as it spawns
+    /// (`_GenericRandomShipSpawn` @0x3ccce-0x3cce5), of which a `flët`
+    /// with `Flags` 0x0001 fills one for its trader ships
+    /// ([`fleet`]). The plunder never
+    /// offers it: boarding reads the `düde`'s `Booty` alone
+    /// (`_SetPlunderValues` @0x92222-0x92256).
+    pub cargo: Option<(Good, u32)>,
     /// Whether it starts boarded (+0xb9): a rescue ship of an expired
     /// mission set up in the system does ([`mission_ships`]).
     pub boarded: bool,
+}
+
+/// What a caller of [`fleet`] asks of the fleet: `_HyperSpawnFleet`'s
+/// third and fourth arguments.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FleetCall {
+    /// The AI type its lead flies as, in place of its ship's `InherentAI`
+    /// (@0x41d5d-0x41d69); its escorts always fly as their own.
+    pub lead_ai: Option<AiType>,
+    /// Whether its arrival shows its `flët`'s `Quote` (`0x14(%ebp)`,
+    /// @0x42607-0x42629). Setup's fleets come silently
+    /// (`_SetupShipsInSystem` @0x4327c-0x4328d); every arriving one is
+    /// announced: a `LinkSyst` fleet (`_HyperShipSpawn` @0x42973), a
+    /// `DudeTypes` fleet (`_EnterMoreShips` @0x43bbc-0x43bd3) and the
+    /// escort-strength timer's (@0x43d90-0x43dcf).
+    pub announced: bool,
 }
 
 /// The persons' side of a system's spawning: their world, and the names
@@ -452,6 +505,8 @@ impl<'a> PersonDraw<'a> {
             boarded: false,
             cloaked: false,
             aux: None,
+            quote: None,
+            cargo: None,
         })
     }
 }
@@ -496,7 +551,7 @@ pub fn initial(
             PersonRoll::None => {}
         }
         if chance.below(FLEET_ODDS) < 1 {
-            link_fleet(table, gate, stellars, chance, &mut out);
+            link_fleet(table, gate, stellars, false, chance, &mut out);
             continue;
         }
         if let Some((ship, dude, ai_type, kind)) = dude_ship(table, gate, chance) {
@@ -518,6 +573,8 @@ pub fn initial(
                 boarded: false,
                 cloaked: false,
                 aux: None,
+                quote: None,
+                cargo: None,
             });
         }
     }
@@ -594,7 +651,11 @@ fn named_fleet(
     let Some(id) = pick(&appearing, chance) else {
         return false;
     };
-    fleet(table, id, gate, stellars, None, chance, out);
+    let call = FleetCall {
+        lead_ai: None,
+        announced: true,
+    };
+    fleet(table, id, gate, stellars, call, chance, out);
     true
 }
 
@@ -632,7 +693,7 @@ fn hyper_ship(
     }
     let gate = draw.world.gate();
     if chance.below(FLEET_ODDS) < 1 {
-        link_fleet(table, gate, stellars, chance, out);
+        link_fleet(table, gate, stellars, true, chance, out);
         return;
     }
     if let Some((ship, dude, ai_type, kind)) = dude_ship(table, gate, chance)
@@ -657,6 +718,8 @@ fn hyper_ship(
             boarded: false,
             cloaked: false,
             aux: None,
+            quote: None,
+            cargo: None,
         });
     }
 }
@@ -798,6 +861,8 @@ fn specific_dude_ship(
         boarded: false,
         cloaked: false,
         aux: None,
+        quote: None,
+        cargo: None,
     })
 }
 
@@ -1015,18 +1080,23 @@ fn dude_ship<'a>(
 
 /// The `LinkSyst` fleet roll: one of 256 slots, and the fleet there, if
 /// its `LinkSyst` matches and its `AppearOn` holds by `gate`, added to
-/// `out`.
+/// `out`, its arrival `announced` or not ([`FleetCall::announced`]).
 pub fn link_fleet(
     table: &SpawnTable,
     gate: Gate,
     stellars: Stellars,
+    announced: bool,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) {
     let slot = chance.below(FLEET_SLOTS) as i16;
     let id = FleetId(FIRST_FLEET_ID + slot);
     if table.link_fleets.contains(&id) {
-        fleet(table, id, gate, stellars, None, chance, out);
+        let call = FleetCall {
+            lead_ai: None,
+            announced,
+        };
+        fleet(table, id, gate, stellars, call, chance, out);
     }
 }
 
@@ -1034,15 +1104,21 @@ pub fn link_fleet(
 /// `stellars` or by hyperspace, then its escorts whose ship type's
 /// `AppearOn` holds by `gate`, each near the lead by hyperspace or at the
 /// lead's gate; nothing, and no draw, when the fleet's own `AppearOn`
-/// does not. The lead flies as `lead_ai` when given, in place of its
-/// ship's `InherentAI` (`_HyperSpawnFleet`'s third argument,
-/// @0x41d5d-0x41d69); its escorts always fly as their own.
+/// does not. The lead flies as the `call`'s AI type when it gives one,
+/// and carries the fleet's `Quote` when the `call` announces it (see
+/// [`FleetCall`]).
+///
+/// The whole fleet is rolled, even the ships that will find no ship-table
+/// slot: the cap (`_GenericRandomShipSpawn` giving -1 for the lead
+/// @0x41d02 or an escort @0x421b9) is applied as the traffic places them
+/// ([`Traffic`](crate::Traffic)'s `add`), in the same call and before any
+/// frame, so the draws it makes for them change nothing the player sees.
 pub fn fleet(
     table: &SpawnTable,
     id: FleetId,
     gate: Gate,
     stellars: Stellars,
-    lead_ai: Option<AiType>,
+    call: FleetCall,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) {
@@ -1070,7 +1146,9 @@ pub fn fleet(
     out.push(NewShip {
         ship: lead_ship,
         govt: record.govt,
-        ai_type: lead_ai.unwrap_or_else(|| AiType::from_raw(kind.inherent_ai)),
+        ai_type: call
+            .lead_ai
+            .unwrap_or_else(|| AiType::from_raw(kind.inherent_ai)),
         lead: None,
         state,
         entry,
@@ -1084,6 +1162,8 @@ pub fn fleet(
         boarded: false,
         cloaked: false,
         aux: None,
+        quote: record.quote.filter(|_| call.announced),
+        cargo: random_cargo(record.flags, kind, chance),
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -1097,12 +1177,13 @@ pub fn fleet(
         for _ in 0..count {
             let placed = escort_offset(&state, chance);
             let (placed, escort_entry) = match entry {
-                Entry::Emerging { .. } => (
+                Entry::Emerging { gate, .. } => (
                     state,
                     Entry::Emerging {
                         ticks_left: EMERGE_TICKS
                             + ESCORT_EMERGE_EXTRA
                             + chance.below(ESCORT_EMERGE_SPREAD),
+                        gate,
                     },
                 ),
                 Entry::Placed | Entry::JumpingIn => (placed, entry),
@@ -1124,9 +1205,33 @@ pub fn fleet(
                 boarded: false,
                 cloaked: false,
                 aux: None,
+                quote: None,
+                cargo: random_cargo(record.flags, kind, chance),
             });
         }
     }
+}
+
+/// The random cargo a ship of `kind` in a fleet of `flags` starts with
+/// (`_HyperSpawnFleet` @0x41e49-0x41ec1 for the lead, @0x42430-0x424a5
+/// for each escort): with [`RANDOM_CARGO`], when its class's own
+/// `InherentAI` (not the AI type it flies as) is at most 2, a trader's,
+/// one commodity `Rand(6)` of `Rand(holds) + 1` tons; otherwise none, and
+/// no draw. A class of no holds gets none: the original would draw
+/// `Rand(0)`, which reseeds its generator and returns the new seed's low
+/// 16 bits (@0xa4c82-0xa4ca2), an arbitrary tonnage. Data that broken
+/// is not worth copying, so no rule chooses it.
+fn random_cargo(
+    flags: u16,
+    kind: &ShipKind,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<(Good, u32)> {
+    if flags & RANDOM_CARGO == 0 || kind.inherent_ai > CARGO_AI_MAX || kind.holds == 0 {
+        return None;
+    }
+    let commodity = u8::try_from(chance.below(CARGO_COMMODITIES)).unwrap_or(0);
+    let tons = chance.below(u32::from(kind.holds)) + 1;
+    Some((Good::Commodity(commodity), tons))
 }
 
 /// How many of an escort type with `min` and `max` come:
@@ -1238,7 +1343,7 @@ fn arrival(
 /// A ship coming out of `site`: at its centre, at rest (the callers of
 /// `_AIMakeShipEmergeFromHyperGate`, @0x42ae4-0x42b0a, @0x41f34-0x41f64),
 /// heading its [`exit_heading`] rolled on `chance`, waiting
-/// [`EMERGE_TICKS`].
+/// [`EMERGE_TICKS`], with `site` its travel stellar (+0x6c, @0x8954a).
 fn emerging(site: &LandingSite, chance: &mut (impl Chance + ?Sized)) -> (ShipState, Entry) {
     let state = ShipState {
         position: site.position,
@@ -1247,6 +1352,7 @@ fn emerging(site: &LandingSite, chance: &mut (impl Chance + ?Sized)) -> (ShipSta
     };
     let entry = Entry::Emerging {
         ticks_left: EMERGE_TICKS,
+        gate: site.id,
     };
     (state, entry)
 }
@@ -1289,6 +1395,7 @@ mod tests {
     use crate::control::{ControlBits, PilotFacts};
     use crate::control::{Test, TestExpr};
     use crate::handling::ShipFields;
+    use crate::market::Good;
     use crate::person::{NovaPersons, PersonWorld};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
@@ -1324,14 +1431,17 @@ mod tests {
             govt: Some(GovtId(131)),
             link_syst: -1,
             appear_on: Test::default(),
+            quote: None,
+            flags: 0,
         }
     }
 
     /// Two ships on average. Düde 128 (weight 100, no `AIType`, govt 130)
     /// flies ship 200 (`InherentAI` 2) or 201 (3), half and half. Fleet
     /// 140, named at 30 %, is led by ship 201 with one to three of ship 202
-    /// (4); fleet 141 (slot 13) links here, led by ship 200 with exactly
-    /// two of ship 202. Ship 203 has no fuel tank.
+    /// (4), its arrival quote `STR#` 7600; fleet 141 (slot 13) links
+    /// here, led by ship 200 with exactly two of ship 202, quote 7601.
+    /// Ship 203 has no fuel tank.
     fn table() -> SpawnTable {
         let no_fuel = ShipFields { fuel: 0, ..FAST };
         SpawnTable {
@@ -1350,8 +1460,20 @@ mod tests {
             dude_fleets: vec![(FleetId(140), 30)],
             link_fleets: BTreeSet::from([FleetId(141)]),
             fleets: BTreeMap::from([
-                (FleetId(140), fleet_record(140, 201, &[(202, 1, 3)])),
-                (FleetId(141), fleet_record(141, 200, &[(202, 2, 2)])),
+                (
+                    FleetId(140),
+                    FleetRecord {
+                        quote: Some(7600),
+                        ..fleet_record(140, 201, &[(202, 1, 3)])
+                    },
+                ),
+                (
+                    FleetId(141),
+                    FleetRecord {
+                        quote: Some(7601),
+                        ..fleet_record(141, 200, &[(202, 2, 2)])
+                    },
+                ),
             ]),
             ships: BTreeMap::from([
                 (ShipId(200), kind(2, FAST)),
@@ -1532,6 +1654,8 @@ mod tests {
                 boarded: false,
                 cloaked: false,
                 aux: None,
+                quote: None,
+                cargo: None,
             }]
         );
     }
@@ -1894,7 +2018,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -1911,7 +2035,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -1928,7 +2052,7 @@ mod tests {
             FleetId(150),
             Gate::FRESH,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut Draws::of(&[]),
             &mut out,
         );
@@ -1940,7 +2064,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut Draws::of(&[]),
             &mut out,
         );
@@ -1953,13 +2077,27 @@ mod tests {
     fn the_linksyst_roll_hits_one_slot_in_256() {
         let mut out = Vec::new();
         let mut hit = Draws::of(&[13]);
-        link_fleet(&table(), Gate::FRESH, Stellars::NONE, &mut hit, &mut out);
+        link_fleet(
+            &table(),
+            Gate::FRESH,
+            Stellars::NONE,
+            false,
+            &mut hit,
+            &mut out,
+        );
         assert_eq!(out.len(), 3, "fleet 141");
         assert_eq!(hit.asked[0], 256);
         let mut out = Vec::new();
         for slot in [12, 0, 255] {
             let mut miss = Draws::of(&[slot]);
-            link_fleet(&table(), Gate::FRESH, Stellars::NONE, &mut miss, &mut out);
+            link_fleet(
+                &table(),
+                Gate::FRESH,
+                Stellars::NONE,
+                false,
+                &mut miss,
+                &mut out,
+            );
             assert_eq!(miss.asked, [256], "{slot}");
         }
         assert_eq!(out, [], "fleet 140 is named, not linked");
@@ -1981,7 +2119,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut crate::NeverFires,
             &mut out,
         );
@@ -2002,7 +2140,10 @@ mod tests {
                 FleetId(141),
                 Gate::FRESH,
                 Stellars::NONE,
-                lead_ai,
+                FleetCall {
+                    lead_ai,
+                    announced: false,
+                },
                 &mut chance,
                 &mut out,
             );
@@ -2026,6 +2167,211 @@ mod tests {
             [AiType::Warship, AiType::Interceptor, AiType::Interceptor]
         );
         assert_eq!(led_draws, own_draws, "the same draws");
+    }
+
+    /// The quotes of the ships fleet `id` of `table` brings, `announced`
+    /// or not.
+    fn quotes_of(table: &SpawnTable, id: i16, announced: bool) -> Vec<Option<i16>> {
+        let mut out = Vec::new();
+        fleet(
+            table,
+            FleetId(id),
+            Gate::FRESH,
+            Stellars::NONE,
+            FleetCall {
+                lead_ai: None,
+                announced,
+            },
+            &mut crate::NeverFires,
+            &mut out,
+        );
+        out.iter().map(|ship| ship.quote).collect()
+    }
+
+    #[test]
+    fn an_announced_fleet_puts_its_quote_on_its_lead_alone() {
+        assert_eq!(quotes_of(&table(), 141, true), [Some(7601), None, None]);
+    }
+
+    #[test]
+    fn an_unannounced_fleet_or_one_without_a_quote_puts_none() {
+        assert_eq!(quotes_of(&table(), 141, false), [None; 3]);
+        let mut table = table();
+        table
+            .fleets
+            .insert(FleetId(141), fleet_record(141, 200, &[(202, 2, 2)]));
+        assert_eq!(quotes_of(&table, 141, true), [None; 3]);
+    }
+
+    #[test]
+    fn a_setup_linksyst_fleet_is_unannounced_and_an_arriving_one_announced() {
+        let quotes = |ships: Vec<NewShip>| ships.iter().map(|ship| ship.quote).collect::<Vec<_>>();
+        // Not a person, a fleet, slot 13 (fleet 141).
+        let mut chance = Draws::of(&[6, 0, 13]);
+        let set_up = initial(
+            &one_pass(),
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(quotes(set_up), [None; 3], "_SetupShipsInSystem passes 0");
+        let mut chance = Draws::of(&[0, 6, 0, 13]);
+        let linked = arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut chance);
+        assert_eq!(
+            quotes(linked),
+            [Some(7601), None, None],
+            "_HyperShipSpawn passes 1"
+        );
+        let mut chance = Draws::of(&[1, 29, 0, 0, 0, 0]);
+        let named = arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut chance);
+        assert_eq!(
+            quotes(named),
+            [Some(7600), None],
+            "_EnterMoreShips passes 1"
+        );
+    }
+
+    // Random cargo.
+
+    /// A ship kind of `inherent_ai` and `holds` tons.
+    fn holding(inherent_ai: i16, holds: u16) -> ShipKind {
+        ShipKind {
+            holds,
+            ..kind(inherent_ai, FAST)
+        }
+    }
+
+    /// `flët` 150 of `flags`, led by ship 210 (`InherentAI` `lead_ai`, 20
+    /// tons), with one ship 211 (`InherentAI` 2, 10 tons) and one ship 212
+    /// (`InherentAI` 3, 30 tons).
+    fn cargo_table(flags: u16, lead_ai: i16) -> SpawnTable {
+        SpawnTable {
+            fleets: BTreeMap::from([(
+                FleetId(150),
+                FleetRecord {
+                    flags,
+                    ..fleet_record(150, 210, &[(211, 1, 1), (212, 1, 1)])
+                },
+            )]),
+            ships: BTreeMap::from([
+                (ShipId(210), holding(lead_ai, 20)),
+                (ShipId(211), holding(2, 10)),
+                (ShipId(212), holding(3, 30)),
+            ]),
+            ..SpawnTable::default()
+        }
+    }
+
+    /// The cargo of each ship fleet 150 of `table` brings, called as
+    /// `call`, drawn on `chance`.
+    fn cargoes(
+        table: &SpawnTable,
+        call: FleetCall,
+        chance: &mut Draws,
+    ) -> Vec<Option<(Good, u32)>> {
+        let mut out = Vec::new();
+        fleet(
+            table,
+            FleetId(150),
+            Gate::FRESH,
+            Stellars::NONE,
+            call,
+            chance,
+            &mut out,
+        );
+        out.iter().map(|ship| ship.cargo).collect()
+    }
+
+    #[test]
+    fn a_random_cargo_fleets_trader_ships_each_carry_one_commodity() {
+        let table = cargo_table(RANDOM_CARGO, 1);
+        let mut last = Draws::of(&[]);
+        assert_eq!(
+            cargoes(&table, FleetCall::default(), &mut last),
+            [
+                Some((Good::Commodity(5), 20)),
+                Some((Good::Commodity(5), 10)),
+                None
+            ],
+            "Rand(6) and Rand(holds) + 1, for InherentAI 1 and 2, not 3"
+        );
+        assert_eq!(last.asked.iter().filter(|&&n| n == 6).count(), 2);
+        assert!(last.asked.contains(&20) && last.asked.contains(&10));
+        assert!(!last.asked.contains(&30), "the warship draws no tons");
+        let mut first = Draws::of(&[0; 32]);
+        assert_eq!(
+            cargoes(&table, FleetCall::default(), &mut first),
+            [
+                Some((Good::Commodity(0), 1)),
+                Some((Good::Commodity(0), 1)),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_class_of_inherent_ai_0_or_below_carries_cargo() {
+        for lead_ai in [0, -1] {
+            let cargo = cargoes(
+                &cargo_table(RANDOM_CARGO, lead_ai),
+                FleetCall::default(),
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(cargo[0], Some((Good::Commodity(5), 20)), "{lead_ai}");
+        }
+    }
+
+    #[test]
+    fn a_lead_carries_cargo_by_its_classs_inherent_ai_not_the_ai_it_flies_as() {
+        let flown = |lead_ai: i16, flies: AiType| {
+            let call = FleetCall {
+                lead_ai: Some(flies),
+                announced: false,
+            };
+            cargoes(
+                &cargo_table(RANDOM_CARGO, lead_ai),
+                call,
+                &mut Draws::of(&[]),
+            )[0]
+        };
+        assert_eq!(
+            flown(1, AiType::Interceptor),
+            Some((Good::Commodity(5), 20))
+        );
+        assert_eq!(flown(3, AiType::WimpyTrader), None);
+    }
+
+    #[test]
+    fn a_class_without_holds_carries_none() {
+        let mut table = cargo_table(RANDOM_CARGO, 1);
+        table.ships.insert(ShipId(210), holding(1, 0));
+        let mut chance = Draws::of(&[]);
+        assert_eq!(cargoes(&table, FleetCall::default(), &mut chance)[0], None);
+        assert_eq!(
+            chance.asked.iter().filter(|&&n| n == 6).count(),
+            1,
+            "only the escort's"
+        );
+    }
+
+    #[test]
+    fn without_the_flag_nobody_carries_cargo_and_no_cargo_is_drawn() {
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            cargoes(&cargo_table(0, 1), FleetCall::default(), &mut chance),
+            [None; 3]
+        );
+        assert!(!chance.asked.contains(&6));
+        let mut other_flags = Draws::of(&[]);
+        assert_eq!(
+            cargoes(
+                &cargo_table(0xFFFE, 1),
+                FleetCall::default(),
+                &mut other_flags
+            ),
+            [None; 3]
+        );
     }
 
     #[test]
@@ -2136,7 +2482,7 @@ mod tests {
             FleetId(141),
             gate,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut crate::NeverFires,
             &mut out,
         );
@@ -2156,7 +2502,7 @@ mod tests {
             FleetId(140),
             gate,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -2172,7 +2518,7 @@ mod tests {
             FleetId(140),
             allowing().world.gate(),
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut crate::NeverFires,
             &mut out,
         );
@@ -2199,7 +2545,7 @@ mod tests {
             FleetId(141),
             refusing_7().world.gate(),
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -2210,7 +2556,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -2221,7 +2567,7 @@ mod tests {
             FleetId(141),
             allowing().world.gate(),
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -2238,6 +2584,7 @@ mod tests {
             &gated,
             refusing_7().world.gate(),
             Stellars::NONE,
+            false,
             &mut hit,
             &mut out,
         );
@@ -2337,7 +2684,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -2680,6 +3027,8 @@ mod tests {
                 boarded: false,
                 cloaked: false,
                 aux: None,
+                quote: None,
+                cargo: None,
             }]
         );
     }
@@ -3110,6 +3459,8 @@ mod tests {
                 boarded: false,
                 cloaked: false,
                 aux: None,
+                quote: None,
+                cargo: None,
             }]
         );
     }
@@ -3741,6 +4092,8 @@ mod tests {
                 boarded: false,
                 cloaked: false,
                 aux: None,
+                quote: None,
+                cargo: None,
             })
         );
     }
@@ -3891,7 +4244,8 @@ mod tests {
         assert_eq!(
             ships[0].entry,
             Entry::Emerging {
-                ticks_left: EMERGE_TICKS
+                ticks_left: EMERGE_TICKS,
+                gate: StellarId(129),
             }
         );
         assert_eq!(ships[0].aggression, 2);
@@ -3937,7 +4291,8 @@ mod tests {
         assert_eq!(
             ships[0].entry,
             Entry::Emerging {
-                ticks_left: EMERGE_TICKS
+                ticks_left: EMERGE_TICKS,
+                gate: StellarId(129),
             }
         );
         // Any other ship never takes the wormhole, and draws no pick.
@@ -3959,7 +4314,8 @@ mod tests {
         assert_eq!(
             ships[0].entry,
             Entry::Emerging {
-                ticks_left: EMERGE_TICKS
+                ticks_left: EMERGE_TICKS,
+                gate: StellarId(129),
             }
         );
     }
@@ -3976,7 +4332,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             among(&sites),
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -3990,9 +4346,18 @@ mod tests {
         assert_eq!(
             out.iter().map(|ship| ship.entry).collect::<Vec<_>>(),
             [
-                Entry::Emerging { ticks_left: 60 },
-                Entry::Emerging { ticks_left: 72 },
-                Entry::Emerging { ticks_left: 79 },
+                Entry::Emerging {
+                    ticks_left: 60,
+                    gate: StellarId(129)
+                },
+                Entry::Emerging {
+                    ticks_left: 72,
+                    gate: StellarId(129)
+                },
+                Entry::Emerging {
+                    ticks_left: 79,
+                    gate: StellarId(129)
+                },
             ]
         );
         assert_eq!(
@@ -4008,7 +4373,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             among(&sites),
-            None,
+            FleetCall::default(),
             &mut chance,
             &mut out,
         );
@@ -4029,9 +4394,18 @@ mod tests {
         assert_eq!(
             ships.iter().map(|ship| ship.entry).collect::<Vec<_>>(),
             [
-                Entry::Emerging { ticks_left: 60 },
-                Entry::Emerging { ticks_left: 70 },
-                Entry::Emerging { ticks_left: 74 },
+                Entry::Emerging {
+                    ticks_left: 60,
+                    gate: StellarId(129)
+                },
+                Entry::Emerging {
+                    ticks_left: 70,
+                    gate: StellarId(129)
+                },
+                Entry::Emerging {
+                    ticks_left: 74,
+                    gate: StellarId(129)
+                },
             ]
         );
         assert!(ships.iter().all(|ship| ship.state == at_gate(90.0)));
@@ -4073,7 +4447,7 @@ mod tests {
                         FleetId(141),
                         Gate::FRESH,
                         stellars,
-                        None,
+                        FleetCall::default(),
                         chance,
                         &mut out,
                     );

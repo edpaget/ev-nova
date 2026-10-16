@@ -25,7 +25,11 @@
 //! accepted (@0x65f43-0x65f6d), so a refusal leaves it boardable.
 //!
 //! **What is on board** ([`Plunder::roll`]), rolled once a boarding, from
-//! its `düde`'s `Booty` (none for a fleet's ship) and its `shïp`: credits
+//! its `düde`'s `Booty` (none for a fleet's ship) and its `shïp`. A fleet
+//! ship's random cargo (`flët` `Flags` 0x0001,
+//! [`Npc::cargo`](crate::traffic::npc::Npc::cargo)) is in its hold, not
+//! its booty, and the plunder never offers it: `_SetPlunderValues` reads
+//! the `düde`'s `Booty` alone (@0x92222-0x92256). On board are credits
 //! with [`MONEY`], about 2.5-5 % of its `Cost` and at least
 //! [`MIN_CREDITS`]; a commodity its booty names, half its holds (a
 //! negative `Holds` read as its size, as `_LoadObjectData` negates it,
@@ -82,13 +86,13 @@
 //!
 //! **A ship captured** ([`Assignment`]) joins the fleet with its armour at
 //! [`ESCORT_ARMOR_SHARE`] of its most; or, "Use As My Ship", the player
-//! takes it over, while a ship slot is free in the system
-//! ([`MAX_SHIPS_IN_SYSTEM`]) for the old ship, which joins the fleet with
-//! its class's stock loadout, full, and by the engine reading of
-//! [`RuleKey::CaptureCargo`] the player's commodities with it; with no
-//! slot free the whole swap is dropped. A player of no crew captures
-//! straight into the fleet. The
-//! captured class's `OnCapture` runs before it joins the fleet, and on
+//! takes it over, while a ship slot below the last of the
+//! [`MAX_SHIPS_IN_SYSTEM`] is free for the old ship (`_DoShipCapture`
+//! leaves 1 free @0x41136, as [`RuleKey::SpawnReserve`] reads), which
+//! joins the fleet with its class's stock loadout, full, and by the engine
+//! reading of [`RuleKey::CaptureCargo`] the player's commodities with it;
+//! with no slot free the whole swap is dropped. A player of no crew
+//! captures straight into the fleet. The captured class's `OnCapture` runs before it joins the fleet, and on
 //! "Use As My Ship" the old class's `OnRetire` runs first; no hook runs
 //! when the swap is dropped (see the session's `hooks`).
 //!
@@ -355,8 +359,11 @@ fn cargo(prize: &Prize, chance: &mut dyn Chance) -> Option<(Good, u32)> {
 /// those that are not fighters).
 pub const MAX_ESCORTS: usize = 6;
 /// The most ships in a system, the player's among them (the Bible's "Max
-/// Ships In System"): the old ship is kept as an escort after "Use As My
-/// Ship" only while a slot is free.
+/// Ships In System"), slot 0 the player's. Each spawn leaves some of the
+/// slots free, as
+/// [`RuleKey::SpawnReserve`] reads: by the
+/// engine, the system's traffic and the fighters 8, so they stop at 55
+/// NPCs, and the old ship kept as an escort after "Use As My Ship" 1.
 pub const MAX_SHIPS_IN_SYSTEM: usize = 64;
 /// How much each take multiplies the self-destruct threshold by, per
 /// item: cargo and ammo double it, credits (the double @0xdd5c8) and

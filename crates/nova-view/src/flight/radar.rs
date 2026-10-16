@@ -57,8 +57,8 @@
 //!   when the clip is empty, so one at x == right is a 1-pixel-wide frame
 //!   at right − 1. It works the same with or without IFF.
 //! - **The centre arrow** (@0x49cde-0x49ec4, [`arrow`]): while the blink
-//!   is on (`_radarCount`), when no hyperspace route is shown (nav mode
-//!   ≠ 3, [`RadarScene::route_shown`]), the system has a stellar, and the
+//!   is on (`_radarCount`), when the nav mode is not 3, whatever it
+//!   selects ([`RadarScene::hyperspace_mode`]), the system has a stellar, and the
 //!   player is more than √7,000,000 from the system's centre
 //!   ([`ARROW_MIN_DISTANCE_SQUARED`], in `f32` as `_XYFloatSquaredDist`
 //!   works it). Three lines in the dim colour, with or without IFF
@@ -222,9 +222,9 @@ pub struct RadarScene {
     /// The static the radar shows this refresh, a `ppat` of
     /// [`STATIC_PATTERNS`], or `None`.
     pub static_pattern: Option<i16>,
-    /// Whether a hyperspace route is shown (the original's nav mode 3),
-    /// which hides the centre arrow.
-    pub route_shown: bool,
+    /// Whether the player's nav mode is 3, hyperspace, with or without a
+    /// system selected (@0x49cf5), which hides the centre arrow.
+    pub hyperspace_mode: bool,
 }
 
 /// Which colour a mark is in: one of the bar's two radar colours, or one
@@ -517,7 +517,7 @@ pub fn marks(radar: IRect, scene: &RadarScene, blink_on: bool) -> Vec<RadarMark>
         color: player,
     });
     let shows_arrow = blink_on
-        && !scene.route_shown
+        && !scene.hyperspace_mode
         && !scene.stellars.is_empty()
         && far_from_centre(scene.player);
     if shows_arrow {
@@ -1307,9 +1307,9 @@ mod tests {
     }
 
     #[test]
-    fn no_arrow_shows_with_a_route_or_without_a_stellar() {
+    fn no_arrow_shows_in_hyperspace_mode_or_without_a_stellar() {
         let route = RadarScene {
-            route_shown: true,
+            hyperspace_mode: true,
             ..far()
         };
         assert_eq!(lines(&route, true), []);

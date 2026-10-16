@@ -148,8 +148,10 @@ pub struct FateRow {
     /// - Flying and disabled: every one. The session refuses on its own
     ///   what the original refuses a disabled ship (`JumpRefusal::Disabled`,
     ///   and `LandingRefusal::Disabled` once the land key has selected and
-    ///   checked landability), so the view keeps sending them and those
-    ///   refusals still show.
+    ///   checked landability), so the view keeps sending them. Both
+    ///   refusals are silent, as the original's are (`_HandlePlayer`
+    ///   @0x6b0f5 → 0x6bada, `_HandlePlayerDockRequest` @0x66af7 →
+    ///   0x67eef).
     /// - Breaking up: all but the map, land and mission info, which
     ///   `_HandlePlayer` gates on the breakup timer +0x3c > 0 (0x6a7b3,
     ///   0x6a8cb, 0x7044b), all three silently. Hail, board and jump stay
@@ -213,7 +215,7 @@ pub enum PlayerCommand {
     /// Choosing a target: `targSel` (slot 0x14) and `closeTarg` (slot 0x16).
     Target,
     /// Choosing a nav target: the stellar keys (1-5, F1-F5), the nearest
-    /// stellar, `navOff` (slot 0x10) and a click in space.
+    /// stellar, `navOff` (slot 0x10), Hyperspace Mode and a click in space.
     Nav,
     /// Choosing the next system: `hyperSel` (slot 0x1a).
     SelectSystem,

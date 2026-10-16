@@ -24,11 +24,16 @@
 //! left of, after `OnAccept`, whatever the goal, the person is swapped
 //! for that ship as the settling begins (see the `mission_ships`
 //! module). Only the hail swaps: a boarding never does.
+//!
+//! **The hail** ([`Session::hail_key`]) offers only when it hails a ship:
+//! with no ship target, or with Option held, the comm key hails the
+//! navigation stellar instead ([`Hailed::Stellar`]), and no person is
+//! asked.
 
 use std::collections::BTreeMap;
 
 use super::Session;
-use super::hail::make_leave;
+use super::hail::{HailTarget, make_leave};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
@@ -74,6 +79,11 @@ pub enum Hailed {
     /// (`_OfferOneMission` @0x62293): the offer dialog, or the mission
     /// accepted at once.
     Offer(VenueOffer),
+    /// The navigation stellar, which answers: the original opens its comm
+    /// dialog here (`_DoPlanetCommDialog` @0x6204b). The engine has no
+    /// planet comm dialog yet (rdm:task/planet-domination), so this is
+    /// the seam where it opens. No sound plays.
+    Stellar(StellarId),
 }
 
 impl Session {
@@ -83,7 +93,7 @@ impl Session {
     /// the first stellar the player's system lists.
     pub(super) fn person_mission_stellar(&self) -> Option<StellarId> {
         match self.rules.source_for(RuleKey::PersonMissionStellar) {
-            RuleSource::Engine => self.nav_target,
+            RuleSource::Engine => self.nav_target(),
             RuleSource::Bible => self.sites.first().map(|site| site.id),
         }
     }
@@ -97,7 +107,7 @@ impl Session {
     pub(super) fn ship_offer_reaches(&self) -> Option<StellarId> {
         self.offering?;
         match self.rules.source_for(RuleKey::PersonMissionStellar) {
-            RuleSource::Engine => self.nav_target,
+            RuleSource::Engine => self.nav_target(),
             RuleSource::Bible => None,
         }
     }
@@ -139,31 +149,67 @@ impl Session {
         self.ship_offers.get(&mission)
     }
 
-    /// Hails the player's target as the original's comm key does
-    /// (`_HandlePlayerCommunication` @0x61f48; see the module docs): a
-    /// person whose mission is offered on its hail offers it, drawing on
-    /// `chance`, in place of the comm dialog, and no conversation opens;
-    /// any other target opens the comm dialog ([`Session::hail`]), with
-    /// `options` listed and the replies read from `catalog`. A person who
-    /// may join opens the comm dialog when `options` list a way to join
-    /// for it ([`HailOptions::lists_join`]). Any hail under way ends.
+    /// Hails as the original's comm key does, Option not held: see
+    /// [`Session::hail_key`].
     ///
     /// # Errors
     ///
-    /// [`Session::hail`]'s refusals, first, drawing nothing.
+    /// As [`Session::hail_key`].
     pub fn open_hail(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
         chance: &mut dyn Chance,
     ) -> Result<Hailed, HailRefusal> {
+        self.hail_key(catalog, options, false, chance)
+    }
+
+    /// Hails as the original's comm key does, with Option held as
+    /// `option` says (`_HandlePlayerCommunication` @0x61f48; see the
+    /// module docs). With no ship target, or with Option held, it hails
+    /// the navigation stellar ([`Hailed::Stellar`]) when that answers
+    /// ([`landing::answers_hail`](crate::landing::answers_hail)),
+    /// drawing nothing and making no sound. Otherwise it hails the ship
+    /// target: a person whose mission is offered on its hail offers it,
+    /// drawing on `chance`, in place of the comm dialog, and no
+    /// conversation opens; any other target opens the comm dialog
+    /// ([`Session::hail`]), with `options` listed and the replies read
+    /// from `catalog`. A person who may join opens the comm dialog when
+    /// `options` list a way to join for it ([`HailOptions::lists_join`]).
+    /// Any hail under way ends. An offer beeps
+    /// [`SimSound::HailOffer`](crate::SimSound::HailOffer)
+    /// (@0x62232-0x6223d).
+    ///
+    /// # Errors
+    ///
+    /// The [`HailRefusal`] that applies, first, drawing nothing and
+    /// beeping [`SimSound::Refused`](crate::SimSound::Refused)
+    /// once: [`HailRefusal::NoTarget`] while landed, jumping or breaking
+    /// up, or with no navigation stellar on the stellar path;
+    /// [`HailRefusal::NoResponse`] for a navigation stellar that does not
+    /// answer, or one not shown; and [`Session::hail`]'s refusals of the
+    /// ship target.
+    pub fn hail_key(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        options: &HailOptions,
+        option: bool,
+        chance: &mut dyn Chance,
+    ) -> Result<Hailed, HailRefusal> {
         self.talk = None;
+        // Beeps here once: once answering, it answers in `hail` too.
+        if let HailTarget::Stellar(stellar) = self.beep_unanswered(self.hail_target(option))? {
+            return Ok(Hailed::Stellar(stellar));
+        }
         let npc = self.answering()?;
         let offered = self
             .person_offering(npc, OfferedBy::Hail)
             .filter(|_| !self.joins_instead(npc, options));
         match offered {
-            Some(offering) => Ok(Hailed::Offer(self.offer_from_ship(offering, chance))),
+            Some(offering) => {
+                self.sounds.push(crate::SimSound::HailOffer);
+                Ok(Hailed::Offer(self.offer_from_ship(offering, chance)))
+            }
             None => self.hail(catalog, options, chance).map(Hailed::Comm),
         }
     }
@@ -326,7 +372,7 @@ mod tests {
 
     fn populated(catalog: &FakePilotCatalog, rules: Rulebook, nav: Option<i16>) -> Session {
         let mut session = Session::start(catalog).expect("starts").with_rules(rules);
-        session.nav_target = nav.map(StellarId);
+        session.nav = crate::navigation::NavMode::Stellar(nav.map(StellarId));
         session.populate(catalog, &mut NeverFires);
         session
     }
@@ -402,7 +448,7 @@ mod tests {
     fn a_person_jumping_in_mid_stay_resolves_and_overwrites_the_last_offer() {
         let (catalog, mut session) = awaiting_arrivals();
         assert_eq!(offered_to(&session), None, "Ace's");
-        session.nav_target = Some(StellarId(129));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
         session.tick_traffic(&catalog, &NovaAi::default(), &mut Draws::of(&[0, 0, 473]));
         let names: Vec<Option<i16>> = session
             .npcs()
@@ -411,12 +457,91 @@ mod tests {
             .collect();
         assert_eq!(names, [Some(600), Some(601)], "Bee jumps in");
         assert_eq!(offered_to(&session), Some(StellarId(129)), "Bee's");
-        session.nav_target = None;
+        session.nav = crate::navigation::NavMode::Off;
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert_eq!(
             offered_to(&session),
             Some(StellarId(129)),
             "nobody new: kept"
+        );
+    }
+
+    /// A [`Chance`] answering 0 to every question but the person draw
+    /// after the first arrival roll, which picks Bee (`përs` 601): the
+    /// setup's person rolls pick nobody, and the arrival roll brings Bee
+    /// in by `_HyperShipSpawn`.
+    #[derive(Debug, Default)]
+    struct BeeArrives {
+        rolled: bool,
+    }
+
+    impl Chance for BeeArrives {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            if n == crate::traffic::spawn::ARRIVAL_ODDS {
+                self.rolled = true;
+            }
+            if self.rolled && n == crate::person::PERSON_DRAW {
+                601 - u32::from(crate::person::FIRST_PERSON.unsigned_abs())
+            } else {
+                0
+            }
+        }
+    }
+
+    #[test]
+    fn a_person_arriving_on_the_gate_exits_pass_has_its_offer_resolved() {
+        // 131, the hypergate's exit, holds one ship on average of düde
+        // 128, whose setup brings nobody; the exit's pass (@0x672f2)
+        // brings Bee.
+        let base = linked(0);
+        let mut catalog = crate::session::tests::gated();
+        catalog.traffic = vec![(
+            SystemId(131),
+            SystemTraffic {
+                dude_types: [
+                    (128, 100),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                ],
+                avg_ships: 1,
+                persons: Default::default(),
+            },
+        )];
+        catalog.dudes = vec![(
+            crate::catalog::DudeId(128),
+            crate::catalog::DudeRecord {
+                ai_type: 1,
+                govt: None,
+                ships: vec![(crate::catalog::ShipId(129), 1)],
+                booty: 0,
+                info_types: 0,
+            },
+        )];
+        catalog.persons = base.persons;
+        catalog.ship_records.extend(base.ship_records);
+        catalog.missions = base.missions;
+        let mut session = crate::session::tests::at_gate(&catalog);
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut BeeArrives::default())
+            .expect("enters");
+        let names: Vec<Option<i16>> = session
+            .npcs()
+            .iter()
+            .map(|npc| npc.person.map(|person| person.id.0))
+            .collect();
+        assert_eq!(names, [Some(601)], "Bee comes on the pass");
+        assert!(
+            session.ship_offer(MissionId(130)).is_some(),
+            "resolved before the first frame"
         );
     }
 
@@ -580,10 +705,32 @@ mod tests {
             (Err(HailRefusal::NoTarget), vec![])
         );
         let mut session = targeting_ace(&catalog);
-        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert_eq!(
             hail(&mut session, &catalog),
             (Err(HailRefusal::InHyperspace), vec![])
+        );
+        let mut session = targeting_ace(&catalog);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
+        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        assert_eq!(
+            hail(&mut session, &catalog),
+            (Err(HailRefusal::NoResponse), vec![]),
+            "disabled, still jumping in (@0x62610-0x62644)"
+        );
+    }
+
+    #[test]
+    fn an_offer_on_the_hail_beeps() {
+        let catalog = talking();
+        let mut session = targeting_ace(&catalog);
+        session.take_sounds();
+        let (hailed, _) = hail(&mut session, &catalog);
+        assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
+        assert_eq!(
+            session.take_sounds(),
+            [crate::SimSound::HailOffer],
+            "_beepSnd[4] (@0x62232-0x6223d)"
         );
     }
 
@@ -707,7 +854,7 @@ mod tests {
         session.target = Some(NpcId(0));
         let (hailed, _) = hail(&mut session, &catalog);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
-        session.nav_target = Some(StellarId(accepted));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(accepted)));
         assert_eq!(accept(&mut session), Ok(0));
         session.pilot().missions().get(0).expect("held").reached
     }

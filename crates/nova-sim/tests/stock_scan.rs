@@ -9,7 +9,7 @@
 //!
 //! The warp-up sound, `snd ` 128, gives the warp's lead-in, through which
 //! the player is still scanned (`_ScanPlayer` @0x7e562-0x7e633; see
-//! `nova_sim::warp`).
+//! `nova_sim::warp`). The warp-out, `snd ` 130, is read here beside it.
 
 mod common;
 
@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use nova_data::GameData;
 use nova_sim::market::Good;
 use nova_sim::scan::{Carried, Contraband, Latches, ScanRules, contraband};
-use nova_sim::warp::{SoundLength, held, sound_duration, warp_factor};
+use nova_sim::warp::{SoundLength, held, sound_duration, warp_factor, warp_out_duration};
 use nova_sim::{Governments, GovtId, JunkId, OutfitId, PilotCatalog, ShipId};
 
 /// What the Federation finds on a player holding `junk` (a ton of each)
@@ -108,4 +108,49 @@ fn the_stock_warp_up_sound_lasts_364_ticks_and_the_shuttles_lead_in_75() {
     assert_eq!(w, 1.3, "no jump-speed bit");
     assert!(!held(Some(74), w, duration, false));
     assert!(held(Some(76), w, duration, false));
+}
+
+/// The stock double-time warp-up, `snd ` 129 "Warp up.x2", runs 185600
+/// frames at 44100 Hz: 252 Mac ticks, the d `_WarpSoundDuration` gives in
+/// double time (@0x8210-0x8219), so the Shuttle's lead-in there lasts while
+/// t ≤ 0.35 × 252 / 1.69, 52 Mac ticks.
+#[test]
+fn the_stock_double_time_warp_up_lasts_252_ticks_and_the_shuttles_lead_in_52() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let sound = data.warp_sound_double_time();
+    assert_eq!(
+        sound,
+        Some(SoundLength {
+            frames: 185_600,
+            rate: 44_100
+        })
+    );
+    let duration = sound_duration(sound);
+    assert_eq!(duration, 252);
+    let w = warp_factor(0);
+    assert!(!held(Some(52), w, duration, false));
+    assert!(held(Some(54), w, duration, false));
+}
+
+/// The stock warp-out, `snd ` 130, runs 55616 frames at 22050 Hz: 151 Mac
+/// ticks, about 2.5 s, through which a jump's natural end skips another
+/// (`_HandlePlayer` @0x6bbe1-0x6bbe9; see `nova_sim::warp::WarpOut`).
+#[test]
+fn the_stock_warp_out_lasts_151_ticks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let sound = data.warp_out_sound();
+    assert_eq!(
+        sound,
+        Some(SoundLength {
+            frames: 55_616,
+            rate: 22_050
+        })
+    );
+    assert_eq!(warp_out_duration(sound), 151);
 }

@@ -124,9 +124,9 @@
 //! or a gate's exit sets it to [`AFTER_TAKE_OFF_FRAME`] (the dock
 //! request's tail, which both run; see the session's `takeoff_grace`
 //! module), so the first step comes on the 15th tick of flight, and a
-//! destroyed player's ticks do not step. The
-//! original's double time, which steps a due frame twice, is not
-//! modelled.
+//! destroyed player's ticks do not step. In double time a due frame steps
+//! twice, once on each pass, as the original's `_HandlePlayer` runs the
+//! step on both (@0x70827; see the session's `double_time` module).
 //!
 //! The conditions follow
 //! [`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags): by the engine, on
@@ -668,15 +668,15 @@ pub fn string_to_num(text: &str) -> i16 {
 /// it, so it names its commodity empty, not as the slot before. A patch
 /// whose length byte runs past its data names it with the data bytes
 /// padded with NULs in the original; the sim keeps no bytes for it and
-/// names it empty. Stock data and editor-written plug-ins never have
-/// one. A slot past the end of `STR#` 4000 is the empty string, as
-/// `GetIndString` gives.
+/// names it empty ([`StringPatch::shown`]). Stock data and editor-written
+/// plug-ins never have one. A slot past the end of `STR#` 4000 is the
+/// empty string, as `GetIndString` gives.
 fn name_string(strings: &CommodityStrings, n: usize) -> &str {
-    match strings.name_patches.get(n) {
-        Some(StringPatch::Text(text)) => text,
-        Some(StringPatch::Empty | StringPatch::Unreadable) => "",
-        Some(StringPatch::Absent) | None => strings.names.get(n).map_or("", String::as_str),
-    }
+    strings
+        .name_patches
+        .get(n)
+        .and_then(StringPatch::shown)
+        .unwrap_or_else(|| strings.names.get(n).map_or("", String::as_str))
 }
 
 /// The string that prices commodity `n`: its `'STR '` 9300 + n patch when

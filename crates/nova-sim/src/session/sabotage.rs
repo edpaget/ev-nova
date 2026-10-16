@@ -144,7 +144,7 @@ impl Session {
             self.jump = None;
         }
         let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
-        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
+        self.halt_sounds(&WARP_UP_HALTS);
         self.messages.push(SimMessage::Sabotaged { outfit });
     }
 }

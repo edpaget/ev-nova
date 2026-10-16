@@ -640,6 +640,19 @@ impl Game {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
+    }
+
     fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
@@ -941,16 +954,15 @@ fn by_the_settings_other_reading_merchant_joins_and_flies_again_after_a_save() {
     game.frame();
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
     let saved: serde_json::Value =
         serde_json::from_str(&store.text("Pilot").expect("saved")).expect("JSON");
     assert_eq!(saved["escorts"][0]["person"], 128);
-    // Reopened in a new app, the pilot takes off: Merchant's slot is
-    // passed over, Wreck's draws, and Merchant flies beside the player.
-    let mut game = Game::opened(&store, &[99, 750, 450, 0], Showing::Spaceport, JOINING);
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Flight);
+    // Reopened in a new app, the pilot resumes in flight: Merchant's slot
+    // is passed over, Wreck's draws, and Merchant flies beside the player.
+    let mut game = Game::opened(&store, &[99, 750, 450, 0], Showing::Flight, JOINING);
     game.frame();
     game.frame();
     let escort = game
