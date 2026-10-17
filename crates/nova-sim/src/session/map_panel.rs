@@ -453,6 +453,18 @@ mod tests {
     }
 
     #[test]
+    fn an_unexplored_systems_panel_reads_none_of_its_stellars() {
+        let catalog = panelled();
+        let mut session = session(&catalog, Rulebook::default());
+        catalog.sites_asked.borrow_mut().clear();
+        assert_eq!(body(&session, &catalog, 130), ColumnBody::Unknown);
+        assert_eq!(*catalog.sites_asked.borrow(), [], "unexplored");
+        session.pilot.explore(SystemId(130));
+        body(&session, &catalog, 130);
+        assert!(catalog.sites_asked.borrow().contains(&SystemId(130)));
+    }
+
+    #[test]
     fn no_selection_reads_unexplored_and_the_gate_titles_its_offers() {
         let catalog = panelled();
         let mut session = session(&catalog, Rulebook::default());

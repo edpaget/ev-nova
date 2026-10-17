@@ -1696,3 +1696,31 @@ fn the_course_maps_panel_shows_a_level_1_systems_goods_and_services_unknown_and_
         Some("Outfitting")
     );
 }
+
+#[test]
+fn the_flights_metrics_measure_the_course_maps_panel() {
+    // The date set against the strip's right edge: 1016 − width − 5.
+    let mut view = worded(flight()).with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
+    tap(&mut view, MAP);
+    let date = view.session().expect("flying").med_date_text();
+    let width =
+        crate::text::fixture::MonoMetrics::advance(Font::Geneva, 9.0) * date.chars().count() as f32;
+    assert_eq!(
+        panel_text(&drawn(&view), (1011.0 - width, 652.0)),
+        Some(date)
+    );
+}
+
+#[test]
+fn a_click_on_empty_space_takes_the_panel_for_no_selection() {
+    let mut view = worded(flight());
+    tap(&mut view, MAP);
+    assert_eq!(title(&view).as_deref(), Some("Current System:"));
+    click(&mut view, Point::new(5.0, 5.0));
+    assert_eq!(view.course_map().selected(), None);
+    assert_eq!(title(&view).as_deref(), Some("Selected System:"));
+    assert_eq!(
+        panel_text(&drawn(&view), PORTS_AT).as_deref(),
+        Some("<Unknown>")
+    );
+}

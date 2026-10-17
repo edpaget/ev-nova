@@ -261,8 +261,10 @@ impl<
         self.map_input_taken(input);
         // A click, a Tab cycle or a gate pick that changed the selection
         // takes the panels again, as the original's next
-        // `_MapDialogUpdate` draws them for its `_selSystem`.
-        if self.map_open && self.map.selected() != selected {
+        // `_MapDialogUpdate` draws them for its `_selSystem`. After an
+        // input that closed the map the panels are taken for nothing:
+        // the map isn't drawn until it opens again, which takes them.
+        if self.map.selected() != selected {
             self.retake_map_panel();
         }
     }

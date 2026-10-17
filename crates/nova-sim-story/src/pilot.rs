@@ -1143,6 +1143,7 @@ mod tests {
         let pilot = Pilot::new(&catalog(), "").expect("starts");
         assert_eq!(pilot.explored_level(SystemId(130)), ExploredLevel::Explored);
         assert_eq!(pilot.charted().count(), 0);
+        assert!(!pilot.has_charted(SystemId(130)));
     }
 
     #[test]

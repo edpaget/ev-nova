@@ -560,6 +560,35 @@ mod tests {
         );
     }
 
+    /// Every character one unit wide.
+    struct UnitMetrics;
+
+    impl TextMetrics for UnitMetrics {
+        fn width(&self, _font: Font, _size: f32, text: &str) -> f32 {
+            text.chars().count() as f32
+        }
+
+        fn line_height(&self, _font: Font, size: f32) -> f32 {
+            size
+        }
+    }
+
+    #[test]
+    fn a_name_ending_on_the_limit_stays_and_the_commas_count_towards_it() {
+        // 500 wide, then ", " (2): x is 502, and a name keeps to line 1
+        // while 502 + w ≤ 521.
+        let long = "a".repeat(500);
+        for (length, baseline) in [(19, 448.0), (20, 460.0)] {
+            let next = "b".repeat(length);
+            let names = strings(&[&long, &next]);
+            let drawn = texts(
+                &info(Ports::Listed(names), ColumnBody::Unknown),
+                Some(&UnitMetrics),
+            );
+            assert_eq!(found(&drawn, &next).1, baseline, "{length}");
+        }
+    }
+
     #[test]
     fn without_metrics_the_ports_are_one_line() {
         let names = strings(&["Earth", "Mars"]);

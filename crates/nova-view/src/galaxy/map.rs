@@ -3309,6 +3309,12 @@ mod tests {
     }
 
     #[test]
+    fn a_measured_map_debugs_its_metrics_by_name() {
+        let map = course_map().with_metrics(Rc::new(MonoMetrics));
+        assert!(format!("{map:?}").contains("MapMetrics"));
+    }
+
+    #[test]
     fn a_click_in_the_info_column_selects_nothing_on_an_in_flight_map() {
         let column = at(950.0, 300.0);
         let mut map = course_map();
