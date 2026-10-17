@@ -29,7 +29,7 @@
 //! two-mission bit-linked chain without ships a new pilot reaches at the
 //! mission computer and the bar; the other venues come later.
 
-mod common;
+use crate::common;
 
 use nova_data::GameData;
 use nova_sim::fixture::{Done, Step, StoryWalker};

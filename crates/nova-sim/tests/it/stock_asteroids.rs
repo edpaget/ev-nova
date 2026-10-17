@@ -9,7 +9,7 @@
 //!   `röid` yields boxes of a kept `YieldType`.
 //! - Every asteroid box graphic, 1-4, sizes its frame from `spïn` 501-504.
 
-mod common;
+use crate::common;
 
 use nova_data::GameData;
 use nova_sim::AsteroidCatalog;

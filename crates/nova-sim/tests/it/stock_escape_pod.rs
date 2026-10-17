@@ -4,7 +4,7 @@
 //! offers an escape ship, and `dësc` 13999 is the rescue's text. Skips,
 //! passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 

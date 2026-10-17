@@ -19,7 +19,7 @@
 //! with peace, Bureau 164 (`Flags` 0x4214, class 0) among them, whose word
 //! still attacks the player by the engine (`blessing_always_attacks`).
 
-mod common;
+use crate::common;
 
 use std::rc::Rc;
 

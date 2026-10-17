@@ -6,7 +6,7 @@
 //! at Aldebaran keeps the place explored (`explored_by_place` engine).
 //! Skips, passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeSet;
 

@@ -14,7 +14,7 @@ const HEADED: [&str; 7] = [
 
 #[test]
 fn no_dependency_renders_opens_windows_or_plays_sound() {
-    let manifest = include_str!("../Cargo.toml");
+    let manifest = include_str!("../../Cargo.toml");
     let dependencies: Vec<&str> = manifest
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))

@@ -11,7 +11,7 @@
 //! the player is still scanned (`_ScanPlayer` @0x7e562-0x7e633; see
 //! `nova_sim::warp`). The warp-out, `snd ` 130, is read here beside it.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 

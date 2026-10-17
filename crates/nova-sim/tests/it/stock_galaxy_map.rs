@@ -3,7 +3,7 @@
 //! framed blue (the player may land), and the map draws only what is
 //! known or explored. Skips, passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeSet;
 

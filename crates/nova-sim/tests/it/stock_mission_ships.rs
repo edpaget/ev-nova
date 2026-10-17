@@ -8,7 +8,7 @@
 //! reads, and a stock mission's come in on their countdown as ordinary
 //! traffic. Skips, passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use nova_data::GameData;
 use nova_sim::catalog::{DudeId, ShipId, TrafficCatalog};

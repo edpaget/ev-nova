@@ -16,7 +16,7 @@
 //!   commodity 0, `PriceDelta` -15) tells its story from `STR#` 2002's
 //!   pieces and `STR#` 4001's "food".
 
-mod common;
+use crate::common;
 
 use std::rc::Rc;
 

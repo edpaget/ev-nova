@@ -4,7 +4,7 @@
 //! system and its original), and only the genuine one-way links are left.
 //! Skips, passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use std::collections::{BTreeMap, BTreeSet};
 

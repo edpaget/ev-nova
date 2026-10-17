@@ -7,7 +7,7 @@
 //!   EV NOVA"}`: paid for, it reads "License".
 //! - `dësc` 472 holds `{G "man" "woman"}`.
 
-mod common;
+use crate::common;
 
 use nova_data::records::desc::Desc;
 use nova_data::{GameData, Record};

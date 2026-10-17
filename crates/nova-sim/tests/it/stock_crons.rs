@@ -17,7 +17,7 @@
 //! more by the engine's reading, so the other stock cröns start too:
 //! only the bits these two own are asserted.
 
-mod common;
+use crate::common;
 
 use nova_data::GameData;
 use nova_sim::cron::CronState;

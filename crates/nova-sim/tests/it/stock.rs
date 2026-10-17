@@ -32,7 +32,7 @@
 //! again; a Valkyrie hailed offers a new pilot its refuel mission in
 //! place of the comm dialog. Skips, passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
