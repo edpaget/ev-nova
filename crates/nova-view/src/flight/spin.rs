@@ -148,6 +148,8 @@ mod tests {
         let mut starts = SpinStarts::default();
         let mut chance = Draws::of(&[7, 8, 9]);
         starts.step([(ShotId(1), SPINS), (ShotId(2), SPINS)], &mut chance);
+        assert_eq!(starts.len(), 2);
+        assert!(!starts.is_empty());
         starts.step([(ShotId(2), SPINS)], &mut chance);
         assert_eq!(starts.len(), 1);
         assert_eq!(starts.start(ShotId(1)), 0, "forgotten");

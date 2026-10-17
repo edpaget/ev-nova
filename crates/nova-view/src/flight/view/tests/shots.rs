@@ -312,7 +312,30 @@ fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
         let layers = glow_layers(&view, 2301);
         assert_eq!(layers.len(), 1, "murk {murk}");
         assert_eq!((layers[0].1, layers[0].2), (tint, true), "murk {murk}");
+        let frame = rotation_frame(npc.state.heading, NonZeroU16::new(72).expect("non-zero"));
+        assert_eq!(layers[0].0, frame % 72, "the hull's frame");
+        if murk == 0 {
+            view.tick(TICK);
+            assert_eq!(
+                glow_layers(&view, 2301).first().map(|layer| layer.1),
+                Some(crate::draw::lights_tint(31)),
+                "falling by its class's WeapDecay 3 × 0.333 a step"
+            );
+        }
     }
+}
+
+#[test]
+fn a_beam_that_is_not_lightning_draws_no_lightning_rolls() {
+    let (effects, effects_chance) = scripted(&[]);
+    let mut view = fighting(armed(0, &[UNDER]), &[]).with_effects_chance(effects_chance);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    assert!(
+        !view.session().expect("flying").beams().is_empty(),
+        "a beam"
+    );
+    assert_eq!(effects.borrow().asked, Vec::<u32>::new());
 }
 
 /// The lines drawn in the lightning beam's colour.

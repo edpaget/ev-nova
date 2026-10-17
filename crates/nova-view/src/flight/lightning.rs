@@ -101,6 +101,11 @@ pub fn zig_zag(
     let count = steps(look.li_density, dx.abs().max(dy.abs()));
     let amplitude = i32::from(look.li_amplitude.max(1));
     let width = i32::from(look.beam_width);
+    // Each segment is `BeamWidth` lines: none at all for a width of none
+    // or less, whose shrunken box would hold no point.
+    if width <= 0 {
+        return Vec::new();
+    }
     // A mostly vertical beam's minor axis is x, any other's y.
     let minor_x = dx.abs() < dy.abs();
     let mut points = vec![from];
@@ -395,19 +400,75 @@ mod tests {
             [(0.0, 15), (1.0, 7), (-1.0, 7), (2.0, 7), (-2.0, 7)]
         );
         assert_eq!(levels(40)[0].1, 7, "at least 1");
-        let none = lightning(2, 1, 0);
+        for width in [0, -5] {
+            let none = lightning(10, 1, width);
+            for rule in [ENGINE, MENDED] {
+                let mut draws = Draws::of(&[]);
+                let lines = zig_zag(at(0.0, 0.0), at(300.0, 0.0), &none, 0, rule, &mut draws);
+                assert_eq!(lines, [], "no width, no lines: {width}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_point_jittered_up_the_minor_axis_stays_inside_the_box() {
+        // The highest jitter, a = 2, on both axes, inside the box grown
+        // by 3 either way.
+        let look = lightning(1, 2, 1);
+        let highest = (0..65535)
+            .max_by_key(|&raw| jitter(2, ENGINE, &mut Draws::of(&[raw])))
+            .expect("a draw");
+        let mut draws = Draws::of(&[highest; 4]);
+        let across = ends(&zig_zag(
+            at(0.0, 0.0),
+            at(400.0, 0.0),
+            &look,
+            0,
+            ENGINE,
+            &mut draws,
+        ));
+        assert_eq!(across[0].1, at(102.0, 2.0));
+        let mut draws = Draws::of(&[highest; 4]);
+        let up = ends(&zig_zag(
+            at(0.0, 0.0),
+            at(0.0, 400.0),
+            &look,
+            0,
+            ENGINE,
+            &mut draws,
+        ));
+        assert_eq!(up[0].1, at(2.0, 102.0));
+    }
+
+    #[test]
+    fn a_diagonal_beam_offsets_its_lines_in_y() {
+        let look = lightning(2, 1, 2);
+        let mut draws = Draws::of(&[]);
+        let lines = zig_zag(at(0.0, 0.0), at(100.0, 100.0), &look, 0, ENGINE, &mut draws);
+        let starts: Vec<Point> = lines.iter().map(|&(from, ..)| from).collect();
         assert_eq!(
-            zig_zag(
-                at(0.0, 0.0),
-                at(100.0, 0.0),
-                &none,
-                0,
-                ENGINE,
-                &mut Draws::of(&[])
-            ),
-            [],
-            "no width, no lines"
+            starts,
+            [at(0.0, 0.0), at(0.0, 1.0), at(0.0, -1.0)],
+            "a tie is not mostly vertical"
         );
+    }
+
+    #[test]
+    fn a_steps_rolls_are_splitmix64s() {
+        // SplitMix64 from 0: its first output is 0xE220A8397B1DCDAF.
+        assert_eq!(StepRolls::new(0).next(), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(
+            StepRolls::new(0).for_beam(0),
+            StepRolls::new(0xE220_A839_7B1D_CDAF)
+        );
+        assert_eq!(
+            StepRolls::new(5).for_beam(2),
+            StepRolls::new(0xE1EB_9BB6_6446_0C41)
+        );
+        let first = StepRolls::new(9).below(100);
+        let percent = |n: u32| u8::try_from(n).expect("at most 100");
+        assert!(!StepRolls::new(9).fires(percent(first)), "below its draw");
+        assert!(StepRolls::new(9).fires(percent(first + 1)));
     }
 
     #[test]

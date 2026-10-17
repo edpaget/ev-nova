@@ -248,6 +248,7 @@ mod tests {
     #[test]
     fn a_frame_is_none_before_its_age_starts_or_past_its_last() {
         assert_eq!(smoke_frame(0, -1.0), None);
+        assert_eq!(smoke_frame(0, 0.0), Some(0), "a fresh puff");
         assert_eq!(smoke_frame(0, 7.99), Some(7));
         assert_eq!(smoke_frame(0, 8.0), None);
         assert_eq!(smoke_frame(1, 5.99), Some(0));

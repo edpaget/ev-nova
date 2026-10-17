@@ -314,4 +314,15 @@ exclude_re = [
     # 9999-31999 and so gives `None` for every code of 2176-9998, which is
     # nowhere with no draw too. The arm states the original's reading.
     "mission/ships.rs:.*delete match arm 2176\\.\\.= 9998 in select_ship_system",
+    # The lightning rolls' seed joins a high word shifted past 32 bits and
+    # a low word below 2^32, and a trail colour joins channels shifted to
+    # their own 8 bits: their bits never overlap, so `|` and `^` give the
+    # same word.
+    "nova-view/src/flight/lightning\\.rs:188:30: replace \\| with \\^ in StepRolls::draw$",
+    "nova-view/src/flight/trails\\.rs:90:16: replace \\| with \\^ in scaled_colour$",
+    # A trail's tail angle is taken `% 360` as the original takes it, but
+    # the table trig it feeds (`table_sin`, `table_cos`) takes every angle
+    # `rem_euclid(360)` itself (`table_radians`), so `+ 360` draws the
+    # same tail.
+    "nova-view/src/flight/trails\\.rs:101:46: replace % with \\+ in trail_start$",
 ]

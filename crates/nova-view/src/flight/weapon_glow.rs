@@ -124,7 +124,8 @@ impl WeaponGlows {
                 return false;
             };
             glow.step(decay);
-            glow.drawn().is_some() || glow.glow > GLOW_FLOOR
+            // One not shown is at or below none: as good as out.
+            glow.drawn().is_some()
         });
         for &(ship, _) in lit.iter().filter(|(_, late)| *late) {
             self.glows.entry(ship).or_default().light();

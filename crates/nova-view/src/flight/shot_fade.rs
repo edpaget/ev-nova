@@ -107,10 +107,12 @@ pub fn shot_shade(look: &WeaponLook, age: u32, rule: RuleSource) -> ShotShade {
     }
     // The window's first tick, from 1: life first below 32.
     let first = (i64::from(look.count) - i64::from(FADE_STEPS - 1)).max(1);
+    // The original stops f at the first step at or past 32, F × ⌈32/F⌉;
+    // past 32 every level is the same (4 added, 31 translucent), so f
+    // runs on here. The window is under 32 ticks long, so f stays below
+    // 32 × 32767: within an `i32`.
     let into = tick - first;
-    let most = (i64::from(FADE_STEPS) + falloff - 1) / falloff;
-    // At most F × ⌈32/F⌉ < 32 + F: within an `i32`.
-    let fade = (falloff * into.min(most)) as i32;
+    let fade = i32::try_from(falloff * into).unwrap_or(i32::MAX);
     if additive {
         ShotShade::Additive(level((FADE_STEPS - fade).max(FADE_OUT_FLOOR)))
     } else {
