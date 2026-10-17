@@ -365,7 +365,7 @@ pub struct World<'a> {
 }
 
 /// No gate's width known: each reads as a loaded master does.
-pub(crate) static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new();
+pub static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new();
 
 impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
@@ -547,8 +547,9 @@ impl Traffic {
     }
 
     /// Whether the escort-strength timer is armed.
-    #[cfg(test)]
-    pub(crate) fn strength_armed(&self) -> bool {
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn strength_armed(&self) -> bool {
         self.strength_timer.armed()
     }
 
@@ -629,7 +630,7 @@ impl Traffic {
 
     /// What the system's traffic is drawn from, to add the mission
     /// `düde`s to ([`SpawnTable::add_mission_dudes`]).
-    pub(crate) fn table_mut(&mut self) -> &mut SpawnTable {
+    pub fn table_mut(&mut self) -> &mut SpawnTable {
         &mut self.table
     }
 
@@ -1267,7 +1268,7 @@ impl Traffic {
     }
 
     /// The NPCs, in the order they appeared, to fight with.
-    pub(crate) fn npcs_mut(&mut self) -> &mut [Npc] {
+    pub fn npcs_mut(&mut self) -> &mut [Npc] {
         &mut self.npcs
     }
 
@@ -1303,28 +1304,28 @@ impl Traffic {
     /// stay active in the ship table until the display pass frees them.
     /// The ship-table caps take the same ships slot by slot, as the
     /// original does, not as a total ([`Traffic::free_berth`]).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
-    pub(crate) fn berths_taken(&self) -> usize {
+    pub fn berths_taken(&self) -> usize {
         self.npcs.len() + self.left_behind.values().map(Vec::len).sum::<usize>()
     }
 
     /// Adds `npc` to the system, numbered as the next NPC, and gives its
     /// number.
-    pub(crate) fn add_npc(&mut self, npc: Npc) -> NpcId {
+    pub fn add_npc(&mut self, npc: Npc) -> NpcId {
         let berth = self.next_berth();
         self.add_npc_at(npc, berth)
     }
 
     /// Holds `berths` back from the first-free numbering until an NPC is
     /// placed at each ([`Traffic::add_npc_at`]), replacing any held before.
-    pub(crate) fn reserve(&mut self, berths: BTreeSet<u32>) {
+    pub fn reserve(&mut self, berths: BTreeSet<u32>) {
         self.reserved = berths;
     }
 
     /// Adds `npc` to the system at berth `berth`, numbered as the next NPC,
     /// and gives its number.
-    pub(crate) fn add_npc_at(&mut self, npc: Npc, berth: u32) -> NpcId {
+    pub fn add_npc_at(&mut self, npc: Npc, berth: u32) -> NpcId {
         self.reserved.remove(&berth);
         let id = NpcId(self.next_id);
         self.next_id += 1;
@@ -1356,15 +1357,15 @@ impl Traffic {
 
     /// Writes `name` as the person of the ship last brought in at `berth`,
     /// for the session's tests of a slot no ship holds.
-    #[cfg(test)]
-    pub(crate) fn set_berth_person(&mut self, berth: u32, name: &str) {
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn set_berth_person(&mut self, berth: u32, name: &str) {
         self.write_berth_person(berth, Some(name.to_owned()));
     }
 
     /// Clears the person `berth` holds, as a capture clears its ship
     /// slot's (`_DoShipCapture` @0x411b3, `_AIShipCapturedByPlayer`
     /// @0x89741, `_DoPlunderDialog` @0x946a6).
-    pub(crate) fn forget_berth_person(&mut self, berth: u32) {
+    pub fn forget_berth_person(&mut self, berth: u32) {
         self.berth_persons.remove(&berth);
     }
 

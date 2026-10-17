@@ -1532,6 +1532,7 @@ dependencies = [
  "nova-data",
  "nova-rsrc",
  "nova-sim",
+ "nova-sim-ai",
  "nova-sim-base",
  "nova-sim-catalog",
  "nova-sim-combat",
@@ -1539,6 +1540,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "nova-sim-ai"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "nova-sim-state",
 ]
 
 [[package]]

@@ -542,7 +542,8 @@ fn persons(
 
 /// A ship of `record`, carrying its default items, armed from `arsenal`
 /// with its stock weapons alone ([`Arsenal::npc`]).
-pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) -> ShipKind {
+#[must_use]
+pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) -> ShipKind {
     let defaults = tally(record.defaults.iter().copied());
     let (armament, rounds) = arsenal.npc(record.id);
     ShipKind {

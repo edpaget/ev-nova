@@ -31,6 +31,11 @@ nova-sim-state.workspace = true
 # ship layers and the tutorial, re-exported at their old paths
 # (`nova_sim::combat`, ...).
 nova-sim-combat.workspace = true
+# The ai and traffic layer, on combat: NPC decisions, traffic and persons,
+# escorts, hails, gates, hyperspace routes, navigation, targeting, the hover
+# test, brackets, cargo boxes, scans and scooping, re-exported at their old
+# paths (`nova_sim::traffic`, ...).
+nova-sim-ai.workspace = true
 
 [dev-dependencies]
 # Synthetic resource forks for the GameData adapter tests under `tests/`.
@@ -44,6 +49,10 @@ nova-sim-catalog = { workspace = true, features = ["fixture"] }
 # The combat layer's test setters the session tests call:
 # `SabotageClock::set_counter` and `Combat::shots_mut`.
 nova-sim-combat = { workspace = true, features = ["fixture"] }
+# The ai and traffic layer's test support: `traffic::fixture::npc`, which
+# `testkit` re-exports, and the `Traffic` setters the session tests call:
+# `strength_armed`, `berths_taken` and `set_berth_person`.
+nova-sim-ai = { workspace = true, features = ["fixture"] }
 # This crate's own `fixture` module, for its integration tests under
 # `tests/`, which build the library without `cfg(test)`: the storyline
 # walker the stock tests drive.

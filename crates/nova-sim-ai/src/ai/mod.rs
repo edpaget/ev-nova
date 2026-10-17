@@ -110,7 +110,8 @@ pub fn favour(
 /// [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach): by the
 /// engine, when `_GovtAllies` finds them allied; by the other reading,
 /// only a rank of `govt` itself.
-pub(crate) fn reaches(
+#[must_use]
+pub fn reaches(
     rank: &RankRecord,
     govt: Option<GovtId>,
     govts: &Governments,
@@ -178,7 +179,7 @@ impl Blessing {
     }
 
     /// Makes `govt` bless `which`; nothing for an ID outside 128-383.
-    pub(crate) fn bless(&mut self, govt: GovtId, which: Blessed) {
+    pub fn bless(&mut self, govt: GovtId, which: Blessed) {
         if let Some(slot) = blessed_slot(govt) {
             let set = match which {
                 Blessed::Peace => &mut self.peace,
@@ -380,7 +381,7 @@ pub struct PlayerSide {
 static NO_GOVERNMENTS: Governments = Governments::empty();
 
 /// No damage aimed at any ship.
-pub(crate) static NO_AIMED_DAMAGE: BTreeMap<ShipRef, i32> = BTreeMap::new();
+pub static NO_AIMED_DAMAGE: BTreeMap<ShipRef, i32> = BTreeMap::new();
 
 /// What an NPC deciding can see.
 #[derive(Clone, Copy, Debug)]
