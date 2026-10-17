@@ -238,13 +238,8 @@ mod tests {
         );
         assert_eq!(CarriedAi::default().target(&docking, &around), None);
         let strike = crate::combat::Strike {
-            ship: n(2),
-            by: Some(ShipRef::Player),
             damage: 10.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(n(2), ShipRef::Player)
         };
         assert_eq!(
             CarriedAi::default().react(&attacking, &strike, &around),

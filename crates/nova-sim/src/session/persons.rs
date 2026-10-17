@@ -850,6 +850,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
     }
@@ -866,6 +869,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.hold_grudges(&[hit(ShipRef::Npc(NpcId(7)))]);
         assert!(!session.pilot().grudge(PersonId(600)));
@@ -886,6 +892,9 @@ mod tests {
             direct: false,
             intended: false,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: false,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
@@ -918,6 +927,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         let mut strikes = [
             downed(ShipRef::Npc(NpcId(0))),

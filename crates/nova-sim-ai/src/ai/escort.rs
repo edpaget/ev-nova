@@ -939,13 +939,8 @@ mod tests {
             ..Surroundings::new(&[], &npcs)
         };
         let strike = crate::combat::Strike {
-            ship: n(1),
-            by: Some(n(2)),
             damage: 10.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(n(1), n(2))
         };
         assert_eq!(
             ENGINE.react(&npcs[0], &strike, &around),

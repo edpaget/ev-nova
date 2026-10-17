@@ -2913,13 +2913,8 @@ mod tests {
 
     fn struck(ship: u32, damage: f32) -> Strike {
         Strike {
-            ship: ShipRef::Npc(NpcId(ship)),
-            by: Some(ShipRef::Player),
             damage,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(ship)), ShipRef::Player)
         }
     }
 

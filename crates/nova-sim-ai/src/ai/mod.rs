@@ -1036,13 +1036,8 @@ mod tests {
         let npcs = [npc(1, AiType::Warship)];
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 30.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         assert_eq!(
             Peaceful.react(&npcs[0], &strike, &around),

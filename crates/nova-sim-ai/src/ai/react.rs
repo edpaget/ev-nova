@@ -247,17 +247,7 @@ mod tests {
         ShipRef::Npc(NpcId(id))
     }
 
-    fn strike(ship: ShipRef, by: ShipRef) -> Strike {
-        Strike {
-            ship,
-            by: Some(by),
-            damage: 12.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
-        }
-    }
+    use crate::combat::fixture::strike;
 
     fn answered(govts: &Governments, npcs: &[Npc], who: usize, hit: &Strike) -> Reaction {
         answered_by(RuleSource::Engine, govts, npcs, who, hit)

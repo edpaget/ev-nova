@@ -611,6 +611,8 @@ pub enum Downed {
 
 /// A hit on a ship: who made it, what it took, and whether it downed
 /// the ship.
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Strike {
     /// The ship hit.
@@ -651,6 +653,38 @@ pub struct Strike {
     /// zero-damage rule lets through (@0x3b716). It is direct and
     /// intended, kills and disables nothing, and downs no ship.
     pub lock: bool,
+    /// The damage it was passed with, not what it took: `_DamageShip`'s
+    /// args +0x14 and +0x18, which the answer flag's no-damage branch
+    /// reads (see `nova_sim::ai::answer_flag`). A shot's direct hit
+    /// passes its weapon's damage less its decay steps (`_HandleShipHit`
+    /// @0x36ac6-0x36afd), a beam its damage on the pass, a blast its
+    /// weapon's whole damage, a shockwave its damage both ways
+    /// (@0x2da89), and a missile lock none, which the flag excepts by
+    /// [`lock`](Strike::lock) as the original's -32000 passes (@0x3b716).
+    pub nominal: Nominal,
+    /// What a player's stray hit adds, × 1.75, to its ship's stray
+    /// provocation: `_DamageShip`'s arg +0x34, the in-memory `wëap` +0x30
+    /// that `_LoadObjectData` fills with `float(Reload)` (@0x792cf). A
+    /// shot's direct hit, its expiry blast (@0x360a2) and the missile lock
+    /// (@0x357f8) pass their weapon's `Reload`, a beam 1, and a blast on a
+    /// hit, an asteroid's blast and a shockwave none.
+    pub weight: f32,
+    /// Whether the ship hit answers it: `_DamageShip`'s answer flag
+    /// (-0x178) and the reaction block's entry test (@0x3bb20-0x3bb74), as
+    /// the session's settle step works it out (see
+    /// `nova_sim::ai::answer_flag`). The fight leaves it unset. Only an
+    /// answered strike draws a reaction, a grudge, cloak-when-hit or a
+    /// Good Samaritan.
+    pub answered: bool,
+}
+
+/// The damage a hit was passed with ([`Strike::nominal`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Nominal {
+    /// Damage to armour: `_DamageShip`'s arg +0x14.
+    pub mass: f32,
+    /// Damage to shields: `_DamageShip`'s arg +0x18.
+    pub energy: f32,
 }
 
 /// A fighter launched from a bay this tick, for the session to put in
@@ -858,6 +892,8 @@ struct Landed {
     intended: bool,
     /// Whether it is a missile lock's ([`Strike::lock`]).
     lock: bool,
+    /// What it weighs as a player's stray hit ([`Strike::weight`]).
+    weight: f32,
     /// How it pushes the ship.
     push: Push,
     /// What it ionizes the ship by (`_IonizeShip`'s weapon and point):
@@ -1321,6 +1357,12 @@ impl Combat {
                     direct: false,
                     intended: false,
                     lock: false,
+                    nominal: Nominal {
+                        mass: damage,
+                        energy: damage,
+                    },
+                    weight: 0.0,
+                    answered: false,
                 });
             }
         }
@@ -2408,6 +2450,7 @@ impl Combat {
                     direct: true,
                     intended: shot.aimed_at == Some(ship),
                     lock: false,
+                    weight: shot.weapon.reload,
                     push: Push {
                         from: at,
                         impact: shot.weapon.impact,
@@ -2421,7 +2464,8 @@ impl Combat {
                 // Once a hit, where the shot is (`_HandleShipHit`
                 // @0x36b44-0x36bae); the ships its blast reaches spray none.
                 self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
-                queue.extend(blasted(&shot, &blast, hit, sides.targets));
+                // A blast on a hit weighs nothing (`_HandleShipHit` @0x36e80).
+                queue.extend(blasted(&shot, &blast, hit, 0.0, sides.targets));
                 // Only the proximity pass releases sub-munitions
                 // (`spawnSubs` 1 @0x37678, 0 @0x37095).
                 (fuse == Fuse::Proximity).then_some(Some(ship))
@@ -2429,7 +2473,10 @@ impl Combat {
                 if shot.weapon.detonates() {
                     let blast = shot.blast(None);
                     self.explode_shot(&shot, &blast);
-                    expiries.extend(blasted(&shot, &blast, hit, sides.targets));
+                    // An expiry blast weighs its weapon's `Reload`
+                    // (`_HandleShot` @0x360a2).
+                    let weight = shot.weapon.reload;
+                    expiries.extend(blasted(&shot, &blast, hit, weight, sides.targets));
                 } else if shot.weapon.fizzles {
                     self.events.push(CombatEvent::Fizzled { at: shot.position });
                 }
@@ -2513,6 +2560,7 @@ impl Combat {
                 direct: true,
                 intended: meant == Some(ship),
                 lock: false,
+                weight: BEAM_WEIGHT,
                 push: Push {
                     from: beam.start,
                     impact: beam.weapon.impact,
@@ -2621,6 +2669,12 @@ impl Combat {
                 direct: landed.direct,
                 intended: landed.intended,
                 lock: landed.lock,
+                nominal: Nominal {
+                    mass: landed.hit.mass,
+                    energy: landed.hit.energy,
+                },
+                weight: landed.weight,
+                answered: false,
             });
         }
     }
@@ -2714,6 +2768,7 @@ impl Combat {
                 direct: false,
                 intended: false,
                 lock: false,
+                weight: 0.0,
                 push: Push {
                     from: blast.at,
                     impact: weapon.impact,
@@ -3368,6 +3423,10 @@ fn touches_a_ship(shot: &Shot, from: Vec2, sides: &Sides) -> bool {
     !shot.expired() && shot.touched(from, sides).is_some()
 }
 
+/// What a beam's hit weighs as a player's stray hit ([`Strike::weight`]):
+/// `_HandleBeams` passes 1 as `_DamageShip`'s arg +0x34.
+pub const BEAM_WEIGHT: f32 = 1.0;
+
 /// What a missile lock strikes with: `_DamageShip(.., -32000, -32000, ..,
 /// can't kill 1, can't disable 1, ..)`, no damage (`_DamageShip` skips
 /// damage at or below none), with both floors. With no damage the floors
@@ -3425,6 +3484,7 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
         direct: true,
         intended: true,
         lock: true,
+        weight: shot.weapon.reload,
         push: Push {
             from: target.position,
             impact: 0.0,
@@ -3434,10 +3494,11 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
     })
 }
 
-/// The hits `shot`'s `blast` lands, each of `hit`, on the ships among
-/// `targets` it [`reached`]: by the shot's attacker, neither direct nor
-/// intended, pushing from the blast's centre and ionizing over its circle.
-fn blasted(shot: &Shot, blast: &Blast, hit: Hit, targets: &[Target]) -> Vec<Landed> {
+/// The hits `shot`'s `blast` lands, each of `hit` and `weight`
+/// ([`Strike::weight`]), on the ships among `targets` it [`reached`]: by
+/// the shot's attacker, neither direct nor intended, pushing from the
+/// blast's centre and ionizing over its circle.
+fn blasted(shot: &Shot, blast: &Blast, hit: Hit, weight: f32, targets: &[Target]) -> Vec<Landed> {
     reached(blast, targets)
         .into_iter()
         .map(|ship| Landed {
@@ -3449,6 +3510,7 @@ fn blasted(shot: &Shot, blast: &Blast, hit: Hit, targets: &[Target]) -> Vec<Land
             direct: false,
             intended: false,
             lock: false,
+            weight,
             push: Push {
                 from: blast.at,
                 impact: shot.weapon.impact,
@@ -3515,6 +3577,7 @@ mod tests {
     use nova_sim_catalog::fixture::weapon;
 
     mod exit_steps;
+    mod strike_terms;
     mod weapon_glow;
 
     /// A ship in a test fight, owning what a fighter borrows.
@@ -4371,6 +4434,12 @@ mod tests {
                 direct: false,
                 intended: false,
                 lock: false,
+                nominal: Nominal {
+                    mass: 32.0,
+                    energy: 32.0,
+                },
+                weight: 0.0,
+                answered: false,
             }]
         );
     }
@@ -4463,6 +4532,12 @@ mod tests {
                     direct: false,
                     intended: false,
                     lock: false,
+                    nominal: Nominal {
+                        mass: 32.0,
+                        energy: 32.0,
+                    },
+                    weight: 0.0,
+                    answered: false,
                 },
                 Strike {
                     ship: B,
@@ -4472,6 +4547,12 @@ mod tests {
                     direct: false,
                     intended: false,
                     lock: false,
+                    nominal: Nominal {
+                        mass: 32.0,
+                        energy: 32.0,
+                    },
+                    weight: 0.0,
+                    answered: false,
                 },
             ]
         );
@@ -4706,6 +4787,7 @@ mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                weight: 0.0,
                 push: Push {
                     from: Vec2::ZERO,
                     impact: 0.0,
@@ -6140,6 +6222,12 @@ mod tests {
                     direct: true,
                     intended: true,
                     lock: true,
+                    nominal: Nominal {
+                        mass: 0.0,
+                        energy: 0.0,
+                    },
+                    weight: 1000.0,
+                    answered: false,
                 }
             )]
         );
@@ -7744,6 +7832,12 @@ mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                nominal: Nominal {
+                    mass: 4.0,
+                    energy: 10.0,
+                },
+                weight: 0.0,
+                answered: false,
             }],
             "10 off the shield, then 4 off the armour"
         );
@@ -7759,6 +7853,12 @@ mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                nominal: Nominal {
+                    mass: 4.0,
+                    energy: 10.0,
+                },
+                weight: 0.0,
+                answered: false,
             }],
             "the shield down to its floor, a tenth below none, then 4 off the armour"
         );
@@ -7783,6 +7883,12 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: Nominal {
+                mass: 0.0,
+                energy: 5.0,
+            },
+            weight: 1.0,
+            answered: false,
         }];
         assert_eq!(struck, [hit.clone(), hit.clone(), hit, vec![], vec![]]);
     }
@@ -7817,6 +7923,12 @@ mod tests {
             direct,
             intended: direct,
             lock: false,
+            nominal: Nominal {
+                mass: 4.0,
+                energy: 10.0,
+            },
+            weight: if direct { 1000.0 } else { 0.0 },
+            answered: false,
         };
         assert_eq!(
             strikes,
@@ -7855,6 +7967,12 @@ mod tests {
                 direct: true,
                 intended: false,
                 lock: false,
+                nominal: Nominal {
+                    mass: 0.0,
+                    energy: 3.0,
+                },
+                weight: 0.0,
+                answered: false,
             }],
             "released at no target"
         );
@@ -7936,6 +8054,12 @@ mod tests {
                     direct: true,
                     intended: false,
                     lock: false,
+                    nominal: Nominal {
+                        mass: 4.0,
+                        energy: 10.0,
+                    },
+                    weight: 0.0,
+                    answered: false,
                 },
                 Strike {
                     ship: B,
@@ -7945,6 +8069,12 @@ mod tests {
                     direct: true,
                     intended: false,
                     lock: false,
+                    nominal: Nominal {
+                        mass: 4.0,
+                        energy: 10.0,
+                    },
+                    weight: 0.0,
+                    answered: false,
                 }
             ],
             "12 armour less 8 is below a third of 30"
@@ -11969,6 +12099,12 @@ mod tests {
                 direct: false,
                 intended: false,
                 lock: false,
+                nominal: Nominal {
+                    mass: 4.0,
+                    energy: 10.0,
+                },
+                weight: 0.0,
+                answered: false,
             }]
         );
     }

@@ -692,13 +692,8 @@ mod tests {
             Some(WeaponId(128))
         );
         let hit = Strike {
-            ship: n(9),
-            by: Some(P),
             damage: 1.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(n(9), P)
         };
         let victim = ship(9, TRADERS, AiType::WimpyTrader, 900.0, 0.0);
         let npcs = [ship(1, POLICE, AiType::Warship, 0.0, 0.0), victim];

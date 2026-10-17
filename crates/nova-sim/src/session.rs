@@ -469,7 +469,8 @@ use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
 use crate::combat::{
-    Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, Scenery, ShipRef, Shove, Strike,
+    Combat, CombatEvent, Downed, Field, Fighter, GamePass, Nominal, Rules, Scenery, ShipRef, Shove,
+    Strike,
 };
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
@@ -5460,7 +5461,9 @@ impl Session {
             self.lose_ranks_to(Crime::Board, npc.govt);
         }
         // A direct, intended strike of no damage: `_HandlePlayerBoardAttempt`
-        // calls `_DoGoodSamaritan` itself, with no aim to test.
+        // calls `_DoGoodSamaritan` itself, with no aim to test, and never
+        // `_DamageShip`, so the answer flag never weighs it: it is
+        // answered as it is.
         self.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
             by: Some(ShipRef::Player),
@@ -5469,6 +5472,9 @@ impl Session {
             direct: true,
             intended: true,
             lock: false,
+            nominal: Nominal::default(),
+            weight: 0.0,
+            answered: true,
         });
         let linked = self.linked_ship(&npc, person_offers::OfferedBy::Boarding);
         let named = linked.is_some();
@@ -6140,6 +6146,9 @@ impl Session {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         }];
         self.target = Some(npc);
         self.aboard = Some(Aboard {
@@ -17773,6 +17782,9 @@ pub(super) mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
         let by_the_police = session.pilot().combat_rating();
@@ -17823,6 +17835,9 @@ pub(super) mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: true,
             }],
             &was,
         );
@@ -17852,6 +17867,9 @@ pub(super) mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.credit_kills(
             &[
@@ -18403,6 +18421,9 @@ pub(super) mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
@@ -18441,6 +18462,9 @@ pub(super) mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: true,
             };
             session.credit_kills(&[by_none], &was);
             session.punish(&[by_none], &was, &witness);
@@ -18462,6 +18486,9 @@ pub(super) mod tests {
             direct: false,
             intended: false,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: false,
         };
         session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
@@ -23105,6 +23132,9 @@ pub(super) mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: true,
             }]
         );
         session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
