@@ -35,14 +35,26 @@
 //!   ([`Beam`](super::beam::Beam)).
 //!
 //! The cursors start at 0, as the ship table is fresh zeroed memory
-//! (`_InitArrays` @0x1b7a8) that nothing else writes, and stay 0-3, so
-//! the original's `Rand(4)` for a cursor out of range (@0x7437-0x7451,
-//! @0x450ff-0x45116, @0x451c2-0x451d9) can't come up. They live on the
-//! ship's [`Armament`](super::armament::Armament), which a new ship builds
-//! afresh: the original keeps a slot's cursors from ship to ship and
-//! through the player's ship change (weapons-fidelity phase 18). A beam of
-//! `ExitType` outside 0-3, which the original lets step its fold frame
-//! (@0x450fa), fires from the centre and steps nothing here (phase 18).
+//! (`_InitArrays` @0x1b7a8), and stay 0-3, so the original's `Rand(4)` for
+//! a cursor out of range (@0x7437-0x7451, @0x450ff-0x45116,
+//! @0x451c2-0x451d9) can't come up. Only these routines write them, so
+//! they are the ship-table slot's, not the ship's: they live on the ship's
+//! [`Armament`](super::armament::Armament), which the traffic gives each
+//! new ship from its slot's last (nova-sim-ai's `traffic::berth_exits`),
+//! and which the session carries through the player's refits and ship
+//! changes, as the rulebook's
+//! [`RuleKey::ReusedSlotExits`](crate::RuleKey::ReusedSlotExits) says. A
+//! hull with no exit points, which the original never checks for, still
+//! moves its cursors on, its shots and beams leaving from the centre.
+//!
+//! A beam of `ExitType` -1, which `_SpawnBeam` reads signed and lets index
+//! the word before the cursors (@0x450fa), steps its ship's fold set
+//! (+0xc8fc, [`Armament::fold_set`](super::armament::Armament::fold_set);
+//! [`step_stray`]) and starts at the centre, as the rulebook's
+//! [`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit) says. Any other
+//! `ExitType` outside 0-3 steps nothing here, though the original steps
+//! whatever word it lands on (weapons-fidelity phase 31).
+//!
 //! `_SpawnBeam`'s given exit (@0x450c7-0x450df) is never given by any of
 //! its callers. A negative `FramesPer`, which the original divides by,
 //! gives a hull no exits; 0 reads as 36 (@0x2274c). None of this plays a
@@ -300,8 +312,7 @@ impl ExitCursors {
     }
 
     /// Moves `kind`'s cursor on one exit, round from 3 to 0, as a shot or
-    /// beam of `kind` from a hull with no exit points does (see the module
-    /// docs).
+    /// beam leaving from the cursor's exit does.
     pub fn step(&mut self, kind: ExitKind) {
         self.step_from(kind, self.next(kind));
     }
@@ -315,10 +326,13 @@ impl ExitCursors {
     /// `angle` with `exits`, and the exit it takes: `_ModifyShotStartPosition`
     /// (@0x739e-0x74c4). With `toward`, the target of a weapon of `Flags3`
     /// 0x0010, the exit nearest it; otherwise the cursor's. Either way the
-    /// cursor moves on from the exit taken.
+    /// cursor moves on from the exit taken. With no `exits`, which the
+    /// original never checks for, the four exits stand at the centre: the
+    /// shot leaves from there, exit 0 is the nearest, and the cursor still
+    /// moves on.
     pub fn shot_start(
         &mut self,
-        exits: &ExitPoints,
+        exits: Option<&ExitPoints>,
         kind: ExitKind,
         from: Vec2,
         angle: f32,
@@ -326,11 +340,16 @@ impl ExitCursors {
         compression: Compression,
     ) -> (Vec2, usize) {
         let index = match toward {
-            Some(toward) => exits.nearest(from, angle, kind, toward, compression),
+            Some(toward) => exits.map_or(0, |exits| {
+                exits.nearest(from, angle, kind, toward, compression)
+            }),
             None => self.next(kind),
         };
         self.step_from(kind, index);
-        (from + exits.offset(angle, kind, index, compression), index)
+        let offset = exits.map_or(Vec2::ZERO, |exits| {
+            exits.offset(angle, kind, index, compression)
+        });
+        (from + offset, index)
     }
 
     /// The exit a beam of `kind` takes, of a ship at `from` facing
@@ -338,10 +357,11 @@ impl ExitCursors {
     /// `toward`, the target of a weapon of `Flags3` 0x0010 aimed at a ship,
     /// the exit nearest it with the ship turned to its heading's whole
     /// degree (@0x4519e); otherwise the cursor's. Either way the cursor
-    /// moves on from where it was, not from a nearest exit.
+    /// moves on from where it was, not from a nearest exit. With no
+    /// `exits`, the four stand at the centre, as for [`ExitCursors::shot_start`].
     pub fn beam_exit(
         &mut self,
-        exits: &ExitPoints,
+        exits: Option<&ExitPoints>,
         kind: ExitKind,
         from: Vec2,
         heading: f32,
@@ -350,7 +370,9 @@ impl ExitCursors {
     ) -> usize {
         let cursor = self.next(kind);
         let index = toward.map_or(cursor, |toward| {
-            exits.nearest(from, heading.trunc(), kind, toward, compression)
+            exits.map_or(0, |exits| {
+                exits.nearest(from, heading.trunc(), kind, toward, compression)
+            })
         });
         self.step_from(kind, cursor);
         index
@@ -576,7 +598,14 @@ mod tests {
         let mut cursors = ExitCursors::default();
         let from = Vec2::new(100.0, 50.0);
         let fire = |cursors: &mut ExitCursors| {
-            cursors.shot_start(&gun, ExitKind::Gun, from, 0.0, None, Compression::ByOffset)
+            cursors.shot_start(
+                Some(&gun),
+                ExitKind::Gun,
+                from,
+                0.0,
+                None,
+                Compression::ByOffset,
+            )
         };
         for (shot, x) in [(0, 101.0), (1, 102.0), (2, 103.0), (3, 104.0), (0, 101.0)] {
             let (start, index) = fire(&mut cursors);
@@ -593,7 +622,7 @@ mod tests {
         let mut cursors = ExitCursors::default();
         let start = |cursors: &mut ExitCursors, toward| {
             cursors.shot_start(
-                &gun,
+                Some(&gun),
                 ExitKind::Gun,
                 Vec2::ZERO,
                 0.0,
@@ -662,7 +691,7 @@ mod tests {
         let mut cursors = ExitCursors::default();
         let exit = |cursors: &mut ExitCursors, heading, toward| {
             cursors.beam_exit(
-                &beam,
+                Some(&beam),
                 ExitKind::Beam,
                 Vec2::ZERO,
                 heading,
@@ -693,6 +722,45 @@ mod tests {
         );
         assert_eq!(exit(&mut cursors, 0.0, None), 3, "with no target, in turn");
         assert_eq!(cursors.next(ExitKind::Beam), 0);
+    }
+
+    #[test]
+    fn with_no_exit_points_a_shot_leaves_from_the_centre_and_still_steps_its_cursor() {
+        let mut cursors = ExitCursors::default();
+        let from = Vec2::new(100.0, 50.0);
+        let mut start = |toward| {
+            cursors.shot_start(
+                None,
+                ExitKind::Gun,
+                from,
+                0.0,
+                toward,
+                Compression::ByOffset,
+            )
+        };
+        assert_eq!(start(None), (from, 0));
+        assert_eq!(start(None), (from, 1));
+        // Four points at the centre: the first of equals is nearest.
+        assert_eq!(start(Some(Vec2::new(500.0, 0.0))), (from, 0));
+        assert_eq!(cursors.next(ExitKind::Gun), 1, "on from exit 0");
+    }
+
+    #[test]
+    fn with_no_exit_points_a_beam_still_steps_its_cursor() {
+        let mut cursors = ExitCursors::default();
+        let mut exit = |toward| {
+            cursors.beam_exit(
+                None,
+                ExitKind::Beam,
+                Vec2::ZERO,
+                0.0,
+                toward,
+                Compression::ByOffset,
+            )
+        };
+        assert_eq!(exit(None), 0);
+        assert_eq!(exit(Some(Vec2::new(500.0, 0.0))), 0, "the first of equals");
+        assert_eq!(exit(None), 2, "stepped from the cursor each time");
     }
 
     #[test]

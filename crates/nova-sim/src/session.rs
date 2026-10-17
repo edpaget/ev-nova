@@ -1725,6 +1725,8 @@ impl Session {
         self.combat
             .set_pd_exit_step(rules.source_for(RuleKey::PdExitStep));
         self.combat
+            .set_stray_beam_exit(rules.source_for(RuleKey::StrayBeamExit));
+        self.combat
             .set_beam_hit_test(rules.source_for(RuleKey::BeamHitTest));
         self.combat
             .set_beam_cone_quirks(rules.source_for(RuleKey::BeamConeQuirks));

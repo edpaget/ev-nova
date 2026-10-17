@@ -904,6 +904,9 @@ pub struct Combat {
     /// How many exits a point-defence shot moves its cursor on
     /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)).
     pd_exit_step: RuleSource,
+    /// Whether a beam of `ExitType` -1 steps its ship's fold set
+    /// ([`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit)).
+    stray_beam_exit: RuleSource,
     /// How beams hit ([`RuleKey::BeamHitTest`](crate::RuleKey::BeamHitTest),
     /// [`RuleKey::BeamConeQuirks`](crate::RuleKey::BeamConeQuirks)).
     beam_rules: BeamRules,
@@ -1295,6 +1298,13 @@ impl Combat {
         self.pd_exit_step = source;
     }
 
+    /// Has a beam of `ExitType` -1 step its ship's fold set as `source`
+    /// says ([`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit)): by
+    /// default, the engine's, as `_SpawnBeam` does ([`exits::step_stray`]).
+    pub fn set_stray_beam_exit(&mut self, source: RuleSource) {
+        self.stray_beam_exit = source;
+    }
+
     /// Has a beam find the ship it hits as `source` says
     /// ([`BeamHitTest`]): by default, the engine's cone.
     pub fn set_beam_hit_test(&mut self, source: RuleSource) {
@@ -1533,7 +1543,6 @@ impl Combat {
             sound,
         });
         let weapon = launch.weapon;
-        let exits = muzzle.exits.zip(weapon.exit);
         let toward = aimed_at
             .filter(|_| weapon.nearest_exit)
             .and_then(|ship| position_of(targets, ship));
@@ -1562,20 +1571,7 @@ impl Combat {
                 aimed_at,
                 ..Beam::launch(weapon, ship, fleet, &from, aiming)
             };
-            if let Some((points, kind)) = exits {
-                // A point-defence beam at a missile is aimed at no ship, so
-                // it never takes the nearest exit (kind 1, @0x398d2).
-                let exit = muzzle.cursors.beam_exit(
-                    points,
-                    kind,
-                    from.position,
-                    from.heading,
-                    toward,
-                    self.compression,
-                );
-                beam.kind = Some(kind);
-                beam.exit = Some(exit);
-            }
+            self.beam_exit(muzzle, &mut beam, toward, chance);
             self.beams.push(beam);
             false
         } else {
@@ -1632,6 +1628,43 @@ impl Combat {
         }
     }
 
+    /// Takes `beam`'s exit from `muzzle`, as `_SpawnBeam` does
+    /// (@0x450e4-0x4523d): an `ExitType` of 0-3 takes its cursor's exit, or
+    /// the one nearest `toward`, and moves the cursor on. A point-defence
+    /// beam at a missile is aimed at no ship, so it never takes the nearest
+    /// exit (kind 1, @0x398d2). A hull with no exit points still steps the
+    /// cursor (`_SpawnBeam` never reads the class), the beam starting at
+    /// the centre. An `ExitType` of -1 indexes the word before the cursors,
+    /// the fold set, and steps it as one by the engine (@0x450fa-0x4523d;
+    /// [`exits::step_stray`]), the beam starting at the centre
+    /// (`_HandleBeams` @0x30469-0x3049f).
+    fn beam_exit(
+        &self,
+        muzzle: &mut Muzzle,
+        beam: &mut Beam,
+        toward: Option<Vec2>,
+        chance: &mut dyn Chance,
+    ) {
+        let weapon = &beam.weapon;
+        if let Some(kind) = weapon.exit {
+            let from = muzzle.from;
+            let exit = muzzle.cursors.beam_exit(
+                muzzle.exits,
+                kind,
+                from.position,
+                from.heading,
+                toward,
+                self.compression,
+            );
+            if muzzle.exits.is_some() {
+                beam.kind = Some(kind);
+                beam.exit = Some(exit);
+            }
+        } else if weapon.steps_fold && self.stray_beam_exit == RuleSource::Engine {
+            exits::step_stray(muzzle.fold, chance);
+        }
+    }
+
     /// Where a shot of `launch` leaves `muzzle` from, and the side of the
     /// exit it leaves from ([`ExitPoints::side`]): from the centre, on no
     /// side, without an exit; else from the exit its cursor or the nearest
@@ -1645,7 +1678,10 @@ impl Combat {
         toward: Option<Vec2>,
     ) -> (Vec2, f32) {
         let from = muzzle.from;
-        let Some((points, kind)) = muzzle.exits.zip(launch.weapon.exit) else {
+        // A hull with no exit points still steps the cursor, from the
+        // centre (`_ModifyShotStartPosition` never checks the points).
+        let points = muzzle.exits;
+        let Some(kind) = launch.weapon.exit else {
             return (from.position, 0.0);
         };
         let toward = if defended.is_some() {
@@ -1672,7 +1708,8 @@ impl Combat {
             toward,
             self.compression,
         );
-        (start, points.side(kind, index))
+        let side = points.map_or(0.0, |points| points.side(kind, index));
+        (start, side)
     }
 
     /// Steps 1 and 4: each of the `firers` fires what its trigger holds,
@@ -1830,7 +1867,7 @@ impl Combat {
         let (state, hull) = (fighter.state, fighter.hull);
         let sides = (fighter.side(), fighter.ties());
         let drawn = fighter.drawn_heading;
-        let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
+        let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
         let mut destructs = false;
         for (copy, launch) in launches.iter().enumerate() {
             let aimed_at = aimed_at(launch, fighter.target);
@@ -1923,8 +1960,7 @@ impl Combat {
                     _ => None,
                 };
                 let drawn = fighter.drawn_heading;
-                let mut muzzle =
-                    Muzzle::new(state, &hull, drawn, fighter.armament.exit_cursors_mut());
+                let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
                 let shot = self.launch(
                     (side, ties),
                     &mut muzzle,
@@ -3075,6 +3111,9 @@ struct Muzzle<'a> {
     angle: f32,
     /// Its cursors.
     cursors: &'a mut ExitCursors,
+    /// Its fold set, which a beam of `ExitType` -1 steps
+    /// ([`Armament::fold_set`]).
+    fold: &'a mut u16,
     /// Its hull's turret miss class, the range its turret and
     /// point-defence shots roll in.
     miss_class: u32,
@@ -3082,12 +3121,12 @@ struct Muzzle<'a> {
 
 impl<'a> Muzzle<'a> {
     /// The muzzle of a ship flying `from` with `hull`, last drawn facing
-    /// `drawn_heading`, moving `cursors` on.
+    /// `drawn_heading`, moving `cursors` and the fold set `fold` on.
     fn new(
         from: ShipState,
         hull: &'a HullSpec,
         drawn_heading: f32,
-        cursors: &'a mut ExitCursors,
+        (cursors, fold): (&'a mut ExitCursors, &'a mut u16),
     ) -> Self {
         let exits = hull.exits.as_ref();
         let angle = exits.map_or(0.0, |exits| {
@@ -3099,6 +3138,7 @@ impl<'a> Muzzle<'a> {
             exits,
             angle,
             cursors,
+            fold,
             miss_class: hull.miss_class,
         }
     }
@@ -3331,6 +3371,8 @@ mod tests {
     };
     use nova_sim_base::fixture::Ranged;
     use nova_sim_catalog::fixture::weapon;
+
+    mod exit_steps;
 
     /// A ship in a test fight, owning what a fighter borrows.
     #[allow(clippy::struct_excessive_bools)]

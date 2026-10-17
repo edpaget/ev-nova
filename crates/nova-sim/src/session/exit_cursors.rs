@@ -179,3 +179,15 @@ fn a_change_of_ship_keeps_the_players_exit_cursors_by_the_engine_and_resets_them
         assert_eq!(fire(&mut session), exit, "{reading:?}: the new hull's");
     }
 }
+
+#[test]
+fn the_rulebook_says_whether_a_stray_beam_steps_the_fold_set() {
+    let catalog = armed();
+    let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+    assert_eq!(session(Rulebook::default()).combat, Combat::default());
+    let mut still = Combat::default();
+    still.set_stray_beam_exit(RuleSource::Bible);
+    assert_ne!(still, Combat::default());
+    let other = Rulebook::default().with_override(RuleKey::StrayBeamExit, RuleSource::Bible);
+    assert_eq!(session(other).combat, still);
+}

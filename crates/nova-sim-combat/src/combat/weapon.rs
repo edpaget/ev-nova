@@ -335,6 +335,10 @@ pub struct WeaponSpec {
     /// The exit points it fires from, by its `ExitType`; none, the
     /// centre, for any but 0-3 (see [`exits`](super::exits)).
     pub exit: Option<ExitKind>,
+    /// Whether, as a beam, it steps its ship's fold set (+0xc8fc): its
+    /// `ExitType` is -1, which `_SpawnBeam` reads as the cursor before Gun's
+    /// (@0x450fa-0x4523d; see [`exits::step_stray`](super::exits::step_stray)).
+    pub steps_fold: bool,
     /// Whether it fires from the exit point nearest its target: its
     /// `Flags3` [`NEAREST_EXIT`].
     pub nearest_exit: bool,
@@ -553,6 +557,7 @@ impl WeaponSpec {
             ionize_colour: record.ionize_color,
             jam_vuln: record.jam_vuln,
             exit: ExitKind::from_raw(record.exit_type),
+            steps_fold: record.exit_type == -1,
             nearest_exit: record.flags3 & NEAREST_EXIT != 0,
             broadside: if record.inaccuracy < 0 {
                 u32::from(record.inaccuracy.unsigned_abs())
@@ -886,6 +891,14 @@ mod tests {
                 ..light_blaster()
             });
             assert_eq!(spec.exit, exit, "{raw}");
+            assert_eq!(spec.steps_fold, raw == -1, "{raw}");
+        }
+        for (raw, steps) in [(-1, true), (-2, false), (i16::MIN, false)] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                exit_type: raw,
+                ..light_blaster()
+            });
+            assert_eq!((spec.exit, spec.steps_fold), (None, steps), "{raw}");
         }
         assert_eq!(NEAREST_EXIT, 0x0010);
         for (flags3, nearest) in [(0x0010, true), (0x0030, true), (0x0020, false), (0, false)] {
