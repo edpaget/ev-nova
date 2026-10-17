@@ -12,7 +12,7 @@
 //! - [`catalog`]: the [`ResourceCatalog`] port, every resource and one
 //!   resource's bytes, files and record, owned.
 //! - [`data`]: the port's adapter over `nova_data`'s `GameData`.
-//! - [`preview`]: the [`Preview`] of a picture or sprite sheet.
+//! - [`preview`](mod@preview): the [`Preview`] of a picture or sprite sheet.
 //! - [`search`]: [`fold`] and the [`Query`], searching by type, ID or name.
 //! - [`browser`]: the [`ResourceBrowser`], the index read once, searched,
 //!   and the [`Selection`] with its record, files, preview and the text

@@ -27,6 +27,11 @@ run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 description = "cargo-deny's bans over the default build's dependency graph (deny.toml)"
 run = "cargo deny --locked check bans"
 
+[tasks.doc]
+description = "Rustdoc over every crate, private items included, with broken intra-doc links denied"
+env = { RUSTDOCFLAGS = "-D rustdoc::broken_intra_doc_links" }
+run = "cargo doc --workspace --no-deps --document-private-items --locked"
+
 [tasks.lint-lib]
 description = "Clippy over every crate's libs and bins without dev-dependency features (so no `fixture`), warnings are errors"
 run = "cargo clippy --workspace --locked -- -D warnings"
@@ -60,4 +65,4 @@ run = "cargo mutants --workspace"
 
 [tasks.ci]
 description = "Everything CI would run; `hk check` runs this, and it gates review and landing"
-depends = ["fmt", "lint", "lint-lib", "deny", "test", "lint-dev-tools", "test-dev-tools"]
+depends = ["fmt", "lint", "lint-lib", "deny", "doc", "test", "lint-dev-tools", "test-dev-tools"]

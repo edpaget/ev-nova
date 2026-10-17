@@ -2,6 +2,17 @@
 //! the simulation takes the player's controls and advances the game state
 //! one fixed step at a time.
 //!
+//! This crate is the session layer and the facade over the layered
+//! crates below it, bottom to top: `nova-sim-base`, `nova-sim-catalog`,
+//! `nova-sim-state`, `nova-sim-combat`, `nova-sim-ai`, `nova-sim-story` and
+//! `nova-sim-port`. Each of their modules is re-exported here at its old
+//! path, so a `nova_sim::…` path doesn't depend on which crate holds the
+//! code. The crate's own modules are the session layer's: [`session`],
+//! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
+//! [`pre_jump`], [`rating`], [`red_alert`], [`status_cargo`],
+//! [`target_panel`] and [`top_speed`], with the test support in
+//! `fixture`.
+//!
 //! - [`ai`]: NPC decisions: the [`Behaviour`] port that sets each NPC's
 //!   [`Goal`] from its [`Surroundings`] and answers hits; [`Peaceful`],
 //!   traffic that never fights; and [`NovaAi`], Nova's combat AI, routing
@@ -96,6 +107,8 @@
 //!   player.
 //! - [`exploration`]: which systems a map outfit explores
 //!   ([`exploration::map_reveals`]) and which are inhabited.
+//! - [`fleet`]: the player's fleet as data: each ship in it, an
+//!   [`Escort`], and the [`EscortOrder`] it follows.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
@@ -292,95 +305,96 @@
 //! - [`warp`]: the player's warp clock: the warp factor, the warp sound's
 //!   duration, and when the warp's lead-in ends and scans are held.
 
-pub mod ai;
-pub mod asteroid;
-pub mod bay;
-pub mod blink;
-pub mod board;
-pub mod brackets;
-pub mod buoy;
-pub mod cargo_box;
-pub mod catalog;
-pub mod chance;
-pub mod clearance;
-pub mod cloak;
-pub mod clock;
-pub mod combat;
-pub mod control;
+pub use nova_sim_ai::ai;
+pub use nova_sim_ai::brackets;
+pub use nova_sim_ai::cargo_box;
+pub use nova_sim_base::blink;
+pub use nova_sim_base::chance;
+pub use nova_sim_base::clock;
+pub use nova_sim_catalog::buoy;
+pub use nova_sim_catalog::catalog;
+pub use nova_sim_catalog::control;
+pub use nova_sim_combat::asteroid;
+pub use nova_sim_combat::bay;
+pub use nova_sim_combat::cloak;
+pub use nova_sim_combat::combat;
+pub use nova_sim_port::board;
+pub use nova_sim_state::clearance;
 pub mod course;
-pub mod cron;
-pub mod data;
-pub mod date;
-pub mod escape;
-pub mod escort;
-pub mod exploration;
+pub use nova_sim_ai::escort;
+pub use nova_sim_catalog::data;
+pub use nova_sim_port::escape;
+pub use nova_sim_state::cron;
+pub use nova_sim_state::date;
+pub use nova_sim_story::exploration;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
-pub mod flight;
-pub mod fuel;
+pub use nova_sim_base::flight;
+pub use nova_sim_base::fuel;
+pub use nova_sim_combat::fleet;
 pub mod galaxy_map;
-pub mod gate;
-pub mod gate_sprite;
-pub mod geometry;
+pub use nova_sim_ai::gate;
+pub use nova_sim_base::geometry;
+pub use nova_sim_port::gate_sprite;
 pub mod glow;
-pub mod govt;
-pub mod grant;
-pub mod hail;
-pub mod handling;
-pub mod hire;
-pub mod hover;
-pub mod hyperspace;
-pub mod iff;
-pub mod landing;
-pub mod legal;
-pub mod market;
-pub mod message;
-pub mod mission;
-pub mod navigation;
-pub mod nebula;
-pub mod news;
-pub mod order_loop;
-pub mod outfit_effects;
-pub mod outfitter;
-pub mod person;
-pub mod pilot;
-pub mod player_fate;
-pub mod player_info;
+pub use nova_sim_ai::hail;
+pub use nova_sim_ai::hover;
+pub use nova_sim_ai::hyperspace;
+pub use nova_sim_ai::navigation;
+pub use nova_sim_base::handling;
+pub use nova_sim_combat::message;
+pub use nova_sim_combat::player_fate;
+pub use nova_sim_port::grant;
+pub use nova_sim_port::hire;
+pub use nova_sim_port::iff;
+pub use nova_sim_port::order_loop;
+pub use nova_sim_port::outfitter;
+pub use nova_sim_port::player_info;
+pub use nova_sim_state::govt;
+pub use nova_sim_state::landing;
+pub use nova_sim_state::legal;
+pub use nova_sim_state::market;
+pub use nova_sim_state::outfit_effects;
+pub use nova_sim_story::mission;
+pub use nova_sim_story::nebula;
+pub use nova_sim_story::news;
+pub use nova_sim_story::person;
+pub use nova_sim_story::pilot;
 pub mod pre_jump;
-pub mod rank;
+pub use nova_sim_story::rank;
 pub mod rating;
-pub mod recharge;
+pub use nova_sim_port::recharge;
 pub mod red_alert;
-pub mod reserves;
-pub mod rulebook;
-pub mod rules;
-pub mod sabotage;
+pub use nova_sim_base::reserves;
+pub use nova_sim_base::rulebook;
+pub use nova_sim_base::rules;
+pub use nova_sim_combat::sabotage;
 pub mod save;
 pub mod saves;
-pub mod scan;
-pub mod scoop;
-pub mod self_repair;
+pub use nova_sim_ai::scan;
+pub use nova_sim_ai::scoop;
+pub use nova_sim_combat::self_repair;
 pub mod session;
-pub mod ship_change;
-pub mod ship_layer;
-pub mod shipyard;
-pub mod sound;
-pub mod stats;
+pub use nova_sim_catalog::sound;
+pub use nova_sim_combat::ship_layer;
+pub use nova_sim_port::ship_change;
+pub use nova_sim_port::shipyard;
+pub use nova_sim_state::stats;
 pub mod status_cargo;
-pub mod story;
-pub mod strings;
+pub use nova_sim_catalog::strings;
+pub use nova_sim_story::story;
 pub mod target_panel;
-pub mod targeting;
+pub use nova_sim_ai::targeting;
 #[cfg(test)]
 mod testkit;
-pub mod text_parse;
-pub mod text_tags;
+pub use nova_sim_story::text_parse;
+pub use nova_sim_story::text_tags;
 pub mod top_speed;
-pub mod traffic;
-pub mod trig;
-pub mod tutorial;
-pub mod wares;
-pub mod warp;
+pub use nova_sim_ai::traffic;
+pub use nova_sim_base::trig;
+pub use nova_sim_catalog::warp;
+pub use nova_sim_combat::tutorial;
+pub use nova_sim_port::wares;
 
 pub use ai::{
     Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide,

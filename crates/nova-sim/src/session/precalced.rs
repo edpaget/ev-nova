@@ -88,7 +88,7 @@ pub(super) enum ResetCause {
     /// @0x99dea).
     SetExpr,
     /// A ship purchase, whose trims are the purchase rule's
-    /// ([`shipyard::keep_cargo`](crate::shipyard::keep_cargo)): its reset
+    /// (`shipyard::keep_cargo`): its reset
     /// trims nothing more.
     Purchase,
     /// Any other site.

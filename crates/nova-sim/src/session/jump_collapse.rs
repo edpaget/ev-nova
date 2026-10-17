@@ -25,13 +25,13 @@
 //!   reaches, so data never makes C 0: the C = 0 branch (the −35/C term
 //!   skipped, s 0) is reached only through [`warp::lead_in_speed`] itself.
 //!   C is read from the player's class when the collapse runs.
-//! - **W**, `_WarpSoundDuration` (@0x8203-0x8224), entry [0] of
+//! - **W**, `_WarpSoundDuration` (@0x8203-0x8224), entry \[0\] of
 //!   `_jumpSoundLength` (0x1b8be6, through the pointer slot 0x3b5070):
 //!   `_LoadSounds` (@0x1c0b5-0x1c12d) stores 350 (0x15e @0x1c0d2) and
 //!   then, when `snd ` 128 exists, its frames × 60 / the whole part of
 //!   its rate (`_ParseSndHeader`, `imull $0x3c`, `divl`), in Mac ticks;
 //!   stock 128 gives 364 ([`warp::sound_duration`]). In double time it
-//!   is entry [1], from `snd ` 129 (@0x8210-0x8219; stock 252). The
+//!   is entry \[1\], from `snd ` 129 (@0x8210-0x8219; stock 252). The
 //!   session's `warp_sound` ([`warp::warp_sound_duration`]). The term
 //!   stays −35/C in double time: only the move-off's is −52.5/C
 //!   ([`warp::move_off_speed`]).

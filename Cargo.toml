@@ -15,6 +15,13 @@ nova-data = { path = "crates/nova-data" }
 nova-view = { path = "crates/nova-view" }
 nova-render = { path = "crates/nova-render" }
 nova-sim = { path = "crates/nova-sim" }
+nova-sim-base = { path = "crates/nova-sim-base" }
+nova-sim-catalog = { path = "crates/nova-sim-catalog" }
+nova-sim-state = { path = "crates/nova-sim-state" }
+nova-sim-combat = { path = "crates/nova-sim-combat" }
+nova-sim-ai = { path = "crates/nova-sim-ai" }
+nova-sim-story = { path = "crates/nova-sim-story" }
+nova-sim-port = { path = "crates/nova-sim-port" }
 nova-audio = { path = "crates/nova-audio" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"

@@ -11,7 +11,7 @@
 //!   off, and their separate volumes), and the [`SettingsStore`] port
 //!   settings are saved through. The keeper that reads and saves them,
 //!   with the game's other settings, is `nova`'s.
-//! - [`file`]: the settings store's adapter, [`FileSettings`], over one
+//! - [`file`](mod@file): the settings store's adapter, [`FileSettings`], over one
 //!   file on disk.
 //! - [`core`](mod@core): the [`AudioCore`], which turns each frame's
 //!   sound events (`nova_view::Sound`, from the screens) and the screen

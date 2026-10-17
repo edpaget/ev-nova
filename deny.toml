@@ -14,4 +14,20 @@ deny = [
     { crate = "egui", reason = "only nova's dev-tools feature may pull in egui" },
     { crate = "egui-wgpu", reason = "only nova's dev-tools feature may pull in egui" },
     { crate = "egui-winit", reason = "only nova's dev-tools feature may pull in egui" },
+    # The layered nova-sim crates (roadmap nova-sim-layered-crates). Each
+    # entry's `wrappers` lists the only crates allowed to depend on it
+    # directly: the nova-sim crates above it (and, for the nova-sim facade,
+    # its downstream crates and its own `fixture` dev-dependency). A lower
+    # crate is never in a higher crate's list, so it can't depend on it,
+    # not even as a dev-dependency, which Cargo itself allows. A new
+    # layered crate gets its own entry and is added to the `wrappers` of
+    # every crate below it.
+    { crate = "nova-sim", wrappers = ["nova", "nova-sim", "nova-view"], reason = "a layered nova-sim crate must never depend on the facade above it" },
+    { crate = "nova-sim-base", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-catalog", "nova-sim-combat", "nova-sim-port", "nova-sim-state", "nova-sim-story"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
+    { crate = "nova-sim-catalog", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-port", "nova-sim-state", "nova-sim-story"], reason = "the catalog layer sits below every nova-sim crate but the foundation and is reached through the nova-sim facade" },
+    { crate = "nova-sim-state", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-port", "nova-sim-story"], reason = "the state layer sits on the foundation and the catalog, below every other nova-sim crate, and is reached through the nova-sim facade" },
+    { crate = "nova-sim-combat", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-port", "nova-sim-story"], reason = "the combat layer sits on the foundation, the catalog and the state, below the ai, story, port and session layers, and is reached through the nova-sim facade" },
+    { crate = "nova-sim-ai", wrappers = ["nova-sim", "nova-sim-port", "nova-sim-story"], reason = "the ai and traffic layer sits on the foundation, the catalog, the state and combat, below the story, port and session layers, and is reached through the nova-sim facade" },
+    { crate = "nova-sim-story", wrappers = ["nova-sim", "nova-sim-port"], reason = "the story layer sits on the foundation, the catalog, the state, combat and the ai, below the port and session layers, and is reached through the nova-sim facade" },
+    { crate = "nova-sim-port", wrappers = ["nova-sim"], reason = "the port layer sits on the foundation, the catalog, the state, combat, the ai and the story, below the session layer, and is reached through the nova-sim facade" },
 ]

@@ -1,0 +1,30 @@
+[package]
+name = "nova-sim-state"
+description = "The state layer of nova-sim's layered crates: the date, governments, legal record, market, crons, landing and clearance, outfit effects and a ship's computed stats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The foundation below it: geometry, handling, chance, fuel, reserves and
+# the rulebook.
+nova-sim-base.workspace = true
+# The catalog below it: the typed records the state is read from, and the
+# control bits. Nothing else of the nova-sim stack: `deny.toml` bans the
+# way back up.
+nova-sim-catalog.workspace = true
+# `mac_roman_byte`, which `market::string_to_num` reads a string's Mac
+# Roman bytes with.
+nova-data.workspace = true
+
+[dev-dependencies]
+# The scripted `Chance` (`Scripted`) the moved tests draw on.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+# The catalog record builders and the control-bit mocks (`AllowAll`,
+# `RefuseBits`) the moved tests build from.
+nova-sim-catalog = { workspace = true, features = ["fixture"] }
+
+[lints]
+workspace = true

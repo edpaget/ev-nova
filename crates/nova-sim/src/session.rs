@@ -649,7 +649,7 @@ pub enum StellarPick {
     /// from 0: the original's keys 1-4 and F1-F4 (@0x69cf6-0x69f17).
     Slot(usize),
     /// The nearest stellar with the can-land flag, destroyed or not, the one the land key selects with no
-    /// target ([`nearest_stellar`]): the original's F5, which picks
+    /// target ([`nearest_stellar`](crate::landing::nearest_stellar)): the original's F5, which picks
     /// through the same `_FindNearestStellar` (@0x276c) its land key does.
     Nearest,
 }
@@ -5552,7 +5552,7 @@ impl Session {
     /// What `npc` has on board to plunder: among the rest, the rounds on
     /// each of its launchers, each the player's to take as the ammunition
     /// outfit of lowest ID naming the launcher when a weapon the player
-    /// carries fires them ([`board::player_fires`], by the rulebook's
+    /// carries fires them ([`board::player_fires`](crate::board::player_fires), by the rulebook's
     /// [`RuleKey::PlunderAmmoBays`]).
     fn prize(&self, npc: &Npc) -> Prize {
         let record = self.ship_record(npc.ship);

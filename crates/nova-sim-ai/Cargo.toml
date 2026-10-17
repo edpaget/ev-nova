@@ -1,0 +1,42 @@
+[package]
+name = "nova-sim-ai"
+description = "The ai and traffic layer of nova-sim's layered crates: the NPCs a system spawns and how they decide, fly, hail, escort, scan and scoop, and the player's targeting, hover test and jump routes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The foundation below it: geometry, handling, flight, chance, fuel,
+# reserves and the rulebook.
+nova-sim-base.workspace = true
+# The catalog below it: the typed records the NPCs read (ships, outfits,
+# governments, `düde`s, fleets, persons), the control bits, the buoys, the
+# warp clock and the sounds.
+nova-sim-catalog.workspace = true
+# The state below it: governments' relations, landing and gates, the legal
+# record, the market and a ship's stats.
+nova-sim-state.workspace = true
+# Combat below it: ships fighting, fighter bays, cloaking, the player's
+# fleet, self-repair, the ship layers and the message line. Nothing else of
+# the nova-sim stack: `deny.toml` bans the way back up.
+nova-sim-combat.workspace = true
+
+[dev-dependencies]
+# The scripted `Chance`s and draws (`Scripted`, `Draws`) and the handling
+# (`FAST`) the moved tests use.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+# The catalog record builders and control-bit mocks the moved tests build
+# from.
+nova-sim-catalog = { workspace = true, features = ["fixture"] }
+
+[features]
+# Test support for other crates' tests: `traffic::fixture::npc`, and the
+# three `Traffic` setters nova-sim's session tests call,
+# `Traffic::strength_armed`, `Traffic::berths_taken` and
+# `Traffic::set_berth_person`.
+fixture = []
+
+[lints]
+workspace = true

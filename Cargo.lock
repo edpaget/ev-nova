@@ -1532,8 +1532,81 @@ dependencies = [
  "nova-data",
  "nova-rsrc",
  "nova-sim",
+ "nova-sim-ai",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "nova-sim-port",
+ "nova-sim-state",
+ "nova-sim-story",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "nova-sim-ai"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "nova-sim-state",
+]
+
+[[package]]
+name = "nova-sim-base"
+version = "0.1.0"
+
+[[package]]
+name = "nova-sim-catalog"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-rsrc",
+ "nova-sim-base",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "nova-sim-combat"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-state",
+]
+
+[[package]]
+name = "nova-sim-port"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-ai",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "nova-sim-state",
+ "nova-sim-story",
+]
+
+[[package]]
+name = "nova-sim-state"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-sim-base",
+ "nova-sim-catalog",
+]
+
+[[package]]
+name = "nova-sim-story"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-ai",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "nova-sim-state",
  "thiserror 2.0.21",
 ]
 

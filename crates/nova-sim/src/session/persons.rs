@@ -4,7 +4,7 @@
 //! [`PersonRules`] say ([`Session::with_person_rules`], Nova's by
 //! default), the pilot's persons gone for good kept away and each
 //! person's `ActiveOn` tested through the session's
-//! [`ControlBits`](crate::hire::ControlBits). A person NPC is named by
+//! [`ControlBits`](crate::control::ControlBits). A person NPC is named by
 //! its record, with its subtitle ([`Session::npc_name`],
 //! [`Session::npc_subtitle`]).
 //!
