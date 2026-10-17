@@ -157,15 +157,29 @@ leaves the developer's machine exactly as it found it.
 - Set up any state a test needs inside the test itself, so it passes on a clean
   checkout.
 
-## Reading large files
+## Large files
 
-`crates/nova-sim/src/session.rs`, `crates/nova/src/app/screen.rs` and
-`crates/nova-sim/src/rulebook.rs` run to thousands of lines. Agents read them thousands of times a week.
+`crates/nova-sim/src/session.rs`, `crates/nova/src/app/screen.rs`,
+`crates/nova-sim/src/combat/mod.rs` and `crates/nova-sim/src/rulebook.rs` run
+to thousands of lines. Agents read them thousands of times a week.
 
 - Find the code first with `grep -n` or LSP symbols, then read only that range
   with the `Read` tool (`offset`/`limit`).
 - Read with `Read`, not `sed`, `cat` or `head`: `Edit` refuses a file that
   `Read` hasn't seen, so a `sed` read costs a second read before any edit.
+
+Files grow large one sensible append at a time, so decide where new code goes
+before writing it:
+
+- When a change adds a new concern (a dialog, a routine of the original, a
+  subsystem), put it in a new sibling module with its own tests. Don't append
+  it to an existing large file because similar code lives there.
+- If a file you're editing is over about 5,000 lines, don't split it in this
+  change: a split mixed into other work is hard to review and conflicts with
+  every branch that touches the file. Check for an rdm split task
+  (`rdm search split --type task --project ev-nova`) and file one if there
+  isn't one, naming the concerns that could come out. A project hook
+  (`.claude/hooks/large-file-reminder.sh`) reminds you when you edit one.
 
 ## Verification runs through cargo
 
