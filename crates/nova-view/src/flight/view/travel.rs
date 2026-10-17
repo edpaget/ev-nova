@@ -8,7 +8,7 @@ use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
     Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Condition, Departure,
-    FighterNote, GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, MapPress,
+    FighterNote, GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, MapMarks, MapPress,
     OutfitOrder, OutfitRefusal, OutfitRun, PilotCatalog, RuleKey, RuleSource, Rules, Session,
     Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage, StellarId, SystemId, TrafficCatalog,
 };
@@ -191,7 +191,7 @@ impl<
             return;
         };
         let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
-        let drawing = session.map_drawing(offered.as_deref(), &self.map_missions);
+        let drawing = session.map_drawing(offered.as_deref(), &self.map_missions, MapMarks::NONE);
         self.map.show_drawing(&drawing);
         if offered.is_some() {
             session.mark_known(drawing.gate_arrows.iter().copied());
@@ -355,6 +355,7 @@ impl<
             shift: press.shift,
             hypergate: offered.as_deref(),
             missions: &self.map_missions,
+            green: None,
         });
         self.map.answer_press(clicked.map(|clicked| PressAnswer {
             selected: clicked.selected,

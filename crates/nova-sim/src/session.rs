@@ -385,6 +385,7 @@ mod map_panel;
 mod map_search;
 mod mission_cargo;
 mod mission_escorts;
+mod mission_map;
 mod mission_screens;
 mod mission_ships;
 mod missions;
@@ -415,6 +416,7 @@ mod tutorial;
 
 pub use hooks::HookRules;
 pub use map_click::{MapClicked, MapPress};
+pub use nav::SavedNav;
 pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};

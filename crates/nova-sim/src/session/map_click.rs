@@ -17,7 +17,10 @@
 //! - on the hypergate map a hit neither flagged nor the current system is
 //!   passed over (@0x13023-0x13040);
 //! - it is accepted when it is known (+0x1ec, @0x13051), a mission system
-//!   (`_missionSyst`, @0x12f60-0x12f7c) or flagged;
+//!   (`_missionSyst`, @0x12f60-0x12f7c), the green mission system its
+//!   opener marked (`_greenMissionSyst`, raw, @0x12f82-0x12f8a, taken
+//!   as a mission system is @0x13061-0x1306b; [`MapPress::green`]) or
+//!   flagged;
 //! - otherwise the source is, with Shift (`_KeyCheck(0x38)` @0x13071) and
 //!   a course, its last hop, raw, and a hit at that hop's position is
 //!   accepted (@0x1308b-0x130af); without, the current system;
@@ -64,8 +67,7 @@
 //! **Left out** (rdm:task/do-system-map-left-out-branches): the length
 //! the acceptance's Shift branch reads is a stale local of `_DoSystemMap`
 //! (-0x9c(%ebp), @0x13081-0x13090), where ours reads the course's real
-//! last hop; `_greenMissionSyst` (@0x12f82), which the in-flight maps
-//! never set; the hypergate map's mode 4 writes (@0x13702-0x13734); and
+//! last hop; the hypergate map's mode 4 writes (@0x13702-0x13734); and
 //! the position compare of a link that resolves to −1, which reads system
 //! −1 out of bounds (@0x130f0-0x13113): ours skips the link.
 
@@ -91,6 +93,11 @@ pub struct MapPress<'a> {
     /// The mission systems taken as the map opened (`_missionSyst`,
     /// [`Session::map_mission_systems`]).
     pub missions: &'a [SystemId],
+    /// The green mission system the map's opener marked
+    /// (`_greenMissionSyst`, [`MapMarks::green`](crate::MapMarks::green)),
+    /// accepted raw as a mission system is (@0x12f82-0x12f8a); `None` on
+    /// every map but a mission dialog's.
+    pub green: Option<SystemId>,
 }
 
 /// What an accepted click did ([`Session::map_click`]).
@@ -185,7 +192,11 @@ impl Session {
         if press.hypergate.is_some() && !flagged && hit != self.pilot.system {
             return None;
         }
-        if flagged || self.is_known(hit) || press.missions.contains(&hit) {
+        if flagged
+            || self.is_known(hit)
+            || press.missions.contains(&hit)
+            || press.green == Some(hit)
+        {
             return Some((hit, flagged));
         }
         let places = self.galaxy.map().places();
@@ -280,6 +291,7 @@ mod tests {
             shift,
             hypergate: None,
             missions: &[],
+            green: None,
         }
     }
 
@@ -363,6 +375,48 @@ mod tests {
             ..press(&hits, false)
         };
         assert_eq!(session.map_click(&press), selects(133));
+    }
+
+    #[test]
+    fn the_green_system_is_accepted_raw_known_or_not_linked_or_not() {
+        // 133 is unknown and unlinked: refused with no green system, or
+        // another one, and accepted as the green one.
+        let mut session = hub_session();
+        assert!(!session.is_known(SystemId(133)));
+        let hits = ids(&[133]);
+        for green in [None, Some(SystemId(132))] {
+            let press = MapPress {
+                green,
+                ..press(&hits, false)
+            };
+            assert_eq!(session.map_click(&press), None, "{green:?}");
+        }
+        session.nav = hyperspace(134);
+        let press = MapPress {
+            green: Some(SystemId(133)),
+            ..press(&hits, false)
+        };
+        assert_eq!(session.map_click(&press), selects(133));
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Hyperspace(None),
+            "no jump there: the selection let go in mode 3"
+        );
+    }
+
+    #[test]
+    fn the_green_system_selects_in_mode_3_in_flight_when_the_ship_can_jump_there() {
+        let mut session = hub_session();
+        session.known.clear();
+        session.pilot.course = ids(&[131]);
+        let hits = ids(&[134]);
+        let press = MapPress {
+            green: Some(SystemId(134)),
+            ..press(&hits, false)
+        };
+        assert_eq!(session.map_click(&press), selects(134));
+        assert_eq!(session.nav_mode(), hyperspace(134));
+        assert_eq!(session.course(), ids(&[131]), "the course untouched");
     }
 
     #[test]

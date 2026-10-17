@@ -547,6 +547,7 @@ mod tests {
             text: text.to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }
     }
 

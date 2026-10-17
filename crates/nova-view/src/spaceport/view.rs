@@ -4709,6 +4709,7 @@ mod tests {
             text: "Go.".to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }]);
         view.set_mission_computer(Err(ComputerRefusal::NoneAvailable));
         assert!(view.mission_computer().is_none(), "closed");
@@ -4734,6 +4735,7 @@ mod tests {
             text: text.to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         };
         let mut view = missioned();
         view.show_mission_texts(vec![text("First."), text("Second.")]);
@@ -4779,6 +4781,7 @@ mod tests {
             mission: MissionId(mission),
             text: text.to_owned(),
             movie: None,
+            map: None,
         };
         view.show_mission_texts(vec![text(130, "First."), text(131, "Second.")]);
         assert_eq!(shown_text(&view).as_deref(), Some("First."));
@@ -4811,6 +4814,7 @@ mod tests {
             text: "Done.".to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }]);
         let at = view
             .mission_text()
@@ -4962,6 +4966,7 @@ mod tests {
             text: "Well done.".to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }]);
         view.open_offer(offered());
         let offer = view.offer_dialog().expect("open");
@@ -5266,6 +5271,7 @@ mod tests {
             text: "Off you go.".to_owned(),
             graphic,
             movie: None,
+            map: None,
         };
         view.show_mission_texts(vec![text(Some(5008)), text(Some(127)), text(None)]);
         let mut shown = Vec::new();
@@ -5321,6 +5327,7 @@ mod tests {
             text: "Pity.".to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }]);
         view.tick(FIRST_OFFER_DELAY);
         assert_eq!(view.take_offer_request(), None);
@@ -5773,6 +5780,7 @@ mod tests {
             text: "Well done.".to_owned(),
             graphic: None,
             movie: DescMovie::from_desc("Comp.mov", 0),
+            map: None,
         }
     }
 
@@ -6034,6 +6042,7 @@ mod tests {
                 text: "Go.".to_owned(),
                 graphic: None,
                 movie: None,
+                map: None,
             }),
             queued_movie("Offer.mov", 0x0001),
         ]);
@@ -6256,6 +6265,7 @@ mod tests {
                 text: "Pity.".to_owned(),
                 graphic: None,
                 movie: None,
+                map: None,
             }]),
         }
         let open = view.mission_info().is_some()
@@ -6421,6 +6431,7 @@ mod tests {
             mission: MissionId(130),
             text: "Well done.".to_owned(),
             movie: None,
+            map: None,
         };
         view.show_mission_texts(vec![text.clone(), text]);
         assert!(view.holds_leave());
@@ -6651,6 +6662,7 @@ mod tests {
             text: text.to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }
     }
 
@@ -7202,6 +7214,7 @@ mod tests {
             text: "Go.".to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }]);
         view.set_mission_info(actives(0));
         assert!(view.mission_info().is_none(), "closed");

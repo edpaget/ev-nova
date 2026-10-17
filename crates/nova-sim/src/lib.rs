@@ -452,6 +452,7 @@ pub use escort::{
 };
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
+pub use galaxy_map::{MARKS_DESTINATION, MapMarks};
 pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;
 pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
@@ -509,7 +510,7 @@ pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
     HookRules, InfoRow, InterfaceLoad, LandPress, MapClicked, MapPress, MissionComputer,
     MissionInfo, MissionInfoPress, MissionShown, MissionText, MissionTextKind, NotOffered,
-    OfferPrompt, PersonQuote, RefuseShown, RelocateRefusal, ScriptEffectRules, Session,
+    OfferPrompt, PersonQuote, RefuseShown, RelocateRefusal, SavedNav, ScriptEffectRules, Session,
     SessionEvent, Settled, ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
 };
 pub use ship_layer::ShipLayer;

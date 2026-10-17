@@ -40,7 +40,7 @@ use std::collections::BTreeMap;
 use super::Session;
 use crate::catalog::{ListedStellar, SystemId};
 use crate::exploration;
-use crate::galaxy_map::{self, HIDES_ARROW, MARKS_SHIPS, MapDrawing, MapState};
+use crate::galaxy_map::{self, HIDES_ARROW, MARKS_SHIPS, MapDrawing, MapMarks, MapState};
 use crate::iff::{self, MapStellar, Standing, SystemColorCode};
 use crate::mission::ships::ShipSystem;
 use crate::navigation::NavMode;
@@ -218,14 +218,21 @@ impl Session {
     /// What the galaxy map draws now ([`galaxy_map::draw_map`]): on the
     /// hypergate map when `hypergate` holds the systems its gate arrows,
     /// with `missions` the mission systems taken as it opened
-    /// ([`Session::map_mission_systems`]), no green mission system and
-    /// multiple arrows allowed (see the [`galaxy_map`]
-    /// module), each system framed as [`Session::system_color_code`]
-    /// says. The course is the one saved, raw. The hypergate map's
-    /// arrows mark their systems known as they are drawn: the caller
-    /// does that with [`Session::mark_known`] once it has drawn them.
+    /// ([`Session::map_mission_systems`]) and `marks` the green mission
+    /// system and the arrow flag its opener set: a mission dialog's
+    /// ([`Session::offer_map_marks`] and its kin), or [`MapMarks::NONE`]
+    /// for every other map (see the [`galaxy_map`] module). Each system is
+    /// framed as [`Session::system_color_code`] says. The course is the
+    /// one saved, raw. The hypergate map's arrows mark their systems
+    /// known as they are drawn: the caller does that with
+    /// [`Session::mark_known`] once it has drawn them.
     #[must_use]
-    pub fn map_drawing(&self, hypergate: Option<&[SystemId]>, missions: &[SystemId]) -> MapDrawing {
+    pub fn map_drawing(
+        &self,
+        hypergate: Option<&[SystemId]>,
+        missions: &[SystemId],
+        marks: MapMarks,
+    ) -> MapDrawing {
         let coding = self.coding();
         let state = MapState {
             galaxy: &self.galaxy,
@@ -236,8 +243,8 @@ impl Session {
             hyper_slot: self.hyper_slot(),
             hypergate,
             missions,
-            green: None,
-            multi_arrows: true,
+            green: marks.green,
+            multi_arrows: marks.multi_arrows,
             pairing: self.rules.source_for(RuleKey::MapLinkPairing),
         };
         galaxy_map::draw_map(&state, |system| self.color_code(&coding, system))
@@ -668,7 +675,7 @@ mod tests {
             }
             session.rework_known();
             let links: Vec<(i16, i16)> = session
-                .map_drawing(None, &[])
+                .map_drawing(None, &[], MapMarks::NONE)
                 .links
                 .iter()
                 .map(|link| (link.from.0, link.to.0))
@@ -687,17 +694,49 @@ mod tests {
         let catalog = coloured();
         let mut session = flown(&catalog, Rulebook::default());
         session.pilot.course = vec![SystemId(131), SystemId(133)];
-        let drawing = session.map_drawing(None, &[]);
+        let drawing = session.map_drawing(None, &[], MapMarks::NONE);
         let drawn: Vec<SystemId> = drawing.systems.iter().map(|system| system.id).collect();
         assert_eq!(drawn, [130, 131, 132].map(SystemId), "known, not 133");
         assert_eq!(drawing.course.len(), 2);
         assert_eq!(drawing.named, [SystemId(130)]);
         let gate = [SystemId(133)];
-        let drawing = session.map_drawing(Some(&gate), &[SystemId(133)]);
+        let drawing = session.map_drawing(Some(&gate), &[SystemId(133)], MapMarks::NONE);
         assert!(drawing.course.is_empty());
         assert_eq!(drawing.gate_arrows, gate);
         let drawn: Vec<SystemId> = drawing.systems.iter().map(|system| system.id).collect();
         assert_eq!(drawn, [130, 131, 132, 133].map(SystemId), "a mission's");
         assert!(!session.is_known(SystemId(133)), "the caller marks it");
+    }
+
+    #[test]
+    fn the_drawing_takes_the_green_system_and_the_arrow_flag_from_its_marks() {
+        let catalog = coloured();
+        let session = flown(&catalog, Rulebook::default());
+        let arrows = |marks: MapMarks| {
+            let drawing = session.map_drawing(None, &[SystemId(133)], marks);
+            let system = drawing
+                .systems
+                .iter()
+                .find(|system| system.id == SystemId(133))
+                .copied()
+                .expect("133 drawn, a mission system");
+            (system.red_arrow, system.green_arrow)
+        };
+        assert_eq!(arrows(MapMarks::NONE), (true, false));
+        let green = Some(SystemId(133));
+        assert_eq!(
+            arrows(MapMarks {
+                green,
+                multi_arrows: true
+            }),
+            (true, true)
+        );
+        assert_eq!(
+            arrows(MapMarks {
+                green,
+                multi_arrows: false
+            }),
+            (false, true)
+        );
     }
 }

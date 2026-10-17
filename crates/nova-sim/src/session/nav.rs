@@ -117,6 +117,19 @@
 //!   the raw selection) and puts them back after each map opened from it
 //!   (@0x492b7-0x492d3), keeping the save for the next map. Its own close
 //!   restores nothing (@0x49414-0x4946f).
+//! - The mission dialogs' maps ([`Session::map_nav`],
+//!   [`Session::restore_map_nav`]): the offer (@0xa30eb-0xa30f7 /
+//!   @0xa3108-0xa3110), the mission computer (@0xa3d54-0xa3d60 /
+//!   @0xa3d86-0xa3d9e) and the accept's briefing text (`_ShowTextDialog`
+//!   @0x5b14c-0x5b158 / @0x5b169-0x5b17d) save both before the map they
+//!   open and write them back after it, over whatever the map's click or
+//!   its close's cue wrote; the course is never saved, so a Shift-click's
+//!   course stays. Mission info saves them (@0x9e442-0x9e44e) and writes
+//!   them back only under `_missionDialog` (@0x9e45f-0x9e476), which its
+//!   own map guard rules out, so its map's nav writes stand. Docked, the
+//!   map's own close first puts back the +0x6c it saved as it opened
+//!   (`_DoSystemMap` @0x12349, @0x13bee-0x13c06), after the bar's redraw;
+//!   the flight view does both.
 //! - A plain click on the course map in flight ([`Session::map_click`],
 //!   `_DoSystemMap` @0x136d7-0x137c7): mode 3 with the system picked when
 //!   the ship can jump there, the slot noted the first at its place
@@ -186,8 +199,9 @@
 //! Of the port dialogs' save and restore: the original's mode 3 +0x6c is
 //! a link slot of the current system, where ours keeps the system, and
 //! mode 3 docked has no original, so its restore is not modelled apart;
-//! each dialog's Map button (`_DoSystemMap`, with its own save and
-//! restore), as ours has no map in port; and the flag at
+//! the shops' map key (`_DoSystemMap`, with its own save and restore), as
+//! ours opens no map from them (the computer's is a mission dialog's map,
+//! above); and the flag at
 //! @0x5ffb2-0x5ffba that gates the mission computer's branch, before its
 //! save (@0x5ffc0-0x5ffd0), as ours opens the computer only where the
 //! port offers Mission BBS.
@@ -225,6 +239,20 @@ pub(super) struct NavSlot {
     system: SystemId,
     slot: usize,
     selected: SystemId,
+}
+
+/// The nav mode and its selection a mission dialog saves before the map
+/// it opens and writes back after it (+0x6a and +0x6c: the offer
+/// @0xa30eb / @0xa3108, the mission computer @0xa3d54 / @0xa3d86, the
+/// text dialog @0x5b14c / @0x5b169; mission info saves them @0x9e442 and
+/// never writes them back). Ours keeps the raw selection and the Con slot
+/// noted for it ([`NavSlot`]), which together are the original's +0x6c.
+/// Taken with [`Session::map_nav`], put back with
+/// [`Session::restore_map_nav`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SavedNav {
+    nav: NavMode,
+    slot: Option<NavSlot>,
 }
 
 impl Session {
@@ -354,6 +382,29 @@ impl Session {
         if let Some(saved) = self.port_nav.take() {
             self.set_nav(saved);
         }
+    }
+
+    /// The nav as it stands, for a mission dialog to put back after the
+    /// map it opens ([`Session::restore_map_nav`]): the mode and the raw
+    /// selection with the Con slot noted for it (see [`SavedNav`]). It
+    /// changes nothing.
+    #[must_use]
+    pub fn map_nav(&self) -> SavedNav {
+        SavedNav {
+            nav: self.nav,
+            slot: self.nav_slot,
+        }
+    }
+
+    /// Puts back the nav a mission dialog saved before the map it opened
+    /// ([`Session::map_nav`]), mode, selection and noted slot exactly as
+    /// saved, as the offer, the mission computer and the text dialog
+    /// write +0x6a and +0x6c back after `_DoSystemMap` returns (see the
+    /// module's **Setters**). The course is never saved, so a Shift-click's
+    /// course stays.
+    pub fn restore_map_nav(&mut self, saved: SavedNav) {
+        self.nav = saved.nav;
+        self.nav_slot = saved.slot;
     }
 
     /// Puts back the nav saved as the bar opened ([`Session::open_bar`]),
@@ -1375,6 +1426,42 @@ mod tests {
         );
     }
 
+    // A mission dialog's map's save and restore.
+
+    #[test]
+    fn a_dialogs_map_nav_is_put_back_with_its_slot_and_the_course_kept() {
+        let mut session = Session::start(&hub()).expect("starts");
+        // `hub`'s 130 lists 131 in slots 1 and 2: the second is noted.
+        let noted = NavSlot {
+            system: SystemId(130),
+            slot: 2,
+            selected: SystemId(131),
+        };
+        session.nav = hyperspace(131);
+        session.nav_slot = Some(noted);
+        let saved = session.map_nav();
+        assert_eq!(session.nav, hyperspace(131), "saving changes nothing");
+        session.select_at_place(SystemId(134));
+        session.pilot.course = ids(&[135]);
+        session.restore_map_nav(saved);
+        assert_eq!(session.nav, hyperspace(131));
+        assert_eq!(session.nav_slot, Some(noted), "the slot with it");
+        assert_eq!(session.course(), ids(&[135]), "the course kept");
+    }
+
+    #[test]
+    fn a_dialogs_map_nav_puts_back_any_mode_raw() {
+        for before in [NavMode::Off, stellar(128), NavMode::Hyperspace(None)] {
+            let mut session = Session::start(&hub()).expect("starts");
+            session.nav = before;
+            let saved = session.map_nav();
+            session.select_at_place(SystemId(134));
+            session.restore_map_nav(saved);
+            assert_eq!(session.nav, before, "{before:?}");
+            assert_eq!(session.nav_slot, None, "{before:?}: none noted");
+        }
+    }
+
     // The map.
 
     #[test]
@@ -1449,7 +1536,9 @@ mod tests {
             "no destination"
         );
         assert_eq!(
-            session.map_drawing(None, &[]).mode3_link,
+            session
+                .map_drawing(None, &[], crate::MapMarks::NONE)
+                .mode3_link,
             None,
             "no link drawn"
         );
