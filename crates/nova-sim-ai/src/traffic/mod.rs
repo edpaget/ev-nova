@@ -105,6 +105,7 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 pub mod autopilot;
+pub mod berth_picks;
 pub mod destination;
 pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
@@ -126,7 +127,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::cloak::{self, Cloak};
-use crate::combat::armament::Trigger;
+use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::control::Gate;
@@ -136,6 +137,7 @@ use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
+use berth_picks::BerthPicks;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use persons::{GateView, PersonWorld, derelict_armor};
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
@@ -481,6 +483,10 @@ pub struct Traffic {
     /// leaves, and across systems, and cleared by a capture
     /// ([`Traffic::forget_berth_person`]). `<OSN>` reads it.
     berth_persons: BTreeMap<u32, String>,
+    /// The pick (+0x72) of the ship last at each berth, which a new ship
+    /// there takes ([`berth_picks`]): written as each ship's pick changes,
+    /// kept as it dies or leaves, and across systems.
+    berth_picks: BerthPicks,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
     /// system they are in, each in the order they appeared: still in the
     /// ship table until the end of the next tick ([`Traffic::tick_in`]),
@@ -545,6 +551,7 @@ impl Traffic {
             attack_quotes: Vec::new(),
             strength_timer: StrengthTimer::default(),
             berth_persons: BTreeMap::new(),
+            berth_picks: BerthPicks::default(),
             left_behind: BTreeMap::new(),
         }
     }
@@ -791,6 +798,7 @@ impl Traffic {
                 // or none run, leave it as it was.
                 if trigger.keep.is_some() {
                     npc.pick = trigger.keep;
+                    self.berth_picks.write(npc.berth, npc.pick);
                 }
                 npc.trigger = trigger;
                 npc.target = target;
@@ -811,6 +819,7 @@ impl Traffic {
                 // `_AIFireTurret` @0x80e3c); none leaves it.
                 if wait.trigger.keep.is_some() {
                     npc.pick = wait.trigger.keep;
+                    self.berth_picks.write(npc.berth, npc.pick);
                 }
                 npc.trigger = wait.trigger;
                 if wait.drops_target {
@@ -1205,11 +1214,37 @@ impl Traffic {
     }
 
     /// What `_HandleShip` does with each NPC's pick once the fight has
-    /// fired it ([`after_firing`](crate::ai::fire::after_firing)).
-    pub fn after_firing(&mut self) {
+    /// fired it, by the weapon records of `arsenal`
+    /// ([`after_firing`](crate::ai::fire::after_firing)); its berth keeps
+    /// what it leaves.
+    pub fn after_firing(&mut self, arsenal: &Arsenal) {
         for npc in &mut self.npcs {
-            crate::ai::fire::after_firing(npc);
+            crate::ai::fire::after_firing(npc, arsenal);
+            self.berth_picks.write(npc.berth, npc.pick);
         }
+    }
+
+    /// Clears NPC `id`'s pick, and its berth's, as a capture clears the
+    /// ship's (`_DoShipCapture` @0x41207).
+    pub fn clear_pick(&mut self, id: NpcId) {
+        if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
+            npc.pick = None;
+            self.berth_picks.write(npc.berth, None);
+        }
+    }
+
+    /// Gives each new ship its berth's last pick by `reading`
+    /// ([`RuleKey::ReusedSlotPick`](crate::RuleKey::ReusedSlotPick)):
+    /// by the engine, as no spawn writes +0x72; none by the other reading.
+    pub fn set_reused_slot_pick(&mut self, reading: RuleSource) {
+        self.berth_picks.set_reading(reading);
+    }
+
+    /// The reading new ships take their berth's last pick by (see
+    /// [`Traffic::set_reused_slot_pick`]).
+    #[must_use]
+    pub fn reused_slot_pick(&self) -> RuleSource {
+        self.berth_picks.reading()
     }
 
     /// NPC `id` turns on the player: its person's hail quote is queued
@@ -1349,7 +1384,14 @@ impl Traffic {
             .and_then(|person| self.table.persons.get(&person.id))
             .map(|person| person.record.name.clone());
         self.write_berth_person(berth, name);
-        self.npcs.push(Npc { id, berth, ..npc });
+        // No spawn writes the pick (+0x72): it is the berth's last.
+        let pick = npc.pick.or(self.berth_picks.seed(berth));
+        self.npcs.push(Npc {
+            id,
+            berth,
+            pick,
+            ..npc
+        });
         id
     }
 
@@ -1642,7 +1684,8 @@ impl Traffic {
                 armament: kind.armament.clone(),
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
-                pick: None,
+                // No spawn writes the pick (+0x72): it is the berth's last.
+                pick: self.berth_picks.seed(berth),
                 target: hunts.then_some(ShipRef::Player),
                 provoked: 0.0,
                 aggression: ship.aggression,
@@ -5770,10 +5813,118 @@ mod tests {
             npc.trigger.only = Some(WeaponId(128));
             npc.pick = Some(WeaponId(128));
         }
-        traffic.after_firing();
+        traffic.after_firing(&crate::combat::armament::Arsenal::new(
+            &[weapon(128)],
+            Vec::new(),
+        ));
         for npc in traffic.npcs() {
             assert_eq!((npc.trigger.only, npc.pick), (None, None), "{:?}", npc.id);
         }
+    }
+
+    /// Keeps its goal and keeps weapon `0` as its pick, firing nothing.
+    #[derive(Debug)]
+    struct Picking(WeaponId);
+
+    impl Behaviour for Picking {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                keep: Some(self.0),
+                ..Trigger::default()
+            }
+        }
+    }
+
+    /// Traffic with its first NPC, at berth 1, having kept `pick` and
+    /// left, reading reused berths' picks by `reading`.
+    fn left_picking(pick: WeaponId, reading: RuleSource) -> Traffic {
+        let mut traffic = Traffic::new();
+        traffic.set_reused_slot_pick(reading);
+        let first = traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        traffic.tick_in(&Picking(pick), World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(pick));
+        traffic.remove(first);
+        traffic
+    }
+
+    #[test]
+    fn a_new_ship_in_a_reused_berth_holds_the_last_ships_pick_by_the_engine_and_none_by_the_other_reading()
+     {
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        let picks: Vec<(u32, Option<WeaponId>)> = traffic
+            .npcs()
+            .iter()
+            .map(|npc| (npc.berth, npc.pick))
+            .collect();
+        assert_eq!(
+            picks,
+            [
+                (2, Some(WeaponId(131))),
+                (1, Some(WeaponId(131))),
+                (3, None)
+            ],
+            "berth 2's own pick, berth 1's left, berth 3 fresh"
+        );
+        let mut other = left_picking(WeaponId(131), RuleSource::Bible);
+        other.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(other.npcs()[1].pick, None);
+    }
+
+    #[test]
+    fn arrivals_take_the_pick_of_the_berth_they_reuse() {
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        traffic.table = table(0);
+        traffic.bring_in_within(vec![mission_ship(-1, 0.0)], SPAWN_RESERVE);
+        let arrival = traffic.npcs().last().expect("came");
+        assert_eq!((arrival.berth, arrival.pick), (1, Some(WeaponId(131))));
+    }
+
+    #[test]
+    fn a_berths_pick_follows_its_ships_pick_as_it_fires_and_is_cleared() {
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        let id = traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        // It fires the pick, a primary: cleared, and so is its berth's.
+        let npc = traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == id)
+            .expect("there");
+        npc.trigger.only = Some(WeaponId(131));
+        traffic.after_firing(&crate::combat::armament::Arsenal::default());
+        traffic.remove(id);
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(traffic.npcs().last().map(|npc| npc.pick), Some(None));
+        // A capture's clear clears its berth's too.
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        let id = traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        traffic.clear_pick(id);
+        assert_eq!(traffic.npcs().last().map(|npc| npc.pick), Some(None));
+        traffic.remove(id);
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(traffic.npcs().last().map(|npc| npc.pick), Some(None));
+    }
+
+    #[test]
+    fn a_berths_pick_outlives_a_jump_but_not_a_new_traffic() {
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        traffic.retarget(table(0), &BTreeSet::new(), Leave::Dropped);
+        traffic.enter(table(0), &mut Draws::of(&[]));
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(
+            (traffic.npcs()[0].berth, traffic.npcs()[0].pick),
+            (1, Some(WeaponId(131)))
+        );
+        let mut fresh = Traffic::new();
+        fresh.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(fresh.npcs()[0].pick, None);
+        assert_eq!(fresh.reused_slot_pick(), RuleSource::Engine);
     }
 
     #[test]

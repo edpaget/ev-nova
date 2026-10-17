@@ -253,9 +253,14 @@ pub struct Npc {
     /// The fire command it holds, as it last decided.
     pub trigger: Trigger,
     /// The weapon it holds as its pick (the original's +0x72): set by its
-    /// AI's passes ([`Trigger::keep`]), kept from tick to tick and cleared
-    /// once a pick without `Flags` 0x0002 fires
-    /// ([`after_firing`](crate::ai::fire::after_firing)); none at first.
+    /// AI's passes ([`Trigger::keep`]) or, waiting, by its turret find
+    /// ([`GateWait`](crate::ai::GateWait)), kept from tick to tick, held
+    /// through its wait ([`fire::gated`](crate::ai::fire::gated)), and
+    /// cleared once a pick whose weapon record has no `Flags` 0x0002 fires
+    /// ([`after_firing`](crate::ai::fire::after_firing)) or the ship is
+    /// captured. A new ship starts with the pick its berth's last ship
+    /// left, as no spawn writes +0x72
+    /// ([`berth_picks`](crate::traffic::berth_picks)).
     pub pick: Option<WeaponId>,
     /// The ship it targets, as it last decided.
     pub target: Option<ShipRef>,
@@ -723,7 +728,14 @@ impl Npc {
     /// Whether its AI wait (+0x4c) is running: waiting in its gate or
     /// held at it, holding its course after its glide or burst, or
     /// entering a gate to leave (see each [`Mode`]). Gliding in, bursting
-    /// out and flying, it has none.
+    /// out and flying, it has none. While it runs, `_HandleShip` skips the
+    /// ship's thrust and fire (@0x34a54-0x34a72): the fight fires only its
+    /// fighter bays and point defence, its pick kept
+    /// ([`fire::gated`](crate::ai::fire::gated)). The waits the engine
+    /// doesn't fly yet (a landed ship's stay, the pirates' holds, a
+    /// launched fighter's, a plundered escort's, the warp out after a
+    /// leader) will count here once built (rdm weapons-fidelity
+    /// phase 17's findings).
     #[must_use]
     pub fn wait_running(&self) -> bool {
         matches!(

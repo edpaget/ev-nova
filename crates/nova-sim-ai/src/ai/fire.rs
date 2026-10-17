@@ -150,7 +150,7 @@ use crate::combat::aim::{
 };
 #[cfg(doc)]
 use crate::combat::armament::Armament;
-use crate::combat::armament::{GUN_RANGE_MARGIN, Mount, Shooter, Trigger};
+use crate::combat::armament::{Arsenal, GUN_RANGE_MARGIN, Mount, Shooter, Trigger};
 use crate::combat::projectile::Target;
 use crate::combat::weapon::{AVOIDS_FAST_SHIPS, Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
@@ -466,22 +466,21 @@ pub fn gated(npc: &Npc) -> Trigger {
 }
 
 /// What `_HandleShip` does with `npc`'s pick once the fight has fired it
-/// (@0x34fcb-0x3501f): a pick fired ([`Trigger::only`]) of a weapon
-/// without `Flags` 0x0002 is cleared, flag and pick alike, whether or not
-/// anything spawned; a secondary's stays, so it fires again on the next
-/// tick its AI sets no flag of its own (its gun pass keeps it). A pick it
-/// doesn't carry is cleared too. While its wait runs nothing was fired
-/// ([`gated`]), so its pick stays.
-pub fn after_firing(npc: &mut Npc) {
+/// (@0x34fcb-0x3501f): a pick fired ([`Trigger::only`]) whose weapon
+/// record in `arsenal` has no `Flags` 0x0002 is cleared, flag and pick
+/// alike, whether or not anything spawned; a secondary's stays, so it
+/// fires again on the next tick its AI sets no flag of its own (its gun
+/// pass keeps it). The original reads the global weapon record by the
+/// pick's index (`0x3b517c[+0x72 × 0xc8] + 0x20`, @0x34fe1-0x34ff5), not
+/// the ship's own mount, so a secondary the ship doesn't carry (a reused
+/// slot's, see [`berth_picks`](crate::traffic::berth_picks)) is kept
+/// forever, firing nothing, and a weapon with no record is cleared.
+/// While its wait runs nothing was fired ([`gated`]), so its pick stays.
+pub fn after_firing(npc: &mut Npc, arsenal: &Arsenal) {
     let Some(fired) = gated(npc).only else {
         return;
     };
-    let secondary = npc
-        .armament
-        .mounts()
-        .iter()
-        .any(|mount| mount.spec.id == fired && mount.spec.secondary());
-    if !secondary {
+    if !arsenal.weapon(fired).is_some_and(WeaponSpec::secondary) {
         npc.trigger.only = None;
         npc.pick = None;
     }
@@ -1775,12 +1774,17 @@ mod tests {
         }
     }
 
+    /// The arsenal of a gun of 128 and a secondary missile of 131.
+    fn gun_and_secondary() -> Arsenal {
+        Arsenal::new(&[gun(128, 1, 1), secondary_missile(131)], Vec::new())
+    }
+
     #[test]
     fn after_firing_a_pick_without_0x0002_is_cleared_and_a_secondary_is_kept() {
         let fired = |npc: Npc, pick: i16| {
             let mut npc = holding(npc, pick);
             npc.trigger.only = id(pick);
-            after_firing(&mut npc);
+            after_firing(&mut npc, &gun_and_secondary());
             (npc.trigger.only, npc.pick)
         };
         let npc = shooter(&[gun(128, 1, 1), secondary_missile(131)], ATTACK);
@@ -1788,8 +1792,25 @@ mod tests {
         assert_eq!(fired(npc.clone(), 131), (id(131), id(131)), "Flags 0x0002");
         // No flag: nothing fired, and the pick stays.
         let mut idle = holding(npc, 128);
-        after_firing(&mut idle);
+        after_firing(&mut idle, &gun_and_secondary());
         assert_eq!((idle.trigger.only, idle.pick), (None, id(128)));
+    }
+
+    #[test]
+    fn after_firing_keeps_an_uncarried_kept_secondary_by_its_weapon_record_and_clears_an_uncarried_primary()
+     {
+        // `_HandleShip` tests `Flags` 0x0002 of the global weapon record
+        // by the pick's index (`0x3b517c[+0x72 x 0xc8] + 0x20`,
+        // @0x34fe1-0x34ff5), not the ship's own mount.
+        let fired = |pick: i16| {
+            let mut npc = holding(shooter(&[], ATTACK), pick);
+            npc.trigger.only = id(pick);
+            after_firing(&mut npc, &gun_and_secondary());
+            (npc.trigger.only, npc.pick)
+        };
+        assert_eq!(fired(131), (id(131), id(131)), "a secondary's record");
+        assert_eq!(fired(128), (None, None), "a primary's record");
+        assert_eq!(fired(140), (None, None), "no record");
     }
 
     #[test]
@@ -2544,7 +2565,7 @@ mod tests {
         let mut npc = holding(shooter(&[gun(128, 1, 1)], ATTACK), 128);
         npc.trigger.only = id(128);
         npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 3 };
-        after_firing(&mut npc);
+        after_firing(&mut npc, &gun_and_secondary());
         assert_eq!(npc.pick, id(128), "nothing fired");
     }
 }

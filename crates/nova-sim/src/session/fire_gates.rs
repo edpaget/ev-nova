@@ -5,10 +5,14 @@
 //! snipers by the rulebook's reading (see
 //! [`snipe`](crate::traffic::snipe)).
 
-use super::tests::{Attacking, armed, facing_an_npc};
+use super::tests::{
+    Attacking, Missileer, armed, facing_an_npc, kept_missile_catalog, missiles_fired,
+    with_an_npc_at,
+};
 use super::*;
 use crate::chance::NeverFires;
 use crate::combat::Rules;
+use crate::rulebook::{RuleSource, Rulebook};
 use crate::traffic::npc::Mode;
 
 /// How many times NPC 0 fired in `events`.
@@ -81,7 +85,6 @@ fn a_ship_entering_a_gate_fires_nothing_it_held() {
 
 #[test]
 fn the_traffic_flies_its_snipers_by_the_rulebooks_snipe_brake_lead() {
-    use crate::rulebook::{RuleSource, Rulebook};
     let catalog = armed();
     for source in [RuleSource::Engine, RuleSource::Bible] {
         let rules = Rulebook::default().with_override(RuleKey::SnipeBrakeLead, source);
@@ -91,4 +94,72 @@ fn the_traffic_flies_its_snipers_by_the_rulebooks_snipe_brake_lead() {
         session.step_traffic(|_, world| flown = Some(world.snipe_brake_lead));
         assert_eq!(flown, Some(source));
     }
+}
+
+/// The session facing an NPC 200 above the player, carrying a short gun
+/// and a secondary missile 134, that has fired the missile, kept it as its
+/// pick and left the system, read by `reading`; and the new ship of the
+/// same class, with no pick of its own, brought into its slot.
+fn reused_slot(reading: RuleSource) -> (crate::testkit::FakePilotCatalog, Session) {
+    let catalog = kept_missile_catalog();
+    let rules = Rulebook::default().with_override(RuleKey::ReusedSlotPick, reading);
+    let mut session = with_an_npc_at(&catalog, 750, 550, 180).with_rules(rules);
+    session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    assert_eq!(missiles_fired(&mut session), 1, "the first ship's");
+    assert_eq!(session.npcs()[0].pick, Some(WeaponId(134)), "kept");
+    let mut next = session.npcs()[0].clone();
+    next.pick = None;
+    session.traffic.remove(NpcId(0));
+    let id = session.traffic.add_npc(next);
+    assert_eq!(session.npc(id).map(|npc| npc.berth), Some(1), "its slot");
+    (catalog, session)
+}
+
+#[test]
+fn a_new_ship_in_a_reused_berth_fires_its_predecessors_kept_missile_on_its_first_empty_gun_pass() {
+    // The first missile still covers the player, so the missile pass
+    // picks none; the gun pass, its gun out of reach, fires the pick the
+    // slot kept (`_AIFireGun` @0x80213-0x8021d), as no spawn writes
+    // +0x72.
+    let (catalog, mut session) = reused_slot(RuleSource::Engine);
+    assert_eq!(session.npcs()[0].pick, Some(WeaponId(134)), "the slot's");
+    session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    assert_eq!(missiles_fired(&mut session), 1);
+    let (catalog, mut session) = reused_slot(RuleSource::Bible);
+    assert_eq!(session.npcs()[0].pick, None, "none of its own");
+    session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    assert_eq!(missiles_fired(&mut session), 0);
+}
+
+#[test]
+fn the_reused_slot_reading_outlives_a_new_traffic() {
+    let catalog = armed();
+    for reading in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::ReusedSlotPick, reading);
+        let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
+        assert_eq!(session.traffic.reused_slot_pick(), reading);
+        let stellar = session.sites[0].id;
+        session
+            .land_at(&catalog, session.pilot.system, stellar)
+            .expect("relocates");
+        assert_eq!(session.npcs(), [], "a new traffic");
+        assert_eq!(session.traffic.reused_slot_pick(), reading, "re-applied");
+    }
+}
+
+#[test]
+fn a_captured_ships_slot_keeps_no_pick() {
+    // `_DoShipCapture` clears the pick (@0x41207).
+    let (_, mut session) = reused_slot(RuleSource::Engine);
+    let id = session.npcs()[0].id;
+    session.fleet_up(id, None);
+    assert_eq!(session.npc(id).map(|npc| npc.pick), Some(None));
+    let mut next = session.npc(id).expect("joined").clone();
+    session.traffic.remove(id);
+    next.pick = None;
+    let again = session.traffic.add_npc(next);
+    assert_eq!(session.npc(again).map(|npc| npc.pick), Some(None));
 }

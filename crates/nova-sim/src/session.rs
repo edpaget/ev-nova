@@ -1743,6 +1743,8 @@ impl Session {
         ));
         self.combat
             .set_proximity_fuse(rules.source_for(RuleKey::ProximityFuse));
+        self.traffic
+            .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.rules = rules;
         self
     }
@@ -2658,7 +2660,7 @@ impl Session {
             },
             chance,
         );
-        self.traffic.after_firing();
+        self.traffic.after_firing(&self.arsenal);
         // The lines are `_DamageShip`'s, said as each hit lands, so before
         // the eject below can take the player into a new ship.
         let strikes = self.combat.take_strikes();
@@ -5864,8 +5866,6 @@ impl Session {
             return;
         };
         npc.trigger = Trigger::default();
-        // `_DoShipCapture` clears the captured ship's pick (@0x41207).
-        npc.pick = None;
         npc.provoked = 0.0;
         let record = Escort {
             ship: npc.ship,
@@ -5875,6 +5875,9 @@ impl Session {
             wage: None,
             person,
         };
+        // `_DoShipCapture` clears the captured ship's pick (@0x41207), and
+        // so its slot's.
+        self.traffic.clear_pick(id);
         self.drop_quarry(id);
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(id) {
@@ -21369,7 +21372,7 @@ pub(super) mod tests {
     /// Every NPC attacks the player, firing as Nova's AI picks
     /// ([`crate::ai::fire::trigger`]).
     #[derive(Debug)]
-    struct Missileer;
+    pub(super) struct Missileer;
 
     impl Behaviour for Missileer {
         fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
@@ -21439,7 +21442,7 @@ pub(super) mod tests {
     /// a secondary missile (134) aiming 79 at the player, which 30 shield
     /// and 45 armour make enough (1.05 x 75 = 78.75), flying 1 pixel a
     /// tick so the first stays in flight.
-    fn kept_missile_catalog() -> FakePilotCatalog {
+    pub(super) fn kept_missile_catalog() -> FakePilotCatalog {
         let missile = WeaponRecord {
             speed: 100,
             count: 400,
@@ -21469,7 +21472,7 @@ pub(super) mod tests {
 
     /// How many of `session`'s combat events are its NPC firing the
     /// missile (134).
-    fn missiles_fired(session: &mut Session) -> usize {
+    pub(super) fn missiles_fired(session: &mut Session) -> usize {
         session
             .take_combat_events()
             .iter()
