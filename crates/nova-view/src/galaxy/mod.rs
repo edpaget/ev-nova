@@ -25,6 +25,9 @@ pub mod model;
 pub mod panel;
 pub mod view;
 
+#[cfg(test)]
+mod testkit;
+
 pub use catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,
     SystemEntry, SystemId,

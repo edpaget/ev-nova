@@ -1529,120 +1529,17 @@ impl Screen for GalaxyMap {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::cell::Cell;
-    use std::collections::BTreeMap;
-
     use super::*;
-    use crate::galaxy::catalog::{
-        Galaxy, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId, SystemEntry,
-    };
+    use crate::galaxy::catalog::{Galaxy, GovtId, StellarEntry, StellarId};
     use crate::galaxy::model::{NEUTRAL, placement, star_system};
+    use crate::galaxy::testkit::{BLUE, FakeCatalog, galaxy, system};
     use crate::galaxy::view::{MAP_CENTER, SCALES};
     use crate::text::fixture::MonoMetrics;
     use crate::{DrawCommand, Font, ImageKey, Key, MouseButton};
     use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
-    /// A canned galaxy; counts how often it is read.
-    struct FakeCatalog {
-        galaxy: Galaxy,
-        reads: Cell<usize>,
-    }
-
-    impl FakeCatalog {
-        fn new(galaxy: Galaxy) -> Self {
-            Self {
-                galaxy,
-                reads: Cell::new(0),
-            }
-        }
-    }
-
-    impl GalaxyCatalog for FakeCatalog {
-        fn galaxy(&self) -> Galaxy {
-            self.reads.set(self.reads.get() + 1);
-            self.galaxy.clone()
-        }
-    }
-
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
-    }
-
-    fn system(id: i16, x: i16, y: i16) -> SystemEntry {
-        SystemEntry {
-            id: SystemId(id),
-            name: format!("System {id}"),
-            x,
-            y,
-            links: Vec::new(),
-            govt: None,
-            stellars: Vec::new(),
-        }
-    }
-
-    const BLUE: u32 = 0x002C_2CAF;
-
-    /// Alpha (128) at (0, 0), Federation, with two stellars; Beta (129) at
-    /// (600, 0), independent; Gamma (130) at (0, 300), Federation; and the
-    /// alternate Alpha (131) at Alpha's position. Alpha and Beta link both
-    /// ways and Gamma links one way to Alpha. A nebula covers Alpha.
-    fn galaxy() -> Galaxy {
-        let alpha = SystemEntry {
-            name: "Alpha".to_owned(),
-            links: vec![SystemId(129)],
-            govt: Some(GovtId(128)),
-            stellars: vec![
-                StellarEntry {
-                    id: StellarId(128),
-                    name: "Alpha Prime".to_owned(),
-                },
-                StellarEntry {
-                    id: StellarId(129),
-                    name: "Alpha Station".to_owned(),
-                },
-            ],
-            ..system(128, 0, 0)
-        };
-        let beta = SystemEntry {
-            name: "Beta".to_owned(),
-            links: vec![SystemId(128)],
-            ..system(129, 600, 0)
-        };
-        let gamma = SystemEntry {
-            name: "Gamma".to_owned(),
-            links: vec![SystemId(128)],
-            govt: Some(GovtId(128)),
-            ..system(130, 0, 300)
-        };
-        let alternate = SystemEntry {
-            name: "Alpha Reborn".to_owned(),
-            ..system(131, 0, 0)
-        };
-        Galaxy {
-            systems: vec![alpha, beta, gamma, alternate],
-            govt_colors: BTreeMap::from([(GovtId(128), BLUE)]),
-            nebulae: vec![NebulaEntry {
-                id: NebulaId(128),
-                name: "Holpa Nebula".to_owned(),
-                left: -20,
-                top: -20,
-                width: 60,
-                height: 60,
-                pictures: vec![
-                    NebulaPicture {
-                        id: 9500,
-                        width: 30,
-                        height: 30,
-                    },
-                    NebulaPicture {
-                        id: 9502,
-                        width: 60,
-                        height: 60,
-                    },
-                ],
-            }],
-            problems: Vec::new(),
-        }
     }
 
     fn map() -> GalaxyMap {
