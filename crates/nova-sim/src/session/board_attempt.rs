@@ -5,8 +5,9 @@
 //!
 //! **The checks** ([`check_board`](crate::board::check_board)) see the
 //! target with its class's `Crew` and whether it carries a mission's mark,
-//! and read [`RuleKey::CrewlessMissionShip`]: by the engine a mission's
-//! special ship is boarded whatever its crew.
+//! and read
+//! [`RuleKey::CrewlessMissionShip`](crate::RuleKey::CrewlessMissionShip):
+//! by the engine a mission's special ship is boarded whatever its crew.
 //!
 //! **The refusal beep**: each refusal said, #130 (@0x65ffe, the refused
 //! `PickupMode` 2 pickup's too, @0x65366 → @0x65fdb), #131 (@0x65f9a)
