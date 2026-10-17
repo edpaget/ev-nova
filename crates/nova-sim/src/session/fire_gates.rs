@@ -1,7 +1,9 @@
 //! The session's tests of the fire gates (rdm weapons-fidelity phase 17):
 //! a waiting NPC holds its fire through the fight, as `_HandleShip` skips
-//! its fire block while its AI wait +0x4c runs (@0x34a54-0x34a72); see
-//! [`fire::gated`](crate::ai::fire::gated).
+//! its fire block while its AI wait +0x4c runs (@0x34a54-0x34a72; see
+//! [`fire::gated`](crate::ai::fire::gated)), and the traffic flies its
+//! snipers by the rulebook's reading (see
+//! [`snipe`](crate::traffic::snipe)).
 
 use super::tests::{Attacking, armed, facing_an_npc};
 use super::*;
@@ -75,4 +77,18 @@ fn a_ship_entering_a_gate_fires_nothing_it_held() {
         assert_eq!(session.npcs()[0].pick, Some(WeaponId(128)), "kept");
     }
     assert!(session.shots().is_empty());
+}
+
+#[test]
+fn the_traffic_flies_its_snipers_by_the_rulebooks_snipe_brake_lead() {
+    use crate::rulebook::{RuleSource, Rulebook};
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::SnipeBrakeLead, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().snipe_brake_lead, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.snipe_brake_lead));
+        assert_eq!(flown, Some(source));
+    }
 }

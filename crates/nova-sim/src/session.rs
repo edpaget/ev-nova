@@ -2358,6 +2358,7 @@ impl Session {
             type_widths: &type_widths,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
+            snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             cloak_scanner: self.scanner().on_screen,
         };
         f(&mut self.traffic, world);
@@ -2422,6 +2423,7 @@ impl Session {
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
+            snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             cloak_scanner: self.scanner().on_screen,
         }
     }

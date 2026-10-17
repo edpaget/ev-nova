@@ -19,10 +19,14 @@
 //!   fails doesn't run: approaching, the gun and then the turret pass
 //!   while facing within [`GUN_FACING`] turns of the heading it wants,
 //!   then the missile pass within [`MISSILE_FACING`]; dogfighting, the
-//!   turret pass, then the gun pass within [`GUN_FACING`]; sniping, the
-//!   gun and missile passes within [`GUN_FACING`], then the turret pass;
-//!   fleeing, the turret pass alone (`_LowLevelAIHandler` substates 7, 6,
-//!   0xe and 5).
+//!   turret pass, then the gun pass within [`GUN_FACING`]; sniping at
+//!   rest, the gun and missile passes while it faces the plain bearing of
+//!   its target within [`GUN_FACING`] turns, strictly
+//!   ([`snipe::facing`]), then the turret pass; sniping while moving 0.35
+//!   or more on an axis ([`snipe::moving`]), none at all, and no point
+//!   defence: it brakes and only launches its fighters (@0x87329, see
+//!   [`snipe`]); fleeing, the turret pass alone (`_LowLevelAIHandler`
+//!   substates 7, 6, 0xe and 5).
 //! - **The gun pass** (`_AIFireGun`), past its preamble (a target live
 //!   in the system and seen), makes the gun it finds the pick; then any
 //!   pick, found or kept, raises the flag (@0x80213-0x8021d), its
@@ -35,6 +39,11 @@
 //!   flag, before the passes (@0x8e6fa, @0x81411): a later find overrides
 //!   it, and a gun pass finding nothing fires it, which then finds it
 //!   reloading after its launch.
+//! - **The wait gate** ([`gated`], `_HandleShip` @0x34a54-0x34a72): while
+//!   its AI wait runs ([`Npc::wait_running`]) the fight fires nothing of
+//!   its trigger but its fighter bays and its point defence, and its pick
+//!   is neither fired nor cleared. A waiting escort's turret find still
+//!   becomes its pick ([`escort::fire_unprovoked`](crate::ai::escort::fire_unprovoked)).
 //! - **After firing** ([`after_firing`], `_HandleShip`): a pick fired of a
 //!   weapon without `Flags` 0x0002 is cleared, flag and pick alike; a
 //!   secondary's stays, so a gun pass that finds nothing fires it again.
@@ -118,14 +127,15 @@
 //!   reads from a local only an earlier 7 or 8 slot sets (@0x80c29-0x80c37,
 //!   @0x80c5b), else uninitialised stack: here the bearing.
 //! - The whole-degree truncation in the arc test (@0x80c7f, @0x80c95).
-//! - Sniping while moving 0.35 or more on an axis, `_LowLevelAIHandler`
-//!   brakes and runs only `_AILaunchFighter` (@0x870db-0x87137), and a
-//!   new ship in a reused slot keeps the last one's pick, as no spawn
-//!   writes +0x72: rdm phase weapons-fidelity/phase-17.
 //! - `_LowLevelAIHandler`'s second `_AILaunchFighter` in the snipe, after
 //!   its passes (@0x8732f), which writes the bay over the frame's pick
 //!   only when the attack block's launch failed or under goal 0xd: the
-//!   engine's sorties never fail and it has no goal 0xd.
+//!   engine's sorties never fail and it has no goal 0xd (rdm phase
+//!   weapons-fidelity/phase-30-snipe-left-out-of-phase-17).
+//! - The goal-22 and escape-pod (class 0x2ff) exemptions from the wait
+//!   gate (@0x34a5d-0x34a72): the engine has neither (rdm phases
+//!   combat-ai-fidelity/phase-9-pirates-disable-and-board and
+//!   ship-handling-fidelity/phase-7-npc-escape-pods-and-escape-ships).
 //! - `_ShipTurnRate`'s own factors, which [`suitable_missile`] reads
 //!   through the target's turn rate: rdm
 //!   system-traffic-fidelity/phase-17-npc-skill-and-speed-factors.
@@ -146,6 +156,7 @@ use crate::combat::weapon::{AVOIDS_FAST_SHIPS, Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
+use crate::traffic::snipe;
 
 /// How near, in pixels on either axis, an attacker dogfights rather than
 /// approaches (165.0 @0xdda24).
@@ -239,6 +250,13 @@ pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
         .iter()
         .find(|mount| forward(&mount.spec))
         .map_or(0.0, |mount| mount.spec.speed);
+    lead_with(npc, at, speed)
+}
+
+/// The lead angle from `npc` to a ship at `at` for a shot of `speed`
+/// pixels a tick ([`lead`]), as `_CalcLeadAngle` aims.
+#[must_use]
+pub fn lead_with(npc: &Npc, at: &ShipState, speed: f32) -> f32 {
     // The lead reads only where it is and how it moves.
     let target = Target {
         ship: ShipRef::Player,
@@ -471,8 +489,8 @@ pub fn after_firing(npc: &mut Npc) {
 
 /// Whether `npc`'s fight reaches `_AIFireTurret` this tick, which runs its
 /// point defence before any check of the target (@0x80b0d): dogfighting
-/// (`_LowLevelAIHandler` substate 6, @0x85f17), sniping (0xe,
-/// @0x8730e-0x87324), fleeing (5, @0x85d5c-0x85d72), and approaching only
+/// (`_LowLevelAIHandler` substate 6, @0x85f17), sniping at rest (0xe,
+/// @0x8730e-0x87324; moving, it brakes and runs none, @0x87329), fleeing (5, @0x85d5c-0x85d72), and approaching only
 /// while facing within [`GUN_FACING`] turns of the heading it wants (7,
 /// @0x868d3-0x868f6).
 fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
@@ -482,6 +500,7 @@ fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
     match manoeuvre(npc.goal, &npc.state, &at) {
         None => false,
         Some(Manoeuvre::Approach) => facing(npc, &at, GUN_FACING),
+        Some(Manoeuvre::Snipe) => !snipe::moving(&npc.state),
         Some(_) => true,
     }
 }
@@ -544,8 +563,12 @@ impl Passes {
                     self.gun(sight);
                 }
             }
+            // Moving, it brakes and runs no pass (@0x870bf-0x87109 →
+            // @0x87329); at rest it fires facing the plain bearing
+            // (@0x872aa-0x872fe).
+            Manoeuvre::Snipe if snipe::moving(&sight.npc.state) => {}
             Manoeuvre::Snipe => {
-                if facing(GUN_FACING) {
+                if snipe::facing(sight.npc, &sight.at) {
                     self.gun(sight);
                     self.missile(sight);
                 }
@@ -2445,6 +2468,75 @@ mod tests {
             npc.mode = mode;
             assert_eq!(gated(&npc), FULL, "{mode:?}");
         }
+    }
+
+    // The snipe.
+
+    const SNIPE: Goal = Goal::Snipe(ShipRef::Player);
+
+    #[test]
+    fn a_moving_sniper_runs_no_pass_and_asks_no_point_defence_but_launches_its_fighters() {
+        // `_LowLevelAIHandler`'s sub-goal 0xe, moving 0.35 or more on an
+        // axis, goes straight to `_AILaunchFighter` (@0x87329): no gun,
+        // missile or turret pass, so no point defence (@0x80b0d).
+        let sniper = |vx: f32, vy: f32| {
+            let mut npc = shooter(&[gun(128, 1, 1), guided(130, 4), bay(150)], SNIPE);
+            npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
+            npc.state.velocity = Vec2::new(vx, vy);
+            npc
+        };
+        for (vx, vy) in [(0.35, 0.0), (0.0, -0.35)] {
+            let moving = trigger_at_player(&sniper(vx, vy), 0.0, -100.0);
+            assert_eq!(
+                (moving.only, moving.keep, moving.bays, moving.point_defence),
+                (None, id(150), true, false),
+                "{vx}, {vy}"
+            );
+        }
+        let resting = trigger_at_player(&sniper(0.3, 0.3), 0.0, -100.0);
+        assert_eq!(resting.only, id(130), "its turret, after its gun");
+        assert!(resting.point_defence && resting.bays);
+    }
+
+    /// What `npc` fires at the player 100 above [`SHOOTER`], crossing right
+    /// at 5 a tick: its gun (10 a tick) leads it at 26.57 degrees.
+    fn fired_at_crossing(npc: &Npc) -> Option<WeaponId> {
+        let npcs = [npc.clone()];
+        let mut player = player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0);
+        player.state.velocity = Vec2::new(5.0, 0.0);
+        let around = Surroundings {
+            player: Some(player),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, FireRules::default()).only
+    }
+
+    #[test]
+    fn a_sniper_at_rest_fires_facing_the_plain_bearing_not_the_lead_and_holds_at_exactly_three_turns()
+     {
+        // Within 3.0 x its turn rate (3) of the bearing, 0, strictly
+        // (@0x872c3-0x872fe).
+        let sniper = |heading: f32| {
+            let mut npc = shooter(&[gun(128, 1, 1)], SNIPE);
+            npc.state.heading = heading;
+            npc
+        };
+        assert!(
+            (wanted_heading(
+                &sniper(0.0),
+                &ShipState {
+                    position: SHOOTER + Vec2::new(0.0, -100.0),
+                    velocity: Vec2::new(5.0, 0.0),
+                    heading: 0.0,
+                }
+            ) - 26.57)
+                .abs()
+                < 0.01
+        );
+        assert_eq!(fired_at_crossing(&sniper(26.57)), None, "facing the lead");
+        assert_eq!(fired_at_crossing(&sniper(8.99)), id(128));
+        assert_eq!(fired_at_crossing(&sniper(9.0)), None, "strictly");
+        assert_eq!(fired_at_crossing(&sniper(351.01)), id(128));
     }
 
     #[test]

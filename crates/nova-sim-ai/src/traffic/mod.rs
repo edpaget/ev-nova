@@ -22,6 +22,7 @@
 //!   if any ([`NpcPerson`](npc::NpcPerson)).
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
+//! - [`snipe`]: how a sniper flies, braking or at rest.
 //!
 //! [`Traffic`] holds a system's NPCs. Entering a system
 //! ([`Traffic::enter_in`]) replaces them with its initial population, its
@@ -112,6 +113,7 @@ pub mod gate_entry;
 pub mod npc;
 pub mod persons;
 pub mod quote;
+pub mod snipe;
 pub mod spawn;
 pub mod strength;
 pub mod table;
@@ -357,6 +359,11 @@ pub struct World<'a> {
     /// that have arrived ([`Npc::arrived`]) by the other reading
     /// ([`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits)).
     pub arrival_hits: RuleSource,
+    /// Where a moving sniper with a last gun turns as it brakes
+    /// ([`snipe::fly`]): its target's lead by the engine, its retro heading
+    /// by the other reading
+    /// ([`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)).
+    pub snipe_brake_lead: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -371,7 +378,8 @@ impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, no damage aimed, no gate's
-    /// width known, the engine's [`SPAWN_RESERVE`], and no cloak scanner.
+    /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
+    /// and no cloak scanner.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -388,6 +396,7 @@ impl<'a> World<'a> {
             type_widths: &NO_TYPE_WIDTHS,
             spawn_reserve: SPAWN_RESERVE,
             arrival_hits: RuleSource::Engine,
+            snipe_brake_lead: RuleSource::Engine,
             cloak_scanner: false,
         }
     }
@@ -940,6 +949,7 @@ impl Traffic {
                     world.type_widths,
                     other.as_ref(),
                     speeds,
+                    world.snipe_brake_lead,
                     &mut *chance,
                 )
             })
