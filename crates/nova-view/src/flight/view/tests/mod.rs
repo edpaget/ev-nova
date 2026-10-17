@@ -346,6 +346,7 @@ fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
         type_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
+        gravity: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
     }
 }
@@ -436,6 +437,7 @@ impl PilotCatalog for FakeCatalog {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            murk: 0,
             message: -1,
         };
         let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
@@ -3065,6 +3067,7 @@ fn granting(count: i16) -> FakeCatalog {
     ace.grant_count = count;
     catalog.govts = vec![nova_sim::GovtRecord {
         id: GovtId(140),
+        name: String::new(),
         flags: 0x0800,
         flags2: 0,
         crime_tol: 0,

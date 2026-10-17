@@ -259,6 +259,7 @@ impl PilotCatalog for GameData {
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
                     exit_angle: stellar.cust_snd_id,
                     tribute: stellar.tribute,
+                    gravity: stellar.gravity,
                     animation: SiteAnimation {
                         delay: stellar.anim_delay,
                         frame0_bias: stellar.frame0_bias,
@@ -282,6 +283,7 @@ impl PilotCatalog for GameData {
                     links: con_slots(system.con),
                     govt: system.govt,
                     interference: system.interference,
+                    murk: system.murk,
                     message: system.message,
                     stellars: system
                         .nav_def
@@ -945,6 +947,20 @@ fn shown_resource_name(name: &str) -> &str {
     shown.trim_end_matches([' ', ';'])
 }
 
+/// The most characters of a government's name the engine keeps (it
+/// copies 31 bytes, a Pascal string's length byte among them, @0x7be51).
+const GOVT_NAME_CHARS: usize = 30;
+
+/// A `gövt` resource's name as the game shows it: cut as
+/// [`shown_resource_name`] cuts it (`_LoadObjectData` @0x7bde9-0x7be2a),
+/// and at most [`GOVT_NAME_CHARS`] characters.
+fn govt_name(name: &str) -> String {
+    shown_resource_name(name)
+        .chars()
+        .take(GOVT_NAME_CHARS)
+        .collect()
+}
+
 /// The frame size of the sprite a shot of `Graphic` `graphic` is drawn
 /// with in `data`, its `spïn` as the original clones it
 /// ([`shot_spin_id`]): none for a `Graphic` below 0, a missing `spïn` or a
@@ -1052,9 +1068,11 @@ impl CombatCatalog for GameData {
     fn governments(&self) -> Vec<GovtRecord> {
         self.records::<Govt>()
             .filter_map(|(id, govt)| {
-                let record = govt.ok()?.record;
+                let govt = govt.ok()?;
+                let record = govt.record;
                 Some(GovtRecord {
                     id: GovtId(id),
+                    name: govt_name(govt.name.unwrap_or_default()),
                     flags: record.flags.bits(),
                     flags2: record.flags2.bits(),
                     crime_tol: record.crime_tol,
@@ -2490,6 +2508,7 @@ mod tests {
                     type_counts_frames: true,
                     exit_angle: 0,
                     tribute: 0,
+                    gravity: 0,
                     animation: SiteAnimation {
                         type_frames: 1,
                         dead_frames: 1,
@@ -2513,6 +2532,7 @@ mod tests {
                     type_counts_frames: false,
                     exit_angle: 0,
                     tribute: 250,
+                    gravity: 0,
                     animation: SiteAnimation {
                         dead_frames: 1,
                         ..SiteAnimation::default()
@@ -2924,6 +2944,7 @@ mod tests {
                     govt: None,
                     stellars: vec![None; 16],
                     interference: 0,
+                    murk: 0,
                     message: -1,
                 },
                 StarSystem {
@@ -2933,11 +2954,26 @@ mod tests {
                     govt: Some(GovtId(140)),
                     stellars: vec![None; 16],
                     interference: 45,
+                    murk: 0,
                     message: 7,
                 },
             ]
         );
         assert_eq!(store(&[]).star_map(), []);
+    }
+
+    #[test]
+    fn a_systems_murk_is_its_sÿsts_raw() {
+        // `_LoadObjectData` stores `Murk` (`sÿst` +0x92) at runtime +0xbc
+        // (@0x77eb7), which the map panel reads.
+        let mut murky = linked(0, 0, &[]);
+        put_i16s(&mut murky, 0x92, &[45]);
+        let data = store(&[
+            (System::TYPE, 130, murky),
+            (System::TYPE, 131, linked(0, 0, &[])),
+        ]);
+        let murk: Vec<i16> = data.star_map().iter().map(|system| system.murk).collect();
+        assert_eq!(murk, [45, 0]);
     }
 
     #[test]
@@ -2969,6 +3005,26 @@ mod tests {
         let mut bytes = stellar(0, 0, 0, 1, 0);
         put_i16s(&mut bytes, 0x1A, &[cust_snd_id]);
         bytes
+    }
+
+    #[test]
+    fn a_landing_sites_gravity_is_its_spöbs_raw() {
+        // `_LoadObjectData` stores `Gravity` (`spöb` +0x238) at runtime
+        // +0x46c (@0x773de-0x773e5), which the map panel reads.
+        let gravities = [0, 7, -3];
+        let mut resources = vec![(System::TYPE, 130, system_with(&[128, 129, 130]))];
+        for (id, gravity) in (128..).zip(gravities) {
+            let mut bytes = stellar(0, 0, 0, 1, 0);
+            put_i16s(&mut bytes, 0x238, &[gravity]);
+            resources.push((Stellar::TYPE, id, bytes));
+        }
+        let data = store(&resources);
+        let found: Vec<i16> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.gravity)
+            .collect();
+        assert_eq!(found, gravities);
     }
 
     #[test]
@@ -3911,6 +3967,35 @@ mod tests {
     }
 
     #[test]
+    fn a_govt_records_name_is_its_resource_name_cut_at_its_last_semicolon() {
+        // `_LoadObjectData` cuts the name before its last ';', dropping
+        // the spaces and ';'s before it (@0x7bde9-0x7be2a), and copies
+        // 31 bytes of it, the length among them (@0x7be51).
+        let long = "A Government Named At Great Length";
+        let data = store_named(&[
+            (
+                Govt::TYPE,
+                128,
+                Some("Federation;hates Temmin Shard"),
+                govt_bytes(),
+            ),
+            (Govt::TYPE, 129, Some("Auroran ; ;notes;more"), govt_bytes()),
+            (Govt::TYPE, 130, Some("Polaris"), govt_bytes()),
+            (Govt::TYPE, 131, None, govt_bytes()),
+            (Govt::TYPE, 132, Some(long), govt_bytes()),
+        ]);
+        let names: Vec<String> = data
+            .governments()
+            .into_iter()
+            .map(|record| record.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["Federation", "Auroran ; ;notes", "Polaris", "", &long[..30]]
+        );
+    }
+
+    #[test]
     fn a_govt_record_carries_its_require() {
         let data = store(&[(Govt::TYPE, 128, govt_bytes())]);
         assert_eq!(
@@ -3931,6 +4016,7 @@ mod tests {
         ]);
         let record = |id| GovtRecord {
             id: GovtId(id),
+            name: String::new(),
             flags: 0xE2B0,
             flags2: 0x0012,
             crime_tol: 6,

@@ -486,6 +486,7 @@ fn an_attacker_following_through_a_wormhole_is_not_drawn_while_it_emerges_but_is
     catalog.dudes[0].1.govt = Some(GovtId(140));
     catalog.govts = vec![nova_sim::GovtRecord {
         id: GovtId(140),
+        name: String::new(),
         flags: 0,
         flags2: nova_sim::govt::ALWAYS_FOLLOWS_THROUGH_WORMHOLE,
         crime_tol: 0,

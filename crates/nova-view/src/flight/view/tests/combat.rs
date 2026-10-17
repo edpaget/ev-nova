@@ -2758,6 +2758,7 @@ fn damaging() -> FakeCatalog {
         }],
         govts: vec![nova_sim::GovtRecord {
             id: GovtId(140),
+            name: String::new(),
             flags: 0,
             flags2: 0,
             crime_tol: 0,

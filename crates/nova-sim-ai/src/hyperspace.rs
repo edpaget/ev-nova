@@ -288,6 +288,8 @@ struct Node {
     stellars: Vec<Option<(u32, u16)>>,
     /// Its `Interference`, raw.
     interference: i16,
+    /// Its `Murk`, raw.
+    murk: i16,
     /// Its `Message`, raw: the message buoy, −1 for none.
     message: i16,
 }
@@ -525,6 +527,7 @@ impl StarMap {
                 ordered_jumps: Vec::new(),
                 stellars: system.stellars,
                 interference: system.interference,
+                murk: system.murk,
                 message: system.message,
             };
             nodes.insert(from, node);
@@ -694,6 +697,12 @@ impl StarMap {
     #[must_use]
     pub fn interference(&self, id: SystemId) -> i16 {
         self.nodes.get(&id).map_or(0, |node| node.interference)
+    }
+
+    /// System `id`'s `Murk`, raw: 0 when it is not on the map.
+    #[must_use]
+    pub fn murk(&self, id: SystemId) -> i16 {
+        self.nodes.get(&id).map_or(0, |node| node.murk)
     }
 
     /// System `id`'s message buoy, its `Message`: the index a hyperspace
@@ -895,6 +904,7 @@ mod tests {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            murk: 0,
             message: -1,
         }
     }
@@ -1505,6 +1515,7 @@ mod tests {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            murk: 0,
             message: -1,
         }]);
         assert_eq!(map.position(SystemId(128)), Some(Vec2::new(-150.0, 75.0)));
@@ -1613,6 +1624,23 @@ mod tests {
         assert_eq!(map.interference(SystemId(128)), 60);
         assert_eq!(map.interference(SystemId(129)), -5);
         assert_eq!(map.interference(SystemId(130)), 0, "not on the map");
+    }
+
+    #[test]
+    fn a_systems_murk_is_its_records_and_0_off_the_map() {
+        let map = StarMap::new(vec![
+            StarSystem {
+                murk: 45,
+                ..system(128, &[])
+            },
+            StarSystem {
+                murk: -1,
+                ..system(129, &[])
+            },
+        ]);
+        assert_eq!(map.murk(SystemId(128)), 45);
+        assert_eq!(map.murk(SystemId(129)), -1);
+        assert_eq!(map.murk(SystemId(130)), 0, "not on the map");
     }
 
     #[test]

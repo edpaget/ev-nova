@@ -89,6 +89,10 @@ pub struct StarSystem {
     /// Its `Interference`, raw: the radar's static
     /// (`nova_sim::iff::interference`).
     pub interference: i16,
+    /// Its `Murk`, raw: the galaxy map panel's "visibility" hazard
+    /// (`nova_sim::map_panel`; `_MapDialogUpdate` @0x1086c-0x1090c reads
+    /// it at runtime +0xbc).
+    pub murk: i16,
     /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
     /// −1 for none (`nova_sim::StarMap::buoy`).
     pub message: i16,
@@ -151,6 +155,10 @@ pub struct LandingSite {
     /// Its `Tribute`, raw: what it pays a day while dominated, as
     /// `nova_sim::player_info::tribute_of` reads it.
     pub tribute: i16,
+    /// Its `Gravity`, raw: the galaxy map panel's "gravity shear" hazard
+    /// when not 0 (`nova_sim::map_panel`; `_MapDialogUpdate`
+    /// @0x1061f-0x106a9 reads it at runtime +0x46c).
+    pub gravity: i16,
     /// Its animation fields and frame counts, which a hypergate's sprite
     /// reads (`nova_sim::gate_sprite`).
     pub animation: SiteAnimation,
@@ -1498,6 +1506,12 @@ pub struct Penalties {
 pub struct GovtRecord {
     /// The `gövt`'s ID.
     pub id: GovtId,
+    /// Its name as the game shows it: the resource name cut before its
+    /// last ';', with the spaces and ';'s before that dropped, and at most
+    /// 30 characters (`_LoadObjectData` @0x7bde9-0x7be51; stock 186
+    /// "Federation;hates Temmin Shard" shows "Federation"). Empty for an
+    /// unnamed resource.
+    pub name: String,
     /// Its `Flags`.
     pub flags: u16,
     /// Its `Flags2`.
@@ -2481,6 +2495,7 @@ mod tests {
                 type_counts_frames: true,
                 exit_angle: -1,
                 tribute: 0,
+                gravity: 0,
                 animation: crate::catalog::SiteAnimation::default(),
             }]
         }
@@ -2507,6 +2522,7 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
                 interference: 0,
+                murk: 0,
                 message: -1,
             }]
         }

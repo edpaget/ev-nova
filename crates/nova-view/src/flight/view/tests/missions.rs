@@ -718,6 +718,7 @@ fn smuggling(flags: u16, fine: i16) -> View {
     catalog.dudes[0].1.govt = Some(GovtId(140));
     catalog.govts = vec![nova_sim::GovtRecord {
         id: GovtId(140),
+        name: String::new(),
         flags: 0,
         flags2: 0,
         crime_tol: 0,
