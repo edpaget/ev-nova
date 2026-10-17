@@ -1,4 +1,4 @@
-//! What the murk asks of the session (see [`murk`](crate::murk)): the
+//! What the murk asks of the session (see [`murk`]): the
 //! player's effective murk in its system, which the view darkens shots by.
 
 use super::Session;

@@ -21,7 +21,7 @@
 //!   faded, its corona in `CoronaColor` at offsets ±(`BeamWidth` + j),
 //!   from alpha 16/32 down by that falloff/32 a line while above 2/32. A
 //!   lightning beam (`LiDensity`) is drawn as its zig-zag, fading by its
-//!   fade over 32 ticks ([`lightning`](super::lightning)).
+//!   fade over 32 ticks ([`lightning`]).
 //! - A beam whose weapon sets `Flags2` 0x2000 is drawn under the ships,
 //!   and every other beam over them.
 
