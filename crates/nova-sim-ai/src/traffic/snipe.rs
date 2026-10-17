@@ -6,8 +6,10 @@
 //!   it does nothing: its thrust is already none from the handler's entry
 //!   (@0x851f1) and nothing slows it, so it coasts.
 //! - **Moving** ([`moving`]): 0.35 or more on either axis ([`MOVING`],
-//!   @0x870bf-0x87109). It wants its retro heading, the way its velocity
-//!   points turned about (`_CalcInterceptAngle((0,0), v × 100)` + 180,
+//!   @0x870bf-0x87109), each axis's float speed widened and tested
+//!   against the double 0.35, so a speed of the float 0.35 is not
+//!   moving. It wants its retro heading, the way its velocity points
+//!   turned about (`_CalcInterceptAngle((0,0), v × 100)` + 180,
 //!   @0x871b2-0x871eb); or, with a last gun (+0xc8da,
 //!   [`Armament::last_gun`](crate::combat::armament::Armament::last_gun))
 //!   and by the engine, the lead angle at its target for that gun
@@ -40,9 +42,9 @@ use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::steer;
 use crate::traffic::npc::Npc;
 
-/// How fast, in pixels a tick on either axis, a sniper is moving (0.35
-/// @0xdda68).
-pub const MOVING: f32 = 0.35;
+/// How fast, in pixels a tick on either axis, a sniper is moving (the
+/// double 0.35 @0xdda68).
+pub const MOVING: f64 = 0.35;
 /// What a sniper at rest keeps of its velocity each tick (0.95 @0xdd618).
 pub const DAMPING: f32 = 0.95;
 /// How far beyond a turn, in degrees, a moving sniper still thrusts (1.0
@@ -50,10 +52,13 @@ pub const DAMPING: f32 = 0.95;
 pub const THRUST_SLACK: f32 = 1.0;
 
 /// Whether a sniper in `state` is moving: 0.35 or more on either axis
-/// (`jae` @0x870e3, `jb` @0x87109).
+/// (`jae` @0x870e3, `jb` @0x87109). The original takes `_FloatAbs` of
+/// each axis's float speed, widens it (`cvtss2sd`) and compares it with
+/// the double [`MOVING`] (`ucomisd`), so the float 0.35, which widens to
+/// 0.34999999403953552, is not moving.
 #[must_use]
 pub fn moving(state: &ShipState) -> bool {
-    state.velocity.x.abs() >= MOVING || state.velocity.y.abs() >= MOVING
+    f64::from(state.velocity.x.abs()) >= MOVING || f64::from(state.velocity.y.abs()) >= MOVING
 }
 
 /// Whether `npc` faces its target at `at` closely enough to fire: within
@@ -173,11 +178,16 @@ mod tests {
     };
 
     #[test]
-    fn a_sniper_moving_0_35_on_either_axis_is_moving_and_one_slower_on_both_rests() {
-        assert!(moving(&at(0.0, 0.0, 0.35, 0.0, 0.0)));
-        assert!(moving(&at(0.0, 0.0, 0.0, -0.35, 0.0)));
-        assert!(!moving(&at(0.0, 0.0, 0.3499, 0.3499, 0.0)));
-        assert!(!moving(&at(0.0, 0.0, -0.3499, 0.0, 0.0)));
+    fn a_sniper_moving_a_double_0_35_on_either_axis_is_moving_and_the_float_0_35_on_both_rests() {
+        // The float 0.35 widens to 0.34999999403953552, below the double
+        // 0.35 it is tested against; the next float up is above it.
+        let above = f32::from_bits(0.35_f32.to_bits() + 1);
+        assert!(f64::from(above) > 0.35_f64);
+        assert!(moving(&at(0.0, 0.0, above, 0.0, 0.0)));
+        assert!(moving(&at(0.0, 0.0, 0.0, -above, 0.0)));
+        assert!(!moving(&at(0.0, 0.0, 0.35, 0.35, 0.0)));
+        assert!(!moving(&at(0.0, 0.0, -0.35, 0.0, 0.0)));
+        assert!(!moving(&at(0.0, 0.0, 0.0, -0.35, 0.0)));
     }
 
     #[test]

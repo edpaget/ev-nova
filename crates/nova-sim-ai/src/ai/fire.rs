@@ -2497,16 +2497,17 @@ mod tests {
 
     #[test]
     fn a_moving_sniper_runs_no_pass_and_asks_no_point_defence_but_launches_its_fighters() {
-        // `_LowLevelAIHandler`'s sub-goal 0xe, moving 0.35 or more on an
-        // axis, goes straight to `_AILaunchFighter` (@0x87329): no gun,
-        // missile or turret pass, so no point defence (@0x80b0d).
+        // `_LowLevelAIHandler`'s sub-goal 0xe, moving the double 0.35 or
+        // more on an axis (see `snipe::moving`), goes straight to
+        // `_AILaunchFighter` (@0x87329): no gun, missile or turret pass,
+        // so no point defence (@0x80b0d).
         let sniper = |vx: f32, vy: f32| {
             let mut npc = shooter(&[gun(128, 1, 1), guided(130, 4), bay(150)], SNIPE);
             npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
             npc.state.velocity = Vec2::new(vx, vy);
             npc
         };
-        for (vx, vy) in [(0.35, 0.0), (0.0, -0.35)] {
+        for (vx, vy) in [(0.36, 0.0), (0.0, -0.36)] {
             let moving = trigger_at_player(&sniper(vx, vy), 0.0, -100.0);
             assert_eq!(
                 (moving.only, moving.keep, moving.bays, moving.point_defence),
