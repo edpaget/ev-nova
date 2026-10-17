@@ -4800,6 +4800,15 @@ mod tests {
                 Some(332.0),
                 "{guidance}"
             );
+            let unlit = WeaponRecord {
+                beam_length: -2,
+                ..reaching(150, guidance, 10)
+            };
+            assert_eq!(
+                stock_reach(&[unlit], &[(150, 1, 0)]),
+                Some(32.0),
+                "a negative BeamLength is none long: {guidance}"
+            );
         }
         assert_eq!(
             stock_reach(&[reaching(150, 5, 10)], &[(150, 1, 0)]),

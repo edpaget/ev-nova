@@ -284,10 +284,6 @@ exclude_re = [
     # A self sub-munition adds `SubLimit` more flights when that is above
     # none: with `>=`, a limit of none adds none of them.
     "combat/weapon.rs:.*replace > with >= in chain_range",
-    # A stock beam's reach is its `BeamLength` and the margin: its chain
-    # range is that same whole `BeamLength` (`own_reach`), so the other
-    # arm's `trunc(range + 32)` gives the same.
-    "combat/armament.rs:.*delete match arm Guidance::Beam \\| Guidance::TurretBeam in Arsenal::stock_reach",
     # A point-defence shot at a ship is aimed at none (`_SpawnShot(.., -1,
     # ..)`); aimed at the ship, it is aimed at none again as it first moves
     # (`Shot::lose_a_gone_ship`), later that same tick, before anything
