@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use nova_sim::Governments;
+
 pub use nova_data::{GovtId, NebulaId, StellarId, SystemId};
 
 /// One stellar object in a system: its ID and display name.
@@ -78,6 +80,9 @@ pub struct Galaxy {
     pub systems: Vec<SystemEntry>,
     /// Every government's map colour, a 24-bit `00RRGGBB` value.
     pub govt_colors: BTreeMap<GovtId, u32>,
+    /// Every government, as the simulation reads them: the viewer's
+    /// borders read their `Flags2` and their alliances.
+    pub govts: Governments,
     /// Every nebula, by ascending ID.
     pub nebulae: Vec<NebulaEntry>,
     /// What could not be read, each a message ready to display.

@@ -29,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use nova_sim::story::OverlaidGalaxy;
-use nova_sim::{StarMap, StarSystem, Vec2};
+use nova_sim::{Governments, StarMap, StarSystem, Vec2};
 
 use super::catalog::{Galaxy, GovtId, NebulaEntry, SystemEntry, SystemId};
 use super::view::{Bounds, Transform};
@@ -93,6 +93,8 @@ pub struct GalaxyModel {
     links: Vec<(SystemId, SystemId)>,
     /// Every government's map colour.
     govt_colors: BTreeMap<GovtId, u32>,
+    /// Every government, as the simulation reads them.
+    govts: Governments,
     /// Every nebula the catalog has that can be drawn.
     catalog_nebulae: Vec<NebulaEntry>,
     /// Every nebula drawn: the catalog's until a session's galaxy is
@@ -109,6 +111,7 @@ impl GalaxyModel {
         let Galaxy {
             mut systems,
             govt_colors,
+            govts,
             nebulae,
             mut problems,
         } = galaxy;
@@ -159,6 +162,7 @@ impl GalaxyModel {
             systems,
             links,
             govt_colors,
+            govts,
             catalog_nebulae: nebulae.clone(),
             nebulae,
             problems,
@@ -234,6 +238,19 @@ impl GalaxyModel {
     #[must_use]
     pub fn links(&self) -> &[(SystemId, SystemId)] {
         &self.links
+    }
+
+    /// Every government's map colour, a 24-bit `00RRGGBB` value: what the
+    /// borders are shaded in too.
+    #[must_use]
+    pub fn govt_colors(&self) -> &BTreeMap<GovtId, u32> {
+        &self.govt_colors
+    }
+
+    /// Every government, as the catalog gives them.
+    #[must_use]
+    pub fn govts(&self) -> &Governments {
+        &self.govts
     }
 
     /// Every nebula drawn, by ascending ID: every one that can be drawn,
@@ -790,6 +807,7 @@ mod tests {
             govt_colors: BTreeMap::from([(GovtId(128), 0x002C_2CAF), (GovtId(129), 0x00CF_0C0C)]),
             nebulae: vec![entry(140), entry(141)],
             problems: vec!["from the catalog".to_owned()],
+            ..Galaxy::default()
         }
     }
 

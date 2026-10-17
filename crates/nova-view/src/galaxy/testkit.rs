@@ -4,6 +4,8 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
+use nova_sim::Governments;
+
 use super::catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,
     SystemEntry, SystemId,
@@ -87,6 +89,7 @@ pub(crate) fn galaxy() -> Galaxy {
     Galaxy {
         systems: vec![alpha, beta, gamma, alternate],
         govt_colors: BTreeMap::from([(GovtId(128), BLUE)]),
+        govts: Governments::default(),
         nebulae: vec![NebulaEntry {
             id: NebulaId(128),
             name: "Holpa Nebula".to_owned(),

@@ -9,6 +9,7 @@ use nova_data::records::nebula::Nebula;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record, StoreEntry};
+use nova_sim::Governments;
 
 use super::catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, SystemEntry,
@@ -53,6 +54,7 @@ impl GalaxyCatalog for GameData {
         Galaxy {
             systems,
             govt_colors,
+            govts: Governments::read(self),
             nebulae,
             problems,
         }
@@ -163,6 +165,8 @@ mod tests {
     use nova_data::{GameData, Record};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
+
+    use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 
     use super::*;
     use crate::galaxy::catalog::{
@@ -573,6 +577,27 @@ mod tests {
             "{:?}",
             galaxy.problems
         );
+    }
+
+    #[test]
+    fn the_governments_are_read_whole_for_the_borders() {
+        let mut fed = govt(0x002C_2CAF);
+        put_i16s(&mut fed, 0x04, &[0x0002]);
+        put_i16s(&mut fed, 0x18, &[1, -1, -1, -1, 2, -1, -1, -1]);
+        let mut civvies = govt(0x00CF_0C0C);
+        put_i16s(&mut civvies, 0x04, &[0x0004]);
+        put_i16s(&mut civvies, 0x18, &[2, -1, -1, -1, -1, -1, -1, -1]);
+        let data = store(&[
+            (Govt::TYPE, 128, Some("Federation"), fed),
+            (Govt::TYPE, 129, Some("Civvies"), civvies),
+        ]);
+        let galaxy = data.galaxy();
+        assert_eq!(galaxy.govts, Governments::read(&data));
+        let (fed, civvies) = (Some(GovtId(128)), Some(GovtId(129)));
+        assert!(galaxy.govts.flag2(fed, SMALL_INFLUENCE));
+        assert!(galaxy.govts.flag2(civvies, NO_INFLUENCE));
+        assert!(galaxy.govts.allies(fed, civvies), "128 allied with class 2");
+        assert_eq!(galaxy.govt_colors[&GovtId(129)], 0x00CF_0C0C);
     }
 
     #[test]

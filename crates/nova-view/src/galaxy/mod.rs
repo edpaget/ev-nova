@@ -11,6 +11,8 @@
 //!   clicking: colours, hyperlinks and hit-testing.
 //! - [`nebulae`]: the maps' nebulae, as `_MapDialogUpdate`'s nebula pass
 //!   draws them: the truncated rect, the picture, the clip and `addMax`.
+//! - [`borders`]: the maps' government borders, as `_DrawMapInfluence`
+//!   paints the cells `nova_sim::map_borders` works out.
 //! - [`update`]: which update item 3 shows, the full one or a drag's
 //!   partial one.
 //! - [`panel`]: the in-flight maps' two info panels, laid out at DITL
@@ -27,6 +29,7 @@
 //! - [`find`]: the map's Find dialog, `DLOG` 3005, as `_DoSystemSearch`
 //!   opens it.
 
+pub mod borders;
 pub mod buttons;
 pub mod catalog;
 pub mod click;
