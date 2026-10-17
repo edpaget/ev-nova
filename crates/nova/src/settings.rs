@@ -67,8 +67,9 @@ impl GameSettings {
 }
 
 /// The settings as saved: JSON, every field optional (a missing one takes
-/// its default). Other fields, such as the rules' `rules` and
-/// `rule_overrides`, are kept and saved back as they were.
+/// its default). Other fields, such as the rules' `rules`,
+/// `rule_overrides` and `rule_values`, are kept and saved back as they
+/// were.
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 #[allow(clippy::struct_excessive_bools)] // One field per key of the file.
@@ -454,11 +455,16 @@ mod tests {
     #[test]
     fn a_change_keeps_the_other_settings_saved_beside_these() {
         let text = r#"{"music": false, "rules": "bible",
-            "rule_overrides": {"crime_gains": "engine", "nested": {"deeper": [1, {"x": null}]}}}"#;
+            "rule_overrides": {"crime_gains": "engine", "nested": {"deeper": [1, {"x": null}]}},
+            "rule_values": {"thrust_divisor": 3000}}"#;
         let store = MemorySettings::holding(text);
         let (mut keeper, _) = SettingsKeeper::open(store.clone());
         keeper.change(plain(quiet())).expect("saves");
         assert_eq!(json(&store)["rules"], "bible");
+        assert_eq!(
+            json(&store)["rule_values"],
+            serde_json::json!({"thrust_divisor": 3000})
+        );
         assert_eq!(
             json(&store)["rule_overrides"],
             serde_json::json!({"crime_gains": "engine", "nested": {"deeper": [1, {"x": null}]}})

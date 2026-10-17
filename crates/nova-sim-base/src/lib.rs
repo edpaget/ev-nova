@@ -21,6 +21,8 @@
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
+//! - [`rule_values`]: the rules whose setting is a number, each a
+//!   [`RuleValue`] the [`Rulebook`] holds, the original's by default.
 //! - [`rulebook`]: the rules where the Nova Bible and the original engine
 //!   disagree: each follows a [`RuleSource`], the engine's by default, as
 //!   the [`Rulebook`] says, by its [`RuleKey`].
@@ -46,6 +48,7 @@ pub mod fuel;
 pub mod geometry;
 pub mod handling;
 pub mod reserves;
+pub mod rule_values;
 pub mod rulebook;
 pub mod rules;
 pub mod trig;
@@ -58,4 +61,5 @@ pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use handling::{Handling, ShipFields};
 pub use reserves::{Gauge, Reserve, Reserves};
+pub use rule_values::RuleValue;
 pub use rulebook::{RuleKey, RuleSource, Rulebook};

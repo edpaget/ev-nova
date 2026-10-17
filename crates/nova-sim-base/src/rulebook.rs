@@ -514,6 +514,17 @@
 //! mission, crön or storyline relies on a shot failing. The Bible says
 //! nothing of them; the engine's reading restores the original's tables.
 //!
+//! # Numeric values
+//!
+//! A few rules take a number rather than a source: each [`RuleValue`],
+//! the original's by default, set in the settings file's `"rule_values"`
+//! (see the [`rule_values`](crate::rule_values) module). The global
+//! source doesn't move them.
+//!
+//! | [`RuleValue`] | settings key | default (the original's) | the port's earlier reading |
+//! |---|---|---|---|
+//! | [`ThrustDivisor`](RuleValue::ThrustDivisor) | `thrust_divisor` | 5000: a ship thrusts `Accel` / 5000 pixels a tick, each tick, as `_ShipAccelRate` doubles `Accel` / 10000 (@0x353b, @0x35f8; see [`handling`](crate::handling)) | 3000, 5/3 as hard |
+//!
 //! # Adding a rule
 //!
 //! 1. Add the variant, its doc comment and its settings key to the
@@ -540,6 +551,10 @@
 //! the program, the one rulebook the settings give (see
 //! `nova::rulebook`) is the rule set every layer reads, and every
 //! strategy port is built from it.
+
+use core::num::NonZeroU32;
+
+pub use crate::rule_values::RuleValue;
 
 /// Which of the two a disputed rule follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2699,11 +2714,13 @@ impl RuleKey {
 
 /// Which source each disputed rule follows: a global source for all, or
 /// each rule's own default ([`RuleKey::default_source`]) when none is
-/// chosen, and an override for any one.
+/// chosen, and an override for any one; and the number each numeric rule
+/// takes, its default unless set ([`RuleValue`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rulebook {
     global: Option<RuleSource>,
     overrides: [Option<RuleSource>; RuleKey::ALL.len()],
+    values: [Option<NonZeroU32>; RuleValue::ALL.len()],
 }
 
 /// Every rule following its own default, overriding none: the engine's,
@@ -2716,18 +2733,35 @@ impl Default for Rulebook {
         Self {
             global: None,
             overrides: [None; RuleKey::ALL.len()],
+            values: [None; RuleValue::ALL.len()],
         }
     }
 }
 
 impl Rulebook {
-    /// Every rule following `global`, overriding none.
+    /// Every rule following `global`, overriding none, and every value at
+    /// its default.
     #[must_use]
     pub const fn new(global: RuleSource) -> Self {
         Self {
             global: Some(global),
             overrides: [None; RuleKey::ALL.len()],
+            values: [None; RuleValue::ALL.len()],
         }
+    }
+
+    /// The rulebook with `rule` taking `value`.
+    #[must_use]
+    pub fn with_value(mut self, rule: RuleValue, value: NonZeroU32) -> Self {
+        self.values[rule.index()] = Some(value);
+        self
+    }
+
+    /// The number `rule` takes: the one set, else its default. The global
+    /// source doesn't move it.
+    #[must_use]
+    pub fn value_for(&self, rule: RuleValue) -> NonZeroU32 {
+        self.values[rule.index()].unwrap_or(rule.default_value())
     }
 
     /// The rulebook with `rule` following `source`, whatever the global

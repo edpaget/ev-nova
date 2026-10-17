@@ -230,6 +230,8 @@
 //!   blink ([`AlertIcon`]).
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
+//! - [`rule_values`]: the rules whose setting is a number, each a
+//!   [`RuleValue`] the [`Rulebook`] holds, the original's by default.
 //! - [`rulebook`]: the rules where the Nova Bible and the original engine
 //!   disagree: each follows a [`RuleSource`], the engine's by default, as
 //!   the [`Rulebook`] says, by its [`RuleKey`].
@@ -366,6 +368,7 @@ pub mod rating;
 pub use nova_sim_port::recharge;
 pub mod red_alert;
 pub use nova_sim_base::reserves;
+pub use nova_sim_base::rule_values;
 pub use nova_sim_base::rulebook;
 pub use nova_sim_base::rules;
 pub use nova_sim_combat::sabotage;
@@ -484,7 +487,7 @@ pub use red_alert::{
     alert_check_due, alert_step_due,
 };
 pub use reserves::{Gauge, Reserve, Reserves};
-pub use rulebook::{RuleKey, RuleSource, Rulebook};
+pub use rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage_flag};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
