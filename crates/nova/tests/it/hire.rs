@@ -671,7 +671,7 @@ impl Game {
             .model()
             .system(nova_sim::SystemId(129))
             .expect("on the map");
-        let at = map.view().world_to_screen(beta.position());
+        let at = map.transform().world_to_screen(beta.position());
         self.click(at);
         self.tap(Key::Char('m'));
         self.fly_out();

@@ -1,8 +1,11 @@
-//! The map's view: which part of the galaxy the map area shows, and at
-//! what scale.
+//! The viewer's view: which part of the galaxy its map area shows, and at
+//! what scale; and the [`Transform`] every map draws through. The
+//! in-flight maps look where their dialog's place says instead
+//! ([`place`](super::place)).
 //!
-//! The map area is the logical rectangle (0, 0) to ([`MAP_WIDTH`],
-//! [`MAP_HEIGHT`]); the info panel fills the rest of the screen below it.
+//! The viewer's map area is the logical rectangle (0, 0) to
+//! ([`MAP_WIDTH`], [`MAP_HEIGHT`]); its info panel fills the rest of the
+//! screen below it.
 //! The view keeps the map (world) point drawn at the map area's centre and
 //! one of Nova's seven map scales:
 //!
@@ -37,8 +40,10 @@ pub const FIT_MARGIN: f32 = 24.0;
 pub const PAN_STEP: f32 = 64.0;
 
 /// Where a map draws a world point: `screen + (p - world) x scale`. The
-/// course map's is its view's ([`MapView::transform`]); the floating map
-/// centres its own on the current system.
+/// viewer's is its view's ([`MapView::transform`]), an in-flight map's
+/// its place's ([`MapPlace::transform`](super::place::MapPlace::transform));
+/// the floating map centres its own
+/// on the current system.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
     /// Where `world` is drawn.

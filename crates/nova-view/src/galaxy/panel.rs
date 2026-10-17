@@ -43,13 +43,13 @@
 //! Without text metrics nothing is measured: the Ports list is one line,
 //! the prompt starts at left + right / 2 and the date at right − 5.
 //!
-//! Until the map is laid out as DITL 2000 (galaxy-map-fidelity phase 5),
-//! the in-flight maps draw both items from [`PANEL_ORIGIN`], each over a
-//! [`PANEL`] fill.
+//! The in-flight maps draw both items from the dialog's top-left corner
+//! ([`DIALOG_ORIGIN`](super::dialog::DIALOG_ORIGIN)), over `PICT` 8509,
+//! the dialog's background: neither is filled.
 
 use nova_sim::map_panel::{ColumnBody, Listing, MapPanel, PanelWords, Ports, Services, Strip};
 
-use super::map::{DARK_GREY, LIGHT_GREY, PANEL};
+use super::map::{DARK_GREY, LIGHT_GREY};
 use super::view::Bounds;
 use crate::draw::fill_rect;
 use crate::flight::pen::Pen;
@@ -61,12 +61,6 @@ use crate::{Color, DrawList, Font, Point};
 pub const INFO_STRIP: IRect = IRect::new(8, 436, 594, 478);
 /// DITL 2000 item 6, the right column, in dialog coordinates.
 pub const INFO_COLUMN: IRect = IRect::new(474, 8, 594, 437);
-/// Where the in-flight maps put the dialog's top-left corner until the
-/// map is laid out as the dialog (galaxy-map-fidelity phase 5): the strip
-/// at (430, 616)-(1016, 658) under the map, the column at
-/// (896, 188)-(1016, 617) over its right edge, meeting at y 616 as in the
-/// dialog.
-pub const PANEL_ORIGIN: Point = Point::new(422.0, 180.0);
 
 /// The labels' and the prompt's colour, `_rgbLightGrey`.
 pub const LABEL: Color = LIGHT_GREY;
@@ -90,8 +84,7 @@ pub fn placed(rect: IRect, origin: Point) -> Bounds {
 }
 
 /// Draws `panel`'s two items with the dialog's top-left corner at
-/// `origin`, each over a [`PANEL`] fill, measuring with `metrics`, if any
-/// (see the module docs).
+/// `origin`, measuring with `metrics`, if any (see the module docs).
 pub fn draw_panel(
     list: &mut DrawList,
     panel: &MapPanel,
@@ -100,8 +93,6 @@ pub fn draw_panel(
 ) {
     let strip = placed(INFO_STRIP, origin);
     let column = placed(INFO_COLUMN, origin);
-    fill_rect(list, strip, PANEL);
-    fill_rect(list, column, PANEL);
     let mut pen = Pen {
         list,
         font: PANEL_FONT,
@@ -280,6 +271,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::galaxy::dialog::DIALOG_ORIGIN;
     use crate::text::fixture::MonoMetrics;
 
     /// The stock words.
@@ -395,10 +387,10 @@ mod tests {
     }
 
     #[test]
-    fn both_items_are_filled_and_ruled_black() {
+    fn both_items_are_ruled_black_over_the_background_unfilled() {
         let mut list = DrawList::new();
         let panel = info(Ports::None, ColumnBody::Unknown);
-        draw_panel(&mut list, &panel, PANEL_ORIGIN, None);
+        draw_panel(&mut list, &panel, DIALOG_ORIGIN, None);
         let fills: Vec<(Point, Point, f32, Color)> = list
             .iter()
             .filter_map(|command| match command {
@@ -411,28 +403,17 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // The strip at (430, 616)-(1016, 658), the column at
-        // (896, 188)-(1016, 617).
-        assert!(fills.contains(&(
-            Point::new(430.0, 637.0),
-            Point::new(1016.0, 637.0),
-            42.0,
-            PANEL
-        )));
-        assert!(fills.contains(&(
-            Point::new(896.0, 402.5),
-            Point::new(1016.0, 402.5),
-            429.0,
-            PANEL
-        )));
-        // The rules: (897, 616)-(1014, 616), the strip's and the column's.
+        // The strip at (220, 564)-(806, 606), the column at
+        // (686, 136)-(806, 565): `PICT` 8509 is under both, so neither
+        // is filled. The rules: (687, 564)-(804, 564), the strip's and
+        // the column's.
         let rule = (
-            Point::new(897.0, 616.5),
-            Point::new(1015.0, 616.5),
+            Point::new(687.0, 564.5),
+            Point::new(805.0, 564.5),
             1.0,
             Color::BLACK,
         );
-        assert_eq!(fills.iter().filter(|fill| **fill == rule).count(), 2);
+        assert_eq!(fills, [rule, rule]);
     }
 
     #[test]
@@ -628,14 +609,14 @@ mod tests {
         };
         assert_eq!(found(&texts(&panel, Some(&MonoMetrics)), "abc").0, 299.0);
         // On screen the halving is of the dialog's right edge, not the
-        // screen's: from the origin, 422 + 305 − 9.
+        // screen's: from the origin, 212 + 305 − 9.
         let mut list = DrawList::new();
-        draw_panel(&mut list, &prompt(), PANEL_ORIGIN, Some(&MonoMetrics));
+        draw_panel(&mut list, &prompt(), DIALOG_ORIGIN, Some(&MonoMetrics));
         let x = list.iter().find_map(|command| match command {
             DrawCommand::Text { text, origin, .. } if text == "abcd" => Some(origin.x),
             _ => None,
         });
-        assert_eq!(x, Some(718.0));
+        assert_eq!(x, Some(508.0));
     }
 
     #[test]

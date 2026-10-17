@@ -288,7 +288,7 @@ fn opening_cancels_a_drag_and_lets_go_of_the_keys_below() {
 
     let mut screen = with_dialogs(data());
     screen.input(&key(Key::Tab, true));
-    let view = *screen.galaxy_map().view();
+    let view = *screen.galaxy_map().view().expect("the viewer");
     let at = Point::new(500.0, 400.0);
     screen.input(&Input::PointerButton {
         button: MouseButton::Left,
@@ -298,7 +298,11 @@ fn opening_cancels_a_drag_and_lets_go_of_the_keys_below() {
     open_about(&mut screen);
     screen.input(&key(Key::Escape, true));
     screen.input(&Input::PointerMoved(Point::new(600.0, 400.0)));
-    assert_eq!(*screen.galaxy_map().view(), view, "the drag was cancelled");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "the drag was cancelled"
+    );
 }
 
 #[test]
@@ -658,7 +662,7 @@ fn only_the_dialog_ticks_while_it_is_open_over_the_ships() {
 fn opening_cancels_a_drag_below() {
     let mut screen = with_dialogs(data());
     screen.input(&key(Key::Tab, true));
-    let view = *screen.galaxy_map().view();
+    let view = *screen.galaxy_map().view().expect("the viewer");
     screen.input(&Input::PointerButton {
         button: MouseButton::Left,
         pressed: true,
@@ -667,7 +671,11 @@ fn opening_cancels_a_drag_below() {
     open_prefs(&mut screen);
     screen.input(&key(Key::Escape, true));
     screen.input(&Input::PointerMoved(Point::new(600.0, 400.0)));
-    assert_eq!(*screen.galaxy_map().view(), view, "the drag was cancelled");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "the drag was cancelled"
+    );
 }
 
 #[test]

@@ -2476,7 +2476,7 @@ impl Boarder {
             .model()
             .system(nova_sim::SystemId(id))
             .expect("on the map");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
     }
 
     /// Flies out from the centre to the minimum jump distance: turns to

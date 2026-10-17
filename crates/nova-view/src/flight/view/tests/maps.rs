@@ -22,7 +22,7 @@ fn tab_on_the_course_map_draws_the_next_link_and_selects_it() {
         assert_eq!(map.hyper_selection(), Some(SystemId(expected)));
         assert_eq!(
             hyper_selected_links(&view),
-            [(on_map(&view, 130), on_map(&view, expected))]
+            [(on_map_now(&view, 130), on_map_now(&view, expected))]
         );
         view.input(&key(k, false));
     }
@@ -208,7 +208,7 @@ fn return_on_the_hypergate_map_enters_or_cancels_in_silence() {
     assert_eq!(map_sounds(&mut view), []);
     let mut view = FlightView::new(gated());
     land_now(&mut view);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     view.take_sounds();
     tap(&mut view, Key::Enter);
@@ -349,7 +349,7 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
         }
         assert!(view.map_open());
         if pick {
-            let alpha = on_map(&view, 131);
+            let alpha = on_map(&mut view, 131);
             click(&mut view, alpha);
         }
         let stale = RadarScene::default();
@@ -375,7 +375,7 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
 fn without_hyperspace_effects_a_hypergate_flashes_white() {
     let mut view = FlightView::new(gated()).with_hyperspace_effects(false);
     land_now(&mut view);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, MAP);
     assert_eq!(
@@ -410,7 +410,7 @@ fn a_hypergate_whose_links_lead_nowhere_opens_an_empty_map_that_cancels() {
     assert!(view.map_open());
     assert_eq!(view.course_map().mode(), MapMode::Hypergate);
     assert_ne!(view.message(), Some(HYPERGATE_CANCELLED), "not yet");
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, MAP);
     assert!(!view.map_open());
@@ -448,7 +448,7 @@ fn l_twice_at_a_wormhole_passes_through_it_with_a_flash() {
 fn coming_out_of_a_hypergate_says_so_for_360_ticks() {
     let mut view = FlightView::new(gated());
     land_now(&mut view);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, MAP);
     let exited = "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.";
@@ -1488,8 +1488,8 @@ fn the_course_map_draws_the_sessions_known_and_explored_systems() {
 }
 
 // The map panel (`_MapDialogUpdate`): the session's panels, drawn from
-// `PANEL_ORIGIN` (422, 180), so the strip's left is 430 and top 616, and
-// the column's left is 896 and top 188.
+// the dialog's origin (212, 128), so the strip's left is 220 and top 564,
+// and the column's left is 686 and top 136.
 
 /// `STR#` 2002 with the panel's words, every other string empty.
 fn panel_strings() -> (i16, Vec<String>) {
@@ -1536,11 +1536,11 @@ fn panel_text(list: &DrawList, (x, baseline): (f32, f32)) -> Option<String> {
 
 /// Where the column's title, the Ports list, the first goods row and the
 /// first two services rows are drawn.
-const TITLE_AT: (f32, f32) = (906.0, 200.0);
-const PORTS_AT: (f32, f32) = (475.0, 628.0);
-const GOODS_AT: (f32, f32) = (911.0, 356.0);
-const SERVICES_AT: (f32, f32) = (911.0, 451.0);
-const SECOND_SERVICE_AT: (f32, f32) = (911.0, 463.0);
+const TITLE_AT: (f32, f32) = (696.0, 148.0);
+const PORTS_AT: (f32, f32) = (265.0, 576.0);
+const GOODS_AT: (f32, f32) = (701.0, 304.0);
+const SERVICES_AT: (f32, f32) = (701.0, 399.0);
+const SECOND_SERVICE_AT: (f32, f32) = (701.0, 411.0);
 
 fn title(view: &View) -> Option<String> {
     panel_text(&drawn(view), TITLE_AT)
@@ -1570,7 +1570,7 @@ fn the_course_maps_panel_lists_a_landable_stellar_and_leaves_out_an_uninhabited_
     tap(&mut view, MAP);
     assert_eq!(view.course_map().selected(), Some(SystemId(130)));
     let list = drawn(&view);
-    assert_eq!(panel_text(&list, (440.0, 628.0)).as_deref(), Some("Ports:"));
+    assert_eq!(panel_text(&list, (230.0, 576.0)).as_deref(), Some("Ports:"));
     assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("Earth"));
     let texts = texts(&list);
     assert!(
@@ -1594,7 +1594,7 @@ fn the_course_maps_panel_titles_the_current_destination_and_selected_systems_and
         "Sol's two unnamed ports"
     );
     // A click plots the course and selects its hop in mode 3.
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     assert_eq!(view.course_map().selected(), Some(SystemId(131)));
     assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
@@ -1610,7 +1610,7 @@ fn the_course_maps_panel_titles_the_current_destination_and_selected_systems_and
     tap(&mut view, MAP);
     assert_eq!(view.course_map().selected(), Some(SystemId(130)));
     assert_eq!(title(&view).as_deref(), Some("Current System:"));
-    let barnard = on_map(&view, 132);
+    let barnard = on_map(&mut view, 132);
     click(&mut view, barnard);
     assert_eq!(view.course_map().selected(), Some(SystemId(132)));
     assert_eq!(nav_mode(&view), NavMode::Off, "no route to Barnard");
@@ -1643,12 +1643,12 @@ fn the_hypergate_maps_panel_prompts_then_titles_a_destination_its_owner_offers()
     // The prompt at 430 + 594 / 2, unmeasured, on the strip's top + 24.
     let list = drawn(&view);
     assert_eq!(
-        panel_text(&list, (727.0, 640.0)).as_deref(),
+        panel_text(&list, (517.0, 588.0)).as_deref(),
         Some("Pick a destination")
     );
     assert_eq!(panel_text(&list, PORTS_AT), None, "the prompt alone");
     assert_eq!(title(&view).as_deref(), Some("Current System:"));
-    let near = on_map(&view, 134);
+    let near = on_map(&mut view, 134);
     click(&mut view, near);
     assert_eq!(view.course_map().selected(), Some(SystemId(134)));
     assert_eq!(title(&view).as_deref(), Some("Hypergate Destination:"));
@@ -1706,7 +1706,7 @@ fn the_flights_metrics_measure_the_course_maps_panel() {
     let width =
         crate::text::fixture::MonoMetrics::advance(Font::Geneva, 9.0) * date.chars().count() as f32;
     assert_eq!(
-        panel_text(&drawn(&view), (1011.0 - width, 652.0)),
+        panel_text(&drawn(&view), (801.0 - width, 600.0)),
         Some(date)
     );
 }
@@ -1716,7 +1716,7 @@ fn a_click_on_empty_space_takes_the_panel_for_no_selection() {
     let mut view = worded(flight());
     tap(&mut view, MAP);
     assert_eq!(title(&view).as_deref(), Some("Current System:"));
-    click(&mut view, Point::new(5.0, 5.0));
+    click(&mut view, Point::new(250.0, 150.0));
     assert_eq!(view.course_map().selected(), None);
     assert_eq!(title(&view).as_deref(), Some("Selected System:"));
     assert_eq!(

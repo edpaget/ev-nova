@@ -223,7 +223,7 @@ fn the_open_maps_panel_follows_a_system_explored_between_frames() {
     let mut view = FlightView::new(centred);
     land_now(&mut view);
     view.open_bar_map();
-    let at = on_map(&view, 131);
+    let at = on_map(&mut view, 131);
     view.port_map_input(&Input::PointerButton {
         button: crate::MouseButton::Left,
         pressed: true,

@@ -323,7 +323,7 @@ impl Harness {
         self.press(KeyCode::KeyM);
         let map = self.flight().course_map();
         let system = map.model().system(SystemId(id)).expect("on the map");
-        let at = map.view().world_to_screen(system.position());
+        let at = map.transform().world_to_screen(system.position());
         self.click(at);
         self.press(KeyCode::KeyM);
         assert!(!self.flight().map_open());

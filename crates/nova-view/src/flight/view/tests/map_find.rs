@@ -66,18 +66,20 @@ fn find(view: &mut View, text: &str) {
 
 /// Where the map's Done or Find button is.
 fn map_button(done: bool) -> Point {
-    let buttons = crate::galaxy::buttons::MapButtons::new();
-    if done {
-        buttons.done().rect.center()
+    use crate::galaxy::buttons::{MapButton, MapButtons};
+    let buttons = MapButtons::new(crate::galaxy::dialog::DIALOG_ORIGIN);
+    let button = if done {
+        MapButton::Done
     } else {
-        buttons.find().rect.center()
-    }
+        MapButton::Find
+    };
+    buttons.rect(button).center()
 }
 
 #[test]
 fn space_on_the_course_map_beeps_centres_on_the_current_system_and_selects_it() {
     let mut view = on_the_map();
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     view.take_sounds();
     tap(&mut view, Key::Space);
@@ -85,7 +87,7 @@ fn space_on_the_course_map_beeps_centres_on_the_current_system_and_selects_it() 
     assert_eq!(ui_sounds(&mut view), [UiSound::MapCentred]);
     let map = view.course_map();
     assert_eq!(map.selected(), Some(SystemId(130)));
-    assert_eq!(map.view().center(), Point::new(0.0, 0.0));
+    assert_eq!(map.place().expect("in flight").scroll(), (0, 0));
     assert_eq!(
         map.panel(),
         Some(&panel_for(&view, 130)),
@@ -105,7 +107,7 @@ fn f_then_a_name_then_return_selects_a_searchable_system_and_its_panel() {
     assert_eq!(ui_sounds(&mut view), [UiSound::MapSystemFound]);
     let map = view.course_map();
     assert_eq!(map.selected(), Some(SystemId(130)));
-    assert_eq!(map.view().center(), Point::new(0.0, 0.0));
+    assert_eq!(map.place().expect("in flight").scroll(), (0, 0));
     assert_eq!(map.panel(), Some(&panel_for(&view, 130)));
     assert_eq!(
         view.session().expect("flying").course_shown(),
@@ -220,7 +222,7 @@ fn done_on_the_hypergate_map_enters_the_pick_or_cancels_in_silence() {
     assert_eq!(map_sounds(&mut view), []);
     let mut view = measured(FlightView::new(gated()));
     land_now(&mut view);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     view.take_sounds();
     click(&mut view, map_button(true));
@@ -232,7 +234,7 @@ fn done_on_the_hypergate_map_enters_the_pick_or_cancels_in_silence() {
 fn space_on_the_hypergate_map_keeps_the_destination_picked() {
     let mut view = measured(FlightView::new(gated()));
     land_now(&mut view);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, Key::Space);
     assert_eq!(view.course_map().selected(), Some(SystemId(130)));

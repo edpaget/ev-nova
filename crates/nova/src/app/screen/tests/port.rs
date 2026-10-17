@@ -718,6 +718,33 @@ fn find_on_the_bars_map_keeps_escape_and_command_comma_from_it() {
     assert_eq!(screen.showing(), Showing::Spaceport, "closed once Find is");
 }
 
+/// Where `system` is on flight's open map, scrolled well into item 3 with
+/// the arrows first: the map opens at 0.5625 and shows little of the
+/// galaxy.
+fn scrolled_to(screen: &mut AppScreen, system: SystemId) -> nova_view::Point {
+    let shown = nova_view::galaxy::dialog::map_area().grown(-12.0);
+    for _ in 0..200 {
+        let map = flight(screen).course_map();
+        let at = map
+            .transform()
+            .world_to_screen(map.model().system(system).expect("on the map").position());
+        let arrow = if at.x < shown.min.x {
+            Key::Left
+        } else if at.x > shown.max.x {
+            Key::Right
+        } else if at.y < shown.min.y {
+            Key::Up
+        } else if at.y > shown.max.y {
+            Key::Down
+        } else {
+            return at;
+        };
+        screen.input(&key(arrow, true));
+        screen.input(&key(arrow, false));
+    }
+    panic!("{system:?} never scrolled into item 3");
+}
+
 #[test]
 fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
     let mut screen = in_the_bar();
@@ -740,10 +767,7 @@ fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
         "the map drawn alone"
     );
     screen.input(&key(MAP, false));
-    let map = flight(&screen).course_map();
-    let beta = map
-        .view()
-        .world_to_screen(map.model().system(SystemId(129)).expect("Beta").position());
+    let beta = scrolled_to(&mut screen, SystemId(129));
     let left = |pressed| Input::PointerButton {
         button: MouseButton::Left,
         pressed,

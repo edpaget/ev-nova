@@ -168,7 +168,7 @@ fn the_galaxy_map_draws_the_stock_galaxy() {
 
     let map = app.screen().galaxy_map();
     let sol = map.model().system(SystemId(130)).expect("Sol");
-    let at = map.view().world_to_screen(sol.position());
+    let at = map.transform().world_to_screen(sol.position());
     send(
         &mut app,
         &mut gpu,
@@ -226,7 +226,7 @@ fn sol_opens_from_the_map_and_its_stellars_reach_the_gpu() {
 
     let map = app.screen().galaxy_map();
     let sol = map.model().system(SystemId(130)).expect("Sol");
-    let at = map.view().world_to_screen(sol.position());
+    let at = map.transform().world_to_screen(sol.position());
     let moved = WindowEvent::PointerMoved {
         px: (f64::from(at.x), f64::from(at.y)),
     };
@@ -314,7 +314,7 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
     let map = flight.course_map();
     let tichel = map.model().system(SystemId(129)).expect("Tichel");
     assert_eq!(tichel.entry.name, "Tichel");
-    let at = map.view().world_to_screen(tichel.position());
+    let at = map.transform().world_to_screen(tichel.position());
     send(
         &mut app,
         WindowEvent::PointerMoved {
@@ -518,7 +518,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     let map = driver.flight().course_map();
     assert_eq!(map.mode(), MapMode::Hypergate);
     let tichel = map.model().system(SystemId(129)).expect("Tichel");
-    let at = map.view().world_to_screen(tichel.position());
+    let at = map.transform().world_to_screen(tichel.position());
     driver.click(at);
     driver.press(Key::Char('m'));
     assert_eq!(driver.showing(), Showing::Flight);

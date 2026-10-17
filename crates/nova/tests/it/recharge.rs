@@ -547,7 +547,7 @@ impl Harness {
             .expect("flying")
             .course_map();
         let system = map.model().system(SystemId(id)).expect("on the map");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
     }
 
     /// Plots a course to Beta on flight's map (M, a click, M), flies out

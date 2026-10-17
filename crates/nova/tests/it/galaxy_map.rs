@@ -198,7 +198,7 @@ impl Harness {
     fn system_at(&self, id: i16) -> Point {
         let map = self.app.screen().galaxy_map();
         let system = map.model().system(SystemId(id)).expect("a system");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
     }
 
     /// Sends a redraw 1/60 s after the last and returns its frame.
@@ -322,7 +322,12 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
     );
 
     // 600 x 300 fits at 133%; the nebula fills its scaled rectangle.
-    let view = *harness.app.screen().galaxy_map().view();
+    let view = *harness
+        .app
+        .screen()
+        .galaxy_map()
+        .view()
+        .expect("the viewer");
     assert_eq!(view.zoom(), 4);
     let corner = view.world_to_screen(Point::new(-20.0, -20.0));
     let Batch::Sprites { quads, .. } = &frame.batches[0] else {
@@ -377,7 +382,16 @@ fn keys_reach_the_map() {
     let at_133 = apart(&after);
     harness.press(Key::Char('='));
     let zoomed = harness.frame();
-    assert_eq!(harness.app.screen().galaxy_map().view().zoom(), 5);
+    assert_eq!(
+        harness
+            .app
+            .screen()
+            .galaxy_map()
+            .view()
+            .expect("the viewer")
+            .zoom(),
+        5
+    );
     // Whole pixels, each point truncated.
     assert!((apart(&zoomed) - at_133 * 4.0 / 3.0).abs() <= 1.0);
     assert!(shows(&zoomed, "Zoom 178%"), "{:?}", texts(&zoomed));
@@ -473,7 +487,7 @@ fn the_map_keeps_its_view_and_selection_across_a_tab_round_trip() {
     let alpha = harness.system_at(128);
     harness.click(alpha);
     let map = harness.app.screen().galaxy_map();
-    let (view, selected) = (*map.view(), map.selected());
+    let (view, selected) = (*map.view().expect("the viewer"), map.selected());
 
     harness.press(Key::Tab);
     assert_eq!(harness.app.screen().showing(), Showing::ShipBrowser);
@@ -483,7 +497,10 @@ fn the_map_keeps_its_view_and_selection_across_a_tab_round_trip() {
     let frame = harness.frame();
 
     let map = harness.app.screen().galaxy_map();
-    assert_eq!((*map.view(), map.selected()), (view, selected));
+    assert_eq!(
+        (*map.view().expect("the viewer"), map.selected()),
+        (view, selected)
+    );
     assert_eq!(selected, Some(SystemId(128)));
     assert!(shows(&frame, "Alpha (sÿst 128)"), "{:?}", texts(&frame));
 }

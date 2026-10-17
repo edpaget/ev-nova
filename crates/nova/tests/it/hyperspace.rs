@@ -62,7 +62,9 @@ use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
-use nova_view::galaxy::map::{BRIGHT_GREEN, COURSE_HELP, ENTER_LABEL};
+use nova_view::galaxy::buttons::DONE_LABEL;
+use nova_view::galaxy::dialog::map_area;
+use nova_view::galaxy::map::{BRIGHT_GREEN, ENTER_LABEL};
 use nova_view::menu::MenuChoice;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::{Key, MouseButton, Point};
@@ -299,6 +301,8 @@ fn data_of(ship: &[u8], beta: &[u8], buoys: Option<&[u8]>) -> Rc<GameData> {
     if let Some(list) = buoys {
         fork = fork.resource(StrList::TYPE, 1000, Some(b"Message Buoy Strings"), list);
     }
+    // The map's background: any picture, stretched over the dialog.
+    fork = fork.resource(PICT, 8509, Some(b"Map"), &button_picture(13));
     // The buttons' pictures, each state's caps masked.
     for state in [7500, 7503, 7506] {
         fork = fork
@@ -562,11 +566,29 @@ impl Harness {
         *self.session().player()
     }
 
-    /// Where system `id` is on flight's map.
-    fn on_map(&self, id: i16) -> Point {
-        let map = self.flight().course_map();
-        let system = map.model().system(SystemId(id)).expect("on the map");
-        map.view().world_to_screen(system.position())
+    /// Where system `id` is on flight's map, scrolled well into item 3
+    /// with the arrows first: the map opens at 0.5625 on the current
+    /// system and shows little of the galaxy.
+    fn on_map(&mut self, id: i16) -> Point {
+        let shown = map_area().grown(-12.0);
+        for _ in 0..200 {
+            let map = self.flight().course_map();
+            let system = map.model().system(SystemId(id)).expect("on the map");
+            let at = map.transform().world_to_screen(system.position());
+            let key = if at.x < shown.min.x {
+                Key::Left
+            } else if at.x > shown.max.x {
+                Key::Right
+            } else if at.y < shown.min.y {
+                Key::Up
+            } else if at.y > shown.max.y {
+                Key::Down
+            } else {
+                return at;
+            };
+            self.press(key);
+        }
+        panic!("system {id} never scrolled into item 3");
     }
 
     /// Sends the next redraw, 1/60 s after the last, and returns its frame.
@@ -780,7 +802,7 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::FlightMap);
     let map = harness.frame();
-    assert!(shows(&map, COURSE_HELP), "{:?}", texts(&map));
+    assert!(shows(&map, DONE_LABEL), "the dialog: {:?}", texts(&map));
     assert!(!shows(&map, ENTER_LABEL), "{:?}", texts(&map));
     assert_eq!(ENTER_LABEL, "Enter system (Return)");
     harness.press(Key::Enter);
@@ -798,11 +820,6 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
         solids_in(&map, BRIGHT_GREEN),
         2 + 8,
         "a line for each jump, and the brackets' eight ticks round Gamma"
-    );
-    assert!(
-        shows(&map, "Course: 2 jump(s) to Gamma"),
-        "{:?}",
-        texts(&map)
     );
 
     // Back in flight, J at the centre is too close.

@@ -5,24 +5,32 @@
 //! - [`catalog`]: the [`GalaxyCatalog`] port, the whole galaxy already
 //!   resolved and owned.
 //! - [`data`]: the port's adapter over `nova_data`'s `GameData`.
-//! - [`view`]: the [`MapView`], which part of the galaxy the map shows and
-//!   at what scale.
+//! - [`view`]: the viewer's [`MapView`], which part of the galaxy it shows
+//!   and at what scale, and the [`Transform`] every map draws through.
 //! - [`model`]: the [`GalaxyModel`], the galaxy laid out for drawing and
 //!   clicking: colours, hyperlinks, nebula placement and hit-testing.
 //! - [`panel`]: the in-flight maps' two info panels, laid out at DITL
 //!   2000's offsets as `_MapDialogUpdate` draws them.
-//! - [`buttons`]: the in-flight maps' Done and Find buttons, until the
-//!   map is laid out as DITL 2000.
+//! - [`dialog`]: the in-flight maps' dialog, DITL 2000: where it sits,
+//!   its map item and its frame.
+//! - [`place`]: where the in-flight maps look, the original's `_mapZoom`
+//!   and `_mapScroll`.
+//! - [`clip`]: the in-flight maps' clip of what they draw to the map item.
+//! - [`buttons`]: the in-flight maps' six buttons, as `_DrawMapButtons`
+//!   draws them and `_TrackMapButtons` tracks them.
 //! - [`find`]: the map's Find dialog, `DLOG` 3005, as `_DoSystemSearch`
 //!   opens it.
 
 pub mod buttons;
 pub mod catalog;
+pub mod clip;
 pub mod data;
+pub mod dialog;
 pub mod find;
 pub mod map;
 pub mod model;
 pub mod panel;
+pub mod place;
 pub mod view;
 
 #[cfg(test)]

@@ -317,22 +317,31 @@ impl Harness {
     }
 
     /// Plots a course to system `id` on flight's map: M, a click, M. The
-    /// map is panned first while the system is under the info column,
-    /// where a click is not a map click.
+    /// map is scrolled with the arrows first until the system is well
+    /// inside item 3: it opens at 0.5625 on the current system.
     fn plot(&mut self, id: i16) {
         self.frame();
         self.press(KeyCode::KeyM);
-        let column = nova_view::galaxy::panel::placed(
-            nova_view::galaxy::panel::INFO_COLUMN,
-            nova_view::galaxy::panel::PANEL_ORIGIN,
-        );
+        let shown = nova_view::galaxy::dialog::map_area().grown(-12.0);
         let on_map = |game: &Self| {
             let map = game.flight().course_map();
             let system = map.model().system(SystemId(id)).expect("on the map");
-            map.view().world_to_screen(system.position())
+            map.transform().world_to_screen(system.position())
         };
-        while column.contains(on_map(self)) {
-            self.press(KeyCode::ArrowRight);
+        for _ in 0..200 {
+            let at = on_map(self);
+            let key = if at.x < shown.min.x {
+                KeyCode::ArrowLeft
+            } else if at.x > shown.max.x {
+                KeyCode::ArrowRight
+            } else if at.y < shown.min.y {
+                KeyCode::ArrowUp
+            } else if at.y > shown.max.y {
+                KeyCode::ArrowDown
+            } else {
+                break;
+            };
+            self.press(key);
         }
         let at = on_map(self);
         self.click(at);

@@ -79,7 +79,7 @@ fn the_stock_map_fits_at_75_percent_with_every_nebula_behind_the_systems() {
     };
     let map = GalaxyMap::new(&data);
     assert_eq!(map.problems(), [] as [String; 0]);
-    assert_eq!(map.view().zoom(), 2, "75%");
+    assert_eq!(map.view().expect("the viewer").zoom(), 2, "75%");
     let list = drawn(&map);
     let pictures: Vec<usize> = list
         .iter()
@@ -246,7 +246,7 @@ fn every_stock_system_can_be_selected_and_shows_its_stellars() {
     };
     let raw = systems(&data);
     let mut map = GalaxyMap::new(&data);
-    let view = *map.view();
+    let view = *map.view().expect("the viewer");
     let mut at_position: BTreeMap<(i16, i16), Vec<i16>> = BTreeMap::new();
     for (&id, system) in &raw {
         at_position

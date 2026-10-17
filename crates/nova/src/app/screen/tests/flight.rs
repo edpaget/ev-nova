@@ -126,7 +126,7 @@ fn entering_and_leaving_flight_let_go_of_the_keys_held() {
 fn entering_flight_cancels_a_drag_on_the_map() {
     let mut screen = AppScreen::new(data());
     screen.input(&key(Key::Tab, true));
-    let view = *screen.galaxy_map().view();
+    let view = *screen.galaxy_map().view().expect("the viewer");
     let left = |pressed| Input::PointerButton {
         button: MouseButton::Left,
         pressed,
@@ -137,7 +137,11 @@ fn entering_flight_cancels_a_drag_on_the_map() {
     screen.input(&left(false));
     screen.input(&key(Key::Escape, true));
     screen.input(&Input::PointerMoved(Point::new(150.0, 100.0)));
-    assert_eq!(*screen.galaxy_map().view(), view, "no drag");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "no drag"
+    );
 }
 
 #[test]

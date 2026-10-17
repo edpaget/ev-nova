@@ -208,7 +208,7 @@ fn a_click_while_the_overlay_shows_selects_nothing_on_the_map() {
     harness.redraw(0);
     let map = harness.app.screen().galaxy_map();
     let system = map.model().system(SystemId(128)).expect("a system");
-    let alpha = map.view().world_to_screen(system.position());
+    let alpha = map.transform().world_to_screen(system.position());
 
     harness.press(Key::Char('`'));
     harness.click(alpha);

@@ -1,6 +1,12 @@
 //! The galaxy map screen: every system, hyperlink and nebula, which pans
 //! and zooms, and an info panel about the selected system.
 //!
+//! The viewer ([`GalaxyMap::new`]) fills the screen, fitted to the galaxy,
+//! and pans and zooms through its [`MapView`]. The in-flight maps are laid
+//! out as the original's dialog, DITL 2000 ([`dialog`](super::dialog)),
+//! and look where the original's `_mapZoom` and `_mapScroll` say
+//! ([`place`](super::place)).
+//!
 //! The screen reads the galaxy once, through the [`GalaxyCatalog`] port,
 //! when it is built; drawing and input never read anything. The course
 //! map is shown a flight's galaxy ([`GalaxyMap::show_galaxy`]): the
@@ -10,13 +16,19 @@
 //!
 //! Input (presses only, except the left button's release):
 //!
-//! - The arrow keys pan the view by [`PAN_STEP`]; `=` or `+` zooms in and
-//!   `-` zooms out.
-//! - Pressing the left button in the map area and moving the pointer drags
-//!   the map. Releasing it after moving no more than [`CLICK_SLOP`] is a
-//!   click instead: it selects the system under the pointer (clicking again
-//!   cycles through systems that share a position, from a system a click
-//!   selected) or, in empty space, clears the selection.
+//! - On the viewer the arrow keys pan the view by [`PAN_STEP`]; `=` or
+//!   `+` zooms in and `-` zooms out. On an in-flight map the arrows scroll
+//!   10 units and `-`, `=` and `+` step the zoom within its limits
+//!   ([`MapDialog::key`]); each repeats while held.
+//! - Pressing the left button in the map area (the viewer's above its
+//!   panel, an in-flight map's item 3) and moving the pointer drags the
+//!   map: the viewer's by the pointer's moves, an in-flight map's by the
+//!   travel from the press times the zoom ([`MapPlace::drag`]). Releasing
+//!   it after moving no more than [`CLICK_SLOP`] is a click instead: it
+//!   selects the system under the pointer (clicking again cycles through
+//!   systems that share a position, from a system a click selected) or,
+//!   in empty space, clears the selection. A press outside the map area
+//!   is a panel's or a button's.
 //! - Return (a press, not its repeats), or a click on the "Enter system"
 //!   button the panel shows while a system is selected, asks to enter the
 //!   selected system. The map only records the request; its owner takes
@@ -76,11 +88,13 @@
 //! [`UiSound::MapSystemNotFound`]. The map's beeps are read with
 //! [`GalaxyMap::take_ui_sounds`], or as its screen sounds.
 //!
-//! The course and hypergate maps draw Done and Find
-//! ([`buttons`](super::buttons)) in the bottom panel until the map is
-//! laid out as DITL 2000. A click on Done asks to close the map, as
-//! Return does, and a click on Find opens Find; both are silent, as
-//! `_TrackMapButtons` is.
+//! The course and hypergate maps draw DITL 2000's six buttons
+//! ([`buttons`](super::buttons)). A click on Done asks to close the map,
+//! as Return does; on "-" or "+" steps the zoom, as `-` and `=` do; on
+//! Find opens Find. Clear Route and Borders are drawn and taken, and do
+//! nothing until galaxy-map-fidelity's phases 6 and 8 give them the
+//! route's clear and the borders. Each is silent, as `_TrackMapButtons`
+//! is.
 //!
 //! # What the map draws
 //!
@@ -149,11 +163,10 @@
 //! ([`GalaxyMap::show_panel`], `nova_sim`'s
 //! [`map_panel`](nova_sim::map_panel) decides them, the
 //! [`panel`](super::panel) module lays them out), measured by the
-//! flight's text metrics ([`GalaxyMap::with_metrics`]), from
-//! [`PANEL_ORIGIN`] until the map is laid out
-//! as DITL 2000. Their own lines (help, zoom, the stack line, problems and
-//! the course line) sit in the bottom panel's left column, and a click in
-//! the right column selects nothing.
+//! flight's text metrics ([`GalaxyMap::with_metrics`]), at DITL 2000's
+//! items 2 and 6 from the dialog's top-left corner. They draw none of the
+//! viewer's lines: the original has no help, zoom, stack, problems or
+//! course line.
 //!
 //! The viewer keeps its own panel, unfiltered: every stellar of the
 //! system selected, landable or not, inhabited or not, with no title, no
@@ -170,11 +183,14 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::{self, SearchOutcome};
 use nova_sim::story::OverlaidGalaxy;
 
-use super::buttons::{MapButton, MapButtons};
+use super::buttons::MapButton;
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
+use super::clip::clip_opaque;
+use super::dialog::{DIALOG_ORIGIN, MapDialog, in_map_item, map_area};
 use super::find::{FindDialog, FindOutcome};
 use super::model::{GalaxyModel, placement};
-use super::panel::{INFO_COLUMN, INFO_STRIP, PANEL_ORIGIN, draw_panel, placed};
+use super::panel::draw_panel;
+use super::place::MapPlace;
 use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
@@ -293,24 +309,10 @@ pub const ENTER_LABEL: &str = "Enter system (Return)";
 const ENTER_LABEL_AT: Point = Point::new(540.0, 720.0);
 const ENTER_LABEL_SIZE: f32 = 14.0;
 
-/// The hypergate map's help line.
-pub const HYPERGATE_HELP: &str = "Arrows or drag: pan   +/-: zoom   Click an arrowed system: hypergate destination   M or Esc: go";
-/// The course map's help line.
-pub const COURSE_HELP: &str =
-    "Arrows or drag: pan   +/-: zoom   Click: set destination   M or Esc: back";
-/// The panel's course line, in the right column where the viewer's
-/// "Enter system" button goes.
-const COURSE_TOP: f32 = 712.0;
-/// How wide the in-flight maps' own lines run in the left column, clear
-/// of the info strip.
-const IN_FLIGHT_WRAP: f32 = 400.0;
-
 // The two columns stay on screen and apart.
 const _: () = assert!(LEFT + LEFT_WRAP <= RIGHT);
 const _: () = assert!(RIGHT + RIGHT_WRAP <= MAP_WIDTH);
 const _: () = assert!(TITLE_TOP > MAP_HEIGHT && HELP_TOP > MAP_HEIGHT);
-// The in-flight maps' lines stay left of the info strip.
-const _: () = assert!(LEFT + IN_FLIGHT_WRAP <= PANEL_ORIGIN.x + INFO_STRIP.left as f32);
 
 /// A left-button press that has not been released yet.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -477,7 +479,7 @@ pub enum MapMode {
 pub struct GalaxyMap {
     mode: MapMode,
     model: GalaxyModel,
-    view: MapView,
+    look: Look,
     selected: Option<SystemId>,
     /// Whether a click made the selection, so that a click again at its
     /// place moves on through the systems there; not when the map
@@ -520,10 +522,20 @@ pub struct GalaxyMap {
     style: ButtonStyle,
     /// A text Find confirmed on an in-flight map, not yet taken.
     query: Option<String>,
-    /// The in-flight maps' Done and Find buttons.
-    buttons: MapButtons,
     /// The beeps the map made, not yet taken.
     sounds: Vec<UiSound>,
+}
+
+/// How a map is laid out: the viewer full-screen with its own pan and
+/// zoom, the in-flight maps as DITL 2000 with the original's. The mode
+/// moves between the course and hypergate maps only, so a map's look
+/// never changes.
+#[derive(Clone, Debug)]
+enum Look {
+    /// The viewer's: fitted, panned and zoomed through [`MapView`].
+    Viewer(MapView),
+    /// An in-flight map's: the dialog, its zoom and scroll.
+    Dialog(MapDialog),
 }
 
 /// What a key on an in-flight map asks its owner for.
@@ -542,20 +554,26 @@ impl GalaxyMap {
         Self::with_mode(catalog, MapMode::Viewer)
     }
 
-    /// The course map of `catalog`'s galaxy, fitted to the map area, with
-    /// nothing selected and no course shown.
+    /// The course map of `catalog`'s galaxy, laid out as DITL 2000 and
+    /// looking at (0, 0) at the first zoom of a run, with nothing
+    /// selected and no course shown.
     pub fn course(catalog: &impl GalaxyCatalog) -> Self {
         Self::with_mode(catalog, MapMode::Course)
     }
 
     fn with_mode(catalog: &impl GalaxyCatalog, mode: MapMode) -> Self {
         let model = GalaxyModel::new(catalog.galaxy());
-        let view = MapView::fit(model.bounds());
-        let picture = (mode == MapMode::Viewer).then(|| MapPicture::viewer(&model));
+        let viewer = mode == MapMode::Viewer;
+        let look = if viewer {
+            Look::Viewer(MapView::fit(model.bounds()))
+        } else {
+            Look::Dialog(MapDialog::new((0, 0)))
+        };
+        let picture = viewer.then(|| MapPicture::viewer(&model));
         Self {
             mode,
             model,
-            view,
+            look,
             selected: None,
             clicked: false,
             press: None,
@@ -575,7 +593,6 @@ impl GalaxyMap {
             find_template: None,
             style: ButtonStyle::STOCK,
             query: None,
-            buttons: MapButtons::new(),
             sounds: Vec::new(),
         }
     }
@@ -824,10 +841,95 @@ impl GalaxyMap {
         self.selected
     }
 
-    /// What the map area shows.
+    /// What the viewer's map area shows; `None` on an in-flight map.
     #[must_use]
-    pub fn view(&self) -> &MapView {
-        &self.view
+    pub fn view(&self) -> Option<&MapView> {
+        match &self.look {
+            Look::Viewer(view) => Some(view),
+            Look::Dialog(_) => None,
+        }
+    }
+
+    /// Where an in-flight map looks; `None` on the viewer.
+    #[must_use]
+    pub fn place(&self) -> Option<&MapPlace> {
+        match &self.look {
+            Look::Viewer(_) => None,
+            Look::Dialog(dialog) => Some(dialog.place()),
+        }
+    }
+
+    /// Where the map draws each galaxy point: the viewer's view, or an
+    /// in-flight map's scroll at item 3's centre.
+    #[must_use]
+    pub fn transform(&self) -> Transform {
+        match &self.look {
+            Look::Viewer(view) => view.transform(),
+            Look::Dialog(dialog) => dialog.transform(),
+        }
+    }
+
+    /// Centres the map on system `id`, if it is on the map: the viewer's
+    /// view stopping at the galaxy's edge, an in-flight map's scroll set
+    /// to its position, unclamped. The selection is left alone.
+    pub fn centre_on_system(&mut self, id: SystemId) {
+        let Some(at) = self.model.position(id) else {
+            return;
+        };
+        match &mut self.look {
+            Look::Viewer(view) => view.centre_on(at),
+            Look::Dialog(dialog) => dialog.place_mut().centre_on(at),
+        }
+    }
+
+    /// Puts an in-flight map's scroll back on the current system shown,
+    /// with no selection and no beep, as each arrival, each floating-map
+    /// draw and each pilot entered set `_mapScroll` (see
+    /// [`place`](super::place)). The viewer has no current system.
+    pub fn recentre(&mut self) {
+        if let (Look::Dialog(_), Some(current)) = (&self.look, self.current) {
+            self.centre_on_system(current);
+        }
+    }
+
+    /// An in-flight map opening: its zoom's guard ([`MapPlace::opened`]).
+    pub fn opened(&mut self) {
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.place_mut().opened();
+        }
+    }
+
+    /// An in-flight map's zoom, which a run keeps across its flights;
+    /// `None` on the viewer.
+    #[must_use]
+    pub fn zoom(&self) -> Option<f64> {
+        self.place().map(MapPlace::zoom)
+    }
+
+    /// The map with an in-flight map's zoom set to `zoom`, as the run
+    /// left it; the viewer keeps its own.
+    #[must_use]
+    pub fn with_zoom(mut self, zoom: f64) -> Self {
+        if let Look::Dialog(dialog) = &mut self.look {
+            *dialog.place_mut() = dialog.place().with_zoom(zoom);
+        }
+        self
+    }
+
+    /// Sets whether the borders are shown, as the Borders button reads it:
+    /// "Hide Borders" while they are, "Show Borders" while they aren't.
+    /// An in-flight map starts with them shown.
+    pub fn show_borders_setting(&mut self, shown: bool) {
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.set_borders_shown(shown);
+        }
+    }
+
+    /// Whether Clear Route is enabled: off the hypergate map, with a
+    /// course shown, as the open works `showClearRouteButton` out
+    /// (@0x12396-0x123c3).
+    fn clear_route_enabled(&self) -> bool {
+        self.mode != MapMode::Hypergate && !self.route.is_empty()
     }
 
     /// The galaxy as the map lays it out.
@@ -850,29 +952,33 @@ impl GalaxyMap {
 }
 
 impl GalaxyMap {
-    /// Handles a key press.
+    /// Handles a key press or repeat: the viewer pans and zooms through
+    /// its view, an in-flight map as the dialog does ([`MapDialog::key`]).
     fn key(&mut self, key: Key) {
-        match key {
-            Key::Left => self.view.pan(-PAN_STEP, 0.0),
-            Key::Right => self.view.pan(PAN_STEP, 0.0),
-            Key::Up => self.view.pan(0.0, -PAN_STEP),
-            Key::Down => self.view.pan(0.0, PAN_STEP),
-            Key::Char('=' | '+') => self.view.zoom_in(),
-            Key::Char('-') => self.view.zoom_out(),
-            Key::Tab | Key::Char('\\') if self.mode != MapMode::Viewer => {
+        if let Look::Dialog(dialog) = &mut self.look
+            && dialog.key(key)
+        {
+            return;
+        }
+        match (&mut self.look, key) {
+            (Look::Viewer(view), Key::Left) => view.pan(-PAN_STEP, 0.0),
+            (Look::Viewer(view), Key::Right) => view.pan(PAN_STEP, 0.0),
+            (Look::Viewer(view), Key::Up) => view.pan(0.0, -PAN_STEP),
+            (Look::Viewer(view), Key::Down) => view.pan(0.0, PAN_STEP),
+            (Look::Viewer(view), Key::Char('=' | '+')) => view.zoom_in(),
+            (Look::Viewer(view), Key::Char('-')) => view.zoom_out(),
+            (_, Key::Tab | Key::Char('\\')) if self.mode != MapMode::Viewer => {
                 self.request = Some(Request::Cycle(MapCycle { back: self.shift }));
             }
             _ => {}
         }
     }
 
-    /// Selects `id`, as no click did, and centres the view on it.
+    /// Selects `id`, as no click did, and centres the map on it.
     fn select_and_centre(&mut self, id: SystemId) {
         self.selected = Some(id);
         self.clicked = false;
-        if let Some(at) = self.model.position(id) {
-            self.view.centre_on(at);
-        }
+        self.centre_on_system(id);
     }
 
     /// Space on an in-flight map (`_MapFilter` @0x140e0-0x14169): the
@@ -905,7 +1011,9 @@ impl GalaxyMap {
         self.find = Some(dialog);
         self.press = None;
         self.armed = false;
-        self.buttons.cancel_pointer();
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.cancel_pointer();
+        }
     }
 
     /// Find's input while it is open: it closes on Find or Cancel, and a
@@ -965,12 +1073,15 @@ impl GalaxyMap {
     /// `at`: a click if the pointer stayed within [`CLICK_SLOP`] and is
     /// still over the map, otherwise the end of a drag.
     fn release(&mut self, at: Point) {
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.release();
+        }
         let Some(press) = self.press.take() else {
             return;
         };
         if press.travelled <= CLICK_SLOP && self.in_map(at) {
             let from = self.selected.filter(|_| self.clicked);
-            let clicked = self.model.click(at, &self.view.transform(), from);
+            let clicked = self.model.click(at, &self.transform(), from);
             if self.mode == MapMode::Hypergate {
                 if clicked.is_some_and(|id| self.offered.contains(&id)) {
                     self.selected = clicked;
@@ -987,7 +1098,9 @@ impl GalaxyMap {
         }
     }
 
-    /// Drags the map with the pointer, if the left button is down.
+    /// Drags the map with the pointer, if the left button is down: the
+    /// viewer by the pointer's moves, an in-flight map from where the
+    /// press started ([`MapDialog::pointer_moved`]).
     fn pointer_moved(&mut self, to: Point) {
         let Some(press) = &mut self.press else {
             return;
@@ -995,13 +1108,18 @@ impl GalaxyMap {
         let (dx, dy) = (to.x - press.last.x, to.y - press.last.y);
         press.travelled += dx.hypot(dy);
         press.last = to;
-        self.view.pan(-dx, -dy);
+        match &mut self.look {
+            Look::Viewer(view) => view.pan(-dx, -dy),
+            Look::Dialog(dialog) => dialog.pointer_moved(to),
+        }
     }
 
-    fn draw_map(&self, list: &mut DrawList) {
+    /// Draws the nebulae, then the picture and the selection, through
+    /// `transform`.
+    fn draw_map(&self, list: &mut DrawList, transform: &Transform) {
         // Every nebula before any line or dot, so behind the systems.
         for nebula in self.model.nebulae() {
-            if let Some(placed) = placement(nebula, &self.view.transform()) {
+            if let Some(placed) = placement(nebula, transform) {
                 list.stretched_picture(
                     ImageKey::picture(placed.picture.id),
                     placed.top_left,
@@ -1010,17 +1128,30 @@ impl GalaxyMap {
                 );
             }
         }
-        let transform = self.view.transform();
         if let Some(picture) = &self.picture {
             let marks = MapMarks {
                 picture,
                 selected: self.selected,
             };
-            self.draw_marks(list, &transform, &marks);
-            self.draw_brackets(list, &transform);
-            self.draw_names(list, &transform, &marks);
+            self.draw_marks(list, transform, &marks);
+            self.draw_brackets(list, transform);
+            self.draw_names(list, transform, &marks);
         } else {
-            self.draw_brackets(list, &transform);
+            self.draw_brackets(list, transform);
+        }
+    }
+
+    /// An in-flight map, as `_MapDialogUpdate` draws it (see
+    /// [`dialog`](super::dialog)): the frame and its buttons, the map
+    /// clipped to item 3, then the panels.
+    fn draw_dialog(&self, dialog: &MapDialog, list: &mut DrawList) {
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        dialog.draw_frame(list, self.clear_route_enabled(), &self.style, metrics);
+        let mut map = DrawList::new();
+        self.draw_map(&mut map, &dialog.transform());
+        clip_opaque(&map, map_area(), list);
+        if let Some(panel) = &self.panel {
+            draw_panel(list, panel, DIALOG_ORIGIN, metrics);
         }
     }
 
@@ -1189,7 +1320,9 @@ impl GalaxyMap {
         }
     }
 
-    fn draw_panel(&self, list: &mut DrawList) {
+    /// The viewer's panel: the selected system and its stellars, the help,
+    /// zoom, stack and problems lines, and the "Enter system" button.
+    fn draw_viewer_panel(&self, view: &MapView, list: &mut DrawList) {
         let panel = Bounds {
             min: Point::new(0.0, MAP_HEIGHT),
             max: Point::new(MAP_WIDTH, SCREEN_HEIGHT),
@@ -1202,39 +1335,32 @@ impl GalaxyMap {
             SEPARATOR,
         );
         let selected = self.selected.and_then(|id| self.model.system(id));
-        let viewer = self.mode == MapMode::Viewer;
-        if viewer {
-            if self.has_enter_button() {
-                fill_rect(list, ENTER_BUTTON, BUTTON);
-            }
-            match selected {
-                Some(system) => draw_system(&system.entry, list),
-                None => {
-                    list.text(
-                        "Click a system to see its stellars",
-                        Point::new(LEFT, TITLE_TOP),
-                        STELLAR_SIZE,
-                        Some(LEFT_WRAP),
-                        Color::DIM,
-                    );
-                }
+        if self.has_enter_button() {
+            fill_rect(list, ENTER_BUTTON, BUTTON);
+        }
+        match selected {
+            Some(system) => draw_system(&system.entry, list),
+            None => {
+                list.text(
+                    "Click a system to see its stellars",
+                    Point::new(LEFT, TITLE_TOP),
+                    STELLAR_SIZE,
+                    Some(LEFT_WRAP),
+                    Color::DIM,
+                );
             }
         }
-        let (column, wrap) = if viewer {
-            (RIGHT, RIGHT_WRAP)
-        } else {
-            (LEFT, IN_FLIGHT_WRAP)
-        };
         let right = |list: &mut DrawList, text: String, top: f32, color: Color| {
-            list.text(text, Point::new(column, top), RIGHT_SIZE, Some(wrap), color);
+            list.text(
+                text,
+                Point::new(RIGHT, top),
+                RIGHT_SIZE,
+                Some(RIGHT_WRAP),
+                color,
+            );
         };
-        let help = match self.mode {
-            MapMode::Viewer => HELP,
-            MapMode::Course => COURSE_HELP,
-            MapMode::Hypergate => HYPERGATE_HELP,
-        };
-        right(list, help.to_owned(), HELP_TOP, Color::DIM);
-        let percent = (self.view.scale() * 100.0).round();
+        right(list, HELP.to_owned(), HELP_TOP, Color::DIM);
+        let percent = (view.scale() * 100.0).round();
         right(list, format!("Zoom {percent}%"), ZOOM_TOP, Color::DIM);
         if let Some(system) = selected {
             let stack = self.model.stack(system.entry.id);
@@ -1263,9 +1389,6 @@ impl GalaxyMap {
             );
             right(list, line, PROBLEMS_TOP, Color::ERROR);
         }
-        if let Some(line) = self.course_line() {
-            right(list, line, COURSE_TOP, Color::WHITE);
-        }
         if self.has_enter_button() {
             list.text(
                 ENTER_LABEL,
@@ -1275,34 +1398,6 @@ impl GalaxyMap {
                 Color::WHITE,
             );
         }
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        if !viewer && let Some(panel) = &self.panel {
-            draw_panel(list, panel, PANEL_ORIGIN, metrics);
-        }
-        if !viewer {
-            self.buttons.draw(&self.style, metrics, list);
-        }
-    }
-}
-
-impl GalaxyMap {
-    /// The course map panel's line about the course: how many jumps to
-    /// where, or that there is no route to the system selected; nothing
-    /// while no course is shown and nothing (or the current system) is
-    /// selected, and nothing on the viewer.
-    fn course_line(&self) -> Option<String> {
-        if self.mode == MapMode::Viewer {
-            return None;
-        }
-        if let Some(&last) = self.route.last() {
-            let name = self
-                .model
-                .system(last)
-                .map_or_else(|| format!("sÿst {}", last.0), |s| s.entry.name.clone());
-            return Some(format!("Course: {} jump(s) to {name}", self.route.len()));
-        }
-        let selected = self.selected?;
-        (Some(selected) != self.current).then(|| "No hyperspace route".to_owned())
     }
 }
 
@@ -1378,16 +1473,38 @@ fn icon(list: &mut DrawList, id: i16, top_left: (i32, i32)) {
     list.sprite(ImageKey::icon(id), center, Color::WHITE);
 }
 
-/// The info column an in-flight map draws over the map's right edge.
-fn info_column() -> Bounds {
-    placed(INFO_COLUMN, PANEL_ORIGIN)
-}
-
 impl GalaxyMap {
-    /// Whether `at` is in the map area rather than a panel: on an
-    /// in-flight map, not in the info column over the map's right edge.
+    /// Whether `at` is in the map area: on the viewer above its panel, on
+    /// an in-flight map in item 3 ([`in_map_item`]).
     fn in_map(&self, at: Point) -> bool {
-        at.y < MAP_HEIGHT && (self.mode == MapMode::Viewer || !info_column().contains(at))
+        match self.look {
+            Look::Viewer(_) => at.y < MAP_HEIGHT,
+            Look::Dialog(_) => in_map_item(at),
+        }
+    }
+
+    /// The in-flight maps' six buttons' input (`_TrackMapButtons`): Done
+    /// asks to close the map, as Return does; "-" and "+" step the zoom,
+    /// each only while its flag allows; Find opens Find. Clear Route and
+    /// Borders are taken and do nothing yet: galaxy-map-fidelity's phases
+    /// 6 and 8 give them the route's clear and the borders.
+    fn button_input(&mut self, input: &Input) {
+        let clear_route = self.clear_route_enabled();
+        let Look::Dialog(dialog) = &mut self.look else {
+            return;
+        };
+        let state = dialog.state(clear_route);
+        match dialog.buttons_mut().input(input, &state) {
+            Some(MapButton::Done) => self.request = Some(Request::Close),
+            Some(MapButton::ZoomOut) => {
+                dialog.place_mut().zoom_out();
+            }
+            Some(MapButton::ZoomIn) => {
+                dialog.place_mut().zoom_in();
+            }
+            Some(MapButton::Find) => self.open_find(),
+            Some(MapButton::ClearRoute | MapButton::Borders) | None => {}
+        }
     }
 }
 
@@ -1417,13 +1534,7 @@ impl Screen for GalaxyMap {
             self.find_input(input);
             return ScreenAction::None;
         }
-        if self.mode != MapMode::Viewer {
-            match self.buttons.input(input) {
-                Some(MapButton::Done) => self.request = Some(Request::Close),
-                Some(MapButton::Find) => self.open_find(),
-                None => {}
-            }
-        }
+        self.button_input(input);
         match *input {
             // Return enters once, however long it is held.
             Input::Key {
@@ -1482,6 +1593,9 @@ impl Screen for GalaxyMap {
                             last: at,
                             travelled: 0.0,
                         });
+                        if let Look::Dialog(dialog) = &mut self.look {
+                            dialog.press(at);
+                        }
                     }
                 }
             }
@@ -1494,10 +1608,16 @@ impl Screen for GalaxyMap {
     /// The map does not animate.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The map, its panel, then Find over them while it is open.
+    /// The map, its panel, then Find over them while it is open: the
+    /// viewer full-screen, an in-flight map as its dialog.
     fn draw(&self, list: &mut DrawList) {
-        self.draw_map(list);
-        self.draw_panel(list);
+        match &self.look {
+            Look::Viewer(view) => {
+                self.draw_map(list, &view.transform());
+                self.draw_viewer_panel(view, list);
+            }
+            Look::Dialog(dialog) => self.draw_dialog(dialog, list),
+        }
         if let Some(dialog) = &self.find {
             dialog.draw(list);
         }
@@ -1509,7 +1629,9 @@ impl Screen for GalaxyMap {
     fn cancel_pointer(&mut self) {
         self.press = None;
         self.armed = false;
-        self.buttons.cancel_pointer();
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.cancel_pointer();
+        }
         if let Some(dialog) = &mut self.find {
             dialog.cancel_pointer();
         }
@@ -1583,8 +1705,13 @@ mod tests {
         );
     }
 
-    /// Clicks on system `id`'s dot.
+    /// Clicks on system `id`'s dot, bringing it into item 3 first on an
+    /// in-flight map, which opens at 0.5625 and shows little of the
+    /// galaxy.
     fn click_on(map: &mut GalaxyMap, id: i16) {
+        if map.place().is_some() {
+            map.centre_on_system(SystemId(id));
+        }
         let at = dot(map, id);
         click(map, at);
     }
@@ -1592,7 +1719,12 @@ mod tests {
     /// Where system `id` is drawn.
     fn dot(map: &GalaxyMap, id: i16) -> Point {
         let system = map.model().system(SystemId(id)).expect("a system");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
+    }
+
+    /// The viewer's view.
+    fn view_of(map: &GalaxyMap) -> MapView {
+        *map.view().expect("the viewer's view")
     }
 
     fn drawn(map: &GalaxyMap) -> DrawList {
@@ -1684,8 +1816,8 @@ mod tests {
         assert_eq!(catalog.reads.get(), 1);
         assert_eq!(map.selected(), None);
         // 600 x 300: 133% fits, 178% does not.
-        assert_eq!(map.view().scale(), SCALES[4]);
-        assert_eq!(map.view().center(), at(300.0, 150.0));
+        assert_eq!(view_of(&map).scale(), SCALES[4]);
+        assert_eq!(view_of(&map).center(), at(300.0, 150.0));
         assert_eq!(map.model().systems().len(), 4);
         drawn(&map);
         click(&mut map, MAP_CENTER);
@@ -1707,8 +1839,8 @@ mod tests {
     #[test]
     fn the_arrow_keys_pan_one_step() {
         let mut map = map();
-        let scale = map.view().scale();
-        let start = map.view().center();
+        let scale = view_of(&map).scale();
+        let start = view_of(&map).center();
         let steps = [
             (Key::Right, (1.0, 0.0)),
             (Key::Left, (0.0, 0.0)),
@@ -1722,7 +1854,7 @@ mod tests {
                 start.x + x * PAN_STEP / scale,
                 start.y + y * PAN_STEP / scale,
             );
-            let center = map.view().center();
+            let center = view_of(&map).center();
             assert!(
                 (center.x - expected.x).abs() < 1e-3 && (center.y - expected.y).abs() < 1e-3,
                 "{key:?}: {center:?} is not {expected:?}"
@@ -1733,36 +1865,40 @@ mod tests {
     #[test]
     fn held_keys_go_on_panning_and_zooming() {
         let mut map = map();
-        let (scale, start, fitted) = (map.view().scale(), map.view().center(), map.view().zoom());
+        let (scale, start, fitted) = (
+            view_of(&map).scale(),
+            view_of(&map).center(),
+            view_of(&map).zoom(),
+        );
         map.input(&press(Key::Right));
         assert_eq!(map.input(&held(Key::Right)), ScreenAction::None);
         map.input(&held(Key::Right));
-        let center = map.view().center();
+        let center = view_of(&map).center();
         let expected = start.x + 3.0 * PAN_STEP / scale;
         assert!((center.x - expected).abs() < 1e-3, "{center:?}");
         map.input(&held(Key::Char('=')));
-        assert_eq!(map.view().zoom(), fitted + 1);
+        assert_eq!(view_of(&map).zoom(), fitted + 1);
     }
 
     #[test]
     fn equals_and_plus_zoom_in_and_minus_zooms_out() {
         let mut map = map();
-        let fitted = map.view().zoom();
+        let fitted = view_of(&map).zoom();
         map.input(&press(Key::Char('=')));
-        assert_eq!(map.view().zoom(), fitted + 1);
+        assert_eq!(view_of(&map).zoom(), fitted + 1);
         map.input(&press(Key::Char('+')));
-        assert_eq!(map.view().zoom(), fitted + 2);
+        assert_eq!(view_of(&map).zoom(), fitted + 2);
         for _ in 0..3 {
             assert_eq!(map.input(&press(Key::Char('-'))), ScreenAction::None);
         }
-        assert_eq!(map.view().zoom(), fitted - 1);
+        assert_eq!(view_of(&map).zoom(), fitted - 1);
     }
 
     #[test]
     fn releases_and_other_keys_change_nothing() {
         let mut map = map();
         click_on(&mut map, 129);
-        let (view, selected) = (*map.view(), map.selected());
+        let (view, selected) = (view_of(&map), map.selected());
         let others = [
             Input::Key {
                 key: Key::Right,
@@ -1783,7 +1919,7 @@ mod tests {
         for input in others {
             assert_eq!(map.input(&input), ScreenAction::None, "{input:?}");
         }
-        assert_eq!((*map.view(), map.selected()), (view, selected));
+        assert_eq!((view_of(&map), map.selected()), (view, selected));
     }
 
     // The pointer.
@@ -1829,8 +1965,8 @@ mod tests {
     fn a_press_moved_past_the_slop_drags_the_map_and_keeps_the_selection() {
         let mut map = map();
         click_on(&mut map, 129);
-        let start = map.view().center();
-        let scale = map.view().scale();
+        let start = view_of(&map).center();
+        let scale = view_of(&map).scale();
         let gamma = dot(&map, 130);
         map.input(&button(MouseButton::Left, true, gamma));
         map.input(&Input::PointerMoved(at(gamma.x + 3.0, gamma.y - 4.0)));
@@ -1842,7 +1978,7 @@ mod tests {
             Some(SystemId(129)),
             "a drag selects nothing"
         );
-        assert_eq!(map.view().center(), start, "dragged there and back");
+        assert_eq!(view_of(&map).center(), start, "dragged there and back");
 
         let empty = at(gamma.x + 100.0, gamma.y);
         map.input(&button(MouseButton::Left, true, empty));
@@ -1852,7 +1988,7 @@ mod tests {
             false,
             at(empty.x - 20.0, empty.y + 10.0),
         ));
-        let center = map.view().center();
+        let center = view_of(&map).center();
         assert_eq!(center, at(start.x + 20.0 / scale, start.y - 10.0 / scale));
         assert_eq!(map.selected(), Some(SystemId(129)), "nor clears it");
     }
@@ -1860,10 +1996,10 @@ mod tests {
     #[test]
     fn moving_the_pointer_without_a_press_pans_nothing() {
         let mut map = map();
-        let view = *map.view();
+        let view = view_of(&map);
         map.input(&Input::PointerMoved(at(10.0, 10.0)));
         map.input(&Input::PointerMoved(at(400.0, 300.0)));
-        assert_eq!(*map.view(), view);
+        assert_eq!(view_of(&map), view);
     }
 
     #[test]
@@ -1883,7 +2019,7 @@ mod tests {
             ..Galaxy::default()
         };
         let mut map = GalaxyMap::new(&FakeCatalog::new(galaxy));
-        assert_eq!(map.view().scale(), 1.0);
+        assert_eq!(view_of(&map).scale(), 1.0);
         map.input(&button(MouseButton::Left, true, at(300.0, 300.0)));
         map.input(&Input::PointerMoved(at(300.0, 352.0)));
         map.input(&button(MouseButton::Left, false, at(300.0, 352.0)));
@@ -1895,7 +2031,7 @@ mod tests {
     fn a_press_in_the_panel_starts_nothing() {
         let mut map = near_the_panel();
         let low = dot(&map, 129);
-        let view = *map.view();
+        let view = view_of(&map);
         // From the panel's top edge, 2 below the dot: no click.
         map.input(&button(MouseButton::Left, true, at(low.x, MAP_HEIGHT)));
         map.input(&Input::PointerMoved(low));
@@ -1905,7 +2041,7 @@ mod tests {
         map.input(&button(MouseButton::Left, true, at(100.0, 700.0)));
         map.input(&Input::PointerMoved(at(200.0, 300.0)));
         map.input(&button(MouseButton::Left, false, at(200.0, 300.0)));
-        assert_eq!(*map.view(), view);
+        assert_eq!(view_of(&map), view);
         // Just above the edge is the map.
         map.input(&button(
             MouseButton::Left,
@@ -1946,7 +2082,7 @@ mod tests {
             map.input(&button(other, false, at(beta.x + 50.0, beta.y)));
         }
         assert_eq!(map.selected(), None);
-        assert_eq!(*map.view(), *self::map().view());
+        assert_eq!(view_of(&map), view_of(&self::map()));
     }
 
     #[test]
@@ -1964,12 +2100,12 @@ mod tests {
     #[test]
     fn cancelling_the_pointer_forgets_the_press_without_a_click() {
         let mut map = map();
-        let view = *map.view();
+        let view = view_of(&map);
         let beta = dot(&map, 129);
         map.input(&button(MouseButton::Left, true, beta));
         map.cancel_pointer();
         map.input(&Input::PointerMoved(at(beta.x + 50.0, beta.y)));
-        assert_eq!(*map.view(), view, "no drag");
+        assert_eq!(view_of(&map), view, "no drag");
         map.input(&button(MouseButton::Left, false, beta));
         assert_eq!(map.selected(), None, "no click");
 
@@ -2010,7 +2146,7 @@ mod tests {
         for _ in 0..SCALES.len() {
             let list = drawn(&map);
             let nebula = &map.model().nebulae()[0];
-            let placed = placement(nebula, &map.view().transform()).expect("placed");
+            let placed = placement(nebula, &view_of(&map).transform()).expect("placed");
             assert_eq!(
                 list.iter().next(),
                 Some(&DrawCommand::StretchedPicture {
@@ -2212,7 +2348,7 @@ mod tests {
         let list = drawn(&map);
         let kinds: Vec<&str> = list.iter().map(kind).collect();
         assert_eq!(kinds, ["line", "line", "text", "text", "text"]);
-        assert_eq!(map.view().zoom(), 3);
+        assert_eq!(view_of(&map).zoom(), 3);
     }
 
     // Entering a system.
@@ -2229,11 +2365,11 @@ mod tests {
     fn return_on_a_selected_system_asks_to_enter_it_once() {
         let mut map = map();
         click_on(&mut map, 129);
-        let (view, selected) = (*map.view(), map.selected());
+        let (view, selected) = (view_of(&map), map.selected());
         assert_eq!(map.input(&press(Key::Enter)), ScreenAction::None);
         assert_eq!(map.take_entry(), Some(SystemId(129)));
         assert_eq!(map.take_entry(), None, "taken");
-        assert_eq!((*map.view(), map.selected()), (view, selected));
+        assert_eq!((view_of(&map), map.selected()), (view, selected));
     }
 
     #[test]
@@ -2314,10 +2450,10 @@ mod tests {
     fn clicking_the_enter_button_asks_to_enter_the_selected_system() {
         let mut map = map();
         click_on(&mut map, 130);
-        let (view, selected) = (*map.view(), map.selected());
+        let (view, selected) = (view_of(&map), map.selected());
         click(&mut map, button_centre());
         assert_eq!(map.take_entry(), Some(SystemId(130)));
-        assert_eq!((*map.view(), map.selected()), (view, selected));
+        assert_eq!((view_of(&map), map.selected()), (view, selected));
         // At its corners too.
         for corner in [ENTER_BUTTON.min, ENTER_BUTTON.max] {
             click(&mut map, corner);
@@ -2350,14 +2486,14 @@ mod tests {
     fn a_press_elsewhere_released_on_the_button_does_not_enter() {
         let mut map = map();
         click_on(&mut map, 129);
-        let view = *map.view();
+        let view = view_of(&map);
         for start in [at(300.0, 728.0), at(512.0, 300.0)] {
             map.input(&button(MouseButton::Left, true, start));
             map.input(&button(MouseButton::Left, false, button_centre()));
             assert_eq!(map.take_entry(), None, "{start:?}");
         }
         assert_eq!(map.selected(), Some(SystemId(129)), "nor clears it");
-        assert_eq!(*map.view(), view);
+        assert_eq!(view_of(&map), view);
     }
 
     #[test]
@@ -2375,10 +2511,10 @@ mod tests {
     fn a_press_on_the_button_starts_no_drag() {
         let mut map = map();
         click_on(&mut map, 129);
-        let view = *map.view();
+        let view = view_of(&map);
         map.input(&button(MouseButton::Left, true, button_centre()));
         map.input(&Input::PointerMoved(at(100.0, 100.0)));
-        assert_eq!(*map.view(), view);
+        assert_eq!(view_of(&map), view);
     }
 
     #[test]
@@ -2448,22 +2584,6 @@ mod tests {
             Some(SystemId(129)),
             "the panel is not the map"
         );
-        assert_eq!(
-            text(&list, "Arrows"),
-            DrawCommand::Text {
-                text: COURSE_HELP.to_owned(),
-                font: Font::Geneva,
-                origin: at(LEFT, HELP_TOP),
-                size: RIGHT_SIZE,
-                wrap_width: Some(IN_FLIGHT_WRAP),
-                color: Color::DIM,
-            },
-            "the in-flight maps' lines sit in the left column"
-        );
-        assert_eq!(
-            COURSE_HELP,
-            "Arrows or drag: pan   +/-: zoom   Click: set destination   M or Esc: back"
-        );
     }
 
     #[test]
@@ -2490,72 +2610,11 @@ mod tests {
     }
 
     #[test]
-    fn the_viewer_map_sets_no_destination_and_has_no_course_line() {
+    fn the_viewer_map_sets_no_destination() {
         let mut map = map();
         click_on(&mut map, 129);
         assert_eq!(map.take_destination(), None);
         assert_eq!(map.selected(), Some(SystemId(129)));
-        map.show_course(SystemId(128), &ids(&[129]));
-        assert_eq!(course_line(&drawn(&map)), None);
-        map.show_course(SystemId(128), &[]);
-        assert_eq!(course_line(&drawn(&map)), None);
-    }
-
-    /// The panel's course line, if any.
-    fn course_line(list: &DrawList) -> Option<DrawCommand> {
-        list.iter()
-            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == at(LEFT, COURSE_TOP)))
-            .cloned()
-    }
-
-    /// The course map's course line, in the left column.
-    fn panel_line(text: &str) -> DrawCommand {
-        DrawCommand::Text {
-            text: text.to_owned(),
-            font: Font::Geneva,
-            origin: at(LEFT, COURSE_TOP),
-            size: RIGHT_SIZE,
-            wrap_width: Some(IN_FLIGHT_WRAP),
-            color: Color::WHITE,
-        }
-    }
-
-    #[test]
-    fn the_panel_says_how_many_jumps_the_course_is_to_where() {
-        let mut map = course_map();
-        assert_eq!(course_line(&drawn(&map)), None);
-        click_on(&mut map, 129);
-        map.show_course(SystemId(130), &ids(&[128, 129]));
-        assert_eq!(
-            course_line(&drawn(&map)),
-            Some(panel_line("Course: 2 jump(s) to Beta"))
-        );
-        map.show_course(SystemId(128), &ids(&[129]));
-        assert_eq!(
-            course_line(&drawn(&map)),
-            Some(panel_line("Course: 1 jump(s) to Beta"))
-        );
-        // A hop not on the map is still named by its ID.
-        map.show_course(SystemId(128), &ids(&[999]));
-        assert_eq!(
-            course_line(&drawn(&map)),
-            Some(panel_line("Course: 1 jump(s) to sÿst 999"))
-        );
-    }
-
-    #[test]
-    fn a_selected_system_with_no_route_says_so() {
-        let mut map = course_map();
-        map.show_course(SystemId(128), &[]);
-        assert_eq!(course_line(&drawn(&map)), None, "nothing selected");
-        click_on(&mut map, 130);
-        assert_eq!(
-            course_line(&drawn(&map)),
-            Some(panel_line("No hyperspace route"))
-        );
-        click_on(&mut map, 128);
-        assert_eq!(map.selected(), Some(SystemId(128)));
-        assert_eq!(course_line(&drawn(&map)), None, "the current system");
     }
 
     // The hyperspace selection.
@@ -2563,6 +2622,7 @@ mod tests {
     #[test]
     fn the_preselect_selects_a_system_and_the_panel_shows_it() {
         let mut map = course_map();
+        map.centre_on_system(SystemId(129));
         map.preselect(Some(SystemId(129)));
         assert_eq!(map.selected(), Some(SystemId(129)));
         let list = drawn(&map);
@@ -2601,23 +2661,9 @@ mod tests {
         click_on(&mut map, 129);
         map.take_destination();
         map.preselect(Some(SystemId(128)));
-        let stack_line = |map: &GalaxyMap| {
-            texts(&drawn(map))
-                .into_iter()
-                .find(|text| text.contains("systems here"))
-        };
-        assert_eq!(
-            stack_line(&map).as_deref(),
-            Some("1 of 2 systems here (sÿst 128, 131)"),
-            "a preselect is not a click to click again"
-        );
         click_on(&mut map, 128);
         assert_eq!(map.selected(), Some(SystemId(128)), "not the next there");
         assert_eq!(map.take_destination(), Some(SystemId(128)));
-        assert_eq!(
-            stack_line(&map).as_deref(),
-            Some("1 of 2 systems here (sÿst 128, 131): click again for the next")
-        );
         click_on(&mut map, 128);
         assert_eq!(map.selected(), Some(SystemId(131)), "a click again cycles");
         let mut map = course_map();
@@ -2641,14 +2687,6 @@ mod tests {
         assert_eq!(map.take_gate_choice(), None);
     }
 
-    /// The panel's stack line.
-    fn stack_line(map: &GalaxyMap) -> String {
-        texts(&drawn(map))
-            .into_iter()
-            .find(|text| text.contains("systems here"))
-            .expect("a stack line")
-    }
-
     #[test]
     fn a_click_again_on_the_hypergate_map_moves_on_through_offered_systems_there() {
         let mut map = course_map();
@@ -2656,11 +2694,6 @@ mod tests {
         map.offer_gates(ids(&[128, 131]));
         click_on(&mut map, 128);
         assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
-        assert!(
-            stack_line(&map).ends_with(": click again for the next"),
-            "{}",
-            stack_line(&map)
-        );
         click_on(&mut map, 128);
         assert_eq!(
             map.selected(),
@@ -2714,7 +2747,7 @@ mod tests {
         assert_eq!(map.selected(), Some(SystemId(129)));
         click_on(&mut map, 128);
         assert_eq!(map.selected(), Some(SystemId(129)), "not offered");
-        click(&mut map, at(5.0, 400.0));
+        click(&mut map, at(250.0, 150.0));
         assert_eq!(map.selected(), Some(SystemId(129)), "empty space");
         click_on(&mut map, 130);
         assert_eq!(map.selected(), Some(SystemId(130)));
@@ -2783,14 +2816,14 @@ mod tests {
     fn the_viewer_never_asks_to_cycle_or_close_and_return_still_enters() {
         let mut map = map();
         click_on(&mut map, 129);
-        let view = *map.view();
+        let view = view_of(&map);
         for k in [Key::Tab, Key::Char('\\'), Key::Enter] {
             map.input(&press(k));
         }
         assert_eq!(map.take_cycle(), None);
         assert!(!map.take_close());
         assert_eq!(map.take_entry(), Some(SystemId(129)));
-        assert_eq!(*map.view(), view);
+        assert_eq!(view_of(&map), view);
     }
 
     #[test]
@@ -2896,12 +2929,14 @@ mod tests {
         }
     }
 
-    /// A course map showing `drawing` at scale 1, where Alpha is at
-    /// (212, 154), Beta at (812, 154) and Gamma at (212, 454).
+    /// The viewer showing `drawing` at scale 1, where Alpha is at
+    /// (212, 154), Beta at (812, 154) and Gamma at (212, 454): the
+    /// viewer draws a picture as the in-flight maps do, unclipped
+    /// (`draw_marks`).
     fn showing(drawing: &MapDrawing) -> GalaxyMap {
-        let mut map = course_map();
+        let mut map = map();
         map.input(&press(Key::Char('-')));
-        assert_eq!(map.view().scale(), 1.0);
+        assert_eq!(view_of(&map).scale(), 1.0);
         map.show_drawing(drawing);
         map
     }
@@ -3012,7 +3047,7 @@ mod tests {
     /// Where `map` draws system `id`, in whole pixels.
     fn pixel_of(map: &GalaxyMap, id: i16) -> (i32, i32) {
         let system = map.model().catalog_system(SystemId(id)).expect("a system");
-        map.view().transform().pixel(system.position())
+        map.transform().pixel(system.position())
     }
 
     fn oval_rect((x, y): (i32, i32), inset: i32) -> IRect {
@@ -3037,7 +3072,7 @@ mod tests {
         for _ in 0..3 {
             map.input(&press(Key::Char('=')));
         }
-        assert_eq!(map.view().scale(), 64.0 / 27.0, "the zoom ≤ 0.5");
+        assert_eq!(view_of(&map).scale(), 64.0 / 27.0, "the zoom ≤ 0.5");
         let list = drawn(&map);
         let alpha = oval_rect(pixel_of(&map, 128), SYSTEM_INSET_ZOOMED);
         assert_eq!(rects(&list, CLEARED), filled(&oval_frame_pixels(alpha, 2)));
@@ -3227,7 +3262,7 @@ mod tests {
             "the baseline 158, Geneva 9 white; Gamma, drawn, unnamed"
         );
         map.input(&press(Key::Char('-')));
-        assert_eq!(map.view().scale(), 0.75, "a zoom of 4/3");
+        assert_eq!(view_of(&map).scale(), 0.75, "a zoom of 4/3");
         assert_eq!(names(&drawn(&map)), [], "nothing selected");
         click_on(&mut map, 129);
         let beta = names(&drawn(&map));
@@ -3337,7 +3372,7 @@ mod tests {
             (None, 0, 0)
         );
         map.input(&press(Key::Char('-')));
-        assert_eq!(map.view().scale(), 1.0);
+        assert_eq!(view_of(&map).scale(), 1.0);
         let list = drawn(&map);
         let names = names(&list);
         assert!(
@@ -3441,7 +3476,7 @@ mod tests {
     }
 
     #[test]
-    fn an_in_flight_map_draws_the_panel_shown_from_the_panel_origin() {
+    fn an_in_flight_map_draws_the_panel_shown_from_the_dialogs_origin() {
         let mut map = course_map().with_metrics(Rc::new(MonoMetrics));
         assert!(map.panel().is_none());
         let list = drawn(&map);
@@ -3449,20 +3484,20 @@ mod tests {
         map.show_panel(unexplored_panel());
         assert_eq!(map.panel(), Some(&unexplored_panel()));
         let list = drawn(&map);
-        // The column's title at (422 + 474 + 10, 180 + 8 + 12), its
+        // The column's title at (212 + 474 + 10, 128 + 8 + 12), its
         // baseline; the date measured against the strip's right edge,
-        // 422 + 594 − 54 − 5.
+        // 212 + 594 − 54 − 5.
         assert_eq!(
             every_origin(&list, "Selected System:"),
-            Some(at(906.0, 191.0))
+            Some(at(696.0, 139.0))
         );
-        assert_eq!(every_origin(&list, "Jun 23, 1177"), Some(at(957.0, 643.0)));
+        assert_eq!(every_origin(&list, "Jun 23, 1177"), Some(at(747.0, 591.0)));
         let course = GalaxyMap::course(&FakeCatalog::new(galaxy()));
         let mut unmeasured = course;
         unmeasured.show_panel(unexplored_panel());
         assert_eq!(
             every_origin(&drawn(&unmeasured), "Jun 23, 1177"),
-            Some(at(1011.0, 643.0)),
+            Some(at(801.0, 591.0)),
             "without metrics"
         );
     }
@@ -3473,30 +3508,10 @@ mod tests {
         assert!(format!("{map:?}").contains("MapMetrics"));
     }
 
-    #[test]
-    fn a_click_in_the_info_column_selects_nothing_on_an_in_flight_map() {
-        let column = at(950.0, 300.0);
-        let mut map = course_map();
-        map.preselect(Some(SystemId(129)));
-        click(&mut map, column);
-        assert_eq!(map.selected(), Some(SystemId(129)), "not a map click");
-        assert_eq!(map.take_destination(), None);
-        // Dragging from it doesn't pan either.
-        let before = map.view().transform();
-        map.input(&button(MouseButton::Left, true, column));
-        map.input(&Input::PointerMoved(at(900.0, 250.0)));
-        map.input(&button(MouseButton::Left, false, at(900.0, 250.0)));
-        assert_eq!(map.view().transform(), before);
-        // On the viewer the same click is in the map, on empty space.
-        let mut viewer = self::map();
-        click_on(&mut viewer, 129);
-        click(&mut viewer, column);
-        assert_eq!(viewer.selected(), None);
-    }
-
     // Space, Find and the Done and Find buttons.
 
     use crate::galaxy::buttons::MapButtons;
+    use crate::galaxy::dialog::DIALOG_ORIGIN;
     use crate::galaxy::find::{FIND_ITEM, PROMPT};
     use crate::sound::{Sound, UiSound};
     use nova_sim::map_search::SearchOutcome;
@@ -3556,7 +3571,7 @@ mod tests {
         click_on(&mut map, 130);
         assert_eq!(map.take_destination(), Some(SystemId(130)));
         map.input(&press(Key::Space));
-        assert_eq!(map.view().center(), place(&map, 129));
+        assert_eq!(map.transform().world, place(&map, 129));
         assert_eq!(map.selected(), Some(SystemId(129)));
         assert_eq!(map.take_destination(), None, "not a destination");
         assert_eq!(map.take_ui_sounds(), [UiSound::MapCentred]);
@@ -3573,10 +3588,13 @@ mod tests {
     fn a_space_repeat_or_release_does_nothing() {
         let mut map = flown_map();
         click_on(&mut map, 130);
-        let view = *map.view();
+        let view = map.transform();
         map.input(&held(Key::Space));
         map.input(&release(Key::Space));
-        assert_eq!((*map.view(), map.selected()), (view, Some(SystemId(130))));
+        assert_eq!(
+            (map.transform(), map.selected()),
+            (view, Some(SystemId(130)))
+        );
         assert_eq!(map.take_ui_sounds(), []);
     }
 
@@ -3586,7 +3604,7 @@ mod tests {
         click_on(&mut map, 130);
         map.input(&press(Key::Space));
         assert_eq!(map.selected(), Some(SystemId(128)));
-        assert_eq!(map.view().center(), place(&map, 128));
+        assert_eq!(map.transform().world, place(&map, 128));
         assert_eq!(map.take_ui_sounds(), [UiSound::MapCentred]);
         assert_eq!(map.take_gate_choice(), Some(SystemId(130)));
     }
@@ -3595,9 +3613,12 @@ mod tests {
     fn space_on_the_viewer_does_nothing() {
         let mut map = measured(map());
         click_on(&mut map, 130);
-        let view = *map.view();
+        let view = map.transform();
         map.input(&press(Key::Space));
-        assert_eq!((*map.view(), map.selected()), (view, Some(SystemId(130))));
+        assert_eq!(
+            (map.transform(), map.selected()),
+            (view, Some(SystemId(130)))
+        );
         assert_eq!(map.take_ui_sounds(), []);
     }
 
@@ -3634,8 +3655,9 @@ mod tests {
         map.show_course(SystemId(129), &[]);
         map.input(&press(Key::Char('f')));
         assert!(!map.finding());
-        let done = MapButtons::new();
-        let find = done.find().rect.center();
+        let find = MapButtons::new(DIALOG_ORIGIN)
+            .rect(MapButton::Find)
+            .center();
         click(&mut map, find);
         assert!(!map.finding(), "the button");
     }
@@ -3662,7 +3684,7 @@ mod tests {
         click_on(&mut map, 130);
         map.take_destination();
         map.input(&press(Key::Char('f')));
-        let view = *map.view();
+        let view = map.transform();
         for key in [
             Key::Left,
             Key::Up,
@@ -3672,7 +3694,7 @@ mod tests {
         ] {
             map.input(&press(key));
         }
-        assert_eq!(*map.view(), view, "no pan or zoom");
+        assert_eq!(map.transform(), view, "no pan or zoom");
         assert_eq!(map.take_cycle(), None, "no cycle");
         type_in(&mut map, " m");
         assert_eq!(map.find_dialog().expect("open").field().text(), " m");
@@ -3690,15 +3712,18 @@ mod tests {
         let mut map = measured(map());
         find(&mut map, "gam");
         assert_eq!(map.selected(), Some(SystemId(130)));
-        assert_eq!(map.view().center(), place(&map, 130));
+        assert_eq!(map.transform().world, place(&map, 130));
         assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemFound]);
         assert_eq!(map.take_find(), None, "nothing asked of an owner");
         find(&mut map, "alpha r");
         assert_eq!(map.selected(), Some(SystemId(131)));
         map.take_ui_sounds();
-        let view = *map.view();
+        let view = map.transform();
         find(&mut map, "zzz");
-        assert_eq!((map.selected(), *map.view()), (Some(SystemId(131)), view));
+        assert_eq!(
+            (map.selected(), map.transform()),
+            (Some(SystemId(131)), view)
+        );
         assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemNotFound]);
     }
 
@@ -3707,7 +3732,7 @@ mod tests {
         for mut map in [measured(map()), flown_map()] {
             click_on(&mut map, 129);
             map.take_destination();
-            let view = *map.view();
+            let view = map.transform();
             find(&mut map, "");
             map.input(&press(Key::Char('s')));
             type_in(&mut map, "gamma");
@@ -3720,7 +3745,10 @@ mod tests {
                 .center();
             click(&mut map, cancel);
             assert!(!map.finding(), "Cancel closes it");
-            assert_eq!((map.selected(), *map.view()), (Some(SystemId(129)), view));
+            assert_eq!(
+                (map.selected(), map.transform()),
+                (Some(SystemId(129)), view)
+            );
             assert_eq!(map.take_ui_sounds(), []);
             assert_eq!(map.take_find(), None);
         }
@@ -3742,12 +3770,15 @@ mod tests {
         map.show_search(SearchOutcome::Found(SystemId(130)));
         assert_eq!(map.selected(), Some(SystemId(130)));
         assert_eq!(map.take_destination(), None, "not a destination");
-        assert_eq!(map.view().center(), place(&map, 130));
+        assert_eq!(map.transform().world, place(&map, 130));
         assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemFound]);
         click_on(&mut map, 128);
-        let view = *map.view();
+        let view = map.transform();
         map.show_search(SearchOutcome::NotFound);
-        assert_eq!((map.selected(), *map.view()), (Some(SystemId(128)), view));
+        assert_eq!(
+            (map.selected(), map.transform()),
+            (Some(SystemId(128)), view)
+        );
         assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemNotFound]);
     }
 
@@ -3808,8 +3839,9 @@ mod tests {
     #[test]
     fn a_click_on_done_asks_to_close_and_on_find_opens_find_silently() {
         for build in [flown_map as fn() -> GalaxyMap, measured_gate_map] {
-            let buttons = MapButtons::new();
-            let (done, find) = (buttons.done().rect.center(), buttons.find().rect.center());
+            let buttons = MapButtons::new(DIALOG_ORIGIN);
+            let done = buttons.rect(MapButton::Done).center();
+            let find = buttons.rect(MapButton::Find).center();
             let mut map = build();
             click(&mut map, done);
             assert!(map.take_close(), "Done, as Return");
@@ -3838,9 +3870,9 @@ mod tests {
         assert_eq!(labels(&course_map()), [true, true], "unmeasured too");
         let mut viewer = measured(map());
         assert_eq!(labels(&viewer), [false, false]);
-        let buttons = MapButtons::new();
-        click(&mut viewer, buttons.done().rect.center());
-        click(&mut viewer, buttons.find().rect.center());
+        let buttons = MapButtons::new(DIALOG_ORIGIN);
+        click(&mut viewer, buttons.rect(MapButton::Done).center());
+        click(&mut viewer, buttons.rect(MapButton::Find).center());
         assert!(!viewer.take_close() && !viewer.finding(), "nor hit");
     }
 

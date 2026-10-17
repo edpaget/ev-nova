@@ -1178,11 +1178,21 @@ fn tap(view: &mut View, k: Key) {
     view.input(&key(k, false));
 }
 
-/// Where system `id` is on the course map.
-fn on_map(view: &View, id: i16) -> Point {
+/// Where system `id` is on the course map, brought into item 3 first: the
+/// map opens at 0.5625 on the current system and shows little of the
+/// galaxy.
+fn on_map(view: &mut View, id: i16) -> Point {
+    view.map.centre_on_system(SystemId(id));
     let map = view.course_map();
     let system = map.model().system(SystemId(id)).expect("on the map");
-    map.view().world_to_screen(system.position())
+    map.transform().world_to_screen(system.position())
+}
+
+/// Where system `id` is drawn on the course map as it looks now.
+fn on_map_now(view: &View, id: i16) -> Point {
+    let map = view.course_map();
+    let system = map.model().system(SystemId(id)).expect("on the map");
+    map.transform().world_to_screen(system.position())
 }
 
 /// Clicks the left button at `at`.
@@ -1232,7 +1242,7 @@ fn hyper_selected_links(view: &View) -> Vec<(Point, Point)> {
     view.course_map()
         .picture()
         .and_then(|picture| picture.mode3_link)
-        .map(|(from, to)| (on_map(view, from.0), on_map(view, to.0)))
+        .map(|(from, to)| (on_map_now(view, from.0), on_map_now(view, to.0)))
         .into_iter()
         .collect()
 }
