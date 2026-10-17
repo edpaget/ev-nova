@@ -596,6 +596,17 @@ mod tests {
     }
 
     #[test]
+    fn a_shift_click_appends_a_link_only_the_pick_lists_both_ways_alone() {
+        // 136 lists 130, one way.
+        let mut session = hub_session();
+        assert_eq!(shift_click(&mut session, &[136]), None, "by the engine");
+        assert_eq!(session.course(), []);
+        let mut session = hub_session().with_hyperlinks(HyperlinkRule::BothWays);
+        assert_eq!(shift_click(&mut session, &[136]), shifted(Some(136)));
+        assert_eq!(session.course(), ids(&[136]), "a jump both ways");
+    }
+
+    #[test]
     fn a_shift_click_is_refused_from_an_unexplored_hop_to_an_unknown_system() {
         let mut session = Session::start(&catalog()).expect("starts");
         session.pilot.course = ids(&[131]);
