@@ -201,7 +201,7 @@ fn assert_matches_snapshot(rendered: &str) {
     }
     assert!(
         rendered == expected,
-        "stock type counts differ from tests/snapshots/stock_type_counts.txt"
+        "stock type counts differ from tests/it/snapshots/stock_type_counts.txt"
     );
 }
 
