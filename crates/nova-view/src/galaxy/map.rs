@@ -111,6 +111,21 @@
 //!
 //! # What the map draws
 //!
+//! First the nebulae, as `_MapDialogUpdate`'s nebula pass draws them
+//! ([`nebulae`](super::nebulae)): each one's rect truncated in the port,
+//! filled by the picture [`RuleKey::NebulaPicture`] picks
+//! ([`GalaxyMap::set_nebula_pick`]), clipped to the map area and copied
+//! with `addMax`, so overlaps take the brighter of each channel. The
+//! course and hypergate maps draw the nebulae the session's galaxy shows,
+//! active and explored; while a drag shows the partial update
+//! ([`update`](super::update), [`GalaxyMap::update`]) they are plain
+//! copies, and the borders' slot is left empty. The partial frame stays
+//! until a repair redraws item 3: the map makes most itself, and its
+//! owner calls [`GalaxyMap::redraw`] for the Tab cycle's pick, and
+//! [`GalaxyMap::route_cleared`] for Clear Route. The viewer draws every
+//! nebula in the data, active or not, explored or not, with the engine's
+//! pick, always with the full update.
+//!
 //! Over its nebulae, the map draws a [`MapPicture`]: in flight the
 //! session's drawing ([`GalaxyMap::show_drawing`], `nova_sim`'s
 //! [`galaxy_map`](nova_sim::galaxy_map) decides what `_DrawMap` draws),
@@ -185,6 +200,8 @@
 //! system selected, landable or not, inhabited or not, with no title, no
 //! explored level and nothing unexplored, and its lines in the right
 //! column.
+//!
+//! [`RuleKey::NebulaPicture`]: nova_sim::RuleKey::NebulaPicture
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -202,10 +219,12 @@ use super::click::{PendingPress, PressAnswer, hits};
 use super::clip::clip_opaque;
 use super::dialog::{DIALOG_ORIGIN, MapDialog, in_map_item, map_area};
 use super::find::{FindDialog, FindOutcome};
-use super::model::{GalaxyModel, placement};
+use super::model::GalaxyModel;
+use super::nebulae::{NebulaFrame, PicturePick, draw_nebulae};
 use super::panel::draw_panel;
 use super::place::MapPlace;
-use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
+use super::update::MapUpdate;
+use super::view::{Bounds, MAP_CENTER, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
 use crate::oval::{fill_pixels, oval_fill_pixels, oval_frame_pixels};
@@ -543,6 +562,9 @@ pub struct GalaxyMap {
     query: Option<String>,
     /// The beeps the map made, not yet taken.
     sounds: Vec<UiSound>,
+    /// Which picture fills each nebula's rect on an in-flight map
+    /// ([`GalaxyMap::set_nebula_pick`]).
+    nebula_pick: PicturePick,
 }
 
 /// How a map is laid out: the viewer full-screen with its own pan and
@@ -616,6 +638,7 @@ impl GalaxyMap {
             style: ButtonStyle::STOCK,
             query: None,
             sounds: Vec::new(),
+            nebula_pick: PicturePick::LargestThatFits,
         }
     }
 
@@ -649,6 +672,8 @@ impl GalaxyMap {
             self.start_drag(at);
             return;
         };
+        // An accepted press redraws items 2, 3 and 6 (@0x131af-0x13259).
+        self.redraw();
         if let Some(selected) = answer.selected {
             self.selected = Some(selected);
             self.clicked = false;
@@ -675,11 +700,45 @@ impl GalaxyMap {
     }
 
     /// The route cleared (@0x12c69-0x12dbf): Clear Route disabled
-    /// (`showClearRouteButton` cleared) and the hypergate map's pick
-    /// dropped, as the original's +0x6c = −1.
+    /// (`showClearRouteButton` cleared), the hypergate map's pick
+    /// dropped, as the original's +0x6c = −1, and item 3 redrawn
+    /// (@0x12cf0, `_MapDialogUpdate` @0x12d9f).
     pub fn route_cleared(&mut self) {
         self.set_clear_route(false);
         self.gate_pick = None;
+        self.redraw();
+    }
+
+    /// Redraws an in-flight map's item 3 with the full update
+    /// ([`MapDialog::redraw`]), for a change its owner settles: the Tab
+    /// cycle's pick, which invalidates items 2, 3 and 6 (the hypergate
+    /// cycle's @0x13e6f, the course cycle's @0x14032). See
+    /// [`update`](super::update) for every repair.
+    pub fn redraw(&mut self) {
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.redraw();
+        }
+    }
+
+    /// The update an in-flight map's item 3 shows; `None` on the viewer,
+    /// which always draws the full one.
+    #[must_use]
+    pub fn update(&self) -> Option<MapUpdate> {
+        match &self.look {
+            Look::Viewer(_) => None,
+            Look::Dialog(dialog) => Some(dialog.update()),
+        }
+    }
+
+    /// Sets which picture fills each nebula's rect on an in-flight map,
+    /// as `source` reads [`RuleKey::NebulaPicture`]. The viewer has no
+    /// rules: it keeps the engine's.
+    ///
+    /// [`RuleKey::NebulaPicture`]: nova_sim::RuleKey::NebulaPicture
+    pub fn set_nebula_pick(&mut self, source: nova_sim::RuleSource) {
+        if self.mode != MapMode::Viewer {
+            self.nebula_pick = PicturePick::of(source);
+        }
     }
 
     /// Sets `showClearRouteButton`, as the map opens with it
@@ -971,10 +1030,13 @@ impl GalaxyMap {
         }
     }
 
-    /// An in-flight map opening: its zoom's guard ([`MapPlace::opened`]).
+    /// An in-flight map opening: its zoom's guard ([`MapPlace::opened`]),
+    /// and the full update, as the open clears `_partialMapDialogUpdate`
+    /// (@0x12458) and draws (@0x125a5).
     pub fn opened(&mut self) {
         if let Look::Dialog(dialog) = &mut self.look {
             dialog.place_mut().opened();
+            dialog.redraw();
         }
     }
 
@@ -1069,8 +1131,9 @@ impl GalaxyMap {
 
     /// Space on an in-flight map (`_MapFilter` @0x140e0-0x14169): the
     /// beep first, then the map centred on the current system, selected
-    /// with no destination or hypergate pick. The viewer has no current
-    /// system: there Space does nothing.
+    /// with no destination or hypergate pick, and item 3 redrawn
+    /// (@0x14215). The viewer has no current system: there Space does
+    /// nothing.
     fn centre_on_current(&mut self) {
         if self.mode == MapMode::Viewer {
             return;
@@ -1079,6 +1142,7 @@ impl GalaxyMap {
         if let Some(current) = self.current {
             self.select_and_centre(current);
         }
+        self.redraw();
     }
 
     /// Opens Find, abandoning any press on the map, when the map has text
@@ -1102,8 +1166,9 @@ impl GalaxyMap {
         }
     }
 
-    /// Find's input while it is open: it closes on Find or Cancel, and a
-    /// text found is searched.
+    /// Find's input while it is open: it closes on Find or Cancel, which
+    /// redraws the whole dialog (@0x11e26-0x11e5d), and a text found is
+    /// searched.
     fn find_input(&mut self, input: &Input) {
         let Some(dialog) = &mut self.find else {
             return;
@@ -1113,6 +1178,7 @@ impl GalaxyMap {
             return;
         };
         self.find = None;
+        self.redraw();
         if let FindOutcome::Search(text) = outcome {
             self.searched(text);
         }
@@ -1228,20 +1294,35 @@ impl GalaxyMap {
         }
     }
 
-    /// Draws the nebulae, then the picture and the selection, through
-    /// `transform`.
-    fn draw_map(&self, list: &mut DrawList, transform: &Transform) {
-        // Every nebula before any line or dot, so behind the systems.
-        for nebula in self.model.nebulae() {
-            if let Some(placed) = placement(nebula, transform) {
-                list.stretched_picture(
-                    ImageKey::picture(placed.picture.id),
-                    placed.top_left,
-                    placed.width,
-                    placed.height,
-                );
-            }
-        }
+    /// The viewer's map: every nebula in the data, active or not,
+    /// explored or not, as `_MapDialogUpdate` draws one (see
+    /// [`nebulae`](super::nebulae)) in its own frame with the engine's
+    /// pick, then its picture and the selection, through its view.
+    fn draw_viewer_map(&self, view: &MapView, list: &mut DrawList) {
+        let transform = view.transform();
+        let centre = view.center();
+        #[allow(clippy::cast_possible_truncation)] // The map area's pixels.
+        let frame = NebulaFrame {
+            origin: Point::new(0.0, 0.0),
+            centre: (MAP_CENTER.x as i32, MAP_CENTER.y as i32),
+            zoom: transform.zoom(),
+            scroll: (f64::from(centre.x), f64::from(centre.y)),
+            area: IRect::new(0, 0, MAP_WIDTH as i32, MAP_HEIGHT as i32),
+        };
+        let nebulae = self.model.catalog_nebulae();
+        draw_nebulae(
+            list,
+            nebulae,
+            &frame,
+            MapUpdate::Full,
+            PicturePick::LargestThatFits,
+        );
+        self.draw_marks_and_selection(list, &transform);
+    }
+
+    /// Draws the picture and the selection through `transform`: what
+    /// `_DrawMap` draws, then the brackets and the names again.
+    fn draw_marks_and_selection(&self, list: &mut DrawList, transform: &Transform) {
         if let Some(picture) = &self.picture {
             let marks = MapMarks {
                 picture,
@@ -1256,13 +1337,28 @@ impl GalaxyMap {
     }
 
     /// An in-flight map, as `_MapDialogUpdate` draws it (see
-    /// [`dialog`](super::dialog)): the frame and its buttons, the map
-    /// clipped to item 3, then the panels.
+    /// [`dialog`](super::dialog)):
+    ///
+    /// 1. the frame and its buttons, item 3 black;
+    /// 2. the borders' slot: galaxy-map-fidelity's phase 8 draws its cells
+    ///    here, before the nebulae, and none while
+    ///    [`MapUpdate::Partial`];
+    /// 3. the nebulae the session's galaxy shows, active and explored
+    ///    ([`draw_nebulae`]), blended as [`MapDialog::update`] says;
+    /// 4. what `_DrawMap` draws, the brackets and the names, clipped to
+    ///    item 3 ([`clip_opaque`]);
+    /// 5. the panels.
+    ///
+    /// In a partial update the frame outside item 3 is drawn as in a full
+    /// one: the window keeps those pixels in the original.
     fn draw_dialog(&self, dialog: &MapDialog, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         dialog.draw_frame(list, &self.style, metrics);
+        let nebulae = self.model.nebulae();
+        let frame = dialog.nebula_frame();
+        draw_nebulae(list, nebulae, &frame, dialog.update(), self.nebula_pick);
         let mut map = DrawList::new();
-        self.draw_map(&mut map, &dialog.transform());
+        self.draw_marks_and_selection(&mut map, &dialog.transform());
         clip_opaque(&map, map_area(), list);
         if let Some(panel) = &self.panel {
             draw_panel(list, panel, DIALOG_ORIGIN, metrics);
@@ -1599,10 +1695,10 @@ impl GalaxyMap {
 
     /// The in-flight maps' six buttons' input (`_TrackMapButtons`): Done
     /// asks to close the map, as Return does; "-" and "+" step the zoom,
-    /// each only while its flag allows; Find opens Find; Clear Route,
-    /// while enabled, asks to clear the route, as C does. Borders is taken
-    /// and does nothing yet: galaxy-map-fidelity's phase 8 gives it the
-    /// borders.
+    /// each only while its flag allows, a step taken redrawing item 3;
+    /// Find opens Find; Clear Route, while enabled, asks to clear the
+    /// route, as C does. Borders redraws item 3 and does nothing else
+    /// yet: galaxy-map-fidelity's phase 8 gives it the borders.
     fn button_input(&mut self, input: &Input) {
         let Look::Dialog(dialog) = &mut self.look else {
             return;
@@ -1610,15 +1706,22 @@ impl GalaxyMap {
         let state = dialog.state();
         match dialog.buttons_mut().input(input, &state) {
             Some(MapButton::Done) => self.request = Some(Request::Close),
+            // A step taken redraws item 3 (@0x128d9, @0x12b0c).
             Some(MapButton::ZoomOut) => {
-                dialog.place_mut().zoom_out();
+                if dialog.place_mut().zoom_out() {
+                    dialog.redraw();
+                }
             }
             Some(MapButton::ZoomIn) => {
-                dialog.place_mut().zoom_in();
+                if dialog.place_mut().zoom_in() {
+                    dialog.redraw();
+                }
             }
             Some(MapButton::Find) => self.open_find(),
             Some(MapButton::ClearRoute) => self.request = Some(Request::ClearRoute),
-            Some(MapButton::Borders) | None => {}
+            // Items 9 and 3 invalidated (@0x12756, @0x127ae).
+            Some(MapButton::Borders) => dialog.redraw(),
+            None => {}
         }
     }
 }
@@ -1704,6 +1807,10 @@ impl Screen for GalaxyMap {
                     self.armed = false;
                     if self.in_map(at) {
                         self.press_map(at);
+                    } else {
+                        // `_MapDialogUpdate` before `_TrackMapButtons`
+                        // (@0x14558).
+                        self.redraw();
                     }
                 }
             }
@@ -1721,7 +1828,7 @@ impl Screen for GalaxyMap {
     fn draw(&self, list: &mut DrawList) {
         match &self.look {
             Look::Viewer(view) => {
-                self.draw_map(list, &view.transform());
+                self.draw_viewer_map(view, list);
                 self.draw_viewer_panel(view, list);
             }
             Look::Dialog(dialog) => self.draw_dialog(dialog, list),
@@ -1762,8 +1869,10 @@ impl Screen for GalaxyMap {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::draw::Blend;
     use crate::galaxy::catalog::{Galaxy, GovtId, StellarEntry, StellarId};
-    use crate::galaxy::model::{NEUTRAL, placement, star_system};
+    use crate::galaxy::model::{NEUTRAL, star_system};
+    use crate::galaxy::nebulae::{choose, nebula_rect};
     use crate::galaxy::testkit::{BLUE, FakeCatalog, galaxy, system};
     use crate::galaxy::view::{MAP_CENTER, SCALES};
     use crate::text::fixture::MonoMetrics;
@@ -2282,27 +2391,55 @@ mod tests {
     fn nebulae_are_drawn_before_every_line_and_dot() {
         let list = drawn(&map());
         let kinds: Vec<&str> = list.iter().map(kind).collect();
-        let last_picture = kinds.iter().rposition(|&k| k == "stretched");
+        let last_nebula = kinds.iter().rposition(|&k| k == "clipped");
         let first_shape = kinds.iter().position(|&k| k == "line" || k == "dot");
-        assert_eq!(last_picture, Some(0));
+        assert_eq!(last_nebula, Some(0));
         assert_eq!(first_shape, Some(1));
+        assert!(
+            matches!(
+                list.iter().next(),
+                Some(DrawCommand::Clipped { command, .. })
+                    if matches!(**command, DrawCommand::BlendedPicture { blend: Blend::Max, .. })
+            ),
+            "{:?}",
+            list.iter().next()
+        );
         assert!(!kinds.contains(&"sprite") && !kinds.contains(&"picture"));
     }
 
+    /// The viewer's frame for the nebula pass: the map area, no port
+    /// offset, at its view's centre and zoom.
+    fn viewer_frame(map: &GalaxyMap) -> NebulaFrame {
+        let view = view_of(map);
+        NebulaFrame {
+            origin: at(0.0, 0.0),
+            centre: (512, 304),
+            zoom: view.transform().zoom(),
+            scroll: (f64::from(view.center().x), f64::from(view.center().y)),
+            area: IRect::new(0, 0, 1024, 608),
+        }
+    }
+
     #[test]
-    fn a_nebula_is_its_placement_stretched() {
+    fn the_viewer_draws_a_nebula_through_its_own_frame_at_every_zoom() {
         let mut map = map();
         for _ in 0..SCALES.len() {
             let list = drawn(&map);
             let nebula = &map.model().nebulae()[0];
-            let placed = placement(nebula, &view_of(&map).transform()).expect("placed");
+            let rect = nebula_rect(nebula, &viewer_frame(&map));
+            let picture = choose(nebula, rect, PicturePick::LargestThatFits).expect("one");
+            let whole = rect.to_bounds();
             assert_eq!(
                 list.iter().next(),
-                Some(&DrawCommand::StretchedPicture {
-                    image: ImageKey::picture(placed.picture.id),
-                    top_left: placed.top_left,
-                    width: placed.width,
-                    height: placed.height,
+                Some(&DrawCommand::Clipped {
+                    clip: whole,
+                    command: Box::new(DrawCommand::BlendedPicture {
+                        image: ImageKey::picture(picture.id),
+                        top_left: whole.min,
+                        width: whole.width(),
+                        height: whole.height(),
+                        blend: Blend::Max,
+                    }),
                 })
             );
             map.input(&press(Key::Char('-')));
@@ -3189,7 +3326,11 @@ mod tests {
                 },
                 DrawCommand::Sprite { image, .. } => format!("cicn {}", image.id),
                 DrawCommand::Text { text, .. } => text.clone(),
-                DrawCommand::StretchedPicture { .. } => continue,
+                DrawCommand::Clipped { command, .. }
+                    if matches!(**command, DrawCommand::BlendedPicture { .. }) =>
+                {
+                    continue;
+                }
                 other => format!("{other:?}"),
             };
             if names.last() != Some(&name) {
@@ -3561,9 +3702,12 @@ mod tests {
         assert_eq!(rects(&list, BRIGHT_GREEN), [], "no brackets");
         assert_eq!(names(&list).len(), 2, "each name once");
         assert!(
-            !list
-                .iter()
-                .any(|command| matches!(command, DrawCommand::StretchedPicture { .. })),
+            !list.iter().any(|command| matches!(
+                command,
+                DrawCommand::StretchedPicture { .. }
+                    | DrawCommand::BlendedPicture { .. }
+                    | DrawCommand::Clipped { .. }
+            )),
             "no nebula"
         );
         assert_eq!(

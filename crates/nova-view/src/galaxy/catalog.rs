@@ -35,11 +35,15 @@ pub struct SystemEntry {
     pub stellars: Vec<StellarEntry>,
 }
 
-/// One of a nebula's pictures: its `PICT` ID and size in pixels.
+/// One of a nebula's pictures: its `PICT` ID, its slot and its size in
+/// pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NebulaPicture {
     /// The `PICT`'s ID.
     pub id: i16,
+    /// Its slot among the nebula's seven, 0 to 6: k in `PICT` 9500 + 7i +
+    /// k. The map falls back to slot 0 when no picture fits.
+    pub slot: u8,
     /// Its width in pixels.
     pub width: u32,
     /// Its height in pixels.

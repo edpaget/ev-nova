@@ -19,9 +19,9 @@
 //!   `_DrawMap` (@0xe7a8) draws them, while the session's jumps follow its
 //!   `HyperlinkRule` (by the engine's, one way along each system's own
 //!   links); a link to a missing system is reported as a problem.
-//! - Each nebula is drawn over its map rectangle at the current scale,
-//!   from whichever of its pictures is closest in size without being
-//!   enlarged.
+//! - The nebulae are kept for drawing ([`GalaxyModel::nebulae`],
+//!   [`GalaxyModel::catalog_nebulae`]); how each is drawn, its rect and
+//!   its picture, is the [`nebulae`](super::nebulae) module's.
 //! - A click selects the nearest system within [`HIT_RADIUS`]. Several
 //!   systems can share one position (alternate versions of a system that
 //!   the game swaps in later); repeated clicks there cycle through them.
@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{StarMap, StarSystem, Vec2};
 
-use super::catalog::{Galaxy, GovtId, NebulaEntry, NebulaPicture, SystemEntry, SystemId};
+use super::catalog::{Galaxy, GovtId, NebulaEntry, SystemEntry, SystemId};
 use super::view::{Bounds, Transform};
 use crate::{Color, Point};
 
@@ -47,46 +47,6 @@ pub const HIT_RADIUS: f32 = 8.0;
 pub fn system_color(govt: Option<GovtId>, colors: &BTreeMap<GovtId, u32>) -> Color {
     govt.and_then(|govt| colors.get(&govt))
         .map_or(NEUTRAL, |&raw| Color::from_rgb24(raw))
-}
-
-/// Where a nebula goes on screen and which picture fills it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NebulaPlacement {
-    /// The picture, stretched to fill the rectangle.
-    pub picture: NebulaPicture,
-    /// The rectangle's top-left corner on screen.
-    pub top_left: Point,
-    /// The rectangle's width on screen.
-    pub width: f32,
-    /// The rectangle's height on screen.
-    pub height: f32,
-}
-
-/// Where `nebula` is drawn through `transform`: its map rectangle scaled, filled by
-/// the smallest picture at least as wide as that, or else the largest, so
-/// a picture is shrunk rather than enlarged whenever possible. `None` when
-/// it has no pictures or no area.
-#[must_use]
-pub fn placement(nebula: &NebulaEntry, transform: &Transform) -> Option<NebulaPlacement> {
-    if nebula.width <= 0 || nebula.height <= 0 {
-        return None;
-    }
-    let scale = transform.scale;
-    let width = f32::from(nebula.width) * scale;
-    let height = f32::from(nebula.height) * scale;
-    let pictures = nebula.pictures.iter();
-    let picture = pictures
-        .clone()
-        .filter(|picture| picture.width as f32 >= width)
-        .min_by_key(|picture| picture.width)
-        .or_else(|| pictures.max_by_key(|picture| picture.width))?;
-    let corner = Point::new(f32::from(nebula.left), f32::from(nebula.top));
-    Some(NebulaPlacement {
-        picture: *picture,
-        top_left: transform.world_to_screen(corner),
-        width,
-        height,
-    })
 }
 
 /// A system as the map draws it.
@@ -284,6 +244,14 @@ impl GalaxyModel {
         &self.nebulae
     }
 
+    /// Every nebula the catalog has that can be drawn, by ascending ID,
+    /// whatever a session's galaxy says: active or not, explored or not.
+    /// The viewer draws these.
+    #[must_use]
+    pub fn catalog_nebulae(&self) -> &[NebulaEntry] {
+        &self.catalog_nebulae
+    }
+
     /// The smallest rectangle holding every system the catalog has, drawn
     /// or not, or `None` for none.
     #[must_use]
@@ -356,7 +324,7 @@ impl GalaxyModel {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::galaxy::catalog::NebulaId;
+    use crate::galaxy::catalog::{NebulaId, NebulaPicture};
     use crate::galaxy::view::{MAP_CENTER, MapView, SCALES};
     use nova_sim::story::GalaxyOverlay;
 
@@ -551,6 +519,7 @@ mod tests {
     fn picture(id: i16, width: u32) -> NebulaPicture {
         NebulaPicture {
             id,
+            slot: 0,
             width,
             height: width,
         }
@@ -571,58 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn a_nebula_fills_its_scaled_rectangle_at_every_zoom() {
-        let nebula = nebula(vec![picture(9500, 25)]);
-        for steps in -3..=3 {
-            let view = view_at(steps);
-            let scale = view.scale();
-            let placed = placement(&nebula, &view.transform()).expect("placed");
-            assert_eq!(placed.top_left, view.world_to_screen(at(-20.0, -40.0)));
-            assert_eq!(
-                (placed.width, placed.height),
-                (100.0 * scale, 100.0 * scale)
-            );
-            assert_eq!(placed.picture, picture(9500, 25), "the only picture");
-        }
-        let actual = placement(&nebula, &view_at(0).transform()).expect("placed");
-        assert_eq!(
-            actual.top_left,
-            at(MAP_CENTER.x - 20.0, MAP_CENTER.y - 40.0)
-        );
-    }
-
-    #[test]
-    fn the_picture_is_the_smallest_not_narrower_than_the_rectangle_or_else_the_largest() {
-        // Out of size order, as nebula 131's are not.
-        let nebula = nebula(vec![
-            picture(9521, 50),
-            picture(9522, 200),
-            picture(9523, 100),
-            picture(9524, 25),
-        ]);
-        let chosen = |steps| {
-            placement(&nebula, &view_at(steps).transform())
-                .expect("placed")
-                .picture
-                .id
-        };
-        // 42.2 wide: 50 is the smallest that covers it.
-        assert_eq!(chosen(-3), 9521);
-        // 56.25 and 75 wide: 100.
-        assert_eq!(chosen(-2), 9523);
-        assert_eq!(chosen(-1), 9523);
-        // 100 wide exactly: 100.
-        assert_eq!(chosen(0), 9523);
-        // 133.3, 177.8: 200; 237: none is that wide, so the largest.
-        assert_eq!(chosen(1), 9522);
-        assert_eq!(chosen(2), 9522);
-        assert_eq!(chosen(3), 9522);
-    }
-
-    #[test]
-    fn a_nebula_with_no_pictures_or_no_area_is_not_placed_or_kept() {
+    fn a_nebula_with_no_pictures_or_no_area_is_not_kept() {
         let none = nebula(Vec::new());
-        assert_eq!(placement(&none, &view_at(0).transform()), None);
         let flat = NebulaEntry {
             id: NebulaId(129),
             height: 0,
@@ -633,8 +552,6 @@ mod tests {
             width: -5,
             ..nebula(vec![picture(9514, 10)])
         };
-        assert_eq!(placement(&flat, &view_at(0).transform()), None);
-        assert_eq!(placement(&thin, &view_at(0).transform()), None);
         let sliver = NebulaEntry {
             id: NebulaId(131),
             width: 1,
@@ -860,6 +777,7 @@ mod tests {
         systems[1].govt = Some(GovtId(128));
         let picture = NebulaPicture {
             id: 9500,
+            slot: 0,
             width: 30,
             height: 30,
         };
@@ -905,6 +823,11 @@ mod tests {
         assert_eq!(model.links(), fresh.links());
         assert_eq!(model.problems(), fresh.problems());
         assert_eq!(nebula_ids(&model), [] as [NebulaId; 0], "none explored");
+        assert_eq!(
+            model.catalog_nebulae(),
+            fresh.nebulae(),
+            "the catalog's are every one"
+        );
     }
 
     #[test]

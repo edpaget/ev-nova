@@ -8,7 +8,11 @@
 //! - [`view`]: the viewer's [`MapView`], which part of the galaxy it shows
 //!   and at what scale, and the [`Transform`] every map draws through.
 //! - [`model`]: the [`GalaxyModel`], the galaxy laid out for drawing and
-//!   clicking: colours, hyperlinks, nebula placement and hit-testing.
+//!   clicking: colours, hyperlinks and hit-testing.
+//! - [`nebulae`]: the maps' nebulae, as `_MapDialogUpdate`'s nebula pass
+//!   draws them: the truncated rect, the picture, the clip and `addMax`.
+//! - [`update`]: which update item 3 shows, the full one or a drag's
+//!   partial one.
 //! - [`panel`]: the in-flight maps' two info panels, laid out at DITL
 //!   2000's offsets as `_MapDialogUpdate` draws them.
 //! - [`dialog`]: the in-flight maps' dialog, DITL 2000: where it sits,
@@ -32,8 +36,10 @@ pub mod dialog;
 pub mod find;
 pub mod map;
 pub mod model;
+pub mod nebulae;
 pub mod panel;
 pub mod place;
+pub mod update;
 pub mod view;
 
 #[cfg(test)]

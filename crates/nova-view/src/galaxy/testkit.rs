@@ -97,11 +97,13 @@ pub(crate) fn galaxy() -> Galaxy {
             pictures: vec![
                 NebulaPicture {
                     id: 9500,
+                    slot: 0,
                     width: 30,
                     height: 30,
                 },
                 NebulaPicture {
                     id: 9502,
+                    slot: 2,
                     width: 60,
                     height: 60,
                 },

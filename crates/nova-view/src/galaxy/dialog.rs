@@ -20,19 +20,28 @@
 //! 3. the six buttons (`_DrawMapButtons(−1)` @0xf6d9);
 //! 4. item 3 painted black (@0xf833).
 //!
-//! Then the map: its nebulae and what `_DrawMap` draws, clipped to item 3
-//! (`CopyBits` @0x100a2-0x10123, [`clip`](super::clip)), the scroll at
-//! item 3's centre ([`map_centre`]); then the panels. The second
-//! `_DrawMapButtons` after the panels (@0x111dc) draws the same pixels as
-//! the first, and is not drawn again.
+//! Then the map: the borders (galaxy-map-fidelity's phase 8), its
+//! nebulae, each clipped to its rect's overlap with item 3
+//! ([`nebulae`](super::nebulae), [`MapDialog::nebula_frame`]), and what
+//! `_DrawMap` draws, clipped to item 3 (`CopyBits` @0x100a2-0x10123,
+//! [`clip`](super::clip)), the scroll at item 3's centre
+//! ([`map_centre`]); then the panels. The second `_DrawMapButtons` after
+//! the panels (@0x111dc) draws the same pixels as the first, and is not
+//! drawn again.
 //!
 //! **Pointer.** A press in item 3 (`PtInRect`, half-open:
 //! [`in_map_item`]) is the map's (@0x14552); anywhere else is the
-//! buttons'. A press in the map that moves drags it ([`MapDialog`]).
+//! buttons'. A press in the map that moves drags it ([`MapDialog`]), and
+//! while it drags item 3 shows the partial update
+//! ([`update`](super::update)): each poll the pointer's whole pixel moved
+//! on draws one, and the release draws the full update only when the
+//! scroll moved from the drag's start.
 
 use super::buttons::{ButtonState, MapButtons};
+use super::nebulae::NebulaFrame;
 use super::panel::placed;
 use super::place::{ARROW_STEP, MapPlace};
+use super::update::MapUpdate;
 use super::view::{Bounds, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
@@ -81,10 +90,16 @@ pub fn map_area() -> Bounds {
 #[allow(clippy::cast_precision_loss)] // Dialog pixels.
 #[must_use]
 pub fn map_centre() -> Point {
-    let x = MAP_ITEM.left + (MAP_ITEM.right - MAP_ITEM.left) / 2;
-    let y = MAP_ITEM.top + (MAP_ITEM.bottom - MAP_ITEM.top) / 2;
+    let (x, y) = MAP_ITEM_CENTRE;
     Point::new(DIALOG_ORIGIN.x + x as f32, DIALOG_ORIGIN.y + y as f32)
 }
+
+/// Item 3's centre in dialog coordinates, (238, 218): [`map_centre`]
+/// less the dialog's origin.
+pub const MAP_ITEM_CENTRE: (i32, i32) = (
+    MAP_ITEM.left + (MAP_ITEM.right - MAP_ITEM.left) / 2,
+    MAP_ITEM.top + (MAP_ITEM.bottom - MAP_ITEM.top) / 2,
+);
 
 /// Whether `at` is in item 3, as `PtInRect` tests it: its left and top
 /// edges in, its right and bottom edges out.
@@ -117,17 +132,25 @@ pub fn draw_frame(
 }
 
 /// A drag in progress: the scroll and the pointer at the press, as
-/// `_DoSystemMap` keeps them (@0x137e9-0x1394d).
+/// `_DoSystemMap` keeps them (@0x137e9-0x1394d), and the whole pixel the
+/// pointer was at when last polled.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Drag {
     scroll: (i32, i32),
     from: Point,
+    last: (i32, i32),
+}
+
+/// `at` as `GetMouse` gives it: the whole pixel it is in.
+#[allow(clippy::cast_possible_truncation)] // Screen pixels.
+fn whole_pixel(at: Point) -> (i32, i32) {
+    (at.x.floor() as i32, at.y.floor() as i32)
 }
 
 /// What the in-flight maps keep of the dialog: where they look
 /// ([`MapPlace`]), the buttons' trackers, the borders setting their
 /// Borders button reads, `showClearRouteButton`, which enables Clear
-/// Route, and a drag in progress.
+/// Route, a drag in progress, and which update item 3 shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MapDialog {
     place: MapPlace,
@@ -136,6 +159,8 @@ pub struct MapDialog {
     /// `showClearRouteButton`: whether Clear Route is enabled.
     clear_route: bool,
     drag: Option<Drag>,
+    /// The update item 3 shows (see [`update`](super::update)).
+    update: MapUpdate,
 }
 
 impl MapDialog {
@@ -150,6 +175,7 @@ impl MapDialog {
             borders_shown: true,
             clear_route: false,
             drag: None,
+            update: MapUpdate::Full,
         }
     }
 
@@ -219,50 +245,101 @@ impl MapDialog {
     /// A key press or repeat (`_MapFilter`): the arrows scroll
     /// [`ARROW_STEP`] units (@0x142a3, @0x142c3, @0x14370, @0x14417),
     /// `-` is item 4 and `=` or `+` item 5, each stepping only while its
-    /// flag allows (@0x14271-0x14293). Whether it took the key.
+    /// flag allows (@0x14271-0x14293). Each arrow redraws item 3 (left and
+    /// right @0x142fc, up @0x143aa, down @0x1445a), and so does a zoom
+    /// step taken (@0x128d9, @0x12b0c); a refused one redraws nothing
+    /// (@0x12803-0x12816). Whether it took the key.
     pub fn key(&mut self, key: Key) -> bool {
-        match key {
-            Key::Left => self.place.scroll_by(-ARROW_STEP, 0),
-            Key::Right => self.place.scroll_by(ARROW_STEP, 0),
-            Key::Up => self.place.scroll_by(0, -ARROW_STEP),
-            Key::Down => self.place.scroll_by(0, ARROW_STEP),
-            Key::Char('-') => {
-                self.place.zoom_out();
-            }
-            Key::Char('=' | '+') => {
-                self.place.zoom_in();
-            }
+        let redraw = match key {
+            Key::Left => self.scroll_by(-ARROW_STEP, 0),
+            Key::Right => self.scroll_by(ARROW_STEP, 0),
+            Key::Up => self.scroll_by(0, -ARROW_STEP),
+            Key::Down => self.scroll_by(0, ARROW_STEP),
+            Key::Char('-') => self.place.zoom_out(),
+            Key::Char('=' | '+') => self.place.zoom_in(),
             _ => return false,
+        };
+        if redraw {
+            self.redraw();
         }
         true
     }
 
+    /// Moves the scroll by (`dx`, `dy`): an arrow, which always redraws.
+    fn scroll_by(&mut self, dx: i32, dy: i32) -> bool {
+        self.place.scroll_by(dx, dy);
+        true
+    }
+
     /// Starts a drag from a press at `at`, replacing any whose release
-    /// was lost.
+    /// was lost. It redraws nothing.
     pub fn press(&mut self, at: Point) {
         self.drag = Some(Drag {
             scroll: self.place.scroll(),
             from: at,
+            last: whole_pixel(at),
         });
     }
 
     /// The pointer moved to `to`: a drag in progress scrolls from where it
-    /// started ([`MapPlace::drag`]).
+    /// started ([`MapPlace::drag`]), and a poll whose whole pixel moved
+    /// draws the partial update, whether or not the scroll followed
+    /// (`_ScrollMapDisplay` @0x1128d-0x112fb).
     pub fn pointer_moved(&mut self, to: Point) {
-        if let Some(Drag { scroll, from }) = self.drag {
-            self.place.drag(scroll, from, to);
+        if let Some(drag) = &mut self.drag {
+            let at = whole_pixel(to);
+            if at != drag.last {
+                drag.last = at;
+                self.update = MapUpdate::Partial;
+            }
+            self.place.drag(drag.scroll, drag.from, to);
         }
     }
 
-    /// Ends any drag, where the release left it.
+    /// Ends any drag, where the release left it: with the full update
+    /// when the scroll moved from the drag's start, and otherwise with
+    /// item 3 as it was (@0x13934-0x13948).
     pub fn release(&mut self) {
-        self.drag = None;
+        if let Some(drag) = self.drag.take()
+            && drag.scroll != self.place.scroll()
+        {
+            self.redraw();
+        }
     }
 
-    /// Abandons any drag, where it got to, and any press on a button.
+    /// Abandons any drag, where it got to, as a release ends it (the
+    /// original's loop ends on `StillDown` going false), and any press on
+    /// a button.
     pub fn cancel_pointer(&mut self) {
-        self.drag = None;
+        self.release();
         self.buttons.cancel_pointer();
+    }
+
+    /// Redraws item 3 with the full update: an invalidation of item 3 or
+    /// a `_MapDialogUpdate` (see [`update`](super::update)).
+    pub fn redraw(&mut self) {
+        self.update = MapUpdate::Full;
+    }
+
+    /// The update item 3 shows.
+    #[must_use]
+    pub fn update(&self) -> MapUpdate {
+        self.update
+    }
+
+    /// What the nebula pass reads: the dialog's port at
+    /// [`DIALOG_ORIGIN`], item 3's centre (238, 218) and rect in it, and
+    /// the exact zoom and the scroll.
+    #[must_use]
+    pub fn nebula_frame(&self) -> NebulaFrame {
+        let (x, y) = self.place.scroll();
+        NebulaFrame {
+            origin: DIALOG_ORIGIN,
+            centre: MAP_ITEM_CENTRE,
+            zoom: self.place.zoom(),
+            scroll: (f64::from(x), f64::from(y)),
+            area: MAP_ITEM,
+        }
     }
 
     /// Draws the frame under the map ([`draw_frame`]) with this dialog's
@@ -283,6 +360,7 @@ mod tests {
     use super::*;
     use crate::DrawCommand;
     use crate::galaxy::buttons::{MapButton, ORDER};
+    use crate::geometry::intersection;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{Placement, SCREEN};
 
@@ -474,6 +552,109 @@ mod tests {
         dialog.cancel_pointer();
         dialog.pointer_moved(at(500.0, 300.0));
         assert_eq!(dialog.place().scroll(), (72, 109), "cancelled where it got");
+    }
+
+    // The update item 3 shows.
+
+    #[test]
+    fn a_new_dialog_shows_the_full_update() {
+        assert_eq!(MapDialog::new((0, 0)).update(), MapUpdate::Full);
+    }
+
+    #[test]
+    fn a_move_of_a_whole_pixel_in_a_drag_shows_the_partial_update() {
+        let mut dialog = MapDialog::new((100, 100));
+        dialog.pointer_moved(at(500.0, 500.0));
+        assert_eq!(dialog.update(), MapUpdate::Full, "no press");
+        dialog.press(at(400.2, 300.2));
+        dialog.pointer_moved(at(400.9, 300.7));
+        assert_eq!(dialog.update(), MapUpdate::Full, "the same whole pixel");
+        dialog.pointer_moved(at(401.0, 300.7));
+        assert_eq!(dialog.update(), MapUpdate::Partial);
+    }
+
+    #[test]
+    fn a_move_the_scroll_does_not_follow_still_shows_the_partial_update() {
+        // 1 px left at zoom 0.5625 from scroll 100: 100 + 0.5625 truncates
+        // to 100.
+        let mut dialog = MapDialog::new((100, 100));
+        dialog.press(at(400.0, 300.0));
+        dialog.pointer_moved(at(399.0, 300.0));
+        assert_eq!(dialog.place().scroll(), (100, 100));
+        assert_eq!(dialog.update(), MapUpdate::Partial);
+    }
+
+    #[test]
+    fn the_release_shows_the_full_update_only_when_the_scroll_moved() {
+        let mut dialog = MapDialog::new((100, 100));
+        dialog.press(at(400.0, 300.0));
+        dialog.pointer_moved(at(420.0, 300.0));
+        dialog.release();
+        assert_eq!(dialog.update(), MapUpdate::Full, "moved");
+
+        dialog.press(at(400.0, 300.0));
+        dialog.pointer_moved(at(420.0, 300.0));
+        dialog.pointer_moved(at(400.0, 300.0));
+        dialog.release();
+        assert_eq!(dialog.update(), MapUpdate::Partial, "brought back");
+        dialog.redraw();
+        assert_eq!(dialog.update(), MapUpdate::Full, "until a redraw");
+    }
+
+    #[test]
+    fn a_cancelled_drag_ends_as_a_release_does() {
+        let mut dialog = MapDialog::new((100, 100));
+        dialog.press(at(400.0, 300.0));
+        dialog.pointer_moved(at(399.0, 300.0));
+        dialog.cancel_pointer();
+        assert_eq!(dialog.update(), MapUpdate::Partial, "back where it began");
+        dialog.press(at(400.0, 300.0));
+        dialog.pointer_moved(at(380.0, 300.0));
+        dialog.cancel_pointer();
+        assert_eq!(dialog.update(), MapUpdate::Full, "moved");
+    }
+
+    #[test]
+    fn the_arrows_and_a_zoom_step_taken_redraw_and_a_refused_one_does_not() {
+        let partial = || {
+            let mut dialog = MapDialog::new((100, 100));
+            dialog.press(at(400.0, 300.0));
+            dialog.pointer_moved(at(399.0, 300.0));
+            dialog.release();
+            assert_eq!(dialog.update(), MapUpdate::Partial);
+            dialog
+        };
+        for key in [Key::Left, Key::Right, Key::Up, Key::Down, Key::Char('-')] {
+            let mut dialog = partial();
+            dialog.key(key);
+            assert_eq!(dialog.update(), MapUpdate::Full, "{key:?}");
+        }
+        let mut dialog = partial();
+        dialog.key(Key::Char('='));
+        assert_eq!(dialog.update(), MapUpdate::Full, "a step in taken");
+        let mut dialog = partial();
+        dialog.place_mut().zoom_in();
+        dialog.key(Key::Char('+'));
+        assert_eq!(dialog.update(), MapUpdate::Partial, "refused at the limit");
+        dialog.key(Key::Char('x'));
+        assert_eq!(dialog.update(), MapUpdate::Partial, "not taken");
+    }
+
+    #[test]
+    fn the_nebulae_are_drawn_in_the_dialogs_port_around_item_3s_centre() {
+        let mut dialog = MapDialog::new((10, -20));
+        dialog.place_mut().zoom_out();
+        assert_eq!(
+            dialog.nebula_frame(),
+            NebulaFrame {
+                origin: at(212.0, 128.0),
+                centre: (238, 218),
+                zoom: dialog.place().zoom(),
+                scroll: (10.0, -20.0),
+                area: MAP_ITEM,
+            }
+        );
+        assert_eq!(dialog.place().zoom(), 0.5625 * 1.333_333, "the exact zoom");
     }
 
     #[test]
@@ -721,7 +902,8 @@ mod tests {
                 }
                 DrawCommand::Dot { center, .. } => assert!(inside(*center), "{command:?}"),
                 DrawCommand::Clipped { clip, command } => {
-                    assert_eq!(*clip, area);
+                    // Item 3, or a nebula's rect within it.
+                    assert_eq!(intersection(*clip, area), Some(*clip), "{command:?}");
                     if let DrawCommand::Text { text, .. } = &**command {
                         names.push(text.clone());
                     }
@@ -1039,7 +1221,8 @@ mod tests {
         assert!(
             !list
                 .iter()
-                .any(|command| matches!(command, DrawCommand::Clipped { .. }))
+                .any(|command| matches!(command, DrawCommand::Clipped { clip, .. } if *clip == map_area())),
+            "nothing clipped to item 3"
         );
     }
 

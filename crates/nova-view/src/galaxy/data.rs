@@ -108,13 +108,16 @@ fn nebula(
     if PICTURED_NEBULAE.contains(&entry.id) {
         // In range, the IDs run from 9500 to 9723, well inside an i16.
         let first = FIRST_NEBULA_PICT + (entry.id - PICTURED_NEBULAE.start()) * PICTURES_PER_NEBULA;
-        for id in first..first + PICTURES_PER_NEBULA {
+        for slot in 0..PICTURES_PER_NEBULA {
+            let id = first + slot;
             let Some(resource) = data.resource(PICT, id) else {
                 continue;
             };
             match decode_pict(resource.resource.data()) {
                 Ok(image) => pictures.push(NebulaPicture {
                     id,
+                    // 0 to 6.
+                    slot: slot as u8,
                     width: image.width(),
                     height: image.height(),
                 }),
@@ -461,22 +464,40 @@ mod tests {
                 pictures: vec![
                     NebulaPicture {
                         id: 9500,
+                        slot: 0,
                         width: 15,
                         height: 12
                     },
                     NebulaPicture {
                         id: 9502,
+                        slot: 2,
                         width: 60,
                         height: 50
                     },
                     NebulaPicture {
                         id: 9506,
+                        slot: 6,
                         width: 120,
                         height: 100
                     },
                 ],
             }]
         );
+    }
+
+    #[test]
+    fn a_nebula_missing_its_first_picture_keeps_its_other_slots() {
+        let data = store(&[
+            (Nebula::TYPE, 129, None, nebula(0, 0, 10, 10)),
+            (PICT, 9508, None, picture(3, 4)),
+            (PICT, 9510, None, picture(5, 6)),
+        ]);
+        let slots: Vec<(i16, u8)> = data.galaxy().nebulae[0]
+            .pictures
+            .iter()
+            .map(|p| (p.id, p.slot))
+            .collect();
+        assert_eq!(slots, [(9508, 1), (9510, 3)]);
     }
 
     #[test]
