@@ -159,3 +159,15 @@ fn nearest_exit_point_defence_fires_from_the_exit_nearest_its_missile() {
         );
     }
 }
+
+#[test]
+fn an_armament_takes_carried_cursors_and_fold_set_keeping_its_weapons() {
+    let built = Armament::new([(WeaponSpec::new(&gun()), 2)]);
+    assert_eq!(built.fold_set(), 0, "0 when built");
+    let mut cursors = ExitCursors::default();
+    cursors.step(ExitKind::Turret);
+    let carried = built.clone().with_exit_cursors(cursors).with_fold_set(3);
+    assert_eq!(*carried.exit_cursors(), cursors);
+    assert_eq!(carried.fold_set(), 3);
+    assert_eq!(carried.mounts(), built.mounts(), "the same weapons");
+}
