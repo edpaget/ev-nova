@@ -2230,6 +2230,42 @@ mod tests {
         assert_eq!(tallied, BTreeMap::from([(OutfitId(129), 1)]));
     }
 
+    #[test]
+    fn the_owned_outfits_mods_are_each_records_four_with_its_count() {
+        let records = [
+            crate::fixture::outfit(128, &[(1, 100), (2, 50)]),
+            crate::fixture::outfit(129, &[(3, 10)]),
+            crate::fixture::outfit(130, &[(4, -5), (5, 6), (6, 7), (7, 8)]),
+        ];
+        let owned = BTreeMap::from([(OutfitId(128), 2), (OutfitId(130), 1)]);
+        let at = |mod_type, mod_val, count| OutfitMod {
+            mod_type,
+            mod_val,
+            count,
+        };
+        assert_eq!(
+            outfit_mods(&owned, &records),
+            [
+                at(1, 100, 2),
+                at(2, 50, 2),
+                at(0, 0, 2),
+                at(0, 0, 2),
+                at(4, -5, 1),
+                at(5, 6, 1),
+                at(6, 7, 1),
+                at(7, 8, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_outfit_owned_or_none_with_a_record_gives_no_mods() {
+        let records = [crate::fixture::outfit(128, &[(1, 100)])];
+        assert_eq!(outfit_mods(&BTreeMap::new(), &records), []);
+        let unlisted = BTreeMap::from([(OutfitId(999), 3)]);
+        assert_eq!(outfit_mods(&unlisted, &records), []);
+    }
+
     // `_LoadPluginString` (@0x71a8e-0x71af4) with its `GetIndString`
     // fallback.
 
