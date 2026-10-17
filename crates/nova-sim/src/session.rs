@@ -379,6 +379,7 @@ mod hooks;
 mod hover;
 mod jump_collapse;
 mod map;
+mod map_click;
 mod map_panel;
 mod map_search;
 mod mission_cargo;
@@ -412,6 +413,7 @@ mod target_panel;
 mod tutorial;
 
 pub use hooks::HookRules;
+pub use map_click::{MapClicked, MapPress};
 pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
@@ -3240,11 +3242,11 @@ impl Session {
     /// no route the course is cleared, and the nav selection let go with
     /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
     ///
-    /// The original selects at the click only a system the current one
-    /// lists (@0x137b3-0x137bb), and cues a longer route as its map closes
-    /// (@0x13c16); here the cue comes at the click. The map covers the
-    /// whole screen and hides the HUD, so the difference crosses no
-    /// boundary the player sees.
+    /// This is a click on the course map by [`RuleKey::MapPlotting`]'s
+    /// other reading ([`Session::map_click`]), and a helper for tests and
+    /// tools. The original has no planner: its click selects only a system
+    /// the current one lists (@0x137b3-0x137bb), a Shift-click adds a hop
+    /// at a time, and the course is cued as the map closes (@0x13c16).
     pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
         match self
             .galaxy

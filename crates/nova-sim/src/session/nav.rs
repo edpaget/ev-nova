@@ -114,11 +114,18 @@
 //!   the raw selection) and puts them back after each map opened from it
 //!   (@0x492b7-0x492d3), keeping the save for the next map. Its own close
 //!   restores nothing (@0x49414-0x4946f).
-//! - A map click ([`Session::plot_course`], `_DoSystemMap`
-//!   @0x136d7-0x137c7): a route cues its first hop, the original's click on
-//!   a system the current one lists (@0x137b3-0x137bb), or its cue as the
-//!   map closes for a longer route (@0x13c16); no route lets go of the
-//!   selection and keeps the mode (@0x13788-0x13790).
+//! - A plain click on the course map in flight ([`Session::map_click`],
+//!   `_DoSystemMap` @0x136d7-0x137c7): mode 3 with the system picked when
+//!   the ship can jump there, the slot noted the first at its place
+//!   (@0x13739-0x137bb); otherwise the selection let go, the mode kept
+//!   (@0x13788-0x13790). Docked it writes neither (@0x136ec). A
+//!   Shift-click writes neither, in flight or docked; the cue as the map
+//!   closes (@0x13c16) selects the course's first hop. By
+//!   [`RuleKey::MapPlotting`]'s other reading the click plots
+//!   ([`Session::plot_course`]): a route cues its first hop, and no route
+//!   lets go of the selection and keeps the mode.
+//! - Clear Route ([`Session::clear_route`], @0x12c69-0x12dbf): the
+//!   selection let go, the mode kept, the course cleared.
 //! - The galaxy map's Tab or `\` ([`Session::cycle_map_selection`],
 //!   `_MapFilter` @0x13f0f-0x13fac): mode 3 with the next Con slot that
 //!   holds a link, stepping on from +0x6c, or with nothing; in silence,
@@ -198,7 +205,7 @@ use crate::{RuleKey, RuleSource, StellarPick};
 
 /// How many Con slots a `sÿst` has, `Con1-Con16`: the slots the
 /// original's link cycles step through.
-const CON_SLOTS: usize = 16;
+pub(super) const CON_SLOTS: usize = 16;
 
 /// The Con slot a mode-3 selection was written from, as the original
 /// keeps it at +0x6c where ours keeps the system. A setter that knows the
@@ -366,16 +373,24 @@ impl Session {
             .jumps(self.pilot.system, self.hyperlinks)
             .contains(&hop)
         {
-            self.set_nav(NavMode::Hyperspace(Some(hop)));
-            self.nav_slot = self.galaxy.same_place(hop).and_then(|place| {
-                let slot = self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))?;
-                Some(NavSlot {
-                    system: self.pilot.system,
-                    slot,
-                    selected: hop,
-                })
-            });
+            self.select_at_place(hop);
         }
+    }
+
+    /// Mode 3 with `system` selected, the Con slot noted
+    /// ([`NavSlot`]) the first of the current system's whose system stands
+    /// at its place, as `_CueNextHyperRouteDest` (@0xe30f-0xe344) and the
+    /// map's click (`_DoSystemMap` @0x13739-0x137bb) write +0x6c.
+    pub(super) fn select_at_place(&mut self, system: SystemId) {
+        self.set_nav(NavMode::Hyperspace(Some(system)));
+        self.nav_slot = self.galaxy.same_place(system).and_then(|place| {
+            let slot = self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))?;
+            Some(NavSlot {
+                system: self.pilot.system,
+                slot,
+                selected: system,
+            })
+        });
     }
 
     /// Runs `_HandlePlayer`'s Nav Off / Hyperspace Mode block for one
