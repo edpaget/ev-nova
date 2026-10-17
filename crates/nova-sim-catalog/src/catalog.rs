@@ -2191,6 +2191,27 @@ pub fn tally(items: impl IntoIterator<Item = (OutfitId, u16)>) -> BTreeMap<Outfi
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_tally_adds_up_each_outfits_repeats() {
+        let tallied = tally([(OutfitId(130), 2), (OutfitId(128), 1), (OutfitId(130), 3)]);
+        assert_eq!(
+            tallied,
+            BTreeMap::from([(OutfitId(128), 1), (OutfitId(130), 5)])
+        );
+    }
+
+    #[test]
+    fn a_tally_saturates() {
+        let tallied = tally([(OutfitId(128), u16::MAX - 1), (OutfitId(128), 2)]);
+        assert_eq!(tallied, BTreeMap::from([(OutfitId(128), u16::MAX)]));
+    }
+
+    #[test]
+    fn a_tally_lists_no_outfit_of_none() {
+        let tallied = tally([(OutfitId(128), 0), (OutfitId(129), 1), (OutfitId(128), 0)]);
+        assert_eq!(tallied, BTreeMap::from([(OutfitId(129), 1)]));
+    }
+
     // `_LoadPluginString` (@0x71a8e-0x71af4) with its `GetIndString`
     // fallback.
 

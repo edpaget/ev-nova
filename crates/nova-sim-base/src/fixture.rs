@@ -185,4 +185,54 @@ mod tests {
         assert_eq!(chance.below(10), 9);
         assert_eq!(chance.below(1), 0);
     }
+
+    #[test]
+    fn draws_come_in_queue_order_then_the_last_outcome() {
+        let mut chance = Draws::of(&[3, 0, 7]);
+        let draws = [10, 5, 8, 6, 1].map(|n| chance.below(n));
+        assert_eq!(draws, [3, 0, 7, 5, 0]);
+    }
+
+    #[test]
+    fn draws_record_each_n_asked_in_order() {
+        let mut chance = Draws::of(&[2]);
+        chance.below(4);
+        chance.below(9);
+        chance.below(9);
+        assert_eq!(chance.asked, [4, 9, 9]);
+    }
+
+    #[test]
+    fn draws_never_fire() {
+        let mut chance = Draws::of(&[1]);
+        assert!(!chance.fires(100));
+        assert_eq!(chance.below(2), 1, "a fire spends no draw");
+    }
+
+    #[test]
+    #[should_panic(expected = "drew 5 below 5")]
+    fn a_queued_draw_outside_its_range_is_a_mistake() {
+        Draws::of(&[5]).below(5);
+    }
+
+    #[test]
+    fn a_range_gives_its_outcome_else_the_last_recording_each_range() {
+        let mut chance = Ranged::of(&[(10, 3), (4, 0)]);
+        let draws = [10, 6, 4, 10].map(|n| chance.below(n));
+        assert_eq!(draws, [3, 5, 0, 3]);
+        assert_eq!(chance.asked, [10, 6, 4, 10]);
+        assert!(chance.was_asked(6));
+        assert!(!chance.was_asked(7));
+    }
+
+    #[test]
+    fn a_ranged_chance_never_fires() {
+        assert!(!Ranged::of(&[]).fires(100));
+    }
+
+    #[test]
+    #[should_panic(expected = "drew 4 below 3")]
+    fn a_ranged_outcome_outside_its_range_is_a_mistake() {
+        Ranged::of(&[(3, 4)]).below(3);
+    }
 }
