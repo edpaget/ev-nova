@@ -31,6 +31,8 @@
 //!   `_DrawCenteredText`'s centring.
 //! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
+//! - [`shot_fade`]: how a shot fades in and out, and how a translucent
+//!   one is added to what is under it ([`ShotShade`](shot_fade::ShotShade)).
 //! - [`spin`]: the index each spinning shot's frames start on.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
@@ -56,6 +58,7 @@ pub mod jump;
 pub mod murk;
 mod pen;
 pub mod radar;
+pub mod shot_fade;
 pub mod spin;
 pub mod sprite;
 pub mod target;

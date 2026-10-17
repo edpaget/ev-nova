@@ -184,6 +184,9 @@ impl<C> FlightView<C> {
             return;
         };
         let npcs = self.shown_npcs();
+        let fade = session
+            .rules()
+            .source_for(nova_sim::RuleKey::TranslucentShotFade);
         let stacked = sprite_stack(session.draw_layers(), self.shown_shots(camera));
         for sprite in stacked {
             match sprite {
@@ -195,7 +198,7 @@ impl<C> FlightView<C> {
                         self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
                     }
                 }
-                Sprite::Shot(shot) => weapons::draw_shot(list, &shot, &self.looks),
+                Sprite::Shot(shot) => weapons::draw_shot(list, &shot, &self.looks, fade),
             }
         }
     }

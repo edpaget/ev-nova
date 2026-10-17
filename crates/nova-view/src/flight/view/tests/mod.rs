@@ -102,6 +102,8 @@ struct FakeCatalog {
     sol_navs: Vec<Option<(u32, u16)>>,
     /// System 130's `Interference`: none, by default.
     sol_interference: i16,
+    /// System 130's `Murk`: none, by default.
+    sol_murk: i16,
     /// System 131's `Message`: no buoy (−1), by default.
     alpha_buoy: i16,
     /// The stellars Sol lists after Earth and the Moon: none, by
@@ -319,6 +321,7 @@ fn catalog() -> FakeCatalog {
         home: false,
         sol_navs: Vec::new(),
         sol_interference: 0,
+        sol_murk: 0,
         alpha_buoy: -1,
         sol_more: Vec::new(),
         gates: Vec::new(),
@@ -450,6 +453,7 @@ impl PilotCatalog for FakeCatalog {
             StarSystem {
                 stellars: self.sol_navs.clone(),
                 interference: self.sol_interference,
+                murk: self.sol_murk,
                 ..star(130, (0.0, 0.0), &sol)
             },
             StarSystem {
