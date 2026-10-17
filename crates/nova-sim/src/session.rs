@@ -16778,6 +16778,50 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_players_missile_reads_its_npc_targets_class_default_jammers_by_either_reading() {
+        // InhJam 57 plus two counted slots of +30; the zero-count slot is skipped.
+        // A roll r is jammed iff the jamming is at least 101 - r.
+        for (flags, ai_type, source, roll, jammed) in [
+            (0, AiType::Warship, RuleSource::Engine, 1, true),
+            (HALF_JAMMING, AiType::Warship, RuleSource::Engine, 43, true),
+            (HALF_JAMMING, AiType::Warship, RuleSource::Engine, 42, false),
+            (
+                HALF_JAMMING,
+                AiType::WimpyTrader,
+                RuleSource::Bible,
+                13,
+                true,
+            ),
+            (
+                HALF_JAMMING,
+                AiType::WimpyTrader,
+                RuleSource::Bible,
+                12,
+                false,
+            ),
+        ] {
+            let mut catalog = jamming_catalog(jammable(0), blaster(), flags);
+            catalog.ship_records[0].defaults =
+                vec![(OutfitId(240), 1), (OutfitId(240), 1), (OutfitId(240), 0)];
+            let rules = Rulebook::default().with_override(RuleKey::JamHalving, source);
+            let mut session = beside_an_npc(&catalog, ai_type).with_rules(rules);
+            session.target = Some(NpcId(0));
+            session.hold_trigger(FIRE);
+            let heading = missile_after(
+                &mut session,
+                16,
+                Rules::default(),
+                &mut Ranged::of(&[(101, roll)]),
+            );
+            let expected = if jammed { 0.0 } else { 7.0 };
+            assert!(
+                (heading - expected).abs() < 1e-4,
+                "{flags:#x} {ai_type:?} {source:?} {roll}: {heading}"
+            );
+        }
+    }
+
+    #[test]
     fn an_npcs_missile_is_jammed_by_a_jammer_the_player_owns() {
         let catalog = jamming_catalog(blaster(), jammable(0), 0);
         for (owned, roll, jammed) in [(1, 71, true), (1, 70, false), (0, 71, false)] {
