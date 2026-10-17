@@ -51,6 +51,7 @@
 use std::num::NonZeroU16;
 
 use crate::catalog::ShipExits;
+use crate::chance::Chance;
 use crate::flight::normalized;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -298,6 +299,13 @@ impl ExitCursors {
         usize::from(self.0[kind.index()])
     }
 
+    /// Moves `kind`'s cursor on one exit, round from 3 to 0, as a shot or
+    /// beam of `kind` from a hull with no exit points does (see the module
+    /// docs).
+    pub fn step(&mut self, kind: ExitKind) {
+        self.step_from(kind, self.next(kind));
+    }
+
     /// Moves `kind`'s cursor on from `index`, round from 3 to 0.
     fn step_from(&mut self, kind: ExitKind, index: usize) {
         self.0[kind.index()] = ((index + 1) % EXITS) as u8;
@@ -349,10 +357,22 @@ impl ExitCursors {
     }
 }
 
+/// Steps `word`, the ship word a beam of `ExitType` -1 indexes as its
+/// cursor (the fold set, +0xc8fc), as `_SpawnBeam` steps a cursor: a word
+/// above 3 is first drawn anew below 4 on `chance` (@0x450ff-0x45116), then
+/// it moves on one, round from 3 to 0 (@0x45211-0x4523d).
+pub fn step_stray(word: &mut u16, chance: &mut dyn Chance) {
+    if *word > 3 {
+        *word = chance.roll(4);
+    }
+    *word = (*word + 1) % EXITS as u16;
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use nova_sim_base::fixture::Draws;
 
     fn frames(n: u16) -> NonZeroU16 {
         NonZeroU16::new(n).expect("non-zero")
@@ -673,6 +693,42 @@ mod tests {
         );
         assert_eq!(exit(&mut cursors, 0.0, None), 3, "with no target, in turn");
         assert_eq!(cursors.next(ExitKind::Beam), 0);
+    }
+
+    #[test]
+    fn a_cursor_steps_on_alone_round_from_3_to_0() {
+        let mut cursors = ExitCursors::default();
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            cursors.step(ExitKind::Turret);
+            seen.push(cursors.next(ExitKind::Turret));
+        }
+        assert_eq!(seen, [1, 2, 3, 0, 1]);
+        assert_eq!(cursors.next(ExitKind::Gun), 0, "untouched");
+    }
+
+    #[test]
+    fn a_stray_word_steps_round_from_3_to_0() {
+        let mut chance = Draws::of(&[]);
+        let mut word = 0;
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            step_stray(&mut word, &mut chance);
+            seen.push(word);
+        }
+        assert_eq!(seen, [1, 2, 3, 0]);
+        assert!(chance.asked.is_empty(), "no draw for a word of 0-3");
+    }
+
+    #[test]
+    fn a_stray_word_above_3_is_redrawn_below_4_before_its_step() {
+        for draw in 0..4 {
+            let mut chance = Draws::of(&[draw]);
+            let mut word = 5;
+            step_stray(&mut word, &mut chance);
+            assert!(word < 4, "{word}");
+            assert_eq!(chance.asked, [4], "one draw below 4");
+        }
     }
 
     #[test]

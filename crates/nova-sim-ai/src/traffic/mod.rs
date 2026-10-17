@@ -105,6 +105,8 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 pub mod autopilot;
+pub mod berth_exits;
+pub mod berth_kept;
 pub mod berth_picks;
 pub mod destination;
 pub mod emerge;
