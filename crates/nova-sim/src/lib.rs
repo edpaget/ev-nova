@@ -9,7 +9,7 @@
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The crate's own modules are the session layer's: [`session`],
 //! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
-//! [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
+//! [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
 //! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
 //! with the test support in `fixture`.
 //!
@@ -169,6 +169,10 @@
 //!   [`legal::systems_from_govts`], which derives the records in each
 //!   system, and [`legal::spread_statuses`], which spreads a new pilot's
 //!   `chär` statuses.
+//! - [`map_borders`]: the galaxy map's government borders, as
+//!   `_AddSystemInfluenceToMap` and `_RecalcMapInfluence` work them out: a
+//!   grid of screen cells of four slots each ([`map_borders::grid`]), and
+//!   the coarse and fine passes over it ([`map_borders::passes`]).
 //! - [`map_panel`]: what the galaxy map's two info panels say about the
 //!   system selected, as `_MapDialogUpdate` decides it: the ports, the
 //!   hazards, the title, and the explored level's goods and services
@@ -346,6 +350,7 @@ pub use nova_sim_ai::gate;
 pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
 pub mod glow;
+pub mod map_borders;
 pub mod map_panel;
 pub mod map_route;
 pub mod map_search;
