@@ -1058,6 +1058,23 @@ mod tests {
     }
 
     #[test]
+    fn point_defence_picks_the_ship_nearer_its_defender_wherever_the_defender_is() {
+        let away = ShipState {
+            position: Vec2::new(500.0, 500.0),
+            ..ShipState::default()
+        };
+        let picked = |candidates: &[Candidate]| {
+            choose_ship(GUARD, &away, &HullSpec::default(), &quad(0), candidates)
+                .map(|candidate| candidate.target.ship)
+        };
+        let beside = attacker(ENEMY, 600.0, 500.0);
+        let below = attacker(LEAD, 500.0, 590.0);
+        assert_eq!(picked(&[beside, below]), Some(LEAD), "90 off, not 100");
+        let farther = attacker(LEAD, 500.0, 610.0);
+        assert_eq!(picked(&[beside, farther]), Some(ENEMY), "100 off, not 110");
+    }
+
+    #[test]
     fn point_defence_never_picks_its_own_ship() {
         assert_eq!(ship_picked(GUARD, &[attacker(DEFENDER, 0.0, 0.0)]), None);
     }
@@ -1155,6 +1172,11 @@ mod tests {
         assert_eq!(ship_picked_by(GUARD, &quad(0), 0, &behind), Some(ENEMY));
         assert_eq!(ship_picked_by(GUARD, &quad(BLIND_REAR), 0, &behind), None);
         assert_eq!(ship_picked_by(GUARD, &quad(0), BLIND_REAR, &behind), None);
+        assert_eq!(
+            ship_picked_by(GUARD, &quad(BLIND_REAR), BLIND_REAR, &behind),
+            None,
+            "both"
+        );
         let ahead = [attacker(ENEMY, 0.0, -100.0)];
         assert_eq!(
             ship_picked_by(GUARD, &quad(BLIND_REAR), BLIND_REAR, &ahead),

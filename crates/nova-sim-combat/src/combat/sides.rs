@@ -428,6 +428,31 @@ mod tests {
     }
 
     #[test]
+    fn a_shot_whose_firer_left_the_fight_passes_its_wingman_by_the_ties_it_kept() {
+        let shot = Shot {
+            source: Source::Ship(Ties {
+                leader: Some(npc(5)),
+                ..Ties::default()
+            }),
+            ..Shot::launch(
+                WeaponSpec::new(&weapon(128)),
+                npc(1),
+                npc(1),
+                &ShipState::default(),
+                0.0,
+            )
+        };
+        let targets = [
+            ship(npc(5), None),
+            ship(npc(2), Some(npc(5))),
+            ship(npc(3), None),
+        ];
+        let sides = among(&targets);
+        assert!(!sides.shot_can_hit(&shot, &targets[1]), "led by its leader");
+        assert!(sides.shot_can_hit(&shot, &targets[2]));
+    }
+
+    #[test]
     fn two_ships_share_a_parent_when_their_leaders_lead_up_to_one_ship() {
         // 4 escorts the player and leads 5; 6 escorts 7.
         let targets = [

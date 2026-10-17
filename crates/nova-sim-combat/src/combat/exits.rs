@@ -591,6 +591,22 @@ mod tests {
     }
 
     #[test]
+    fn the_nearest_exit_is_nearest_by_its_squared_distance_on_both_axes() {
+        // 5 across and 50 down from the target, or 20 across and 10 down.
+        let gun = exits(&raw([(5, 0), (20, 40), (5, 0), (5, 0)]));
+        assert_eq!(
+            gun.nearest(
+                Vec2::ZERO,
+                0.0,
+                ExitKind::Gun,
+                Vec2::new(0.0, -50.0),
+                Compression::ByOffset
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn the_nearest_exit_is_measured_from_where_the_ship_is() {
         let gun = exits(&raw([(-10, 0), (10, 0), (0, 0), (0, 0)]));
         assert_eq!(

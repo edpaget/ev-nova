@@ -881,6 +881,25 @@ mod tests {
     }
 
     #[test]
+    fn the_cone_is_measured_from_its_start_wherever_it_is_by_either_angle() {
+        let start = Vec2::new(100.0, 100.0);
+        for angle in [ConeAngle::Plain, ConeAngle::Wrapped] {
+            let hit = |centre| cone(start, 90.0, 100.0, 31, centre, angle);
+            assert_eq!(
+                hit(Vec2::new(150.0, 100.0)),
+                Some(2_500.0),
+                "{angle:?}: 50 ahead"
+            );
+            assert_eq!(hit(Vec2::new(50.0, 100.0)), None, "{angle:?}: 50 astern");
+            assert_eq!(
+                hit(Vec2::new(-50.0, 100.0)),
+                None,
+                "{angle:?}: out of reach"
+            );
+        }
+    }
+
+    #[test]
     fn the_cone_takes_the_nearest_centre_not_the_first_contact() {
         let beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), Aiming::Ahead);
         let targets = [sized(2, 60.0, 50.0, 200.0), sized(3, 40.0, 0.0, 20.0)];
@@ -1159,6 +1178,12 @@ mod tests {
             on_beam(npc(3), 60.0, Ties::default()),
         ];
         assert_eq!(first(FIRER, led_by(npc(5)), &targets), Some(npc(3)));
+    }
+
+    #[test]
+    fn the_players_beam_hits_a_ship_another_npc_leads() {
+        let led = [on_beam(npc(2), 30.0, led_by(npc(5)))];
+        assert_eq!(first(ShipRef::Player, Ties::default(), &led), Some(npc(2)));
     }
 
     #[test]

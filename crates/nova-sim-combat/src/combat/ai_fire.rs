@@ -307,6 +307,28 @@ mod tests {
     }
 
     #[test]
+    fn a_turrets_box_is_about_its_firer_wherever_the_firer_is() {
+        let turret = guided(4);
+        let away = ShipState {
+            position: Vec2::new(1000.0, 1000.0),
+            ..firer()
+        };
+        let from_away = |x: f32, y: f32| {
+            spawn(
+                &turret,
+                &away,
+                &HullSpec::default(),
+                Some(&at(x, y)),
+                RuleSource::Engine,
+            )
+            .is_some()
+        };
+        assert!(from_away(1231.0, 769.0), "231 off on each axis");
+        assert!(!from_away(1232.0, 1000.0), "232 off: on the edge");
+        assert!(!from_away(231.0, -231.0), "inside the box about the origin");
+    }
+
+    #[test]
     fn a_turret_holds_fire_at_a_target_in_its_blind_spot_by_the_bearing() {
         let rear_blind = WeaponSpec {
             flags: BLIND_REAR,
@@ -324,6 +346,18 @@ mod tests {
         assert_eq!(
             spawn(&beam, &firer(), &hull, Some(&behind), RuleSource::Engine),
             None
+        );
+        // Both blind astern, still blind astern.
+        assert_eq!(
+            spawn(
+                &rear_blind,
+                &firer(),
+                &hull,
+                Some(&behind),
+                RuleSource::Engine
+            ),
+            None,
+            "the weapon's and the ship's together"
         );
         // A quadrant turret takes no blind spot here.
         let rear = WeaponSpec {

@@ -3187,6 +3187,20 @@ fn touches_a_ship(shot: &Shot, from: Vec2, sides: &Sides) -> bool {
     !shot.expired() && shot.touched(from, sides).is_some()
 }
 
+/// What a missile lock strikes with: `_DamageShip(.., -32000, -32000, ..,
+/// can't kill 1, can't disable 1, ..)`, no damage (`_DamageShip` skips
+/// damage at or below none), with both floors. With no damage the floors
+/// never act, as they act only on armour the hit itself takes; it is a
+/// constant so that no mutant of its flags, which no test could tell
+/// apart, is made.
+const LOCK_HIT: Hit = Hit {
+    mass: 0.0,
+    energy: 0.0,
+    passes_shields: false,
+    cant_kill: true,
+    cant_disable: true,
+};
+
 /// The missile lock `shot` makes this tick among `sides`, if any
 /// (`_HandleShot` @0x35627-0x35863): a homing shot the player fired, not
 /// jammed, aimed at an NPC that neither the player leads nor shares the
@@ -3226,11 +3240,7 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
         by: Some(ShipRef::Player),
         weapon: Some(shot.weapon.id),
         at: target.position,
-        hit: Hit {
-            cant_kill: true,
-            cant_disable: true,
-            ..Hit::default()
-        },
+        hit: LOCK_HIT,
         direct: true,
         intended: true,
         lock: true,
@@ -4520,6 +4530,38 @@ mod tests {
         ship.reserves.armor.now
     }
 
+    /// The armour `id`, unshielded at (100, 0) with `armor` of 30 in
+    /// `condition`, is left with after the first tick A's blaster hits it.
+    fn armour_after_a_blaster_hit(id: ShipRef, armor: f32, condition: Condition) -> f32 {
+        let mut combat = Combat::default();
+        let mut struck = holding(2, 100.0, 0.0, 0.0, armor, 30.0);
+        struck.id = id;
+        struck.fleet = id;
+        struck.condition = condition;
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster()), struck];
+        for _ in 0..20 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            if combat.take_strikes().iter().any(|strike| strike.ship == id) {
+                return ships[1].reserves.armor.now;
+            }
+        }
+        panic!("never hit");
+    }
+
+    #[test]
+    fn a_hit_truncates_the_armour_of_the_player_it_newly_disables_toward_zero() {
+        let close = |now: f32, want: f32| (now - want).abs() < 1e-4;
+        let player =
+            |armor, condition| armour_after_a_blaster_hit(ShipRef::Player, armor, condition);
+        assert_eq!(player(10.6, Condition::Intact), 6.0, "6.6, now disabled");
+        let whole = player(25.6, Condition::Intact);
+        assert!(close(whole, 21.6), "hit, not disabled: {whole}");
+        let before = player(9.6, Condition::Disabled);
+        assert!(close(before, 5.6), "disabled before: {before}");
+        let npc = armour_after_a_blaster_hit(B, 10.6, Condition::Intact);
+        assert!(close(npc, 6.6), "an NPC's is never truncated: {npc}");
+    }
+
     #[test]
     fn a_cant_disable_hit_sets_an_intact_ship_it_newly_disables_back_to_the_repair_share() {
         let armour = landed_armour(Ship::at(2, 0.0, 0.0), &[armour_hit(25.0, true)]);
@@ -4632,6 +4674,48 @@ mod tests {
         assert_eq!(shields, [95.0, 90.0, 85.0, 85.0, 85.0]);
         assert_eq!(combat.beams(), [], "over");
         assert_eq!(combat.shots(), []);
+    }
+
+    #[test]
+    fn a_beam_truncates_the_armour_of_the_player_it_newly_disables_toward_zero() {
+        let beamed = |id: ShipRef| {
+            let mut combat = Combat::default();
+            let mut struck = holding(2, 100.0, 0.0, 0.0, 10.6, 30.0);
+            struck.id = id;
+            struck.fleet = id;
+            let laser = WeaponRecord {
+                mass_dmg: 4,
+                ..laser()
+            };
+            let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser), struck];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.take_strikes().len(), 1, "{id:?}");
+            ships[1].reserves.armor.now
+        };
+        assert_eq!(beamed(ShipRef::Player), 6.0, "6.6, now disabled");
+        assert!(
+            (beamed(B) - 6.6).abs() < 1e-4,
+            "an NPC's is never truncated"
+        );
+    }
+
+    #[test]
+    fn a_beam_whose_firer_left_the_fight_still_passes_the_firers_leader() {
+        let mut combat = Combat::default();
+        let mut firer = Ship::at(1, 0.0, 0.0).armed(laser());
+        firer.leader = Some(B);
+        let mut leader = Ship::at(2, 100.0, 0.0);
+        leader.reserves.shield = Gauge::full(100.0);
+        let mut ships = [firer, leader];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.beams().len(), 1);
+        tick(&mut combat, &mut ships[1..], &NovaDisable);
+        assert_eq!(combat.beams().len(), 1, "it lasts");
+        assert_eq!(
+            ships[1].reserves.shield.now, 100.0,
+            "passed by the ties it kept"
+        );
+        assert_eq!(combat.take_strikes(), []);
     }
 
     /// Each tick of `ticks` with `weapon` fired once from (0, 0) at a ship
@@ -5136,6 +5220,39 @@ mod tests {
             .map(|strike| strike.ship)
             .collect();
         assert_eq!(struck, [C]);
+    }
+
+    #[test]
+    fn the_shots_in_flight_are_changed_in_place_through_shots_mut() {
+        let mut combat = launched_by(Ship::at(1, 0.0, 0.0), blaster(), vec![]);
+        assert_eq!(combat.shots_mut().len(), 1);
+        combat.shots_mut()[0].age = 9;
+        assert_eq!(combat.shots()[0].age, 9);
+    }
+
+    #[test]
+    fn the_pass_through_reading_set_decides_whether_an_escorts_shots_pass_as_the_players() {
+        let govts = Governments::new([crate::catalog::GovtRecord {
+            flags: crate::govt::PLAYER_SHOTS_PASS,
+            ..nova_sim_catalog::fixture::govt(142)
+        }]);
+        let struck = |pass_through: PassThrough| {
+            let mut combat = Combat::default();
+            combat.set_pass_through(pass_through);
+            let mut escort = Ship::at(1, 0.0, 0.0).armed(blaster());
+            escort.leader = Some(ShipRef::Player);
+            let mut passed = Ship::at(2, 100.0, 0.0);
+            passed.govt = Some(GovtId(142));
+            let mut ships = [escort, passed];
+            for _ in 0..12 {
+                let rules = Rules::default();
+                tick_among(&mut combat, &mut ships, &Arsenal::default(), &govts, rules);
+                ships[0].trigger = QUIET;
+            }
+            combat.take_strikes().len()
+        };
+        assert_eq!(struck(PassThrough::PlayerSide), 0, "the player's side");
+        assert_eq!(struck(PassThrough::PlayerOnly), 1, "the player alone");
     }
 
     #[test]
@@ -8615,6 +8732,19 @@ mod tests {
         assert!(close_to(velocity, along), "{velocity:?} {along:?}");
     }
 
+    #[test]
+    fn a_gun_of_no_broadside_fires_from_a_side_exit_along_its_aim_untruncated() {
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0)
+            .armed(gun())
+            .facing(45.5)
+            .of(exits_at(0, [(3, 10); 4]))];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let velocity = combat.shots()[0].velocity;
+        let along = crate::flight::facing(45.5) * 10.0;
+        assert!(close_to(velocity, along), "{velocity:?} {along:?}");
+    }
+
     /// The velocity and heading of the shot of `guidance` and `inaccuracy`
     /// that `ship`, moving (1, 2) and facing up, fires from a starboard
     /// exit, after its first tick.
@@ -9274,6 +9404,15 @@ mod tests {
             assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));
             assert_eq!(ships[1].reserves.shield.now, 5.0, "hurt");
         }
+    }
+
+    #[test]
+    fn a_beam_of_no_impact_neither_holds_nor_pulls() {
+        let firer = of_mass(Ship::at(1, 0.0, 0.0).armed(beam_of(0)), 200.0).facing(90.0);
+        let mut ships = [firer, of_mass(Ship::at(2, 100.0, 0.0), 100.0)];
+        assert_eq!(tractored(&mut ships), []);
+        assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));
+        assert!(ships[1].reserves.shield.now < 10.0, "hit");
     }
 
     #[test]
@@ -11351,6 +11490,23 @@ mod tests {
                 lock: false,
             }]
         );
+    }
+
+    #[test]
+    fn a_disable_only_blast_at_an_asteroid_never_destroys_the_ship_it_reaches() {
+        let mut combat = Combat::default();
+        let mut rocks = [rock(0, 100.0, 0.0)];
+        let frail = holding(2, 110.0, 20.0, 0.0, 2.0, 30.0);
+        let (ships, _) = shoot_rocks(
+            &mut combat,
+            ShipRef::Player,
+            blasting(0, DISABLE_ONLY),
+            vec![frail],
+            &mut rocks,
+            8,
+        );
+        assert_eq!(combat.take_strikes().len(), 1);
+        assert_eq!(ships[1].reserves.armor.now, damage::SPARED_ARMOR);
     }
 
     #[test]

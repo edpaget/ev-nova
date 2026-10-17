@@ -1485,6 +1485,15 @@ mod tests {
     }
 
     #[test]
+    fn an_asteroid_is_changed_through_its_slot_and_a_free_or_missing_slot_gives_none() {
+        let mut field = holding(2, rock(1, PLAYER));
+        field.get_mut(2).expect("held").strength = 7;
+        assert_eq!(field.slots[2].map(|r| r.strength), Some(7));
+        assert!(field.get_mut(0).is_none(), "free");
+        assert!(field.get_mut(SLOTS).is_none(), "past the field");
+    }
+
+    #[test]
     fn a_fragment_takes_the_first_free_slot_at_the_point_given_with_its_own_velocity() {
         let at = Vec2::new(40.0, -60.0);
         for (chance, velocity, frame, spin) in [

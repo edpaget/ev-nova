@@ -1307,6 +1307,16 @@ mod tests {
         assert_eq!(range_of(&[lost], 140), 20.0, "a sub that cannot be read");
         let odd = chained(140, (-1, 10, 200), (1, Some(100), 0));
         assert_eq!(range_of(&[odd], 140), 20.0, "a sub outside 128-383");
+        let final_ammo = chained(383, (-1, 30, 300), (0, None, 0));
+        let beyond = chained(384, (-1, 30, 300), (0, None, 0));
+        let to_final = chained(140, (-1, 10, 200), (1, Some(383), 0));
+        assert_eq!(
+            range_of(&[to_final, final_ammo], 140),
+            110.0,
+            "383, the last"
+        );
+        let to_beyond = chained(140, (-1, 10, 200), (1, Some(384), 0));
+        assert_eq!(range_of(&[to_beyond, beyond], 140), 20.0, "384, past it");
     }
 
     #[test]

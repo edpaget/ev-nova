@@ -262,6 +262,12 @@ mod tests {
             Jamming([50, 5, 5, 50]),
             "each type its own; a negative ModVal takes away; other mods add nothing"
         );
+        let past = vec![outfit(250, &[(JAMMING_MOD + 4, 40), (JAMMING_MOD - 1, 40)])];
+        assert_eq!(
+            Jamming::of_player([0, 0, 0, 0], &owned(&[(250, 1)]), &past),
+            Jamming::NONE,
+            "the mods either side of the four jamming types add nothing"
+        );
         assert_eq!(
             player([0, 0, 0, 0], &[(999, 1)]),
             Jamming::NONE,
@@ -412,6 +418,10 @@ mod tests {
         assert!(
             !jams([0, 0, 0, 0], Jamming([100, 100, 100, 100]), false),
             "a roll of none is skipped"
+        );
+        assert!(
+            !jams([0, 0, 0, 0], Jamming([i16::MAX; JAMMING_TYPES]), false),
+            "a roll of none is skipped whatever the jamming"
         );
         let second = Jamming([100, 40, 0, 0]);
         assert!(

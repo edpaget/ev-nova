@@ -2564,6 +2564,26 @@ mod tests {
     }
 
     #[test]
+    fn a_simultaneous_bursts_end_spends_a_unit_of_fuel_for_each_copy() {
+        let fuelled = WeaponRecord {
+            flags: super::super::weapon::SIMULTANEOUS,
+            flags3: AMMO_AT_BURST_END,
+            ammo_type: -1005,
+            burst_count: 1,
+            ..pick_launcher(130, -1, 0)
+        };
+        let mut armament = mounted(fuelled, 3);
+        let mut supplies = npc_supplies(LauncherRounds::default(), 10.0);
+        let volley = supplies.pick(&mut armament, 130, RuleSource::Engine, &mut ahead);
+        assert_eq!(volley.map(|volley| volley.launches.len()), Some(3));
+        assert!(
+            (supplies.fuel.now - 8.5).abs() < 1e-5,
+            "three copies of half a unit: {:?}",
+            supplies.fuel
+        );
+    }
+
+    #[test]
     fn a_burst_of_copies_one_at_a_time_runs_burst_count_times_the_count_carried() {
         // `_WeaponBurstInterval` (@0x831c): BurstCount x the count for
         // copies that fire one at a time; the burst's end spends one round
@@ -4642,6 +4662,47 @@ mod tests {
         assert_eq!(arsenal.strength(ShipId(130)), 0, "no record");
     }
 
+    /// A combat catalog of the given weapons and hulls, and no governments.
+    struct Armoury {
+        weapons: Vec<WeaponRecord>,
+        hulls: Vec<HullRecord>,
+    }
+
+    impl CombatCatalog for Armoury {
+        fn weapons(&self) -> Vec<WeaponRecord> {
+            self.weapons.clone()
+        }
+
+        fn hulls(&self) -> Vec<HullRecord> {
+            self.hulls.clone()
+        }
+
+        fn governments(&self) -> Vec<crate::catalog::GovtRecord> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn the_arsenal_read_from_a_catalog_holds_its_weapons_and_hulls() {
+        let catalog = Armoury {
+            weapons: vec![blaster(150, 5)],
+            hulls: vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(150),
+                    count: 2,
+                    ammo: 0,
+                }],
+                ..hull(130)
+            }],
+        };
+        let arsenal = Arsenal::read(&catalog);
+        assert_eq!(arsenal.weapon(WeaponId(150)).map(|w| w.reload), Some(5.0));
+        assert_eq!(
+            arsenal.stock_slots(ShipId(130)),
+            BTreeMap::from([(WeaponId(150), (2, 0))])
+        );
+    }
+
     #[test]
     fn a_hull_is_its_records_or_a_placeholder() {
         let arsenal = arsenal();
@@ -4750,6 +4811,12 @@ mod tests {
     fn a_class_with_no_such_weapon_has_no_stock_reach() {
         let turret = reaching(151, 9, 50);
         assert_eq!(stock_reach(&[turret], &[(151, 1, 0)]), None);
+        let weird = reaching(155, 11, 50);
+        assert_eq!(
+            stock_reach(&[weird], &[(155, 1, 0)]),
+            None,
+            "a guidance above 8"
+        );
         assert_eq!(stock_reach(&[], &[]), None);
         assert_eq!(arsenal().hull(ShipId(129)).stock_reach, None, "no record");
         assert_eq!(HullSpec::default().stock_reach, None);
@@ -4977,6 +5044,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_player_has_none_left_of_rounds_only_when_it_owns_none_of_their_outfits() {
+        let sources = [
+            (WeaponId(138), OutfitId(201)),
+            (WeaponId(149), OutfitId(205)),
+        ];
+        let mut owned = BTreeMap::from([(OutfitId(201), 2)]);
+        let rounds = OutfitRounds {
+            owned: &mut owned,
+            sources: &sources,
+        };
+        assert!(!rounds.none_left(WeaponId(138)));
+        assert!(rounds.none_left(WeaponId(149)));
+        assert!(rounds.none_left(WeaponId(150)), "no outfit is its rounds");
+    }
+
     // Fighter bays.
 
     /// A secondary fighter bay `id` launching ship `ship`, reloading every
@@ -5087,6 +5170,29 @@ mod tests {
             "150 waits while 149 reloads with rounds, then launches every 70"
         );
         assert_eq!(supplies.rounds.slot(WeaponId(150)), 1);
+    }
+
+    #[test]
+    fn an_npc_launches_from_its_lowest_bay_holding_rounds_once_that_one_has_reloaded() {
+        let (mut armament, mut supplies) = two_bays([2, 2]);
+        assert_eq!(
+            armament.bay_to_launch(&supplies.rounds),
+            Some(WeaponId(149))
+        );
+        supplies.tick(&mut armament, BAYS);
+        assert_eq!(
+            armament.bay_to_launch(&supplies.rounds),
+            None,
+            "149 reloads, and 150, ready, waits for it"
+        );
+        let (armament, supplies) = two_bays([0, 2]);
+        assert_eq!(
+            armament.bay_to_launch(&supplies.rounds),
+            Some(WeaponId(150)),
+            "149 empty"
+        );
+        let (armament, supplies) = two_bays([0, 0]);
+        assert_eq!(armament.bay_to_launch(&supplies.rounds), None);
     }
 
     #[test]
@@ -5212,5 +5318,49 @@ mod tests {
         npc.stow(WeaponId(149));
         npc.stow(WeaponId(149));
         assert_eq!(npc, LauncherRounds::from([(WeaponId(149), 2)]));
+    }
+
+    // The weapon and rounds arrays the outfits owned make.
+
+    #[test]
+    fn the_arrays_count_each_outfit_by_the_weapon_or_rounds_its_first_mod_names() {
+        let records = [
+            outfit(200, &[(MOD_WEAPON, 128)]),
+            outfit(201, &[(MOD_AMMO, 138)]),
+            outfit(202, &[(MOD_WEAPON, 128), (MOD_AMMO, 150)]),
+            outfit(203, &[(2, 128), (MOD_WEAPON, 140)]),
+            outfit(204, &[(MOD_WEAPON, 141)]),
+        ];
+        let owned = BTreeMap::from([
+            (OutfitId(200), 2),
+            (OutfitId(201), 30),
+            (OutfitId(202), 1),
+            (OutfitId(203), 4),
+        ]);
+        assert_eq!(
+            Arrays::of(&owned, &records),
+            adds(&[(128, 3)], &[(138, 30)]),
+            "the second mod and a first mod of another type count for nothing; 204 isn't owned"
+        );
+    }
+
+    #[test]
+    fn adding_arrays_sums_each_weapons_and_each_rounds_count() {
+        let mut arrays = adds(&[(128, 2), (138, 1)], &[(138, 20)]);
+        arrays.add(&adds(&[(128, 1), (140, 4)], &[(138, -5), (150, 7)]));
+        assert_eq!(
+            arrays,
+            adds(&[(128, 3), (138, 1), (140, 4)], &[(138, 15), (150, 7)])
+        );
+    }
+
+    #[test]
+    fn a_weapon_mod_counts_in_the_weapons_and_an_ammunition_mod_in_the_rounds() {
+        let mut arrays = adds(&[(128, 1)], &[(138, 2)]);
+        assert_eq!(arrays.array(MOD_WEAPON).cloned(), Some(array(&[(128, 1)])));
+        assert_eq!(arrays.array(MOD_AMMO).cloned(), Some(array(&[(138, 2)])));
+        assert_eq!(arrays.array(2), None);
+        arrays.array(MOD_WEAPON).unwrap().insert(WeaponId(140), 5);
+        assert_eq!(arrays, adds(&[(128, 1), (140, 5)], &[(138, 2)]));
     }
 }

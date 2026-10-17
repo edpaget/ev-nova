@@ -605,6 +605,25 @@ mod tests {
     }
 
     #[test]
+    fn a_rear_turrets_reference_is_the_tail_turned_into_0_360() {
+        assert_eq!(quadrant_reference(Guidance::RearTurret, 90.0), 270.0);
+        assert_eq!(quadrant_reference(Guidance::RearTurret, 270.0), 90.0);
+        assert_eq!(quadrant_reference(Guidance::FrontTurret, 90.0), 90.0);
+    }
+
+    #[test]
+    fn by_the_engine_a_bearing_is_off_a_quadrant_reference_by_its_difference() {
+        assert_eq!(quadrant_off(90.0, 100.0, RuleSource::Engine), 10.0);
+        assert_eq!(quadrant_off(100.0, 90.0, RuleSource::Engine), 10.0);
+        assert_eq!(
+            quadrant_off(10.0, 350.0, RuleSource::Engine),
+            340.0,
+            "no fold past 180"
+        );
+        assert_eq!(quadrant_off(10.0, 350.0, RuleSource::Bible), 20.0);
+    }
+
+    #[test]
     fn point_defence_never_fires_on_the_trigger() {
         for raw in [9, 10] {
             for with_target in [false, true] {

@@ -450,6 +450,26 @@ mod tests {
     }
 
     #[test]
+    fn the_near_gate_is_measured_from_the_start_wherever_it_is_and_is_strict_on_each_axis() {
+        let firer = body(6.0, 990.0, 1000.0);
+        let start = Vec2::new(1000.0, 1000.0);
+        let at = |x: f32, y: f32| tractor(&body(15.0, x, y), &firer, start, -5.0);
+        assert_eq!(at(1030.0, 1049.9), Tractor::Pulls(None));
+        assert!(
+            matches!(at(1030.0, 1050.0), Tractor::Pulls(Some(_))),
+            "50 down"
+        );
+        assert!(
+            matches!(at(1049.9, 950.0), Tractor::Pulls(Some(_))),
+            "50 up"
+        );
+        assert!(
+            matches!(at(30.0, 49.9), Tractor::Pulls(Some(_))),
+            "near the origin, far from the start"
+        );
+    }
+
+    #[test]
     fn a_massless_or_planet_type_firer_holds_itself_but_is_not_pulled() {
         let target = body(15.0, 300.0, 0.0);
         let massless = body(0.0, -10.0, 0.0);
