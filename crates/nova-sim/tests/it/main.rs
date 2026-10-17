@@ -21,6 +21,7 @@ mod stock_galaxy_map;
 mod stock_galaxy_visibility;
 mod stock_mission_ships;
 mod stock_missions;
+mod stock_murk;
 mod stock_news;
 mod stock_ranks;
 mod stock_scan;
