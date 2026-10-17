@@ -354,6 +354,7 @@
 
 mod asteroids;
 mod aux_ships;
+mod board_attempt;
 mod brackets;
 mod buoys;
 mod cargo_boxes;
@@ -437,11 +438,11 @@ use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
 use crate::board::{
-    AMMO_GROWTH, Assigned, Assignment, BoardRefusal, BoardTarget, Boarding, BoardingRule,
-    CAPTURE_TRIP, CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE,
-    EscortCrew, HeldRounds, MARINES, MAX_ESCORTS, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL,
-    TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken,
-    check_board,
+    AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
+    CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE, EscortCrew,
+    HeldRounds, MARINES, MAX_ESCORTS, MissionBoardLine, Plunder, PlunderView, Prize,
+    SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE,
+    Take, Taken, check_board,
 };
 use crate::catalog::{
     AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, GateSite, GovtId,
@@ -896,6 +897,9 @@ pub struct Session {
     aboard: Option<Aboard>,
     /// What the last boarding granted, until it is taken.
     granted: Option<Granted>,
+    /// The comm line a failed mission's ship said as the last board
+    /// plundered it, until it is taken (see the `board_attempt` module).
+    board_line: Option<MissionBoardLine>,
     /// The hail under way, if any.
     talk: Option<hail::Talk>,
     /// What the NPCs assisting the player have done since this was last
@@ -1520,6 +1524,7 @@ impl Session {
             strikes: Vec::new(),
             aboard: None,
             granted: None,
+            board_line: None,
             talk: None,
             comm: Vec::new(),
             fighter_notes: Vec::new(),
@@ -5366,9 +5371,11 @@ impl Session {
     /// `_HandlePlayerBoardAttempt` @0x6582b, and `_SlapWithPenalty`
     /// slaps only for none, @0x9c10), the
     /// NPCs come to the target's help as for a hit by the player (a
-    /// strike of no damage, answered on the next traffic tick), the
-    /// target is marked boarded, and every other NPC after it lets it go
-    /// and decides again (`_AIShipBoardedByPlayer`). Then, unless `rule`
+    /// strike of no damage, answered on the next traffic tick), but for
+    /// a person with a `LinkMission`, whose boarding never calls the Good
+    /// Samaritans, the target is marked boarded, and every other NPC
+    /// after it lets it go and decides again (`_AIShipBoardedByPlayer`;
+    /// see the `board_attempt` module). Then, unless `rule`
     /// says its crew repels the boarders, its plunder is rolled on
     /// `chance` and the boarding is under way ([`Session::plunder`]). A
     /// board that passes the checks raises [`Fate::Boarded`], repelled
@@ -5379,16 +5386,23 @@ impl Session {
     /// convicted ([`Boarding::Offered`], see the `person_offers` module):
     /// nothing is rolled or granted, and the ship is marked boarded, and
     /// [`Fate::Boarded`] raised, only once the mission is accepted. A
-    /// mission's special ship, but one of a failed mission, is only
-    /// marked boarded, its velocity matched, and maybe counted, a
-    /// `PickupMode` 2 mission's cargo picked up
-    /// ([`Boarding::MissionShip`], see the `mission_ships` module); one
-    /// of a failed mission is plundered, uncharged.
+    /// mission's special ship of a mission standing is only marked
+    /// boarded, its velocity matched, and maybe counted, a `PickupMode` 2
+    /// mission's cargo picked up ([`Boarding::MissionShip`], see the
+    /// `mission_ships` module); a crewless one is boarded all the same, by
+    /// the engine's reading of [`RuleKey::CrewlessMissionShip`]. One of a
+    /// failed mission takes the same pickup or assist path, counted and
+    /// its line said ([`Session::take_board_line`]), and is then
+    /// plundered, uncharged. A ship boarded on the assist path holds its
+    /// course for 100 ticks (see the `board_attempt` module). The player
+    /// may board while disabled; only a dying player is refused.
     ///
     /// # Errors
     ///
-    /// The [`BoardRefusal`] that applies, and nothing changes;
-    /// [`BoardRefusal::NoTarget`] while landed. A jump under way refuses
+    /// The [`BoardRefusal`] that applies, and nothing changes but the
+    /// refusal's beep, [`SimSound::Refused`], for each refusal said (not
+    /// for [`BoardRefusal::silent`] ones); [`BoardRefusal::NoTarget`],
+    /// silently, while landed. A jump under way refuses
     /// nothing up front: `_HandlePlayerBoardAttempt` (0x65000-0x66064)
     /// reads no jump state, so the checks run on the ship as it brakes, or
     /// in the hyperspace stage on the session as it was when the jump
@@ -5405,17 +5419,27 @@ impl Session {
         rule: &dyn BoardingRule,
         chance: &mut dyn Chance,
     ) -> Result<Boarding, BoardRefusal> {
+        self.board_line = None;
+        let boarded = self.attempt_board(law, rule, chance);
+        if let Err(refusal) = boarded {
+            self.beep_refusal(refusal);
+        }
+        boarded
+    }
+
+    /// [`Session::board`] but for its refusal's beep.
+    fn attempt_board(
+        &mut self,
+        law: &dyn LegalCode,
+        rule: &dyn BoardingRule,
+        chance: &mut dyn Chance,
+    ) -> Result<Boarding, BoardRefusal> {
         if self.landed.is_some() {
             return Err(BoardRefusal::NoTarget);
         }
-        let target = self.target().map(|npc| BoardTarget {
-            state: npc.state,
-            condition: npc.condition,
-            boarded: npc.boarded,
-            crew: self.crew(npc.ship),
-            reach: npc.hull.board_reach,
-        });
-        check_board(&self.player, self.condition, target)?;
+        let target = self.target().map(|npc| self.board_target(npc));
+        let crewless = self.rules.source_for(RuleKey::CrewlessMissionShip);
+        check_board(&self.player, self.condition, target, crewless)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
         if let Some(boarding) = self.board_mission_ship(&npc) {
             let boarding = boarding?;
@@ -5427,17 +5451,7 @@ impl Session {
             self.convict_of(law, Crime::Board, npc.govt);
             self.lose_ranks_to(Crime::Board, npc.govt);
         }
-        // A direct, intended strike of no damage: `_HandlePlayerBoardAttempt`
-        // calls `_DoGoodSamaritan` itself, with no aim to test.
-        self.strikes.push(Strike {
-            ship: ShipRef::Npc(npc.id),
-            by: Some(ShipRef::Player),
-            damage: 0.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
-        });
+        self.call_good_samaritans(&npc);
         let linked = self.linked_ship(&npc, person_offers::OfferedBy::Boarding);
         let named = linked.is_some();
         self.reach_linked(linked);
@@ -22646,7 +22660,7 @@ pub(super) mod tests {
     /// `catalog`'s session with the trader (NPC 0) disabled (armour 10 of
     /// 45) under the player at the centre, both at rest facing up, and
     /// targeted, and the police (NPC 1) 740 below.
-    fn alongside(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn alongside(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut placing(2, &[(0, 0, 0, 0), (1, 0, 740, 0)]));
         let trader = &mut session.traffic.npcs_mut()[0];
@@ -22678,7 +22692,10 @@ pub(super) mod tests {
     };
 
     /// Boards by `law` and Nova's boarding rules, on [`BOARD_DRAWS`].
-    fn board_by(session: &mut Session, law: &dyn LegalCode) -> Result<Boarding, BoardRefusal> {
+    pub(super) fn board_by(
+        session: &mut Session,
+        law: &dyn LegalCode,
+    ) -> Result<Boarding, BoardRefusal> {
         session.board(law, &NovaBoarding::default(), &mut Draws::of(&BOARD_DRAWS))
     }
 
@@ -22976,7 +22993,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_repelled_board_plays_the_airlock_and_a_refused_one_nothing() {
+    fn a_repelled_board_plays_the_airlock_and_a_refused_one_the_refusal_beep() {
         let mut catalog = boardable();
         catalog.dudes[0].1.booty = 0;
         let bible = NovaBoarding {
@@ -22995,7 +23012,11 @@ pub(super) mod tests {
             Err(BoardRefusal::CantBoard),
             "boarded already"
         );
-        assert_eq!(session.take_sounds(), [], "refused (@0x65fdb)");
+        assert_eq!(
+            session.take_sounds(),
+            [crate::sound::SimSound::Refused],
+            "refused (@0x65fdb → @0x65ffe)"
+        );
         session.target = None;
         assert!(board_by(&mut session, &NovaLaw::default()).is_err());
         assert_eq!(session.take_sounds(), [], "no target");

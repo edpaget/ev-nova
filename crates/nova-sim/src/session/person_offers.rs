@@ -407,7 +407,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::ai::NovaAi;
     use crate::catalog::{MissionRecord, PersonId, PersonRecord, SystemId, SystemTraffic};
@@ -1083,7 +1083,7 @@ mod tests {
     /// [`talking`] with Ace of the Federation (`gövt` 128, whose boarding
     /// penalty is 5) and of `flags`, 0x0200 among them: it offers mission
     /// 130 on boarding.
-    fn boardable(flags: u16) -> FakePilotCatalog {
+    pub(in crate::session) fn boardable(flags: u16) -> FakePilotCatalog {
         let mut catalog = talking();
         catalog.persons[0].flags = MISSION_ON_BOARD | flags;
         catalog.persons[0].govt = Some(GovtId(128));
@@ -1099,7 +1099,7 @@ mod tests {
 
     /// [`targeting_ace`] with Ace disabled, drifting with the player at
     /// its place, and a second ship (NPC 1) attacking it.
-    fn alongside_ace(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn alongside_ace(catalog: &FakePilotCatalog) -> Session {
         let mut session = targeting_ace(catalog);
         let mut state = *session.player();
         state.velocity = crate::geometry::Vec2::new(0.25, 0.0);
@@ -1115,7 +1115,9 @@ mod tests {
 
     /// Boards by Nova's law and boarding, drawing on a fresh [`Draws`]:
     /// what it did, and the bounds asked.
-    fn board(session: &mut Session) -> (Result<Boarding, BoardRefusal>, Vec<u32>) {
+    pub(in crate::session) fn board(
+        session: &mut Session,
+    ) -> (Result<Boarding, BoardRefusal>, Vec<u32>) {
         let mut chance = Draws::of(&[]);
         let boarded = session.board(&NovaLaw::default(), &NovaBoarding::default(), &mut chance);
         (boarded, chance.asked)

@@ -213,6 +213,10 @@ pub enum SimSound {
     /// `nova_sim::landing::LandingRefusal::beeps`),
     /// and Closest Target finding no ship (`_HandlePlayer` @0x6aadb; see
     /// `nova_sim::Session::select_target`),
+    /// as does each board refusal said, #131 too far (@0x65f9a), #132 too
+    /// fast (@0x65fcc) and #130 can't board, a refused `PickupMode` 2
+    /// pickup's too (@0x65ffe), all at priority 1, not modelled (see
+    /// `nova_sim::Session::board`),
     /// and every other refusal
     /// that beeps reuses it rather than adding a variant of its own.
     Refused,

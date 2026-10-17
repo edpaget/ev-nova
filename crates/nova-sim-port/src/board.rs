@@ -12,12 +12,18 @@
 //!
 //! **Boarding** ([`check_board`]): with no target nothing happens. The
 //! first refusal that applies, in this order, is said: the player cannot
-//! board a ship that is not disabled, has been boarded before, or has no
-//! `Crew`, nor when its own ship is not intact (`STR#` 2002 #130); not
-//! moving more than [`MAX_RELATIVE_SPEED`] against it on either axis
-//! (#132), then not off its centre by more than its board reach on either
-//! axis (#131); and, silently, the player must face within
-//! [`FACING_LIMIT`] of its heading or its reverse. Once the boarding's
+//! board a ship that is not disabled or has been boarded before, nor
+//! while its own ship is dying (`_IsDying` @0x650c9, its only test of
+//! the player: a disabled player boards) (`STR#` 2002 #130); not moving
+//! more than [`MAX_RELATIVE_SPEED`] against it on either axis (#132),
+//! then not off its centre by more than its board reach on either axis
+//! (#131); silently, the player must face within [`FACING_LIMIT`] of its
+//! heading or its reverse; and last, a ship with no mission mark and no
+//! `Crew` cannot be boarded (#130, @0x65768-0x65789), so a mission's
+//! special ship is boarded whatever its crew. By the other reading of
+//! [`RuleKey::CrewlessMissionShip`], every ship of no crew is refused up
+//! front, among the first #130 tests. Each refusal said beeps, and no
+//! target and facing it do not ([`BoardRefusal::silent`]). Once the boarding's
 //! crime is convicted, a person of `Flags` 0x0200 whose `LinkMission` is
 //! available from a ship offers it in place of the plunder
 //! ([`Boarding::Offered`], @0x65867-0x65936): nothing is rolled or
@@ -151,6 +157,9 @@ pub struct BoardTarget {
     pub boarded: bool,
     /// Its `shïp` `Crew`.
     pub crew: i16,
+    /// Whether it carries a mission's mark (+0xc8d2 not -1), whether its
+    /// mission stands, has failed or has left its slot.
+    pub mission: bool,
     /// How far off its centre, on either axis, the player may be.
     pub reach: f32,
 }
@@ -771,8 +780,9 @@ impl BoardingRule for NovaBoarding {
 }
 
 /// Whether the player's ship, at `player` and in `condition`, can board
-/// `target`; the first refusal that applies, in the original's order,
-/// otherwise (see the module docs).
+/// `target`, a ship of no crew refused as `crewless`, the reading of
+/// [`RuleKey::CrewlessMissionShip`], says; the first refusal that
+/// applies, in the original's order, otherwise (see the module docs).
 ///
 /// # Errors
 ///
@@ -781,12 +791,17 @@ pub fn check_board(
     player: &ShipState,
     condition: Condition,
     target: Option<BoardTarget>,
+    crewless: RuleSource,
 ) -> Result<(), BoardRefusal> {
     let target = target.ok_or(BoardRefusal::NoTarget)?;
-    if condition != Condition::Intact
+    let no_crew = target.crew <= 0;
+    // `_IsDying` (@0x650c9) reads the armour at or below none, so a
+    // player destroyed reads dying too; a disabled one boards.
+    let dying = matches!(condition, Condition::Dying { .. } | Condition::Destroyed);
+    if dying
         || target.condition != Condition::Disabled
         || target.boarded
-        || target.crew <= 0
+        || (crewless == RuleSource::Bible && no_crew)
     {
         return Err(BoardRefusal::CantBoard);
     }
@@ -805,6 +820,11 @@ pub fn check_board(
     if off > FACING_LIMIT && off < 180.0 - FACING_LIMIT {
         return Err(BoardRefusal::Misaligned);
     }
+    // By the engine, only a ship with no mission mark has its crew
+    // tested, after the rest (@0x652bd → @0x65768-0x65789).
+    if crewless == RuleSource::Engine && !target.mission && no_crew {
+        return Err(BoardRefusal::CantBoard);
+    }
     Ok(())
 }
 
@@ -816,14 +836,15 @@ mod tests {
     use crate::grant::{COUNT_FLOOR_PERCENT, COUNT_PERCENT, COUNT_SPREAD, GRANT_ROLL};
     use nova_sim_base::fixture::Draws;
 
-    /// A disabled ship of crew 3 at the centre, at rest, facing up, never
-    /// boarded, with a reach of 20.
+    /// A disabled ship of crew 3 and no mission at the centre, at rest,
+    /// facing up, never boarded, with a reach of 20.
     fn quarry() -> BoardTarget {
         BoardTarget {
             state: ShipState::default(),
             condition: Condition::Disabled,
             boarded: false,
             crew: 3,
+            mission: false,
             reach: 20.0,
         }
     }
@@ -838,7 +859,16 @@ mod tests {
     }
 
     fn board(player: ShipState, target: BoardTarget) -> Result<(), BoardRefusal> {
-        check_board(&player, Condition::Intact, Some(target))
+        board_by(RuleSource::Engine, player, target)
+    }
+
+    /// [`board`] with [`RuleKey::CrewlessMissionShip`] read as `crewless`.
+    fn board_by(
+        crewless: RuleSource,
+        player: ShipState,
+        target: BoardTarget,
+    ) -> Result<(), BoardRefusal> {
+        check_board(&player, Condition::Intact, Some(target), crewless)
     }
 
     fn over() -> ShipState {
@@ -853,11 +883,19 @@ mod tests {
     #[test]
     fn with_no_target_nothing_happens() {
         assert_eq!(
-            check_board(&over(), Condition::Intact, None),
+            check_board(&over(), Condition::Intact, None, RuleSource::Engine),
             Err(BoardRefusal::NoTarget)
         );
         assert_eq!(
-            check_board(&over(), Condition::Disabled, None),
+            check_board(
+                &over(),
+                Condition::Dying {
+                    ticks_left: 1,
+                    starting: false
+                },
+                None,
+                RuleSource::Engine
+            ),
             Err(BoardRefusal::NoTarget),
             "before the player's own state"
         );
@@ -895,33 +933,99 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_with_no_crew_cannot_be_boarded() {
+    fn a_ship_with_no_mission_and_no_crew_cannot_be_boarded_by_either_reading() {
+        for crewless in RuleSource::ALL {
+            for crew in [0, -1] {
+                let target = BoardTarget { crew, ..quarry() };
+                assert_eq!(
+                    board_by(crewless, over(), target),
+                    Err(BoardRefusal::CantBoard),
+                    "{crewless:?} {crew}"
+                );
+            }
+            let target = BoardTarget {
+                crew: 1,
+                ..quarry()
+            };
+            assert_eq!(board_by(crewless, over(), target), Ok(()), "{crewless:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_mission_ship_of_no_crew_is_boarded_and_by_the_other_reading_refused() {
         for crew in [0, -1] {
-            let target = BoardTarget { crew, ..quarry() };
+            let target = BoardTarget {
+                crew,
+                mission: true,
+                ..quarry()
+            };
             assert_eq!(
-                board(over(), target),
+                board_by(RuleSource::Engine, over(), target),
+                Ok(()),
+                "{crew}: @0x652bd skips the crew test"
+            );
+            assert_eq!(
+                board_by(RuleSource::Bible, over(), target),
                 Err(BoardRefusal::CantBoard),
                 "{crew}"
             );
         }
-        let target = BoardTarget {
-            crew: 1,
-            ..quarry()
-        };
-        assert_eq!(board(over(), target), Ok(()));
     }
 
     #[test]
-    fn a_player_not_intact_cannot_board() {
+    fn by_the_engine_the_crew_is_tested_after_the_speed_reach_and_facing() {
+        let crewless = BoardTarget {
+            crew: 0,
+            ..quarry()
+        };
+        for (player, engine) in [
+            (player((0.0, 0.0), (3.0, 0.0), 0.0), BoardRefusal::TooFast),
+            (player((50.0, 0.0), (0.0, 0.0), 0.0), BoardRefusal::TooFar),
+            (
+                player((0.0, 0.0), (0.0, 0.0), 90.0),
+                BoardRefusal::Misaligned,
+            ),
+        ] {
+            assert_eq!(
+                board_by(RuleSource::Engine, player, crewless),
+                Err(engine),
+                "@0x65768 comes after @0x6529e"
+            );
+            assert_eq!(
+                board_by(RuleSource::Bible, player, crewless),
+                Err(BoardRefusal::CantBoard),
+                "{engine:?}: refused up front"
+            );
+        }
+    }
+
+    #[test]
+    fn a_disabled_player_boards_and_a_dying_or_destroyed_one_cannot() {
+        assert_eq!(
+            check_board(
+                &over(),
+                Condition::Disabled,
+                Some(quarry()),
+                RuleSource::Engine
+            ),
+            Ok(()),
+            "_IsDying (@0x650c9) is the only test of the player"
+        );
+        // `_IsDying` reads the armour at or below none, so a ship
+        // destroyed reads dying too.
         for condition in [
-            Condition::Disabled,
             Condition::Dying {
                 ticks_left: 1,
                 starting: false,
             },
+            Condition::Dying {
+                ticks_left: 1,
+                starting: true,
+            },
+            Condition::Destroyed,
         ] {
             assert_eq!(
-                check_board(&over(), condition, Some(quarry())),
+                check_board(&over(), condition, Some(quarry()), RuleSource::Engine),
                 Err(BoardRefusal::CantBoard),
                 "{condition:?}"
             );
