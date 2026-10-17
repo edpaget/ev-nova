@@ -21,6 +21,7 @@ use crate::flight::escorts::{
 use crate::flight::flash::ShieldFlash;
 use crate::flight::floating::{self, Hit};
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
+use crate::flight::murk;
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::{self};
 use crate::flight::weapons::{self, BeamShown, ShotShown};
@@ -825,16 +826,26 @@ impl<C> FlightView<C> {
     }
 
     /// The shots in flight, each where it is drawn: `alpha` of the way
-    /// from where it was a step ago, as the ships are.
+    /// from where it was a step ago, as the ships are; each with the
+    /// index its spin started on ([`SpinStarts`](crate::flight::spin::SpinStarts))
+    /// and its murk where the session holds it, seen from the player's
+    /// ship as the session holds it, in the player's effective murk
+    /// ([`murk::sprite_murk`], [`Session::effective_murk`]), as
+    /// `_HandleShot` murks it once a pass after it moves (@0x35c48).
     pub(super) fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
         let Ok(session) = &self.session else {
             return Vec::new();
         };
         let behind = 1.0 - self.alpha;
+        let viewer = session.player().position;
+        let murk = session.effective_murk();
         session
             .shots()
             .iter()
             .map(|shot| ShotShown {
+                id: shot.id,
+                spin_start: self.shot_looks.spin_starts.start(shot.id),
+                murk: murk::sprite_murk(shot.position, viewer, murk),
                 at: camera.world_to_screen(Point::new(
                     shot.velocity.x.mul_add(-behind, shot.position.x),
                     shot.velocity.y.mul_add(-behind, shot.position.y),

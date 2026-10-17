@@ -70,6 +70,7 @@ mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod shots;
 mod stellars;
 
 /// The first `chär` flies ship 128 (an average ship that turns 3° a

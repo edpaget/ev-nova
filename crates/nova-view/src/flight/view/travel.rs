@@ -496,6 +496,7 @@ impl<
                     self.effects.step(&dying, &scene, &self.looks, chance);
                     let shown = (&mut self.effects, &mut self.flashes);
                     show_combat(session, &scene, shown, &self.looks, chance);
+                    self.shot_looks.step(session, &self.looks, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {
@@ -784,6 +785,7 @@ impl<
         self.npc_previous.clear();
         self.effects.clear();
         self.flashes.clear();
+        self.shot_looks.clear();
         self.read_npc_sheets();
     }
 
@@ -1105,6 +1107,7 @@ impl<
                 self.message = None;
                 self.effects.clear();
                 self.flashes.clear();
+                self.shot_looks.clear();
                 self.redraw_status();
             }
             Ok(LandPress::AtGate {

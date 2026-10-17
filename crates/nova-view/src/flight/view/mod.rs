@@ -571,6 +571,7 @@ mod interface;
 mod messages;
 mod readouts;
 mod screen;
+mod shots;
 mod sprites;
 mod travel;
 
@@ -1031,6 +1032,9 @@ pub struct FlightView<C> {
     effects_chance: SharedChance,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
+    /// What the view keeps of the shots in flight, drawn on the effects'
+    /// chance ([`ShotLooks`](shots::ShotLooks)).
+    shot_looks: shots::ShotLooks,
     /// What the HUD's text is measured by, if anything.
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.

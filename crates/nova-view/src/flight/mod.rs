@@ -31,6 +31,7 @@
 //!   `_DrawCenteredText`'s centring.
 //! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
+//! - [`spin`]: the index each spinning shot's frames start on.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
 //! - [`target`]: the target panel and the secondary weapon's line.
@@ -55,6 +56,7 @@ pub mod jump;
 pub mod murk;
 mod pen;
 pub mod radar;
+pub mod spin;
 pub mod sprite;
 pub mod target;
 pub mod view;
