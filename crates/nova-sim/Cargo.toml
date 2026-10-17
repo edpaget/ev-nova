@@ -22,6 +22,10 @@ nova-sim-base.workspace = true
 # GameData adapter, control bits, sounds, strings and the warp clock,
 # re-exported at their old paths (`nova_sim::catalog`, ...).
 nova-sim-catalog.workspace = true
+# The state layer, on the catalog: the date, governments, legal record,
+# market, crons, landing and clearance, outfit effects and ship stats,
+# re-exported at their old paths (`nova_sim::market`, ...).
+nova-sim-state.workspace = true
 
 [dev-dependencies]
 # Synthetic resource forks for the GameData adapter tests under `tests/`.

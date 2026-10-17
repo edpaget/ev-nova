@@ -261,7 +261,7 @@ pub const fn cron_hook(cron: CronId, hook: u8) -> SubscriptionId {
 /// What the daily pass asks of the session it runs on: the crons'
 /// states, whether an inactive crön may start, and running a crön's
 /// script.
-pub(crate) trait CronDay {
+pub trait CronDay {
     /// Crön `cron`'s counters, or `None` while it is inactive.
     fn state(&self, cron: CronId) -> Option<CronState>;
     /// Sets crön `cron`'s counters, `None` making it inactive.
@@ -284,7 +284,7 @@ pub(crate) trait CronDay {
 /// `rules` (see the module docs). Each state is written before the crön's scripts
 /// run, and each script runs at once, so a later crön in the pass sees
 /// what an earlier one set.
-pub(crate) fn pass(records: &[CronRecord], rules: &Rulebook, day: &mut (impl CronDay + ?Sized)) {
+pub fn pass(records: &[CronRecord], rules: &Rulebook, day: &mut (impl CronDay + ?Sized)) {
     let mut sorted: Vec<&CronRecord> = records.iter().collect();
     sorted.sort_by_key(|record| record.id);
     for record in sorted {

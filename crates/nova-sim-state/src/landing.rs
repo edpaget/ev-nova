@@ -556,7 +556,8 @@ pub fn is_landable(site: &LandingSite) -> bool {
 
 /// Whether a stellar of `Flags` `flags`, `destroyed` or not, is landable
 /// (see [`is_landable`]).
-pub(crate) fn landable(flags: u32, destroyed: bool) -> bool {
+#[must_use]
+pub fn landable(flags: u32, destroyed: bool) -> bool {
     flags & StellarFlags::CAN_LAND != 0
         && destroyed == (flags & StellarFlags::ONLY_WHEN_DESTROYED != 0)
 }
@@ -709,7 +710,7 @@ pub struct Standing {
 /// `_HandlePlayerDockApproach` @0x6481c-0x64843, and the escape pod's
 /// search @0xd1de-0xd1fc).
 #[must_use]
-pub(crate) fn open_by_record(min_status: i16, record: i16) -> bool {
+pub fn open_by_record(min_status: i16, record: i16) -> bool {
     (record >= min_status || min_status == ANY_RECORD) && min_status != NEVER_BY_RECORD
 }
 

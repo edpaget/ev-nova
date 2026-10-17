@@ -584,7 +584,7 @@ pub fn lost_share(lost: i16, own: u32, escorts: i64, counted: bool) -> f64 {
 /// Takes `share` of every good in `cargo`, commodity or `jünk`: each loses
 /// the truncated part of what it holds (@0xcf3b-0xcfe4), and a good left
 /// at none is gone. `share` is in 0..=1 ([`lost_share`]).
-pub(crate) fn destroy_share(cargo: &mut BTreeMap<Good, u32>, share: f64) {
+pub fn destroy_share(cargo: &mut BTreeMap<Good, u32>, share: f64) {
     for tons in cargo.values_mut() {
         // The share is in 0..=1, so the part is in 0..=held.
         *tons -= (f64::from(*tons) * share) as u32;
@@ -596,7 +596,7 @@ pub(crate) fn destroy_share(cargo: &mut BTreeMap<Good, u32>, share: f64) {
 /// carries (`_TotalCargo`) when that is more
 /// (`_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c), in single floats; a
 /// `jünk` is not cut. A good cut to none is gone.
-pub(crate) fn trim_commodities(cargo: &mut BTreeMap<Good, u32>, holds: u32, total: i64) {
+pub fn trim_commodities(cargo: &mut BTreeMap<Good, u32>, holds: u32, total: i64) {
     if i64::from(holds) >= total {
         return;
     }
@@ -708,7 +708,7 @@ fn base_price_string(strings: &CommodityStrings, n: usize) -> &str {
 pub struct Goods {
     commodities: Vec<(u8, Commodity)>,
     junk: Vec<JunkRecord>,
-    pub(crate) disasters: Vec<DisasterRecord>,
+    pub disasters: Vec<DisasterRecord>,
     /// The stellars a `Stellar` -1 event may be placed at, by ascending ID.
     stellars: Vec<StellarId>,
 }
@@ -1305,7 +1305,7 @@ impl MarketRow {
 /// [`settle`] changes it: its credits, the goods it holds, the cargo
 /// aboard and the planetary events under way. The story layer's
 /// `nova_sim::pilot::Pilot` implements it.
-pub(crate) trait Trader {
+pub trait Trader {
     /// The credits.
     fn cash(&self) -> i64;
     /// The tons of `good` held; none of a good not held.
@@ -1327,24 +1327,24 @@ pub(crate) trait Trader {
 /// cargo space, the control-bit tests a `jünk` asks (a [`Gate`]), the
 /// rule set and the stellar's [`Markup`].
 #[derive(Clone, Copy)]
-pub(crate) struct Exchange<'a> {
+pub struct Exchange<'a> {
     /// Everything the exchange trades and every event that can move its
     /// prices.
-    pub(crate) goods: &'a Goods,
+    pub goods: &'a Goods,
     /// The stellar the exchange is at.
-    pub(crate) stellar: StellarId,
+    pub stellar: StellarId,
     /// The stellar's `spöb` `Flags`: its trade center and price levels.
-    pub(crate) flags: u32,
+    pub flags: u32,
     /// The player's pilot: cash, cargo and the events under way.
-    pub(crate) pilot: &'a dyn Trader,
+    pub pilot: &'a dyn Trader,
     /// The fleet's cargo space, in tons ([`fleet_holds`]).
-    pub(crate) capacity: u32,
+    pub capacity: u32,
     /// What a `jünk`'s `BuyOn` and `SellOn` tests are asked of.
-    pub(crate) gate: Gate<'a>,
+    pub gate: Gate<'a>,
     /// The rule set the exchange is priced and traded by.
-    pub(crate) rules: Rulebook,
+    pub rules: Rulebook,
     /// What the stellar's low and high prices are marked down and up by.
-    pub(crate) markup: Markup,
+    pub markup: Markup,
 }
 
 /// The exchange `exchange` describes; `None` without a trade center.
@@ -1353,7 +1353,8 @@ pub(crate) struct Exchange<'a> {
 /// has one, traded both ways; each `jünk` row a stellar lists, as
 /// [`junk_listing`] lists it. Then the rows are ordered by good, and
 /// each shows the tons held.
-pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
+#[must_use]
+pub fn market(exchange: &Exchange) -> Option<Market> {
     let &Exchange {
         goods,
         stellar,
@@ -1642,7 +1643,8 @@ fn traded_by_side(quote: &JunkQuote) -> (bool, bool) {
 /// reads it (`_LoadObjectData` @0x7cd56-0x7cd6f): one above 5 is 5
 /// (equipment), and a negative one is none, an event that prices nothing
 /// (the original writes `_commodityPrice[-1]`, @0x5dd19-0x5dd40).
-pub(crate) fn event_commodity(raw: i16) -> Option<u8> {
+#[must_use]
+pub fn event_commodity(raw: i16) -> Option<u8> {
     u8::try_from(raw.min(i16::from(COMMODITIES) - 1)).ok()
 }
 
@@ -1661,7 +1663,7 @@ fn listed(good: Good, name: &str, price: i64, (sold_here, bought_here): (bool, b
 
 /// Moves `tons` of `order`'s good at `price` a ton between the stellar
 /// and `pilot`, paying or being paid.
-pub(crate) fn settle(pilot: &mut (impl Trader + ?Sized), order: Order, tons: u32, price: i64) {
+pub fn settle(pilot: &mut (impl Trader + ?Sized), order: Order, tons: u32, price: i64) {
     let total = i64::from(tons).saturating_mul(price);
     let held = pilot.held(order.good);
     let cash = pilot.cash_mut();
@@ -1718,17 +1720,18 @@ pub fn event_stellars(stellars: &[(StellarId, u32)]) -> Vec<StellarId> {
 
 /// An event under way: its days left and the stellar it is at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ActiveEvent {
+pub struct ActiveEvent {
     /// The days it has left.
-    pub(crate) days: u16,
+    pub days: u16,
     /// The stellar it is at; `None` for its record's own `Stellar`, which
     /// only a save from before version 15 holds.
-    pub(crate) stellar: Option<StellarId>,
+    pub stellar: Option<StellarId>,
 }
 
 /// The stellar `active`, an event of `event`'s, is at: the one it
 /// stored, or else its record's.
-pub(crate) fn place(active: ActiveEvent, event: &DisasterRecord) -> Option<StellarId> {
+#[must_use]
+pub fn place(active: ActiveEvent, event: &DisasterRecord) -> Option<StellarId> {
     active.stellar.or_else(|| fixed_stellar(event.stellar))
 }
 
@@ -1736,7 +1739,7 @@ pub(crate) fn place(active: ActiveEvent, event: &DisasterRecord) -> Option<Stell
 /// `ActivateOn` asked of `gate`, is rolled once on `chance`. An event
 /// that had days left this morning is not rolled today, even if it ends
 /// today (`_DisasterHandler` @0x41add-0x41ae7).
-pub(crate) fn step_day(
+pub fn step_day(
     goods: &Goods,
     events: &mut BTreeMap<DisasterId, ActiveEvent>,
     gate: Gate,
@@ -1831,7 +1834,7 @@ pub fn junk_step_due(frame: i16) -> bool {
 /// they hold until the next one, whatever the step does to the cargo
 /// in between.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct JunkLatches {
+pub struct JunkLatches {
     /// A tribbles good was held at the last reset.
     pub tribbles: bool,
     /// A perishable good that is not tribbles was held at the last
@@ -1846,7 +1849,8 @@ impl JunkLatches {
     /// is perishable and not tribbles the perishable latch (@0xc556), so
     /// a good of both flags sets only the tribbles latch
     /// (@0xc524-0xc570). A `jünk` with no record sets neither.
-    pub(crate) fn of(goods: &Goods, cargo: &BTreeMap<Good, u32>) -> Self {
+    #[must_use]
+    pub fn of(goods: &Goods, cargo: &BTreeMap<Good, u32>) -> Self {
         let mut latches = Self::default();
         for (&good, &tons) in cargo {
             if tons == 0 {
@@ -1892,7 +1896,7 @@ impl JunkLatches {
 ///   the tribbles goods held grow by ascending ID, each taking a ton of
 ///   the free space, until none is left, so the hold never goes over;
 ///   then every perishable good held loses a ton, whatever the space.
-pub(crate) fn step_junk(
+pub fn step_junk(
     goods: &Goods,
     cargo: &mut BTreeMap<Good, u32>,
     capacity: u32,
