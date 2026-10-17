@@ -2842,3 +2842,99 @@ fn without_dialogs_a_landing_q_leaves_in_the_landings_input() {
     assert_eq!(game.session().landed(), None);
     assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
 }
+
+// The map key on the mission dialogs: each opens flight's course map over
+// itself, marked for its mission, and closes back to it.
+
+/// `mission` marking its destination green on its dialogs' maps: `Flags`
+/// 0x0100.
+fn marking(mut mission: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut mission, 0x50, &[0x0100]);
+    mission
+}
+
+/// [`game_data`] with the run, mission 128, [`marking`] its destination.
+fn marked_data() -> Rc<GameData> {
+    game_data_from(&marking(timed(mission(128, 200, 201))), bar_job())
+}
+
+impl Game {
+    /// Whether a mission dialog's map is open, and whether it draws a
+    /// green arrow.
+    fn dialog_map(&self) -> (bool, bool) {
+        let flight = self.app.screen().flight_view().expect("flying");
+        let green = flight
+            .course_map()
+            .picture()
+            .is_some_and(|picture| picture.systems.iter().any(|system| system.green_arrow));
+        (flight.dialog_map_open(), green)
+    }
+}
+
+#[test]
+fn m_on_the_mission_computer_opens_its_offers_map_and_closes_back_to_it() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), marked_data());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.tap(Key::Char('m'));
+    assert_eq!(game.showing(), Showing::FlightMap);
+    assert_eq!(game.dialog_map(), (true, true), "the Pad's system green");
+    game.tap(Key::Char('m'));
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert!(game.spaceport().mission_computer().is_some(), "back to it");
+}
+
+#[test]
+fn m_on_the_briefing_after_an_accept_opens_its_map_and_closes_back_to_the_text() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), marked_data());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.accept();
+    assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
+    game.tap(Key::Char('m'));
+    assert_eq!(game.showing(), Showing::FlightMap);
+    assert_eq!(game.dialog_map(), (true, true));
+    game.tap(Key::Char('m'));
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(
+        game.shown_text().as_deref(),
+        Some("Off you go to Pad."),
+        "the briefing still open"
+    );
+}
+
+#[test]
+fn m_on_the_bars_offer_opens_its_map_and_closes_back_to_the_offer() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_pilot(&store, &ada());
+    game.frame();
+    game.land();
+    game.click_port(BAR);
+    assert_eq!(game.await_offer(), Some(MissionId(130)));
+    game.tap(Key::Char('m'));
+    assert_eq!(game.showing(), Showing::FlightMap);
+    assert_eq!(game.dialog_map(), (true, false), "the offer's, unmarked");
+    game.tap(Key::Escape);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert!(game.offer().is_some(), "the offer still open");
+}
+
+#[test]
+fn over_flight_m_on_mission_info_opens_its_map_and_escape_returns_to_it() {
+    let store = MemoryPilots::new();
+    let pilot = holding(&ada(), &[(0, 128, None, Some(128))]);
+    let mut game = Game::with_data(&store, &pilot, marked_data());
+    game.frame();
+    game.tap(Key::Char('i'));
+    assert_eq!(game.showing(), Showing::MissionInfo);
+    game.tap(Key::Char('m'));
+    assert_eq!(game.showing(), Showing::FlightMap);
+    assert_eq!(game.dialog_map(), (true, true), "the run's system green");
+    game.tap(Key::Escape);
+    assert_eq!(game.showing(), Showing::MissionInfo, "back to it");
+    assert!(game.app.screen().flight_mission_info().is_some());
+}

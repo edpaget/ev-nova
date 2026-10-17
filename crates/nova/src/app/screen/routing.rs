@@ -7,8 +7,8 @@ use nova_view::spaceport::offer::OfferChoice;
 use nova_view::{Input, Key, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::{
-    abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_bar_map,
-    open_outfitter, open_port_dialogs, refresh_spaceport, refresh_status_bar,
+    abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
+    open_port_dialogs, open_port_map, refresh_spaceport, refresh_status_bar,
 };
 use super::{AppScreen, ENTERED, LANDED, MenuAction, PREFERENCES_KEY, Side};
 
@@ -28,7 +28,10 @@ impl AppScreen {
     /// with the port dialogs' openings (`open_port_dialogs`).
     ///
     /// The bar's map key opens flight's course map over the spaceport
-    /// ([`FlightView::open_bar_map`](nova_view::flight::FlightView::open_bar_map)). While it is open it takes every
+    /// ([`FlightView::open_bar_map`](nova_view::flight::FlightView::open_bar_map)),
+    /// and so does a mission dialog's, an offer's, the computer's, mission
+    /// info's or the accept's briefing's
+    /// ([`FlightView::open_dialog_map`](nova_view::flight::FlightView::open_dialog_map)). While it is open it takes every
     /// input: an Escape press closes it ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)), as in
     /// flight, and anything else goes to it ([`FlightView::port_map_input`](nova_view::flight::FlightView::port_map_input),
     /// where M closes it too).
@@ -39,7 +42,7 @@ impl AppScreen {
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
         close_mission_texts(spaceport, self.flight.as_mut().expect(ENTERED));
-        open_bar_map(spaceport, self.flight.as_mut().expect(ENTERED));
+        open_port_map(spaceport, self.flight.as_mut().expect(ENTERED));
         // A new opening clears what lasts one, and the outfitter it opened
         // on was the cached one: it shows the flight's afresh, or, listing
         // nothing, says so and never opens, the port's `_DrawStatus` after
@@ -304,7 +307,7 @@ impl AppScreen {
     /// P on the main menu, the ship browser and the galaxy viewer, away
     /// from flight and the spaceport, where P is the player info key. A
     /// press opens them; its repeats and release do nothing.
-    fn preferences_key(&mut self, input: &Input) -> bool {
+    pub(super) fn preferences_key(&mut self, input: &Input) -> bool {
         let Input::Key {
             key,
             pressed,
@@ -353,13 +356,60 @@ impl AppScreen {
     /// or the galaxy viewer.
     fn map_takes_every_key(&self) -> bool {
         match self.side {
-            // In port, flight's map is open only as the bar's map.
+            // In port, flight's map is open only as the bar's or a mission
+            // dialog's.
             Side::Flight | Side::Spaceport => {
                 self.flight.as_ref().is_some_and(FlightView::map_finding)
             }
             Side::Galaxy => self.galaxy.system().is_none() && self.galaxy.map().finding(),
             Side::MainMenu | Side::Ships => false,
         }
+    }
+
+    /// The input to the overlay open in front, if any: what it did, or
+    /// `None` with none open. A mission dialog's map over flight is in
+    /// front of the dialogs it opened from.
+    fn overlay_input(&mut self, input: &Input) -> Option<ScreenAction> {
+        if self.about.is_some() {
+            return Some(self.about_input(input));
+        }
+        if self.preferences.is_some() {
+            return Some(self.preferences_input(input));
+        }
+        if self.player_info.is_some() {
+            return Some(self.player_info_input(input));
+        }
+        if self.haggle.is_some() {
+            return Some(self.haggle_input(input));
+        }
+        if self.comm.is_some() {
+            return Some(self.comm_input(input));
+        }
+        if self.flight_dialog_map_open() {
+            return Some(self.flight_dialog_map_input(input));
+        }
+        if self.missions.is_some() {
+            return Some(self.missions_input(input));
+        }
+        if self.offer.is_some() {
+            return Some(self.offer_input(input));
+        }
+        if self.plunder.is_some() {
+            return Some(self.plunder_input(input));
+        }
+        if self.assignment.is_some() {
+            return Some(self.assignment_input(input));
+        }
+        if self.new_pilot.is_some() {
+            return Some(self.new_pilot_input(input));
+        }
+        if self.open_pilot.is_some() {
+            return Some(self.open_pilot_input(input));
+        }
+        if self.load_note.is_some() {
+            return Some(self.load_note_input(input));
+        }
+        None
     }
 
     /// Routes one input, as [`Screen::input`] describes.
@@ -373,41 +423,8 @@ impl AppScreen {
                 _ => {}
             }
         }
-        if self.about.is_some() {
-            return self.about_input(input);
-        }
-        if self.preferences.is_some() {
-            return self.preferences_input(input);
-        }
-        if self.player_info.is_some() {
-            return self.player_info_input(input);
-        }
-        if self.haggle.is_some() {
-            return self.haggle_input(input);
-        }
-        if self.comm.is_some() {
-            return self.comm_input(input);
-        }
-        if self.missions.is_some() {
-            return self.missions_input(input);
-        }
-        if self.offer.is_some() {
-            return self.offer_input(input);
-        }
-        if self.plunder.is_some() {
-            return self.plunder_input(input);
-        }
-        if self.assignment.is_some() {
-            return self.assignment_input(input);
-        }
-        if self.new_pilot.is_some() {
-            return self.new_pilot_input(input);
-        }
-        if self.open_pilot.is_some() {
-            return self.open_pilot_input(input);
-        }
-        if self.load_note.is_some() {
-            return self.load_note_input(input);
+        if let Some(action) = self.overlay_input(input) {
+            return action;
         }
         if self.spaceport_takes_every_key() {
             return self.spaceport_input(input);

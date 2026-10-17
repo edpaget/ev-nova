@@ -34,6 +34,8 @@
 //!   description.
 //! - [`modal`]: the [`ModalHost`](modal::ModalHost) the screens open
 //!   their dialogs in, over themselves.
+//! - [`port_map`]: the [`PortMap`] the spaceport asks for, the bar's or a
+//!   mission dialog's.
 //! - [`quantity_ask`]: the [`QuantityAsk`](quantity_ask::QuantityAsk),
 //!   the quantity dialog as the exchange and the outfitter host it.
 
@@ -50,6 +52,7 @@ pub mod modal;
 pub mod news;
 pub mod offer;
 pub mod outfitter;
+pub mod port_map;
 pub mod quantity_ask;
 pub mod service;
 pub mod shipyard;
@@ -64,6 +67,7 @@ pub use missions::{MissionComputerScreen, MissionInfoScreen};
 pub use news::NewsScreen;
 pub use offer::{OfferChoice, OfferDialog};
 pub use outfitter::{OutfitterCatalog, OutfitterScreen};
+pub use port_map::PortMap;
 pub use service::ServiceScreen;
 pub use shipyard::{ShipBaseImages, ShipOrder, ShipyardCatalog, ShipyardScreen};
 pub use trade::TradeScreen;

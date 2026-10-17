@@ -88,6 +88,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 mod death;
+mod dialog_maps;
 mod encounters;
 mod flight;
 mod map_find;

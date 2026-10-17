@@ -529,6 +529,12 @@ impl BarScreen {
         std::mem::take(&mut self.asks.map)
     }
 
+    /// The mission of the offer open over it, when the offer's map key
+    /// asked for the map since this was last asked, once.
+    pub fn take_offer_map_request(&mut self) -> Option<MissionId> {
+        self.offering.as_mut()?.take_map_request()
+    }
+
     /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last asked, in the bar or its offer.
     pub fn take_info_request(&mut self) -> bool {

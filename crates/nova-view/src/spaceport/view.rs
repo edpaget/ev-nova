@@ -126,10 +126,14 @@
 //! [`SpaceportView::take_port_dialog_closed`]), and the other closings
 //! the original ends in `_RefreshSAT` say so too
 //! ([`SpaceportView::take_status_refresh`]): whoever flies the ship
-//! redraws the status bar at each. The bar's map key asks for the course
-//! map ([`SpaceportView::take_map_request`]), whose close redraws the
-//! whole bar and puts back the nav the bar opened with (flight's
-//! `FlightView::close_map`). An outfitter, shipyard or hire screen with
+//! redraws the status bar at each. The map key asks for the course map
+//! ([`SpaceportView::take_map_request`], a [`PortMap`]) from five screens:
+//! the bar, an offer over any venue, the mission computer, mission info
+//! (not when opened over an offer or the computer) and the accept's
+//! briefing text. Its close redraws the whole bar and puts back the
+//! selection the map opened with, then the nav the bar or the mission
+//! dialog saved, as each does (flight's `FlightView::close_map`). An
+//! outfitter, shipyard or hire screen with
 //! nothing listed never opens: it says so in "Desc Dialog" (`STR#` 2002
 //! #206, #223, #224) and returns before its nav save or its close
 //! (@0x5bbf7 → @0x5dbd6, @0x5e8df → @0x5f906), so nothing redraws or is
@@ -139,12 +143,10 @@
 //!
 //! - The bar's Gamble text (`_ShowTextDialog` @0x4918c, then
 //!   `_RefreshSAT` @0x49191): ours' Gamble isn't built and shows greyed.
-//! - The map key on the other port screens (the spaceport, the shops, the
-//!   ship description, text dialogs, mission info, an offer and the
-//!   computer each call `_DoSystemMap` on their filter's map-key check),
-//!   and `_DoSystemMap`'s own put-back of +0x6c in port (@0x13bee-0x13c06):
-//!   ours opens the map only from the bar, under which the bar's restore
-//!   overwrites that put-back unseen. Filed as
+//! - The map key on the other port screens (the spaceport, the shops and
+//!   the ship description each call `_DoSystemMap` on their filter's
+//!   map-key check): ours opens the map only from the five screens above.
+//!   Filed as
 //!   rdm:phase/hud-fidelity-followups/phase-1-map-key-from-the-other-port-screens.
 //! - Mission info's Abort with nothing selected (@0x9e51d-0x9e557): ours
 //!   greys Abort unless the selected mission can be aborted.
@@ -187,11 +189,13 @@ use super::layout::{
 use super::missions::{MissionComputerScreen, MissionInfoScreen};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::outfitter::{NO_ITEMS, OutfitterCatalog, OutfitterScreen};
+use super::port_map::PortMap;
 use super::service::ServiceScreen;
 use super::shipyard::{InfoTemplates, NO_SHIPS, ShipOrder, ShipyardCatalog, ShipyardScreen};
 use super::trade::TradeScreen;
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::MapOpener;
 use crate::flight::view::SharedChance;
 use crate::font::Font;
 use crate::geometry::Point;
@@ -1156,14 +1160,43 @@ impl SpaceportView {
         }
     }
 
-    /// Whether the bar's map key has asked for the course map since this
-    /// was last asked ([`BarScreen::take_map_request`]): whoever flies the
-    /// ship opens it over the spaceport.
-    pub fn take_map_request(&mut self) -> bool {
-        match &mut self.open {
-            Some(Open::Bar(screen)) => screen.take_map_request(),
-            _ => false,
+    /// The course map asked for since this was last asked, once (see the
+    /// [`port_map`](super::port_map) module): the bar's
+    /// ([`BarScreen::take_map_request`]), or a mission dialog's, asked by
+    /// the offer open over the venue open or the spaceport, the mission
+    /// computer with its selected offer, or the mission texts and the
+    /// mission info screen over them ([`MissionDialogs::take_map_request`]).
+    /// Whoever flies the ship opens it over the spaceport.
+    pub fn take_map_request(&mut self) -> Option<PortMap> {
+        let open = match &mut self.open {
+            Some(Open::Bar(screen)) => {
+                if screen.take_map_request() {
+                    return Some(PortMap::Bar);
+                }
+                screen.take_offer_map_request()
+            }
+            Some(Open::Trade(screen)) => screen.take_offer_map_request(),
+            Some(Open::Outfitter(screen)) => screen.take_offer_map_request(),
+            Some(Open::Shipyard(screen)) => screen.take_offer_map_request(),
+            Some(Open::Computer(screen)) => {
+                if let Some(opener) = screen.take_map_request() {
+                    return Some(PortMap::Dialog(opener));
+                }
+                None
+            }
+            Some(Open::Service(_)) | None => None,
+        };
+        let landing = self
+            .missioning
+            .as_mut()
+            .and_then(|missioning| missioning.landing.take_map_request());
+        if let Some(mission) = open.or(landing) {
+            return Some(PortMap::Dialog(MapOpener::Offer(mission)));
         }
+        self.dialogs
+            .as_mut()?
+            .take_map_request()
+            .map(PortMap::Dialog)
     }
 
     /// Whether the bar's Hire Escort has asked for the ships for hire
@@ -1679,10 +1712,14 @@ impl SpaceportView {
 
     /// Opens the mission info screen on `info` over whatever is open; with
     /// nothing to show, it does not open, as the original's does not
-    /// (@0xa3e37-0xa3ec1).
+    /// (@0xa3e37-0xa3ec1). Opened over an offer or the mission computer,
+    /// its map key opens no map, as `_missionDialog` is set there
+    /// (`_DoMissionInfoDialog` @0x9e3c6-0x9e3cd).
     pub fn open_mission_info(&mut self, info: MissionInfo) {
+        let over_mission_dialog =
+            self.offer_dialog().is_some() || matches!(self.open, Some(Open::Computer(_)));
         if let Some(dialogs) = &mut self.dialogs {
-            dialogs.open_info(info);
+            dialogs.open_info_with_map(info, !over_mission_dialog);
             self.sounds.extend(dialogs.take_sounds());
         }
     }
@@ -4460,12 +4497,112 @@ mod tests {
         use crate::flight::view::MAP_KEY;
         let mut view = drinking(true);
         view.input(&key(MAP_KEY));
-        assert!(!view.take_map_request(), "no bar open");
+        assert_eq!(view.take_map_request(), None, "no bar open");
         click_item(&mut view, 10);
         view.input(&key(MAP_KEY));
-        assert!(view.take_map_request());
-        assert!(!view.take_map_request(), "once");
+        assert_eq!(view.take_map_request(), Some(PortMap::Bar));
+        assert_eq!(view.take_map_request(), None, "once");
         assert!(view.open_bar().is_some(), "still in the bar");
+    }
+
+    #[test]
+    fn the_map_key_asks_from_an_offer_over_each_venue() {
+        use crate::flight::view::MAP_KEY;
+        for venue in [SPACEPORT, BAR, TRADE_CENTER, OUTFITTER, SHIPYARD] {
+            let mut view = venues();
+            assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+            if venue != SPACEPORT {
+                let item = match venue {
+                    BAR => 10,
+                    TRADE_CENTER => 7,
+                    OUTFITTER => 8,
+                    _ => 9,
+                };
+                click_item(&mut view, item);
+                if view.take_outfitter_opened() {
+                    view.set_opened_outfitter(tanks(1));
+                }
+                view.tick(FIRST_OFFER_DELAY);
+                assert_eq!(view.take_offer_request(), Some(venue));
+            }
+            view.open_offer(offered());
+            view.take_sounds();
+            view.input(&key(MAP_KEY));
+            assert_eq!(
+                view.take_map_request(),
+                Some(PortMap::Dialog(MapOpener::Offer(MissionId(141)))),
+                "{venue}"
+            );
+            assert_eq!(view.take_map_request(), None, "{venue}: once");
+            assert!(view.offer_dialog().is_some(), "{venue}: still open");
+            assert_eq!(view.take_sounds(), [], "{venue}: silent");
+        }
+    }
+
+    #[test]
+    fn the_map_key_asks_from_the_mission_computer_with_its_selected_offer() {
+        use crate::flight::view::MAP_KEY;
+        let mut view = missioned();
+        view.open_mission_computer(Ok(offers()));
+        view.input(&key(MAP_KEY));
+        assert_eq!(
+            view.take_map_request(),
+            Some(PortMap::Dialog(MapOpener::Computer(Some(MissionId(130)))))
+        );
+        assert!(view.mission_computer().is_some(), "still open");
+    }
+
+    #[test]
+    fn mission_info_asks_for_the_map_unless_opened_over_an_offer_or_the_computer() {
+        use crate::flight::view::MAP_KEY;
+        let mut view = missioned();
+        view.open_mission_info(actives(2));
+        view.input(&key(MAP_KEY));
+        assert_eq!(
+            view.take_map_request(),
+            Some(PortMap::Dialog(MapOpener::MissionInfo(Some(0)))),
+            "over the spaceport"
+        );
+        let mut view = missioned();
+        view.open_mission_computer(Ok(offers()));
+        view.open_mission_info(actives(2));
+        view.input(&key(MAP_KEY));
+        assert_eq!(view.take_map_request(), None, "over the computer");
+        assert!(view.mission_info().is_some());
+        let mut view = missioned();
+        view.open_offer(offered());
+        view.open_mission_info(actives(2));
+        view.input(&key(MAP_KEY));
+        assert_eq!(view.take_map_request(), None, "over an offer");
+    }
+
+    #[test]
+    fn the_briefing_asks_for_its_map_and_another_text_for_none() {
+        use crate::flight::view::MAP_KEY;
+        let marks = nova_sim::MapMarks {
+            green: Some(nova_sim::SystemId(131)),
+            multi_arrows: true,
+        };
+        let text = |map| MissionText {
+            kind: MissionTextKind::Brief,
+            mission: MissionId(130),
+            text: "Go.".to_owned(),
+            graphic: None,
+            movie: None,
+            map,
+        };
+        let mut view = missioned();
+        view.open_mission_computer(Ok(offers()));
+        view.show_mission_texts(vec![text(Some(marks)), text(None)]);
+        view.input(&key(MAP_KEY));
+        assert_eq!(
+            view.take_map_request(),
+            Some(PortMap::Dialog(MapOpener::Briefing(marks)))
+        );
+        view.input(&key(Key::Enter));
+        view.input(&key(MAP_KEY));
+        assert_eq!(view.take_map_request(), None, "a text with no map");
+        assert!(shown_text(&view).is_some(), "still open");
     }
 
     #[test]

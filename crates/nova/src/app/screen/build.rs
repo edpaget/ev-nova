@@ -29,7 +29,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
     HaggleDialog, PlunderDialog, PrefsDialog,
 };
-use nova_view::{Input, Key, Navigator, Prefs, Screen, Showing};
+use nova_view::{Input, Key, Navigator, Prefs, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::refresh_spaceport;
 use super::{ABOUT_TEXT, AppScreen, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side};
@@ -524,6 +524,9 @@ impl AppScreen {
         if self.comm.is_some() {
             return Showing::Comm;
         }
+        if self.flight_dialog_map_open() {
+            return Showing::FlightMap;
+        }
         if let Some(missions) = &self.missions {
             if missions.playing() {
                 return Showing::Movie;
@@ -578,6 +581,14 @@ impl AppScreen {
         if !self.port_map_open() {
             return false;
         }
+        self.map_over_input(input);
+        true
+    }
+
+    /// The input to flight's course map open over something: an Escape
+    /// press closes it ([`FlightView::close_map`]), unless its Find is
+    /// open, and anything else goes to it ([`FlightView::port_map_input`]).
+    fn map_over_input(&mut self, input: &Input) {
         let flight = self.flight.as_mut().expect(ENTERED);
         let escape = Input::Key {
             key: Key::Escape,
@@ -590,11 +601,35 @@ impl AppScreen {
         } else {
             flight.port_map_input(input);
         }
-        true
+    }
+
+    /// Whether a mission dialog's map is open over flight
+    /// ([`FlightView::open_dialog_map`]): over the offer from a ship or the
+    /// mission dialogs, which stay open under it.
+    pub(super) fn flight_dialog_map_open(&self) -> bool {
+        self.side == Side::Flight
+            && self
+                .flight
+                .as_ref()
+                .is_some_and(FlightView::dialog_map_open)
+    }
+
+    /// The input to a mission dialog's map over flight, before anything
+    /// open under it sees it: as flight's own map takes it, the Preferences
+    /// keys first unless Find is open, then the map's
+    /// ([`AppScreen::port_map_input`]'s).
+    pub(super) fn flight_dialog_map_input(&mut self, input: &Input) -> ScreenAction {
+        let finding = self.flight.as_ref().is_some_and(FlightView::map_finding);
+        if !finding && self.preferences_key(input) {
+            return ScreenAction::None;
+        }
+        self.map_over_input(input);
+        ScreenAction::None
     }
 
     /// Whether flight's course map is open over the spaceport: the bar's
-    /// map ([`FlightView::open_bar_map`]).
+    /// map ([`FlightView::open_bar_map`]) or a mission dialog's
+    /// ([`FlightView::open_dialog_map`]).
     pub(super) fn port_map_open(&self) -> bool {
         self.side == Side::Spaceport && self.flight.as_ref().is_some_and(FlightView::map_open)
     }

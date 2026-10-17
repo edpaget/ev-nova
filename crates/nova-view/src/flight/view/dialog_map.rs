@@ -37,7 +37,21 @@
 
 use nova_sim::{MapMarks, MissionId, SavedNav, Session};
 
-use super::FlightView;
+use super::{FlightView, MAP_KEY};
+use crate::Input;
+
+/// Whether `input` is a press of [`MAP_KEY`], never a repeat: how each
+/// mission dialog asks for the map, as the bar does (`_QuickKeyCheck` of
+/// `_keyPrefs` +0x12).
+#[must_use]
+pub(crate) fn is_map_press(input: &Input) -> bool {
+    *input
+        == Input::Key {
+            key: MAP_KEY,
+            pressed: true,
+            repeat: false,
+        }
+}
 
 /// The mission dialog that asks for the map, and what it reads for the
 /// map's marks.

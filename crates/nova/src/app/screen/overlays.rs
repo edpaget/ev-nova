@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use nova_sim::{HailView, OfferPrompt, Take, Taken};
-use nova_view::flight::FlightView;
+use nova_view::flight::{FlightView, MapOpener};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
     OFFER_DIALOG, OfferChoice, OfferDialog, OfferTemplates, PICTURE_OFFER_DIALOG,
@@ -339,6 +339,12 @@ impl AppScreen {
     pub(super) fn missions_input(&mut self, input: &Input) -> ScreenAction {
         let missions = self.missions.as_mut().expect("open");
         missions.input(input);
+        if let Some(opener) = missions.take_map_request() {
+            missions.cancel_pointer();
+            self.open_flight_dialog_map(opener);
+            return ScreenAction::None;
+        }
+        let missions = self.missions.as_mut().expect("open");
         abort_and_refresh(missions, self.flight.as_mut());
         self.load_flight_info_text();
         if self
@@ -459,6 +465,12 @@ impl AppScreen {
             self.open_flight_player_info();
             return;
         }
+        if dialog.take_map_request() {
+            let mission = dialog.prompt().mission;
+            dialog.cancel_pointer();
+            self.open_flight_dialog_map(MapOpener::Offer(mission));
+            return;
+        }
         let Some(choice) = dialog.take_choice() else {
             return;
         };
@@ -481,6 +493,18 @@ impl AppScreen {
         self.show_mission_texts();
         if self.missions.is_none() {
             self.offer = None;
+        }
+    }
+
+    /// Opens flight's course map for `opener`, a mission dialog over
+    /// flight ([`FlightView::open_dialog_map`]): the offer from a ship,
+    /// mission info or the accept's briefing, which stays open under it;
+    /// the keys held let go. Its input goes to the map before them
+    /// ([`AppScreen::flight_dialog_map_input`]).
+    fn open_flight_dialog_map(&mut self, opener: MapOpener) {
+        self.release_keys();
+        if let Some(flight) = &mut self.flight {
+            flight.open_dialog_map(opener);
         }
     }
 

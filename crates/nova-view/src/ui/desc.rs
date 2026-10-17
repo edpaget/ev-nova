@@ -13,8 +13,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::MapMarks;
+
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::Input;
@@ -120,6 +123,12 @@ pub struct DescDialog {
     /// The picture variant's graphic, drawn in item 2 over
     /// [`PICTURE_FRAME`]; none for the plain dialog over [`FRAME`].
     picture: Option<i16>,
+    /// The marks of the map [`MAP_KEY`](crate::flight::view::MAP_KEY)
+    /// opens from it, or none when it opens no map.
+    map: Option<MapMarks>,
+    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for the
+    /// map, until it is taken.
+    map_requested: bool,
     closed: bool,
     reported: bool,
 }
@@ -182,9 +191,33 @@ impl DescDialog {
         Self {
             dialog,
             picture: None,
+            map: None,
+            map_requested: false,
             closed: false,
             reported: false,
         }
+    }
+
+    /// This dialog opening the map marked `map` on
+    /// [`MAP_KEY`](crate::flight::view::MAP_KEY), or none: only the
+    /// accept's briefing does, as only `_DoMissionAccept` passes
+    /// `_ShowTextDialog` a first argument of 1, which allows item 4
+    /// (@0xa1f0e, @0x5b135-0x5b146); `_TextDialogFilter` gives item 4 for
+    /// the key in every text (@0x51f9c-0x51fbe), which opens nothing then.
+    #[must_use]
+    pub fn with_map(self, map: Option<MapMarks>) -> Self {
+        Self { map, ..self }
+    }
+
+    /// The marks of the map [`MAP_KEY`](crate::flight::view::MAP_KEY)
+    /// asked for since this was last taken, once: `_ShowTextDialog` opens
+    /// the course map over the text (@0x5b14c-0x5b17d; see
+    /// [`FlightView::open_dialog_map`](crate::flight::FlightView::open_dialog_map)),
+    /// which stays open under it.
+    pub fn take_map_request(&mut self) -> Option<MapMarks> {
+        std::mem::take(&mut self.map_requested)
+            .then_some(self.map)
+            .flatten()
     }
 
     /// The picture variant's graphic, if this is the picture variant.
@@ -230,9 +263,15 @@ impl DescDialog {
 }
 
 impl Screen for DescDialog {
-    /// Every event goes to the dialog; activating Done closes it. It never
-    /// quits.
+    /// A press of [`MAP_KEY`](crate::flight::view::MAP_KEY) asks for the
+    /// map when it opens one ([`DescDialog::take_map_request`]); every
+    /// other event goes to the dialog, and activating Done closes it. It
+    /// never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if is_map_press(input) {
+            self.map_requested = self.map.is_some();
+            return ScreenAction::None;
+        }
         if self.dialog.input(input) == Some(DialogEvent::Item(DONE_ITEM)) {
             self.closed = true;
         }
@@ -317,6 +356,40 @@ mod tests {
             pressed: true,
             repeat: false,
         }
+    }
+
+    #[test]
+    fn with_marks_the_map_key_asks_for_the_map_and_without_none() {
+        let m = crate::flight::view::MAP_KEY;
+        let marks = MapMarks {
+            green: Some(nova_sim::SystemId(131)),
+            multi_arrows: true,
+        };
+        let mut briefing = desc().with_map(Some(marks));
+        for input in [
+            Input::Key {
+                key: m,
+                pressed: true,
+                repeat: true,
+            },
+            Input::Key {
+                key: m,
+                pressed: false,
+                repeat: false,
+            },
+        ] {
+            briefing.input(&input);
+            assert_eq!(briefing.take_map_request(), None, "{input:?}");
+        }
+        briefing.input(&key(m));
+        assert_eq!(briefing.take_map_request(), Some(marks));
+        assert_eq!(briefing.take_map_request(), None, "once");
+        assert!(!briefing.closed(), "it stays open under the map");
+        assert_eq!(briefing.take_sounds(), [], "silent");
+        let mut plain = desc();
+        plain.input(&key(m));
+        assert_eq!(plain.take_map_request(), None, "no map for this text");
+        assert!(!plain.closed());
     }
 
     #[test]

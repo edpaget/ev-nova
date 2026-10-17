@@ -591,6 +591,7 @@ mod screen;
 mod travel;
 
 pub use dialog_map::MapOpener;
+pub(crate) use dialog_map::is_map_press;
 pub use messages::*;
 
 /// The developer overlays: the system's title and the help line.
