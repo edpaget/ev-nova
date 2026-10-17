@@ -90,6 +90,7 @@ use std::collections::VecDeque;
 mod death;
 mod encounters;
 mod flight;
+mod map_find;
 mod menu;
 mod missions;
 mod overlays;

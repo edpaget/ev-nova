@@ -213,7 +213,8 @@ impl AppScreen {
     }
 
     /// Flight's input: an Escape press closes flight's map when it is
-    /// open, and otherwise goes back; everything else goes to flight
+    /// open (unless its Find is, which takes it), and otherwise goes
+    /// back; everything else goes to flight
     /// (where L, the stellar slot keys and a click select the navigation
     /// target). When it lands, the
     /// spaceport shows.
@@ -224,8 +225,13 @@ impl AppScreen {
             repeat,
         } = *input
         {
+            let flight = self.flight.as_mut().expect(ENTERED);
+            // Find, while open, takes Escape too, doing nothing with it.
+            if flight.map_finding() {
+                flight.input(input);
+                return ScreenAction::None;
+            }
             if pressed && !repeat {
-                let flight = self.flight.as_mut().expect(ENTERED);
                 if flight.map_open() {
                     flight.close_map();
                 } else if self.return_to == Side::MainMenu {

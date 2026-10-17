@@ -2,6 +2,7 @@
 //! methods and the router itself.
 
 use nova_sim::VenueOffer;
+use nova_view::flight::FlightView;
 use nova_view::spaceport::offer::OfferChoice;
 use nova_view::{Input, Key, Screen, ScreenAction, Showing};
 
@@ -345,6 +346,21 @@ impl AppScreen {
         naming || (self.side == Side::Spaceport && spaceport.playing())
     }
 
+    /// Whether the side shown has a map whose Find is open, which takes
+    /// every input, the Preferences keys and the side's own keys
+    /// included, as `_DoSystemSearch`'s `ModalDialog` takes every event
+    /// (@0x11dd1): flight's course map, the bar's map over the spaceport,
+    /// or the galaxy viewer.
+    fn map_takes_every_key(&self) -> bool {
+        let flight_finding = self.flight.as_ref().is_some_and(FlightView::map_finding);
+        match self.side {
+            Side::Flight => flight_finding,
+            Side::Spaceport => self.port_map_open() && flight_finding,
+            Side::Galaxy => self.galaxy.system().is_none() && self.galaxy.map().finding(),
+            Side::MainMenu | Side::Ships => false,
+        }
+    }
+
     /// Routes one input, as [`Screen::input`] describes.
     pub(super) fn route(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key { key, pressed, .. } = *input {
@@ -394,6 +410,13 @@ impl AppScreen {
         }
         if self.spaceport_takes_every_key() {
             return self.spaceport_input(input);
+        }
+        if self.map_takes_every_key() {
+            return match self.side {
+                Side::Flight => self.flight_input(input),
+                Side::Spaceport => self.spaceport_input(input),
+                _ => self.galaxy.input(input),
+            };
         }
         if self.preferences_key(input) {
             return ScreenAction::None;

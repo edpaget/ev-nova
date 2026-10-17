@@ -6,11 +6,15 @@
 //! selection. Escape on the map does nothing here: what it means there
 //! (quitting) is the app's router's to decide.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::{SystemCatalog, SystemView};
-use crate::{DrawList, Input, Key, Screen, ScreenAction};
+use crate::text::TextMetrics;
+use crate::ui::button::ButtonStyle;
+use crate::ui::dialog::DialogTemplate;
+use crate::{DrawList, Input, Key, Screen, ScreenAction, Sound};
 
 /// The galaxy map and, while one is open, a system's view.
 #[derive(Clone, Debug)]
@@ -47,6 +51,29 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
     #[must_use]
     pub fn catalog(&self) -> &C {
         &self.catalog
+    }
+}
+
+impl<C> Navigator<C> {
+    /// The navigator with the map's text measured by `metrics`, which its
+    /// Find needs ([`GalaxyMap::with_metrics`]).
+    #[must_use]
+    pub fn with_metrics(self, metrics: Rc<dyn TextMetrics>) -> Self {
+        Self {
+            map: self.map.with_metrics(metrics),
+            ..self
+        }
+    }
+
+    /// The navigator with the map's Find laid out from `template`, or its
+    /// fallback for `None`, its buttons labelled in `style`
+    /// ([`GalaxyMap::with_find`]).
+    #[must_use]
+    pub fn with_find(self, template: Option<DialogTemplate>, style: ButtonStyle) -> Self {
+        Self {
+            map: self.map.with_find(template, style),
+            ..self
+        }
     }
 }
 
@@ -123,6 +150,11 @@ impl<C: GalaxyCatalog + SystemCatalog> Screen for Navigator<C> {
 
     fn release_keys(&mut self) {
         self.shown_mut().release_keys();
+    }
+
+    /// The map's beeps: Find's ([`GalaxyMap::take_ui_sounds`]).
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        self.map.take_sounds()
     }
 }
 
@@ -421,5 +453,33 @@ mod tests {
         navigator.tick(Duration::from_millis(250));
         let camera = navigator.system().expect("open").camera().center();
         assert_eq!(camera, Point::new(0.0, -240.0));
+    }
+
+    #[test]
+    fn the_maps_find_is_laid_out_as_given_and_its_beeps_come_through() {
+        let mut template = crate::galaxy::find::fallback();
+        template.items[crate::galaxy::find::FIND_ITEM - 1].kind =
+            crate::ui::dialog::ItemSpec::Button("Seek".to_owned());
+        let mut navigator = navigator()
+            .with_metrics(std::rc::Rc::new(crate::text::fixture::MonoMetrics))
+            .with_find(Some(template), crate::ui::ButtonStyle::STOCK);
+        navigator.input(&press(Key::Char('s')));
+        assert!(navigator.map().finding());
+        let mut list = DrawList::new();
+        navigator.draw(&mut list);
+        assert!(list.iter().any(|command| matches!(
+            command,
+            crate::DrawCommand::Text { text, .. } if text == "Seek"
+        )));
+        for c in ['s', 'b', 'e'] {
+            navigator.input(&Input::Text(c));
+        }
+        navigator.input(&press(Key::Enter));
+        assert_eq!(navigator.map().selected(), Some(SystemId(129)));
+        assert_eq!(
+            navigator.take_sounds(),
+            [crate::Sound::Ui(crate::sound::UiSound::MapSystemFound)]
+        );
+        assert_eq!(navigator.take_sounds(), []);
     }
 }

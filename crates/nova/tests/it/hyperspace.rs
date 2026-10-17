@@ -172,6 +172,17 @@ fn status_picture() -> Vec<u8> {
         .build()
 }
 
+/// A grey `PICT`, `width` x 25: a piece of a button, which the course
+/// map's Done and Find draw.
+fn button_picture(width: i16) -> Vec<u8> {
+    let bounds = [0, 0, 25, width];
+    let pixels = vec![0x4210; usize::try_from(width).expect("positive") * 25];
+    PictBuilder::new(bounds)
+        .direct_bits(&DirectBits::rgb555(bounds, &pixels))
+        .end()
+        .build()
+}
+
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
     let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
@@ -287,6 +298,15 @@ fn data_of(ship: &[u8], beta: &[u8], buoys: Option<&[u8]>) -> Rc<GameData> {
         );
     if let Some(list) = buoys {
         fork = fork.resource(StrList::TYPE, 1000, Some(b"Message Buoy Strings"), list);
+    }
+    // The buttons' pictures, each state's caps masked.
+    for state in [7500, 7503, 7506] {
+        fork = fork
+            .resource(PICT, state, None, &button_picture(13))
+            .resource(PICT, state + 1, None, &button_picture(2))
+            .resource(PICT, state + 2, None, &button_picture(13))
+            .resource(PICT, state + 100, None, &button_picture(13))
+            .resource(PICT, state + 102, None, &button_picture(13));
     }
     let file = OneFile(fork.build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))

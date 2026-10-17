@@ -13,6 +13,7 @@ use nova_sim::{
 use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
+use nova_view::galaxy::find::FIND_DIALOG;
 use nova_view::menu::{MainMenu, PilotList};
 use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
@@ -25,8 +26,8 @@ use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::{
-    AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, HaggleDialog,
-    PlunderDialog, PrefsDialog,
+    AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
+    HaggleDialog, PlunderDialog, PrefsDialog,
 };
 use nova_view::{Input, Key, Navigator, Prefs, Screen, Showing};
 
@@ -309,11 +310,19 @@ impl AppScreen {
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects)
             .with_sound_prefs(self.prefs.sound)
-            .with_double_time(self.double_time);
+            .with_double_time(self.double_time)
+            .with_find(self.find_template(), self.data.button_style());
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
         }
+    }
+
+    /// The maps' Find dialog, `DLOG` 3005, from the dialogs, if they
+    /// were given and have it; `None` lays it out from its fallback.
+    pub(super) fn find_template(&self) -> Option<DialogTemplate> {
+        let dialogs = self.dialogs.as_ref()?;
+        dialogs.resources.dialog_template(FIND_DIALOG).ok()
     }
 
     /// The metrics the router's text is laid out by: the dialogs', or the
@@ -416,19 +425,27 @@ impl AppScreen {
     }
 
     /// The router with dialogs: I opens the About text in a dialog built
-    /// from `dialogs`, its text laid out by `metrics`. Without dialogs, I
-    /// does nothing.
+    /// from `dialogs`, its text laid out by `metrics`, and the galaxy
+    /// viewer's Find is laid out from them (`DLOG` 3005, or its
+    /// fallback) and measured by `metrics`. Without dialogs, I does
+    /// nothing, and the viewer's Find never opens.
     #[must_use]
     pub fn with_dialogs(
         self,
         dialogs: Rc<dyn DialogResources>,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
+        let template = dialogs.dialog_template(FIND_DIALOG).ok();
+        let galaxy = self
+            .galaxy
+            .with_metrics(Rc::clone(&metrics))
+            .with_find(template, self.data.button_style());
         Self {
             dialogs: Some(Dialogs {
                 resources: dialogs,
                 metrics,
             }),
+            galaxy,
             ..self
         }
     }
@@ -550,7 +567,8 @@ impl AppScreen {
             pressed: true,
             repeat: false,
         };
-        if *input == escape {
+        // Find, while open, takes Escape too, doing nothing with it.
+        if *input == escape && !flight.map_finding() {
             flight.close_map();
         } else {
             flight.port_map_input(input);

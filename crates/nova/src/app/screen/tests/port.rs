@@ -699,6 +699,26 @@ fn in_the_bar() -> AppScreen {
 }
 
 #[test]
+fn find_on_the_bars_map_keeps_escape_and_command_comma_from_it() {
+    let mut screen = in_the_bar();
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    for pressed in [true, false] {
+        screen.input(&key(Key::Char('f'), pressed));
+    }
+    assert!(flight(&screen).map_finding());
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::FlightMap, "Escape types nothing");
+    command_comma(&mut screen);
+    assert!(screen.preferences().is_none(), "no Preferences over Find");
+    assert!(flight(&screen).map_finding());
+    screen.input(&key(Key::Enter, true));
+    assert!(!flight(&screen).map_finding());
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::Spaceport, "closed once Find is");
+}
+
+#[test]
 fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
     let mut screen = in_the_bar();
     let nav = |screen: &AppScreen| {
