@@ -154,6 +154,7 @@ mod tests {
         StellarId,
     };
     use crate::map_panel::{ColumnBody, Listing, Ports, Services, Strip};
+    use crate::market::DOMINATED;
     use crate::player_info::LEGAL_STATUS_STRINGS;
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{alternates, hide};
@@ -449,6 +450,35 @@ mod tests {
         assert!(
             matches!(services(&session), Services::Items(_)),
             "134 holds it"
+        );
+    }
+
+    #[test]
+    fn a_dominated_stellar_no_visible_system_holds_leaves_the_legal_status_undominated() {
+        // 134, at 131's place, alone lists dominated port 141: while 131
+        // stands for the place, it is inactive and does not count.
+        let mut catalog = panelled();
+        catalog.sites.retain(|(system, _)| system.0 != 134);
+        catalog.sites.push((
+            SystemId(134),
+            vec![LandingSite {
+                flags2: DOMINATED,
+                ..port(141)
+            }],
+        ));
+        let catalog = synced(catalog);
+        let mut session = session(&catalog, Rulebook::default());
+        session.pilot.explore(SystemId(134));
+        assert_eq!(
+            legal(&body(&session, &catalog, 134)),
+            "status 2",
+            "no counting stellar: the record's status"
+        );
+        assert!(hide(&mut session, &catalog, &[131]));
+        assert_eq!(
+            legal(&body(&session, &catalog, 134)),
+            "status 18",
+            "134 holds it: every counting stellar dominated"
         );
     }
 
