@@ -394,6 +394,7 @@ mod persons;
 mod player_downed;
 mod player_info;
 mod player_led;
+mod player_repair;
 mod precalced;
 mod radar;
 mod ranks;
@@ -808,6 +809,10 @@ pub struct Session {
     armament: Armament,
     /// How the player's ship is holding up.
     condition: Condition,
+    /// The player's repair inhibit, `_playerRepairInhibit`: armed as it is
+    /// newly disabled, it holds back its armour's regeneration and its
+    /// self-repair (see the `player_repair` module).
+    repair_inhibit: crate::self_repair::RepairInhibit,
     /// Whether the player's ship was destroyed on the latest
     /// [`Session::tick_combat`], the tick the fight raised its
     /// `CombatEvent::Destroyed`; read by [`Session::player_fate`]. It stays
@@ -1494,6 +1499,7 @@ impl Session {
             hull: HullSpec::default(),
             armament: Armament::default(),
             condition: Condition::Intact,
+            repair_inhibit: crate::self_repair::RepairInhibit::OFF,
             player_exploded_this_tick: false,
             tractor: None,
             ion: Ion::default(),
@@ -2591,11 +2597,13 @@ impl Session {
     }
 
     /// `_HandlePlayer`'s part of a game-work pass that comes before the
-    /// fight, on either pass (see the `double_time` module): the sabotage
-    /// clock's tick (see the `sabotage` module), then the eject check for
-    /// a player who enters it disabled or dying (see the `eject` module),
-    /// drawing on `chance`.
+    /// fight, on either pass (see the `double_time` module): the repair
+    /// inhibit's countdown and the disabled player's self-repair (see the
+    /// `player_repair` module), the sabotage clock's tick (see the
+    /// `sabotage` module), then the eject check for a player who enters it
+    /// disabled or dying (see the `eject` module), drawing on `chance`.
     fn before_fight(&mut self, rules: Rules, chance: &mut dyn Chance) {
+        self.player_repair_tick(rules, &mut *chance);
         self.sabotage_tick(rules, &mut *chance);
         self.eject_before_fight(chance);
     }
@@ -2614,6 +2622,7 @@ impl Session {
         let mut stellars = self.stellar_targets();
         let scanner = self.scanner();
         let mut rocks = self.asteroid_targets();
+        let armor_regen = self.player_armor_regen();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -2629,7 +2638,7 @@ impl Session {
             state: self.player,
             hull: self.hull,
             shield_regen: self.stats.shield_regen,
-            armor_regen: self.stats.armor_regen,
+            armor_regen,
             trigger: if self.pod.is_some() {
                 Trigger::default()
             } else {

@@ -28,6 +28,11 @@
 //! escort hired with its wage, a captured one unhired
 //! ([`FormerEscort::rejoined`]). The player is told
 //! "Fighter repaired." or "Escort repaired." ([`rejoin_message`]).
+//!
+//! **The player** repairs itself by the same test and to the same armour,
+//! from the outfits it owns, but only once its repair inhibit
+//! ([`RepairInhibit`]), armed as it is newly disabled, has run out (see
+//! the session's `player_repair` module).
 
 use std::collections::BTreeMap;
 

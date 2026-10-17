@@ -661,7 +661,9 @@ pub struct Fighter<'a> {
     pub hull: HullSpec,
     /// The shield points it regenerates a tick.
     pub shield_regen: f32,
-    /// The armour points it regenerates a tick.
+    /// The armour points it regenerates a tick: for the player, none
+    /// while its repair inhibit holds
+    /// ([`RepairInhibit`](crate::self_repair::RepairInhibit)).
     pub armor_regen: f32,
     /// The fire command it holds.
     pub trigger: Trigger,

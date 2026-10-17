@@ -4,7 +4,10 @@
 //! **Newly disabled** (@0x3b0fb-0x3b1d2): the player is told "Ship
 //! disabled." ([`SimMessage::ShipDisabled`], `STR#` 2002 #287) with
 //! `_beepSnd[1]` ([`SimSound::ShipDowned`], `snd ` 151), and the first
-//! unfailed mission whose `Flags2` holds 0x0004 fails. Its armour is
+//! unfailed mission whose `Flags2` holds 0x0004 fails. The repair
+//! inhibit is armed, holding back the player's armour regeneration and
+//! self-repair for 300 ticks (`_playerRepairInhibit` = 300.0
+//! @0x3b186-0x3b18d; see the `player_repair` module). Its armour is
 //! truncated toward zero (@0x3b193-0x3b1a1) by the fight itself, before
 //! it decides the breakup (`Combat::tick_on`), as the original's dying
 //! test after the truncation (`_IsDying` @0x3b1e5) reads the truncated
@@ -32,9 +35,7 @@
 //! fails one slot at most, and a hidden mission (`Flags` 0x0400) fails
 //! aloud: nothing tests the hidden flag here.
 //!
-//! **Left out.** `_playerRepairInhibit` = 300.0 (@0x3b186-0x3b18d) belongs
-//! to rdm:phase/ship-handling-fidelity/phase-3-regeneration-and-self-repair.
-//! The Captain Hector shareware nag and its `_playerKilledByHector` lock
+//! **Left out.** The Captain Hector shareware nag and its `_playerKilledByHector` lock
 //! (@0x3b226-0x3b2c9, @0x3b35d-0x3b365) are a roadmap non-goal; with the
 //! nag left out, "Ship destroyed." always shows.
 //!
@@ -81,8 +82,7 @@ impl Session {
         if was == Condition::Intact && now != Condition::Intact {
             self.sounds.push(SimSound::ShipDowned);
             self.messages.push(SimMessage::ShipDisabled);
-            // ship-handling-fidelity phase 3 arms `_playerRepairInhibit`
-            // (300.0) here (@0x3b186-0x3b18d).
+            self.arm_repair_inhibit();
             self.fail_downed_mission(chance);
         }
         let was_up = matches!(was, Condition::Intact | Condition::Disabled);

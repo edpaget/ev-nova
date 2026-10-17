@@ -13,7 +13,9 @@
 //! [`sabotage`](crate::sabotage)), trims the
 //! commodities to the fleet's holds (@0xc7d8-0xc887), and takes the
 //! active ranks the blessing table is built from (@0xc8be-0xc981; see
-//! the `ranks` module). The trim is not idempotent: it cuts only the
+//! the `ranks` module), and turns the player's repair inhibit off
+//! (`_playerRepairInhibit` = -1.0 @0xc998; see the `player_repair`
+//! module). The trim is not idempotent: it cuts only the
 //! commodities, by the holds over everything held, so with any `jünk` or
 //! mission cargo aboard the cargo is still past the holds after it, and
 //! each reset cuts again, as the original's does.
@@ -102,7 +104,7 @@ impl Session {
     /// sets the `jünk` latches, refreshes the sabotage clock
     /// (@0xc3ff-0xc769, `Session::refresh_sabotage`), trims the commodities to the fleet's holds (@0xc7d8-0xc887), and
     /// takes the active ranks the blessing table is built from
-    /// (@0xc8be-0xc981).
+    /// (@0xc8be-0xc981), and turns the repair inhibit off (@0xc998).
     ///
     /// The trim cuts each commodity to trunc(held × holds / total), in
     /// single floats, when the fleet's holds ([`Session::capacity`]) are
@@ -129,6 +131,7 @@ impl Session {
             self.trim_to_holds();
         }
         self.blessing_ranks.clone_from(&self.pilot.ranks);
+        self.repair_inhibit = crate::self_repair::RepairInhibit::OFF;
     }
 
     /// Whether the reset for `cause` trims the commodities: never through
