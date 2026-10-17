@@ -2,8 +2,6 @@
 //! offscreen target, read back pixel by pixel. Needs a GPU adapter; skips,
 //! passing, without one.
 
-#![cfg(feature = "dev-tools")]
-
 use egui::{Color32, ColorImage, Context, Pos2, RawInput, Rect, TextureOptions, pos2, vec2};
 use nova::devtools::EguiLayer;
 use nova_render::wgpu::{InitError, OffscreenGpu, WithOverlay};

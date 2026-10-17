@@ -5,7 +5,7 @@
 //! spaceport before its `Q` leaves. Skips, passing, when `NOVA_DATA` is
 //! unset.
 
-mod common;
+use crate::common;
 
 use std::ops::RangeInclusive;
 use std::rc::Rc;

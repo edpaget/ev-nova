@@ -12,7 +12,7 @@
 //! port, landing and Leave play their sounds and the music follows the
 //! screen.
 
-mod bracket_art;
+use crate::bracket_art;
 
 use std::io;
 use std::path::Path;

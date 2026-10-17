@@ -1,5 +1,5 @@
 //! The corner bracket art the flight draws round its nav target and its
-//! ship target, `cïcn` 10000-10023, for the test binaries whose flights
+//! ship target, `cïcn` 10000-10023, for the test modules whose flights
 //! select a stellar or target a ship: blank 16 x 16 stand-ins for Nova
 //! Graphics 1's icons, so no frame reports them missing.
 

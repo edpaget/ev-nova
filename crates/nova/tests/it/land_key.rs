@@ -17,7 +17,7 @@
 //! - Moving too fast, or far from every stellar, the second L says so in
 //!   the original's words (`STR#` 2002 #72, #68) and the ship flies on.
 
-mod bracket_art;
+use crate::bracket_art;
 
 use std::io;
 use std::path::Path;

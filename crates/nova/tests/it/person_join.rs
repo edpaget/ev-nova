@@ -33,7 +33,7 @@
 //! `Flags` 0x0200, linked to mission 128, offers it on boarding in place
 //! of the plunder dialog.
 
-mod bracket_art;
+use crate::bracket_art;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;

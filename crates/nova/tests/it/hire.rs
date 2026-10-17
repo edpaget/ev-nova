@@ -33,7 +33,7 @@
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
 
-mod bracket_art;
+use crate::bracket_art;
 
 use std::cell::RefCell;
 use std::io;

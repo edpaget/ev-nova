@@ -1,4 +1,4 @@
-//! The program edge shared by the stock-data test binaries.
+//! The program edge shared by the stock-data test modules.
 //!
 //! This module is the only place `NOVA_DATA` is read. The game data is
 //! copyrighted and never committed, so each stock test asks [`nova_data`] for

@@ -12,7 +12,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-mod prefs_fixture;
+use crate::prefs_fixture;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;

@@ -22,7 +22,7 @@
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
 
-mod prefs_fixture;
+use crate::prefs_fixture;
 
 use std::cell::RefCell;
 use std::io;
