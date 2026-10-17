@@ -4170,6 +4170,14 @@ mod tests {
         };
         traffic.tick_in(&defending, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(140)));
+        // The find is its berth's pick too: a ship that reuses the berth
+        // holds it, by the engine's reading.
+        assert_eq!(traffic.reused_slot_pick(), RuleSource::Engine);
+        let (id, berth) = (traffic.npcs()[0].id, traffic.npcs()[0].berth);
+        traffic.remove(id);
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        let reuser = traffic.npcs().last().expect("added");
+        assert_eq!((reuser.berth, reuser.pick), (berth, Some(WeaponId(140))));
     }
 
     #[test]
