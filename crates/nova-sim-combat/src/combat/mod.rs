@@ -2815,8 +2815,8 @@ impl Combat {
     /// The shots in flight, to change as nothing in play does at will:
     /// for a session test that needs a shot in a state only a rare draw
     /// reaches.
-    #[cfg(test)]
-    pub(crate) fn shots_mut(&mut self) -> &mut [Shot] {
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn shots_mut(&mut self) -> &mut [Shot] {
         &mut self.shots
     }
 
@@ -2849,7 +2849,7 @@ impl Combat {
     /// (`_HandlePlayer` @0x698ef). It is of size 0, as
     /// `_CreateExplosion(.., 0, 1)` makes it, so no extra explosions
     /// scatter from it.
-    pub(crate) fn explode(&mut self, at: Vec2, explosion: Explosion) {
+    pub fn explode(&mut self, at: Vec2, explosion: Explosion) {
         self.events.push(CombatEvent::Exploded {
             at,
             explosion,
@@ -2859,7 +2859,7 @@ impl Combat {
 
     /// Reports `burst`'s particles: a shot's hit on an asteroid's, or an
     /// asteroid's as it is destroyed.
-    pub(crate) fn particles(&mut self, burst: ParticleBurst) {
+    pub fn particles(&mut self, burst: ParticleBurst) {
         self.events.push(CombatEvent::Particles(burst));
     }
 

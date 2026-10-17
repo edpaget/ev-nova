@@ -182,7 +182,7 @@ impl Arrays {
     }
 
     /// Adds `other`'s counts to these.
-    pub(crate) fn add(&mut self, other: &Self) {
+    pub fn add(&mut self, other: &Self) {
         for (&weapon, &count) in &other.weapons {
             add(&mut self.weapons, weapon, count);
         }
@@ -193,7 +193,7 @@ impl Arrays {
 
     /// The array a first mod of `mod_type` counts in: none for any other
     /// mod.
-    pub(crate) fn array(&mut self, mod_type: i16) -> Option<&mut BTreeMap<WeaponId, i64>> {
+    pub fn array(&mut self, mod_type: i16) -> Option<&mut BTreeMap<WeaponId, i64>> {
         match mod_type {
             MOD_WEAPON => Some(&mut self.weapons),
             MOD_AMMO => Some(&mut self.rounds),
@@ -1555,7 +1555,8 @@ impl Arsenal {
     /// `WeapCount` and `AmmoLoad`, a later slot naming the same weapon
     /// replacing an earlier one's (`_LoadObjectData` @0x7aa72, @0x7aa90);
     /// none for a class that cannot be read.
-    pub(crate) fn stock_slots(&self, ship: ShipId) -> BTreeMap<WeaponId, (i16, i16)> {
+    #[must_use]
+    pub fn stock_slots(&self, ship: ShipId) -> BTreeMap<WeaponId, (i16, i16)> {
         self.stock_weapons(ship)
             .iter()
             .map(|stock| (stock.weapon, (stock.count, stock.ammo)))
@@ -1680,11 +1681,7 @@ pub struct Magazine {
 /// does (@0x5eebc-0x5ef92): when the outfits owned hold fewer of a fit's
 /// weapon (or rounds) than its count, the fit's outfit makes up the
 /// difference; when they hold as many or more, nothing changes.
-pub(crate) fn fit_stock(
-    owned: &mut BTreeMap<OutfitId, u16>,
-    fits: &[StockFit],
-    outfits: &[OutfitRecord],
-) {
+pub fn fit_stock(owned: &mut BTreeMap<OutfitId, u16>, fits: &[StockFit], outfits: &[OutfitRecord]) {
     for fit in fits {
         let held: u32 = mods(owned, outfits, fit.mod_type)
             .into_iter()

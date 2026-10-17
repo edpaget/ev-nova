@@ -26,6 +26,11 @@ nova-sim-catalog.workspace = true
 # market, crons, landing and clearance, outfit effects and ship stats,
 # re-exported at their old paths (`nova_sim::market`, ...).
 nova-sim-state.workspace = true
+# The combat layer, on the state: combat, the asteroid field, fighter bays,
+# cloaking, the fleet, messages, the player's fate, sabotage, self-repair,
+# ship layers and the tutorial, re-exported at their old paths
+# (`nova_sim::combat`, ...).
+nova-sim-combat.workspace = true
 
 [dev-dependencies]
 # Synthetic resource forks for the GameData adapter tests under `tests/`.
@@ -36,6 +41,9 @@ nova-sim-base = { workspace = true, features = ["fixture"] }
 # The catalog's record builders and control-bit mocks, which `testkit`
 # re-exports.
 nova-sim-catalog = { workspace = true, features = ["fixture"] }
+# The combat layer's test setters the session tests call:
+# `SabotageClock::set_counter` and `Combat::shots_mut`.
+nova-sim-combat = { workspace = true, features = ["fixture"] }
 # This crate's own `fixture` module, for its integration tests under
 # `tests/`, which build the library without `cfg(test)`: the storyline
 # walker the stock tests drive.

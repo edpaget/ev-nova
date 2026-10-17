@@ -383,13 +383,13 @@ impl Asteroids {
     }
 
     /// The asteroid in `slot`, if any.
-    pub(crate) fn get_mut(&mut self, slot: usize) -> Option<&mut Asteroid> {
+    pub fn get_mut(&mut self, slot: usize) -> Option<&mut Asteroid> {
         self.slots.get_mut(slot)?.as_mut()
     }
 
     /// Puts `asteroid` in the first free slot, and gives the slot; none
     /// when the field is full.
-    pub(crate) fn place(&mut self, asteroid: Asteroid) -> Option<usize> {
+    pub fn place(&mut self, asteroid: Asteroid) -> Option<usize> {
         let slot = self.first_free()?;
         self.slots[slot] = Some(asteroid);
         Some(slot)

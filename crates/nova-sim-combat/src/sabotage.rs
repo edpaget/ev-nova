@@ -230,8 +230,8 @@ impl SabotageClock {
 
     /// Sets the count, as nothing in play does: for the branch that
     /// seeds a negative one.
-    #[cfg(test)]
-    pub(crate) fn set_counter(&mut self, counter: f32) {
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn set_counter(&mut self, counter: f32) {
         self.counter = counter;
     }
 }
