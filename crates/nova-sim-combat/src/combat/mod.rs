@@ -3330,6 +3330,12 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
 /// `_HandlePlayer` @0x6cf86-0x6cff3 for the shield and @0x6d00a-0x6d093
 /// for the armour, which its repair inhibit also holds back through
 /// [`Fighter::armor_regen`]).
+///
+/// *Ordering against the original.* The original tests the condition its
+/// frame started with; the engine tests the one this tick's hits leave.
+/// So a ship disabled on a tick misses that tick's regeneration, and a
+/// player repaired on a tick gains it, one tick's rate either way, which
+/// no frame shows.
 fn regenerate(fighter: &mut Fighter) {
     if *fighter.condition == Condition::Intact {
         recharge(&mut fighter.reserves.shield, fighter.shield_regen);
