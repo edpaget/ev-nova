@@ -925,6 +925,20 @@ mod tests {
         )
     }
 
+    /// The original's flight rules but `Accel` divided by `divisor`.
+    fn thrust_over(divisor: u32) -> FlightRules {
+        FlightRules::from_rulebook(&crate::Rulebook::default().with_value(
+            crate::rulebook::RuleValue::ThrustDivisor,
+            std::num::NonZeroU32::new(divisor).unwrap(),
+        ))
+    }
+
+    /// Flies `npc` at its own top speed, with no lead, under `rules`.
+    fn fly_own_under(npc: &mut Npc, other: Option<&ShipState>, rules: FlightRules) -> Outcome {
+        let speeds = TopSpeeds::own_of(npc);
+        fly_under(npc, &[], other, speeds, rules)
+    }
+
     /// Flies `npc` at `speeds` under `rules`, any wait it draws its
     /// longest.
     fn fly_under(
@@ -1084,6 +1098,29 @@ mod tests {
                 FORMATION_NUDGE
             ),
             (300.0, 600.0, 8.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn an_escort_keeping_formation_is_nudged_by_ten_ticks_of_its_rules_thrust() {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let slot = slot_of(&leader);
+        let nudged = |rules: FlightRules| {
+            let mut ship = escort(FAST, at(slot.x + 20.0, slot.y - 20.0, 0.0, 0.0, 0.0));
+            fly_own_under(&mut ship, Some(&leader), rules);
+            ship.state.position - slot
+        };
+        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
+        // FAST's 900 / 3000 is 0.3 a tick, ten ticks' 3; / 5000, 1.8.
+        let quicker = nudged(thrust_over(3000));
+        assert!(
+            near(quicker, Vec2::new(17.0, -17.0)),
+            "0.3 x 10 a tick: {quicker:?}"
+        );
+        let original = nudged(FlightRules::default());
+        assert!(
+            near(original, Vec2::new(18.2, -18.2)),
+            "0.18 x 10 a tick: {original:?}"
         );
     }
 
@@ -2788,6 +2825,29 @@ mod tests {
     }
 
     #[test]
+    fn a_sniper_is_at_rest_below_half_a_tick_of_its_rules_weakest_thrust() {
+        // The target left, bearing 270; the creep left too, so a brake
+        // turns right, to face 90 behind it, and aiming turns left.
+        let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
+        let creep = 1.3e-4;
+        assert!(
+            FlightRules::default().at_rest_speed() < creep
+                && creep < thrust_over(3000).at_rest_speed(),
+            "between 0.5 / 5000 and 0.5 / 3000"
+        );
+        let turned = |rules: FlightRules| {
+            let mut ship = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, -creep, 0.0, 0.0));
+            fly_own_under(&mut ship, Some(&target), rules);
+            shortest_turn(0.0, ship.state.heading)
+        };
+        assert!(turned(thrust_over(3000)) < 0.0, "at rest, aiming left");
+        assert!(
+            turned(FlightRules::default()) > 0.0,
+            "braking, turning right"
+        );
+    }
+
+    #[test]
     fn fleeing_close_it_turns_straight_away_and_thrusts_within_a_turn_and_20() {
         // The attacker 250 below: away is up, 0; thrust within 23.
         let attacker = at(0.0, 250.0, 0.0, 0.0, 0.0);
@@ -2948,6 +3008,24 @@ mod tests {
         fly(&mut edge, &[], Some(&carrier));
         assert_eq!(edge.state.position.x, -pull, "not farther than the pull");
         assert_eq!(edge.state.position.y, 60.0 - pull);
+    }
+
+    #[test]
+    fn inside_its_window_a_fighter_is_pulled_by_ten_ticks_of_its_rules_thrust() {
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
+        let pulled = |start: ShipState, rules: FlightRules| {
+            let mut ship = docking(FAST, start);
+            fly_own_under(&mut ship, Some(&carrier), rules);
+            ship.state.position
+        };
+        // FAST's 900 / 3000 is 0.3 a tick, ten ticks' 3; y's 1.5 within it.
+        let quicker = pulled(at(-70.0, 1.5, 0.0, 0.0, 270.0), thrust_over(3000));
+        assert!(near(quicker, Vec2::new(-67.0, 1.5)), "{quicker:?}");
+        let both = pulled(at(50.0, 60.0, 0.0, 0.0, 135.0), thrust_over(3000));
+        assert!(near(both, Vec2::new(47.0, 57.0)), "{both:?}");
+        let original = pulled(at(50.0, 60.0, 0.0, 0.0, 135.0), FlightRules::default());
+        assert!(near(original, Vec2::new(48.2, 58.2)), "{original:?}");
     }
 
     #[test]
