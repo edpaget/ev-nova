@@ -1907,4 +1907,13 @@ mod tests {
         overlay.set_govt(SystemId(1), Some(Some(GovtId(7))));
         OverlaidGalaxy::new(systems(), overlay)
     }
+
+    #[test]
+    fn set_inactive_says_it_changed_an_overlay_it_only_adds_to() {
+        let mut overlay = GalaxyOverlay::default();
+        assert!(overlay.set_inactive(&nebula_ids(&[130])));
+        assert_eq!(overlay.nebula(NebulaId(130)), Some(false));
+        assert!(!overlay.set_inactive(&nebula_ids(&[130])), "again");
+        assert!(overlay.set_inactive(&nebula_ids(&[130, 131])), "one more");
+    }
 }

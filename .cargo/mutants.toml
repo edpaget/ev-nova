@@ -289,4 +289,9 @@ exclude_re = [
     # (`Shot::lose_a_gone_ship`), later that same tick, before anything
     # reads it.
     "combat/mod.rs:.*replace match guard launch.weapon.is_beam\\(\\) with true in Combat::defend",
+    # A mission ship code of 2176-9998 is nowhere, drawing nothing. Without
+    # its own arm it falls to the last, where `GovtCode::of` names only
+    # 9999-31999 and so gives `None` for every code of 2176-9998, which is
+    # nowhere with no draw too. The arm states the original's reading.
+    "mission/ships.rs:.*delete match arm 2176\\.\\.= 9998 in select_ship_system",
 ]

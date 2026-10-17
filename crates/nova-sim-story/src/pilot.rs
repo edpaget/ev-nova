@@ -1082,4 +1082,84 @@ mod tests {
             ]))
         );
     }
+
+    #[test]
+    fn the_missions_crons_ranks_stellar_and_course_read_as_they_are_kept() {
+        use crate::catalog::{CronId, RankId, StellarId};
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        pilot
+            .missions
+            .put(2, crate::mission::fixture::carrying(141, 3));
+        let running = CronState {
+            days: 4,
+            holdoff: -1,
+        };
+        pilot.crons.insert(CronId(130), running);
+        pilot.ranks.insert(RankId(131));
+        pilot.stellar = Some(StellarId(140));
+        pilot.course = vec![SystemId(131), SystemId(132)];
+        assert_eq!(pilot.missions().lowest_free(), Some(0));
+        assert_eq!(pilot.missions().cargo_aboard(), 3);
+        assert_eq!(
+            pilot.crons().iter().collect::<Vec<_>>(),
+            [(&CronId(130), &running)]
+        );
+        assert_eq!(pilot.ranks().iter().collect::<Vec<_>>(), [&RankId(131)]);
+        assert_eq!(pilot.stellar(), Some(StellarId(140)));
+        assert_eq!(pilot.course(), [SystemId(131), SystemId(132)]);
+    }
+
+    #[test]
+    fn a_control_bit_set_through_bits_mut_is_the_pilots() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        let bit = Bit::new(42).expect("in range");
+        pilot.bits_mut().set(bit);
+        assert!(pilot.control_bit(bit));
+        assert!(!pilot.control_bit(Bit::new(41).expect("in range")));
+    }
+
+    #[test]
+    fn the_legal_records_port_reads_and_writes_the_pilots_own_records() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        let records: &mut dyn LegalRecords = &mut pilot;
+        assert_eq!(records.legal_record(GovtId(128)), 0);
+        records.set_legal_record(GovtId(128), 300);
+        records.set_system_record(SystemId(130), -40);
+        assert_eq!(records.legal_record(GovtId(128)), 300);
+        assert_eq!(records.legal_record(GovtId(129)), 0);
+        assert_eq!(records.system_record(SystemId(130)), -40);
+        assert_eq!(records.system_record(SystemId(131)), 0);
+        assert_eq!(pilot.legal_record(GovtId(128)), 300);
+        assert_eq!(pilot.system_record(SystemId(130)), -40);
+    }
+
+    #[test]
+    fn the_trader_port_reads_and_changes_the_pilots_cash_cargo_and_events() {
+        use crate::catalog::{DisasterId, StellarId};
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        pilot.set_cash(-250);
+        pilot.cargo = BTreeMap::from([(Good::Commodity(3), 7)]);
+        pilot
+            .missions
+            .put(0, crate::mission::fixture::carrying(140, 5));
+        let event = ActiveEvent {
+            days: 6,
+            stellar: Some(StellarId(140)),
+        };
+        pilot.events = BTreeMap::from([(DisasterId(129), event)]);
+        let trader: &mut dyn Trader = &mut pilot;
+        assert_eq!(trader.cash(), -250);
+        assert_eq!(trader.held(Good::Commodity(3)), 7);
+        assert_eq!(trader.held(Good::Commodity(4)), 0);
+        assert_eq!(trader.total_cargo(), 12, "7 held and 5 aboard");
+        assert_eq!(
+            trader.events_under_way(),
+            &BTreeMap::from([(DisasterId(129), event)])
+        );
+        *trader.cash_mut() += 1000;
+        trader.cargo_mut().insert(Good::Commodity(5), 2);
+        assert_eq!(pilot.cash(), 750);
+        assert_eq!(pilot.held(Good::Commodity(5)), 2);
+        assert_eq!(pilot.held(Good::Commodity(3)), 7);
+    }
 }

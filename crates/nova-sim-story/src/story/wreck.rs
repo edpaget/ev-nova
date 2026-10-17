@@ -237,4 +237,11 @@ mod tests {
             assert_eq!(in_range(StellarId(id)), acts, "{id}");
         }
     }
+
+    #[test]
+    fn a_stellar_of_no_dead_time_counts_its_days_down() {
+        let life = life(100, 0);
+        assert_eq!(day(&life, left(5)), Tick::Stays(left(4)));
+        assert_eq!(day(&life, left(1)), Tick::Regenerates);
+    }
 }

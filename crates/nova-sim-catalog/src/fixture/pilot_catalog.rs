@@ -541,4 +541,389 @@ mod tests {
         };
         assert_eq!(fake.listed_stellars(), []);
     }
+
+    #[test]
+    fn the_catalog_starts_ship_128_in_system_130_on_the_start_date() {
+        let fake = catalog();
+        assert_eq!(
+            fake.first_character(),
+            Ok(CharacterStart {
+                ship: Some(ShipId(128)),
+                systems: [Some(SystemId(130)), None, None, None],
+                start: START,
+                ..CharacterStart::default()
+            })
+        );
+        assert_eq!(
+            (START.day, START.month, START.year),
+            (23, 6, 1177),
+            "23 June 1177"
+        );
+        let elsewhere = starting([None, Some(131), None, Some(132)]);
+        assert_eq!(
+            elsewhere.first_character(),
+            Ok(CharacterStart {
+                ship: Some(ShipId(128)),
+                systems: [None, Some(SystemId(131)), None, Some(SystemId(132))],
+                start: START,
+                ..CharacterStart::default()
+            })
+        );
+        assert_eq!(
+            elsewhere.star_map, fake.star_map,
+            "the rest is the catalog's"
+        );
+    }
+
+    #[test]
+    fn living_adds_its_lives_to_the_catalogs() {
+        let life = |id| StellarLife {
+            id: StellarId(id),
+            strength: 100,
+            dead_time: 3,
+            flags2: 0,
+            explosion: None,
+            on_destroy: crate::control::Script::default(),
+            on_regen: crate::control::Script::default(),
+        };
+        let fake = FakePilotCatalog {
+            lives: vec![life(128)],
+            ..catalog()
+        }
+        .living([life(129), life(140)]);
+        assert_eq!(fake.stellar_lives(), [life(128), life(129), life(140)]);
+        assert_eq!(*fake.life_reads.borrow(), 1);
+        assert_eq!(catalog().stellar_lives(), [], "none, by default");
+    }
+
+    #[test]
+    fn the_fake_gives_each_ships_fields_and_default_outfits_and_records_the_asks() {
+        let slow = ShipFields { speed: 1, ..FAST };
+        let fake = FakePilotCatalog {
+            ships: vec![
+                (ShipId(128), Ok(FAST)),
+                (ShipId(129), Ok(slow)),
+                (ShipId(130), Err("broken".to_owned())),
+            ],
+            defaults: vec![
+                (ShipId(128), vec![(OutfitId(128), 2)]),
+                (ShipId(129), vec![(OutfitId(130), 1)]),
+            ],
+            ..catalog()
+        };
+        assert_eq!(fake.ship_fields(ShipId(129)), Ok(slow));
+        assert_eq!(fake.ship_fields(ShipId(128)), Ok(FAST));
+        assert_eq!(fake.ship_fields(ShipId(130)), Err("broken".to_owned()));
+        assert_eq!(fake.ship_fields(ShipId(131)), Err("no shïp 131".to_owned()));
+        assert_eq!(
+            *fake.ships_asked.borrow(),
+            [ShipId(129), ShipId(128), ShipId(130), ShipId(131)]
+        );
+        assert_eq!(fake.default_outfits(ShipId(129)), [(OutfitId(130), 1)]);
+        assert_eq!(fake.default_outfits(ShipId(128)), [(OutfitId(128), 2)]);
+        assert_eq!(fake.default_outfits(ShipId(131)), []);
+        assert_eq!(
+            *fake.defaults_asked.borrow(),
+            [ShipId(129), ShipId(128), ShipId(131)]
+        );
+    }
+
+    #[test]
+    fn the_fake_gives_its_records_and_counts_each_read() {
+        use super::super::{outfit, ship};
+        let junk = JunkRecord {
+            id: crate::catalog::JunkId(128),
+            name: "Tribbles".to_owned(),
+            abbrev: "Trb".to_owned(),
+            base_price: 10,
+            sold_at: Vec::new(),
+            bought_at: Vec::new(),
+            buy_on: crate::control::Test::parse(""),
+            sell_on: crate::control::Test::parse(""),
+            flags: 0,
+            scan_mask: 0,
+            lc_name: "tribbles".to_owned(),
+        };
+        let disaster = DisasterRecord {
+            duration: 5,
+            ..DisasterRecord::default()
+        };
+        let gate = GateSite {
+            id: StellarId(150),
+            position: crate::geometry::Vec2::new(1.0, 2.0),
+            flags2: 0,
+            links: [None; 8],
+            exit_angle: 90,
+        };
+        let commodities = CommodityStrings {
+            names: vec!["Food".to_owned()],
+            ..CommodityStrings::default()
+        };
+        let place_names = PlaceNames {
+            systems: [(SystemId(130), "Sol".to_owned())].into(),
+            ..PlaceNames::default()
+        };
+        let fake = FakePilotCatalog {
+            outfits: vec![outfit(128, &[])],
+            ship_records: vec![ship(128, FAST)],
+            commodities: commodities.clone(),
+            junk: vec![junk.clone()],
+            disasters: vec![disaster.clone()],
+            stellars: vec![(StellarId(128), 4)],
+            gates: vec![gate],
+            place_names: place_names.clone(),
+            ..catalog()
+        };
+        let counts = |fake: &FakePilotCatalog| {
+            [
+                *fake.outfit_reads.borrow(),
+                *fake.ship_record_reads.borrow(),
+                *fake.star_map_reads.borrow(),
+                *fake.goods_reads.borrow(),
+                *fake.date_affix_reads.borrow(),
+                *fake.gate_reads.borrow(),
+                *fake.place_name_reads.borrow(),
+            ]
+        };
+        assert_eq!(counts(&fake), [0; 7]);
+        for reads in 1..=2 {
+            assert_eq!(fake.outfits(), [outfit(128, &[])]);
+            assert_eq!(fake.ships(), [ship(128, FAST)]);
+            assert_eq!(fake.star_map(), catalog().star_map);
+            assert_eq!(fake.date_affixes().suffix, " NC");
+            assert_eq!(fake.gate_sites(), [gate]);
+            assert_eq!(fake.place_names(), place_names);
+            assert_eq!(counts(&fake), [reads, reads, reads, 0, reads, reads, reads]);
+        }
+        assert_eq!(fake.commodity_strings(), commodities);
+        assert_eq!(*fake.goods_reads.borrow(), 1);
+        assert_eq!(fake.junk(), [junk]);
+        assert_eq!(*fake.goods_reads.borrow(), 2);
+        assert_eq!(fake.disasters(), [disaster]);
+        assert_eq!(*fake.goods_reads.borrow(), 3);
+        assert_eq!(fake.stellar_flags(), [(StellarId(128), 4)]);
+        assert_eq!(*fake.goods_reads.borrow(), 4, "every good counts as one");
+    }
+
+    #[test]
+    fn the_fake_gives_its_sites_systems_and_records_the_systems_asked() {
+        let fake = catalog();
+        assert!(fake.system_exists(SystemId(130)));
+        assert!(fake.system_exists(SystemId(131)));
+        assert!(!fake.system_exists(SystemId(132)), "on the map, unreadable");
+        assert_eq!(fake.landing_sites(SystemId(131)), [planet(140, 0.0, 0.0)]);
+        assert_eq!(
+            fake.landing_sites(SystemId(130)),
+            [planet(128, 30.0, -40.0), planet(129, 2000.0, 0.0)]
+        );
+        assert_eq!(fake.landing_sites(SystemId(133)), []);
+        assert_eq!(
+            *fake.sites_asked.borrow(),
+            [SystemId(131), SystemId(130), SystemId(133)]
+        );
+        assert_eq!(
+            fake.first_stellars(),
+            [
+                (SystemId(130), StellarId(128)),
+                (SystemId(131), StellarId(140))
+            ]
+        );
+        assert_eq!(fake.fallback_frame_size(), Some((100, 100)));
+        let unread = FakePilotCatalog {
+            fallback_frame: None,
+            ..catalog()
+        };
+        assert_eq!(unread.fallback_frame_size(), None);
+    }
+
+    #[test]
+    fn the_fake_marks_each_listed_stellar_it_isnt_given_by_its_id() {
+        let given = StellarMark {
+            id: StellarId(128),
+            place: (5, 6),
+            name: "Earth".to_owned(),
+        };
+        let fake = FakePilotCatalog {
+            marks: vec![given.clone()],
+            unloaded: vec![StellarId(129)],
+            ..catalog()
+        };
+        assert_eq!(
+            fake.stellar_marks(),
+            [
+                given,
+                StellarMark {
+                    id: StellarId(140),
+                    place: (0, 0),
+                    name: "#140".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_fake_gives_its_story_records_and_sounds() {
+        use super::super::{cron, mission, nebula, rank};
+        let texts = MissionTexts {
+            id: crate::catalog::MissionId(128),
+            name: "Deliver".to_owned(),
+            offer: Some("Take it".to_owned()),
+            brief: None,
+            quick_brief: None,
+            comp: None,
+            fail: None,
+            refuse: None,
+            refuse_named: false,
+            load_cargo: None,
+            dump_cargo: None,
+            ship_done: None,
+            accept_button: String::new(),
+            refuse_button: String::new(),
+            graphics: crate::catalog::TextGraphics::default(),
+            movies: crate::catalog::TextMovies::default(),
+        };
+        let visibility = SystemVisibility {
+            id: SystemId(131),
+            visibility: crate::control::Test::parse("b1"),
+        };
+        let sound = |frames| SoundLength { frames, rate: 22 };
+        let dude = DudeRecord {
+            ai_type: 3,
+            ..DudeRecord::default()
+        };
+        let fake = FakePilotCatalog {
+            missions: vec![mission(128)],
+            mission_texts: vec![texts.clone()],
+            visibility: vec![visibility.clone()],
+            crons: vec![cron(130)],
+            ranks: vec![rank(131)],
+            nebulae: vec![nebula(132, (0, 0, 10, 10), "", "")],
+            warp_sound: Some(sound(1)),
+            warp_sound_double_time: Some(sound(2)),
+            warp_out_sound: Some(sound(3)),
+            dudes: vec![(DudeId(140), dude.clone())],
+            ..catalog()
+        };
+        assert_eq!(fake.missions(), [mission(128)]);
+        assert_eq!(fake.mission_texts(), [texts]);
+        assert_eq!(fake.system_visibility(), [visibility]);
+        assert_eq!(fake.crons(), [cron(130)]);
+        assert_eq!(fake.ranks(), [rank(131)]);
+        assert_eq!(fake.nebulae(), [nebula(132, (0, 0, 10, 10), "", "")]);
+        assert_eq!(fake.warp_sound(), Some(sound(1)));
+        assert_eq!(fake.warp_sound_double_time(), Some(sound(2)));
+        assert_eq!(fake.warp_out_sound(), Some(sound(3)));
+        assert_eq!(fake.mission_dude(DudeId(140)), Some(dude));
+        assert_eq!(fake.mission_dude(DudeId(141)), None);
+    }
+
+    #[test]
+    fn the_fake_gives_its_traffic_by_system_and_its_dudes_by_id() {
+        use super::super::person;
+        let traffic = |avg_ships| SystemTraffic {
+            avg_ships,
+            ..SystemTraffic::default()
+        };
+        let dude = |ai_type| DudeRecord {
+            ai_type,
+            ..DudeRecord::default()
+        };
+        let fleet = FleetRecord {
+            id: crate::catalog::FleetId(128),
+            lead: Some(ShipId(128)),
+            escorts: Vec::new(),
+            govt: None,
+            link_syst: -1,
+            appear_on: crate::control::Test::parse(""),
+            quote: None,
+            flags: 0,
+        };
+        let fake = FakePilotCatalog {
+            traffic: vec![(SystemId(130), traffic(4)), (SystemId(131), traffic(9))],
+            dudes: vec![(DudeId(128), dude(1)), (DudeId(129), dude(2))],
+            fleets: vec![fleet.clone()],
+            persons: vec![person(128, 128)],
+            ..catalog()
+        };
+        assert_eq!(fake.system_traffic(SystemId(131)), Some(traffic(9)));
+        assert_eq!(fake.system_traffic(SystemId(130)), Some(traffic(4)));
+        assert_eq!(fake.system_traffic(SystemId(132)), None);
+        assert_eq!(fake.dude(DudeId(129)), Some(dude(2)));
+        assert_eq!(fake.dude(DudeId(128)), Some(dude(1)));
+        assert_eq!(fake.dude(DudeId(130)), None);
+        assert_eq!(fake.fleets(), [fleet]);
+        assert_eq!(fake.persons(), [person(128, 128)]);
+    }
+
+    #[test]
+    fn the_fake_gives_its_combat_and_asteroid_records() {
+        use super::super::{govt, hull, weapon};
+        let rock = AsteroidTypeRecord {
+            kind: 2,
+            strength: 30,
+            spin_rate: 100,
+            frames: 36,
+            frame_size: Some((40, 40)),
+            yield_type: 3,
+            yield_qty: 2,
+            part_count: 5,
+            part_color: 0x00ff_8800,
+            frag_types: [-1, -1],
+            frag_count: 0,
+            explode_type: -1,
+            mass: 50,
+        };
+        let field = AsteroidFieldRecord {
+            system: SystemId(130),
+            count: 6,
+            types: 0b100,
+        };
+        let mut box_frames = [None; BOX_GRAPHICS];
+        box_frames[1] = Some((16, 12));
+        let fake = FakePilotCatalog {
+            weapons: vec![weapon(128)],
+            hulls: vec![hull(129)],
+            govts: vec![govt(130)],
+            asteroid_types: vec![rock],
+            asteroid_fields: vec![field],
+            box_frames,
+            ..catalog()
+        };
+        assert_eq!(fake.weapons(), [weapon(128)]);
+        assert_eq!(fake.hulls(), [hull(129)]);
+        assert_eq!(fake.governments(), [govt(130)]);
+        assert_eq!(fake.asteroid_types(), [rock]);
+        assert_eq!(fake.asteroid_fields(), [field]);
+        assert_eq!(fake.box_frame_sizes(), box_frames);
+        assert_eq!(catalog().box_frame_sizes(), [None; BOX_GRAPHICS]);
+    }
+
+    #[test]
+    fn the_fake_gives_its_strings_and_patches_by_id() {
+        let fake = FakePilotCatalog {
+            strings: vec![
+                (7101, vec!["Hello".to_owned(), "Bye".to_owned()]),
+                (crate::buoy::BUOY_STRINGS, vec!["Buoy".to_owned()]),
+            ],
+            string_patches: vec![
+                (5000, StringPatch::Text("Patched".to_owned())),
+                (5001, StringPatch::Empty),
+            ],
+            ..catalog()
+        };
+        assert_eq!(fake.string_list(7101), ["Hello", "Bye"]);
+        assert_eq!(fake.string_list(7102), Vec::<String>::new());
+        assert_eq!(fake.buoy_strings(), ["Buoy"]);
+        assert_eq!(fake.string_patch(5001), StringPatch::Empty);
+        assert_eq!(
+            fake.string_patch(5000),
+            StringPatch::Text("Patched".to_owned())
+        );
+        assert_eq!(fake.string_patch(5002), StringPatch::Absent);
+        assert_eq!(
+            fake.plugin_string(5000),
+            StringPatch::Text("Patched".to_owned())
+        );
+        assert_eq!(fake.plugin_string(5002), StringPatch::Absent);
+    }
 }

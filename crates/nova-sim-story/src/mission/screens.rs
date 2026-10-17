@@ -349,4 +349,17 @@ mod tests {
         }
         assert_eq!(ordered(&[], RuleSource::Engine), Vec::<usize>::new());
     }
+
+    #[test]
+    fn an_offer_can_be_refused_only_with_a_refuse_button() {
+        let prompt = |labels| OfferPrompt {
+            mission: crate::catalog::MissionId(128),
+            text: String::new(),
+            labels,
+            graphic: None,
+            movie: None,
+        };
+        assert!(prompt(offer_labels("", "", true)).can_refuse());
+        assert!(!prompt(offer_labels("", "", false)).can_refuse());
+    }
 }

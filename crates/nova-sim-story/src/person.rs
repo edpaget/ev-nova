@@ -1223,6 +1223,20 @@ mod tests {
     }
 
     #[test]
+    fn hail_quote_1_is_the_first_quote_a_person_may_say() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let first = NpcPerson {
+            hail_quote: 1,
+            ..quoting(0)
+        };
+        assert_eq!(
+            eligible(&intact, first, VIEW),
+            eligible(&intact, quoting(0), VIEW)
+        );
+        assert_ne!(eligible(&intact, first, VIEW), Eligible::No);
+    }
+
+    #[test]
     fn no_quote_without_one_while_the_player_jumps_or_the_npc_jumps_in_or_breaks_up() {
         let intact = npc_of(Condition::Intact, IDLE);
         for none in [-1, 0] {

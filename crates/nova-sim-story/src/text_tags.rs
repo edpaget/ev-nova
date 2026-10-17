@@ -1756,4 +1756,50 @@ mod tests {
         let ships = ships_named(&[(128, "Shuttle")]);
         assert_eq!(expand_before_any_pilot(text, &ships), text);
     }
+
+    #[test]
+    fn the_tag_rules_read_each_key_of_the_rulebook() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let bible = |key| {
+            TagRules::from_rulebook(&Rulebook::default().with_override(key, RuleSource::Bible))
+        };
+        let engine = TagRules::from_rulebook(&Rulebook::default());
+        assert_eq!(
+            engine,
+            TagRules {
+                pay_slot_offset: RuleSource::Engine,
+                missionless: RuleSource::Engine,
+                prk_nnn_name: RuleSource::Engine,
+                crossed_rank_tags: RuleSource::Engine,
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::PaySlotOffset),
+            TagRules {
+                pay_slot_offset: RuleSource::Bible,
+                ..engine
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::MissionlessTags),
+            TagRules {
+                missionless: RuleSource::Bible,
+                ..engine
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::PrkNnnName),
+            TagRules {
+                prk_nnn_name: RuleSource::Bible,
+                ..engine
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::CrossedRankTags),
+            TagRules {
+                crossed_rank_tags: RuleSource::Bible,
+                ..engine
+            }
+        );
+    }
 }
