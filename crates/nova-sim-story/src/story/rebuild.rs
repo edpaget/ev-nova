@@ -48,7 +48,7 @@ use crate::landing::TypeWidth;
 /// the stellars whose slot shows no frame. Never saved: a load is itself a
 /// rebuild point.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Rebuilt {
+pub struct Rebuilt {
     dead: BTreeSet<StellarId>,
     masters: BTreeSet<i16>,
     empty: BTreeSet<StellarId>,
@@ -73,7 +73,7 @@ impl Rebuilt {
     /// filling it with graphic type 0; and a slot is left with no frame
     /// when its stellar shows nothing that can be read and the fallback
     /// cannot be read either. Whether the dead set changed.
-    pub(crate) fn rebuild(
+    pub fn rebuild(
         &mut self,
         shown: &[LandingSite],
         destroyed: impl Fn(StellarId) -> bool,
@@ -113,7 +113,7 @@ impl Rebuilt {
     /// stellar that `destroyed` holds whole leaves the dead set, and each
     /// stellar showing a graphic that can be read has its master loaded
     /// and its frames cloned into its slot.
-    pub(crate) fn frame(&mut self, shown: &[LandingSite], destroyed: impl Fn(StellarId) -> bool) {
+    pub fn frame(&mut self, shown: &[LandingSite], destroyed: impl Fn(StellarId) -> bool) {
         self.dead.retain(|&id| destroyed(id));
         for site in shown {
             if let Some(graphic) = shown_graphic(site, destroyed(site.id)) {
@@ -124,12 +124,14 @@ impl Rebuilt {
     }
 
     /// Whether `stellar` has been dead since the last rebuild point.
-    pub(crate) fn dead(&self, stellar: StellarId) -> bool {
+    #[must_use]
+    pub fn dead(&self, stellar: StellarId) -> bool {
         self.dead.contains(&stellar)
     }
 
     /// Whether `stellar`'s sprite slot shows a frame.
-    pub(crate) fn shows_frame(&self, stellar: StellarId) -> bool {
+    #[must_use]
+    pub fn shows_frame(&self, stellar: StellarId) -> bool {
         !self.empty.contains(&stellar)
     }
 
@@ -137,7 +139,8 @@ impl Rebuilt {
     /// `site`'s `Type` master: unloaded unless its sheet can be read and
     /// its master is loaded; out of range when its `spïn` gives no frame
     /// count; otherwise the frame's.
-    pub(crate) fn type_width(&self, site: &LandingSite) -> TypeWidth {
+    #[must_use]
+    pub fn type_width(&self, site: &LandingSite) -> TypeWidth {
         if site.frame_size.is_none() || !self.masters.contains(&site.graphic) {
             TypeWidth::Unloaded
         } else if site.type_counts_frames {

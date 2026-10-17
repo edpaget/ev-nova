@@ -75,7 +75,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::outfit_mods;
-pub(crate) use crate::catalog::tally;
+pub use crate::catalog::tally;
 use crate::catalog::{
     CombatCatalog, CronId, DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, RankId, ShipId,
     ShipRecord, StartError, StellarId, SystemId,
@@ -98,88 +98,88 @@ use crate::story::{GalaxyOverlay, SubscriptionId};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pilot {
     /// The pilot's name; empty for a pilot that is never saved.
-    pub(crate) name: String,
+    pub name: String,
     /// The ship class flown.
-    pub(crate) ship: ShipId,
+    pub ship: ShipId,
     /// The ship's name. `None` for a ship never named: a save from
     /// before ships had names. Flying the pilot names it after its class.
-    pub(crate) ship_name: Option<String>,
+    pub ship_name: Option<String>,
     /// The system the ship is in.
-    pub(crate) system: SystemId,
+    pub system: SystemId,
     /// The stellar last landed on in that system, if any.
-    pub(crate) stellar: Option<StellarId>,
+    pub stellar: Option<StellarId>,
     /// Today's date.
-    pub(crate) date: GameDate,
+    pub date: GameDate,
     /// Credits.
-    pub(crate) cash: i64,
+    pub cash: i64,
     /// The ship's shield, armour and fuel.
-    pub(crate) reserves: Reserves,
+    pub reserves: Reserves,
     /// The systems still to jump to, in order, ending at the destination.
-    pub(crate) course: Vec<SystemId>,
+    pub course: Vec<SystemId>,
     /// Every system the pilot has been in.
-    pub(crate) explored: BTreeSet<SystemId>,
+    pub explored: BTreeSet<SystemId>,
     /// The legal record with each government that has one.
-    pub(crate) legal: BTreeMap<GovtId, i16>,
+    pub legal: BTreeMap<GovtId, i16>,
     /// The legal record in each system that has one (see
     /// [`legal`](crate::legal)); `None` until it is derived from `legal`
     /// when the pilot first flies: a new pilot, or a save from before
     /// records were kept per system.
-    pub(crate) system_legal: Option<BTreeMap<SystemId, i16>>,
+    pub system_legal: Option<BTreeMap<SystemId, i16>>,
     /// The combat rating (see `nova_sim::rating`).
-    pub(crate) combat_rating: i64,
+    pub combat_rating: i64,
     /// The tons held of each good the ship carries; none of a good not
     /// listed.
-    pub(crate) cargo: BTreeMap<Good, u32>,
+    pub cargo: BTreeMap<Good, u32>,
     /// The planetary events under way: each `öops` with the days it has
     /// left and the stellar it is at.
-    pub(crate) events: BTreeMap<DisasterId, ActiveEvent>,
+    pub events: BTreeMap<DisasterId, ActiveEvent>,
     /// How many of each outfit the ship carries; none of an outfit not
     /// listed.
-    pub(crate) outfits: BTreeMap<OutfitId, u16>,
+    pub outfits: BTreeMap<OutfitId, u16>,
     /// Whether the ship still carries its class's default items, not yet
     /// read into `outfits`: a save from before outfits were kept. Flying
     /// the pilot reads them.
-    pub(crate) default_outfits_pending: bool,
+    pub default_outfits_pending: bool,
     /// Whether the ship still mounts its class's stock weapons and their
     /// `AmmoLoad` beside `outfits`, not yet fitted as outfits: a save from
     /// before stock weapons were outfits. Flying the pilot fits them.
-    pub(crate) stock_weapons_pending: bool,
+    pub stock_weapons_pending: bool,
     /// The fleet: every ship escorting the player, in the order it joined.
-    pub(crate) escorts: Vec<Escort>,
+    pub escorts: Vec<Escort>,
     /// The persons gone for good, who never appear again (see
     /// [`person`](crate::person)).
-    pub(crate) gone_persons: BTreeSet<PersonId>,
+    pub gone_persons: BTreeSet<PersonId>,
     /// The persons holding a grudge against the player.
-    pub(crate) grudges: BTreeSet<PersonId>,
+    pub grudges: BTreeSet<PersonId>,
     /// The control bits.
-    pub(crate) bits: ControlBitSet,
+    pub bits: ControlBitSet,
     /// The player's gender.
-    pub(crate) gender: Gender,
+    pub gender: Gender,
     /// Whether the pilot plays Strict Play, the new-pilot dialog's check
     /// box (the original's flag at 0x3b5158). A pilot that does not flies
     /// half as fast again (see `nova_sim::top_speed`).
-    pub(crate) strict_play: bool,
+    pub strict_play: bool,
     /// The system the player last jumped from (the original's player
     /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
     /// from. None until the pilot's first jump, and kept as a raw ID, so
     /// one with no record still loads.
-    pub(crate) jumped_from: Option<SystemId>,
+    pub jumped_from: Option<SystemId>,
     /// The ship's paint; `None` when unpainted.
-    pub(crate) paint: Option<Rgb15>,
+    pub paint: Option<Rgb15>,
     /// The once-only story subscriptions that have fired, by their stable
     /// ids (see the [`story`](crate::story) module's "Dispatch").
-    pub(crate) story_fired: BTreeSet<SubscriptionId>,
+    pub story_fired: BTreeSet<SubscriptionId>,
     /// What play has changed of the galaxy (see the
     /// [`story`](crate::story) module's "Galaxy overlay").
-    pub(crate) galaxy: GalaxyOverlay,
+    pub galaxy: GalaxyOverlay,
     /// The missions accepted, in their 16 slots (see
     /// [`mission`](crate::mission)).
-    pub(crate) missions: ActiveMissions,
+    pub missions: ActiveMissions,
     /// Each crön running or holding off, by ID, with its counters; any
     /// other is inactive (see [`cron`](crate::cron)).
-    pub(crate) crons: BTreeMap<CronId, CronState>,
+    pub crons: BTreeMap<CronId, CronState>,
     /// The active ranks, by ID (see [`rank`](crate::rank)).
-    pub(crate) ranks: BTreeSet<RankId>,
+    pub ranks: BTreeSet<RankId>,
 }
 
 impl Pilot {
@@ -308,7 +308,7 @@ impl Pilot {
     }
 
     /// The control bits, to write.
-    pub(crate) fn bits_mut(&mut self) -> &mut ControlBitSet {
+    pub fn bits_mut(&mut self) -> &mut ControlBitSet {
         &mut self.bits
     }
 
@@ -446,7 +446,8 @@ impl Pilot {
     }
 
     /// Whether the records in each system are derived yet.
-    pub(crate) fn system_records_derived(&self) -> bool {
+    #[must_use]
+    pub fn system_records_derived(&self) -> bool {
         self.system_legal.is_some()
     }
 
@@ -573,7 +574,8 @@ impl Trader for Pilot {
 
 /// The name of ship class `ship` among `records`, as a ship of it is
 /// named until something renames it: empty when it has no record.
-pub(crate) fn class_name(records: &[ShipRecord], ship: ShipId) -> String {
+#[must_use]
+pub fn class_name(records: &[ShipRecord], ship: ShipId) -> String {
     records
         .iter()
         .find(|record| record.id == ship)
@@ -583,18 +585,13 @@ pub(crate) fn class_name(records: &[ShipRecord], ship: ShipId) -> String {
 
 /// Ship `ship`'s default items from `catalog`, each with how many: repeated
 /// slots add up, and none of an item is not listed.
-pub(crate) fn default_outfits(
-    catalog: &impl PilotCatalog,
-    ship: ShipId,
-) -> BTreeMap<OutfitId, u16> {
+pub fn default_outfits(catalog: &impl PilotCatalog, ship: ShipId) -> BTreeMap<OutfitId, u16> {
     tally(catalog.default_outfits(ship))
 }
 
 /// `a` and `b` together, saturating.
-pub(crate) fn merged(
-    a: &BTreeMap<OutfitId, u16>,
-    b: &BTreeMap<OutfitId, u16>,
-) -> BTreeMap<OutfitId, u16> {
+#[must_use]
+pub fn merged(a: &BTreeMap<OutfitId, u16>, b: &BTreeMap<OutfitId, u16>) -> BTreeMap<OutfitId, u16> {
     let mut both = a.clone();
     for (&id, &count) in b {
         let owned = both.entry(id).or_default();

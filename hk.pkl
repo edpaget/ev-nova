@@ -24,6 +24,7 @@ local crates = List(
     "nova-sim-catalog",
     "nova-sim-combat",
     "nova-sim-state",
+    "nova-sim-story",
     "nova-view",
 )
 

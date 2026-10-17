@@ -28,8 +28,10 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 nova-sim-base = { workspace = true, features = ["fixture"] }
 
 [features]
-# Exposes the test support in `fixture` (the catalog record builders and
-# the control-bit mocks) to the tests of the nova-sim crates above.
+# Exposes the test support in `fixture` (the catalog record builders, the
+# control-bit mocks and `FakePilotCatalog`) to the tests of the nova-sim
+# crates above. The fake's `catalog()` flies with the foundation's
+# `fixture::FAST`, so this turns on the foundation's `fixture` too.
 fixture = ["nova-sim-base/fixture"]
 
 [lints]

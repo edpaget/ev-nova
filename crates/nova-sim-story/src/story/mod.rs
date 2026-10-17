@@ -1900,11 +1900,11 @@
 //!   which `_PropagateMissionBitEffects` writes @0x998da) and explored
 //!   (+0x9) (@0xf947-0xf95f).
 
-pub(crate) mod day;
-pub(crate) mod dispatch;
+pub mod day;
+pub mod dispatch;
 pub mod galaxy;
-pub(crate) mod rebuild;
-pub(crate) mod wreck;
+pub mod rebuild;
+pub mod wreck;
 
 pub use dispatch::DuplicateSubscription;
 pub use galaxy::{

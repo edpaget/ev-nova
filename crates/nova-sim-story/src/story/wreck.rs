@@ -18,7 +18,8 @@ const STARTS_DESTROYED: u16 = 0x0040;
 
 /// Whether the stellar `life` starts the game destroyed: its `Flags2` has
 /// 0x0040 (`_DoNewPilot` @0x192d6), whatever its other bits.
-pub(crate) fn starts_destroyed(life: &StellarLife) -> bool {
+#[must_use]
+pub fn starts_destroyed(life: &StellarLife) -> bool {
     life.flags2 & STARTS_DESTROYED != 0
 }
 
@@ -27,7 +28,8 @@ pub(crate) fn starts_destroyed(life: &StellarLife) -> bool {
 const STELLARS: RangeInclusive<i16> = 128..=2175;
 
 /// Whether `Y` and `U` act on `stellar`.
-pub(crate) fn in_range(stellar: StellarId) -> bool {
+#[must_use]
+pub fn in_range(stellar: StellarId) -> bool {
     STELLARS.contains(&stellar.0)
 }
 
@@ -36,7 +38,8 @@ pub(crate) fn in_range(stellar: StellarId) -> bool {
 /// the raw `DeadTime` (@0x374c8-0x374cf), but a negative countdown with
 /// the current strength -1 reads destroyed just the same, and the next
 /// day sets it to 1 (@0xb6f5), so the shot's destruction uses this too.
-pub(crate) fn countdown_on_destroy(life: &StellarLife) -> Countdown {
+#[must_use]
+pub fn countdown_on_destroy(life: &StellarLife) -> Countdown {
     Countdown {
         days_left: u16::try_from(life.dead_time).unwrap_or(1),
     }
@@ -47,7 +50,8 @@ pub(crate) fn countdown_on_destroy(life: &StellarLife) -> Countdown {
 /// reads: by the engine, only when its `Strength` is above 0, since
 /// `_StellarIsDestroyed` holds no invincible stellar destroyed (@0x4e1a);
 /// by the Bible's "destroy stellar xxx", always.
-pub(crate) fn destroys(life: &StellarLife, reading: RuleSource) -> bool {
+#[must_use]
+pub fn destroys(life: &StellarLife, reading: RuleSource) -> bool {
     match reading {
         RuleSource::Engine => life.strength > 0,
         RuleSource::Bible => true,
@@ -58,14 +62,16 @@ pub(crate) fn destroys(life: &StellarLife, reading: RuleSource) -> bool {
 /// 0, as `_CheckShotProximities` skips any other (@0x3726d), and as
 /// `_StellarIsDestroyed` never holds an invincible one destroyed
 /// (@0x4e1a).
-pub(crate) fn destroyable(life: &StellarLife) -> bool {
+#[must_use]
+pub fn destroyable(life: &StellarLife) -> bool {
     life.strength > 0
 }
 
 /// The strength of the stellar `life` while it is whole and undamaged:
 /// its `Strength`, which the day restores (@0xb700) and a load gives
 /// back (@0x76068-0x760b8).
-pub(crate) fn full_strength(life: &StellarLife) -> i64 {
+#[must_use]
+pub fn full_strength(life: &StellarLife) -> i64 {
     i64::from(life.strength)
 }
 
@@ -76,17 +82,14 @@ pub(crate) fn full_strength(life: &StellarLife) -> i64 {
 /// invincible stellar, which the engine's
 /// [`RuleKey::DestroyInvincible`](crate::RuleKey::DestroyInvincible)
 /// leaves whole, explodes all the same.
-pub(crate) fn explodes_on_y(
-    life: &StellarLife,
-    shown: bool,
-    destroyed_before: bool,
-) -> Option<Explosion> {
+#[must_use]
+pub fn explodes_on_y(life: &StellarLife, shown: bool, destroyed_before: bool) -> Option<Explosion> {
     life.explosion.filter(|_| shown && !destroyed_before)
 }
 
 /// What a day does to a destroyed stellar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Tick {
+pub enum Tick {
     /// It stays destroyed, with this countdown.
     Stays(Countdown),
     /// It regenerates, and runs its `OnRegen`.
@@ -97,7 +100,8 @@ pub(crate) enum Tick {
 /// one with a negative `DeadTime` stays destroyed with 1 day left
 /// (@0xb6f5), so it never regenerates on its own; any other counts a day
 /// down and regenerates at 0 or below (@0xb68a-0xb69d).
-pub(crate) fn day(life: &StellarLife, countdown: Countdown) -> Tick {
+#[must_use]
+pub fn day(life: &StellarLife, countdown: Countdown) -> Tick {
     if life.dead_time < 0 {
         return Tick::Stays(Countdown { days_left: 1 });
     }

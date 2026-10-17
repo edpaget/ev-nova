@@ -17,17 +17,14 @@ pub struct DuplicateSubscription(pub SubscriptionId);
 
 /// The subscriptions registered, each under its unique id.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Registry {
+pub struct Registry {
     subscriptions: BTreeMap<SubscriptionId, Subscription>,
 }
 
 impl Registry {
     /// Registers `subscription`, unless one is registered under its id
     /// already.
-    pub(crate) fn register(
-        &mut self,
-        subscription: Subscription,
-    ) -> Result<(), DuplicateSubscription> {
+    pub fn register(&mut self, subscription: Subscription) -> Result<(), DuplicateSubscription> {
         match self.subscriptions.entry(subscription.id) {
             Entry::Occupied(_) => Err(DuplicateSubscription(subscription.id)),
             Entry::Vacant(slot) => {
@@ -38,18 +35,20 @@ impl Registry {
     }
 
     /// Takes the subscription registered under `id` out, if any.
-    pub(crate) fn unregister(&mut self, id: SubscriptionId) -> Option<Subscription> {
+    pub fn unregister(&mut self, id: SubscriptionId) -> Option<Subscription> {
         self.subscriptions.remove(&id)
     }
 
     /// The subscription registered under `id`, if any.
-    pub(crate) fn get(&self, id: SubscriptionId) -> Option<&Subscription> {
+    #[must_use]
+    pub fn get(&self, id: SubscriptionId) -> Option<&Subscription> {
         self.subscriptions.get(&id)
     }
 
     /// The ids of the subscriptions `event` runs, in [`dispatch_order`]'s
     /// order: the dispatch's snapshot.
-    pub(crate) fn matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
+    #[must_use]
+    pub fn matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
         dispatch_order(self.subscriptions.values(), event)
             .into_iter()
             .map(|sub| sub.id)
@@ -92,7 +91,7 @@ impl Budget {
 /// When the events a script raises dispatch: the Rulebook key
 /// [`RuleKey::StoryReentry`](crate::RuleKey::StoryReentry).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Reentry {
+pub enum Reentry {
     /// Depth first, before the script's next operator: the original's.
     Nested,
     /// Once the script has settled, first in, first out.
@@ -110,7 +109,7 @@ impl From<RuleSource> for Reentry {
 
 /// The port the dispatcher works through: the session implements it over
 /// its own state, with the catalog and the chance a settling holds.
-pub(crate) trait Stage {
+pub trait Stage {
     /// The ids of the subscriptions `event` runs, in order.
     fn matching(&self, event: &StoryEvent) -> Vec<SubscriptionId>;
     /// Whether the consumer of `id` lets it run on `event` now: its own
@@ -141,7 +140,7 @@ pub(crate) trait Stage {
 /// turn, first in, first out, the events a script raises dispatched as
 /// `reentry` says, then a pending leave, and so on until nothing is left.
 /// Gives how many events were dropped past [`EVENT_LIMIT`].
-pub(crate) fn settle(stage: &mut dyn Stage, reentry: Reentry) -> u32 {
+pub fn settle(stage: &mut dyn Stage, reentry: Reentry) -> u32 {
     let mut budget = Budget::default();
     let mut queue = VecDeque::new();
     loop {

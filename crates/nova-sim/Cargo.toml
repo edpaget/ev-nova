@@ -36,6 +36,10 @@ nova-sim-combat.workspace = true
 # test, brackets, cargo boxes, scans and scooping, re-exported at their old
 # paths (`nova_sim::traffic`, ...).
 nova-sim-ai.workspace = true
+# The story layer, on the ai: missions and their offers, the story runtime,
+# persons, ranks, news, nebulae, exploration, the text tags and the pilot,
+# re-exported at their old paths (`nova_sim::mission`, ...).
+nova-sim-story.workspace = true
 
 [dev-dependencies]
 # Synthetic resource forks for the GameData adapter tests under `tests/`.
@@ -53,6 +57,9 @@ nova-sim-combat = { workspace = true, features = ["fixture"] }
 # `testkit` re-exports, and the `Traffic` setters the session tests call:
 # `strength_armed`, `berths_taken` and `set_berth_person`.
 nova-sim-ai = { workspace = true, features = ["fixture"] }
+# The story layer's test support: `mission::fixture::carrying`, which
+# `testkit` re-exports.
+nova-sim-story = { workspace = true, features = ["fixture"] }
 # This crate's own `fixture` module, for its integration tests under
 # `tests/`, which build the library without `cfg(test)`: the storyline
 # walker the stock tests drive.
@@ -60,7 +67,9 @@ nova-sim = { workspace = true, features = ["fixture"] }
 
 [features]
 # Exposes the test support in `fixture` (the in-memory pilot store and the
-# storyline walker) to other crates' tests and this crate's `tests/`.
+# storyline walker) to other crates' tests and this crate's `tests/`. It
+# re-exports the catalog's `listed_stellars` and `list_also`, so it turns
+# on the catalog's `fixture` too.
 fixture = ["nova-sim-catalog/fixture"]
 
 [lints]

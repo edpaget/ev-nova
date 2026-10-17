@@ -6,7 +6,7 @@
 /// day; the session runs the ones built so far and leaves the rest to the
 /// phase named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Participant {
+pub enum Participant {
     /// The date moves on a day (@0xb51f-0xb585).
     Date,
     /// The crons (`_CronEventHandler` @0xb58b): one pass over every
@@ -60,7 +60,7 @@ impl Participant {
 
 /// The port the daily step runs its participants through: the session
 /// implements it over its own state.
-pub(crate) trait Day {
+pub trait Day {
     /// Runs `participant` for one day.
     fn run(&mut self, participant: Participant);
 }
@@ -68,7 +68,7 @@ pub(crate) trait Day {
 /// Passes `days` days on `day`, each running every participant in
 /// [`Participant::ORDER`]. Nothing else: the wages and any price flux run
 /// once after a transition's days, outside the step.
-pub(crate) fn pass_days(days: u32, day: &mut (impl Day + ?Sized)) {
+pub fn pass_days(days: u32, day: &mut (impl Day + ?Sized)) {
     for _ in 0..days {
         for participant in Participant::ORDER {
             day.run(participant);
@@ -80,17 +80,17 @@ pub(crate) fn pass_days(days: u32, day: &mut (impl Day + ?Sized)) {
 /// as it is left. A landing starts it afresh, as `_DoPortDialog` clears
 /// its flags on opening (@0x5f93d-0x5f95a).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Stay {
+pub struct Stay {
     /// An outfit was bought or sold: the flag `_DoOutfitDialog` sets
     /// (@0x5c555, @0x5d317).
-    pub(crate) outfit_traded: bool,
+    pub outfit_traded: bool,
     /// A ship was bought: the flag `_DoShipyardDialog` sets (@0x5ebce).
-    pub(crate) ship_bought: bool,
+    pub ship_bought: bool,
     /// The escorts sold or upgraded (`_DoEscortLand` @0x4031f-0x405b5).
     /// Nothing raises it yet: the escort dialog's Sell and Upgrade (rdm
     /// task escorts-follow-up) will add one for each escort sold or
     /// upgraded.
-    pub(crate) escorts_changed: u32,
+    pub escorts_changed: u32,
 }
 
 impl Stay {
@@ -103,13 +103,15 @@ impl Stay {
 
     /// The days the escorts sold or upgraded pass: half as many, rounded
     /// down (`_DoEscortLand` @0x407ed-0x40851), before their pay.
-    pub(crate) const fn escort_days(self) -> u32 {
+    #[must_use]
+    pub const fn escort_days(self) -> u32 {
         self.escorts_changed / 2
     }
 
     /// The days that pass as the stay is left, after the escorts' days and
     /// pay: the outfit's day, the ship's days, then the take-off's.
-    pub(crate) const fn leaving_days(self) -> u32 {
+    #[must_use]
+    pub const fn leaving_days(self) -> u32 {
         let outfit = if self.outfit_traded {
             Self::OUTFIT_DAYS
         } else {

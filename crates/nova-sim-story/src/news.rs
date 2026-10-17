@@ -303,15 +303,15 @@ fn choose(facts: &NewsFacts) -> Candidates {
 
 /// What the `öops` story's pool reads: the active events, their
 /// records, the docked stellar and the rule set.
-pub(crate) struct OopsFacts<'a> {
+pub struct OopsFacts<'a> {
     /// The events under way, by ID.
-    pub(crate) events: &'a BTreeMap<DisasterId, ActiveEvent>,
+    pub events: &'a BTreeMap<DisasterId, ActiveEvent>,
     /// Every `öops`.
-    pub(crate) disasters: &'a [DisasterRecord],
+    pub disasters: &'a [DisasterRecord],
     /// The stellar docked at.
-    pub(crate) docked: StellarId,
+    pub docked: StellarId,
     /// The rule set in force.
-    pub(crate) rules: &'a Rulebook,
+    pub rules: &'a Rulebook,
 }
 
 impl Context for OopsFacts<'_> {
@@ -323,7 +323,7 @@ impl Context for OopsFacts<'_> {
 /// The events the `öops` story is drawn among, by ascending ID (see the
 /// module docs).
 #[must_use]
-pub(crate) fn oops_pool<'a>() -> Value<OopsFacts<'a>, Vec<DisasterId>> {
+pub fn oops_pool<'a>() -> Value<OopsFacts<'a>, Vec<DisasterId>> {
     Value::plain(
         "news price events",
         "_RandomizeNewsDialog @0x482b5-0x48364",
