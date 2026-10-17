@@ -708,6 +708,10 @@ fn base_price_string(strings: &CommodityStrings, n: usize) -> &str {
 pub struct Goods {
     commodities: Vec<(u8, Commodity)>,
     junk: Vec<JunkRecord>,
+    /// Every `öops` that can be read, by ascending ID, as
+    /// [`PilotCatalog::disasters`] gives them: the events [`step_day`]
+    /// rolls to start, in this order, and whose active days move an
+    /// exchange's prices.
     pub disasters: Vec<DisasterRecord>,
     /// The stellars a `Stellar` -1 event may be placed at, by ascending ID.
     stellars: Vec<StellarId>,
