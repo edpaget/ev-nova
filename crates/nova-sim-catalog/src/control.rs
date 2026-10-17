@@ -426,6 +426,18 @@ mod tests {
     }
 
     #[test]
+    fn a_script_runs_its_operators_or_for_text_that_did_not_parse_none() {
+        let script = Script::parse("b7 !b8");
+        assert_eq!(Some(script.runs()), script.tree());
+        let unparsed = Script::parse("b1&");
+        assert_eq!(unparsed.runs(), &SetExpr::UNPARSED);
+        assert!(
+            !unparsed.runs().is_empty_text(),
+            "the reset at its end still runs"
+        );
+    }
+
+    #[test]
     fn a_script_from_a_parse_shares_it() {
         let parsed: ParsedSet = Arc::new(SetExpr::parse("b2"));
         let script = Script::from(Arc::clone(&parsed));

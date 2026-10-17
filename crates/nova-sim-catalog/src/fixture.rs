@@ -355,3 +355,73 @@ impl ControlBits for AllowAll {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cron_carries_no_news() {
+        let cron = cron(128);
+        assert_eq!((cron.news_govt, cron.govt_news), ([-1; 4], [-1; 4]));
+        assert_eq!(cron.ind_news, -1);
+    }
+
+    #[test]
+    fn a_mission_goes_nowhere_and_carries_nothing() {
+        let mission = mission(128);
+        assert_eq!(mission.avail_stel, -1, "offered at any stellar");
+        assert_eq!((mission.travel_stel, mission.return_stel), (-1, -1));
+        assert_eq!(mission.cargo_type, -1);
+        assert_eq!((mission.pickup_mode, mission.drop_off_mode), (-1, -1));
+    }
+
+    #[test]
+    fn a_planet_can_be_landed_on_and_has_no_exit_angle() {
+        let planet = planet(128, 1.0, 2.0);
+        assert_eq!(planet.flags, 0x01);
+        assert_eq!(planet.exit_angle, -1);
+        assert_eq!(planet.position, Vec2::new(1.0, 2.0));
+    }
+
+    #[test]
+    fn a_ships_escort_class_is_worked_out() {
+        assert_eq!(ship(128, ShipFields::default()).escort_type, -1);
+    }
+
+    #[test]
+    fn a_weapon_is_unguided_with_unlimited_ammo_and_no_explosion_or_exit() {
+        let weapon = weapon(128);
+        assert_eq!((weapon.guidance, weapon.ammo_type), (-1, -1));
+        assert_eq!((weapon.explod_type, weapon.exit_type), (-1, -1));
+    }
+
+    #[test]
+    fn a_hull_has_no_explosions() {
+        let hull = hull(128);
+        assert_eq!((hull.explode1, hull.explode2), (-1, -1));
+    }
+
+    #[test]
+    fn a_government_has_no_classes_allies_enemies_or_news_picture() {
+        let govt = govt(128);
+        assert_eq!(govt.classes, [-1; 4]);
+        assert_eq!((govt.allies, govt.enemies), ([-1; 4], [-1; 4]));
+        assert_eq!(govt.news_pic, -1);
+    }
+
+    #[test]
+    fn a_person_may_appear_anywhere_and_has_no_quotes() {
+        let person = person(510, 128);
+        assert_eq!(person.link_syst, -1);
+        assert_eq!((person.comm_quote, person.hail_quote), (-1, -1));
+        assert_eq!(person.ship, Some(ShipId(128)));
+    }
+
+    #[test]
+    fn a_star_has_no_buoy_message() {
+        let star = star(130, (1.0, 2.0), &[131]);
+        assert_eq!(star.message, -1);
+        assert_eq!(star.links, [SystemId(131)]);
+    }
+}

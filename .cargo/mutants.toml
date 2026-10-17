@@ -85,6 +85,10 @@ exclude_re = [
     # at y == 0 it is 0, and 180 ± 0 and -0 are the same. So `<` and `<=`
     # give the same heading at every zero.
     "nova-sim-base/src/trig\\.rs:.*replace < with <= in table_arctan",
+    # `npc_warp_out_speed` caps the speed with `if v > WARP_OUT_CAP { cap }
+    # else { v }`: at v == the cap both branches give the cap, and a NaN
+    # fails `>` and `>=` alike, so `>=` returns the same speed every time.
+    "nova-sim-catalog/src/warp\\.rs:.*replace > with >= in npc_warp_out_speed",
     # Compiled only on non-macOS targets, so on the macOS development host a
     # mutated body is never built into the tests and cannot be observed. It
     # is a one-line `Ok(None)`.

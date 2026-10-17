@@ -3087,6 +3087,79 @@ mod tests {
         assert_eq!(comm(Rc::new(One)), direct);
     }
 
+    /// Data holding an `l33t` resource.
+    struct Leet;
+
+    impl CommCatalog for Leet {
+        fn string_list(&self, _id: i16) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn leet_mode(&self) -> bool {
+            true
+        }
+    }
+
+    /// Whether `catalog` turns on leet mode.
+    fn leet(catalog: impl CommCatalog) -> bool {
+        catalog.leet_mode()
+    }
+
+    #[test]
+    fn a_comm_catalog_is_not_leet_unless_it_says_so_through_any_handle() {
+        assert!(!leet(One), "none by default");
+        assert!(!leet(&One));
+        assert!(!leet(Rc::new(One)));
+        assert!(leet(Leet));
+        assert!(leet(&Leet));
+        assert!(leet(Rc::new(Leet)));
+    }
+
+    #[test]
+    fn by_default_no_missions_dude_can_be_read() {
+        assert_eq!(Mapped.mission_dude(DudeId(150)), None);
+    }
+
+    #[test]
+    fn an_explosion_type_of_0_to_63_is_its_boom_and_1000_more_adds_the_extras() {
+        let boom = |id, extra| {
+            Some(Explosion {
+                boom: BoomId(id),
+                extra,
+            })
+        };
+        assert_eq!(Explosion::decode(0), boom(128, false));
+        assert_eq!(Explosion::decode(5), boom(133, false));
+        assert_eq!(Explosion::decode(63), boom(191, false));
+        assert_eq!(Explosion::decode(1000), boom(128, true));
+        assert_eq!(Explosion::decode(1005), boom(133, true));
+        assert_eq!(Explosion::decode(1063), boom(191, true));
+        for none in [-1, 64, 999, 1064, i16::MIN, i16::MAX] {
+            assert_eq!(Explosion::decode(none), None, "{none}");
+        }
+        assert_eq!((FIRST_BOOM, BOOM_TYPES, EXTRA_EXPLOSIONS), (128, 64, 1000));
+    }
+
+    #[test]
+    fn each_escort_class_has_its_menu_label_and_message_form() {
+        assert_eq!(
+            EscortClass::ALL.map(EscortClass::menu_label),
+            ["Fighters", "Medium Ships", "Warships", "Freighters"]
+        );
+        assert_eq!(
+            EscortClass::ALL.map(EscortClass::message_form),
+            ["Fighters", "Medium ships", "Warships", "Freighters"]
+        );
+    }
+
+    #[test]
+    fn no_special_ships_have_no_goal_and_no_behaviour() {
+        let none = MissionShip::NONE;
+        assert_eq!((none.count, none.goal, none.behav), (0, -1, -1));
+        assert_eq!((none.syst, none.start), (0, 0));
+        assert_eq!((none.dude, none.name_id, none.subtitle), (None, None, None));
+    }
+
     #[test]
     fn each_error_reads_as_a_sentence() {
         assert_eq!(StartError::NoCharacter.to_string(), "no chär to start from");
