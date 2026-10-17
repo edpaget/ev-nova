@@ -355,6 +355,18 @@ fn the_jump_collapse_notice_reads_its_stock_string() {
     assert_eq!(strings[34], JUMP_COLLAPSED);
 }
 
+/// The player's Repair Droids repairing it say `STR#` 2002 #37, as the
+/// stock string reads.
+#[test]
+fn the_propulsion_repaired_notice_reads_its_stock_string() {
+    use nova_view::flight::view::PROPULSION_REPAIRED;
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(strings[36], PROPULSION_REPAIRED);
+}
+
 /// A scan's notices are built from `STR#` 2002 #375-#380, as the stock
 /// strings read ("posession" as they spell it).
 #[test]

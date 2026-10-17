@@ -76,6 +76,11 @@ pub enum SimSound {
     /// A disabled former escort or fighter repaired itself and rejoined
     /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
     EscortRepaired,
+    /// The disabled player's Repair Droids repaired it, as it is told
+    /// "Propulsion systems repaired.": `_beepSnd[4]`, `snd ` 154
+    /// (`_HandlePlayer` @0x68c44-0x68c67; see the session's
+    /// `player_repair` module).
+    PropulsionRepaired,
     /// An announced fleet arrived with its `flët`'s `Quote`:
     /// `_beepSnd[4]`, `snd ` 154 (`_HyperSpawnFleet` @0x42698-0x426bb),
     /// even when the line is empty.

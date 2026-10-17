@@ -572,6 +572,18 @@ fn a_collapsed_jump_says_the_hyperspace_field_collapsed() {
 }
 
 #[test]
+fn the_players_repair_droids_say_propulsion_systems_repaired() {
+    let view = flight();
+    let session = view.session().expect("flying");
+    assert_eq!(
+        sim_message_text(&SimMessage::PropulsionRepaired, session).as_deref(),
+        Some("Propulsion systems repaired.")
+    );
+    assert_eq!(PROPULSION_REPAIRED, "Propulsion systems repaired.");
+    assert_eq!(arrival_lead(&SimMessage::PropulsionRepaired), None);
+}
+
+#[test]
 fn the_escape_ship_says_escaping_in_its_long_name() {
     assert_eq!(ESCAPING_IN, "Escaping in");
     let mut catalog = shipbuying();

@@ -196,6 +196,9 @@ impl<A: Audio> AudioCore<A> {
             Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
             Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
             Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
+            Sound::Sim(SimSound::PropulsionRepaired) => {
+                self.play(self.table.propulsion_repaired);
+            }
             Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
             Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
             Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
@@ -876,6 +879,16 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_players_repair_droids_repairing_it_beeps() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::PropulsionRepaired)],
+        );
+        assert_eq!(drain(&log), [play(154, EFFECTS)]);
     }
 
     #[test]

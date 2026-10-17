@@ -88,6 +88,62 @@ pub fn repaired_armor(capacity: f32, tough: bool) -> f32 {
     armor
 }
 
+/// The ticks a newly disabled player's repair inhibit holds after it is
+/// armed: `_DamageShip` sets `_playerRepairInhibit` to 300.0
+/// (@0x3b186-0x3b18d).
+pub const REPAIR_INHIBIT_TICKS: i32 = 300;
+
+/// The player's repair inhibit, `_playerRepairInhibit` (0x3b50b4): while it
+/// holds, the player's armour neither regenerates (`_HandlePlayer`
+/// @0x6d03e-0x6d049) nor is repaired by its gear (@0x68b3d-0x68b40).
+///
+/// The original keeps it as a float. `_DamageShip` arms it at 300.0 as the
+/// player is newly disabled, `_ResetPlayerPrecalcedValues` turns it off at
+/// -1.0 (@0xc998), and each frame of `_HandlePlayer` takes a frame's length
+/// in ticks (1 at the engine's rate) off it while it is at 0 or above
+/// (@0x68b09-0x68b2c). It holds while it is at 0 or above, so armed it
+/// holds through the next [`REPAIR_INHIBIT_TICKS`] ticks and opens on the
+/// one after. The count here is whole ticks, which matches the float
+/// exactly at the engine's fixed rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RepairInhibit {
+    /// The ticks left, -1 when off.
+    left: i32,
+}
+
+impl RepairInhibit {
+    /// Off: it never holds (the -1.0).
+    pub const OFF: Self = Self { left: -1 };
+
+    /// Armed as the player is newly disabled: it holds for the next
+    /// [`REPAIR_INHIBIT_TICKS`] ticks.
+    #[must_use]
+    pub fn armed() -> Self {
+        Self {
+            left: REPAIR_INHIBIT_TICKS,
+        }
+    }
+
+    /// Counts down one tick while it is at 0 or above.
+    pub fn tick(&mut self) {
+        if self.left >= 0 {
+            self.left -= 1;
+        }
+    }
+
+    /// Whether it holds back the player's armour regeneration and repair.
+    #[must_use]
+    pub fn holds(self) -> bool {
+        self.left >= 0
+    }
+}
+
+impl Default for RepairInhibit {
+    fn default() -> Self {
+        Self::OFF
+    }
+}
+
 /// What a former escort was, as `_DamageShip` sets +0xc8de: 0, 1 or 2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormerKind {
@@ -216,6 +272,56 @@ mod tests {
             "the caller asks only of a disabled ship"
         );
         assert_eq!(REPAIR_ODDS, 500);
+    }
+
+    #[test]
+    fn an_inhibit_off_never_holds_and_stays_off_as_it_ticks() {
+        let mut inhibit = RepairInhibit::OFF;
+        for _ in 0..400 {
+            assert!(!inhibit.holds());
+            inhibit.tick();
+        }
+        assert_eq!(inhibit, RepairInhibit::OFF);
+        assert_eq!(RepairInhibit::default(), RepairInhibit::OFF);
+    }
+
+    /// The ticks after arming, in turn, whose `tick` leaves the inhibit
+    /// holding, up to `most`.
+    fn held_for(mut inhibit: RepairInhibit, most: u32) -> u32 {
+        let mut held = 0;
+        for _ in 0..most {
+            inhibit.tick();
+            if !inhibit.holds() {
+                return held;
+            }
+            held += 1;
+        }
+        held
+    }
+
+    #[test]
+    fn an_armed_inhibit_holds_for_300_ticks_and_opens_on_the_301st() {
+        assert_eq!(REPAIR_INHIBIT_TICKS, 300);
+        let armed = RepairInhibit::armed();
+        assert!(armed.holds(), "as it is armed");
+        assert_eq!(held_for(armed, 1000), 300);
+        let mut inhibit = armed;
+        for _ in 0..301 {
+            inhibit.tick();
+        }
+        assert!(!inhibit.holds());
+        inhibit.tick();
+        assert!(!inhibit.holds(), "and stays open");
+    }
+
+    #[test]
+    fn arming_again_restarts_the_inhibit_from_300() {
+        let mut inhibit = RepairInhibit::armed();
+        for _ in 0..200 {
+            inhibit.tick();
+        }
+        inhibit = RepairInhibit::armed();
+        assert_eq!(held_for(inhibit, 1000), 300);
     }
 
     #[test]

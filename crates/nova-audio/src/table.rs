@@ -44,6 +44,8 @@ pub struct SoundTable {
     pub enter_refused: Option<SoundId>,
     /// Plays as a disabled former escort repairs itself and rejoins.
     pub escort_repaired: Option<SoundId>,
+    /// Plays as the disabled player's Repair Droids repair it.
+    pub propulsion_repaired: Option<SoundId>,
     /// Plays as the player becomes threatened: the Red Alert.
     pub red_alert: Option<SoundId>,
     /// Plays as cargo is jettisoned in flight.
@@ -171,6 +173,9 @@ impl SoundTable {
     ///   after "Escort repaired." or "Fighter repaired." as a former
     ///   escort rejoins (@0x33bc9-0x33bd4). The original plays it on
     ///   channel 8, which is not modelled.
+    /// - `propulsion_repaired`: 154, `_beepSnd[4]`, which `_HandlePlayer`
+    ///   plays after "Propulsion systems repaired." as the disabled
+    ///   player's Repair Droids repair it (@0x68c44-0x68c67).
     /// - `red_alert`: 370, "Red Alert", which `_LoadSounds` loads into
     ///   `_redAlertSnd` (@0x1c218-0x1c22a) and `_HandlePlayer` plays
     ///   (@0x68cff). The original plays it at priority 5; the audio port
@@ -295,6 +300,7 @@ impl SoundTable {
         no_escorts: Some(SoundId(153)),
         enter_refused: Some(SoundId(153)),
         escort_repaired: Some(SoundId(154)),
+        propulsion_repaired: Some(SoundId(154)),
         red_alert: Some(SoundId(370)),
         jettison: Some(SoundId(154)),
         scan_failed: Some(SoundId(151)),
@@ -361,6 +367,7 @@ mod tests {
         assert_eq!(table.no_escorts, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.enter_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.escort_repaired, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.propulsion_repaired, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.red_alert, Some(SoundId(370)), "Red Alert");
         assert_eq!(table.jettison, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.scan_failed, Some(SoundId(151)), "_beepSnd[1]");
