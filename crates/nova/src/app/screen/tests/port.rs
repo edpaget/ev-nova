@@ -760,11 +760,13 @@ fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
     assert_eq!(screen.showing(), Showing::FlightMap);
     assert!(spaceport(&screen).open_bar().is_some(), "the bar beneath");
     let mut list = DrawList::new();
+    flight(&screen).draw_status_bar(&mut list);
+    spaceport(&screen).draw(&mut list);
     flight(&screen).course_map().draw(&mut list);
     assert_eq!(
         drawn(&screen).iter().cloned().collect::<Vec<_>>(),
         list.iter().cloned().collect::<Vec<_>>(),
-        "the map drawn alone"
+        "the status bar and the spaceport, the bar open, under the map"
     );
     screen.input(&key(MAP, false));
     let beta = scrolled_to(&mut screen, SystemId(129));

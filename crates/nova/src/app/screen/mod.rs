@@ -397,6 +397,10 @@ pub struct AppScreen {
     /// original's sprites outlive a pilot, `_InitSprites` running once at
     /// launch (see [`nova_sim::ship_layer`]).
     slot_sprites: SlotSprites,
+    /// The course map's zoom the last flight put away left, which each
+    /// new flight's map opens at: the original's `_mapZoom` is set once,
+    /// by its data, and never reset by a new or loaded pilot.
+    course_map_zoom: Option<f64>,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
     /// The About dialog, or the main menu's X text, while it is open.

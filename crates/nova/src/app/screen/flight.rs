@@ -286,15 +286,17 @@ impl AppScreen {
     }
 
     /// Drops the flight, if any, keeping its ship slots' draw-layer and
-    /// cloned-frame history for the next flight in this run.
+    /// cloned-frame history, and its course map's zoom, for the next
+    /// flight in this run.
     fn put_away_flight(&mut self) {
-        if let Some(slot_sprites) = self
-            .flight
-            .take()
-            .as_ref()
-            .and_then(FlightView::slot_sprites)
-        {
+        let Some(flight) = self.flight.take() else {
+            return;
+        };
+        if let Some(slot_sprites) = flight.slot_sprites() {
             self.slot_sprites = slot_sprites.clone();
+        }
+        if let Some(zoom) = flight.course_map_zoom() {
+            self.course_map_zoom = Some(zoom);
         }
     }
 

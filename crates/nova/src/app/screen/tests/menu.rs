@@ -1399,3 +1399,40 @@ fn an_unnamed_pilots_edit_is_not_saved() {
     assert_eq!(store.writes(), 0);
     assert_eq!(store.keys(), Vec::<String>::new());
 }
+
+/// Opens the flight's course map, zooms it out a step with `-` and
+/// closes it: the zoom it is left at.
+fn zoom_the_course_map_out(screen: &mut AppScreen) -> f64 {
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert!(flight(screen).map_open());
+    screen.input(&key(Key::Char('-'), true));
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert!(!flight(screen).map_open());
+    flight(screen).course_map_zoom().expect("an in-flight map")
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Each zoom is an exact product.
+fn the_course_maps_zoom_carries_into_the_next_pilot_new_or_opened() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    assert_eq!(
+        flight(&screen).course_map_zoom(),
+        Some(0.5625),
+        "a run's first"
+    );
+    let zoomed = zoom_the_course_map_out(&mut screen);
+    assert_eq!(zoomed, 0.5625 * 1.333_333);
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    create(&mut screen, "Bea");
+    assert_eq!(flight(&screen).course_map_zoom(), Some(zoomed), "New Pilot");
+    let again = zoom_the_course_map_out(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    open_first(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(flight(&screen).course_map_zoom(), Some(again), "Open Pilot");
+}

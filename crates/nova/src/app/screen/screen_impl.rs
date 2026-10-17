@@ -5,7 +5,7 @@ use std::time::Duration;
 use nova_view::{Diagnostic, DrawList, Input, Prefs, Screen, ScreenAction, Showing, Sound};
 
 use super::{
-    AppScreen, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS, Held,
+    AppScreen, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS, Held, LANDED,
     MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, MenuKeys, Side,
 };
 
@@ -130,10 +130,15 @@ impl Screen for AppScreen {
     /// after a death, over everything. Under the spaceport, flight's status
     /// bar is drawn at the right edge ([`FlightView::draw_status_bar`](nova_view::flight::FlightView::draw_status_bar)), as
     /// the original's port dialog leaves it beside the dialog and its shops
-    /// cover its left edge (`_DoPortDialog` @0x5fbca).
+    /// cover its left edge (`_DoPortDialog` @0x5fbca). The bar's course
+    /// map is drawn over them both, as the original's map dialog opens
+    /// over the port window (`_DoBarDialog` @0x492a3).
     fn draw(&self, list: &mut DrawList) {
-        if self.side == Side::Spaceport && !self.port_map_open() {
+        if self.side == Side::Spaceport {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
+            if self.port_map_open() {
+                self.spaceport.as_ref().expect(LANDED).draw(list);
+            }
         }
         self.shown().draw(list);
         let hint = match (self.side, self.dialogs.is_some()) {

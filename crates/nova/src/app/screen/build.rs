@@ -46,6 +46,7 @@ impl AppScreen {
             data,
             flight: None,
             slot_sprites: SlotSprites::default(),
+            course_map_zoom: None,
             dialogs: None,
             about: None,
             about_text: ABOUT_TEXT,
@@ -312,6 +313,10 @@ impl AppScreen {
             .with_sound_prefs(self.prefs.sound)
             .with_double_time(self.double_time)
             .with_find(self.find_template(), self.data.button_style());
+        let flight = match self.course_map_zoom {
+            Some(zoom) => flight.with_course_map_zoom(zoom),
+            None => flight,
+        };
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -620,8 +625,9 @@ impl AppScreen {
 
     /// The screen of the side shown: flight's while its course map is
     /// open over the spaceport ([`AppScreen::port_map_open`]), so the
-    /// spaceport neither ticks nor draws beneath it, paused as under any
-    /// modal dialog. The bar's offer wait pausing under it too is ours'
+    /// spaceport doesn't tick beneath it, paused as under any modal
+    /// dialog, though it is drawn beneath it, as under the other modal
+    /// dialogs. The bar's offer wait pausing under it too is ours'
     /// existing reading
     /// (rdm:phase/missions-fidelity/phase-15-offer-timer-under-nested-dialogs).
     pub(super) fn shown(&self) -> &dyn Screen {
