@@ -237,5 +237,5 @@ exclude_re = [
     # A run-out shield flash is dropped from the view's map: with `>=` it
     # is kept at none, which `FlightView::shield_flash` reads as no flash
     # all the same, and the next hit sets it afresh either way.
-    "view.rs:.*replace > with >= in step_flashes",
+    "flight/view/mod.rs:.*replace > with >= in step_flashes",
 ]
