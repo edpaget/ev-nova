@@ -8,6 +8,7 @@ use super::{AcceptError, AcceptRefusal, SLOTS};
 use crate::catalog::{DescMovie, MissionId};
 use crate::chance::Chance;
 use crate::rulebook::RuleSource;
+pub use crate::warp::MAC_TICKS_PER_SECOND;
 
 /// `STR#` 2002 #351: what the mission computer says before the slots'
 /// count when every slot is taken.
@@ -180,10 +181,6 @@ pub enum VenueOffer {
 pub const FIRST_OFFER_TICKS: u32 = 15;
 /// The fewest ticks between one offer and the next.
 pub const OFFER_GAP_TICKS: u32 = 30;
-
-/// The Mac's ticks a second (`TickCount`), which the offers' times are
-/// counted in.
-pub const MAC_TICKS_PER_SECOND: u32 = 60;
 
 /// `ticks` of the Mac's clock as a duration.
 #[must_use]

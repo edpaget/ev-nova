@@ -50,7 +50,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::exits::ExitKind;
 use crate::bay::{FIGHTER_BAY, FIRST_SHIP};
-use crate::catalog::{BoomId, FrameSize, ShipId, WeaponId, WeaponRecord};
+pub use crate::catalog::{BOOM_TYPES, EXTRA_EXPLOSIONS, Explosion, FIRST_BOOM};
+use crate::catalog::{FrameSize, ShipId, WeaponId, WeaponRecord};
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 
 /// How a weapon's shots fly, from its `Guidance`.
@@ -206,40 +207,6 @@ impl Ammo {
             }
             other => Self::Other(other),
         }
-    }
-}
-
-/// The first `bööm`, explosion type 0.
-pub const FIRST_BOOM: i16 = 128;
-/// How many explosion types there are.
-pub const BOOM_TYPES: i16 = 64;
-/// What an explosion type is offset by to add extra small explosions.
-pub const EXTRA_EXPLOSIONS: i16 = 1000;
-
-/// An explosion: its `bööm`, and whether extra type-0 explosions go off
-/// around it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Explosion {
-    /// Its `bööm`.
-    pub boom: BoomId,
-    /// Whether a random number of type-0 explosions go off around it.
-    pub extra: bool,
-}
-
-impl Explosion {
-    /// The explosion an `ExplodType`, `Explode1` or `Explode2` of `raw`
-    /// means, if any.
-    #[must_use]
-    pub fn decode(raw: i16) -> Option<Self> {
-        let (kind, extra) = if raw >= EXTRA_EXPLOSIONS {
-            (raw - EXTRA_EXPLOSIONS, true)
-        } else {
-            (raw, false)
-        };
-        (0..BOOM_TYPES).contains(&kind).then_some(Self {
-            boom: BoomId(FIRST_BOOM + kind),
-            extra,
-        })
     }
 }
 
@@ -873,6 +840,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::catalog::BoomId;
     use crate::testkit::weapon;
 
     /// The stock Light Blaster's numbers.

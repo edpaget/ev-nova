@@ -522,11 +522,11 @@ pub struct EscortHolds {
 impl EscortHolds {
     /// Whether its `Holds` add to the fleet's cargo space
     /// (`_TotalFleetHolds`): it is not a launched fighter and its
-    /// `InherentAI` is [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or
+    /// `InherentAI` is [`FREIGHTER_AI`](crate::catalog::FREIGHTER_AI) or
     /// less. A jettison drops boxes behind each such escort too.
     #[must_use]
     pub fn adds_holds(self) -> bool {
-        !self.carried && self.inherent_ai <= crate::escort::FREIGHTER_AI
+        !self.carried && self.inherent_ai <= crate::catalog::FREIGHTER_AI
     }
 }
 
@@ -546,7 +546,7 @@ pub fn escort_tons(escorts: impl IntoIterator<Item = EscortHolds>) -> i64 {
 /// The fleet's cargo space, in tons (`_TotalFleetHolds` @0xc24d-0xc356):
 /// the ship's own `ship` tons plus the `Holds` (each a negative one's
 /// size) of each escort that is not a launched fighter and whose
-/// `InherentAI` is [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or less
+/// `InherentAI` is [`FREIGHTER_AI`](crate::catalog::FREIGHTER_AI) or less
 /// ([`escort_tons`]), at most [`MAX_FLEET_HOLDS`].
 #[must_use]
 pub fn fleet_holds(ship: u32, escorts: impl IntoIterator<Item = EscortHolds>) -> u32 {

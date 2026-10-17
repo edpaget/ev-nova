@@ -14,9 +14,7 @@ pub use nova_data::{
     RankId, ShipId, SoundId, StellarId, SystemId, WeaponId,
 };
 
-use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
-use crate::escort::EscortClass;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::warp::SoundLength;
@@ -30,7 +28,7 @@ pub struct CharacterStart {
     pub systems: [Option<SystemId>; 4],
     /// The starting date, raw.
     pub start: StartDate,
-    /// The starting credits, raw: the [`pilot`](crate::pilot) rules
+    /// The starting credits, raw: the `nova_sim::pilot` rules
     /// decide what a negative amount means.
     pub cash: i32,
     /// The starting legal records, `Govt1-4` with `Status1-4`: each
@@ -44,7 +42,7 @@ pub struct CharacterStart {
 }
 
 /// A new pilot's starting date, raw from the `chär`: the
-/// [`date`](crate::date) rules decide what the values mean.
+/// `nova_sim::date` rules decide what the values mean.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StartDate {
     /// The day of the month.
@@ -66,7 +64,7 @@ pub struct DateAffixes {
 }
 
 /// A star system on the map, raw from its `sÿst`: the
-/// [`hyperspace`](crate::hyperspace) rules decide which links count.
+/// `nova_sim::hyperspace` rules decide which links count.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StarSystem {
     /// The `sÿst`'s ID.
@@ -84,19 +82,19 @@ pub struct StarSystem {
     pub govt: Option<GovtId>,
     /// Each of its `NavDefs` slots, in order: the stellar's `spöb` `Flags`
     /// and `Flags2`, raw, or `None` for an empty slot or a stellar that
-    /// cannot be read. The [`exploration`](crate::exploration) rules read
+    /// cannot be read. The `nova_sim::exploration` rules read
     /// whether the system is inhabited from them.
     pub stellars: Vec<Option<(u32, u16)>>,
     /// Its `Interference`, raw: the radar's static
-    /// ([`iff::interference`](crate::iff::interference)).
+    /// (`nova_sim::iff::interference`).
     pub interference: i16,
     /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
-    /// −1 for none ([`StarMap::buoy`](crate::StarMap::buoy)).
+    /// −1 for none (`nova_sim::StarMap::buoy`).
     pub message: i16,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
-/// [`landing`](crate::landing) rules decide what the values mean.
+/// `nova_sim::landing` rules decide what the values mean.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LandingSite {
     /// The `spöb`'s ID.
@@ -110,7 +108,7 @@ pub struct LandingSite {
     pub flags: u32,
     /// Its `MinStatus`: the legal record below which landing is refused.
     pub min_status: i16,
-    /// Its `TechLevel`: the [`outfitter`](crate::outfitter) sells outfits
+    /// Its `TechLevel`: the `nova_sim::outfitter` sells outfits
     /// up to it.
     pub tech_level: i16,
     /// Its `SpecialTech` 1-8, in order: the outfitter also sells outfits of
@@ -118,20 +116,20 @@ pub struct LandingSite {
     pub special_tech: [i16; 8],
     /// Its `Govt`, or `None` when it is independent.
     pub govt: Option<GovtId>,
-    /// Its `Flags2`, raw: the [`gate`](crate::gate) rules read its
+    /// Its `Flags2`, raw: the `nova_sim::gate` rules read its
     /// hypergate (0x1000) and wormhole (0x2000) bits, and the
-    /// [`market`](crate::market) its always-dominated bit
-    /// ([`DOMINATED`](crate::market::DOMINATED), 0x0020), and the
-    /// [`outfitter`](crate::outfitter) its bit that buys back owned
-    /// outfits ([`BUYS_OWNED_OUTFITS`](crate::outfitter::BUYS_OWNED_OUTFITS),
+    /// `nova_sim::market` its always-dominated bit
+    /// (`nova_sim::market::DOMINATED`, 0x0020), and the
+    /// `nova_sim::outfitter` its bit that buys back owned
+    /// outfits (`nova_sim::outfitter::BUYS_OWNED_OUTFITS`,
     /// 0x0400).
     pub flags2: u16,
     /// Whether it is destroyed: never in the catalog, which gives `false`;
     /// the galaxy overlay stamps it
-    /// ([`OverlaidGalaxy::site`](crate::story::OverlaidGalaxy::site)).
+    /// (`nova_sim::story::OverlaidGalaxy::site`).
     pub destroyed: bool,
     /// Its `Type`, raw: the graphic type whose master the original's
-    /// landing distance reads (see [`landing`](crate::landing)).
+    /// landing distance reads (see `nova_sim::landing`).
     pub graphic: i16,
     /// Its `DeadType`, when that is 0 to 255 and its sheet can be read:
     /// the graphic it shows while destroyed.
@@ -147,13 +145,13 @@ pub struct LandingSite {
     pub type_counts_frames: bool,
     /// Its `CustSndID`, raw, as [`GateSite::exit_angle`]: the heading an
     /// NPC comes out of it on when it is a hypergate or wormhole and the
-    /// value is 0 to 359 ([`exit_heading`](crate::gate::exit_heading)).
+    /// value is 0 to 359 (`nova_sim::gate::exit_heading`).
     pub exit_angle: i16,
     /// Its `Tribute`, raw: what it pays a day while dominated, as
-    /// [`tribute_of`](crate::player_info::tribute_of) reads it.
+    /// `nova_sim::player_info::tribute_of` reads it.
     pub tribute: i16,
     /// Its animation fields and frame counts, which a hypergate's sprite
-    /// reads ([`gate_sprite`](crate::gate_sprite)).
+    /// reads (`nova_sim::gate_sprite`).
     pub animation: SiteAnimation,
 }
 
@@ -178,7 +176,7 @@ pub struct SiteAnimation {
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
-/// [`gate`](crate::gate) rules decide what the values mean. Any stellar a
+/// `nova_sim::gate` rules decide what the values mean. Any stellar a
 /// system lists may be one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GateSite {
@@ -198,7 +196,7 @@ pub struct GateSite {
 }
 
 /// A stellar some system lists, raw from its `spöb`: what a mission's
-/// stellars are chosen by (see [`mission`](crate::mission)), without the
+/// stellars are chosen by (see `nova_sim::mission`), without the
 /// sprites a [`LandingSite`] reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListedStellar {
@@ -207,11 +205,11 @@ pub struct ListedStellar {
     /// Every `sÿst` that can be read and lists it, by ascending ID, each
     /// once: the galaxy refresh gives it to the lowest visible one not
     /// shadowed at its place
-    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)),
+    /// (`nova_sim::story::OverlaidGalaxy::owner`),
     /// the player's system holds it when none does
-    /// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)),
+    /// (`nova_sim::story::OverlaidGalaxy::holder`),
     /// and `_FindSystemFromStellar` finds it in the lowest visible one
-    /// ([`OverlaidGalaxy::find_system_from_stellar`](crate::story::OverlaidGalaxy::find_system_from_stellar)).
+    /// (`nova_sim::story::OverlaidGalaxy::find_system_from_stellar`).
     pub systems: Vec<SystemId>,
     /// Its `Flags`.
     pub flags: u32,
@@ -220,13 +218,13 @@ pub struct ListedStellar {
     /// Its `Govt`, or `None` when it is independent.
     pub govt: Option<GovtId>,
     /// Its `MinStatus`: what the galaxy map's colour code weighs the
-    /// player's record against (see [`iff`](crate::iff)'s "Systems on the
+    /// player's record against (see `nova_sim::iff`'s "Systems on the
     /// galaxy map").
     pub min_status: i16,
 }
 
 /// A system's `Visibility`, raw from its `sÿst`: the galaxy refresh
-/// evaluates it into the overlay (see the [`story`](crate::story) module's
+/// evaluates it into the overlay (see the `nova_sim::story` module's
 /// "Visibility and governments").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SystemVisibility {
@@ -238,7 +236,7 @@ pub struct SystemVisibility {
 }
 
 /// The stellars' and systems' names, by ID, that the text tags read
-/// (see [`text_tags`](crate::text_tags)): each `spöb` and `sÿst` that can
+/// (see `nova_sim::text_tags`): each `spöb` and `sÿst` that can
 /// be read, named as the game shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PlaceNames {
@@ -259,13 +257,47 @@ pub struct StellarMark {
     pub place: (i16, i16),
     /// Its resource name up to its last ';', trailing spaces and ';'s
     /// dropped (@0x772ab-0x77308), empty when it has none. Kept whole:
-    /// [`StellarMarks`](crate::mission::StellarMarks) compares the 30
+    /// `nova_sim::mission::StellarMarks` compares the 30
     /// characters the original's record keeps (@0x77310-0x7732a).
     pub name: String,
 }
 
+/// The first `bööm`, explosion type 0.
+pub const FIRST_BOOM: i16 = 128;
+/// How many explosion types there are.
+pub const BOOM_TYPES: i16 = 64;
+/// What an explosion type is offset by to add extra small explosions.
+pub const EXTRA_EXPLOSIONS: i16 = 1000;
+
+/// An explosion: its `bööm`, and whether extra type-0 explosions go off
+/// around it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Explosion {
+    /// Its `bööm`.
+    pub boom: BoomId,
+    /// Whether a random number of type-0 explosions go off around it.
+    pub extra: bool,
+}
+
+impl Explosion {
+    /// The explosion an `ExplodType`, `Explode1` or `Explode2` of `raw`
+    /// means, if any.
+    #[must_use]
+    pub fn decode(raw: i16) -> Option<Self> {
+        let (kind, extra) = if raw >= EXTRA_EXPLOSIONS {
+            (raw - EXTRA_EXPLOSIONS, true)
+        } else {
+            (raw, false)
+        };
+        (0..BOOM_TYPES).contains(&kind).then_some(Self {
+            boom: BoomId(FIRST_BOOM + kind),
+            extra,
+        })
+    }
+}
+
 /// What a stellar's destruction and regeneration read from its `spöb`
-/// (see the [`story`](crate::story) module's "Galaxy overlay"): the
+/// (see the `nova_sim::story` module's "Galaxy overlay"): the
 /// story's wreck rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StellarLife {
@@ -287,7 +319,7 @@ pub struct StellarLife {
     pub on_regen: Script,
 }
 
-/// An outfit, raw from its `oütf`: the [`outfitter`](crate::outfitter)
+/// An outfit, raw from its `oütf`: the `nova_sim::outfitter`
 /// rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutfitRecord {
@@ -321,7 +353,7 @@ pub struct OutfitRecord {
     /// Its `RequireGovt`, raw.
     pub require_govt: i16,
     /// Its `BuyRandom`, raw: the percent chance a day that it is for
-    /// sale, as [`outfitter`](crate::outfitter) reads it.
+    /// sale, as `nova_sim::outfitter` reads it.
     pub buy_random: i16,
     /// Its `Availability` control-bit test, parsed.
     pub availability: Test,
@@ -331,14 +363,14 @@ pub struct OutfitRecord {
     /// Its `OnSell` set expression, parsed: run once for each unit sold.
     pub on_sell: Script,
     /// Its `ItemClass`, raw: the class a person's `GrantClass` grants
-    /// from (see [`grant`](crate::grant)).
+    /// from (see `nova_sim::grant`).
     pub item_class: i16,
     /// Its `LCName`, raw: its lower-case singular name.
     pub lc_name: String,
     /// Its `LCPlural`, raw: its lower-case plural name.
     pub lc_plural: String,
     /// Its `ScanMask`, raw: a scan finds it owned when this shares a bit
-    /// with the scanner's government's (see [`scan`](crate::scan)).
+    /// with the scanner's government's (see `nova_sim::scan`).
     pub scan_mask: u16,
 }
 
@@ -358,7 +390,7 @@ pub fn loaded_mod_val(mod_type: i16, mod_val: i16) -> i16 {
     }
 }
 
-/// A ship class, raw from its `shïp`: the [`shipyard`](crate::shipyard)
+/// A ship class, raw from its `shïp`: the `nova_sim::shipyard`
 /// rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShipRecord {
@@ -385,7 +417,7 @@ pub struct ShipRecord {
     /// Its `BuyRandom`: the percent chance a day it is for sale.
     pub buy_random: i16,
     /// Its `HireRandom`: the percent chance a day it is for hire in the
-    /// bar (see [`hire`](crate::hire)).
+    /// bar (see `nova_sim::hire`).
     pub hire_random: i16,
     /// Its `Require` bits.
     pub require: u64,
@@ -393,7 +425,7 @@ pub struct ShipRecord {
     pub availability: Test,
     /// Its `AppearOn` control-bit test, parsed. The Bible: "Ships of this
     /// type will not show up in dude resources if this expression
-    /// evaluates to false" (see [`spawn`](crate::traffic::spawn)).
+    /// evaluates to false" (see `nova_sim::traffic::spawn`).
     pub appear_on: Test,
     /// Its `OnPurchase` set expression, parsed: run when the player buys
     /// one (see the session's `hooks`).
@@ -405,7 +437,7 @@ pub struct ShipRecord {
     /// one in or leaves it for a captured ship.
     pub on_retire: Script,
     /// Its `Flags`, raw: 0x8000 marks a fighter the player can escape in
-    /// (see [`escape`](crate::escape)), and its jump-speed bits give its
+    /// (see `nova_sim::escape`), and its jump-speed bits give its
     /// warp factor ([`warp_factor`](crate::warp::warp_factor)).
     pub flags: u16,
     /// Its `Flags3`.
@@ -433,10 +465,10 @@ pub struct ShipRecord {
     /// or one + 2000 ("combat only"); none for -1 or + 1000 ("attributes
     /// only"). A mission's `AvailShipType` 2128-3384 reads it beside
     /// [`inherent_govt`](Self::inherent_govt) (see
-    /// [`mission`](crate::mission)).
+    /// `nova_sim::mission`).
     pub combat_govt: Option<GovtId>,
     /// Its `EscortType`, raw: the class it has as the player's escort
-    /// (see [`EscortClass::of`](crate::escort::EscortClass::of)).
+    /// (see [`EscortClass::of`](crate::catalog::EscortClass::of)).
     pub escort_type: i16,
 }
 
@@ -444,7 +476,7 @@ pub struct ShipRecord {
 /// "All Cargo" names them and `STR#` 4004 "Base Prices" prices them, the
 /// nth string for commodity n (from 0). A plug-in's `'STR '` 9000 + n
 /// patches commodity n's 4000 string, and its `'STR '` 9300 + n patches
-/// commodity n's 4004 string. The [`market`](crate::market) rules decide
+/// commodity n's 4004 string. The `nova_sim::market` rules decide
 /// which string names and which prices each commodity, and how a price
 /// is read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -470,11 +502,11 @@ pub enum StringPatch {
     Text(String),
     /// A `'STR '` with that ID and no bytes at all. What the original
     /// then reads depends on the strings it patches: see
-    /// [`market`](crate::market).
+    /// `nova_sim::market`.
     Empty,
     /// A `'STR '` with that ID whose length byte runs past its data. What
     /// the original then reads depends on the strings it patches: see
-    /// [`market`](crate::market).
+    /// `nova_sim::market`.
     Unreadable,
 }
 
@@ -555,11 +587,11 @@ pub struct JunkRecord {
     pub buy_on: Test,
     /// Its `SellOn` control-bit test, parsed.
     pub sell_on: Test,
-    /// Its `Flags`, raw: [`TRIBBLES`](crate::market::TRIBBLES) and
-    /// [`PERISHABLE`](crate::market::PERISHABLE) are read.
+    /// Its `Flags`, raw: `nova_sim::market::TRIBBLES` and
+    /// `nova_sim::market::PERISHABLE` are read.
     pub flags: u16,
     /// Its `ScanMask`, raw: a scan finds it held when this shares a bit
-    /// with the scanner's government's (see [`scan`](crate::scan)).
+    /// with the scanner's government's (see `nova_sim::scan`).
     pub scan_mask: u16,
     /// Its `LCName`, raw: what a scan that finds it calls it.
     pub lc_name: String,
@@ -595,7 +627,7 @@ pub struct DisasterRecord {
 }
 
 /// A system's traffic, raw from its `sÿst`: the
-/// [`traffic`](crate::traffic) rules decide what the values mean.
+/// `nova_sim::traffic` rules decide what the values mean.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SystemTraffic {
     /// Its `DudeTypes`, each with its `% Prob`, in record order: a `düde`
@@ -608,7 +640,7 @@ pub struct SystemTraffic {
     pub persons: [(Option<PersonId>, i16); 8],
 }
 
-/// A `düde`, raw: the [`traffic`](crate::traffic) rules decide what the
+/// A `düde`, raw: the `nova_sim::traffic` rules decide what the
 /// values mean.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DudeRecord {
@@ -620,10 +652,10 @@ pub struct DudeRecord {
     /// `Probability`, in record order; the unused (-1) slots left out.
     pub ships: Vec<(ShipId, i16)>,
     /// Its `Booty` flags: what boarding one of its ships yields (see
-    /// [`board`](crate::board)).
+    /// `nova_sim::board`).
     pub booty: u16,
     /// Its `InfoTypes` flags: what its ships say when hailed (see
-    /// [`hail`](crate::hail)).
+    /// `nova_sim::hail`).
     pub info_types: u16,
 }
 
@@ -638,7 +670,7 @@ pub struct EscortRecord {
     pub max: i16,
 }
 
-/// A fleet, raw from its `flët`: the [`traffic`](crate::traffic) rules
+/// A fleet, raw from its `flët`: the `nova_sim::traffic` rules
 /// decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FleetRecord {
@@ -657,10 +689,10 @@ pub struct FleetRecord {
     pub appear_on: Test,
     /// Its `Quote`: the `STR#` an announced arrival of it shows a line
     /// of, when above 0 (+0x1e > 0, `_HyperSpawnFleet` @0x42621-0x42629;
-    /// see [`quote`](crate::traffic::quote)).
+    /// see `nova_sim::traffic::quote`).
     pub quote: Option<i16>,
     /// Its `Flags`, raw: 0x0001 gives its trader ships random cargo (see
-    /// [`spawn::fleet`](crate::traffic::spawn::fleet)).
+    /// `nova_sim::traffic::spawn::fleet`).
     pub flags: u16,
 }
 
@@ -676,7 +708,7 @@ pub struct PersonWeapon {
     pub ammo: i16,
 }
 
-/// A person, raw from its `përs`: the [`person`](crate::person) rules
+/// A person, raw from its `përs`: the `nova_sim::person` rules
 /// decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PersonRecord {
@@ -722,7 +754,7 @@ pub struct PersonRecord {
     /// Its `Flags2`.
     pub flags2: u16,
     /// Its `GrantClass`, raw: the `ItemClass` of the outfits boarding it
-    /// may grant (see [`grant`](crate::grant)).
+    /// may grant (see `nova_sim::grant`).
     pub grant_class: i16,
     /// Its `GrantCount`, raw: the most outfits a grant gives.
     pub grant_count: i16,
@@ -735,7 +767,7 @@ pub struct PersonRecord {
 
 /// A mission's special ships, raw from its `mïsn`: as many as its
 /// `ShipCount`, with its `ShipGoal`, and where, of what and how they
-/// spawn (see the [`traffic::spawn`](crate::traffic::spawn) module's
+/// spawn (see the `nova_sim::traffic::spawn` module's
 /// "Mission ships").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MissionShip {
@@ -774,7 +806,7 @@ impl MissionShip {
 }
 
 /// A mission, raw from its `mïsn`: the fields its offer reads. The
-/// [`mission`](crate::mission) rules decide what the values mean.
+/// `nova_sim::mission` rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MissionRecord {
     /// The `mïsn`'s ID.
@@ -852,7 +884,7 @@ pub struct MissionRecord {
 
 /// A mission's auxiliary ships, raw from its `mïsn`: ordinary traffic of
 /// its `AuxShipDude` that comes into the systems its `AuxShipSyst` allows
-/// on a countdown (see the [`mission::aux_ships`](crate::mission::aux_ships) module).
+/// on a countdown (see the `nova_sim::mission::aux_ships` module).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuxShip {
     /// Its `AuxShipCount`.
@@ -913,18 +945,18 @@ pub struct CronRecord {
     /// Its `Require` bits, asked of the player before it starts.
     pub require: u64,
     /// Its `NewsGovt1-4`, raw: -1 or, in stock data, 0 for unused; the
-    /// [`news`](crate::news) module reads it.
+    /// `nova_sim::news` module reads it.
     pub news_govt: [i16; 4],
     /// Its `GovtNewsStr1-4`, raw: -1 or, in stock data, 0 for unused; the
-    /// [`news`](crate::news) module reads it.
+    /// `nova_sim::news` module reads it.
     pub govt_news: [i16; 4],
     /// Its `IndNewsStr`, raw: -1 or, in stock data, 0 for unused; the
-    /// [`news`](crate::news) module reads it.
+    /// `nova_sim::news` module reads it.
     pub ind_news: i16,
 }
 
 /// A rank, from its `ränk` as `_LoadObjectData` keeps it
-/// (@0x7da37-0x7dc4d): the fields the [`rank`](crate::rank) module
+/// (@0x7da37-0x7dc4d): the fields the `nova_sim::rank` module
 /// reads, which decides what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RankRecord {
@@ -955,8 +987,13 @@ pub struct RankRecord {
     pub price_mod: i16,
 }
 
+/// The first `nëbu` the original has a slot for.
+pub const FIRST_NEBULA: i16 = 128;
+/// The last `nëbu` the original has a slot for: 32 slots in all.
+pub const LAST_NEBULA: i16 = 159;
+
 /// A nebula, from its `nëbu` as `_LoadObjectData` keeps it
-/// (@0x7cf44-0x7d025): the fields the [`nebula`](crate::nebula) module
+/// (@0x7cf44-0x7d025): the fields the `nova_sim::nebula` module
 /// reads, which decides what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NebulaRecord {
@@ -977,7 +1014,7 @@ pub struct NebulaRecord {
 }
 
 /// What a mission's screens show of it, read from its `mïsn` and its
-/// `dësc`s (see the [`mission`](crate::mission) module's "Screens"): each
+/// `dësc`s (see the `nova_sim::mission` module's "Screens"): each
 /// text as written, its tags not yet filled, and `None` for an ID of -1
 /// or a `dësc` that cannot be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1184,7 +1221,7 @@ impl<T: TrafficCatalog + ?Sized> TrafficCatalog for Rc<T> {
     }
 }
 
-/// A weapon, raw from its `wëap`: the [`combat`](crate::combat) rules
+/// A weapon, raw from its `wëap`: the `nova_sim::combat` rules
 /// decide what the values mean.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WeaponRecord {
@@ -1277,11 +1314,11 @@ pub struct WeaponRecord {
     pub ionize_color: u32,
     /// Its `JamVuln1-4`: each jamming type's share, in percent, that a
     /// shot rolls its vulnerability to at launch (see
-    /// [`jamming`](crate::combat::jamming)).
+    /// `nova_sim::combat::jamming`).
     pub jam_vuln: [i16; 4],
     /// The frame size of its shots' sprite, the sheet of `spïn` 3000 +
     /// its `Graphic`, which point defence meets missiles by (see
-    /// [`defence`](crate::combat::defence)); none for a `Graphic` below
+    /// `nova_sim::combat::defence`); none for a `Graphic` below
     /// 0 or a sheet that cannot be read.
     pub frame: Option<FrameSize>,
 }
@@ -1308,7 +1345,7 @@ pub struct StockWeapon {
 }
 
 /// A ship class's weapon exit points, raw from its `shän` (see
-/// [`exits`](crate::combat::exits)).
+/// `nova_sim::combat::exits`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShipExits {
     /// Each `ExitType`'s four (x, y) points, in pixels from the centre with
@@ -1325,8 +1362,74 @@ pub struct ShipExits {
     pub frames: i16,
 }
 
+/// An escort's class, which the escort menu groups it by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EscortClass {
+    /// 0: a fighter.
+    Fighter,
+    /// 1: a medium ship.
+    Medium,
+    /// 2: a warship.
+    Warship,
+    /// 3: a freighter; the default, the class a ship of no record works
+    /// out to (`InherentAI` none).
+    #[default]
+    Freighter,
+}
+
+/// The heaviest `Mass` of a fighter whose class is worked out.
+pub const FIGHTER_MASS: i16 = 49;
+/// The heaviest `Mass` of a medium ship whose class is worked out.
+pub const MEDIUM_MASS: i16 = 199;
+/// The highest `InherentAI` of a freighter whose class is worked out.
+pub const FREIGHTER_AI: i16 = 2;
+
+impl EscortClass {
+    /// Every class, in the escort menu's order.
+    pub const ALL: [Self; 4] = [Self::Fighter, Self::Medium, Self::Warship, Self::Freighter];
+
+    /// The class of a `shïp` of `EscortType` `escort_type`, `InherentAI`
+    /// `inherent_ai` and `Mass` `mass` (see the `nova_sim::escort` module
+    /// docs).
+    #[must_use]
+    pub fn of(escort_type: i16, inherent_ai: i16, mass: i16) -> Self {
+        match escort_type {
+            0 => Self::Fighter,
+            1 => Self::Medium,
+            2 => Self::Warship,
+            3 => Self::Freighter,
+            _ if inherent_ai <= FREIGHTER_AI => Self::Freighter,
+            _ if mass <= FIGHTER_MASS => Self::Fighter,
+            _ if mass <= MEDIUM_MASS => Self::Medium,
+            _ => Self::Warship,
+        }
+    }
+
+    /// Its row in the escort menu (`STR#` 2002 #140-#143).
+    #[must_use]
+    pub const fn menu_label(self) -> &'static str {
+        match self {
+            Self::Fighter => "Fighters",
+            Self::Medium => "Medium Ships",
+            Self::Warship => "Warships",
+            Self::Freighter => "Freighters",
+        }
+    }
+
+    /// What a command's message calls it (`STR#` 2002 #135-#138).
+    #[must_use]
+    pub const fn message_form(self) -> &'static str {
+        match self {
+            Self::Fighter => "Fighters",
+            Self::Medium => "Medium ships",
+            Self::Warship => "Warships",
+            Self::Freighter => "Freighters",
+        }
+    }
+}
+
 /// What a ship class fights with and how it dies, raw from its `shïp` and
-/// its `shän`: the [`combat`](crate::combat) rules decide what the values
+/// its `shän`: the `nova_sim::combat` rules decide what the values
 /// mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HullRecord {
@@ -1358,17 +1461,17 @@ pub struct HullRecord {
     /// aboard, raw; none for -1.
     pub key_carried: Option<ShipId>,
     /// Its `Cost`, raw: -1 hides a ship of the type (see
-    /// [`HullSpec::hidden`](crate::combat::hull::HullSpec::hidden)).
+    /// `nova_sim::combat::hull::HullSpec::hidden`).
     pub cost: i32,
     /// Its `Speed`, raw (see
-    /// [`HullSpec::class_speed`](crate::combat::hull::HullSpec::class_speed)).
+    /// `nova_sim::combat::hull::HullSpec::class_speed`).
     pub speed: i16,
     /// Its `shän`'s weapon exit points, or `None` when it has no `shän`
     /// that can be read.
     pub exits: Option<ShipExits>,
     /// Its escort class, from its `EscortType`, `InherentAI` and `Mass`
     /// ([`EscortClass::of`]), which sets which turret shots miss it (see
-    /// [`HullSpec::miss_class`](crate::combat::hull::HullSpec::miss_class)).
+    /// `nova_sim::combat::hull::HullSpec::miss_class`).
     pub escort_class: EscortClass,
 }
 
@@ -1388,8 +1491,8 @@ pub struct Penalties {
     pub shoot: i16,
 }
 
-/// A government, raw from its `gövt`: the [`govt`](crate::govt) and
-/// [`legal`](crate::legal) rules decide what the values mean.
+/// A government, raw from its `gövt`: the `nova_sim::govt` and
+/// `nova_sim::legal` rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GovtRecord {
     /// The `gövt`'s ID.
@@ -1432,7 +1535,7 @@ pub struct GovtRecord {
     pub require: u64,
     /// Its `InhJam1-4`: the jamming of each type its ships' classes take
     /// through their `InherentGovt` (`gövt` runtime +0x56; see
-    /// [`jamming`](crate::combat::jamming)).
+    /// `nova_sim::combat::jamming`).
     pub inh_jam: [i16; 4],
 }
 
@@ -1478,8 +1581,12 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
     }
 }
 
+/// How many asteroid types there are: `röid` 128-143, one bit each of
+/// `AstTypes`.
+pub const KINDS: usize = 16;
+
 /// One asteroid type, `röid` 128 + `kind`, with its master sprite's
-/// frames and frame size (see [`asteroid`](crate::asteroid)), raw.
+/// frames and frame size (see `nova_sim::asteroid`), raw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AsteroidTypeRecord {
     /// Its type, 0-15: `röid` 128 + `kind`, bit `kind` of a system's
@@ -1548,7 +1655,7 @@ pub struct AsteroidFieldRecord {
 }
 
 /// The game data a session's asteroid fields are read from (see
-/// [`asteroid`](crate::asteroid)).
+/// `nova_sim::asteroid`).
 pub trait AsteroidCatalog {
     /// `röid` 128 + `kind`, `kind` 0-15, for each that reads, by kind,
     /// with `spïn` 800 + `kind`'s frames and frame size.
@@ -1557,7 +1664,7 @@ pub trait AsteroidCatalog {
     fn asteroid_fields(&self) -> Vec<AsteroidFieldRecord>;
     /// The frame width and height of each box graphic 0-4, `spïn` 500 +
     /// graphic, by graphic: none where the sheet does not read. A scoop
-    /// tests a ship against the box's frame (see [`scoop`](crate::scoop)).
+    /// tests a ship against the box's frame (see `nova_sim::scoop`).
     fn box_frame_sizes(&self) -> [Option<(u32, u32)>; BOX_GRAPHICS];
 }
 
@@ -1603,7 +1710,7 @@ pub trait CommCatalog {
 
     /// Whether the data holds any `l33t` resource, which turns on the
     /// original's `_leetMode` (`_LoadObjectData` @0x7e28c-0x7e2a2; see
-    /// [`text_tags`](crate::text_tags)). None by default.
+    /// `nova_sim::text_tags`). None by default.
     fn leet_mode(&self) -> bool {
         false
     }
@@ -1611,7 +1718,7 @@ pub trait CommCatalog {
     /// The `'STR '` `id`, raw, from whichever open file holds it, the base
     /// data's or a plug-in's, as `_LoadPluginString` (@0x71a8e) looks it up
     /// with `GetResource`: a person's hail quote's patch (see
-    /// [`hail_quote_text`](crate::person::hail_quote_text)), and one string
+    /// `nova_sim::person::hail_quote_text`), and one string
     /// of a `STR#` (see [`strings`](crate::strings)). None by default.
     fn plugin_string(&self, id: i16) -> StringPatch {
         let _ = id;
@@ -1726,7 +1833,7 @@ pub trait PilotCatalog {
     /// itself, by ascending ID: where a hypergate or wormhole may lead. The
     /// system each is in is resolved from the listed stellars
     /// ([`PilotCatalog::listed_stellars`]), owner-first (see the
-    /// [`gate`](crate::gate) module).
+    /// `nova_sim::gate` module).
     fn gate_sites(&self) -> Vec<GateSite>;
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
@@ -1781,7 +1888,7 @@ pub trait PilotCatalog {
     }
     /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
     /// of `Flags` 0x0800 draws its ships' one type from at accept (see
-    /// [`SpecialShips::uniform_type`](crate::mission::SpecialShips::uniform_type)).
+    /// `nova_sim::mission::SpecialShips::uniform_type`).
     /// None when it cannot be read, as by default: the type is then drawn
     /// at the ships' first spawn.
     fn mission_dude(&self, _id: DudeId) -> Option<DudeRecord> {
@@ -1790,7 +1897,7 @@ pub trait PilotCatalog {
     /// Each system's first stellar that can be read, the first of its
     /// [`PilotCatalog::landing_sites`], by ascending system ID; a system
     /// with none is left out. A landed `M` selects it (see the `nav`
-    /// module of [`Session`](crate::Session)): the original's first
+    /// module of `nova_sim::Session`): the original's first
     /// `NavDefs` slot that isn't −1, as its loader clears the slot of a
     /// `spöb` that didn't load (@0x780f8-0x7817f). By default it is read
     /// through [`PilotCatalog::star_map`] and the landing sites of each

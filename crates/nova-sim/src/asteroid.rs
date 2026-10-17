@@ -79,6 +79,7 @@
 //!   registration parity `_SpawnNagShip` (@0x607a) reads: never ported.
 
 use crate::catalog::AsteroidTypeRecord;
+pub use crate::catalog::KINDS;
 use crate::chance::Chance;
 use crate::cloak::Area;
 use crate::combat::ParticleBurst;
@@ -87,10 +88,6 @@ use crate::geometry::Vec2;
 
 /// The most asteroids in a field at once: `_asteroidData`'s 16 slots.
 pub const SLOTS: usize = 16;
-
-/// How many asteroid types there are: `röid` 128-143, one bit each of
-/// `AstTypes`.
-pub const KINDS: usize = 16;
 
 /// How far past the play area's right and bottom edges, and before its
 /// left and top edges less twice the sprite, an asteroid may go before

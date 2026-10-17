@@ -67,15 +67,12 @@
 
 use std::collections::BTreeSet;
 
+pub use crate::catalog::{FIRST_NEBULA, LAST_NEBULA};
 use crate::catalog::{NebulaId, NebulaRecord};
 use crate::control::Gate;
 use crate::geometry::Vec2;
 use crate::story::{Consumer, SubscriptionId};
 
-/// The first `nëbu` the original has a slot for.
-pub const FIRST_NEBULA: i16 = 128;
-/// The last `nëbu` the original has a slot for: 32 slots in all.
-pub const LAST_NEBULA: i16 = 159;
 /// How far `_ExploreNebulaeFromSystem` insets a nebula's rectangle on
 /// each side (`InsetRect(8, 8)` @0x5116).
 pub const INSET: i32 = 8;

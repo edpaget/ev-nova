@@ -56,6 +56,7 @@
 //! what they will do, said of a command given while a jump is under way
 //! ([`EscortCommand::will`], `_IssueNewEscortCommand` @0x66461-0x664e5).
 
+pub use crate::catalog::{EscortClass, FIGHTER_MASS, FREIGHTER_AI, MEDIUM_MASS};
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
 use crate::traffic::npc::{Npc, NpcId};
@@ -69,71 +70,6 @@ pub const ESCORT_COMMANDS: &str = "Escort Commands";
 pub const NEW_ORDERS: &str = "New escort orders assigned:  ";
 /// `STR#` 2002 #154: Attack's message with no target to copy.
 pub const WILL_ATTACK: &str = "will attack.";
-
-/// An escort's class, which the escort menu groups it by.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum EscortClass {
-    /// 0: a fighter.
-    Fighter,
-    /// 1: a medium ship.
-    Medium,
-    /// 2: a warship.
-    Warship,
-    /// 3: a freighter; the default, the class a ship of no record works
-    /// out to (`InherentAI` none).
-    #[default]
-    Freighter,
-}
-
-/// The heaviest `Mass` of a fighter whose class is worked out.
-pub const FIGHTER_MASS: i16 = 49;
-/// The heaviest `Mass` of a medium ship whose class is worked out.
-pub const MEDIUM_MASS: i16 = 199;
-/// The highest `InherentAI` of a freighter whose class is worked out.
-pub const FREIGHTER_AI: i16 = 2;
-
-impl EscortClass {
-    /// Every class, in the escort menu's order.
-    pub const ALL: [Self; 4] = [Self::Fighter, Self::Medium, Self::Warship, Self::Freighter];
-
-    /// The class of a `shïp` of `EscortType` `escort_type`, `InherentAI`
-    /// `inherent_ai` and `Mass` `mass` (see the module docs).
-    #[must_use]
-    pub fn of(escort_type: i16, inherent_ai: i16, mass: i16) -> Self {
-        match escort_type {
-            0 => Self::Fighter,
-            1 => Self::Medium,
-            2 => Self::Warship,
-            3 => Self::Freighter,
-            _ if inherent_ai <= FREIGHTER_AI => Self::Freighter,
-            _ if mass <= FIGHTER_MASS => Self::Fighter,
-            _ if mass <= MEDIUM_MASS => Self::Medium,
-            _ => Self::Warship,
-        }
-    }
-
-    /// Its row in the escort menu (`STR#` 2002 #140-#143).
-    #[must_use]
-    pub const fn menu_label(self) -> &'static str {
-        match self {
-            Self::Fighter => "Fighters",
-            Self::Medium => "Medium Ships",
-            Self::Warship => "Warships",
-            Self::Freighter => "Freighters",
-        }
-    }
-
-    /// What a command's message calls it (`STR#` 2002 #135-#138).
-    #[must_use]
-    pub const fn message_form(self) -> &'static str {
-        match self {
-            Self::Fighter => "Fighters",
-            Self::Medium => "Medium ships",
-            Self::Warship => "Warships",
-            Self::Freighter => "Freighters",
-        }
-    }
-}
 
 /// A standing order an escort follows. An escort with none keeps
 /// formation.

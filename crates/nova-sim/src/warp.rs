@@ -48,8 +48,11 @@
 
 use crate::catalog::SoundId;
 use crate::clock::TICKS_PER_SECOND;
-use crate::mission::screens::MAC_TICKS_PER_SECOND;
 use crate::sound::WARP_UP_HALTS;
+
+/// The Mac's ticks a second (`TickCount`), which the offers' times are
+/// counted in.
+pub const MAC_TICKS_PER_SECOND: u32 = 60;
 
 /// The Mac's ticks in one of the engine's: 2.
 pub const MAC_TICKS_PER_TICK: u32 = MAC_TICKS_PER_SECOND / TICKS_PER_SECOND;

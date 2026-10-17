@@ -32,26 +32,22 @@ use nova_data::sound::decode_snd;
 use nova_data::{GameData, Record, shot_spin_id, stellar_spin_id};
 use nova_rsrc::ResType;
 
-use crate::asteroid::KINDS;
 use crate::blink::Blink;
 use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
-    DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord,
-    FrameSize, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId,
-    WeaponRecord, loaded_mod_val,
+    DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
+    Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GovtId, GovtRecord,
+    HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
+    ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
+    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
-use crate::combat::weapon::Explosion;
-use crate::escort::EscortClass;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
-use crate::nebula;
 use crate::warp::SoundLength;
 
 /// The `spïn` of asteroid type 0's master sprite: type `n`'s is 800 +
@@ -512,7 +508,7 @@ impl PilotCatalog for GameData {
     /// `_LoadObjectData` trims it (@0x772ab-0x77308): up to its last ';',
     /// trailing spaces and ';'s dropped, empty when it has none. The name
     /// is kept whole: the original's 30-character field (@0x77310-0x7732a)
-    /// is the core's to apply ([`StellarMarks`](crate::mission::StellarMarks)),
+    /// is the core's to apply (`nova_sim::mission::StellarMarks`),
     /// by [`StellarIdentityRecord`](crate::RuleKey::StellarIdentityRecord).
     /// A `spöb` that can't be decoded is left out, as one that didn't load.
     fn stellar_marks(&self) -> Vec<StellarMark> {
@@ -685,10 +681,10 @@ impl PilotCatalog for GameData {
     }
 
     /// Only IDs 128-159 have a slot (@0x7cf44-0x7d025; see the
-    /// [`nebula`](crate::nebula) module).
+    /// `nova_sim::nebula` module).
     fn nebulae(&self) -> Vec<NebulaRecord> {
         self.records::<Nebula>()
-            .filter(|(id, _)| (nebula::FIRST_NEBULA..=nebula::LAST_NEBULA).contains(id))
+            .filter(|(id, _)| (FIRST_NEBULA..=LAST_NEBULA).contains(id))
             .filter_map(|(id, record)| {
                 let record = record.ok()?.record;
                 Some(NebulaRecord {
@@ -1388,7 +1384,6 @@ mod tests {
         GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipExits, StarSystem, StartDate,
         StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
-    use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test, TestExpr};
 
     /// One data file, `/data/Nova Data`, holding a fork.
@@ -3854,28 +3849,45 @@ mod tests {
 
     /// The hull of a `shïp` of `EscortType` `escort_type`, `InherentAI`
     /// `inherent_ai` and `Mass` `mass`, as the combat catalog reads it.
-    fn classed(escort_type: i16, inherent_ai: i16, mass: i16) -> crate::combat::hull::HullSpec {
+    fn classed(escort_type: i16, inherent_ai: i16, mass: i16) -> HullRecord {
         let mut bytes = ship(1, 2, 3);
         put_i16s(&mut bytes, 0x3E, &[mass]);
         put_i16s(&mut bytes, 0x42, &[inherent_ai]);
         put_i16s(&mut bytes, 0x732, &[escort_type]);
-        let hulls = store(&[(Ship::TYPE, 128, bytes)]).hulls();
-        crate::combat::hull::HullSpec::new(&hulls[0])
+        let mut hulls = store(&[(Ship::TYPE, 128, bytes)]).hulls();
+        hulls.remove(0)
     }
 
+    /// The hull record's escort class, which combat's `HullSpec` turns
+    /// into its miss class (`nova_sim::combat::hull`'s tests cover that
+    /// mapping).
     #[test]
     fn a_hulls_miss_class_comes_from_its_escort_type_or_one_worked_out() {
-        let miss =
-            |escort_type, inherent_ai, mass| classed(escort_type, inherent_ai, mass).miss_class;
+        let class =
+            |escort_type, inherent_ai, mass| classed(escort_type, inherent_ai, mass).escort_class;
         // Worked out from the mass for an `EscortType` outside 0-3.
-        for (mass, class) in [(49, 80), (50, 90), (199, 90), (200, 100)] {
-            assert_eq!(miss(-1, 3, mass), class, "mass {mass}");
+        for (mass, expected) in [
+            (49, EscortClass::Fighter),
+            (50, EscortClass::Medium),
+            (199, EscortClass::Medium),
+            (200, EscortClass::Warship),
+        ] {
+            assert_eq!(class(-1, 3, mass), expected, "mass {mass}");
         }
-        assert_eq!(miss(-1, 2, 10), 100, "a freighter by its InherentAI");
+        assert_eq!(
+            class(-1, 2, 10),
+            EscortClass::Freighter,
+            "a freighter by its InherentAI"
+        );
         // Named directly, whatever the mass.
-        for (escort_type, class) in [(0, 80), (1, 90), (2, 100), (3, 100)] {
-            assert_eq!(miss(escort_type, 3, 500), class, "{escort_type}");
-            assert_eq!(miss(escort_type, 1, 10), class, "{escort_type}");
+        for (escort_type, expected) in [
+            (0, EscortClass::Fighter),
+            (1, EscortClass::Medium),
+            (2, EscortClass::Warship),
+            (3, EscortClass::Freighter),
+        ] {
+            assert_eq!(class(escort_type, 3, 500), expected, "{escort_type}");
+            assert_eq!(class(escort_type, 1, 10), expected, "{escort_type}");
         }
     }
 

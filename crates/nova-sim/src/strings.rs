@@ -10,7 +10,7 @@
 //!
 //! `STR#` 4000 and 4004, the commodities' names and prices, are patched
 //! by the market's own [`CommodityStrings`](crate::catalog::CommodityStrings)
-//! (see [`market`](crate::market)).
+//! (see `nova_sim::market`).
 //!
 //! A patch ([`StringPatch`]) with text stands for its entry, whatever the
 //! list holds. One with no bytes, which `_LoadPluginString` (@0x71a8e)

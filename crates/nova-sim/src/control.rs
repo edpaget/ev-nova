@@ -52,7 +52,18 @@ pub use nova_data::{
 
 pub use self::set::{BitStore, execute};
 use crate::catalog::{OutfitId, StellarId, SystemId};
-use crate::pilot::Gender;
+
+/// The player's gender, which the `G` test reads (true when male). The
+/// stock new-pilot dialog's Gender menu lists Male, then Female, and starts
+/// on Male.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Gender {
+    /// Male: the `G` test holds.
+    #[default]
+    Male,
+    /// Female.
+    Female,
+}
 
 /// What a control-bit test reads about the pilot.
 pub trait PilotFacts: Debug {
@@ -199,7 +210,7 @@ impl PilotFacts for StartUpPilot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptNote {
     /// One settling raised more story events than it dispatches (see the
-    /// [`story`](crate::story) module's "Dispatch"): this many were
+    /// `nova_sim::story` module's "Dispatch"): this many were
     /// dropped.
     EventsDropped {
         /// The events dropped.
@@ -209,7 +220,7 @@ pub enum ScriptNote {
     /// which by the Bible's reading of
     /// [`RuleKey::YOnDestroy`](crate::RuleKey::YOnDestroy) would run it
     /// again: it was destroyed, but its `OnDestroy` was not run again (see
-    /// the [`story`](crate::story) module's "Built by phase 8").
+    /// the `nova_sim::story` module's "Built by phase 8").
     OnDestroyReentered {
         /// The stellar.
         stellar: StellarId,

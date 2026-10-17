@@ -3,7 +3,7 @@
 
 use crate::catalog::SoundId;
 
-/// Something a [`Session`](crate::Session) did that may make a sound.
+/// Something a `nova_sim::Session` did that may make a sound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimSound {
     /// The ship began thrusting.
@@ -44,13 +44,13 @@ pub enum SimSound {
     Arrived,
     /// The player became threatened: the Red Alert, `snd ` 370
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see
-    /// [`red_alert`](crate::red_alert)).
+    /// `nova_sim::red_alert`).
     RedAlert,
     /// A `Q` set operator's message is shown in flight.
     ScriptMessage,
     /// Cargo was jettisoned in flight: `_beepSnd[4]`, `snd ` 154
     /// (`_JettisonCargo` @0x3e31a-0x3e33d), whether or not a mission
-    /// failed with it (see [`cargo_box`](crate::cargo_box)).
+    /// failed with it (see `nova_sim::cargo_box`).
     CargoJettisoned,
     /// A scan found a mission's cargo and failed the mission, the player
     /// told: `_beepSnd[1]`, `snd ` 151 (`_ScanPlayer` @0x7e721-0x7e740).
@@ -100,7 +100,7 @@ pub enum SimSound {
     DownedMissionFailed,
     /// A mission's special ship lost (destroyed or disabled) failed a
     /// mission that isn't hidden, with
-    /// [`SimMessage::MissionShipLost`](crate::SimMessage::MissionShipLost):
+    /// `nova_sim::SimMessage::MissionShipLost`:
     /// `_beepSnd[1]`, `snd ` 151 (`_HandleShipDisplay` @0x2db31-0x2db5a,
     /// `_DamageShip` @0x3aee8-0x3af11).
     MissionShipLost,
@@ -123,26 +123,26 @@ pub enum SimSound {
     /// (`_HandlePlayer` @0x69f6f), Closest Target (R, with or without
     /// Option) when it picks a ship other than the target (@0x6aa55), and
     /// a click in space on a ship other than the target
-    /// ([`Session::click_in_space`](crate::Session::click_in_space),
+    /// (`nova_sim::Session::click_in_space`,
     /// @0x6a585): `_beepSnd[2]`, `snd ` 152. Closest Target finding no
     /// ship raises [`SimSound::Refused`] instead.
     TargetSelected,
     /// Option-backquote let go of the ship target (`_HandlePlayer`
     /// @0x69a7d), or a click on the player's own ship did
-    /// ([`Session::click_in_space`](crate::Session::click_in_space),
+    /// (`nova_sim::Session::click_in_space`,
     /// @0x6a585): `_beepSnd[0]`, `snd ` 150. With no target either is
     /// silent.
     TargetCleared,
     /// A first-flight tutorial hint was shown: `_beepSnd[4]`, `snd ` 154
     /// (`_HandlePlayer` @0x70a1c, @0x70c12, @0x70dab, @0x70e59; see
-    /// [`tutorial`](crate::tutorial)).
+    /// `nova_sim::tutorial`).
     TutorialHint,
     /// Traffic control answered the player: `_beepSnd[1]`, `snd ` 151.
     /// The land key's request with its line (`_HandlePlayerDockRequest`
     /// @0x67a69) and its denial (@0x67ec6), and the dock approach's
     /// greeting (`_HandlePlayerDockApproach` @0x649a9) raise it; a request
     /// within reach and "No response." are silent (see
-    /// [`clearance`](crate::clearance)).
+    /// `nova_sim::clearance`).
     TrafficControl,
     /// The player boarded a person who offers its mission: `snd ` 390
     /// "Airlock" (loaded by `_LoadSounds` @0x1c277-0x1c289), played by
@@ -197,22 +197,22 @@ pub enum SimSound {
     /// original's shared refusal beep, whether or not a message says why.
     /// The player info key's refusals raise it (`_HandlePlayer`
     /// @0x7039a-0x703bd, priority 5, not modelled; see
-    /// [`Session::press_player_info`](crate::Session::press_player_info)),
+    /// `nova_sim::Session::press_player_info`),
     /// as does the mission info key with no mission to show, before its
     /// "You have no active missions." (`PlaySound` @0x70557, priority 1,
     /// not modelled; see
-    /// [`Session::press_mission_info`](crate::Session::press_mission_info)),
+    /// `nova_sim::Session::press_mission_info`),
     /// as do the jump key's (@0x6b89f, @0x6b9cc, @0x6ba72; see
-    /// [`Session::jump_refusal_told`](crate::Session::jump_refusal_told))
+    /// `nova_sim::Session::jump_refusal_told`)
     /// and every refusal of a hail, with no target too
     /// (`_HandlePlayerCommunication` @0x626cf, @0x6206c, @0x6261c,
     /// @0x6264e, its `PlaySound` argument of 1 or 5 not modelled; see
-    /// [`HailRefusal`](crate::hail::HailRefusal)), as do the land key's
+    /// `nova_sim::hail::HailRefusal`), as do the land key's
     /// not-landable, too-far and too-fast refusals from the dock request
     /// (@0x67e8f, @0x676aa, @0x676fe; see
-    /// [`LandingRefusal::beeps`](crate::landing::LandingRefusal::beeps)),
+    /// `nova_sim::landing::LandingRefusal::beeps`),
     /// and Closest Target finding no ship (`_HandlePlayer` @0x6aadb; see
-    /// [`Session::select_target`](crate::Session::select_target)),
+    /// `nova_sim::Session::select_target`),
     /// and every other refusal
     /// that beeps reuses it rather than adding a variant of its own.
     Refused,

@@ -79,6 +79,7 @@ use crate::catalog::{
     ShipRecord, StartError, StellarId, SystemId,
 };
 use crate::combat::armament::Arsenal;
+pub use crate::control::Gender;
 use crate::control::{Bit, ControlBitSet};
 use crate::cron::CronState;
 use crate::date::GameDate;
@@ -177,18 +178,6 @@ pub struct Pilot {
     pub(crate) crons: BTreeMap<CronId, CronState>,
     /// The active ranks, by ID (see [`rank`](crate::rank)).
     pub(crate) ranks: BTreeSet<RankId>,
-}
-
-/// The player's gender, which the `G` test reads (true when male). The
-/// stock new-pilot dialog's Gender menu lists Male, then Female, and starts
-/// on Male.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Gender {
-    /// Male: the `G` test holds.
-    #[default]
-    Male,
-    /// Female.
-    Female,
 }
 
 /// A ship in the player's fleet: its class, its shield, armour and fuel,
