@@ -87,7 +87,7 @@
 //! ([`contributes`]; `_GetPlayerContributeBits` @0x770f-0x7724): a crön
 //! in its pre-holdoff or its post-holdoff contributes nothing, and a
 //! running crön's own bits count towards a later crön's `Require`. Every
-//! reader sums them through [`wares::contributed`].
+//! reader sums them through `nova_sim::wares::contributed`.
 //!
 //! # Eligibility
 //!
@@ -145,8 +145,6 @@ use crate::control::{Gate, Script};
 use crate::date::GameDate;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context};
-use crate::story::{Consumer, SubscriptionId};
-use crate::wares;
 
 /// A crön's `OnStart` hook.
 pub const START: u8 = 0;
@@ -198,12 +196,55 @@ impl std::fmt::Display for CronHook {
     }
 }
 
+/// Who registered a subscription, in the order consumers run on one
+/// event: the offers first, as a landing rolls them before the land
+/// check; and every stock consumer before the
+/// plug-ins (see the `nova_sim::story` module docs' "Dispatch").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Consumer {
+    /// The missions' offers (`mïsn` availability and resolution).
+    Offers,
+    /// A mission's ships (`mïsn` `Ship*` fields).
+    MissionShips,
+    /// Missions (`mïsn`).
+    Missions,
+    /// Crons (`crön`).
+    Crons,
+    /// Nebulae (`nëbu`).
+    Nebulae,
+    /// Plug-in trigger records.
+    Plugins,
+    /// A test's own subscriptions.
+    Fixture,
+}
+
+/// A subscription's name, stable from one session to the next: who
+/// registered it, the record it is for, and which of that record's hooks.
+/// It orders dispatch, field by field, and keys the once-fired record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SubscriptionId {
+    /// Who registered it.
+    pub consumer: Consumer,
+    /// The consumer's number for the record: a resource ID, or for
+    /// missions and mission ships the active mission's slot.
+    pub record: i16,
+    /// The consumer's number for the record's hook.
+    pub hook: u8,
+}
+
+/// Whether `require` is met by the bits `contributed`: each of its bits is
+/// among them.
+#[must_use]
+pub fn requirement_met(require: u64, contributed: u64) -> bool {
+    require & !contributed == 0
+}
+
 /// Whether an iterative script of `record` runs again: its `Require`
 /// among the bits `contributed`, then its `EnableOn` through `gate`
 /// (`_PlayerMeetsRequirements`, then `_EvalMissionBitTestString`).
 #[must_use]
 pub fn holds(record: &CronRecord, contributed: u64, gate: Gate) -> bool {
-    wares::requirement_met(record.require, contributed) && gate.allows(&record.enable_on)
+    requirement_met(record.require, contributed) && gate.allows(&record.enable_on)
 }
 
 /// The name of crön `cron`'s `hook` ([`START`] or [`END`]) as it runs:
@@ -507,7 +548,7 @@ pub fn eligibility<'a>() -> Checks<CronFacts<'a>, CronRefusal> {
             "_PlayerMeetsRequirements @0x3883f",
             |facts: &CronFacts| {
                 refuse_unless(
-                    wares::requirement_met(facts.record.require, facts.contributed),
+                    requirement_met(facts.record.require, facts.contributed),
                     CronRefusal::Require,
                 )
             },
@@ -650,7 +691,8 @@ mod tests {
 
     use crate::control::{ControlBits, FreshPilot, PilotFacts, Test, TestExpr};
     use crate::rules::Descriptor;
-    use crate::testkit::{Scripted, cron};
+    use nova_sim_base::fixture::Scripted;
+    use nova_sim_catalog::fixture::cron;
 
     /// A hand-written control-bit port with a canned answer, recording
     /// each test it is asked.
@@ -1635,10 +1677,13 @@ mod tests {
             day
         };
         let state = |day: &MockDay| day.state(CronId(128)).expect("still held");
+        // Whether the news has the crön, as `nova_sim::news::running` reads
+        // it: active, with a holdoff of 0 or below (@0x485cf-0x485f1).
+        let has_news = |state: CronState| state.active() && state.holdoff <= 0;
 
         let mut day = ended(RuleSource::Bible);
         assert_eq!(day.of(128), Some((-1, 3)));
-        assert!(!crate::news::running(state(&day)));
+        assert!(!has_news(state(&day)));
         assert!(!contributes(state(&day)));
         quiet_days(&mut day, &records, &[Some((-1, 2)), Some((-1, 1)), None]);
 
@@ -1647,7 +1692,7 @@ mod tests {
         for k in 1..=20 {
             assert_eq!(day.day(&records), [Ended(128)], "day {k}: no ask");
             assert_eq!(day.of(128), Some((-k, 0)));
-            assert!(crate::news::running(state(&day)), "day {k}");
+            assert!(has_news(state(&day)), "day {k}");
             assert!(contributes(state(&day)), "day {k}");
         }
         day.states.insert(

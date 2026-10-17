@@ -49,7 +49,7 @@
 //! comes before the load overwrites every record (@0x7650e, @0x7674a).
 //!
 //! The mission writers (success, failure, abort and the cleaning pay,
-//! see [`mission`](crate::mission)) change the record in every system of
+//! see `nova_sim::mission`) change the record in every system of
 //! a qualifying government, hidden ones included, as the original's
 //! loops over every slot do; the clean-record outfit cleans the visible
 //! ones (see [`outfit_effects`](crate::outfit_effects)).
@@ -137,14 +137,13 @@
 //! @0x3ae08; `_HandlePlayerBoardAttempt` @0x6582b); a stellar's kill,
 //! the scans and the planet hails pass -1. The same return skips the
 //! ranks the crime would take (`_DeactivateRank` @0x9c9e; see
-//! [`rank`](crate::rank)'s **Crimes**).
+//! `nova_sim::rank`'s **Crimes**).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use crate::catalog::{GovtId, SystemId};
 use crate::govt::{Governments, NOSY};
-use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// How far either way of none a legal record goes.
@@ -165,7 +164,7 @@ const FIRST_GOVT: GovtId = GovtId(128);
 pub enum Crime {
     /// Carrying contraband its scan finds (`SmugPenalty`): the original's
     /// type 0 (`_ScanPlayer` @0x7ebcc, @0x7f01f; see the
-    /// [`scan`](crate::scan) module).
+    /// `nova_sim::scan` module).
     Smuggle,
     /// Disabling it (`DisabPenalty`).
     Disable,
@@ -402,6 +401,21 @@ pub fn systems_from_govts(
         .collect()
 }
 
+/// The legal records a conviction and a new pilot's statuses change: the
+/// record with each government and the record in each system, each 0
+/// when there is none. The story layer's `nova_sim::pilot::Pilot`
+/// implements it.
+pub trait LegalRecords {
+    /// The legal record with `govt`: 0 when there is none.
+    fn legal_record(&self, govt: GovtId) -> i16;
+    /// Sets the legal record with `govt` to `record`.
+    fn set_legal_record(&mut self, govt: GovtId, record: i16);
+    /// The legal record in `system`: 0 when there is none.
+    fn system_record(&self, system: SystemId) -> i16;
+    /// Sets the legal record in `system` to `record`.
+    fn set_system_record(&mut self, system: SystemId, record: i16);
+}
+
 /// Spreads a new pilot's `chär` statuses (`Govt1-4` with `Status1-4`,
 /// `slots`) as `_ActivateCharResource` does (@0x76dc0-0x76e6e): for each
 /// slot in order, every one of `systems` (all of them, hidden or not,
@@ -416,7 +430,7 @@ pub fn systems_from_govts(
 /// held within [`RECORD_LIMIT`]; the original's word wrap of a negated
 /// -32768 isn't kept. The spread plays no sound.
 pub fn spread_statuses(
-    pilot: &mut Pilot,
+    pilot: &mut (impl LegalRecords + ?Sized),
     systems: impl IntoIterator<Item = (SystemId, Option<GovtId>)>,
     slots: &[Option<(GovtId, i16)>],
     govts: &Governments,
@@ -461,7 +475,7 @@ fn held(record: i32) -> i16 {
 /// @0x9aab-0x9b1e), so a change's fraction counts. Every record is held
 /// within [`RECORD_LIMIT`].
 pub fn convict(
-    pilot: &mut Pilot,
+    pilot: &mut (impl LegalRecords + ?Sized),
     govt_changes: &[(GovtId, i32)],
     system_changes: &[(SystemId, f32)],
 ) {
@@ -480,7 +494,33 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtRecord, Penalties};
     use crate::govt::{DERELICT, XENOPHOBIC};
-    use crate::testkit::govt;
+    use nova_sim_catalog::fixture::govt;
+
+    /// A pilot's legal records: the [`LegalRecords`] port's fake, 0 for a
+    /// government or system with none.
+    #[derive(Debug, Default)]
+    struct Records {
+        legal: BTreeMap<GovtId, i16>,
+        systems: BTreeMap<SystemId, i16>,
+    }
+
+    impl LegalRecords for Records {
+        fn legal_record(&self, govt: GovtId) -> i16 {
+            self.legal.get(&govt).copied().unwrap_or(0)
+        }
+
+        fn set_legal_record(&mut self, govt: GovtId, record: i16) {
+            self.legal.insert(govt, record);
+        }
+
+        fn system_record(&self, system: SystemId) -> i16 {
+            self.systems.get(&system).copied().unwrap_or(0)
+        }
+
+        fn set_system_record(&mut self, system: SystemId, record: i16) {
+            self.systems.insert(system, record);
+        }
+    }
 
     const VICTIM: GovtId = GovtId(130);
     const ALLY: GovtId = GovtId(131);
@@ -1189,21 +1229,17 @@ mod tests {
     /// A pilot whose systems 130-134 are governed as their IDs say and
     /// 139 is independent, each seeded from its government's
     /// `InitialRec` as a new pilot's are.
-    fn seeded(govts: &Governments) -> (Pilot, Vec<(SystemId, Option<GovtId>)>) {
-        let mut pilot = Pilot::new(&crate::testkit::catalog(), "").expect("a pilot");
+    fn seeded(govts: &Governments) -> (Records, Vec<(SystemId, Option<GovtId>)>) {
+        let mut pilot = Records::default();
         let systems: Vec<(SystemId, Option<GovtId>)> = (130..=134)
             .map(|id| (SystemId(id), Some(GovtId(id))))
             .chain([(SystemId(139), None)])
             .collect();
-        pilot.system_legal = Some(systems_from_govts(
-            systems.iter().copied(),
-            &BTreeMap::new(),
-            govts,
-        ));
+        pilot.systems = systems_from_govts(systems.iter().copied(), &BTreeMap::new(), govts);
         (pilot, systems)
     }
 
-    fn system_records(pilot: &Pilot) -> Vec<i16> {
+    fn system_records(pilot: &Records) -> Vec<i16> {
         [130, 131, 132, 133, 134, 139]
             .map(|id| pilot.system_record(SystemId(id)))
             .to_vec()
@@ -1289,8 +1325,7 @@ mod tests {
 
     #[test]
     fn convicting_truncates_each_systems_new_record_not_its_change() {
-        let catalog = crate::testkit::catalog();
-        let mut pilot = Pilot::new(&catalog, "").expect("a pilot");
+        let mut pilot = Records::default();
         for (system, record) in [(1, -31_990), (2, 5), (3, -5), (4, 0), (5, 31_999), (6, 8)] {
             pilot.set_system_record(SystemId(system), record);
         }
@@ -1327,8 +1362,7 @@ mod tests {
 
     #[test]
     fn convicting_changes_each_record_held_within_32000() {
-        let catalog = crate::testkit::catalog();
-        let mut pilot = Pilot::new(&catalog, "").expect("a pilot");
+        let mut pilot = Records::default();
         pilot.set_legal_record(VICTIM, -31_990);
         pilot.set_legal_record(ENEMY, 31_995);
         pilot.set_legal_record(ALLY, 10);

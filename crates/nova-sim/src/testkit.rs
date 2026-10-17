@@ -8,8 +8,8 @@ pub(crate) use nova_sim_base::fixture::Scripted;
 /// The catalog's record builders and control-bit mocks, from the catalog
 /// crate's test support.
 pub(crate) use nova_sim_catalog::fixture::{
-    AllowAll, RefuseBits, cron, govt, hull, mission, nebula, person, planet, rank, ship, star,
-    weapon,
+    AllowAll, RefuseBits, cron, govt, hull, mission, nebula, outfit, person, planet, rank, ship,
+    star, weapon,
 };
 
 use crate::ai::Goal;
@@ -206,38 +206,6 @@ pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
         failed: None,
         ships: crate::mission::SpecialShips::default(),
         aux: crate::mission::aux_ships::AuxShips::default(),
-    }
-}
-
-/// `oütf` `id` with these mods (the unused ones none): tech level 1, a
-/// ton, 1000 credits, up to 10 owned, no flags, requiring nothing, for
-/// sale every day (`BuyRandom` 100), of
-/// `ItemClass` 0, its lower-case names "outfit `id`" and "outfits `id`".
-pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
-    let mut pairs = [(0, 0); 4];
-    pairs[..mods.len()].copy_from_slice(mods);
-    OutfitRecord {
-        id: OutfitId(id),
-        name: format!("Outfit {id}"),
-        short_name: format!("Outfit\\n{id}"),
-        disp_weight: 0,
-        mass: 1,
-        tech_level: 1,
-        max: 10,
-        flags: 0,
-        cost: 1000,
-        mods: pairs,
-        contribute: 0,
-        require: 0,
-        require_govt: -1,
-        buy_random: 100,
-        availability: Test::default(),
-        item_class: 0,
-        lc_name: format!("outfit {id}"),
-        lc_plural: format!("outfits {id}"),
-        scan_mask: 0,
-        on_purchase: crate::control::Script::default(),
-        on_sell: crate::control::Script::default(),
     }
 }
 

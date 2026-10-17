@@ -46,9 +46,28 @@
 
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
 use crate::handling::{Handling, ShipFields};
-use crate::hyperspace::{MIN_JUMP_DISTANCE, base_jump_days};
 use crate::market::cargo_capacity;
 use crate::reserves::{Reserves, shield_points};
+
+/// How far from the system's centre, in pixels, a ship must be to jump
+/// unless its outfits say otherwise (the Bible: "Jump Distance 1000
+/// pixels"): the no-jump zone's standard radius.
+pub const MIN_JUMP_DISTANCE: f32 = 1000.0;
+
+/// How many days pass in a jump before any outfit changes it, from the
+/// hull's `shïp` `Mass` alone: the Nova Bible's bands, 1-99 tons take one
+/// day, 100-199 take two and 200 or more take three. The original's
+/// `_ShipHyperTransitTime` (@0x43d0) reads the same bands from the
+/// ship type's `Mass` and no outfit mass, and gives a `Mass` of 0 or less
+/// one day too.
+#[must_use]
+pub fn base_jump_days(mass: i16) -> u32 {
+    match mass {
+        ..=99 => 1,
+        100..=199 => 2,
+        _ => 3,
+    }
+}
 
 /// The `oütf` `ModType` that adds shield points.
 pub const MORE_SHIELD: i16 = 4;
@@ -112,7 +131,7 @@ pub struct ShipStats {
     /// Whether it jumps without slowing down first.
     pub fast_jump: bool,
     /// How many systems a jump passes along the course, as the outfits
-    /// give it (see [`hops_per_jump`](crate::hyperspace::hops_per_jump)).
+    /// give it (see `nova_sim::hyperspace::hops_per_jump`).
     pub multi_jump: u32,
 }
 
@@ -129,7 +148,7 @@ fn mod_total(outfits: &[OutfitMod], mod_type: i16) -> i64 {
 /// A ship's `Speed`, `Accel` and `Maneuver`, its outfits' included, not
 /// yet floored: what its [`Handling`] is worked out from, and what the
 /// player info's stat rows show
-/// ([`player_info`](crate::player_info)).
+/// (`nova_sim::player_info`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HandlingTotals {
     /// `Speed` plus the [`MORE_SPEED`] outfits.
@@ -206,7 +225,6 @@ impl ShipStats {
 mod tests {
     use super::*;
     use crate::fuel::FUEL_SCOOP;
-    use crate::hyperspace::MIN_JUMP_DISTANCE;
     use crate::market::MORE_CARGO;
     use crate::reserves::Gauge;
 

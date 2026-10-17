@@ -27,7 +27,7 @@
 //!   is the same: slot by slot, not any class against any, as the
 //!   original compares them (@0x6e9d-0x6eb4). Being derelict does not
 //!   count, and nor does a class below 0. A mission's `AvailStel` and its
-//!   random destinations read it (see [`mission`](crate::mission)).
+//!   random destinations read it (see `nova_sim::mission`).
 //! - A government the table does not hold has no classes and no flags.
 //! - `MaxOdds` ([`Governments::max_odds`]) is a fraction, `MaxOdds / 100`,
 //!   no less than [`MIN_ODDS`] (`_LoadObjectData` @0x7bbb3); an
@@ -48,7 +48,7 @@ pub const ALWAYS_ATTACKS_PLAYER: u16 = 0x0004;
 /// `Flags`: the player's shots pass through its ships ("Player's shots
 /// won't hit ships of this govt"); in the original, the whole player
 /// side's (`_ShotCanHitShip` @0x449a8-0x449d0; see
-/// [`sides`](crate::combat::sides)).
+/// `nova_sim::combat::sides`).
 pub const PLAYER_SHOTS_PASS: u16 = 0x0008;
 /// `Flags`: its warships retreat when badly damaged or outnumbered.
 pub const WARSHIPS_RETREAT: u16 = 0x0010;
@@ -58,7 +58,7 @@ pub const IGNORED_WHEN_ATTACKED: u16 = 0x0020;
 pub const NEVER_ATTACKS_PLAYER: u16 = 0x0040;
 /// `Flags`: its ships' jamming is halved: in the original every NPC's of
 /// it, whatever its AI type (`_ShipECM` @0x3ccf); by the Bible only its
-/// freighters' `InhJam` share (see [`jamming`](crate::combat::jamming)).
+/// freighters' `InhJam` share (see `nova_sim::combat::jamming`).
 pub const HALF_JAMMING: u16 = 0x0080;
 /// `Flags`: its interceptors retreat when outnumbered.
 pub const INTERCEPTORS_RETREAT: u16 = 0x0100;
@@ -69,7 +69,7 @@ pub const PLUNDERS: u16 = 0x1000;
 pub const DERELICT: u16 = 0x0800;
 /// `Flags2`: its mission ships that attack the player never follow the
 /// player through a hypergate (`_HandlePlayerDockRequest` @0x6721d; see
-/// [`mission::ships::through_gate`](crate::mission::ships::through_gate)).
+/// `nova_sim::mission::ships::through_gate`).
 pub const NEVER_FOLLOWS_THROUGH_HYPERGATE: u16 = 0x0020;
 /// `Flags2`: its mission ships that attack the player always follow the
 /// player through a hypergate (@0x67221).
@@ -79,7 +79,7 @@ pub const ALWAYS_FOLLOWS_THROUGH_HYPERGATE: u16 = 0x0040;
 pub const ALWAYS_FOLLOWS_THROUGH_WORMHOLE: u16 = 0x0080;
 /// `Flags2`: its ships never take a hypergate as a destination, nor to
 /// come out of (`_SelectRandomStellarDest` @0x80625, see
-/// [`destination`](crate::traffic::destination)).
+/// `nova_sim::traffic::destination`).
 pub const AVOIDS_HYPERGATES: u16 = 0x0020;
 /// `Flags2`: its ships take a hypergate as a destination, and to come
 /// out of, whenever one will do (@0x80989).
@@ -331,7 +331,26 @@ fn lists_a_class(list: [i16; 4], classes: [i16; 4]) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::testkit::govt;
+    use crate::catalog::{HullRecord, WeaponRecord};
+    use nova_sim_catalog::fixture::govt;
+
+    /// A catalog of these governments and nothing else: the
+    /// [`CombatCatalog`] port's fake.
+    struct GovtsOnly(Vec<GovtRecord>);
+
+    impl CombatCatalog for GovtsOnly {
+        fn weapons(&self) -> Vec<WeaponRecord> {
+            Vec::new()
+        }
+
+        fn hulls(&self) -> Vec<HullRecord> {
+            Vec::new()
+        }
+
+        fn governments(&self) -> Vec<GovtRecord> {
+            self.0.clone()
+        }
+    }
 
     const FED: Option<GovtId> = Some(GovtId(128));
     const CIVVIES: Option<GovtId> = Some(GovtId(157));
@@ -631,16 +650,13 @@ mod tests {
             govts.ids().map(|id| id.0).collect::<Vec<_>>(),
             [128, 137, 140, 150, 157, 160]
         );
-        let catalog = crate::testkit::FakePilotCatalog {
-            govts: vec![govt(130), govt(128)],
-            ..crate::testkit::catalog()
-        };
+        let catalog = GovtsOnly(vec![govt(130), govt(128)]);
         assert_eq!(
             Governments::read(&catalog),
             Governments::new([govt(128), govt(130)])
         );
         assert_eq!(
-            Governments::read(&crate::testkit::catalog()),
+            Governments::read(&GovtsOnly(Vec::new())),
             Governments::default()
         );
     }

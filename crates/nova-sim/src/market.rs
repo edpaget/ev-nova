@@ -113,7 +113,7 @@
 //!
 //! In flight, a held `jünk` with the Tribbles flag ([`TRIBBLES`]) gains a
 //! ton, and one with the Perishable flag ([`PERISHABLE`]) loses one, on
-//! each due frame, as the [`Session`](crate::Session) ticks; a good that
+//! each due frame, as the `nova_sim::Session` ticks; a good that
 //! decays to none is gone.
 //! There is no random draw. A frame is due when the original's frame
 //! counter is a multiple of [`JUNK_STEP_FRAMES`] ([`junk_step_due`]); the
@@ -197,7 +197,7 @@
 //! The engine reads a negative `Holds` as its size everywhere:
 //! `_LoadObjectData` negates it in place as it loads the class
 //! (@0x7a6a5-0x7a6d3), and only the outfitter reads that it was negative
-//! ([`OutfitRefusal::NoExpansion`](crate::outfitter::OutfitRefusal::NoExpansion)).
+//! (`nova_sim::outfitter::OutfitRefusal::NoExpansion`).
 //!
 //! The exchange measures the fleet's cargo space ([`fleet_holds`],
 //! `_TotalFleetHolds` @0xc24d-0xc356): the ship's own, plus the `Holds`
@@ -251,7 +251,6 @@ use crate::chance::{Chance, NeverFires};
 use crate::control::Gate;
 use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
-use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
 
@@ -533,7 +532,7 @@ impl EscortHolds {
 /// The summed `Holds` of the escorts [`fleet_holds`] counts
 /// ([`EscortHolds::adds_holds`]), each a negative one's size
 /// (@0x7a6a5-0x7a6d3), with no cap. A ship purchase divides the cargo by
-/// it uncapped ([`shipyard`](crate::shipyard)).
+/// it uncapped (`nova_sim::shipyard`).
 #[must_use]
 pub fn escort_tons(escorts: impl IntoIterator<Item = EscortHolds>) -> i64 {
     escorts
@@ -1302,6 +1301,27 @@ impl MarketRow {
     }
 }
 
+/// The pilot trading at an exchange, as [`market`] reads it and
+/// [`settle`] changes it: its credits, the goods it holds, the cargo
+/// aboard and the planetary events under way. The story layer's
+/// `nova_sim::pilot::Pilot` implements it.
+pub(crate) trait Trader {
+    /// The credits.
+    fn cash(&self) -> i64;
+    /// The tons of `good` held; none of a good not held.
+    fn held(&self, good: Good) -> u32;
+    /// The tons aboard, as `_TotalCargo` (@0x4a0b) counts them: every good
+    /// held, and the mission cargo aboard, which is never held as a good.
+    fn total_cargo(&self) -> i64;
+    /// The planetary events under way: each `öops` with the days it has
+    /// left and the stellar it is at.
+    fn events_under_way(&self) -> &BTreeMap<DisasterId, ActiveEvent>;
+    /// The credits, to change.
+    fn cash_mut(&mut self) -> &mut i64;
+    /// The tons held of each good, to change; none of a good not listed.
+    fn cargo_mut(&mut self) -> &mut BTreeMap<Good, u32>;
+}
+
 /// What an exchange is built from, gathered once: the goods and events,
 /// the stellar and its `spöb` `Flags`, the player's pilot and the fleet's
 /// cargo space, the control-bit tests a `jünk` asks (a [`Gate`]), the
@@ -1316,7 +1336,7 @@ pub(crate) struct Exchange<'a> {
     /// The stellar's `spöb` `Flags`: its trade center and price levels.
     pub(crate) flags: u32,
     /// The player's pilot: cash, cargo and the events under way.
-    pub(crate) pilot: &'a Pilot,
+    pub(crate) pilot: &'a dyn Trader,
     /// The fleet's cargo space, in tons ([`fleet_holds`]).
     pub(crate) capacity: u32,
     /// What a `jünk`'s `BuyOn` and `SellOn` tests are asked of.
@@ -1347,7 +1367,7 @@ pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
         return None;
     }
     let here: Vec<&DisasterRecord> = pilot
-        .events
+        .events_under_way()
         .iter()
         .filter_map(|(id, active)| {
             let event = goods.disasters.iter().find(|event| event.id == *id)?;
@@ -1391,7 +1411,7 @@ pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
     Some(Market {
         rows,
         events: here.iter().map(|event| event.name.clone()).collect(),
-        cash: pilot.cash,
+        cash: pilot.cash(),
         capacity,
         free: u32::try_from(free).unwrap_or(u32::MAX),
         rules: *rules,
@@ -1641,23 +1661,24 @@ fn listed(good: Good, name: &str, price: i64, (sold_here, bought_here): (bool, b
 
 /// Moves `tons` of `order`'s good at `price` a ton between the stellar
 /// and `pilot`, paying or being paid.
-pub(crate) fn settle(pilot: &mut Pilot, order: Order, tons: u32, price: i64) {
+pub(crate) fn settle(pilot: &mut (impl Trader + ?Sized), order: Order, tons: u32, price: i64) {
     let total = i64::from(tons).saturating_mul(price);
     let held = pilot.held(order.good);
+    let cash = pilot.cash_mut();
     let held = match order.direction {
         Direction::Buy => {
-            pilot.cash = pilot.cash.saturating_sub(total);
+            *cash = cash.saturating_sub(total);
             held.saturating_add(tons)
         }
         Direction::Sell => {
-            pilot.cash = pilot.cash.saturating_add(total);
+            *cash = cash.saturating_add(total);
             held.saturating_sub(tons)
         }
     };
     if held == 0 {
-        pilot.cargo.remove(&order.good);
+        pilot.cargo_mut().remove(&order.good);
     } else {
-        pilot.cargo.insert(order.good, held);
+        pilot.cargo_mut().insert(order.good, held);
     }
 }
 
@@ -1937,7 +1958,8 @@ mod tests {
     use super::*;
     use crate::control::{Gate, Test};
     use crate::rules::{Descriptor, Verdict};
-    use crate::testkit::{AllowAll, RefuseBits, Scripted, catalog};
+    use nova_sim_base::fixture::Scripted;
+    use nova_sim_catalog::fixture::{AllowAll, RefuseBits};
 
     // Price levels and prices.
 
@@ -2640,10 +2662,54 @@ mod tests {
         assert_eq!(goods.abbrev(JunkId(999)), None);
     }
 
-    fn pilot(cash: i64) -> Pilot {
-        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
-        pilot.cash = cash;
-        pilot
+    /// A pilot at the exchange: the [`Trader`] port's fake.
+    #[derive(Debug, Default)]
+    struct FakePilot {
+        cash: i64,
+        cargo: BTreeMap<Good, u32>,
+        events: BTreeMap<DisasterId, ActiveEvent>,
+        /// The tons of mission cargo aboard: they take space, but no good
+        /// holds them.
+        mission_tons: i64,
+    }
+
+    impl Trader for FakePilot {
+        fn cash(&self) -> i64 {
+            self.cash
+        }
+
+        fn held(&self, good: Good) -> u32 {
+            self.cargo.get(&good).copied().unwrap_or(0)
+        }
+
+        fn total_cargo(&self) -> i64 {
+            self.cargo
+                .values()
+                .map(|&tons| i64::from(tons))
+                .sum::<i64>()
+                + self.mission_tons
+        }
+
+        fn events_under_way(&self) -> &BTreeMap<DisasterId, ActiveEvent> {
+            &self.events
+        }
+
+        fn cash_mut(&mut self) -> &mut i64 {
+            &mut self.cash
+        }
+
+        fn cargo_mut(&mut self) -> &mut BTreeMap<Good, u32> {
+            &mut self.cargo
+        }
+    }
+
+    /// A pilot with `cash` credits, holding nothing, with no mission cargo
+    /// aboard and no events under way.
+    fn pilot(cash: i64) -> FakePilot {
+        FakePilot {
+            cash,
+            ..FakePilot::default()
+        }
     }
 
     fn row(good: Good, name: &str, price: i64) -> MarketRow {
@@ -2693,7 +2759,7 @@ mod tests {
         goods: &'a Goods,
         stellar: StellarId,
         flags: u32,
-        pilot: &'a Pilot,
+        pilot: &'a FakePilot,
     ) -> Exchange<'a> {
         Exchange {
             goods,
@@ -2958,7 +3024,7 @@ mod tests {
         junk_trade: RuleSource,
         base: i16,
         markup: Markup,
-        pilot: &Pilot,
+        pilot: &FakePilot,
         capacity: u32,
     ) -> Market {
         let both = JunkRecord {
@@ -2980,7 +3046,7 @@ mod tests {
     }
 
     /// [`both_ways_by`] the engine.
-    fn both_ways(base: i16, markup: Markup, pilot: &Pilot, capacity: u32) -> Market {
+    fn both_ways(base: i16, markup: Markup, pilot: &FakePilot, capacity: u32) -> Market {
         both_ways_by(RuleSource::Engine, base, markup, pilot, capacity)
     }
 
@@ -3290,7 +3356,7 @@ mod tests {
     fn the_mission_cargo_aboard_takes_space_but_is_never_held_to_sell() {
         let mut pilot = pilot(0);
         pilot.cargo = BTreeMap::from([(Good::Commodity(0), 3)]);
-        pilot.missions.put(0, crate::testkit::carrying(140, 5));
+        pilot.mission_tons = 5;
         let found = market(&Exchange {
             capacity: 12,
             rules: rules(RuleSource::Engine),
@@ -3317,7 +3383,7 @@ mod tests {
             lot: Lot::Max,
         };
         assert_eq!(only.tons(sell), Err(TradeRefusal::NoneHeld));
-        pilot.missions.put(1, crate::testkit::carrying(141, 20));
+        pilot.mission_tons += 20;
         let over = market(&Exchange {
             capacity: 12,
             rules: rules(RuleSource::Engine),
@@ -3739,7 +3805,12 @@ mod tests {
     /// The exchange at Earth, by `junk_price`, of a `jünk` 200 of `base`
     /// price that Earth buys (`bought`) and sells (`sold`), for `pilot`
     /// with 10 tons of space, traded both ways by the engine.
-    fn junk_market(base: i16, ways: (bool, bool), junk_price: RuleSource, pilot: &Pilot) -> Market {
+    fn junk_market(
+        base: i16,
+        ways: (bool, bool),
+        junk_price: RuleSource,
+        pilot: &FakePilot,
+    ) -> Market {
         let rules = Rulebook::default().with_override(RuleKey::JunkPrice, junk_price);
         junk_market_by(base, ways, rules, pilot)
     }
@@ -3749,7 +3820,7 @@ mod tests {
         base: i16,
         (bought, sold): (bool, bool),
         rules: Rulebook,
-        pilot: &Pilot,
+        pilot: &FakePilot,
     ) -> Market {
         let odd = JunkRecord {
             id: JunkId(200),
@@ -5303,8 +5374,8 @@ mod tests {
         assert_eq!(pilot.cash, 1000 - 372 + 150 + 300);
         assert_eq!(pilot.held(FOOD), 0);
         assert_eq!(
-            pilot.cargo().collect::<Vec<_>>(),
-            [(OPALS, 1)],
+            pilot.cargo,
+            BTreeMap::from([(OPALS, 1)]),
             "a good sold out is gone"
         );
     }

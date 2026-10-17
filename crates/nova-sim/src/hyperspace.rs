@@ -88,11 +88,8 @@ use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::navigation::next_after;
 use crate::rulebook::RuleSource;
+pub use crate::stats::{MIN_JUMP_DISTANCE, base_jump_days};
 
-/// How far from the system's centre, in pixels, a ship must be to jump
-/// unless its outfits say otherwise (the Bible: "Jump Distance 1000
-/// pixels"): the no-jump zone's standard radius.
-pub const MIN_JUMP_DISTANCE: f32 = 1000.0;
 /// The fuel a jump uses (the Bible: "100 is one jump").
 pub const JUMP_FUEL: f32 = 100.0;
 
@@ -113,21 +110,6 @@ pub const ARRIVAL_DISTANCE: f32 = MIN_JUMP_DISTANCE + ARRIVAL_MARGIN;
 /// The `sÿst` `Message` that means no message buoy: the only one
 /// (`_HandlePlayer` @0x6c25b-0x6c27a).
 pub const NO_BUOY: i16 = -1;
-/// How many days pass in a jump before any outfit changes it, from the
-/// hull's `shïp` `Mass` alone: the Nova Bible's bands, 1-99 tons take one
-/// day, 100-199 take two and 200 or more take three. The original's
-/// `_ShipHyperTransitTime` (@0x43d0) reads the same bands from the
-/// ship type's `Mass` and no outfit mass, and gives a `Mass` of 0 or less
-/// one day too.
-#[must_use]
-pub fn base_jump_days(mass: i16) -> u32 {
-    match mass {
-        ..=99 => 1,
-        100..=199 => 2,
-        _ => 3,
-    }
-}
-
 /// How a multi-jump outfit (`oütf` `ModType` 32) chains a jump's hops.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MultiJumpRule {

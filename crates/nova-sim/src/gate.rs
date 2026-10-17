@@ -91,11 +91,8 @@ use crate::catalog::{GateSite, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
 use crate::hyperspace::StarMap;
+pub use crate::landing::{GateKind, HYPERGATE, WORMHOLE};
 
-/// The `spöb` `Flags2` bit of a hypergate.
-pub const HYPERGATE: u16 = 0x1000;
-/// The `spöb` `Flags2` bit of a wormhole.
-pub const WORMHOLE: u16 = 0x2000;
 /// The fraction of its top speed a ship leaves a gate at: the original's
 /// 0.5 (the float at 0xdd694).
 pub const EXIT_SPEED_FRACTION: f32 = 0.5;
@@ -105,31 +102,6 @@ pub const EXIT_SPEED_FRACTION: f32 = 0.5;
 /// stellar index (ID - 128) is below 0x800.
 const FIRST_STELLAR: i16 = 128;
 const STELLARS: i16 = 0x800;
-
-/// What a stellar a ship can enter leads through.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GateKind {
-    /// A hypergate: the player picks among its linked gates.
-    Hypergate,
-    /// A wormhole: it leads somewhere at random.
-    Wormhole,
-}
-
-impl GateKind {
-    /// What a stellar with `Flags2` `flags2` is: a hypergate when it has
-    /// the hypergate bit (tested first, as the original does), a wormhole
-    /// when it has the wormhole bit, and otherwise no gate.
-    #[must_use]
-    pub fn of(flags2: u16) -> Option<Self> {
-        if flags2 & HYPERGATE != 0 {
-            Some(Self::Hypergate)
-        } else if flags2 & WORMHOLE != 0 {
-            Some(Self::Wormhole)
-        } else {
-            None
-        }
-    }
-}
 
 /// Why entering a hypergate or wormhole took the ship nowhere.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

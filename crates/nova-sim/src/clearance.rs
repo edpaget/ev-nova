@@ -1,6 +1,6 @@
 //! The dock request and the dock approach: the original's `_dockTarget`
 //! and `_dockPermission` ([`DockRequest`]), which the land key sets
-//! (`_HandlePlayerDockRequest`, see [`land_or_select`](crate::land_or_select)) and the approach
+//! (`_HandlePlayerDockRequest`, see [`land_or_select`](crate::landing::land_or_select)) and the approach
 //! counts on every flight frame (`_HandlePlayerDockApproach`
 //! @0x647a6-0x64fff, [`approach`]). All addresses are in `EV Nova.app`'s
 //! `EV Nova` (i386).
@@ -15,12 +15,12 @@
 //! once it is past [`EXPIRES_PAST`]. The land key lands only on a counter
 //! past [`REQUESTED_NEAR`] (@0x66c13-0x66c23), and a counter at
 //! [`CLEARED`] or more clears the next request, `Require` permitting
-//! ([`Standing::granted`](crate::Standing::granted), @0x67934-0x6793d).
+//! ([`Standing::granted`](crate::landing::Standing::granted), @0x67934-0x6793d).
 //!
 //! **The approach** (`_HandlePlayerDockApproach`), whole:
 //!
 //! 1. The dock stellar left the system (@0x647c5-0x647e3): the request is
-//!    dropped. The session does this ([`Session`](crate::Session)'s
+//!    dropped. The session does this (`nova_sim::Session`'s
 //!    approach).
 //! 2. No request (@0x647e9-0x647f5): nothing. Ours holds none as `None`.
 //! 3. The clearance ([`approach_clears`], @0x6480d-0x648ca), with no
@@ -40,9 +40,8 @@
 //! fee. The distances' `i16` wraps are not copied.
 
 use crate::catalog::{LandingSite, StellarId};
-use crate::gate::HYPERGATE;
 use crate::geometry::Vec2;
-use crate::landing::{Standing, StellarFlags, open_by_record};
+use crate::landing::{HYPERGATE, Standing, StellarFlags, open_by_record};
 
 /// The counter of a request made within [`NEAR`] of the stellar
 /// (@0x67a2c), and the least the approach counts up from (@0x648e2).
@@ -117,13 +116,13 @@ pub fn near(offset: Vec2) -> bool {
 /// Whether the approach clears the pilot of `standing` at `site`, its
 /// request's counter at `permission` (@0x6480d-0x648ca): any of no
 /// government, the record passing `MinStatus` (with
-/// [`cleared`](crate::cleared)'s sentinels), the stellar dominated, the
+/// [`cleared`](crate::landing::cleared)'s sentinels), the stellar dominated, the
 /// counter past [`REQUESTED_NEAR`], a mission stellar, or the government
 /// blessing the pilot with landing. Unlike the request's clearance, it
 /// has no `Require` test, so a blessing clears it under either reading of
 /// [`BlessingLanding`](crate::RuleKey::BlessingLanding), and
-/// [`Standing::meets_require`](crate::Standing::meets_require) and
-/// [`Standing::granted`](crate::Standing::granted) are not read.
+/// [`Standing::meets_require`](crate::landing::Standing::meets_require) and
+/// [`Standing::granted`](crate::landing::Standing::granted) are not read.
 #[must_use]
 pub fn approach_clears(site: &LandingSite, standing: Standing, permission: i16) -> bool {
     site.govt.is_none()
@@ -176,8 +175,7 @@ pub fn approach(
 mod tests {
     use super::*;
     use crate::catalog::GovtId;
-    use crate::gate::WORMHOLE;
-    use crate::landing::cleared;
+    use crate::landing::{WORMHOLE, cleared};
     use crate::market::DOMINATED;
     use crate::rulebook::RuleSource;
 

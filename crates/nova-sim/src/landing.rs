@@ -86,7 +86,7 @@
 //!    failed ones included (@0x67977-0x679cb).
 //! 6. The blessing: otherwise a governed stellar's government blesses the
 //!    pilot with landing (`_PlayerBlessedByGovt` which 1, @0x679cd-0x67a05;
-//!    see [`rank`](crate::rank)'s **Blessing**).
+//!    see `nova_sim::rank`'s **Blessing**).
 //!
 //! None of them refuses (@0x67ea3), the same refusal for `Require` as for
 //! the record. So by the engine the blessing gets the pilot past both
@@ -110,7 +110,7 @@
 //!   has one.
 //! - The cloak refusal (@0x66a85-0x66ae9) and the silent press of a
 //!   disabled or dying ship (@0x66aee-0x66b14), which the
-//!   [`Session`](crate::Session) refuses up front with
+//!   `nova_sim::Session` refuses up front with
 //!   [`LandingRefusal::Disabled`]:
 //!   rdm:phase/player-death/phase-16-handle-player-left-out-gates.
 //! - The cloak refusal (`_ShipIsCloaked` @0x66a8e, STR# 2002 #73),
@@ -127,9 +127,9 @@
 //! original's "dock at this station" or "land on this planet" wording.
 //!
 //! Hypergates and wormholes are requested and landed on the same way;
-//! the [`Session`](crate::Session) enters one instead of docking
-//! ([`LandPress::AtGate`](crate::LandPress::AtGate), see
-//! [`gate`](crate::gate)).
+//! the `nova_sim::Session` enters one instead of docking
+//! (`nova_sim::LandPress::AtGate`, see
+//! `nova_sim::gate`).
 //!
 //! **The reach** ([`landing_reach`]) follows
 //! [`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance). By the
@@ -160,14 +160,13 @@
 //! (`phase/stellar-fidelity/phase-5-npc-landing-reach`). The quarter of
 //! the width, inclusive (@0x8dbdf), is state 20's box for entering a
 //! hypergate or wormhole, not a landing ([`stellar_width`], see
-//! [`gate_entry`](crate::traffic::gate_entry)).
+//! `nova_sim::traffic::gate_entry`).
 //! The original's speed gate is per axis (story-runtime phase 17,
 //! per-axis-landing-speed).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::clearance::{self, CLEARED, DockRequest, REQUESTED_NEAR};
 use crate::flight::ShipState;
-use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 
@@ -205,18 +204,48 @@ impl StellarFlags {
     pub const ONLY_WHEN_DESTROYED: u32 = 0x80;
 }
 
+/// The `spöb` `Flags2` bit of a hypergate.
+pub const HYPERGATE: u16 = 0x1000;
+/// The `spöb` `Flags2` bit of a wormhole.
+pub const WORMHOLE: u16 = 0x2000;
+
+/// What a stellar a ship can enter leads through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GateKind {
+    /// A hypergate: the player picks among its linked gates.
+    Hypergate,
+    /// A wormhole: it leads somewhere at random.
+    Wormhole,
+}
+
+impl GateKind {
+    /// What a stellar with `Flags2` `flags2` is: a hypergate when it has
+    /// the hypergate bit (tested first, as the original does), a wormhole
+    /// when it has the wormhole bit, and otherwise no gate.
+    #[must_use]
+    pub fn of(flags2: u16) -> Option<Self> {
+        if flags2 & HYPERGATE != 0 {
+            Some(Self::Hypergate)
+        } else if flags2 & WORMHOLE != 0 {
+            Some(Self::Wormhole)
+        } else {
+            None
+        }
+    }
+}
+
 /// Why the ship cannot land.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LandingRefusal {
     /// The ship is jumping through hyperspace. The
-    /// [`Session`](crate::Session) gives this before [`check_landing`] is
+    /// `nova_sim::Session` gives this before [`check_landing`] is
     /// asked.
     Jumping,
     /// The ship is disabled, breaking up or destroyed: refused silently,
     /// the dock request's bare epilogue 0x67eef, after the landability
     /// check (and the fee and cloak, not modelled) for a disabled ship,
     /// and before anything for a breaking-up or destroyed one (see
-    /// [`Session::land`](crate::Session::land)).
+    /// `nova_sim::Session::land`).
     Disabled,
     /// The system has no stellars, so the land key has nothing to select
     /// and makes no dock request (@0x6a94c): a silent refusal.
@@ -577,7 +606,7 @@ pub fn nearest_stellar(position: Vec2, sites: &[LandingSite]) -> Option<StellarI
 
 /// The stellar [`nearest_stellar`] (`_FindNearestStellar`) names, and whether it is a station
 /// (`spöb` `Flags` 0x10), as the tutorial's land hint words it
-/// (`_HandlePlayer` @0x709e8-0x70a31; see [`tutorial`](crate::tutorial)).
+/// (`_HandlePlayer` @0x709e8-0x70a31; see `nova_sim::tutorial`).
 #[must_use]
 pub fn nearest_stellar_station(position: Vec2, sites: &[LandingSite]) -> Option<(StellarId, bool)> {
     nearest_stellar_site(position, sites).map(|site| (site.id, is_station(site)))
@@ -665,7 +694,7 @@ pub struct Standing {
     pub mission_stellar: bool,
     /// Whether the stellar's government blesses the pilot with landing
     /// (`_PlayerBlessedByGovt` which 1, @0x679cd-0x67a05; see
-    /// [`rank`](crate::rank)'s **Blessing**).
+    /// `nova_sim::rank`'s **Blessing**).
     pub blessed: bool,
     /// Whether the pilot's dock request stands at
     /// [`CLEARED`] or more, whichever stellar
@@ -762,7 +791,7 @@ pub enum Service {
     /// The bar.
     Bar,
     /// The mission computer, whose view the session gives
-    /// ([`Session::mission_computer`](crate::Session::mission_computer)).
+    /// (`nova_sim::Session::mission_computer`).
     MissionBbs,
 }
 
@@ -999,7 +1028,6 @@ mod tests {
 
     #[test]
     fn a_stellar_with_the_can_land_flag_and_no_gate_is_dockable_destroyed_or_not() {
-        use crate::gate::{HYPERGATE, WORMHOLE};
         use StellarFlags as F;
         for destroyed in [false, true] {
             let site = |flags, flags2| LandingSite {
@@ -1051,7 +1079,6 @@ mod tests {
 
     #[test]
     fn dockable_means_landable_and_no_gate() {
-        use crate::gate::{HYPERGATE, WORMHOLE};
         let gate = |flags2| LandingSite {
             flags2,
             ..with_flags(StellarFlags::CAN_LAND)
@@ -1070,7 +1097,6 @@ mod tests {
 
     #[test]
     fn a_hail_is_answered_by_a_dockable_inhabited_stellar_alone() {
-        use crate::gate::{HYPERGATE, WORMHOLE};
         let gate = |flags2| LandingSite {
             flags2,
             ..with_flags(StellarFlags::CAN_LAND)

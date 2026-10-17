@@ -1914,6 +1914,7 @@ pub use galaxy::{
 
 use crate::catalog::{StellarId, SystemId};
 use crate::control::{Script, Test};
+pub use crate::cron::{Consumer, SubscriptionId};
 use crate::date::GameDate;
 use crate::traffic::npc::NpcId;
 
@@ -2069,42 +2070,6 @@ impl EventFilter {
             _ => false,
         }
     }
-}
-
-/// Who registered a subscription, in the order consumers run on one
-/// event: the offers first, as a landing rolls them before the land
-/// check; and every stock consumer before the
-/// plug-ins (see the module docs' "Dispatch").
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Consumer {
-    /// The missions' offers (`mïsn` availability and resolution).
-    Offers,
-    /// A mission's ships (`mïsn` `Ship*` fields).
-    MissionShips,
-    /// Missions (`mïsn`).
-    Missions,
-    /// Crons (`crön`).
-    Crons,
-    /// Nebulae (`nëbu`).
-    Nebulae,
-    /// Plug-in trigger records.
-    Plugins,
-    /// A test's own subscriptions.
-    Fixture,
-}
-
-/// A subscription's name, stable from one session to the next: who
-/// registered it, the record it is for, and which of that record's hooks.
-/// It orders dispatch, field by field, and keys the once-fired record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SubscriptionId {
-    /// Who registered it.
-    pub consumer: Consumer,
-    /// The consumer's number for the record: a resource ID, or for
-    /// missions and mission ships the active mission's slot.
-    pub record: i16,
-    /// The consumer's number for the record's hook.
-    pub hook: u8,
 }
 
 /// "On this event, if this test holds, run this set expression, maybe

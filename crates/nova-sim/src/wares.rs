@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::catalog::{CronRecord, LandingSite, OutfitId, OutfitRecord, RankRecord, ShipId};
 use crate::chance::Chance;
 use crate::cron;
+pub use crate::cron::requirement_met;
 use crate::pilot::Pilot;
 use crate::rank;
 
@@ -258,13 +259,6 @@ pub fn contributed(by: &Contributors<'_>, pilot: &Pilot) -> u64 {
         .map(|record| record.contribute);
     outfits.chain(crons).fold(by.ship, |bits, more| bits | more)
         | rank::contributed(by.ranks, &pilot.ranks)
-}
-
-/// Whether `require` is met by the bits `contributed`: each of its bits is
-/// among them.
-#[must_use]
-pub fn requirement_met(require: u64, contributed: u64) -> bool {
-    require & !contributed == 0
 }
 
 /// The flag bits an item kind hides with.

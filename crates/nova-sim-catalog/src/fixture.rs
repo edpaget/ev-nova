@@ -5,9 +5,9 @@
 
 use crate::catalog::{
     AuxShip, CronId, CronRecord, EscortClass, GovtId, GovtRecord, HullRecord, LandingSite,
-    MissionId, MissionRecord, MissionShip, NebulaId, NebulaRecord, Penalties, PersonId,
-    PersonRecord, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StellarId, SystemId,
-    WeaponId, WeaponRecord,
+    MissionId, MissionRecord, MissionShip, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
+    StellarId, SystemId, WeaponId, WeaponRecord,
 };
 use crate::control::{ControlBits, PilotFacts, Script, Test, TestExpr};
 use crate::geometry::Vec2;
@@ -257,6 +257,39 @@ pub fn hull(id: i16) -> HullRecord {
         speed: 0,
         exits: None,
         escort_class: EscortClass::Freighter,
+    }
+}
+
+/// `oütf` `id` with these mods (the unused ones none): tech level 1, a
+/// ton, 1000 credits, up to 10 owned, no flags, requiring nothing, for
+/// sale every day (`BuyRandom` 100), of
+/// `ItemClass` 0, its lower-case names "outfit `id`" and "outfits `id`".
+#[must_use]
+pub fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
+    let mut pairs = [(0, 0); 4];
+    pairs[..mods.len()].copy_from_slice(mods);
+    OutfitRecord {
+        id: OutfitId(id),
+        name: format!("Outfit {id}"),
+        short_name: format!("Outfit\\n{id}"),
+        disp_weight: 0,
+        mass: 1,
+        tech_level: 1,
+        max: 10,
+        flags: 0,
+        cost: 1000,
+        mods: pairs,
+        contribute: 0,
+        require: 0,
+        require_govt: -1,
+        buy_random: 100,
+        availability: Test::default(),
+        item_class: 0,
+        lc_name: format!("outfit {id}"),
+        lc_plural: format!("outfits {id}"),
+        scan_mask: 0,
+        on_purchase: Script::default(),
+        on_sell: Script::default(),
     }
 }
 

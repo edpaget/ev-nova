@@ -84,7 +84,8 @@ use crate::control::{Bit, ControlBitSet};
 use crate::cron::CronState;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
-use crate::market::{ActiveEvent, Good};
+use crate::legal::LegalRecords;
+use crate::market::{ActiveEvent, Good, Trader};
 use crate::mission::ActiveMissions;
 use crate::outfit_effects::Rgb15;
 use crate::outfitter::outfit_mods;
@@ -556,6 +557,54 @@ impl Pilot {
     /// Every person holding a grudge against the player, by ascending ID.
     pub fn grudges(&self) -> impl Iterator<Item = PersonId> + '_ {
         self.grudges.iter().copied()
+    }
+}
+
+/// The pilot's records, as a conviction and the new pilot's statuses
+/// change them: its own, through [`Pilot::legal_record`] and the rest.
+impl LegalRecords for Pilot {
+    fn legal_record(&self, govt: GovtId) -> i16 {
+        Pilot::legal_record(self, govt)
+    }
+
+    fn set_legal_record(&mut self, govt: GovtId, record: i16) {
+        Pilot::set_legal_record(self, govt, record);
+    }
+
+    fn system_record(&self, system: SystemId) -> i16 {
+        Pilot::system_record(self, system)
+    }
+
+    fn set_system_record(&mut self, system: SystemId, record: i16) {
+        Pilot::set_system_record(self, system, record);
+    }
+}
+
+/// The pilot at an exchange: its cash, the goods it holds, the mission
+/// cargo aboard ([`Pilot::total_cargo`]) and the events under way.
+impl Trader for Pilot {
+    fn cash(&self) -> i64 {
+        self.cash
+    }
+
+    fn held(&self, good: Good) -> u32 {
+        Pilot::held(self, good)
+    }
+
+    fn total_cargo(&self) -> i64 {
+        Pilot::total_cargo(self)
+    }
+
+    fn events_under_way(&self) -> &BTreeMap<DisasterId, ActiveEvent> {
+        &self.events
+    }
+
+    fn cash_mut(&mut self) -> &mut i64 {
+        &mut self.cash
+    }
+
+    fn cargo_mut(&mut self) -> &mut BTreeMap<Good, u32> {
+        &mut self.cargo
     }
 }
 

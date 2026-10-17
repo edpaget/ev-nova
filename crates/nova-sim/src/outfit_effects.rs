@@ -56,12 +56,12 @@ use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// The disputed rules of granting and removing outfits that the session
 /// follows, projected from its rule set (see
-/// [`Session::with_rules`](crate::Session::with_rules)): the engine's by
+/// `nova_sim::Session::with_rules`): the engine's by
 /// default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OutfitRules {
     /// Which systems a map explores, and which are inhabited
-    /// ([`RuleKey::MapExplore`]; see [`exploration`](crate::exploration)).
+    /// ([`RuleKey::MapExplore`]; see `nova_sim::exploration`).
     pub map_explore: RuleSource,
     /// Whether a map that explores nothing is used up
     /// ([`RuleKey::InvalidMap`]; see [`GrantEffect::of`]).
@@ -69,8 +69,8 @@ pub struct OutfitRules {
     /// Whether a grant, by boarding or by `G`, may pass the outfit's
     /// `Max` and the free mass ([`RuleKey::GrantMax`]): its one owner,
     /// which the session passes to
-    /// [`BoardingRule::grant`](crate::BoardingRule::grant) and holds `G`
-    /// to ([`held_to_max`](crate::grant::held_to_max)).
+    /// `nova_sim::BoardingRule::grant` and holds `G`
+    /// to (`nova_sim::grant::held_to_max`).
     pub grant_max: RuleSource,
     /// Whether `D` pays for the outfit it removes
     /// ([`RuleKey::RemoveRefund`]).
@@ -281,7 +281,7 @@ pub fn cleaned_records<K: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::outfit;
+    use nova_sim_catalog::fixture::outfit;
 
     fn effect(mods: &[(i16, i16)]) -> GrantEffect {
         GrantEffect::of(&outfit(300, mods), RuleSource::Engine)
