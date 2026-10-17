@@ -708,6 +708,25 @@ mod tests {
     }
 
     #[test]
+    fn an_ejecting_players_turn_of_exits_goes_on_in_the_pod_by_the_engine_alone() {
+        use crate::combat::exits::ExitKind;
+        use crate::rulebook::Rulebook;
+        for (reading, gun) in [(RuleSource::Engine, 1), (RuleSource::Bible, 0)] {
+            let catalog = ejecting(100);
+            let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
+            let mut session = flying(&catalog, &[POD, AUTO]).with_rules(rules);
+            session.armament.exit_cursors_mut().step(ExitKind::Gun);
+            to_the_breakup(&mut session, &catalog, false);
+            assert!(in_the_pod(&session));
+            assert_eq!(
+                session.armament.exit_cursors().next(ExitKind::Gun),
+                gun,
+                "{reading:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_dying_player_without_a_pod_or_escape_ship_never_ejects() {
         let catalog = ejecting(2);
         let mut session = flying(&catalog, &[AUTO]);

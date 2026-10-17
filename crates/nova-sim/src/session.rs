@@ -368,6 +368,8 @@ mod eject;
 mod entry;
 mod escorts;
 mod events;
+#[cfg(test)]
+mod exit_cursors;
 mod explored;
 mod fighters;
 #[cfg(test)]
@@ -1745,6 +1747,8 @@ impl Session {
             .set_proximity_fuse(rules.source_for(RuleKey::ProximityFuse));
         self.traffic
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
+        self.traffic
+            .set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
         self.rules = rules;
         self
     }
@@ -1832,7 +1836,9 @@ impl Session {
     /// The outfitter, the shipyard, capture and a reload hold; `G`, `D`
     /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
     /// reads [`RuleKey::ShipChangeReserves`] (see
-    /// [`ReservePolicy::reading`]). Capture, a change of ship and a
+    /// [`ReservePolicy::reading`]). The exit cursors and the fold set carry
+    /// over, as no refit writes them (see the `exit_cursors` tests).
+    /// Capture, a change of ship and a
     /// purchase refit through [`Session::become_class`], by the policy
     /// they chose. By the engine, a refit leaves the secondary selected as
     /// it is, one the ship no longer carries too, as the original's
@@ -1842,7 +1848,13 @@ impl Session {
     fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
         let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
-        self.armament = self.arsenal.player(&self.pilot.outfits, &self.outfits);
+        // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
+        // set (+0xc8fc): the new armament carries the old's.
+        self.armament = self
+            .arsenal
+            .player(&self.pilot.outfits, &self.outfits)
+            .with_exit_cursors(*self.armament.exit_cursors())
+            .with_fold_set(self.armament.fold_set());
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
         for (gauge, max, hold) in [
@@ -2661,6 +2673,7 @@ impl Session {
             chance,
         );
         self.traffic.after_firing(&self.arsenal);
+        self.traffic.keep_berth_exits();
         // The lines are `_DamageShip`'s, said as each hit lands, so before
         // the eject below can take the player into a new ship.
         let strikes = self.combat.take_strikes();

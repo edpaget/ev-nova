@@ -166,6 +166,7 @@ use super::{ReservePolicy, Session, SessionEvent};
 use crate::catalog::{CommCatalog, GovtId, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
+use crate::combat::exits::ExitCursors;
 use crate::combat::hull::{DisableRule, NovaDisable};
 use crate::navigation::NavMode;
 use crate::outfitter::{Hardpoints, OutfitFlags};
@@ -379,7 +380,9 @@ impl Session {
     /// takes the class, its fields, default items and stock weapons from
     /// `ship`, refits by `change.reserves`, makes a save due and tells
     /// [`SessionEvent::ShipChanged`]. What the change carries, and what
-    /// runs between, is the caller's.
+    /// runs between, is the caller's. The exit cursors go on as the refit
+    /// carries them, or start at exit 0 by the other reading of
+    /// [`RuleKey::ReusedSlotExits`].
     pub(super) fn become_class(
         &mut self,
         ship: &ShipRecord,
@@ -393,6 +396,12 @@ impl Session {
         self.defaults = pilot::tally(ship.defaults.iter().copied());
         self.stock = armament::fitted(&self.arsenal.stock_fits(ship.id, &self.outfits));
         self.refit(false, change.reserves);
+        // The original's ship change writes no exit cursor (+0xc8fe-+0xc905),
+        // so the turn of exits goes on, as the refit carried it; by the
+        // other reading a new ship starts each `ExitType` at exit 0.
+        if self.rules.source_for(RuleKey::ReusedSlotExits) == RuleSource::Bible {
+            *self.armament.exit_cursors_mut() = ExitCursors::default();
+        }
         self.save_due = true;
         self.emit(SessionEvent::ShipChanged);
     }

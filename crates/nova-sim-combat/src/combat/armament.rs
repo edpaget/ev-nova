@@ -622,6 +622,9 @@ pub struct Armament {
     /// The exit each `ExitType`'s next shot or beam leaves from (the
     /// original's +0xc8fe-+0xc905; see [`exits`](super::exits)).
     exits: ExitCursors,
+    /// The ship's fold set (the original's +0xc8fc), which a beam of
+    /// `ExitType` -1 steps as a cursor (see [`Armament::fold_set`]).
+    fold_set: u16,
 }
 
 impl Armament {
@@ -649,6 +652,7 @@ impl Armament {
             mounts,
             last_gun: None,
             exits: ExitCursors::default(),
+            fold_set: 0,
         }
     }
 
@@ -1063,6 +1067,42 @@ impl Armament {
     /// ([`Combat`](super::Combat)).
     pub fn exit_cursors_mut(&mut self) -> &mut ExitCursors {
         &mut self.exits
+    }
+
+    /// The ship's fold set, the original's +0xc8fc: 0 when built, the
+    /// original's `BaseSets` − 1 for a hull of one set. A beam of `ExitType`
+    /// -1 steps it as `_SpawnBeam` steps a cursor (@0x450fa-0x4523d; see
+    /// [`exits::step_stray`](super::exits::step_stray)), and no refit
+    /// writes it. Folding hulls' `BaseSets` − 1 at spawn and on a ship
+    /// change, and every reader (the drawn set, the fold-before-fire
+    /// gates), are ship-handling-fidelity phase 10's; this is their hook.
+    #[must_use]
+    pub fn fold_set(&self) -> u16 {
+        self.fold_set
+    }
+
+    /// This armament with `fold_set` for its fold set: the player's carried
+    /// through a refit (see [`Armament::fold_set`]).
+    #[must_use]
+    pub fn with_fold_set(mut self, fold_set: u16) -> Self {
+        self.fold_set = fold_set;
+        self
+    }
+
+    /// The exit cursors and the fold set together, for the fight to move
+    /// on as a shot or beam leaves: a beam of `ExitType` -1 steps the fold
+    /// set in place of a cursor.
+    pub fn exits_mut(&mut self) -> (&mut ExitCursors, &mut u16) {
+        (&mut self.exits, &mut self.fold_set)
+    }
+
+    /// This armament with `cursors` for its exit cursors: those its ship's
+    /// slot kept, or the player's carried through a refit, as no spawn or
+    /// refit writes them.
+    #[must_use]
+    pub fn with_exit_cursors(mut self, cursors: ExitCursors) -> Self {
+        self.exits = cursors;
+        self
     }
 
     /// The last unguided gun or rocket (guidance -1 or 6) an NPC's pick

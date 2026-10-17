@@ -139,6 +139,7 @@ use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
+use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use persons::{GateView, PersonWorld, derelict_armor};
@@ -489,6 +490,10 @@ pub struct Traffic {
     /// there takes ([`berth_picks`]): written as each ship's pick changes,
     /// kept as it dies or leaves, and across systems.
     berth_picks: BerthPicks,
+    /// The exit cursors (+0xc8fe-+0xc905) of the ship last at each berth,
+    /// which a new ship there takes ([`berth_exits`]): written after each
+    /// fight, kept as it dies or leaves, and across systems.
+    berth_exits: BerthExits,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
     /// system they are in, each in the order they appeared: still in the
     /// ship table until the end of the next tick ([`Traffic::tick_in`]),
@@ -554,6 +559,7 @@ impl Traffic {
             strength_timer: StrengthTimer::default(),
             berth_persons: BTreeMap::new(),
             berth_picks: BerthPicks::default(),
+            berth_exits: BerthExits::default(),
             left_behind: BTreeMap::new(),
         }
     }
@@ -1388,12 +1394,15 @@ impl Traffic {
         self.write_berth_person(berth, name);
         // No spawn writes the pick (+0x72): it is the berth's last.
         let pick = npc.pick.or(self.berth_picks.seed(berth));
-        self.npcs.push(Npc {
+        let mut npc = Npc {
             id,
             berth,
             pick,
             ..npc
-        });
+        };
+        // Nor the exit cursors (+0xc8fe-+0xc905): they are the berth's.
+        *npc.armament.exit_cursors_mut() = self.berth_cursors(berth);
+        self.npcs.push(npc);
         id
     }
 
@@ -1683,7 +1692,12 @@ impl Traffic {
                 },
                 condition,
                 hull: kind.hull,
-                armament: kind.armament.clone(),
+                // No spawn writes the exit cursors (+0xc8fe-+0xc905): they
+                // are the berth's.
+                armament: kind
+                    .armament
+                    .clone()
+                    .with_exit_cursors(self.berth_cursors(berth)),
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
                 // No spawn writes the pick (+0x72): it is the berth's last.
