@@ -430,6 +430,13 @@ mod tests {
     }
 
     #[test]
+    fn an_outfit_requires_no_government_and_pads_its_mods_with_none() {
+        let outfit = outfit(300, &[(2, 5)]);
+        assert_eq!(outfit.require_govt, -1, "no government required");
+        assert_eq!(outfit.mods, [(2, 5), (0, 0), (0, 0), (0, 0)]);
+    }
+
+    #[test]
     fn a_hull_has_no_explosions() {
         let hull = hull(128);
         assert_eq!((hull.explode1, hull.explode2), (-1, -1));
