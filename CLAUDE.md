@@ -159,9 +159,8 @@ leaves the developer's machine exactly as it found it.
 
 ## Large files
 
-`crates/nova-sim/src/session.rs`, `crates/nova/src/app/screen.rs`,
-`crates/nova-sim/src/combat/mod.rs` and `crates/nova-sim/src/rulebook.rs` run
-to thousands of lines. Agents read them thousands of times a week.
+`crates/nova-sim/src/session.rs`, `crates/nova-sim/src/combat/mod.rs` and
+`crates/nova-sim/src/rulebook.rs` run to thousands of lines. Agents read them thousands of times a week.
 
 - Find the code first with `grep -n` or LSP symbols, then read only that range
   with the `Read` tool (`offset`/`limit`).
