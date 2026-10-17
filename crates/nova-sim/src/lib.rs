@@ -350,6 +350,7 @@ pub use nova_sim_combat::player_fate;
 pub use nova_sim_port::grant;
 pub use nova_sim_port::hire;
 pub use nova_sim_port::iff;
+pub use nova_sim_port::murk;
 pub use nova_sim_port::order_loop;
 pub use nova_sim_port::outfitter;
 pub use nova_sim_port::player_info;

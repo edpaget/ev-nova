@@ -375,6 +375,7 @@ pub fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         govt: None,
         stellars: Vec::new(),
         interference: 0,
+        murk: 0,
         message: -1,
     }
 }

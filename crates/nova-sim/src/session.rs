@@ -388,6 +388,7 @@ mod mission_escorts;
 mod mission_screens;
 mod mission_ships;
 mod missions;
+mod murk;
 mod nav;
 mod nebulae;
 mod news;

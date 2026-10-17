@@ -117,6 +117,7 @@ pub(super) fn star_system(entry: &SystemEntry) -> StarSystem {
         govt: entry.govt,
         stellars: Vec::new(),
         interference: 0,
+        murk: 0,
         message: -1,
     }
 }

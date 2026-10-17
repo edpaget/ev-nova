@@ -89,6 +89,9 @@ pub struct StarSystem {
     /// Its `Interference`, raw: the radar's static
     /// (`nova_sim::iff::interference`).
     pub interference: i16,
+    /// Its `Murk`, raw: how murky its space is, which
+    /// `nova_sim::murk::loaded_murk` loads as the original does.
+    pub murk: i16,
     /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
     /// −1 for none (`nova_sim::StarMap::buoy`).
     pub message: i16,
@@ -2512,6 +2515,7 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
                 interference: 0,
+                murk: 0,
                 message: -1,
             }]
         }

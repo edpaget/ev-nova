@@ -282,6 +282,7 @@ impl PilotCatalog for GameData {
                     links: con_slots(system.con),
                     govt: system.govt,
                     interference: system.interference,
+                    murk: system.murk,
                     message: system.message,
                     stellars: system
                         .nav_def
@@ -2902,15 +2903,18 @@ mod tests {
     }
 
     #[test]
-    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_interference_and_buoy()
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_interference_murk_and_buoy()
      {
         let data = store(&[
             (
                 System::TYPE,
                 131,
-                buoyed(
-                    interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
-                    7,
+                murky(
+                    buoyed(
+                        interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
+                        7,
+                    ),
+                    5,
                 ),
             ),
             (System::TYPE, 129, short(linked(0, 0, &[130]))),
@@ -2926,6 +2930,7 @@ mod tests {
                     govt: None,
                     stellars: vec![None; 16],
                     interference: 0,
+                    murk: 0,
                     message: -1,
                 },
                 StarSystem {
@@ -2935,6 +2940,7 @@ mod tests {
                     govt: Some(GovtId(140)),
                     stellars: vec![None; 16],
                     interference: 45,
+                    murk: 5,
                     message: 7,
                 },
             ]
@@ -2957,6 +2963,12 @@ mod tests {
     /// `bytes`, a `sÿst`, with this `Message` (offset 0x68).
     fn buoyed(mut bytes: Vec<u8>, message: i16) -> Vec<u8> {
         put_i16s(&mut bytes, 0x68, &[message]);
+        bytes
+    }
+
+    /// `bytes`, a `sÿst`, with this `Murk` (offset 0x92), raw.
+    fn murky(mut bytes: Vec<u8>, murk: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x92, &[murk]);
         bytes
     }
 

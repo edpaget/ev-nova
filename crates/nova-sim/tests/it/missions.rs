@@ -143,6 +143,7 @@ impl PilotCatalog for Courier {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            murk: 0,
             message: -1,
         };
         vec![star(130, 0.0, 131), star(131, 600.0, 130)]

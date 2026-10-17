@@ -436,6 +436,7 @@ impl PilotCatalog for FakeCatalog {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            murk: 0,
             message: -1,
         };
         let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
