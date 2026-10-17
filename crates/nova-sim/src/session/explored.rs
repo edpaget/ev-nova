@@ -1,19 +1,24 @@
 //! Exploration shared by place on the session, as
 //! [`RuleKey::ExploredByPlace`] reads it (see
-//! [`exploration`](crate::exploration) for the rules themselves).
+//! [`exploration`](crate::exploration) for the rules themselves), at the
+//! level each writer gives ([`ExploredLevel`]; the original's `sÿst`
+//! +0x90). Every writer only raises a level, never lowers it.
 //!
 //! **Raises that include the head** ([`Session::explore_place`]): each
-//! explores the system and, by the engine, its place's head.
+//! raises the system and, by the engine, its place's head.
 //!
-//! - A jump's arrival (@0x6c16c-0x6c1b8), a hypergate's exit
-//!   (@0x63a04-0x63a49) and a wormhole's exit (@0x642ae-0x642f3): the
-//!   entry's explore step (see the `entry` module).
-//! - The take-off (`_PlayerLandOnStellar` @0x63457-0x634a7):
-//!   [`Session::take_off`].
-//! - A map grant: `_AutoSetExploration` → `_RecursiveAutoExplore`
-//!   raises each reached system's head (@0xd9b6-0xda10), for the N-jump
-//!   (@0x44dcb), inhabited-independent (@0x44e12) and government-class
-//!   (@0x44e86) grants alike (see the `outfits` module).
+//! - Level 1: a jump's arrival, the head then the system
+//!   (@0x6c184-0x6c1b8), a hypergate's exit (@0x63a1a-0x63a49) and a
+//!   wormhole's exit (@0x642c4-0x642f3): the entry's explore step (see the
+//!   `entry` module).
+//! - Level 2: the take-off (`_PlayerLandOnStellar` raises the head, then
+//!   the system, @0x6346d-0x6349e, then `_AutoSetExploration(system, 0,
+//!   2)` raises both again @0x634b1-0x634c8): [`Session::take_off`].
+//! - Level 2: a map grant: `_AutoSetExploration` → `_RecursiveAutoExplore`
+//!   raises each reached system (@0xd9a6-0xd9af) and its head
+//!   (@0xda07-0xda10), for the N-jump (@0x44dcb), inhabited-independent
+//!   (@0x44e12) and government-class (@0x44e86) grants alike (see the
+//!   `outfits` module).
 //!
 //! Only the system itself raises
 //! [`StoryEvent::Explored`](crate::story::StoryEvent::Explored): the
@@ -22,28 +27,32 @@
 //! wormhole's exit raises none: the original's exits write the explored
 //! level directly and explore no nebula (see the `nebulae` module).
 //!
-//! **A raise that does not include the head.** `X` raises only its system
-//! (`_EvalSetExp` @0x15c71-0x15ca1; `Session::explore_system`).
+//! **A raise that does not include the head.** `X` raises only its system,
+//! to level 1 (`_EvalSetExp` @0x15c71-0x15ca1; `Session::explore_system`).
 //!
 //! **Rebuild points** ([`Session::share_explored`]):
 //! `_HandleStellarSystemVisibility` raises every system, hidden or not,
 //! to its head's level whenever its head is another system
-//! (@0x32b13-0x32b8f). The session shares first thing at each rebuild
-//! point, docked or not (see the `stellars` module's "Rebuild points"),
-//! raising no event. A load's rebuild shares under the default reading,
-//! as `Session::fly` runs before `Session::with_rules` (task
-//! load-reads-rules-before-fly).
+//! (@0x32b13-0x32b8f, @0x32b5a-0x32b6b). The session shares first thing at
+//! each rebuild point, docked or not (see the `stellars` module's
+//! "Rebuild points"), raising no event: a level-1 head explores its
+//! members, a level-2 head charts them. A load's rebuild shares under the
+//! default reading, as `Session::fly` runs before `Session::with_rules`
+//! (task load-reads-rules-before-fly).
 //!
 //! **A new pilot** ([`Session::explore_start_neighbours`]): `_DoNewPilot`
 //! clears every level, then, for each of the start system's Con slots
-//! naming a visible system, sets the head of that system's place
-//! (@0x18f97-0x19003), and last the start system's head
+//! naming a visible system, sets the head of that system's place to level
+//! 1 (@0x18f97-0x19003, @0x18fe6), and last the start system's head
 //! (@0x19005-0x1902e). Both readings explore the neighbours, as the
 //! neighbour loop is the original's and the Bible says nothing of it: by
 //! the engine each neighbour's head, by the other reading the neighbour
 //! itself. The start system is explored by `Pilot::new`, and its head by
 //! the rebuild `Session::begin` ends with, under the engine; visibility
 //! is the galaxy as `Session::fly` refreshed it for the new pilot's bits.
+//!
+//! **A load** keeps each system's level, as the original's pilot file
+//! does (`_LoadPilotData` @0x7553f-0x75565; see the save's version 29).
 //!
 //! **Known** ([`Session::is_known`]; see the
 //! [`exploration`](crate::exploration) module's "Known"). Each rebuild
@@ -52,12 +61,15 @@
 //! pilot, a loaded one and a fresh session are known from before their
 //! first frame, as each ends in a rebuild. A map grant adds its pass,
 //! with no clear, after its walk (`Session::add_known`, @0xdb06-0xdbd4).
-//! The hypergate map's arrows mark their systems
-//! ([`Session::mark_known`], @0xf45f).
+//! The take-off's `_AutoSetExploration` runs the same pass
+//! (@0x634c8), but needs none of its own here: the dock request's rebuild
+//! point ends the take-off (@0x674c7; `Session::lift_off`) and works the
+//! known set out afresh from what the take-off explored, as the
+//! original's does after the pass. The hypergate map's arrows mark their
+//! systems ([`Session::mark_known`], @0xf45f).
 //!
 //! Left to others: `_ResetPlayer`'s neighbours (@0x1da0f-0x1da7a) and the
-//! escape pod's exploration (@0x690cb), roadmap player-death; the levels
-//! 1 and 2 kept apart, the fidelity roadmap. The
+//! escape pod's exploration (@0x690cb), roadmap player-death. The
 //! arrival message's second raise (@0x70ee6-0x70f2a) changes nothing after
 //! the arrival's own and is not modelled.
 
@@ -66,6 +78,7 @@ use std::collections::BTreeSet;
 use super::Session;
 use crate::catalog::SystemId;
 use crate::exploration::{explored_with, known_from, shared_by_place, start_neighbours};
+use crate::pilot::ExploredLevel;
 use crate::rulebook::{RuleKey, RuleSource};
 
 impl Session {
@@ -75,23 +88,28 @@ impl Session {
         self.rules.source_for(RuleKey::ExploredByPlace)
     }
 
-    /// Explores `system` and, by the engine, its place's head (see the
-    /// module docs). Raises no event.
-    pub(super) fn explore_place(&mut self, system: SystemId) {
+    /// Raises `system` and, by the engine, its place's head to `level`
+    /// when lower (see the module docs). Raises no event.
+    pub(super) fn explore_place(&mut self, system: SystemId, level: ExploredLevel) {
         let source = self.explored_by_place();
         for explored in explored_with(system, self.galaxy.map().places(), source) {
-            self.pilot.explore(explored);
+            self.pilot.raise_explored(explored, level);
         }
     }
 
     /// A rebuild point's share (see the module docs): by the engine,
-    /// every system at an explored head's place is explored. Raises no
-    /// event.
+    /// every system at an explored head's place is raised to the head's
+    /// level. Raises no event.
     pub(super) fn share_explored(&mut self) {
         let source = self.explored_by_place();
-        let shared = shared_by_place(&self.pilot.explored, self.galaxy.map().places(), source);
-        for system in shared {
+        let places = self.galaxy.map().places();
+        let explored = shared_by_place(&self.pilot.explored, places, source);
+        let charted = shared_by_place(&self.pilot.charted, places, source);
+        for system in explored {
             self.pilot.explore(system);
+        }
+        for system in charted {
+            self.pilot.chart(system);
         }
     }
 
@@ -191,6 +209,59 @@ mod tests {
         session.pilot().has_explored(SystemId(system))
     }
 
+    /// The arrival into 131 raised it, and by the engine its head 127, to
+    /// level 1 (@0x6c184-0x6c1b8, @0x63a1a-0x63a49, @0x642c4-0x642f3).
+    fn assert_arrived_at_level_1(session: &Session, source: RuleSource) {
+        assert_eq!(level(session, 131), ExploredLevel::Explored, "{source:?}");
+        let head = if source == RuleSource::Engine {
+            ExploredLevel::Explored
+        } else {
+            ExploredLevel::Unexplored
+        };
+        assert_eq!(level(session, 127), head, "{source:?}");
+    }
+
+    #[test]
+    fn an_arrival_leaves_a_charted_system_and_head_charted() {
+        let jumps = shadowed(catalog());
+        let gates = shadowed(gated());
+        let holes = shadowed(wormholes());
+        for source in RuleSource::ALL {
+            let chart = |mut session: Session| {
+                session.pilot.chart(SystemId(131));
+                session.pilot.chart(SystemId(127));
+                session
+            };
+            let still_charted = |session: &Session, how: &str| {
+                assert_eq!(
+                    level(session, 131),
+                    ExploredLevel::Charted,
+                    "{source:?} {how}"
+                );
+                assert_eq!(
+                    level(session, 127),
+                    ExploredLevel::Charted,
+                    "{source:?} {how}"
+                );
+            };
+            let mut session = chart(flown(&jumps, source));
+            assert_eq!(jump(&mut session, &jumps, 131), Some(SystemId(131)));
+            still_charted(&session, "a jump");
+            let mut session = chart(at_gate(&gates).with_rules(rules(source)));
+            assert_eq!(
+                session.enter_hypergate(Some(SystemId(131)), &gates, &mut Scripted::default()),
+                Ok(SystemId(131))
+            );
+            still_charted(&session, "a gate");
+            let mut session = chart(at_wormhole(&holes).with_rules(rules(source)));
+            assert_eq!(
+                session.enter_wormhole(&holes, &mut Scripted::rolling(&[0])),
+                Ok(SystemId(131))
+            );
+            still_charted(&session, "a wormhole");
+        }
+    }
+
     #[test]
     fn a_jump_into_a_member_explores_the_places_head() {
         let catalog = shadowed(catalog());
@@ -198,12 +269,7 @@ mod tests {
             let mut session = flown(&catalog, source);
             assert!(!session.galaxy().visible(SystemId(127)));
             assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
-            assert!(explored(&session, 131));
-            assert_eq!(
-                explored(&session, 127),
-                source == RuleSource::Engine,
-                "{source:?}"
-            );
+            assert_arrived_at_level_1(&session, source);
         }
     }
 
@@ -217,12 +283,7 @@ mod tests {
                 session.enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default()),
                 Ok(SystemId(131))
             );
-            assert!(explored(&session, 131));
-            assert_eq!(
-                explored(&session, 127),
-                source == RuleSource::Engine,
-                "{source:?}"
-            );
+            assert_arrived_at_level_1(&session, source);
         }
     }
 
@@ -235,12 +296,7 @@ mod tests {
                 session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
                 Ok(SystemId(131))
             );
-            assert!(explored(&session, 131));
-            assert_eq!(
-                explored(&session, 127),
-                source == RuleSource::Engine,
-                "{source:?}"
-            );
+            assert_arrived_at_level_1(&session, source);
         }
     }
 
@@ -257,6 +313,14 @@ mod tests {
                 source == RuleSource::Engine,
                 "{source:?}"
             );
+            // Level 2 (`_PlayerLandOnStellar` @0x6346d-0x6349e).
+            assert_eq!(level(&session, 130), ExploredLevel::Charted, "{source:?}");
+            let head = if source == RuleSource::Engine {
+                ExploredLevel::Charted
+            } else {
+                ExploredLevel::Unexplored
+            };
+            assert_eq!(level(&session, 129), head, "{source:?}");
         }
     }
 
@@ -266,7 +330,7 @@ mod tests {
         let mut session = flown(&catalog, RuleSource::Engine);
         assert!(!explored(&session, 127));
         let before: Vec<SystemId> = session.pilot().explored().collect();
-        session.explore_place(SystemId(127));
+        session.explore_place(SystemId(127), ExploredLevel::Explored);
         let after: Vec<SystemId> = session.pilot().explored().collect();
         assert_eq!(after.len(), before.len() + 1);
         assert!(explored(&session, 127));
@@ -278,7 +342,7 @@ mod tests {
         let catalog = shadowed(catalog());
         let mut session = flown(&catalog, RuleSource::Engine);
         let before: Vec<SystemId> = session.pilot().explored().collect();
-        session.explore_place(SystemId(133));
+        session.explore_place(SystemId(133), ExploredLevel::Explored);
         let after: Vec<SystemId> = session.pilot().explored().collect();
         assert_eq!(after.len(), before.len() + 1);
         assert!(explored(&session, 133));
@@ -297,6 +361,50 @@ mod tests {
                 source == RuleSource::Engine,
                 "{source:?}"
             );
+        }
+    }
+
+    fn level(session: &Session, system: i16) -> ExploredLevel {
+        session.pilot().explored_level(SystemId(system))
+    }
+
+    #[test]
+    fn a_rebuild_point_shares_each_heads_level_with_its_place() {
+        let catalog = shadowed(catalog());
+        for source in RuleSource::ALL {
+            let shared = |level: ExploredLevel| {
+                if source == RuleSource::Engine {
+                    level
+                } else {
+                    ExploredLevel::Unexplored
+                }
+            };
+            // 127 charted: its member 131 is charted.
+            let mut session = flown(&catalog, source);
+            session.pilot.chart(SystemId(127));
+            session.share_explored();
+            assert_eq!(
+                level(&session, 131),
+                shared(ExploredLevel::Charted),
+                "{source:?}"
+            );
+            // 127 at level 1: 131 is explored, not charted.
+            let mut session = flown(&catalog, source);
+            session.pilot.explore(SystemId(127));
+            session.share_explored();
+            assert_eq!(
+                level(&session, 131),
+                shared(ExploredLevel::Explored),
+                "{source:?}"
+            );
+            // 130 charted under 129 at level 1: 130 stays charted, and 129
+            // takes nothing from its member.
+            let mut session = flown(&catalog, source);
+            session.pilot.explore(SystemId(129));
+            session.pilot.chart(SystemId(130));
+            session.share_explored();
+            assert_eq!(level(&session, 130), ExploredLevel::Charted, "{source:?}");
+            assert_eq!(level(&session, 129), ExploredLevel::Explored, "{source:?}");
         }
     }
 
@@ -322,6 +430,8 @@ mod tests {
                 expected.iter().copied().map(SystemId).collect::<Vec<_>>(),
                 "{source:?}"
             );
+            // At level 1 (`_DoNewPilot` @0x18fe6, @0x1902e).
+            assert_eq!(session.pilot().charted().count(), 0, "{source:?}");
         }
     }
 

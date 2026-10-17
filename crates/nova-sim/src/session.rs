@@ -503,7 +503,7 @@ use crate::outfitter::{
     OutfitVisit, Outfitter, Reselection, SaleAlert, Shop, outfit_mods,
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
-use crate::pilot::{self, Escort, Pilot};
+use crate::pilot::{self, Escort, ExploredLevel, Pilot};
 use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
@@ -4299,9 +4299,10 @@ impl Session {
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
         }
-        // With its place's head, by the engine (`_PlayerLandOnStellar`
-        // @0x63457-0x634a7; see the `explored` module).
-        self.explore_place(self.pilot.system);
+        // At level 2, with its place's head, by the engine
+        // (`_PlayerLandOnStellar` @0x6346d-0x6349e, `_AutoSetExploration`
+        // @0x634b1-0x634c8; see the `explored` module).
+        self.explore_place(self.pilot.system, ExploredLevel::Charted);
         self.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });

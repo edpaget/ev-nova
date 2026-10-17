@@ -76,9 +76,11 @@
 //! +0x1ec, so a load's rebuild works it out again. The session keeps it
 //! (its `explored` module).
 //!
-//! The explored levels 1 and 2 kept apart are deferred to the fidelity
-//! roadmap (crons-news-ranks-fidelity phase 21): the pilot's one set of
-//! explored systems does not tell `X`'s level 1 from a map's level 2.
+//! **Levels.** Each rule above reads only whether a system is explored
+//! (level 1 or 2; see [`ExploredLevel`](crate::pilot::ExploredLevel)).
+//! [`shared_by_place`] serves each level alike: the session shares the
+//! explored systems, then the charted ones, raising each member to its
+//! head's level.
 
 use std::collections::{BTreeSet, VecDeque};
 
