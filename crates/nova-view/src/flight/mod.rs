@@ -41,6 +41,8 @@
 //! - [`trails`]: the particle trail a shot leaves at its tail.
 //! - [`view`]: the [`FlightView`] screen, which runs the flight and draws
 //!   it.
+//! - [`weapon_glow`]: a ship's weapon glow, lit by a `Flags2` 0x0200
+//!   weapon it fires.
 //! - [`weapons`]: drawing shots and beams.
 
 pub mod alert;
@@ -67,6 +69,7 @@ pub mod sprite;
 pub mod target;
 pub mod trails;
 pub mod view;
+pub mod weapon_glow;
 pub mod weapons;
 
 pub use catalog::{

@@ -745,8 +745,8 @@ impl GalaxyCatalog for FakeCatalog {
 
 impl ShipSprites for FakeCatalog {
     /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
-    /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101 and lights
-    /// `rlëD` 2201; ship 130's cannot be read, nor can the escape
+    /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101, lights
+    /// `rlëD` 2201 and weapon glow `rlëD` 2301 of `WeapDecay` 3; ship 130's cannot be read, nor can the escape
     /// pod's, 895.
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
         self.sheets_asked.borrow_mut().push(id);
@@ -758,6 +758,8 @@ impl ShipSprites for FakeCatalog {
                 rotations: NonZeroU16::new(72).expect("non-zero"),
                 glow: Some(layer(2101, 72)),
                 lights: Some(layer(2201, 72)),
+                weapon: Some(layer(2301, 72)),
+                weap_decay: 3,
                 ..sheet()
             }),
             130 => Err("no shän 130".to_owned()),

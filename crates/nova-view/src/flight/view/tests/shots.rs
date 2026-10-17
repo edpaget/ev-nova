@@ -239,3 +239,78 @@ fn landing_and_arriving_free_the_smoke() {
     assert_eq!(view.session().expect("flying").system(), SystemId(131));
     assert_eq!(view.shot_looks.smoke().puffs(), [], "arrived");
 }
+
+/// The weapon glow layers drawn: each one's frame, tint and whether it
+/// is drawn by OR.
+fn glow_layers(view: &View, image: i16) -> Vec<(u16, Color, bool)> {
+    drawn(view)
+        .iter()
+        .filter_map(|command| match *command {
+            DrawCommand::Sprite {
+                image: key,
+                tint,
+                blend,
+                ..
+            } if key.id == image => Some((key.frame, tint, blend == crate::draw::Blend::Or)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_firing_ships_weapon_glow_is_added_at_32_then_falls_by_its_decay() {
+    let mut catalog = armed(0, &[BLASTER]);
+    catalog.weapons[0].flags2 = nova_sim::combat::weapon::GLOWS;
+    catalog.sheet = Ok(ShipSheet {
+        weapon: Some(layer(2300, 36)),
+        weap_decay: 6,
+        ..sheet()
+    });
+    let mut view = fighting(catalog, &[]);
+    assert_eq!(glow_layers(&view, 2300), [], "unlit");
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    let frame = view.frame().expect("a sheet") % 36;
+    assert_eq!(
+        glow_layers(&view, 2300),
+        [(frame, crate::draw::lights_tint(32), true)],
+        "the frame it fired"
+    );
+    view.tick(TICK);
+    assert_eq!(
+        glow_layers(&view, 2300),
+        [(frame, crate::draw::lights_tint(30), true)],
+        "32 less 6 × 0.333"
+    );
+    ticks(&mut view, 20);
+    assert_eq!(glow_layers(&view, 2300), [], "out");
+}
+
+#[test]
+fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
+    for (murk, sprite_murk) in [(0, 0), (30, 7), (100, 24)] {
+        let mut catalog = trafficked(&[130], 1, 129, 3);
+        catalog.sol_murk = murk;
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let npc = view.session().expect("flying").npcs()[0].clone();
+        let viewer = view.session().expect("flying").player().position;
+        let level = crate::flight::murk::sprite_murk(
+            npc.state.position,
+            viewer,
+            view.session().expect("flying").effective_murk(),
+        );
+        assert_eq!(level, sprite_murk, "murk {murk}");
+        view.glows
+            .step(&[(ShipRef::Npc(npc.id), false)], |_| Some(1.0));
+        let capped = crate::flight::weapon_glow::npc_glow_level(32, level);
+        let tint = crate::flight::murk::murk_tint(crate::draw::lights_tint(capped), level);
+        let layers = glow_layers(&view, 2301);
+        assert_eq!(layers.len(), 1, "murk {murk}");
+        assert_eq!((layers[0].1, layers[0].2), (tint, true), "murk {murk}");
+    }
+}

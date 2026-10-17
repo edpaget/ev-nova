@@ -29,7 +29,7 @@ use super::{
     HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
     MESSAGE_TICKS, MapSeen, NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS,
     SECONDARY_KEY, Said, TOO_CLOSE, Then, arrival_lead, arrival_message_with, assigned_message,
-    assigned_ticks, comm_message, dying, gate_refusal_message, jump_refusal_message,
+    assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
     jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
     point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
     stellar_name,
@@ -495,7 +495,11 @@ impl<
                     };
                     self.effects.step(&dying, &scene, &self.looks, chance);
                     let shown = (&mut self.effects, &mut self.flashes);
-                    show_combat(session, &scene, shown, &self.looks, chance);
+                    let lit = show_combat(session, &scene, shown, &self.looks, chance);
+                    let (player, sheets) = (&self.sheet, &self.npc_sheets);
+                    let session_now: &Session = session;
+                    self.glows
+                        .step(&lit, |ship| glow_decay(session_now, player, sheets, ship));
                     let effects = (&mut self.effects, scene.caps);
                     self.shot_looks.step(session, &self.looks, effects, chance);
                 }
@@ -786,6 +790,7 @@ impl<
         self.npc_previous.clear();
         self.effects.clear();
         self.flashes.clear();
+        self.glows.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
     }
@@ -1108,6 +1113,7 @@ impl<
                 self.message = None;
                 self.effects.clear();
                 self.flashes.clear();
+                self.glows.clear();
                 self.shot_looks.clear();
                 self.redraw_status();
             }

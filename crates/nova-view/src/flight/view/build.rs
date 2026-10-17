@@ -206,6 +206,7 @@ impl<
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
             flashes: BTreeMap::new(),
+            glows: crate::flight::weapon_glow::WeaponGlows::default(),
             shot_looks: super::shots::ShotLooks::default(),
             metrics: None,
             escort_menu: EscortMenu::default(),

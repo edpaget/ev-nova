@@ -21,9 +21,10 @@ use crate::flight::escorts::{
 use crate::flight::flash::ShieldFlash;
 use crate::flight::floating::{self, Hit};
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
-use crate::flight::murk;
+use crate::flight::murk::{self, murk_tint, sprite_murk};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::{self};
+use crate::flight::weapon_glow::npc_glow_level;
 use crate::flight::weapons::{self, BeamShown, ShotShown};
 use nova_sim::sprite_layer::SpriteLayer;
 
@@ -207,7 +208,9 @@ impl<C> FlightView<C> {
     /// crossed box when its sheet cannot be read, at the alpha its cloak
     /// leaves ([`cloak_alpha`]); not at all when its cloak hides it. One
     /// waiting at the gate it comes out of is hidden, then fades in over
-    /// its last ticks there ([`npc_tint`]).
+    /// its last ticks there ([`npc_tint`]). Its weapon glow is drawn over
+    /// it while lit ([`weapon_glow`](crate::flight::weapon_glow)), held
+    /// below its murk ([`npc_glow_level`]) and murked.
     fn draw_npc(&self, list: &mut DrawList, session: &Session, npc: &Npc, at: Point, heading: f32) {
         let Some(cloak) = cloak_alpha(session.cloak_shown(npc)) else {
             return;
@@ -224,6 +227,14 @@ impl<C> FlightView<C> {
             Some(Ok(sheet)) => {
                 let frame = rotation_frame(heading, sheet.rotations);
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
+                let glow = sheet.weapon.zip(self.glows.drawn(ShipRef::Npc(npc.id)));
+                if let Some((layer, level)) = glow {
+                    let viewer = session.player().position;
+                    let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
+                    let tint = murk_tint(lights_tint(npc_glow_level(level, murk)), murk);
+                    let layer_frame = frame % layer.frames.get();
+                    list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
+                }
             }
             _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -997,8 +1008,9 @@ impl<C> FlightView<C> {
     }
 
     /// Draws the player's ship at `at`, as much of it as `drawn` says
-    /// (see [`nova_sim::player_fate`]): its sprite, engine glow and
-    /// running lights, or, when its sheet cannot be read, a crossed box
+    /// (see [`nova_sim::player_fate`]): its sprite, engine glow, running
+    /// lights and weapon glow ([`weapon_glow`](crate::flight::weapon_glow),
+    /// never murked), or, when its sheet cannot be read, a crossed box
     /// and the reason. The box stands in for the sprite and a missing
     /// sheet has no glow or lights, so only a ship drawn in full has one.
     fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
@@ -1018,7 +1030,10 @@ impl<C> FlightView<C> {
                     .zip(glow_level(base, tick, &self.glow_rolls).map(lights_tint));
                 let level = lights_level(&sheet.blink, tick, &self.blink_rolls);
                 let lights = sheet.lights.zip(level.map(lights_tint));
-                for (layer, tint) in [glow, lights].into_iter().flatten() {
+                let weapon = sheet
+                    .weapon
+                    .zip(self.glows.drawn(ShipRef::Player).map(lights_tint));
+                for (layer, tint) in [glow, lights, weapon].into_iter().flatten() {
                     let layer_frame = frame % layer.frames.get();
                     list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
                 }
