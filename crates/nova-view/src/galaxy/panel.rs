@@ -4,7 +4,7 @@
 //! decides it); this module puts each line at its DITL 2000 offset.
 //!
 //! Every line is a baseline in Geneva 9 (`_smallTextFont`,
-//! `_smallTextSize`), set through the HUD's [`Pen`]. Labels are
+//! `_smallTextSize`), set through the HUD's `Pen`. Labels are
 //! [`LABEL`] (`_rgbLightGrey`), values white (`ForeColor` 30), the date
 //! [`DATE`] (`_rgbDarkGrey`), and each item's top or bottom rule black.
 //!
@@ -38,14 +38,14 @@
 //!   Government, Legal Status, Goods Traded and Services at (left + 10,
 //!   top + 75 / 119 / 155 / 250), their values at (left + 15, top + 88 /
 //!   132 / 168 / 263), a list's rows 12 apart, and "None Available", or
-//!   the "<Unknown>" of a system with no service, at top + 262.
+//!   the `<Unknown>` of a system with no service, at top + 262.
 //!
 //! Without text metrics nothing is measured: the Ports list is one line,
 //! the prompt starts at left + right / 2 and the date at right − 5.
 //!
 //! Until the map is laid out as DITL 2000 (galaxy-map-fidelity phase 5),
 //! the in-flight maps draw both items from [`PANEL_ORIGIN`], each over a
-//! [`PANEL`](super::map::PANEL) fill.
+//! [`PANEL`] fill.
 
 use nova_sim::map_panel::{ColumnBody, Listing, MapPanel, PanelWords, Ports, Services, Strip};
 

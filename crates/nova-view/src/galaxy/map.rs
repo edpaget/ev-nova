@@ -115,7 +115,7 @@
 //! [`map_panel`](nova_sim::map_panel) decides them, the
 //! [`panel`](super::panel) module lays them out), measured by the
 //! flight's text metrics ([`GalaxyMap::with_metrics`]), from
-//! [`PANEL_ORIGIN`](super::panel::PANEL_ORIGIN) until the map is laid out
+//! [`PANEL_ORIGIN`] until the map is laid out
 //! as DITL 2000. Their own lines (help, zoom, the stack line, problems and
 //! the course line) sit in the bottom panel's left column, and a click in
 //! the right column selects nothing.
@@ -3201,7 +3201,7 @@ mod tests {
 
     use nova_sim::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
 
-    /// The stock titles, "<Unknown>" and "Unexplored"'s neighbours.
+    /// The stock titles, `<Unknown>` and "Unexplored"'s neighbours.
     fn panel_words() -> PanelWords {
         let mut list = vec![String::new(); 340];
         list[309] = "<Unknown>".to_owned();

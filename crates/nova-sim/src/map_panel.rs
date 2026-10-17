@@ -14,7 +14,7 @@
 //!   uninhabited (`Flags` 0x20) and `_StellarIsLandable`
 //!   ([`landable`]); neither the active byte nor the gate bits are read,
 //!   so a landable hypergate is listed, and so is a stellar another
-//!   system owns. "None" when none is; "<Unknown>" when the system is
+//!   system owns. "None" when none is; `<Unknown>` when the system is
 //!   unexplored.
 //! - "Navigation Hazards:" ([`hazards`], @0x10586-0x109aa): "gravity
 //!   shear" when any stellar has a `Gravity` (all 16 slots, active or
@@ -38,7 +38,7 @@
 //!   map's gate offers (owner-first, as
 //!   [`gate::hypergate_offers`](crate::gate::hypergate_offers) resolves
 //!   them), else "Selected System:".
-//! - Unexplored: the name reads "<Unknown>" and nothing more
+//! - Unexplored: the name reads `<Unknown>` and nothing more
 //!   (@0x10cc5-0x10cd7). Not `_SystemIsInhabited` (read under
 //!   `RuleKey::MapExplore` by the session): the name and "Uninhabited
 //!   System" (@0x11183-0x111ba). Otherwise the name, the government
@@ -48,8 +48,8 @@
 //!   services ([`system_has_service`], @0x10ff5-0x111ba).
 //!
 //! **The explored level** tells only the goods and the services apart: at
-//! level 1 both read "<Unknown>" (@0x10f34, @0x1107d, @0x11110), at level
-//! 2 they are listed. The services' "<Unknown>" sits a pixel higher when
+//! level 1 both read `<Unknown>` (@0x10f34, @0x1107d, @0x11110), at level
+//! 2 they are listed. The services' `<Unknown>` sits a pixel higher when
 //! the system has no service ([`Services::Unknown`]'s `any`).
 //!
 //! With nothing selected (`_selSystem` −1) off the hypergate map the
@@ -83,7 +83,7 @@ pub struct PanelWords {
     pub hypergate_prompt: String,
     /// #309 "Ports:".
     pub ports: String,
-    /// #310 "<Unknown>".
+    /// #310 `<Unknown>`.
     pub unknown: String,
     /// #311 "Navigation Hazards:".
     pub hazards: String,
@@ -247,7 +247,7 @@ pub struct MapPanel {
     pub strip: Strip,
     /// The right column, DITL 2000 item 6.
     pub column: Column,
-    /// The `STR#` 2002 words, for the labels and the "<Unknown>"s.
+    /// The `STR#` 2002 words, for the labels and the `<Unknown>`s.
     pub words: PanelWords,
 }
 
@@ -265,7 +265,7 @@ pub enum Strip {
     Info {
         /// The ports.
         ports: Ports,
-        /// The hazards' value: "<Unknown>" when unexplored.
+        /// The hazards' value: `<Unknown>` when unexplored.
         hazards: String,
         /// Today's date.
         date: String,
@@ -279,7 +279,7 @@ pub enum Ports {
     Listed(Vec<String>),
     /// "None": no stellar qualifies.
     None,
-    /// "<Unknown>": the system is unexplored.
+    /// `<Unknown>`: the system is unexplored.
     Unknown,
 }
 
@@ -295,7 +295,7 @@ pub struct Column {
 /// What the right column holds under its title.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ColumnBody {
-    /// Unexplored: the name reads "<Unknown>" and nothing more.
+    /// Unexplored: the name reads `<Unknown>` and nothing more.
     Unknown,
     /// Not inhabited: the name, then "Uninhabited System".
     Uninhabited {
@@ -324,7 +324,7 @@ pub enum Listing {
     Items(Vec<String>),
     /// "None".
     None,
-    /// "<Unknown>": explored at level 1.
+    /// `<Unknown>`: explored at level 1.
     Unknown,
 }
 
@@ -335,7 +335,7 @@ pub enum Services {
     Items(Vec<String>),
     /// "None Available".
     NoneAvailable,
-    /// "<Unknown>": explored at level 1. `any` is whether the system has
+    /// `<Unknown>`: explored at level 1. `any` is whether the system has
     /// a service: the original draws it 13 below the label with one (the
     /// first service's row, @0x1107d) and 12 below without (the "None
     /// Available" row, @0x11110).
