@@ -2269,6 +2269,7 @@ mod tests {
             DrawCommand::Sprite { .. } => "sprite",
             DrawCommand::Picture { .. } => "picture",
             DrawCommand::StretchedPicture { .. } => "stretched",
+            DrawCommand::BlendedPicture { .. } => "blended",
             DrawCommand::TiledPicture { .. } => "tiled",
             DrawCommand::Text { .. } => "text",
             DrawCommand::Line { .. } => "line",

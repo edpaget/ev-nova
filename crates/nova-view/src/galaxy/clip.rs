@@ -23,8 +23,8 @@ use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 ///   and dropped when it misses;
 /// - each dot kept whole when inside, cut to the rect of its overlap when
 ///   partly inside, and dropped when outside;
-/// - each text, sprite and picture wrapped in [`DrawCommand::Clipped`]
-///   with `area`, which the renderer crops;
+/// - each text, sprite and picture, blended or not, wrapped in
+///   [`DrawCommand::Clipped`] with `area`, which the renderer crops;
 /// - each command already clipped re-clipped to the two clips' overlap,
 ///   and dropped when they share none.
 pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
@@ -83,6 +83,7 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
             | DrawCommand::Sprite { .. }
             | DrawCommand::Picture { .. }
             | DrawCommand::StretchedPicture { .. }
+            | DrawCommand::BlendedPicture { .. }
             | DrawCommand::TiledPicture { .. } => {
                 out.clipped(area, command.clone());
             }
@@ -221,12 +222,19 @@ mod tests {
             image: ImageKey::picture(9501),
             top_left: at(5000.0, 0.0),
         };
+        let nebula = DrawCommand::BlendedPicture {
+            image: ImageKey::picture(9502),
+            top_left: at(200.0, 100.0),
+            width: 300.0,
+            height: 300.0,
+            blend: crate::draw::Blend::Max,
+        };
         let drawn = clipped(|map| {
-            for command in [&text, &sprite, &picture, &plain] {
+            for command in [&text, &sprite, &picture, &plain, &nebula] {
                 map.push(command.clone());
             }
         });
-        let wrapped: Vec<DrawCommand> = [text, sprite, picture, plain]
+        let wrapped: Vec<DrawCommand> = [text, sprite, picture, plain, nebula]
             .into_iter()
             .map(|command| DrawCommand::Clipped {
                 clip: area(),
