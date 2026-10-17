@@ -29,8 +29,9 @@ use nova_rsrc::{Fork, ForkReader};
 use nova_view::flight::radar::IRect;
 use nova_view::galaxy::NEUTRAL;
 use nova_view::galaxy::map::{BUTTON, ENTER_BUTTON, SYSTEM_INSET};
+use nova_view::galaxy::nebulae::{NebulaFrame, nebula_rect};
 use nova_view::oval::{oval_fill_pixels, oval_frame_pixels, runs};
-use nova_view::{Key, MouseButton, Point};
+use nova_view::{Blend, Key, MouseButton, Point};
 
 const BLUE: u32 = 0x002C_2CAF;
 
@@ -321,25 +322,35 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
         ]
     );
 
-    // 600 x 300 fits at 133%; the nebula fills its scaled rectangle.
-    let view = *harness
-        .app
-        .screen()
-        .galaxy_map()
-        .view()
-        .expect("the viewer");
+    // 600 x 300 fits at 133%; the nebula fills its scaled rectangle,
+    // truncated as `_MapDialogUpdate` truncates it, with `addMax`.
+    let map = harness.app.screen().galaxy_map();
+    let view = *map.view().expect("the viewer");
     assert_eq!(view.zoom(), 4);
+    let frame_of_view = NebulaFrame {
+        origin: Point::new(0.0, 0.0),
+        centre: (512, 304),
+        zoom: view.transform().zoom(),
+        scroll: (f64::from(view.center().x), f64::from(view.center().y)),
+        area: IRect::new(0, 0, 1024, 608),
+    };
+    let rect = nebula_rect(&map.model().catalog_nebulae()[0], &frame_of_view);
     let corner = view.world_to_screen(Point::new(-20.0, -20.0));
-    let Batch::Sprites { quads, .. } = &frame.batches[0] else {
+    assert_eq!(
+        (rect.left, rect.top),
+        (corner.x.trunc() as i32, corner.y.trunc() as i32)
+    );
+    let Batch::Sprites { quads, blend, .. } = &frame.batches[0] else {
         panic!("{:?}", frame.batches[0]);
     };
+    assert_eq!(*blend, Blend::Max);
     assert_eq!(
         quads[0].dest,
         Rect {
-            x: corner.x,
-            y: corner.y,
-            w: 60.0 * view.scale(),
-            h: 60.0 * view.scale(),
+            x: rect.left as f32,
+            y: rect.top as f32,
+            w: (rect.right - rect.left) as f32,
+            h: (rect.bottom - rect.top) as f32,
         }
     );
 
