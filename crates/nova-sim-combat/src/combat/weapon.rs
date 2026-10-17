@@ -487,6 +487,11 @@ pub const AI_WONT_USE: u16 = 0x0100;
 /// `Flags2`: it fires while its ship is cloaked, and no other weapon does
 /// (`_WeaponHasAmmo` @0xb9a2-0xba01).
 pub const FIRES_CLOAKED: u16 = 0x4000;
+/// `Flags2`: firing it lights its ship's weapon glow, ship +0xc8e8 =
+/// 32.0 (`_FirePlayerWeapon` @0x62c78-0x62c98, `_FireAIShipWeapon`
+/// @0x88dc0-0x88de4, `_HandleBeams` @0x30b1f-0x30b37), which the view
+/// draws.
+pub const GLOWS: u16 = 0x0200;
 /// `Flags2`: the secondary weapon's line shows no count of its rounds
 /// (`_DrawStatusWeap` @0x4c190).
 pub const HIDES_COUNT: u16 = 0x0040;
@@ -585,6 +590,13 @@ impl WeaponSpec {
                 color: record.hit_part_color,
             }),
         }
+    }
+
+    /// Whether firing it lights its ship's weapon glow: its `Flags2`
+    /// [`GLOWS`] (see [`CombatEvent::WeaponGlow`](super::CombatEvent::WeaponGlow)).
+    #[must_use]
+    pub fn glows(&self) -> bool {
+        self.flags2 & GLOWS != 0
     }
 
     /// Whether its shots pass through asteroids ([`IGNORES_ASTEROIDS`]),

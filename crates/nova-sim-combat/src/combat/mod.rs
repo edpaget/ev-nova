@@ -451,6 +451,28 @@ pub enum CombatEvent {
         /// the original's ship table's.
         late: bool,
     },
+    /// A ship's weapon glow lit (`Flags2` 0x0200, ship +0xc8e8 = 32.0):
+    /// the view shows its `shän` `WeapImageID` sprite at full and lets it
+    /// fade by its `WeapDecay`. The player's call that fired a glow weapon
+    /// lights it (`_FirePlayerWeapon` @0x62c78-0x62c98, a fighter bay's
+    /// launch too, @0x62c61-0x62c6e), and an NPC's pick that spawned one
+    /// (`_FireAIShipWeapon` @0x88dc0-0x88de4), once a call; and each
+    /// live beam of one, on every advance-pass tick, for its firer
+    /// (`_HandleBeams` @0x30b1f-0x30b37), but a point-defence beam's at a
+    /// missile (@0x309ab-0x309bb). Point defence's firing, an NPC's bay
+    /// launch, an escort's formation trigger and a sub-munition release
+    /// never light it.
+    WeaponGlow {
+        /// The ship.
+        ship: ShipRef,
+        /// Whether the original shows it a frame later, as with
+        /// [`CombatEvent::Hit::late`]: a beam's, as `_HandleBeams` runs
+        /// after every ship's `_HandleShipDisplay` (@0x4453d), so it shows
+        /// the next frame, and once after the beam's last tick. A firing
+        /// comes before its ship's display (@0x43e19, @0x44483) and shows
+        /// that frame.
+        late: bool,
+    },
     /// A ship was destroyed: the view draws its explosion and debris.
     Destroyed {
         /// The ship.
@@ -1166,7 +1188,9 @@ impl Combat {
 
     /// Step 6's beams: each spends a tick of its life on `pass`, and on
     /// the advance pass follows its firer among `fighters`, at `targets`,
-    /// turned by its jitter drawn on `chance` (see the module docs).
+    /// turned by its jitter drawn on `chance` (see the module docs), and
+    /// lights its firer's weapon glow if it glows ([`Beam::glows`]), a
+    /// frame late ([`CombatEvent::WeaponGlow`]).
     fn move_beams(
         &mut self,
         fighters: &[Fighter],
@@ -1192,6 +1216,16 @@ impl Combat {
                 .map(|firer| (&firer.state, firer.hull.exits.as_ref()));
             beam.follow(firer, compression, targets, shots, chance)
         });
+        if advance {
+            let glowing = self.beams.iter().filter(|beam| beam.glows());
+            let lit: Vec<CombatEvent> = glowing
+                .map(|beam| CombatEvent::WeaponGlow {
+                    ship: beam.firer,
+                    late: true,
+                })
+                .collect();
+            self.events.extend(lit);
+        }
     }
 
     /// Step 9b: the shockwave of each ship destroyed this tick, in the
@@ -1827,6 +1861,7 @@ impl Combat {
             };
             let sound = first_copy_sounds_at(AI_FIRE_PRIORITY);
             self.launch_volley(fighter, &volley.launches, sound, targets, chance);
+            self.glow(fighter.ship, &volley.weapon);
             let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
             if let Some(velocity) = pushed {
                 self.shove(fighter, velocity);
@@ -1885,6 +1920,7 @@ impl Combat {
             };
             let sound = first_copy_sounds_at(player_fire_priority(&volley.weapon));
             self.launch_volley(fighter, &volley.launches, sound, targets, chance);
+            self.glow(fighter.ship, &volley.weapon);
             let recoils = match self.forward_recoil {
                 RuleSource::Engine => volley.weapon.recoil > 0.0,
                 RuleSource::Bible => volley.weapon.recoils(),
@@ -1929,6 +1965,15 @@ impl Combat {
         }
         if destructs {
             self_destruct(fighter);
+        }
+    }
+
+    /// Lights `ship`'s weapon glow when `weapon` glows, once a call that
+    /// fired it ([`CombatEvent::WeaponGlow`]), shown the frame it fired.
+    fn glow(&mut self, ship: ShipRef, weapon: &weapon::WeaponSpec) {
+        if weapon.glows() {
+            self.events
+                .push(CombatEvent::WeaponGlow { ship, late: false });
         }
     }
 
@@ -3449,6 +3494,7 @@ mod tests {
     use nova_sim_catalog::fixture::weapon;
 
     mod exit_steps;
+    mod weapon_glow;
 
     /// A ship in a test fight, owning what a fighter borrows.
     #[allow(clippy::struct_excessive_bools)]

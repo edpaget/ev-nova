@@ -338,11 +338,13 @@ impl Effects {
             }
             CombatEvent::Particles(burst) => self.spray(&burst, scene.caps, chance),
             // A hit's shield flash is the flight view's
-            // ([`ShieldFlash`](super::flash::ShieldFlash)).
+            // ([`ShieldFlash`](super::flash::ShieldFlash)), and so is the
+            // weapon glow.
             CombatEvent::Fired { sound: None, .. }
             | CombatEvent::Disabled { .. }
             | CombatEvent::BreakingUp { .. }
-            | CombatEvent::Hit { .. } => {}
+            | CombatEvent::Hit { .. }
+            | CombatEvent::WeaponGlow { .. } => {}
         }
     }
 

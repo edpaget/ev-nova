@@ -30,6 +30,10 @@
 //! a looped one (`Flags` 0x0010) skipped while its sound plays anywhere
 //! (@0x88e00-0x88e1d), which the view or the audio side applies
 //! ([`FireSound::unless_playing`](super::FireSound::unless_playing)).
+//! A pick that spawned a weapon of the glow (`Flags2` 0x0200, +0xc8e8 =
+//! 32.0, @0x88dc0-0x88de4) lights its ship's glow once a call
+//! ([`CombatEvent::WeaponGlow`](super::CombatEvent::WeaponGlow)), which
+//! the view draws.
 //!
 //! # Not modelled
 //!
@@ -44,8 +48,6 @@
 //! - The rating stretch of the reload (@0x88fb3-0x8901b): rdm phase
 //!   cloaking-fidelity/phase-6-rating-reload-stretch, between the reload
 //!   and the burst in `Armament::fire_pick`.
-//! - The weapon glow (`Flags2` 0x0200, +0xc8e8 = 32.0, @0x88ddd): rdm
-//!   phase weapons-fidelity/phase-14, from the `Fired` it raises.
 //! - `_SpawnShot`'s exit points and its turret miss and launch speed:
 //!   weapons-fidelity phases 6 and 10.
 //! - The whole pixels of the box's reach (@0x888bf, @0x88a24), the
