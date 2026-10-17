@@ -20,15 +20,21 @@
 //!   `+` zooms in and `-` zooms out. On an in-flight map the arrows scroll
 //!   10 units and `-`, `=` and `+` step the zoom within its limits
 //!   ([`MapDialog::key`]); each repeats while held.
-//! - Pressing the left button in the map area (the viewer's above its
-//!   panel, an in-flight map's item 3) and moving the pointer drags the
-//!   map: the viewer's by the pointer's moves, an in-flight map's by the
-//!   travel from the press times the zoom ([`MapPlace::drag`]). Releasing
-//!   it after moving no more than [`CLICK_SLOP`] is a click instead: it
-//!   selects the system under the pointer (clicking again cycles through
-//!   systems that share a position, from a system a click selected) or,
-//!   in empty space, clears the selection. A press outside the map area
-//!   is a panel's or a button's.
+//! - On the viewer, pressing the left button above its panel and moving
+//!   the pointer drags the map by the pointer's moves. Releasing it after
+//!   moving no more than [`CLICK_SLOP`] is a click instead: it selects
+//!   the system under the pointer (clicking again cycles through systems
+//!   that share a position, from a system a click selected) or, in empty
+//!   space, clears the selection.
+//! - On an in-flight map a left press in item 3 acts at once, as
+//!   `_MapFilter` gives item 3 on mouse-down (@0x14552;
+//!   [`click`](super::click)): a press whose hit box holds systems is held
+//!   for the owner ([`GalaxyMap::take_press`]), which answers it
+//!   ([`GalaxyMap::answer_press`], `nova_sim::Session::map_click`); one
+//!   the owner accepts nothing of, or one that hits nothing, drags the map
+//!   by the travel from the press times the zoom ([`MapPlace::drag`]). The
+//!   release only ends a drag.
+//! - A press outside the map area is a panel's or a button's.
 //! - Return (a press, not its repeats), or a click on the "Enter system"
 //!   button the panel shows while a system is selected, asks to enter the
 //!   selected system. The map only records the request; its owner takes
@@ -43,13 +49,15 @@
 //!   does nothing.
 //! - F or S (a press, any case, not its repeats) opens Find, as the Find
 //!   button does (@0x144b9-0x144d6; see "Find" below).
+//! - C (any case, its repeats too) on an in-flight map asks the owner to
+//!   clear the route ([`GalaxyMap::take_clear_route`]), as Clear Route
+//!   does, whether the button is enabled or not (`_MapFilter` @0x14268).
 //!
 //! The map has two modes ([`MapMode`]). The viewer ([`GalaxyMap::new`]),
 //! the developer path the app's Tab reaches, enters systems as above. The
 //! course map ([`GalaxyMap::course`]), opened from flight, plots the
-//! player's course instead: it has no "Enter system" button, and a click
-//! that selects a system also makes it the destination, which the owner
-//! takes with [`GalaxyMap::take_destination`]. On it and the hypergate
+//! player's course instead: it has no "Enter system" button, and its
+//! clicks are the owner's to answer, as above. On it and the hypergate
 //! map, Tab or `\` (repeats too) asks the owner to cycle the selection
 //! ([`GalaxyMap::take_cycle`], Shift held stepping the hypergate map's
 //! back), and Return asks it to close the map
@@ -57,19 +65,19 @@
 //! (@0x13cdd-0x13f0f). As the course map opens from flight, its owner
 //! selects the system the original's `_DoSystemMap` does
 //! ([`GalaxyMap::preselect`], @0x124ac-0x124ff), which the panel then
-//! shows; a click at its place is a first click.
+//! shows.
 //!
 //! While a hypergate is entered from flight, the course map becomes the
 //! hypergate map ([`MapMode::Hypergate`], [`GalaxyMap::offer_gates`]), as
-//! the original's `_DoSystemMap` in hypergate mode: a click selects one of
-//! the systems the gate offers and nothing else (@0x12f8f-0x13040). The
-//! owner takes the pick with [`GalaxyMap::take_gate_choice`], which
-//! returns the map to the course map. The pick is kept apart from the
-//! selection, as the original's mode 4 and +0x6c are from `_selSystem`:
-//! a click on an offered system and the Tab cycle
-//! ([`GalaxyMap::select_gate`]) write both, while Space, Find and the
-//! preselect move only the selection, so a destination picked before
-//! them is still the one entered.
+//! the original's `_DoSystemMap` in hypergate mode: the owner's answer to
+//! a click picks one of the systems the gate offers, or the current
+//! system with no pick (@0x12f8f-0x13040, @0x136fc-0x13734). The owner
+//! takes the pick with [`GalaxyMap::take_gate_choice`], which returns the
+//! map to the course map. The pick is kept apart from the selection, as
+//! the original's mode 4 and +0x6c are from `_selSystem`: a click and the
+//! Tab cycle ([`GalaxyMap::select_gate`]) write both, while Space, Find
+//! and the preselect move only the selection, so a destination picked
+//! before them is still the one entered; Clear Route drops it.
 //!
 //! # Find, Done and the buttons
 //!
@@ -91,10 +99,13 @@
 //! The course and hypergate maps draw DITL 2000's six buttons
 //! ([`buttons`](super::buttons)). A click on Done asks to close the map,
 //! as Return does; on "-" or "+" steps the zoom, as `-` and `=` do; on
-//! Find opens Find. Clear Route and Borders are drawn and taken, and do
-//! nothing until galaxy-map-fidelity's phases 6 and 8 give them the
-//! route's clear and the borders. Each is silent, as `_TrackMapButtons`
-//! is.
+//! Find opens Find; on Clear Route, while it is enabled, asks the owner to
+//! clear the route, as C does. Clear Route is enabled by
+//! `showClearRouteButton` ([`GalaxyMap::set_clear_route`]): the owner sets
+//! it as the map opens, a press that writes a hop sets it, and the
+//! route's clear turns it off ([`GalaxyMap::route_cleared`]). Borders is
+//! drawn and taken, and does nothing until galaxy-map-fidelity's phase 8
+//! gives it the borders. Each is silent, as `_TrackMapButtons` is.
 //!
 //! # What the map draws
 //!
@@ -185,6 +196,7 @@ use nova_sim::story::OverlaidGalaxy;
 
 use super::buttons::MapButton;
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
+use super::click::{PendingPress, PressAnswer, hits};
 use super::clip::clip_opaque;
 use super::dialog::{DIALOG_ORIGIN, MapDialog, in_map_item, map_area};
 use super::find::{FindDialog, FindOutcome};
@@ -491,8 +503,12 @@ pub struct GalaxyMap {
     armed: bool,
     /// A request to enter a system, not yet taken.
     entry: Option<SystemId>,
-    /// A destination chosen on the course map, not yet taken.
-    destination: Option<SystemId>,
+    /// An in-flight map's press that hit systems, not yet taken by the
+    /// owner.
+    pending: Option<PendingPress>,
+    /// Where a press taken by the owner and not yet answered was made:
+    /// the drag starts there if the owner accepts no hit.
+    awaiting: Option<Point>,
     /// The system the player is in, as last shown.
     current: Option<SystemId>,
     /// The course from it, as last shown.
@@ -508,7 +524,8 @@ pub struct GalaxyMap {
     picture: Option<MapPicture>,
     /// Whether Shift is held.
     shift: bool,
-    /// A Tab, `\` or Return on an in-flight map, not yet taken.
+    /// A Tab, `\`, Return, C or Clear Route on an in-flight map, not yet
+    /// taken.
     request: Option<Request>,
     /// The hypergate map's pick, the original's mode 4 and +0x6c: what a
     /// click on an offered system or the Tab cycle picked, which Space
@@ -545,6 +562,8 @@ enum Request {
     Cycle(MapCycle),
     /// Return: close the map.
     Close,
+    /// C or Clear Route: clear the route.
+    ClearRoute,
 }
 
 impl GalaxyMap {
@@ -579,7 +598,8 @@ impl GalaxyMap {
             press: None,
             armed: false,
             entry: None,
-            destination: None,
+            pending: None,
+            awaiting: None,
             current: None,
             route: Vec::new(),
             panel: None,
@@ -603,22 +623,79 @@ impl GalaxyMap {
         self.mode
     }
 
-    /// The destination chosen on the course map since it was last taken,
-    /// if any; taking it clears it.
-    pub fn take_destination(&mut self) -> Option<SystemId> {
-        self.destination.take()
+    /// The press on an in-flight map's item 3 that hit systems since this
+    /// was last taken, for the owner to answer with
+    /// [`GalaxyMap::answer_press`] (`nova_sim::Session::map_click`); taking
+    /// it clears it. Until it is answered nothing drags. The viewer never
+    /// holds one: it clicks on the release.
+    pub fn take_press(&mut self) -> Option<PendingPress> {
+        let press = self.pending.take()?;
+        self.awaiting = Some(press.at);
+        Some(press)
+    }
+
+    /// The owner's answer to the press taken ([`GalaxyMap::take_press`]):
+    /// `None`, no hit accepted, starts the drag from the press, as
+    /// `_DoSystemMap` drags for a press that selects nothing (@0x137e9);
+    /// an answer sets the selection, the hypergate map's pick and
+    /// `showClearRouteButton` as it says, and nothing drags.
+    pub fn answer_press(&mut self, answer: Option<PressAnswer>) {
+        let Some(at) = self.awaiting.take() else {
+            return;
+        };
+        let Some(answer) = answer else {
+            self.start_drag(at);
+            return;
+        };
+        if let Some(selected) = answer.selected {
+            self.selected = Some(selected);
+            self.clicked = false;
+        }
+        if let Some(pick) = answer.gate_pick {
+            self.gate_pick = pick;
+        }
+        if answer.appended {
+            self.set_clear_route(true);
+        }
+    }
+
+    /// Whether C, or a click on Clear Route while it is enabled, asked an
+    /// in-flight map to clear the route since this was last taken (item 8,
+    /// `_MapFilter` @0x14268); taking it clears it. The owner clears it
+    /// (`nova_sim::Session::clear_route`) and answers with
+    /// [`GalaxyMap::route_cleared`].
+    pub fn take_clear_route(&mut self) -> bool {
+        let clear = self.request == Some(Request::ClearRoute);
+        if clear {
+            self.request = None;
+        }
+        clear
+    }
+
+    /// The route cleared (@0x12c69-0x12dbf): Clear Route disabled
+    /// (`showClearRouteButton` cleared) and the hypergate map's pick
+    /// dropped, as the original's +0x6c = −1.
+    pub fn route_cleared(&mut self) {
+        self.set_clear_route(false);
+        self.gate_pick = None;
+    }
+
+    /// Sets `showClearRouteButton`, as the map opens with it
+    /// (@0x12396-0x123c3). A press that writes a hop sets it, and the
+    /// route's clear turns it off; nothing else touches it.
+    pub fn set_clear_route(&mut self, enabled: bool) {
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.set_clear_route(enabled);
+        }
     }
 
     /// Switches to the hypergate map, offering the systems `offered`, with
-    /// nothing selected: a click selects one of them and nothing else, and
-    /// records no course destination. An arrow points from the current
-    /// system to each.
+    /// nothing selected. An arrow points from the current system to each.
     pub fn offer_gates(&mut self, offered: Vec<SystemId>) {
         self.mode = MapMode::Hypergate;
         self.offered = offered;
         self.selected = None;
         self.gate_pick = None;
-        self.destination = None;
     }
 
     /// The systems the hypergate offers, on the hypergate map; none on
@@ -719,10 +796,8 @@ impl GalaxyMap {
 
     /// Selects `system`, as the map selects as it opens (`_DoSystemMap`
     /// @0x124ac-0x124ff), when it is on the map, and nothing otherwise. It
-    /// records no destination and picks no hypergate destination, and a
-    /// click at its place is a first click, selecting the first system
-    /// there: the original's click never reads the selection
-    /// (@0x12dd4-0x1314b).
+    /// picks no hypergate destination, and the viewer's click at its
+    /// place is a first click, selecting the first system there.
     pub fn preselect(&mut self, system: Option<SystemId>) {
         self.selected = system.filter(|&id| self.model.system(id).is_some());
         self.clicked = false;
@@ -925,11 +1000,15 @@ impl GalaxyMap {
         }
     }
 
-    /// Whether Clear Route is enabled: off the hypergate map, with a
-    /// course shown, as the open works `showClearRouteButton` out
-    /// (@0x12396-0x123c3).
-    fn clear_route_enabled(&self) -> bool {
-        self.mode != MapMode::Hypergate && !self.route.is_empty()
+    /// Whether Clear Route is enabled: `showClearRouteButton`
+    /// ([`GalaxyMap::set_clear_route`]); never on the viewer, which has
+    /// no buttons.
+    #[must_use]
+    pub fn clear_route_enabled(&self) -> bool {
+        match &self.look {
+            Look::Viewer(_) => false,
+            Look::Dialog(dialog) => dialog.clear_route(),
+        }
     }
 
     /// The galaxy as the map lays it out.
@@ -970,6 +1049,9 @@ impl GalaxyMap {
             (_, Key::Tab | Key::Char('\\')) if self.mode != MapMode::Viewer => {
                 self.request = Some(Request::Cycle(MapCycle { back: self.shift }));
             }
+            // C, either case, its repeats too, whatever Clear Route's
+            // flag (`_MapFilter` @0x14268).
+            (Look::Dialog(_), Key::Char('c' | 'C')) => self.request = Some(Request::ClearRoute),
             _ => {}
         }
     }
@@ -1070,31 +1152,59 @@ impl GalaxyMap {
     }
 
     /// Ends the press, if there is one, with the left button released at
-    /// `at`: a click if the pointer stayed within [`CLICK_SLOP`] and is
-    /// still over the map, otherwise the end of a drag.
+    /// `at`. On the viewer it is a click if the pointer stayed within
+    /// [`CLICK_SLOP`] and is still over the map, otherwise the end of a
+    /// drag. On an in-flight map it only ends a drag: its click was the
+    /// press's ([`GalaxyMap::take_press`]).
     fn release(&mut self, at: Point) {
-        if let Look::Dialog(dialog) = &mut self.look {
-            dialog.release();
-        }
         let Some(press) = self.press.take() else {
             return;
         };
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.release();
+            return;
+        }
         if press.travelled <= CLICK_SLOP && self.in_map(at) {
             let from = self.selected.filter(|_| self.clicked);
-            let clicked = self.model.click(at, &self.transform(), from);
-            if self.mode == MapMode::Hypergate {
-                if clicked.is_some_and(|id| self.offered.contains(&id)) {
-                    self.selected = clicked;
-                    self.gate_pick = clicked;
-                    self.clicked = true;
+            self.selected = self.model.click(at, &self.transform(), from);
+            self.clicked = true;
+        }
+    }
+
+    /// A left press in the map area at `at`: the viewer's press, clicked
+    /// or dragged on its release; on an in-flight map, the systems its
+    /// hit box holds ([`hits`]) held for the owner
+    /// ([`GalaxyMap::take_press`]), or with none the drag at once.
+    fn press_map(&mut self, at: Point) {
+        if let Look::Dialog(_) = &self.look {
+            let hits = hits(&self.model, at, &self.transform());
+            self.awaiting = None;
+            if !hits.is_empty() {
+                self.press = None;
+                if let Look::Dialog(dialog) = &mut self.look {
+                    dialog.release();
                 }
+                self.pending = Some(PendingPress {
+                    at,
+                    hits,
+                    shift: self.shift,
+                });
                 return;
             }
-            self.selected = clicked;
-            self.clicked = true;
-            if self.mode == MapMode::Course && self.selected.is_some() {
-                self.destination = self.selected;
-            }
+            self.pending = None;
+        }
+        self.start_drag(at);
+    }
+
+    /// Starts a press at `at` that drags the map as the pointer moves:
+    /// replacing any whose release was lost.
+    fn start_drag(&mut self, at: Point) {
+        self.press = Some(Press {
+            last: at,
+            travelled: 0.0,
+        });
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.press(at);
         }
     }
 
@@ -1146,7 +1256,7 @@ impl GalaxyMap {
     /// clipped to item 3, then the panels.
     fn draw_dialog(&self, dialog: &MapDialog, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        dialog.draw_frame(list, self.clear_route_enabled(), &self.style, metrics);
+        dialog.draw_frame(list, &self.style, metrics);
         let mut map = DrawList::new();
         self.draw_map(&mut map, &dialog.transform());
         clip_opaque(&map, map_area(), list);
@@ -1485,15 +1595,15 @@ impl GalaxyMap {
 
     /// The in-flight maps' six buttons' input (`_TrackMapButtons`): Done
     /// asks to close the map, as Return does; "-" and "+" step the zoom,
-    /// each only while its flag allows; Find opens Find. Clear Route and
-    /// Borders are taken and do nothing yet: galaxy-map-fidelity's phases
-    /// 6 and 8 give them the route's clear and the borders.
+    /// each only while its flag allows; Find opens Find; Clear Route,
+    /// while enabled, asks to clear the route, as C does. Borders is taken
+    /// and does nothing yet: galaxy-map-fidelity's phase 8 gives it the
+    /// borders.
     fn button_input(&mut self, input: &Input) {
-        let clear_route = self.clear_route_enabled();
         let Look::Dialog(dialog) = &mut self.look else {
             return;
         };
-        let state = dialog.state(clear_route);
+        let state = dialog.state();
         match dialog.buttons_mut().input(input, &state) {
             Some(MapButton::Done) => self.request = Some(Request::Close),
             Some(MapButton::ZoomOut) => {
@@ -1503,7 +1613,8 @@ impl GalaxyMap {
                 dialog.place_mut().zoom_in();
             }
             Some(MapButton::Find) => self.open_find(),
-            Some(MapButton::ClearRoute | MapButton::Borders) | None => {}
+            Some(MapButton::ClearRoute) => self.request = Some(Request::ClearRoute),
+            Some(MapButton::Borders) | None => {}
         }
     }
 }
@@ -1588,14 +1699,7 @@ impl Screen for GalaxyMap {
                     // Replaces any button press whose release was lost.
                     self.armed = false;
                     if self.in_map(at) {
-                        // Replaces any press whose release was lost.
-                        self.press = Some(Press {
-                            last: at,
-                            travelled: 0.0,
-                        });
-                        if let Look::Dialog(dialog) = &mut self.look {
-                            dialog.press(at);
-                        }
+                        self.press_map(at);
                     }
                 }
             }
@@ -1628,6 +1732,8 @@ impl Screen for GalaxyMap {
     /// "Enter system" button, on Done or Find, or in Find.
     fn cancel_pointer(&mut self) {
         self.press = None;
+        self.pending = None;
+        self.awaiting = None;
         self.armed = false;
         if let Look::Dialog(dialog) = &mut self.look {
             dialog.cancel_pointer();
@@ -1705,15 +1811,53 @@ mod tests {
         );
     }
 
-    /// Clicks on system `id`'s dot, bringing it into item 3 first on an
-    /// in-flight map, which opens at 0.5625 and shows little of the
-    /// galaxy.
+    /// Clicks on system `id`'s dot. On an in-flight map, which opens at
+    /// 0.5625 and shows little of the galaxy, the map is brought onto it
+    /// first, and the owner answers the press by selecting `id`, as the
+    /// session's click does for a system it accepts off the hypergate map.
     fn click_on(map: &mut GalaxyMap, id: i16) {
-        if map.place().is_some() {
-            map.centre_on_system(SystemId(id));
+        answered_on(map, id, None);
+    }
+
+    /// Clicks on system `id`'s dot on the hypergate map, the owner
+    /// answering by selecting it and picking it.
+    fn gate_click_on(map: &mut GalaxyMap, id: i16) {
+        answered_on(map, id, Some(SystemId(id)));
+    }
+
+    /// Clicks on system `id`'s dot on the hypergate map, the owner
+    /// answering by selecting it and dropping the pick, as for the current
+    /// system.
+    fn gate_click_dropping(map: &mut GalaxyMap, id: i16) {
+        answer_on(map, id, Some(None));
+    }
+
+    /// [`click_on`], the owner's answer picking `pick` on the hypergate
+    /// map.
+    fn answered_on(map: &mut GalaxyMap, id: i16, pick: Option<SystemId>) {
+        answer_on(map, id, pick.map(Some));
+    }
+
+    /// [`click_on`], the owner's answer setting `gate_pick` as
+    /// [`PressAnswer::gate_pick`] does.
+    #[allow(clippy::option_option)] // `PressAnswer::gate_pick`'s.
+    fn answer_on(map: &mut GalaxyMap, id: i16, gate_pick: Option<Option<SystemId>>) {
+        if map.place().is_none() {
+            let at = dot(map, id);
+            click(map, at);
+            return;
         }
+        map.centre_on_system(SystemId(id));
         let at = dot(map, id);
-        click(map, at);
+        map.input(&button(MouseButton::Left, true, at));
+        let press = map.take_press().expect("a press for the owner");
+        assert!(press.hits.contains(&SystemId(id)), "{press:?}");
+        map.answer_press(Some(PressAnswer {
+            selected: Some(SystemId(id)),
+            gate_pick,
+            appended: false,
+        }));
+        map.input(&button(MouseButton::Left, false, at));
     }
 
     /// Where system `id` is drawn.
@@ -2586,35 +2730,161 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_click_on_a_system_sets_it_as_the_destination_once() {
+    /// The course map in Alpha (128), looking at Beta (129).
+    fn on_beta() -> (GalaxyMap, Point) {
         let mut map = course_map();
-        assert_eq!(map.take_destination(), None);
-        click_on(&mut map, 129);
-        assert_eq!(map.take_destination(), Some(SystemId(129)));
-        assert_eq!(map.take_destination(), None, "taken");
-        // Empty space clears the selection and sets nothing.
+        map.show_course(SystemId(128), &[]);
+        map.centre_on_system(SystemId(129));
         let beta = dot(&map, 129);
-        click(&mut map, at(beta.x - 40.0, beta.y));
-        assert_eq!(map.selected(), None);
-        assert_eq!(map.take_destination(), None);
-        // A drag sets nothing.
-        map.input(&button(MouseButton::Left, true, beta));
-        map.input(&Input::PointerMoved(at(beta.x + 20.0, beta.y)));
-        map.input(&button(MouseButton::Left, false, at(beta.x + 20.0, beta.y)));
-        assert_eq!(map.take_destination(), None);
-        // The last click is the one taken.
-        click_on(&mut map, 130);
-        click_on(&mut map, 128);
-        assert_eq!(map.take_destination(), Some(SystemId(128)));
+        (map, beta)
+    }
+
+    /// The pointer moved by (`dx`, `dy`) from `from`.
+    fn moved(from: Point, dx: f32, dy: f32) -> Input {
+        Input::PointerMoved(at(from.x + dx, from.y + dy))
     }
 
     #[test]
-    fn the_viewer_map_sets_no_destination() {
+    fn a_press_on_a_system_is_held_for_the_owner_once_with_its_hits_and_shift() {
+        let (mut map, beta) = on_beta();
+        assert_eq!(map.take_press(), None);
+        map.input(&button(MouseButton::Left, true, beta));
+        assert_eq!(
+            map.take_press(),
+            Some(PendingPress {
+                at: beta,
+                hits: ids(&[129]),
+                shift: false,
+            })
+        );
+        assert_eq!(map.take_press(), None, "taken");
+        assert_eq!(map.selected(), None, "the owner selects");
+        map.input(&button(MouseButton::Left, false, beta));
+        assert_eq!(map.take_press(), None, "no click on the release");
+        map.input(&press(Key::Shift));
+        map.input(&button(MouseButton::Left, true, beta));
+        assert!(map.take_press().expect("held").shift, "Shift held");
+    }
+
+    #[test]
+    fn a_held_press_drags_nothing_until_the_owner_accepts_no_hit() {
+        let (mut map, beta) = on_beta();
+        let scroll = map.place().expect("in flight").scroll();
+        map.input(&button(MouseButton::Left, true, beta));
+        map.input(&moved(beta, 40.0, 0.0));
+        assert_eq!(map.place().expect("in flight").scroll(), scroll, "held");
+        map.take_press().expect("held");
+        map.input(&moved(beta, 40.0, 0.0));
+        assert_eq!(map.place().expect("in flight").scroll(), scroll, "taken");
+        map.answer_press(None);
+        map.input(&moved(beta, 40.0, 0.0));
+        assert_ne!(
+            map.place().expect("in flight").scroll(),
+            scroll,
+            "dragged from the press"
+        );
+        map.input(&button(MouseButton::Left, false, beta));
+        let released = map.place().expect("in flight").scroll();
+        map.input(&moved(beta, 80.0, 0.0));
+        assert_eq!(map.place().expect("in flight").scroll(), released);
+        assert_eq!(map.selected(), None, "a drag selects nothing");
+    }
+
+    #[test]
+    fn an_answered_press_selects_and_drags_nothing() {
+        let (mut map, beta) = on_beta();
+        let scroll = map.place().expect("in flight").scroll();
+        map.input(&button(MouseButton::Left, true, beta));
+        map.take_press().expect("held");
+        map.answer_press(Some(PressAnswer {
+            selected: Some(SystemId(129)),
+            gate_pick: None,
+            appended: false,
+        }));
+        assert_eq!(map.selected(), Some(SystemId(129)));
+        map.input(&moved(beta, 40.0, 0.0));
+        map.input(&button(MouseButton::Left, false, beta));
+        assert_eq!(map.place().expect("in flight").scroll(), scroll);
+        map.answer_press(Some(PressAnswer {
+            selected: Some(SystemId(128)),
+            gate_pick: None,
+            appended: false,
+        }));
+        assert_eq!(map.selected(), Some(SystemId(129)), "nothing to answer");
+    }
+
+    #[test]
+    fn an_answer_with_no_selection_keeps_the_selection() {
+        let (mut map, beta) = on_beta();
+        map.preselect(Some(SystemId(130)));
+        map.input(&button(MouseButton::Left, true, beta));
+        map.take_press().expect("held");
+        map.answer_press(Some(PressAnswer {
+            selected: None,
+            gate_pick: None,
+            appended: false,
+        }));
+        assert_eq!(map.selected(), Some(SystemId(130)));
+    }
+
+    #[test]
+    fn a_press_on_empty_space_drags_at_once_and_holds_nothing() {
+        let (mut map, beta) = on_beta();
+        let scroll = map.place().expect("in flight").scroll();
+        map.preselect(Some(SystemId(129)));
+        let empty = at(beta.x - 40.0, beta.y);
+        map.input(&button(MouseButton::Left, true, empty));
+        assert_eq!(map.take_press(), None);
+        map.input(&moved(empty, 40.0, 0.0));
+        assert_ne!(map.place().expect("in flight").scroll(), scroll);
+        map.input(&button(MouseButton::Left, false, empty));
+        assert_eq!(
+            map.selected(),
+            Some(SystemId(129)),
+            "a release on empty space keeps the selection"
+        );
+    }
+
+    #[test]
+    fn a_new_press_replaces_a_held_one_and_cancelling_forgets_it() {
+        let (mut map, beta) = on_beta();
+        map.input(&button(MouseButton::Left, true, beta));
+        let empty = at(beta.x - 40.0, beta.y);
+        map.input(&button(MouseButton::Left, true, empty));
+        assert_eq!(map.take_press(), None, "replaced by a drag");
+        map.input(&button(MouseButton::Left, true, beta));
+        map.cancel_pointer();
+        assert_eq!(map.take_press(), None, "cancelled");
+        map.input(&button(MouseButton::Left, true, beta));
+        map.take_press().expect("held");
+        map.cancel_pointer();
+        map.answer_press(None);
+        let scroll = map.place().expect("in flight").scroll();
+        map.input(&moved(beta, 40.0, 0.0));
+        assert_eq!(
+            map.place().expect("in flight").scroll(),
+            scroll,
+            "a cancelled press answered starts no drag"
+        );
+    }
+
+    #[test]
+    fn the_viewer_holds_no_press_and_selects_an_unknown_inactive_system() {
+        // A course map shown a galaxy hiding Beta (129) gives no hit for
+        // it; the viewer, unfiltered, selects it.
+        let (mut course, beta) = on_beta();
+        course.show_galaxy(&session_galaxy(|overlay| {
+            overlay.set_visible(SystemId(129), Some(false));
+        }));
+        course.input(&button(MouseButton::Left, true, beta));
+        assert_eq!(course.take_press(), None, "no hit on the course map");
         let mut map = map();
         click_on(&mut map, 129);
-        assert_eq!(map.take_destination(), None);
         assert_eq!(map.selected(), Some(SystemId(129)));
+        assert_eq!(map.take_press(), None, "nothing for an owner");
+        assert!(!map.take_clear_route(), "no clear asked");
+        map.input(&press(Key::Enter));
+        assert_eq!(map.take_entry(), Some(SystemId(129)));
     }
 
     // The hyperspace selection.
@@ -2631,7 +2901,7 @@ mod tests {
             !texts(&list).iter().any(|text| text.starts_with("Beta (")),
             "the session's panel, not the viewer's"
         );
-        assert_eq!(map.take_destination(), None, "no destination");
+        assert_eq!(map.take_press(), None, "no press");
         map.preselect(None);
         assert_eq!(map.selected(), None);
         assert!(
@@ -2654,69 +2924,26 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_the_preselected_place_is_a_first_click() {
+    fn an_in_flight_press_gives_every_hit_at_a_place_whatever_the_selection() {
         // `_DoSystemMap`'s click (@0x12dd4-0x1314b) never reads
-        // `_selSystem`: it takes the first visible system at the place.
-        let mut map = course_map();
-        click_on(&mut map, 129);
-        map.take_destination();
-        map.preselect(Some(SystemId(128)));
-        click_on(&mut map, 128);
-        assert_eq!(map.selected(), Some(SystemId(128)), "not the next there");
-        assert_eq!(map.take_destination(), Some(SystemId(128)));
-        click_on(&mut map, 128);
-        assert_eq!(map.selected(), Some(SystemId(131)), "a click again cycles");
-        let mut map = course_map();
-        map.preselect(Some(SystemId(131)));
-        click_on(&mut map, 131);
-        assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
-    }
-
-    #[test]
-    fn a_click_on_the_hypergate_maps_preselected_place_is_a_first_click() {
-        let mut map = course_map();
-        map.show_course(SystemId(129), &[]);
-        map.offer_gates(ids(&[131]));
-        map.preselect(Some(SystemId(128)));
-        click_on(&mut map, 128);
-        assert_eq!(
-            map.selected(),
-            Some(SystemId(128)),
-            "128 hit first, not offered: the preselect kept"
-        );
-        assert_eq!(map.take_gate_choice(), None);
-    }
-
-    #[test]
-    fn a_click_again_on_the_hypergate_map_moves_on_through_offered_systems_there() {
-        let mut map = course_map();
-        map.show_course(SystemId(129), &[]);
-        map.offer_gates(ids(&[128, 131]));
-        click_on(&mut map, 128);
-        assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
-        click_on(&mut map, 128);
-        assert_eq!(
-            map.selected(),
-            Some(SystemId(131)),
-            "a click again moves on"
-        );
-        assert_eq!(map.take_gate_choice(), Some(SystemId(131)));
-    }
-
-    #[test]
-    fn a_course_map_click_before_the_gates_are_offered_is_not_clicked_again() {
-        // A course-map click on 128 leaves it selected by a click; offering
-        // the gates lets go of it, so the first click on the hypergate map
-        // starts from the first system at the place, not the one after 128.
-        let mut map = course_map();
-        map.show_course(SystemId(129), &[]);
-        click_on(&mut map, 128);
-        assert_eq!(map.selected(), Some(SystemId(128)));
-        map.offer_gates(ids(&[128, 131]));
-        click_on(&mut map, 128);
-        assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
-        click_on(&mut map, 128);
-        assert_eq!(map.selected(), Some(SystemId(131)));
+        // `_selSystem`, and has no stack cycling: it walks the systems.
+        for mut map in [course_map(), gate_map()] {
+            map.show_course(SystemId(129), &[]);
+            for selected in [None, Some(SystemId(128)), Some(SystemId(131))] {
+                map.preselect(selected);
+                map.centre_on_system(SystemId(128));
+                let alpha = dot(&map, 128);
+                map.input(&button(MouseButton::Left, true, alpha));
+                assert_eq!(
+                    map.take_press().expect("held").hits,
+                    ids(&[128, 131]),
+                    "{selected:?}"
+                );
+                map.answer_press(None);
+                map.input(&button(MouseButton::Left, false, alpha));
+                assert_eq!(map.selected(), selected, "{selected:?}");
+            }
+        }
     }
 
     // The hypergate map.
@@ -2737,38 +2964,34 @@ mod tests {
         map.offer_gates(ids(&[129, 130]));
         assert_eq!(map.mode(), MapMode::Hypergate);
         assert_eq!(map.selected(), None);
-        assert_eq!(map.take_destination(), None, "no course destination");
     }
 
     #[test]
-    fn a_click_selects_an_offered_system_and_nothing_else() {
+    fn the_hypergate_map_takes_the_owners_pick_and_the_current_system_drops_it() {
         let mut map = gate_map();
-        click_on(&mut map, 129);
+        gate_click_on(&mut map, 129);
         assert_eq!(map.selected(), Some(SystemId(129)));
-        click_on(&mut map, 128);
-        assert_eq!(map.selected(), Some(SystemId(129)), "not offered");
+        gate_click_dropping(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)), "the current system");
+        assert_eq!(map.take_gate_choice(), None, "the pick dropped");
+        let mut map = gate_map();
+        gate_click_on(&mut map, 130);
         click(&mut map, at(250.0, 150.0));
-        assert_eq!(map.selected(), Some(SystemId(129)), "empty space");
-        click_on(&mut map, 130);
-        assert_eq!(map.selected(), Some(SystemId(130)));
-        assert_eq!(map.take_destination(), None, "never a course destination");
+        assert_eq!(map.selected(), Some(SystemId(130)), "empty space");
+        click_on(&mut map, 129);
+        assert_eq!(map.take_gate_choice(), Some(SystemId(130)), "pick kept");
         assert_eq!(map.route(), []);
     }
 
     #[test]
     fn taking_the_gate_choice_gives_it_and_returns_to_the_course_map() {
         let mut map = gate_map();
-        click_on(&mut map, 130);
+        gate_click_on(&mut map, 130);
         assert_eq!(map.take_gate_choice(), Some(SystemId(130)));
         assert_eq!(map.mode(), MapMode::Course);
         assert_eq!(map.selected(), None);
         assert_eq!(map.take_gate_choice(), None, "taken");
-        click_on(&mut map, 128);
-        assert_eq!(
-            map.take_destination(),
-            Some(SystemId(128)),
-            "a course map again"
-        );
+        assert_eq!(map.offered(), [], "a course map again");
 
         let mut unpicked = gate_map();
         assert_eq!(unpicked.take_gate_choice(), None);
@@ -3569,19 +3792,12 @@ mod tests {
     fn space_centres_the_course_map_on_the_current_system_and_selects_it() {
         let mut map = flown_map();
         click_on(&mut map, 130);
-        assert_eq!(map.take_destination(), Some(SystemId(130)));
         map.input(&press(Key::Space));
         assert_eq!(map.transform().world, place(&map, 129));
         assert_eq!(map.selected(), Some(SystemId(129)));
-        assert_eq!(map.take_destination(), None, "not a destination");
+        assert_eq!(map.take_press(), None, "nothing for the owner");
         assert_eq!(map.take_ui_sounds(), [UiSound::MapCentred]);
         assert_eq!(map.take_ui_sounds(), [], "taken");
-        click_on(&mut map, 129);
-        assert_eq!(
-            map.selected(),
-            Some(SystemId(129)),
-            "a first click at its place"
-        );
     }
 
     #[test]
@@ -3601,7 +3817,7 @@ mod tests {
     #[test]
     fn space_on_the_hypergate_map_selects_the_current_system_and_keeps_the_pick() {
         let mut map = measured_gate_map();
-        click_on(&mut map, 130);
+        gate_click_on(&mut map, 130);
         map.input(&press(Key::Space));
         assert_eq!(map.selected(), Some(SystemId(128)));
         assert_eq!(map.transform().world, place(&map, 128));
@@ -3682,7 +3898,6 @@ mod tests {
     fn find_takes_every_input_while_it_is_open() {
         let mut map = flown_map();
         click_on(&mut map, 130);
-        map.take_destination();
         map.input(&press(Key::Char('f')));
         let view = map.transform();
         for key in [
@@ -3698,9 +3913,10 @@ mod tests {
         assert_eq!(map.take_cycle(), None, "no cycle");
         type_in(&mut map, " m");
         assert_eq!(map.find_dialog().expect("open").field().text(), " m");
-        click_on(&mut map, 128);
+        let alpha = dot(&map, 128);
+        click(&mut map, alpha);
         assert_eq!(map.selected(), Some(SystemId(130)), "no click on the map");
-        assert_eq!(map.take_destination(), None);
+        assert_eq!(map.take_press(), None);
         assert_eq!(map.take_ui_sounds(), [], "no Space beep");
         map.input(&press(Key::Enter));
         assert!(!map.finding(), "Return confirms");
@@ -3731,7 +3947,6 @@ mod tests {
     fn an_empty_text_and_cancel_change_nothing_and_say_nothing() {
         for mut map in [measured(map()), flown_map()] {
             click_on(&mut map, 129);
-            map.take_destination();
             let view = map.transform();
             find(&mut map, "");
             map.input(&press(Key::Char('s')));
@@ -3769,7 +3984,7 @@ mod tests {
         let mut map = flown_map();
         map.show_search(SearchOutcome::Found(SystemId(130)));
         assert_eq!(map.selected(), Some(SystemId(130)));
-        assert_eq!(map.take_destination(), None, "not a destination");
+        assert_eq!(map.take_press(), None, "nothing for the owner");
         assert_eq!(map.transform().world, place(&map, 130));
         assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemFound]);
         click_on(&mut map, 128);
@@ -3785,7 +4000,7 @@ mod tests {
     #[test]
     fn a_search_found_on_the_hypergate_map_keeps_the_pick() {
         let mut map = measured_gate_map();
-        click_on(&mut map, 129);
+        gate_click_on(&mut map, 129);
         map.show_search(SearchOutcome::Found(SystemId(131)));
         assert_eq!(map.selected(), Some(SystemId(131)));
         assert_eq!(map.take_gate_choice(), Some(SystemId(129)));
@@ -3798,7 +4013,7 @@ mod tests {
         assert_eq!(map.selected(), Some(SystemId(129)));
         assert_eq!(map.take_gate_choice(), None, "a preselect picks nothing");
         let mut map = gate_map();
-        click_on(&mut map, 129);
+        gate_click_on(&mut map, 129);
         map.offer_gates(ids(&[129, 130]));
         assert_eq!(map.selected(), None);
         assert_eq!(map.take_gate_choice(), None, "offering clears the pick");

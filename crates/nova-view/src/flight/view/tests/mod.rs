@@ -1209,13 +1209,66 @@ fn click(view: &mut View, at: Point) {
     }
 }
 
-/// Opens the map, picks system `id` and closes the map again.
+/// Opens the map, Shift-clicks each hop of the shortest route to system
+/// `id` and closes the map again, as `_DoSystemMap` builds a course a hop
+/// at a time ([`nova_sim::RuleKey::MapPlotting`]), the close cueing its
+/// first hop. The course must come out as the route: a hop past an
+/// unexplored system to an unknown one is refused, so a flight that
+/// plots one reads the planner ([`planner`]), where each click plots the
+/// route to its system.
 fn plot(view: &mut View, id: i16) {
+    let session = view.session().expect("flying");
+    let route = session
+        .star_map()
+        .route(
+            session.system(),
+            SystemId(id),
+            nova_sim::HyperlinkRule::Engine,
+        )
+        .expect("a route");
     tap(view, MAP);
-    let at = on_map(view, id);
-    click(view, at);
+    view.input(&key(Key::Shift, true));
+    for &hop in &route {
+        let at = on_map(view, hop.0);
+        click(view, at);
+    }
+    view.input(&key(Key::Shift, false));
+    assert_eq!(view.session().expect("flying").course(), route, "plotted");
     tap(view, MAP);
     assert!(!view.map_open());
+}
+
+/// `view` reading [`nova_sim::RuleKey::MapPlotting`]'s other reading, the
+/// planner: a click on the map plots the shortest course to its system
+/// and cues its first hop at once.
+fn planner(view: View) -> View {
+    let rules = view
+        .session()
+        .expect("flying")
+        .rules()
+        .with_override(nova_sim::RuleKey::MapPlotting, nova_sim::RuleSource::Bible);
+    view.with_rules(rules)
+}
+
+/// Marks system `id` known, as a map or a visit would.
+fn know(view: &mut View, id: i16) {
+    view.session
+        .as_mut()
+        .expect("flying")
+        .mark_known([SystemId(id)]);
+}
+
+/// Whether the open map draws Clear Route enabled
+/// (`showClearRouteButton`).
+fn clear_route_enabled(view: &View) -> bool {
+    view.course_map().clear_route_enabled()
+}
+
+/// Presses Shift, clicks at `at` and lets Shift go.
+fn shift_click(view: &mut View, at: Point) {
+    view.input(&key(Key::Shift, true));
+    click(view, at);
+    view.input(&key(Key::Shift, false));
 }
 
 /// Thrusts straight up until the ship is at least the minimum jump
@@ -1385,10 +1438,10 @@ fn tick_to_arrival(view: &mut View) {
 /// Jumps from Sol to Alpha Centauri, on a course on to Barnard, and
 /// stops 50 ms into the arrival's fade-in.
 fn fading_in_on_course_to_barnard() -> View {
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = planner(FlightView::new(FakeCatalog {
         onward: true,
         ..catalog()
-    });
+    }));
     plot(&mut view, 132);
     fly_out(&mut view);
     jump_now(&mut view);

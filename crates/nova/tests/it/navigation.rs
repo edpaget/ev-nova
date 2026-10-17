@@ -39,7 +39,7 @@ use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
-use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
+use nova_sim::hyperspace::{HyperlinkRule, MIN_JUMP_DISTANCE};
 use nova_sim::{Session, ShipState, SystemId};
 use nova_view::flight::FlightView;
 use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_OFF, NAV_UNEXPLORED};
@@ -317,14 +317,26 @@ impl Harness {
         *self.session().player()
     }
 
-    /// Plots a course to system `id` on flight's map: M, a click, M.
+    /// Plots a course to system `id` on flight's map: M, a Shift-click on
+    /// each hop of the shortest route there, M, as `_DoSystemMap` builds a
+    /// course a hop at a time; the close cues its first hop.
     fn plot(&mut self, id: i16) {
         self.frame();
+        let session = self.session();
+        let route = session
+            .star_map()
+            .route(session.system(), SystemId(id), HyperlinkRule::Engine)
+            .expect("a route");
         self.press(KeyCode::KeyM);
-        let map = self.flight().course_map();
-        let system = map.model().system(SystemId(id)).expect("on the map");
-        let at = map.transform().world_to_screen(system.position());
-        self.click(at);
+        self.key(KeyCode::ShiftLeft, true, false);
+        for hop in &route {
+            let map = self.flight().course_map();
+            let system = map.model().system(*hop).expect("on the map");
+            let at = map.transform().world_to_screen(system.position());
+            self.click(at);
+        }
+        self.key(KeyCode::ShiftLeft, false, false);
+        assert_eq!(self.session().course(), route, "plotted");
         self.press(KeyCode::KeyM);
         assert!(!self.flight().map_open());
     }

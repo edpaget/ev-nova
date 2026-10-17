@@ -587,13 +587,15 @@ impl Harness {
         panic!("the map was never taken");
     }
 
-    /// Plots a course to Beta on flight's map: M, a click, M, once the
-    /// take-off grace is over.
+    /// Plots a course to Beta on flight's map: M, a Shift-click, M, once
+    /// the take-off grace is over.
     fn plot_beta(&mut self) {
         self.past_the_takeoff_grace();
         self.press(KeyCode::KeyM);
         let beta = self.on_map(129);
+        self.key(KeyCode::ShiftLeft, true);
         self.click(beta);
+        self.key(KeyCode::ShiftLeft, false);
         self.press(KeyCode::KeyM);
         assert_eq!(self.session().course(), [SystemId(129)]);
     }

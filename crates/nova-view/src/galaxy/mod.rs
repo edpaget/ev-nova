@@ -16,6 +16,8 @@
 //! - [`place`]: where the in-flight maps look, the original's `_mapZoom`
 //!   and `_mapScroll`.
 //! - [`clip`]: the in-flight maps' clip of what they draw to the map item.
+//! - [`click`]: the in-flight maps' click: the hit box, and the press
+//!   held for the map's owner to answer.
 //! - [`buttons`]: the in-flight maps' six buttons, as `_DrawMapButtons`
 //!   draws them and `_TrackMapButtons` tracks them.
 //! - [`find`]: the map's Find dialog, `DLOG` 3005, as `_DoSystemSearch`
@@ -23,6 +25,7 @@
 
 pub mod buttons;
 pub mod catalog;
+pub mod click;
 pub mod clip;
 pub mod data;
 pub mod dialog;
@@ -40,6 +43,7 @@ pub use catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,
     SystemEntry, SystemId,
 };
+pub use click::{PendingPress, PressAnswer};
 pub use find::{FindDialog, FindOutcome};
 pub use map::{GalaxyMap, MapCycle, MapMarks, MapMode};
 pub use model::{GalaxyModel, MapSystem, NEUTRAL};

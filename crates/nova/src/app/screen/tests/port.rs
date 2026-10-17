@@ -687,10 +687,16 @@ fn cancelling_the_hire_screen_resets_and_the_shops_show_it() {
 /// [`data`] with system 128 linked to 129, landed at Alpha Prime's
 /// bar, the bar open.
 fn in_the_bar() -> AppScreen {
+    in_the_bar_by(Rulebook::default())
+}
+
+/// [`in_the_bar`], its rules read as `rules` says.
+fn in_the_bar_by(rules: Rulebook) -> AppScreen {
     let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
     let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
     built.put_u16(alpha + 0x04, 129);
     let mut screen = AppScreen::new(loaded_bytes(built.bytes))
+        .with_rules(rules)
         .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
     land(&mut screen);
     click_port_item(&mut screen, 10);
@@ -747,7 +753,9 @@ fn scrolled_to(screen: &mut AppScreen, system: SystemId) -> nova_view::Point {
 
 #[test]
 fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
-    let mut screen = in_the_bar();
+    // The planner's click writes the nav in port, which the bar puts back.
+    let mut screen =
+        in_the_bar_by(Rulebook::default().with_override(RuleKey::MapPlotting, RuleSource::Bible));
     let nav = |screen: &AppScreen| {
         flight(screen)
             .session()
@@ -770,15 +778,16 @@ fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
     );
     screen.input(&key(MAP, false));
     let beta = scrolled_to(&mut screen, SystemId(129));
+    let empty = nova_view::Point::new(beta.x - 40.0, beta.y);
     let left = |pressed| Input::PointerButton {
         button: MouseButton::Left,
         pressed,
-        at: beta,
+        at: empty,
     };
     screen.input(&left(true));
     screen.cancel_pointer();
     screen.input(&left(false));
-    assert_eq!(nav(&screen), landed, "the map's click abandoned");
+    assert_eq!(nav(&screen), landed, "a press on empty space plots nothing");
     for pressed in [true, false] {
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,

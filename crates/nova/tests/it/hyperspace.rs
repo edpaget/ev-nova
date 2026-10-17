@@ -53,9 +53,10 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::shortest_turn;
-use nova_sim::hyperspace::{JUMP_FUEL, MIN_JUMP_DISTANCE};
+use nova_sim::hyperspace::{HyperlinkRule, JUMP_FUEL, MIN_JUMP_DISTANCE};
 use nova_sim::{
-    Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId, TICKS_PER_SECOND,
+    Chance, DisasterId, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook, Session, ShipState,
+    SystemId, TICKS_PER_SECOND,
 };
 use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
 use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
@@ -341,7 +342,25 @@ impl Harness {
     /// from the ship browser with F, drawing the developer's title, which
     /// these tests read the system shown by.
     fn flying_over(data: Rc<GameData>, chance: SharedChance) -> Self {
+        Self::flying_by(data, chance, Rulebook::default())
+    }
+
+    /// The app in flight reading [`RuleKey::MapPlotting`]'s other reading,
+    /// the planner: a click on the map plots the shortest course there.
+    /// Beta is unexplored and Gamma unknown, so the engine's Shift-click
+    /// can't add Gamma after Beta.
+    fn planning() -> Self {
+        Self::flying_by(
+            data(),
+            SharedChance::default(),
+            Rulebook::default().with_override(RuleKey::MapPlotting, RuleSource::Bible),
+        )
+    }
+
+    /// [`Harness::flying_over`], its rules read as `rules` says.
+    fn flying_by(data: Rc<GameData>, chance: SharedChance, rules: Rulebook) -> Self {
         let screen = start_screen(Rc::clone(&data))
+            .with_rules(rules)
             .with_chance(chance)
             .with_flight_overlays(FlightOverlays {
                 title: true,
@@ -444,12 +463,24 @@ impl Harness {
         self.fly_out();
     }
 
-    /// Plots a course to system `id` on flight's map: M, a click on it, M.
+    /// Plots a course to system `id` on flight's map: M, a Shift-click on
+    /// each hop of the shortest route there, M, as `_DoSystemMap` builds a
+    /// course a hop at a time; the close cues its first hop.
     fn plot(&mut self, id: i16) {
         self.frame();
+        let session = self.session();
+        let route = session
+            .star_map()
+            .route(session.system(), SystemId(id), HyperlinkRule::Engine)
+            .expect("a route");
         self.press(Key::Char('m'));
-        let system = self.on_map(id);
-        self.click(system);
+        self.key(Key::Shift, true);
+        for hop in &route {
+            let at = self.on_map(hop.0);
+            self.click(at);
+        }
+        self.key(Key::Shift, false);
+        assert_eq!(self.session().course(), route, "plotted");
         self.press(Key::Char('m'));
     }
 
@@ -802,7 +833,9 @@ fn date(harness: &Harness) -> (u8, u8, i32) {
 
 #[test]
 fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
-    let mut harness = Harness::flying();
+    // The planner: Gamma is unknown past unexplored Beta, so the engine's
+    // Shift-click can't add it after Beta.
+    let mut harness = Harness::planning();
     harness.frame();
     assert_eq!(date(&harness), (23, 6, 1177));
 
@@ -820,9 +853,16 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::FlightMap);
 
-    // Clicking Gamma plots the course through Beta, drawn on the map.
+    // Gamma, unknown, is accepted only from Beta's link, with Shift and a
+    // course to Beta: Shift-clicking Beta then Gamma plots the course
+    // through Beta, drawn on the map.
+    let beta = harness.on_map(129);
+    harness.key(Key::Shift, true);
+    harness.click(beta);
+    assert_eq!(harness.session().course(), [SystemId(129)]);
     let gamma = harness.on_map(130);
     harness.click(gamma);
+    harness.key(Key::Shift, false);
     assert_eq!(harness.session().course(), [SystemId(129), SystemId(130)]);
     let map = harness.frame();
     assert_eq!(
@@ -907,7 +947,7 @@ fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
 
 #[test]
 fn j_straight_after_arriving_jumps_on_to_the_next_system() {
-    let mut harness = Harness::flying();
+    let mut harness = Harness::planning();
     harness.out_towards(130);
     harness.arrive_in(129);
     // Once the jump effect is over, and a second later, J still goes on.
@@ -930,7 +970,7 @@ fn j_straight_after_arriving_jumps_on_to_the_next_system() {
 
 #[test]
 fn j_as_the_new_system_fades_in_jumps_on_to_the_next_system() {
-    let mut harness = Harness::flying();
+    let mut harness = Harness::planning();
     harness.out_towards(130);
     let first = harness.arrive_in(129);
     assert!(white(&first) || fading(&first), "fading in from white");
@@ -970,10 +1010,7 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     harness.app = harness
         .app
         .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
-    harness.press(Key::Char('m'));
-    let beta = harness.on_map(129);
-    harness.click(beta);
-    harness.press(Key::Char('m'));
+    harness.plot(129);
     harness.fly_out();
     log.borrow_mut().clear();
     harness.jump_into(129);
@@ -1004,10 +1041,7 @@ fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
     harness.app = harness
         .app
         .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
-    harness.press(Key::Char('m'));
-    let beta = harness.on_map(129);
-    harness.click(beta);
-    harness.press(Key::Char('m'));
+    harness.plot(129);
     harness.fly_out();
     log.borrow_mut().clear();
     harness.jump_into(129);
@@ -1063,10 +1097,7 @@ fn each_day_of_a_jump_rolls_the_events_on_the_apps_chance() {
     let (asked, chance) = always();
     let mut harness = Harness::flying_with(chance);
     harness.frame();
-    harness.press(Key::Char('m'));
-    let beta = harness.on_map(129);
-    harness.click(beta);
-    harness.press(Key::Char('m'));
+    harness.plot(129);
     harness.fly_out();
     assert!(
         asked.borrow().is_empty(),

@@ -132,6 +132,8 @@ pub struct MapDialog {
     place: MapPlace,
     buttons: MapButtons,
     borders_shown: bool,
+    /// `showClearRouteButton`: whether Clear Route is enabled.
+    clear_route: bool,
     drag: Option<Drag>,
 }
 
@@ -145,6 +147,7 @@ impl MapDialog {
             place: MapPlace::new(scroll),
             buttons: MapButtons::new(DIALOG_ORIGIN),
             borders_shown: true,
+            clear_route: false,
             drag: None,
         }
     }
@@ -182,14 +185,26 @@ impl MapDialog {
         self.borders_shown = shown;
     }
 
-    /// The buttons' flags: the zoom's, Clear Route's `clear_route`, and
-    /// the borders setting.
+    /// Whether Clear Route is enabled (`showClearRouteButton`): off as
+    /// the dialog is made.
     #[must_use]
-    pub fn state(&self, clear_route: bool) -> ButtonState {
+    pub fn clear_route(&self) -> bool {
+        self.clear_route
+    }
+
+    /// Sets `showClearRouteButton`.
+    pub fn set_clear_route(&mut self, enabled: bool) {
+        self.clear_route = enabled;
+    }
+
+    /// The buttons' flags: the zoom's, `showClearRouteButton`, and the
+    /// borders setting.
+    #[must_use]
+    pub fn state(&self) -> ButtonState {
         ButtonState {
             can_zoom_out: self.place.can_zoom_out(),
             can_zoom_in: self.place.can_zoom_in(),
-            clear_route,
+            clear_route: self.clear_route,
             borders_shown: self.borders_shown,
         }
     }
@@ -250,21 +265,14 @@ impl MapDialog {
     }
 
     /// Draws the frame under the map ([`draw_frame`]) with this dialog's
-    /// buttons, Clear Route enabled by `clear_route`.
+    /// buttons in its state.
     pub fn draw_frame(
         &self,
         list: &mut DrawList,
-        clear_route: bool,
         style: &ButtonStyle,
         metrics: Option<&dyn TextMetrics>,
     ) {
-        draw_frame(
-            list,
-            &self.buttons,
-            &self.state(clear_route),
-            style,
-            metrics,
-        );
+        draw_frame(list, &self.buttons, &self.state(), style, metrics);
     }
 }
 
@@ -374,12 +382,15 @@ mod tests {
     #[test]
     fn the_state_reads_the_zoom_flags_clear_route_and_the_borders() {
         let mut dialog = MapDialog::new((0, 0));
-        assert_eq!(dialog.state(true), ALL);
+        assert!(!dialog.clear_route(), "off as made");
+        dialog.set_clear_route(true);
+        assert_eq!(dialog.state(), ALL);
         dialog.place_mut().zoom_in();
         dialog.set_borders_shown(false);
+        dialog.set_clear_route(false);
         assert!(!dialog.borders_shown());
         assert_eq!(
-            dialog.state(false),
+            dialog.state(),
             ButtonState {
                 can_zoom_out: true,
                 can_zoom_in: false,
@@ -394,12 +405,12 @@ mod tests {
         let mut dialog = MapDialog::new((0, 0));
         dialog.place_mut().zoom_in();
         let mut list = DrawList::new();
-        dialog.draw_frame(&mut list, false, &ButtonStyle::STOCK, None);
+        dialog.draw_frame(&mut list, &ButtonStyle::STOCK, None);
         let mut expected = DrawList::new();
         draw_frame(
             &mut expected,
             dialog.buttons(),
-            &dialog.state(false),
+            &dialog.state(),
             &ButtonStyle::STOCK,
             None,
         );
@@ -468,7 +479,8 @@ mod tests {
     fn cancelling_the_pointer_abandons_a_press_on_a_button() {
         let mut dialog = MapDialog::new((0, 0));
         let done = dialog.buttons().rect(MapButton::Done).center();
-        let state = dialog.state(true);
+        dialog.set_clear_route(true);
+        let state = dialog.state();
         let press = |pressed| crate::Input::PointerButton {
             button: crate::MouseButton::Left,
             pressed,
@@ -483,6 +495,7 @@ mod tests {
 
     use crate::galaxy::buttons::{CLEAR_ROUTE_LABEL, HIDE_BORDERS_LABEL, SHOW_BORDERS_LABEL};
     use crate::galaxy::catalog::SystemId;
+    use crate::galaxy::click::PressAnswer;
     use crate::galaxy::map::{BUTTON, ENTER_BUTTON, ENTER_LABEL, GalaxyMap, PANEL};
     use crate::galaxy::testkit::{FakeCatalog, galaxy, system};
     use crate::galaxy::view::{MapView, PAN_STEP, SCALES};
@@ -613,18 +626,20 @@ mod tests {
                 label(HIDE_BORDERS_LABEL, true),
                 label("Find", true),
             ],
-            "no course: Clear Route disabled; the borders shown by default"
+            "Clear Route off until set; the borders shown by default"
         );
         map.show_course(SystemId(128), &[SystemId(129)]);
-        assert_eq!(labels(&drawn(&map))[3], label(CLEAR_ROUTE_LABEL, true));
-        map.show_borders_setting(false);
-        assert_eq!(labels(&drawn(&map))[4], label(SHOW_BORDERS_LABEL, true));
-        map.offer_gates(vec![SystemId(129)]);
         assert_eq!(
             labels(&drawn(&map))[3],
             label(CLEAR_ROUTE_LABEL, false),
-            "never on the hypergate map"
+            "the course alone doesn't set showClearRouteButton"
         );
+        map.set_clear_route(true);
+        assert_eq!(labels(&drawn(&map))[3], label(CLEAR_ROUTE_LABEL, true));
+        map.show_borders_setting(false);
+        assert_eq!(labels(&drawn(&map))[4], label(SHOW_BORDERS_LABEL, true));
+        map.set_clear_route(false);
+        assert_eq!(labels(&drawn(&map))[3], label(CLEAR_ROUTE_LABEL, false));
     }
 
     #[test]
@@ -798,18 +813,92 @@ mod tests {
     }
 
     #[test]
-    fn clear_route_and_borders_are_taken_and_change_nothing_yet() {
+    fn borders_is_taken_and_changes_nothing_yet() {
         let mut map = course_map().with_metrics(std::rc::Rc::new(MonoMetrics));
         map.show_course(SystemId(128), &[SystemId(129)]);
+        map.set_clear_route(true);
         let before = drawn(&map);
-        for button in [MapButton::ClearRoute, MapButton::Borders] {
-            click(&mut map, on(button));
-            assert!(!map.take_close(), "{button:?}");
-            assert!(!map.finding(), "{button:?}");
-            assert_eq!(map.take_destination(), None);
-            assert_eq!(map.route(), [SystemId(129)], "{button:?}");
-        }
+        click(&mut map, on(MapButton::Borders));
+        assert!(!map.take_close());
+        assert!(!map.finding());
+        assert!(!map.take_clear_route());
+        assert_eq!(map.route(), [SystemId(129)]);
         assert_eq!(drawn(&map), before, "the labels unchanged");
+    }
+
+    #[test]
+    fn clear_route_asks_to_clear_only_while_enabled() {
+        let mut map = course_map().with_metrics(std::rc::Rc::new(MonoMetrics));
+        map.show_course(SystemId(128), &[SystemId(129)]);
+        click(&mut map, on(MapButton::ClearRoute));
+        assert!(!map.take_clear_route(), "disabled");
+        map.set_clear_route(true);
+        click(&mut map, on(MapButton::ClearRoute));
+        assert!(map.take_clear_route(), "enabled");
+        assert!(!map.take_clear_route(), "taken");
+        assert!(!map.take_close());
+        drag(&mut map, on(MapButton::ClearRoute), on(MapButton::Done));
+        assert!(!map.take_clear_route(), "released off it");
+    }
+
+    #[test]
+    fn c_asks_to_clear_whatever_the_button_its_repeats_too() {
+        for enabled in [false, true] {
+            let mut map = course_map();
+            map.set_clear_route(enabled);
+            for key in [
+                press(Key::Char('c')),
+                press(Key::Char('C')),
+                held(Key::Char('c')),
+            ] {
+                map.input(&key);
+                assert!(map.take_clear_route(), "{key:?}, enabled {enabled}");
+            }
+            map.input(&Input::Key {
+                key: Key::Char('c'),
+                pressed: false,
+                repeat: false,
+            });
+            assert!(!map.take_clear_route(), "a release");
+        }
+        let mut gate = course_map();
+        gate.offer_gates(vec![SystemId(129)]);
+        gate.input(&press(Key::Char('c')));
+        assert!(gate.take_clear_route(), "the hypergate map too");
+        let mut viewer = viewer();
+        viewer.input(&press(Key::Char('c')));
+        assert!(!viewer.take_clear_route(), "never the viewer");
+    }
+
+    #[test]
+    fn the_latch_is_set_by_an_answer_that_appends_and_cleared_by_the_clear() {
+        let mut map = course_map();
+        let alpha = map.transform().world_to_screen(Point::new(0.0, 0.0));
+        let answer = |map: &mut GalaxyMap, appended| {
+            map.input(&left(true, alpha));
+            map.take_press().expect("a hit");
+            map.answer_press(Some(PressAnswer {
+                selected: None,
+                gate_pick: None,
+                appended,
+            }));
+            map.input(&left(false, alpha));
+            labels(&drawn(map))[3].1
+        };
+        assert!(!answer(&mut map, false), "nothing appended");
+        assert!(answer(&mut map, true), "appended");
+        assert!(answer(&mut map, false), "kept by a press appending nothing");
+        map.route_cleared();
+        assert!(!labels(&drawn(&map))[3].1, "the clear");
+    }
+
+    #[test]
+    fn the_clear_drops_the_hypergate_maps_pick() {
+        let mut map = course_map();
+        map.offer_gates(vec![SystemId(129)]);
+        map.select_gate(Some(SystemId(129)));
+        map.route_cleared();
+        assert_eq!(map.take_gate_choice(), None);
     }
 
     #[test]
@@ -870,8 +959,12 @@ mod tests {
             drag(&mut map, outside, alpha);
             assert_eq!(map.selected(), None, "{outside:?}");
         }
-        click(&mut map, alpha);
-        assert_eq!(map.selected(), Some(SystemId(128)), "a click in item 3");
+        map.input(&left(true, alpha));
+        assert_eq!(
+            map.take_press().map(|press| press.hits),
+            Some(vec![SystemId(128), SystemId(131)]),
+            "a press in item 3"
+        );
     }
 
     #[test]

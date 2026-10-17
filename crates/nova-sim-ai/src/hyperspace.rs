@@ -40,11 +40,14 @@
 //!   too, and only 5 are genuinely one-way. No copy of the Nova Bible
 //!   was at hand to check its `sÿst` Con text, and an in-game check of a
 //!   stock one-way pair could not be made; the engine evidence is direct.
-//!   Two differences from the original are left as they are: the original
-//!   has no shortest-path planner (a click sets the destination only to a
-//!   listed neighbour, and a shift-click extends the course a hop at a
-//!   time), and it draws a link one system alone lists only once that
-//!   system passes the map's exploration test.
+//!   The original has no shortest-path planner: a click sets the
+//!   destination only to a listed neighbour, and a shift-click extends the
+//!   course a hop at a time. That is
+//!   [`RuleKey::MapPlotting`](crate::RuleKey::MapPlotting)'s engine
+//!   reading (`nova_sim::Session::map_click`); [`StarMap::route`] is its
+//!   other reading's planner. One difference is left as it is: the
+//!   original draws a link one system alone lists only once that system
+//!   passes the map's exploration test.
 //! - [`check_jump`] gives the next system on the route, or the first
 //!   [`JumpRefusal`] that applies, in this order: there is no destination,
 //!   the ship is nearer the system's centre than its jump distance

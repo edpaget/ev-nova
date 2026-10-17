@@ -218,7 +218,8 @@ fn return_on_the_hypergate_map_enters_or_cancels_in_silence() {
 
 #[test]
 fn return_closes_the_bars_map_and_puts_back_the_bars_nav() {
-    let mut view = in_the_bar(None);
+    // The planner's click writes the nav in port, which the close shows.
+    let mut view = planner(in_the_bar(None));
     view.open_bar_map();
     port_click(&mut view, 131);
     view.take_sounds();
@@ -1453,7 +1454,8 @@ fn a_click_on_the_hypergate_map_draws_it_again() {
         ..gated()
     });
     land_now(&mut view);
-    click(&mut view, at(5.0, 5.0));
+    let sol = on_map(&mut view, 130);
+    click(&mut view, sol);
     let drawn: Vec<SystemId> = view
         .course_map()
         .picture()
@@ -1593,7 +1595,7 @@ fn the_course_maps_panel_titles_the_current_destination_and_selected_systems_and
         Some(", "),
         "Sol's two unnamed ports"
     );
-    // A click plots the course and selects its hop in mode 3.
+    // A click on a linked system selects it in mode 3.
     let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     assert_eq!(view.course_map().selected(), Some(SystemId(131)));
@@ -1610,10 +1612,11 @@ fn the_course_maps_panel_titles_the_current_destination_and_selected_systems_and
     tap(&mut view, MAP);
     assert_eq!(view.course_map().selected(), Some(SystemId(130)));
     assert_eq!(title(&view).as_deref(), Some("Current System:"));
+    know(&mut view, 132);
     let barnard = on_map(&mut view, 132);
     click(&mut view, barnard);
     assert_eq!(view.course_map().selected(), Some(SystemId(132)));
-    assert_eq!(nav_mode(&view), NavMode::Off, "no route to Barnard");
+    assert_eq!(nav_mode(&view), NavMode::Off, "no link to Barnard");
     assert_eq!(title(&view).as_deref(), Some("Selected System:"));
 }
 
@@ -1712,16 +1715,19 @@ fn the_flights_metrics_measure_the_course_maps_panel() {
 }
 
 #[test]
-fn a_click_on_empty_space_takes_the_panel_for_no_selection() {
+fn a_click_on_empty_space_drags_and_keeps_the_selection_and_its_panel() {
+    // A press that selects nothing drags (`_DoSystemMap` @0x137e9),
+    // leaving `_selSystem` as it was.
     let mut view = worded(flight());
     tap(&mut view, MAP);
     assert_eq!(title(&view).as_deref(), Some("Current System:"));
     click(&mut view, Point::new(250.0, 150.0));
-    assert_eq!(view.course_map().selected(), None);
-    assert_eq!(title(&view).as_deref(), Some("Selected System:"));
+    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+    assert_eq!(title(&view).as_deref(), Some("Current System:"));
     assert_eq!(
         panel_text(&drawn(&view), PORTS_AT).as_deref(),
-        Some("<Unknown>")
+        Some(", "),
+        "Sol's two unnamed ports"
     );
 }
 
@@ -1897,4 +1903,125 @@ fn in_port_the_map_is_drawn_alone() {
     view.open_bar_map();
     let list = drawn(&view);
     assert_eq!(background_at(&list), Some(1), "the dialog's black, then it");
+}
+
+// Clear Route, C and the open latch (`_DoSystemMap` item 8,
+// @0x12c69-0x12dbf; `showClearRouteButton`, @0x12396-0x123c3).
+
+/// Where Clear Route is on the screen.
+fn clear_route_button() -> Point {
+    crate::galaxy::buttons::MapButtons::new(crate::galaxy::dialog::DIALOG_ORIGIN)
+        .rect(crate::galaxy::buttons::MapButton::ClearRoute)
+        .center()
+}
+
+#[test]
+fn the_map_opens_with_clear_route_enabled_by_a_course_and_never_on_the_hypergate_map() {
+    let mut view = flight();
+    tap(&mut view, MAP);
+    assert!(!clear_route_enabled(&view), "no course");
+    tap(&mut view, MAP);
+    plot(&mut view, 131);
+    tap(&mut view, MAP);
+    assert!(clear_route_enabled(&view), "a course");
+    let mut view = FlightView::new(gated());
+    view.session
+        .as_mut()
+        .expect("flying")
+        .plot_course(SystemId(131))
+        .expect("a route");
+    land_now(&mut view);
+    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+    assert!(!clear_route_enabled(&view), "the hypergate map");
+}
+
+#[test]
+fn clear_route_by_its_button_clears_the_course_lets_go_and_redraws_the_nav() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    tap(&mut view, MAP);
+    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+    click(&mut view, clear_route_button());
+    assert!(view.map_open());
+    assert_eq!(course(&view), []);
+    assert_eq!(view.course_map().route(), []);
+    assert_eq!(
+        nav_mode(&view),
+        NavMode::Hyperspace(None),
+        "let go, mode kept"
+    );
+    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
+    assert!(!clear_route_enabled(&view), "disabled after");
+    tap(&mut view, MAP);
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None), "nothing to cue");
+}
+
+#[test]
+fn c_clears_the_route_whether_clear_route_is_enabled_or_not() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    tap(&mut view, MAP);
+    tap(&mut view, Key::Char('c'));
+    assert_eq!(course(&view), []);
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+    assert!(!clear_route_enabled(&view));
+    // Clear Route is disabled now, and C still clears.
+    let alpha = on_map(&mut view, 131);
+    click(&mut view, alpha);
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+    tap(&mut view, Key::Char('c'));
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None), "C again");
+    assert!(view.map_open(), "C doesn't close the map");
+}
+
+#[test]
+fn c_on_the_hypergate_map_drops_the_pick_so_the_close_cancels() {
+    let mut view = FlightView::new(gated());
+    land_now(&mut view);
+    let alpha = on_map(&mut view, 131);
+    click(&mut view, alpha);
+    assert_eq!(view.course_map().selected(), Some(SystemId(131)));
+    tap(&mut view, Key::Char('c'));
+    tap(&mut view, Key::Enter);
+    assert!(!view.map_open());
+    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+    assert_eq!(system_of(&view), SystemId(130));
+}
+
+#[test]
+fn a_click_on_the_hypergate_maps_current_system_drops_the_pick_so_the_close_cancels() {
+    let mut view = FlightView::new(gated());
+    land_now(&mut view);
+    let alpha = on_map(&mut view, 131);
+    click(&mut view, alpha);
+    let sol = on_map(&mut view, 130);
+    click(&mut view, sol);
+    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+    tap(&mut view, Key::Enter);
+    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+    assert_eq!(system_of(&view), SystemId(130));
+}
+
+#[test]
+fn shift_on_the_hypergate_map_is_a_plain_click() {
+    let mut view = FlightView::new(gated());
+    land_now(&mut view);
+    let alpha = on_map(&mut view, 131);
+    shift_click(&mut view, alpha);
+    assert_eq!(course(&view), [], "no hop written");
+    tap(&mut view, Key::Enter);
+    assert_eq!(system_of(&view), SystemId(131), "entered");
+}
+
+#[test]
+fn a_shift_click_writing_a_hop_enables_clear_route() {
+    let mut view = flight();
+    tap(&mut view, MAP);
+    assert!(!clear_route_enabled(&view));
+    let alpha = on_map(&mut view, 131);
+    click(&mut view, alpha);
+    assert!(!clear_route_enabled(&view), "a plain click writes no hop");
+    shift_click(&mut view, alpha);
+    assert!(clear_route_enabled(&view));
+    assert_eq!(view.course_map().route(), [SystemId(131)], "shown");
 }

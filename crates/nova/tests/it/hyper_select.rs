@@ -35,8 +35,8 @@ use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
-use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
-use nova_sim::{NavMode, Session, ShipState, SystemId};
+use nova_sim::hyperspace::{HyperlinkRule, MIN_JUMP_DISTANCE};
+use nova_sim::{NavMode, RuleKey, RuleSource, Rulebook, Session, ShipState, SystemId};
 use nova_view::flight::FlightView;
 use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
 use nova_view::{MouseButton, Point};
@@ -238,8 +238,19 @@ struct Harness {
 impl Harness {
     /// The app in flight, entered from the ship browser with F.
     fn flying() -> Self {
+        Self::flying_by(Rulebook::default())
+    }
+
+    /// The app in flight reading [`RuleKey::MapPlotting`]'s other reading,
+    /// the planner: a click on the map plots the shortest course there.
+    fn planning() -> Self {
+        Self::flying_by(Rulebook::default().with_override(RuleKey::MapPlotting, RuleSource::Bible))
+    }
+
+    /// [`Harness::flying`], its rules read as `rules` says.
+    fn flying_by(rules: Rulebook) -> Self {
         let data = data();
-        let screen = start_screen(Rc::clone(&data));
+        let screen = start_screen(Rc::clone(&data)).with_rules(rules);
         let mut harness = Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
@@ -316,35 +327,47 @@ impl Harness {
         *self.session().player()
     }
 
-    /// Plots a course to system `id` on flight's map: M, a click, M. The
-    /// map is scrolled with the arrows first until the system is well
-    /// inside item 3: it opens at 0.5625 on the current system.
+    /// Plots a course to system `id` on flight's map: M, a Shift-click on
+    /// each hop of the shortest route there, M, as `_DoSystemMap` builds a
+    /// course a hop at a time; the close cues its first hop. The map is
+    /// scrolled with the arrows first until each hop is well inside item
+    /// 3: it opens at 0.5625 on the current system.
     fn plot(&mut self, id: i16) {
         self.frame();
+        let session = self.session();
+        let route = session
+            .star_map()
+            .route(session.system(), SystemId(id), HyperlinkRule::Engine)
+            .expect("a route");
         self.press(KeyCode::KeyM);
+        self.key(KeyCode::ShiftLeft, true, false);
         let shown = nova_view::galaxy::dialog::map_area().grown(-12.0);
-        let on_map = |game: &Self| {
-            let map = game.flight().course_map();
-            let system = map.model().system(SystemId(id)).expect("on the map");
-            map.transform().world_to_screen(system.position())
-        };
-        for _ in 0..200 {
-            let at = on_map(self);
-            let key = if at.x < shown.min.x {
-                KeyCode::ArrowLeft
-            } else if at.x > shown.max.x {
-                KeyCode::ArrowRight
-            } else if at.y < shown.min.y {
-                KeyCode::ArrowUp
-            } else if at.y > shown.max.y {
-                KeyCode::ArrowDown
-            } else {
-                break;
+        for &hop in &route {
+            let on_map = |game: &Self| {
+                let map = game.flight().course_map();
+                let system = map.model().system(hop).expect("on the map");
+                map.transform().world_to_screen(system.position())
             };
-            self.press(key);
+            for _ in 0..200 {
+                let at = on_map(self);
+                let key = if at.x < shown.min.x {
+                    KeyCode::ArrowLeft
+                } else if at.x > shown.max.x {
+                    KeyCode::ArrowRight
+                } else if at.y < shown.min.y {
+                    KeyCode::ArrowUp
+                } else if at.y > shown.max.y {
+                    KeyCode::ArrowDown
+                } else {
+                    break;
+                };
+                self.press(key);
+            }
+            let at = on_map(self);
+            self.click(at);
         }
-        let at = on_map(self);
-        self.click(at);
+        self.key(KeyCode::ShiftLeft, false, false);
+        assert_eq!(self.session().course(), route, "plotted");
         self.press(KeyCode::KeyM);
         assert!(!self.flight().map_open());
     }
@@ -464,7 +487,8 @@ fn the_selected_system_is_where_j_jumps() {
 
 #[test]
 fn with_a_course_plotted_backslash_moves_on_from_its_first_hop_and_keeps_the_course() {
-    let mut game = Harness::flying();
+    // The planner: 133 is unknown past the unexplored 131.
+    let mut game = Harness::planning();
     game.plot(133);
     assert_eq!(game.session().course(), ids(&[131, 133]));
     game.press(KeyCode::Backslash);
