@@ -3035,6 +3035,70 @@ mod tests {
         );
     }
 
+    /// The heading a sniper moving down at 2, facing 76, with a last gun
+    /// of 10 a tick, sniping the player 300 to its right, takes after one
+    /// move in a world whose snipe brake lead is `lead`.
+    fn snipers_heading_after_a_move(lead: RuleSource) -> f32 {
+        let mut traffic = populated(1, 1);
+        let gun = crate::catalog::WeaponRecord {
+            speed: 1000,
+            count: 20,
+            ..weapon(128)
+        };
+        let npc = &mut traffic.npcs[0];
+        npc.goal = Goal::Snipe(ShipRef::Player);
+        npc.armament = Armament::new([(WeaponSpec::new(&gun), 1)]);
+        npc.state = ShipState {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(0.0, 2.0),
+            heading: 76.0,
+        };
+        let mut fuel = npc.reserves.fuel;
+        npc.armament.fire_pick(
+            WeaponId(128),
+            Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
+            &mut LauncherRounds::default(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+        );
+        assert_eq!(npc.armament.last_gun(), Some(WeaponId(128)));
+        let player = PlayerSide {
+            state: ShipState {
+                position: Vec2::new(300.0, 0.0),
+                ..ShipState::default()
+            },
+            condition: Condition::Intact,
+            reserves: crate::reserves::Reserves::full(1.0, 1.0, 1.0),
+            hull: HullSpec::default(),
+            handling: ShipStats::new(FAST, &[]).handling,
+            rating: 0,
+            yardstick: 0,
+            untargetable: false,
+            blessing: crate::ai::Blessing::NONE,
+        };
+        let world = World {
+            player: Some(player),
+            snipe_brake_lead: lead,
+            ..World::new(&[])
+        };
+        traffic.move_in(world, &mut Draws::of(&[]));
+        traffic.npcs()[0].state.heading
+    }
+
+    #[test]
+    fn a_moving_sniper_with_a_last_gun_turns_to_its_lead_or_its_retro_heading_by_the_worlds_reading()
+     {
+        // Its lead lies right of 76, at 78.69; its retro heading is up, 0.
+        let engine = snipers_heading_after_a_move(RuleSource::Engine);
+        assert!(engine > 76.0, "toward its lead: {engine}");
+        let bible = snipers_heading_after_a_move(RuleSource::Bible);
+        assert!(bible < 76.0, "toward its retro heading: {bible}");
+    }
+
     #[test]
     fn an_npc_added_is_numbered_after_every_other() {
         let mut traffic = populated(2, 1);

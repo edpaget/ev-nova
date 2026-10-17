@@ -84,7 +84,7 @@ fn a_ship_entering_a_gate_fires_nothing_it_held() {
 }
 
 #[test]
-fn the_traffic_flies_its_snipers_by_the_rulebooks_snipe_brake_lead() {
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_snipe_brake_lead() {
     let catalog = armed();
     for source in [RuleSource::Engine, RuleSource::Bible] {
         let rules = Rulebook::default().with_override(RuleKey::SnipeBrakeLead, source);
