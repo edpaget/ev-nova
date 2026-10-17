@@ -111,6 +111,12 @@ pub struct SoundTable {
     pub map_open: Option<SoundId>,
     /// Plays as the course map closes in flight.
     pub map_close: Option<SoundId>,
+    /// Plays as Space centres a map on the current system.
+    pub map_centre: Option<SoundId>,
+    /// Plays as a map's Find finds a system.
+    pub map_found: Option<SoundId>,
+    /// Plays as a map's Find finds none.
+    pub map_not_found: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -272,6 +278,15 @@ impl SoundTable {
     ///   (@0x6a842-0x6a85a), however the map closed. The hypergate's map
     ///   plays neither: `_PlayerEnterHypergate` calls `_DoSystemMap`
     ///   (@0x6385b) with no `PlaySound` before or after it.
+    /// - `map_centre`: 154, "Beep5", `_beepSnd[4]`, which `_MapFilter`
+    ///   plays first as Space goes down, on every map (`PlaySound`
+    ///   @0x14119).
+    /// - `map_found`: 154, "Beep5", `_beepSnd[4]`, which
+    ///   `_DoSystemSearch` plays as it selects the system found
+    ///   (@0x120c6-0x120f3).
+    /// - `map_not_found`: 153, "Beep4", `_beepSnd[3]`, which
+    ///   `_DoSystemSearch` plays when it finds none (@0x120d0-0x120f3).
+    ///   Neither plays for an empty text (@0x11e26-0x11e5d).
     /// - `airlock`: 390, "Airlock", which `_LoadSounds` loads
     ///   (@0x1c277-0x1c289) and `_HandlePlayerBoardAttempt` plays as any
     ///   board goes aboard: as a boarded person offers its mission, before
@@ -323,6 +338,9 @@ impl SoundTable {
         airlock: Some(SoundId(390)),
         map_open: Some(SoundId(152)),
         map_close: Some(SoundId(150)),
+        map_centre: Some(SoundId(154)),
+        map_found: Some(SoundId(154)),
+        map_not_found: Some(SoundId(153)),
     };
 }
 
@@ -397,5 +415,8 @@ mod tests {
         assert_eq!(table.airlock, Some(SoundId(390)), "Airlock");
         assert_eq!(table.map_open, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.map_close, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.map_centre, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.map_found, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.map_not_found, Some(SoundId(153)), "_beepSnd[3]");
     }
 }

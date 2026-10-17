@@ -239,6 +239,9 @@ impl<A: Audio> AudioCore<A> {
             }
             Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
             Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
+            Sound::Ui(UiSound::MapCentred) => self.play(self.table.map_centre),
+            Sound::Ui(UiSound::MapSystemFound) => self.play(self.table.map_found),
+            Sound::Ui(UiSound::MapSystemNotFound) => self.play(self.table.map_not_found),
             Sound::Ui(UiSound::PortAmbient {
                 sound,
                 until_stopped: true,
@@ -1298,6 +1301,47 @@ mod tests {
         assert_eq!(
             drain(&log),
             [play(300, EFFECTS), play(301, EFFECTS)],
+            "the table's"
+        );
+    }
+
+    #[test]
+    fn the_map_beeps_as_space_centres_it_and_find_finds_or_not() {
+        const MAP: [Sound; 3] = [
+            Sound::Ui(UiSound::MapCentred),
+            Sound::Ui(UiSound::MapSystemFound),
+            Sound::Ui(UiSound::MapSystemNotFound),
+        ];
+        let (mut core, log) = original();
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(154, EFFECTS), play(154, EFFECTS), play(153, EFFECTS)]
+        );
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(154, 0.5), play(154, 0.5), play(153, 0.5)],
+            "at the effects volume"
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &MAP);
+        assert_eq!(drain(&log), [], "sound off");
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            map_centre: Some(SoundId(300)),
+            map_found: Some(SoundId(301)),
+            map_not_found: Some(SoundId(302)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(300, EFFECTS), play(301, EFFECTS), play(302, EFFECTS)],
             "the table's"
         );
     }

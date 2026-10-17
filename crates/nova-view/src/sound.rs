@@ -3,7 +3,8 @@
 //!
 //! - [`UiSound`]: the interface's own, a main-menu button pressed and
 //!   released, the alert as something is refused, the news dialog's
-//!   beeps, the course map's beeps, and the beep of the player info
+//!   beeps, the course map's beeps (opening, closing, Space and Find),
+//!   and the beep of the player info
 //!   refused.
 //! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
@@ -111,6 +112,17 @@ pub enum UiSound {
     /// plays `_beepSnd[0]` once `_DoSystemMap` returns (`PlaySound`
     /// @0x6a85a). The hypergate's map does not raise it.
     MapClosed,
+    /// Space centred a map on the current system: `_MapFilter` plays
+    /// `_beepSnd[4]` (`snd ` 154) first, on key-down, on every map
+    /// (`PlaySound` @0x14119).
+    MapCentred,
+    /// The map's Find found a system: `_DoSystemSearch` plays
+    /// `_beepSnd[4]` (`snd ` 154) as it selects it (@0x120c6-0x120f3).
+    MapSystemFound,
+    /// The map's Find found no system: `_DoSystemSearch` plays
+    /// `_beepSnd[3]` (`snd ` 153) (@0x120d0-0x120f3). An empty text plays
+    /// nothing.
+    MapSystemNotFound,
     /// The stellar's ambient sound, its `CustSndID` (128 and up), plays
     /// while the spaceport is frontmost: `_PortFilter` @0x4f041 plays
     /// `_planetSnd` (@0x4f0e8, @0x4f106), and so does a press on the
