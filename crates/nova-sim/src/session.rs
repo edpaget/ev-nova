@@ -2184,7 +2184,9 @@ impl Session {
     /// mission slot and not disabled, whole (@0x3bf7e-0x3bfb6). A
     /// disabled escort has left the fleet already, and mission escorts
     /// and fighters carry no aux mark, so the fleet is exactly the kept
-    /// ships with one; each keeps its mark into the new system.
+    /// ships with one; each keeps its mark into the new system. Each
+    /// escort also keeps its ion colour, its charge cleared
+    /// (`_RespawnEscort` @0x3d543 leaves +0xb0).
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2192,7 +2194,7 @@ impl Session {
         entering: Option<Entrance>,
     ) {
         let kept: BTreeSet<NpcId> = self.fleet.iter().copied().flatten().collect();
-        let marks = self.fleet_aux_marks();
+        let kept_escorts = self.fleet_kept();
         self.give_back_aux_ships(&kept);
         let table = self.spawn_table(catalog);
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
@@ -2223,7 +2225,7 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths, &marks);
+        self.enter_escorts(&berths, &kept_escorts);
         if entering.is_none() {
             self.snap_mission_escorts();
         }
