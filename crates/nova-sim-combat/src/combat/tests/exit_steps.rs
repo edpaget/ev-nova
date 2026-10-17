@@ -177,6 +177,7 @@ fn nearest_exit_point_defence_fires_from_the_exit_nearest_its_missile() {
         let mut combat = Combat::default();
         combat.set_pd_exit_step(source);
         let mut ships = defended_nearest();
+        missile_in_flight(&mut combat, &mut ships);
         tick(&mut combat, &mut ships, &NovaDisable);
         let fired = defence_shots(&combat);
         assert_eq!(fired.len(), 1, "{source:?}: {:?}", combat.shots());

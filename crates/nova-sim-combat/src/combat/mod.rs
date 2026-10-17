@@ -48,9 +48,13 @@
 //! [`Fighter`] with the ship it targets, by the fight's [`Rules`], in this
 //! order:
 //!
-//! 1. The player fires the weapons its trigger holds that are ready, then
-//!    its point defence fires, as `_HandlePlayer` fires them before the
-//!    frame's collision passes (`_DoPlayGameWork` @0x43e19). Each weapon
+//! 1. The player's point defence fires, then the player fires the weapons
+//!    its trigger holds that are ready, as `_HandlePlayer` calls them
+//!    (`_HandleShipPointDefense` @0x68c74, then `_FirePlayerWeapon`
+//!    @0x6ab55 and @0x6abc7) before the frame's collision passes
+//!    (`_DoPlayGameWork` @0x43e19). So point defence takes a free shot or
+//!    beam slot, and steps an exit cursor it shares with a gun, before the
+//!    trigger, and reads the ship before the trigger's recoil. Each weapon
 //!    is aimed as its guidance aims it at the ship's target ([`aim`]); a
 //!    turret that cannot fire spends nothing. Each shot or beam leaves
 //!    from the ship's exit point for its weapon's `ExitType`, on the frame
@@ -81,8 +85,7 @@
 //!    under way ([`Fighter::jumping`]) runs none. It asks the fight's
 //!    [`PointDefenceRule`] which missiles are hostile only by the other
 //!    reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility), and
-//!    never of a ship. The player's runs after its trigger, where
-//!    `_HandlePlayer` runs it first (weapons-fidelity phase 25).
+//!    never of a ship.
 //! 2. The hit pass (`Combat::hit_pass`): each shot that moved in the
 //!    last tick is tested on that move, as the original's next frame tests
 //!    it before `_HandleShot` moves it again; a shot fired since has not
@@ -156,9 +159,13 @@
 //!    disabled, or starts breaking up, and the pass's last strike on it
 //!    says so. So an NPC downed by a shot fires nothing more that tick, as
 //!    `_HandleShip` reads `_IsDisabled` after the passes.
-//! 4. Each NPC fires the weapons its trigger holds that are ready, as in
-//!    step 1, then its point defence fires, reading the conditions the hit
-//!    pass left. An NPC fires its pick as `_FireAIShipWeapon` does
+//! 4. Every NPC's point defence fires, as `_AIDispatch` runs it in its
+//!    slot loop (@0x4429d, `_AIFireTurret` @0x80b0d); then each NPC fires
+//!    the weapons its trigger holds that are ready, as in step 1, as
+//!    `_HandleShip`'s loop fires the picks (@0x44483); both read the
+//!    conditions the hit pass left. So a missile an NPC fires is first met
+//!    by an NPC's point defence on the next tick. An NPC fires its pick as
+//!    `_FireAIShipWeapon` does
 //!    ([`ai_fire`]): a copy that spawns nothing still spends, by the
 //!    engine, and a recoil sets the firer's velocity, reported as a
 //!    [`Shove`].
@@ -248,8 +255,9 @@
 //!
 //! **Frame to tick.** Tick t is the original's frame t
 //! (`_DoPlayGameWork` @0x43e19-0x4453d, drawn after it returns,
-//! `_PrepareAllSprites` @0x45834): step 1 is its `_HandlePlayer` trigger
-//! and point defence; steps 2 and 3 its collision passes
+//! `_PrepareAllSprites` @0x45834): step 1 is its `_HandlePlayer` point
+//! defence and trigger (@0x68c74, then @0x6ab55); steps 2 and 3 its
+//! collision passes
 //! (`_SWCollideSpriteLayer` @0x43e70-0x44010, `_CheckShotProximities`
 //! @0x44015), testing tick t−1's moves, and `_HandleShot`'s ends of life
 //! (@0x36195); step 4 `_AIDispatch`'s point defence (@0x4429d) and
@@ -1071,10 +1079,9 @@ impl Combat {
         // A `dyn` source over the caller's, which may be unsized.
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
-        // Step 1: the player's trigger and point defence, as `_HandlePlayer`
-        // fires them before the collision passes.
+        // Step 1: the player's point defence and trigger, as `_HandlePlayer`
+        // calls them (@0x68c74, then @0x6ab55) before the collision passes.
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        self.fire(fighters, &targets, chance, Firers::Player);
         self.defend(
             fighters,
             &targets,
@@ -1082,18 +1089,20 @@ impl Combat {
             chance,
             Firers::Player,
         );
+        self.fire(fighters, &targets, chance, Firers::Player);
         // Steps 2 and 3: the last tick's moves tested, and the struck
         // ships' conditions settled.
         let begun = self.hit_pass(fighters, (govts, arsenal), rules.disable, scenery, chance);
-        // Step 4: the NPCs fire and defend, reading the conditions the pass
-        // left, as `_HandleShip` reads `_IsDisabled` after the passes.
+        // Step 4: the NPCs' point defence, as `_AIDispatch` runs it
+        // (@0x4429d), then their picks, as `_HandleShip` fires them
+        // (@0x44483), reading the conditions the pass left, as `_HandleShip`
+        // reads `_IsDisabled` after the passes.
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let sides = Sides {
             targets: &targets,
             govts,
             pass_through: self.pass_through,
         };
-        self.fire(fighters, &targets, chance, Firers::Npcs);
         self.defend(
             fighters,
             &targets,
@@ -1101,6 +1110,7 @@ impl Combat {
             chance,
             Firers::Npcs,
         );
+        self.fire(fighters, &targets, chance, Firers::Npcs);
         // Step 5.
         for fighter in fighters.iter_mut() {
             fighter.armament.reload();
@@ -1791,10 +1801,13 @@ impl Combat {
         (start, side)
     }
 
-    /// Steps 1 and 4: each of the `firers` fires what its trigger holds,
-    /// aimed at its target among `targets` while that can be hit. The
-    /// player fires in step 1, before the hit pass, as
-    /// `_HandlePlayer` calls `_FirePlayerWeapon` ([`Combat::fire_player`]).
+    /// Steps 1 and 4, after point defence ([`Combat::defend`]): each of the
+    /// `firers` fires what its trigger holds, aimed at its target among
+    /// `targets` while that can be hit. The player fires in step 1, before
+    /// the hit pass, as `_HandlePlayer` calls `_FirePlayerWeapon` after
+    /// `_HandleShipPointDefense` ([`Combat::fire_player`]); the NPCs in step
+    /// 4, as `_HandleShip` fires their picks after `_AIDispatch` has run
+    /// their point defence.
     /// An NPC launches its fighters with [`Trigger::bays`] and fires an
     /// escort's formation trigger through [`Armament::fire`], its quadrant
     /// turrets testing their blind spots as the original's AI picks them
@@ -1988,8 +2001,11 @@ impl Combat {
         });
     }
 
-    /// Steps 1 and 4, after the firing: the point defence of each of the
-    /// `firers` its trigger asks for
+    /// Steps 1 and 4, before the firing ([`Combat::fire`]), as
+    /// `_HandlePlayer` runs the player's (@0x68c74) before its trigger
+    /// (@0x6ab55) and `_AIDispatch` every NPC's (@0x4429d) before
+    /// `_HandleShip` fires any pick (@0x44483): the point defence of each of
+    /// the `firers` its trigger asks for
     /// ([`Trigger::point_defence`](armament::Trigger::point_defence))
     /// fires at the missile it picks ([`defence::choose`]), asking `rule`
     /// which are hostile, with the relations in `govts`, only by the
@@ -2001,7 +2017,9 @@ impl Combat {
     /// ([`Fighter::jumping`]) runs none (`_HandleShipPointDefense`
     /// @0x392d6-0x392de). Each shot or beam sounds at
     /// [`PD_FIRE_PRIORITY`], through the same tail for a missile or a ship
-    /// (@0x39931-0x39bb3).
+    /// (@0x39931-0x39bb3). Each reads its ship before the trigger's
+    /// recoil pushes it, and a point-defence shot leaves with that
+    /// velocity ([`projectile::launch_velocity`]).
     fn defend(
         &mut self,
         fighters: &mut [Fighter],
@@ -3198,9 +3216,11 @@ fn aimed_at(launch: &Launch, target: Option<ShipRef>) -> Option<ShipRef> {
     if ahead { None } else { target }
 }
 
-/// Which ships fire in a step of the tick: the player in step 1, as
-/// `_HandlePlayer` fires before the collision passes, and the NPCs in
-/// step 4, after them.
+/// Which ships defend and fire in a step of the tick, point defence
+/// first: the player in step 1, as `_HandlePlayer` runs its point defence
+/// and then its trigger before the collision passes, and the NPCs in step
+/// 4, after them, as `_AIDispatch` runs their point defence before
+/// `_HandleShip` fires their picks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Firers {
     /// The player alone.
@@ -3884,6 +3904,7 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(quad).targeting(B),
             Ship::at(2, 150.0, 0.0).armed(missile).targeting(A),
         ];
+        missile_in_flight(&mut combat, &mut ships);
         tick(&mut combat, &mut ships, &NovaDisable);
         let defence: Vec<&Shot> = combat
             .shots()
@@ -6500,6 +6521,19 @@ mod tests {
         ]
     }
 
+    /// Ticks once with `ships[0]`'s point defence off, so the missile
+    /// `ships[1]` fires is in flight before a test's first defended tick,
+    /// as an NPC's point defence (`_AIDispatch` @0x4429d) first meets a
+    /// missile an NPC fires (`_HandleShip` @0x44483) on the next tick.
+    /// `ships[1]` fires no more.
+    fn missile_in_flight(combat: &mut Combat, ships: &mut [Ship]) {
+        let defending = ships[0].trigger;
+        ships[0].trigger.point_defence = false;
+        tick(combat, ships, &NovaDisable);
+        ships[0].trigger = defending;
+        ships[1].trigger = QUIET;
+    }
+
     #[test]
     fn a_ship_whose_trigger_does_not_ask_runs_no_point_defence() {
         let rule = Hostility {
@@ -6517,6 +6551,7 @@ mod tests {
                 point_defence,
                 ..Trigger::default()
             };
+            missile_in_flight(&mut combat, &mut ships);
             tick_among(
                 &mut combat,
                 &mut ships,
@@ -6550,6 +6585,7 @@ mod tests {
             defender.jumping = jumping;
             let mut ships = [defender, attacker];
             let mut combat = Combat::default();
+            missile_in_flight(&mut combat, &mut ships);
             tick(&mut combat, &mut ships, &NovaDisable);
             let mount = ships[0].armament.mounts()[0];
             (
@@ -6587,6 +6623,7 @@ mod tests {
         let mut ships = missile_attack(quad());
         let mut durabilities = Vec::new();
         let mut events = Vec::new();
+        missile_in_flight(&mut combat, &mut ships);
         for _ in 0..30 {
             tick(&mut combat, &mut ships, &NovaDisable);
             ships[1].trigger = QUIET;
@@ -6604,10 +6641,10 @@ mod tests {
             durabilities.push((missile_durability(&combat), defended, spent_before));
         }
         // 3 to a missile of 4: 4, 1, -2, then gone. Its shots, each fired
-        // 5 ticks apart, closing on it at 25 pixels a tick, end their
-        // moves within reach of it on ticks 7, 11 and 15, 25 pixels short
-        // of it: their 35-pixel sprites overlap its 18-pixel one under 26
-        // pixels apart. Each meeting comes in the next tick's hit pass.
+        // 5 ticks apart from the tick after the lead-in, closing on it at
+        // 25 pixels a tick, end their moves within reach of it on ticks 7,
+        // 11 and 15: their 35-pixel sprites overlap its 18-pixel one under
+        // 26 pixels apart. Each meeting comes in the next tick's hit pass.
         let seen: Vec<Option<f32>> = durabilities.iter().map(|(d, _, _)| *d).collect();
         assert_eq!(&seen[..7], [Some(4.0); 7]);
         assert_eq!(&seen[7..11], [Some(1.0); 4]);
@@ -6624,7 +6661,7 @@ mod tests {
         };
         assert!(
             (at - Vec2::new(0.0, -100.0)).length() < 1e-3,
-            "at the third shot, not the missile at -125: {at:?}"
+            "at the third shot, not the missile at -120: {at:?}"
         );
         let fired: Vec<usize> = durabilities.iter().map(|(_, f, _)| *f).collect();
         assert_eq!(&fired[..15], [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
@@ -6699,6 +6736,7 @@ mod tests {
                 defence: &rule,
                 ..Rules::default()
             };
+            missile_in_flight(&mut combat, &mut ships);
             for _ in 0..3 {
                 tick_among(&mut combat, &mut ships, &Arsenal::default(), &govts, rules);
                 ships[1].trigger = QUIET;
@@ -6730,6 +6768,7 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = missile_attack(pd_beam());
         let mut seen = Vec::new();
+        missile_in_flight(&mut combat, &mut ships);
         for _ in 0..2 {
             tick_on(&mut combat, &mut ships, DOUBLE_TIME);
             ships[1].trigger = QUIET;
@@ -6742,6 +6781,7 @@ mod tests {
     fn on_the_second_pass_a_point_defence_beam_does_no_damage() {
         let mut combat = Combat::default();
         let mut ships = missile_attack(pd_beam());
+        missile_in_flight(&mut combat, &mut ships);
         tick_on(&mut combat, &mut ships, DOUBLE_TIME);
         ships[1].trigger = QUIET;
         tick_on(&mut combat, &mut ships, GamePass::Again);
@@ -6762,8 +6802,12 @@ mod tests {
         };
         let mut combat = Combat::default();
         let mut ships = missile_attack(beam);
+        // B 5 further back, so its missile's lead-in move brings it to
+        // 200 above A as the beam first fires.
+        ships[1].state.position.y = -205.0;
         let mut seen = Vec::new();
         let mut events = Vec::new();
+        missile_in_flight(&mut combat, &mut ships);
         for _ in 0..4 {
             tick_with(
                 &mut combat,
@@ -8056,6 +8100,7 @@ mod tests {
             let id = defence.id;
             let mut combat = Combat::default();
             let mut ships = missile_attack(defence);
+            missile_in_flight(&mut combat, &mut ships);
             tick(&mut combat, &mut ships, &NovaDisable);
             let heard: Vec<_> = sounds(&combat.take_events())
                 .into_iter()
@@ -9029,6 +9074,7 @@ mod tests {
             ..exit_defence()
         };
         let mut ships = [defender.armed(broadside), attacker];
+        missile_in_flight(&mut combat, &mut ships);
         tick(&mut combat, &mut ships, &NovaDisable);
         let shot = combat
             .shots()
@@ -9211,6 +9257,7 @@ mod tests {
     fn point_defence_fires_from_every_other_exit_at_the_missile() {
         let mut combat = Combat::default();
         let mut ships = defended();
+        missile_in_flight(&mut combat, &mut ships);
         tick(&mut combat, &mut ships, &NovaDisable);
         let fired = defence_shots(&combat);
         assert_eq!(fired.len(), 1, "{:?}", combat.shots());
@@ -9233,10 +9280,82 @@ mod tests {
         let mut combat = Combat::default();
         combat.set_pd_exit_step(RuleSource::Bible);
         let mut ships = defended();
+        missile_in_flight(&mut combat, &mut ships);
         tick(&mut combat, &mut ships, &NovaDisable);
         let fired = defence_shots(&combat);
         assert!(close_to(fired[0].0, Vec2::new(10.0, 0.0)), "{fired:?}");
         assert_eq!(ships[0].armament.exit_cursors().next(ExitKind::Turret), 1);
+    }
+
+    #[test]
+    fn the_players_point_defence_steps_a_shared_exit_cursor_before_its_trigger() {
+        // `_HandlePlayer` runs `_HandleShipPointDefense` @0x68c74 before
+        // `_FirePlayerWeapon` @0x6ab55, so point defence steps the turret
+        // exits' cursor first (`_ModifyShotStartPosition`).
+        let turret_gun = WeaponRecord {
+            exit_type: 1,
+            ..gun()
+        };
+        for (source, defence_from, gun_from, cursor) in [
+            (
+                RuleSource::Engine,
+                Vec2::new(20.0, 0.0),
+                Vec2::new(30.0, 0.0),
+                3,
+            ),
+            (
+                RuleSource::Bible,
+                Vec2::new(10.0, 0.0),
+                Vec2::new(20.0, 0.0),
+                2,
+            ),
+        ] {
+            let mut combat = Combat::default();
+            combat.set_pd_exit_step(source);
+            let mut ships = defended();
+            ships[0].id = ShipRef::Player;
+            ships[0].fleet = ShipRef::Player;
+            ships[0].target = None;
+            ships[1].target = Some(ShipRef::Player);
+            ships[0].armament = Armament::new([
+                (WeaponSpec::new(&exit_defence()), 1),
+                (WeaponSpec::new(&turret_gun), 1),
+            ]);
+            // B's missile in flight first, the player quiet.
+            ships[0].trigger = Trigger {
+                point_defence: false,
+                ..QUIET
+            };
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.shots().len(), 1, "{source:?}: the missile");
+            ships[1].trigger = QUIET;
+            ships[0].trigger = PRIMARY_HELD;
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let fired = defence_shots(&combat);
+            assert_eq!(fired.len(), 1, "{source:?}: {:?}", combat.shots());
+            let at = fired[0].0;
+            assert!(
+                close_to(at, defence_from),
+                "{source:?}: point defence from {at:?}"
+            );
+            let guns: Vec<Vec2> = combat
+                .shots()
+                .iter()
+                .filter(|shot| shot.firer == ShipRef::Player && shot.weapon.id == WeaponId(128))
+                .map(start)
+                .collect();
+            assert_eq!(guns.len(), 1, "{source:?}: {guns:?}");
+            assert!(
+                close_to(guns[0], gun_from),
+                "{source:?}: the gun from {:?}",
+                guns[0]
+            );
+            assert_eq!(
+                ships[0].armament.exit_cursors().next(ExitKind::Turret),
+                cursor,
+                "{source:?}"
+            );
+        }
     }
 
     #[test]
@@ -10137,6 +10256,7 @@ mod tests {
         let mut ships = [defender.of(hull), attacker];
         let mut combat = Combat::default();
         let mut chance = nova_sim_base::fixture::Draws::of(&[60]);
+        missile_in_flight(&mut combat, &mut ships);
         tick_drawing(&mut combat, &mut ships, &mut chance);
         let defence = combat
             .shots()
@@ -10214,6 +10334,7 @@ mod tests {
             let mut combat = Combat::default();
             let mut chance = nova_sim_base::fixture::Draws::of(&[draw]);
             let mut struck = Vec::new();
+            missile_in_flight(&mut combat, &mut ships);
             for _ in 0..12 {
                 tick_drawing(&mut combat, &mut ships, &mut chance);
                 ships[0].trigger = QUIET;
@@ -12874,6 +12995,7 @@ mod tests {
     fn a_point_defence_shot_of_ammo_type_minus_999_breaks_its_firer_up() {
         let mut combat = Combat::default();
         let mut ships = missile_attack(self_destructing(quad()));
+        missile_in_flight(&mut combat, &mut ships);
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].reserves.armor.now, 0.0);
         assert!(
@@ -13071,6 +13193,7 @@ mod tests {
             let mut combat = crowded(MAX_SHOTS - 1, capped);
             let mut ships = missile_attack(launching);
             ships[0].rounds = LauncherRounds::from([(WeaponId(133), 5)]);
+            missile_in_flight(&mut combat, &mut ships);
             tick(&mut combat, &mut ships, &NovaDisable);
             let pd = sounds(&combat.take_events())
                 .into_iter()
@@ -13203,6 +13326,7 @@ mod tests {
         };
         combat.set_combat_caps(RuleSource::Engine);
         let mut ships = missile_attack(beam);
+        missile_in_flight(&mut combat, &mut ships);
         tick(&mut combat, &mut ships, &NovaDisable);
         assert!(
             combat.beams().iter().all(|beam| beam.firer == C),
@@ -13303,6 +13427,99 @@ mod tests {
                 let held = capped && defender == ShipRef::Player;
                 assert_eq!(pd, usize::from(!held), "{defender:?} {capped}");
             }
+        }
+    }
+
+    /// A blaster reloading every 10 ticks, so a firing shows on its mount.
+    fn slow_blaster() -> WeaponRecord {
+        WeaponRecord {
+            reload: 10,
+            ..blaster()
+        }
+    }
+
+    /// [`missile_attack`] of `quad()`, its defender `defender` armed with
+    /// a [`slow_blaster`] as well, after the tick B's missile takes the
+    /// 127th slot among [`crowded`]'s `MAX_SHOTS - 2`, the defender quiet
+    /// and its point defence off; B fires no more.
+    fn last_slot_left(defender: ShipRef, capped: bool) -> (Combat, [Ship; 2]) {
+        let mut combat = crowded(MAX_SHOTS - 2, capped);
+        let mut ships = missile_attack(quad());
+        ships[0].id = defender;
+        ships[0].fleet = defender;
+        ships[1].target = Some(defender);
+        ships[0].armament = Armament::new([
+            (WeaponSpec::new(&quad()), 1),
+            (WeaponSpec::new(&slow_blaster()), 1),
+        ]);
+        ships[0].trigger = Trigger {
+            point_defence: false,
+            ..QUIET
+        };
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.shots().len(), MAX_SHOTS - 1, "the missile's 127th");
+        ships[1].trigger = QUIET;
+        combat.take_events();
+        (combat, ships)
+    }
+
+    /// What `ship` has in flight: its point-defence shots and its others.
+    fn in_flight_by(combat: &Combat, ship: ShipRef) -> (usize, usize) {
+        let by = combat.shots().iter().filter(|shot| shot.firer == ship);
+        let (pd, other): (Vec<&Shot>, Vec<&Shot>) =
+            by.partition(|shot| shot.weapon.id == WeaponId(133));
+        (pd.len(), other.len())
+    }
+
+    #[test]
+    fn under_the_caps_the_players_point_defence_takes_the_last_slot_before_its_trigger() {
+        // `_HandlePlayer` runs `_HandleShipPointDefense` @0x68c74 before
+        // `_FirePlayerWeapon` @0x6ab55: point defence takes the 128th.
+        for capped in [false, true] {
+            let (mut combat, mut ships) = last_slot_left(ShipRef::Player, capped);
+            ships[0].trigger = PRIMARY_HELD;
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let (pd, blaster) = in_flight_by(&combat, ShipRef::Player);
+            assert_eq!(pd, 1, "{capped}: point defence flies");
+            assert_eq!(blaster, usize::from(!capped), "{capped}: the blaster");
+            let heard = sounds(&combat.take_events());
+            assert!(
+                heard.iter().any(|&(weapon, _)| weapon == WeaponId(128)),
+                "{capped}: the blaster is heard: {heard:?}"
+            );
+            assert_eq!(
+                ships[0].armament.mounts()[1].reload,
+                9.0,
+                "{capped}: and spent"
+            );
+        }
+    }
+
+    #[test]
+    fn under_the_caps_an_npcs_point_defence_takes_the_last_slot_before_an_npcs_pick() {
+        // Every NPC's point defence runs in `_AIDispatch`'s loop
+        // (@0x4429d, `_AIFireTurret` @0x80b0d), before `_HandleShip`'s
+        // picks (`_FireAIShipWeapon` @0x34ffd, loop @0x44483).
+        for capped in [false, true] {
+            let (mut combat, mut ships) = last_slot_left(A, capped);
+            ships[0].trigger = Trigger {
+                only: Some(WeaponId(128)),
+                ..QUIET
+            };
+            tick(&mut combat, &mut ships, &NovaDisable);
+            let (pd, blaster) = in_flight_by(&combat, A);
+            assert_eq!(pd, 1, "{capped}: point defence flies");
+            assert_eq!(blaster, usize::from(!capped), "{capped}: the blaster");
+            let heard = sounds(&combat.take_events());
+            assert!(
+                heard.iter().any(|&(weapon, _)| weapon == WeaponId(128)),
+                "{capped}: the blaster is heard: {heard:?}"
+            );
+            assert_eq!(
+                ships[0].armament.mounts()[1].reload,
+                9.0,
+                "{capped}: and spent"
+            );
         }
     }
 
@@ -13685,11 +13902,82 @@ mod tests {
             Some(2),
             "the player's point defence runs before the NPCs fire"
         );
-        assert_eq!(first_defence(A, B), Some(1), "an NPC's after them");
+        assert_eq!(
+            first_defence(A, B),
+            Some(2),
+            "an NPC's before the NPCs fire (`_AIDispatch` @0x4429d, then `_HandleShip` @0x44483)"
+        );
         assert_eq!(
             first_defence(A, ShipRef::Player),
             Some(1),
             "an NPC's after the player fires"
+        );
+    }
+
+    #[test]
+    fn an_npcs_point_defence_meets_a_missile_fired_this_tick_only_on_the_next() {
+        // `_AIDispatch` @0x4429d runs every NPC's point defence before
+        // `_HandleShip` @0x44483 fires any NPC's pick: B's missile first
+        // exists for A's `_HandleShipPointDefense` in the next frame.
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(quad());
+        let defended = |combat: &mut Combat| {
+            let pd_heard = sounds(&combat.take_events())
+                .into_iter()
+                .any(|(weapon, _)| weapon == WeaponId(133));
+            (pd_heard, in_flight_by(combat, A).0)
+        };
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(in_flight_by(&combat, B).1, 1, "the missile is in flight");
+        assert_eq!(defended(&mut combat), (false, 0), "tick 1: no defence");
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(defended(&mut combat), (true, 1), "tick 2: defended");
+    }
+
+    #[test]
+    fn the_players_point_defence_launches_from_its_velocity_before_its_recoil() {
+        // Point defence (@0x68c74) reads the ship before
+        // `_FirePlayerWeapon`'s recoil (@0x62ea2-0x62f35) pushes it, and a
+        // point-defence shot carries its firer's velocity (`_SpawnShot`).
+        let mut ships = missile_attack(quad());
+        ships[0].id = ShipRef::Player;
+        ships[0].fleet = ShipRef::Player;
+        ships[0].hull.mass = 50.0;
+        ships[1].target = Some(ShipRef::Player);
+        let kicking = WeaponRecord {
+            recoil: 100,
+            ..slow_blaster()
+        };
+        ships[0].armament = Armament::new([
+            (WeaponSpec::new(&quad()), 1),
+            (WeaponSpec::new(&kicking), 1),
+        ]);
+        ships[0].trigger = Trigger {
+            point_defence: false,
+            ..QUIET
+        };
+        let mut combat = Combat::default();
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[1].trigger = QUIET;
+        ships[0].trigger = PRIMARY_HELD;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.take_shoves().len(), 1, "the recoil");
+        let pd: Vec<&Shot> = combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.id == WeaponId(133))
+            .collect();
+        assert_eq!(pd.len(), 1, "{:?}", combat.shots());
+        let at_rest = projectile::launch_velocity(
+            &pd[0].weapon,
+            &ShipState::default(),
+            pd[0].heading,
+            BombLaunch::Dropped,
+        );
+        assert!(
+            (pd[0].velocity - at_rest).length() < 1e-4,
+            "launched at rest: {:?} against {at_rest:?}",
+            pd[0].velocity
         );
     }
 
@@ -13845,10 +14133,13 @@ mod tests {
         );
         for capped in [false, true] {
             // 127 others, and B's missile, which A's beam downs the tick
-            // it is fired.
+            // after it is fired.
             let mut combat = crowded(MAX_SHOTS - 1, capped);
             let mut defender = Ship::at(1, 0.0, 0.0).armed(pd_beam());
-            defender.trigger = QUIET;
+            defender.trigger = Trigger {
+                point_defence: false,
+                ..QUIET
+            };
             let attacker = Ship::at(2, 0.0, -200.0)
                 .armed(fragile)
                 .facing(180.0)
@@ -13856,6 +14147,9 @@ mod tests {
             let mut player = the_player_at(0.0, 300.0).armed(blaster());
             player.trigger = QUIET;
             let mut ships = [player, defender, attacker];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[1].trigger = QUIET;
+            ships[2].trigger = QUIET;
             tick(&mut combat, &mut ships, &NovaDisable);
             let downed = combat
                 .take_events()
