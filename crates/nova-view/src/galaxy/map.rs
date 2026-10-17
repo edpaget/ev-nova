@@ -102,8 +102,10 @@
 //! Find opens Find; on Clear Route, while it is enabled, asks the owner to
 //! clear the route, as C does. Clear Route is enabled by
 //! `showClearRouteButton` ([`GalaxyMap::set_clear_route`]): the owner sets
-//! it as the map opens, a press that writes a hop sets it, and the
-//! route's clear turns it off ([`GalaxyMap::route_cleared`]). Borders is
+//! it as the map opens, a press that writes a hop sets it (by the
+//! planner's reading a press writes it outright, off when it plots no
+//! course), and the route's clear turns it off
+//! ([`GalaxyMap::route_cleared`]). Borders is
 //! drawn and taken, and does nothing until galaxy-map-fidelity's phase 8
 //! gives it the borders. Each is silent, as `_TrackMapButtons` is.
 //!
@@ -654,8 +656,8 @@ impl GalaxyMap {
         if let Some(pick) = answer.gate_pick {
             self.gate_pick = pick;
         }
-        if answer.appended {
-            self.set_clear_route(true);
+        if let Some(enabled) = answer.clear_route {
+            self.set_clear_route(enabled);
         }
     }
 
@@ -682,7 +684,9 @@ impl GalaxyMap {
 
     /// Sets `showClearRouteButton`, as the map opens with it
     /// (@0x12396-0x123c3). A press that writes a hop sets it, and the
-    /// route's clear turns it off; nothing else touches it.
+    /// route's clear turns it off; by the engine's reading nothing else
+    /// touches it. By the planner's (`nova_sim::RuleKey::MapPlotting`)
+    /// a press writes it outright, off when it plots no course.
     pub fn set_clear_route(&mut self, enabled: bool) {
         if let Look::Dialog(dialog) = &mut self.look {
             dialog.set_clear_route(enabled);
@@ -1855,7 +1859,7 @@ mod tests {
         map.answer_press(Some(PressAnswer {
             selected: Some(SystemId(id)),
             gate_pick,
-            appended: false,
+            clear_route: None,
         }));
         map.input(&button(MouseButton::Left, false, at));
     }
@@ -2799,7 +2803,7 @@ mod tests {
         map.answer_press(Some(PressAnswer {
             selected: Some(SystemId(129)),
             gate_pick: None,
-            appended: false,
+            clear_route: None,
         }));
         assert_eq!(map.selected(), Some(SystemId(129)));
         map.input(&moved(beta, 40.0, 0.0));
@@ -2808,7 +2812,7 @@ mod tests {
         map.answer_press(Some(PressAnswer {
             selected: Some(SystemId(128)),
             gate_pick: None,
-            appended: false,
+            clear_route: None,
         }));
         assert_eq!(map.selected(), Some(SystemId(129)), "nothing to answer");
     }
@@ -2822,7 +2826,7 @@ mod tests {
         map.answer_press(Some(PressAnswer {
             selected: None,
             gate_pick: None,
-            appended: false,
+            clear_route: None,
         }));
         assert_eq!(map.selected(), Some(SystemId(130)));
     }

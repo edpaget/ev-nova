@@ -101,8 +101,11 @@ pub struct MapClicked {
     /// On the hypergate map, its new pick, `Some(None)` for none; `None`
     /// off it.
     pub gate_pick: Option<Option<SystemId>>,
-    /// Whether the click set `showClearRouteButton`: a hop written.
-    pub appended: bool,
+    /// What the click writes to `showClearRouteButton`; `None` leaves it.
+    /// By the engine's reading only a hop written sets it, and no click
+    /// clears it; by the other, the click writes it outright, on while
+    /// the plotted course has a hop.
+    pub clear_route: Option<bool>,
     /// Whether the click touched the course, which the map shows again.
     pub course_changed: bool,
     /// Whether the nav area redraws at once (`_DrawStatus`).
@@ -123,7 +126,7 @@ impl Session {
             return Some(MapClicked {
                 selected: Some(pick),
                 gate_pick: Some(flagged.then_some(pick)),
-                appended: false,
+                clear_route: None,
                 course_changed: false,
                 nav_redraw: false,
             });
@@ -134,7 +137,7 @@ impl Session {
             return Some(MapClicked {
                 selected: Some(pick),
                 gate_pick: None,
-                appended: !self.pilot.course.is_empty(),
+                clear_route: Some(!self.pilot.course.is_empty()),
                 course_changed: true,
                 nav_redraw: !docked,
             });
@@ -157,7 +160,7 @@ impl Session {
         Some(MapClicked {
             selected: Some(pick),
             gate_pick: None,
-            appended: false,
+            clear_route: None,
             course_changed: false,
             nav_redraw: !docked,
         })
@@ -246,7 +249,7 @@ impl Session {
         MapClicked {
             selected: edit.appended.then_some(pick),
             gate_pick: None,
-            appended: edit.appended,
+            clear_route: edit.appended.then_some(true),
             course_changed: true,
             nav_redraw: false,
         }
@@ -296,7 +299,7 @@ mod tests {
         Some(MapClicked {
             selected: Some(SystemId(selected)),
             gate_pick: None,
-            appended: false,
+            clear_route: None,
             course_changed: false,
             nav_redraw: true,
         })
@@ -308,7 +311,7 @@ mod tests {
         Some(MapClicked {
             selected: selected.map(SystemId),
             gate_pick: None,
-            appended: selected.is_some(),
+            clear_route: selected.is_some().then_some(true),
             course_changed: true,
             nav_redraw: false,
         })
@@ -517,7 +520,7 @@ mod tests {
         Some(MapClicked {
             selected: Some(SystemId(selected)),
             gate_pick: Some(pick.map(SystemId)),
-            appended: false,
+            clear_route: None,
             course_changed: false,
             nav_redraw: false,
         })
@@ -740,7 +743,7 @@ mod tests {
                 Some(MapClicked {
                     selected: Some(SystemId(132)),
                     gate_pick: None,
-                    appended: true,
+                    clear_route: Some(true),
                     course_changed: true,
                     nav_redraw: true,
                 }),
@@ -757,7 +760,7 @@ mod tests {
         session.mark_known([SystemId(133)]);
         session.pilot.course = ids(&[131]);
         let clicked = click(&mut session, &[133]).expect("accepted");
-        assert!(!clicked.appended);
+        assert_eq!(clicked.clear_route, Some(false), "turned off");
         assert!(clicked.course_changed);
         assert_eq!(session.course(), []);
     }

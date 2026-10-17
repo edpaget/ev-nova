@@ -872,23 +872,25 @@ mod tests {
     }
 
     #[test]
-    fn the_latch_is_set_by_an_answer_that_appends_and_cleared_by_the_clear() {
+    fn the_latch_is_written_by_an_answer_that_says_and_cleared_by_the_clear() {
         let mut map = course_map();
         let alpha = map.transform().world_to_screen(Point::new(0.0, 0.0));
-        let answer = |map: &mut GalaxyMap, appended| {
+        let answer = |map: &mut GalaxyMap, clear_route| {
             map.input(&left(true, alpha));
             map.take_press().expect("a hit");
             map.answer_press(Some(PressAnswer {
                 selected: None,
                 gate_pick: None,
-                appended,
+                clear_route,
             }));
             map.input(&left(false, alpha));
             labels(&drawn(map))[3].1
         };
-        assert!(!answer(&mut map, false), "nothing appended");
-        assert!(answer(&mut map, true), "appended");
-        assert!(answer(&mut map, false), "kept by a press appending nothing");
+        assert!(!answer(&mut map, None), "nothing written");
+        assert!(answer(&mut map, Some(true)), "set");
+        assert!(answer(&mut map, None), "kept by a press writing nothing");
+        assert!(!answer(&mut map, Some(false)), "turned off");
+        assert!(answer(&mut map, Some(true)), "set again");
         map.route_cleared();
         assert!(!labels(&drawn(&map))[3].1, "the clear");
     }

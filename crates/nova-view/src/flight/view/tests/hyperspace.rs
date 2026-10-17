@@ -202,6 +202,39 @@ fn by_the_planner_a_click_on_a_system_plots_the_course_there_and_the_map_shows_i
 }
 
 #[test]
+fn by_the_planner_a_click_with_no_route_disables_clear_route() {
+    let mut view = planner(flight());
+    tap(&mut view, MAP);
+    assert!(!clear_route_enabled(&view), "no course");
+    let alpha = on_map(&mut view, 131);
+    click(&mut view, alpha);
+    assert!(clear_route_enabled(&view), "a course plotted");
+    know(&mut view, 132);
+    let barnard = on_map(&mut view, 132);
+    click(&mut view, barnard);
+    assert_eq!(view.course_map().route(), [], "no route there");
+    assert!(!clear_route_enabled(&view), "no course to clear");
+}
+
+#[test]
+fn by_the_engine_no_click_turns_clear_route_off() {
+    let mut view = flight();
+    tap(&mut view, MAP);
+    let alpha = on_map(&mut view, 131);
+    shift_click(&mut view, alpha);
+    assert!(clear_route_enabled(&view), "a hop written");
+    click(&mut view, alpha);
+    assert!(clear_route_enabled(&view), "a plain click keeps the latch");
+    know(&mut view, 132);
+    let barnard = on_map(&mut view, 132);
+    click(&mut view, barnard);
+    assert!(
+        clear_route_enabled(&view),
+        "an unlinked plain click keeps it"
+    );
+}
+
+#[test]
 fn closing_the_map_abandons_its_drag() {
     let mut view = flight();
     tap(&mut view, MAP);

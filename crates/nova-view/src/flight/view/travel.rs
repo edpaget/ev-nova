@@ -355,7 +355,7 @@ impl<
         self.map.answer_press(clicked.map(|clicked| PressAnswer {
             selected: clicked.selected,
             gate_pick: clicked.gate_pick,
-            appended: clicked.appended,
+            clear_route: clicked.clear_route,
         }));
         let Some(clicked) = clicked else {
             return;

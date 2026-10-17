@@ -63,8 +63,8 @@ pub struct PressAnswer {
     /// On the hypergate map, its new pick, `Some(None)` for none; `None`
     /// leaves it.
     pub gate_pick: Option<Option<SystemId>>,
-    /// Whether the press set `showClearRouteButton`.
-    pub appended: bool,
+    /// What the press writes to `showClearRouteButton`; `None` leaves it.
+    pub clear_route: Option<bool>,
 }
 
 #[cfg(test)]
