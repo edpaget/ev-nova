@@ -3,11 +3,17 @@
 //! records, each a plain record that tests change with struct-update
 //! syntax, and mocks of the [`ControlBits`] port.
 
+mod pilot_catalog;
+
+pub use pilot_catalog::{FakePilotCatalog, START, catalog, starting};
+
+use std::collections::BTreeMap;
+
 use crate::catalog::{
     AuxShip, CronId, CronRecord, EscortClass, GovtId, GovtRecord, HullRecord, LandingSite,
-    MissionId, MissionRecord, MissionShip, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
-    StellarId, SystemId, WeaponId, WeaponRecord,
+    ListedStellar, MissionId, MissionRecord, MissionShip, NebulaId, NebulaRecord, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, RankId, RankRecord, ShipId, ShipRecord,
+    StarSystem, StellarId, SystemId, WeaponId, WeaponRecord,
 };
 use crate::control::{ControlBits, PilotFacts, Script, Test, TestExpr};
 use crate::geometry::Vec2;
@@ -389,6 +395,70 @@ impl ControlBits for AllowAll {
     }
 }
 
+/// Every stellar of `sites` (each system's landing sites, as a fake
+/// `PilotCatalog::landing_sites` gives them), by ascending ID, with every
+/// system listing it, by ascending ID, each once, and the flags and
+/// government of its first site: the listed stellars
+/// (`PilotCatalog::listed_stellars`) a fake gives for those sites, as the
+/// data's `NavDefs` give them. A session shows only the stellars its
+/// system holds by these, so a fake that lists none shows none.
+#[must_use]
+pub fn listed_stellars<'a>(
+    sites: impl IntoIterator<Item = (SystemId, &'a [LandingSite])>,
+) -> Vec<ListedStellar> {
+    let mut listed: BTreeMap<StellarId, ListedStellar> = BTreeMap::new();
+    for (system, sites) in sites {
+        for site in sites {
+            let stellar = listed.entry(site.id).or_insert_with(|| ListedStellar {
+                id: site.id,
+                systems: Vec::new(),
+                flags: site.flags,
+                flags2: site.flags2,
+                govt: site.govt,
+                min_status: site.min_status,
+            });
+            if !stellar.systems.contains(&system) {
+                stellar.systems.push(system);
+                stellar.systems.sort_unstable();
+            }
+        }
+    }
+    listed.into_values().collect()
+}
+
+/// Adds to `listed` (as [`listed_stellars`] gives it) each `(system,
+/// stellar)` of `listers`: a `NavDefs` entry with no landing site, such as
+/// a gate in a system the ship never flies in. A stellar not yet listed is
+/// added with no flags and no government.
+pub fn list_also(
+    listed: &mut Vec<ListedStellar>,
+    listers: impl IntoIterator<Item = (SystemId, StellarId)>,
+) {
+    for (system, stellar) in listers {
+        let at = listed
+            .binary_search_by_key(&stellar, |listed| listed.id)
+            .unwrap_or_else(|at| {
+                listed.insert(
+                    at,
+                    ListedStellar {
+                        id: stellar,
+                        systems: Vec::new(),
+                        flags: 0,
+                        flags2: 0,
+                        govt: None,
+                        min_status: 0,
+                    },
+                );
+                at
+            });
+        let systems = &mut listed[at].systems;
+        if !systems.contains(&system) {
+            systems.push(system);
+            systems.sort_unstable();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,5 +533,79 @@ mod tests {
         let star = star(130, (1.0, 2.0), &[131]);
         assert_eq!(star.message, -1);
         assert_eq!(star.links, [SystemId(131)]);
+    }
+
+    #[test]
+    fn the_listed_stellars_are_every_site_by_id_with_every_system_listing_it() {
+        let flagged = LandingSite {
+            flags: 4,
+            flags2: 0x2000,
+            ..planet(129, 0.0, 0.0)
+        };
+        let sites = [
+            (SystemId(131), vec![flagged, planet(128, 0.0, 0.0)]),
+            (
+                SystemId(130),
+                vec![planet(129, 1.0, 1.0), planet(129, 1.0, 1.0)],
+            ),
+        ];
+        let listed = listed_stellars(sites.iter().map(|(system, sites)| (*system, &sites[..])));
+        assert_eq!(
+            listed,
+            [
+                ListedStellar {
+                    id: StellarId(128),
+                    systems: vec![SystemId(131)],
+                    flags: planet(128, 0.0, 0.0).flags,
+                    flags2: 0,
+                    govt: None,
+                    min_status: 0,
+                },
+                ListedStellar {
+                    id: StellarId(129),
+                    systems: vec![SystemId(130), SystemId(131)],
+                    flags: 4,
+                    flags2: 0x2000,
+                    govt: None,
+                    min_status: 0,
+                },
+            ],
+            "by ascending ID, each system once and in order, the first site's flags"
+        );
+        assert_eq!(listed_stellars([]), []);
+    }
+
+    #[test]
+    fn listing_also_adds_each_lister_in_order_and_each_stellar_by_id() {
+        let sites = [(SystemId(131), vec![planet(129, 0.0, 0.0)])];
+        let mut listed = listed_stellars(sites.iter().map(|(system, sites)| (*system, &sites[..])));
+        list_also(
+            &mut listed,
+            [
+                (SystemId(130), StellarId(129)),
+                (SystemId(131), StellarId(129)),
+                (SystemId(132), StellarId(140)),
+                (SystemId(133), StellarId(128)),
+            ],
+        );
+        let gate = |id, systems: &[i16]| ListedStellar {
+            id: StellarId(id),
+            systems: systems.iter().copied().map(SystemId).collect(),
+            flags: 0,
+            flags2: 0,
+            govt: None,
+            min_status: 0,
+        };
+        assert_eq!(
+            listed,
+            [
+                gate(128, &[133]),
+                ListedStellar {
+                    systems: vec![SystemId(130), SystemId(131)],
+                    ..listed_stellars([(SystemId(131), &[planet(129, 0.0, 0.0)][..])])[0].clone()
+                },
+                gate(140, &[132]),
+            ]
+        );
     }
 }

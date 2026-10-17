@@ -284,7 +284,7 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtId, GovtRecord, StarSystem};
     use crate::story::OverlaidGalaxy;
-    use crate::testkit::{govt, star};
+    use nova_sim_catalog::fixture::{govt, star};
 
     fn ids(list: &[i16]) -> BTreeSet<SystemId> {
         list.iter().copied().map(SystemId).collect()

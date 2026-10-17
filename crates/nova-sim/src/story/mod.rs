@@ -22,7 +22,7 @@
 //! - text substitution: missions phase 3.
 //!
 //! Where the original cannot settle a question, or the design does not
-//! follow it, the section names the [`Rulebook`](crate::Rulebook) key the
+//! follow it, the section names the [`Rulebook`](crate::rulebook::Rulebook) key the
 //! building phase adds and its readings. Phase 2 adds `stay_days`, phase 3
 //! `story_reentry`, phase 5 `destroy_invincible`, phase 8 `y_on_destroy`,
 //! phase 9 `dead_type_fallback`; crons-news-ranks phase 5 adds
@@ -126,7 +126,7 @@
 //!   dialog (@0x4f060) on its next call, once the texts and dialogs shown
 //!   over the port have closed, and `_DoPortDialog` leaves by the same
 //!   close (@0x5fcc6-0x5fcd0, @0x60196, @0x601a0-0x6020e). Here the
-//!   session holds the leave ([`Session::leave_due`](crate::Session::leave_due))
+//!   session holds the leave (`nova_sim::Session::leave_due`)
 //!   and the take-off, through the port's Leave, carries it out.
 //!
 //! ## One landing
@@ -435,19 +435,19 @@
 //!
 //! A [`StoryEvent`] says what happened, with its data. It is the sim's
 //! own: story dispatch never drains or reuses the view's
-//! [`SessionEvent`](crate::SessionEvent) outbox, which carries no data and
-//! is emptied by [`Session::take_events`](crate::Session::take_events).
+//! `nova_sim::SessionEvent` outbox, which carries no data and
+//! is emptied by `nova_sim::Session::take_events`.
 //! Each event has one source, at a transition point that also emits a
 //! `SessionEvent` or runs a step:
 //!
 //! | Event | Its one source | The original's |
 //! |---|---|---|
 //! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] | the enter-system hook |
-//! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks | the spaceport opening |
-//! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
+//! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as `nova_sim::Session::land` docks | the spaceport opening |
+//! | [`TookOff`](StoryEvent::TookOff) | `nova_sim::Session::take_off`, after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
-//! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores but a gate's or wormhole's exit; a take-off; a map granted, for each system it reaches; [`Session::fly`](crate::Session::fly), for each visible explored system (a new pilot's withdrawn by [`Session::begin`](crate::Session::begin) under the engine's [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot)). `X` raises none | `_ExploreNebulaeFromSystem` |
-//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too); the session's boarding, repelled or not, a mission ship's included (a `PickupMode` 2 pickup's too; a refused pickup raises none); the system's setup and the appear timer's arrivals, for each mission ship they bring in ([`Fate::Arrived`]); the traffic's tick, for each mission ship that leaves the system ([`Fate::Departed`]); and the traffic's flight tick for a watched ship first seen ([`Session::watch_ship`](crate::Session::watch_ship)) | the goal counts and the per-frame poll |
+//! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores but a gate's or wormhole's exit; a take-off; a map granted, for each system it reaches; `nova_sim::Session::fly`, for each visible explored system (a new pilot's withdrawn by `nova_sim::Session::begin` under the engine's [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot)). `X` raises none | `_ExploreNebulaeFromSystem` |
+//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too); the session's boarding, repelled or not, a mission ship's included (a `PickupMode` 2 pickup's too; a refused pickup raises none); the system's setup and the appear timer's arrivals, for each mission ship they bring in ([`Fate::Arrived`]); the traffic's tick, for each mission ship that leaves the system ([`Fate::Departed`]); and the traffic's flight tick for a watched ship first seen (`nova_sim::Session::watch_ship`) | the goal counts and the per-frame poll |
 //!
 //! A consumer that wants only some entrances reads the [`Entrance`] in
 //! its subscription: mission ships restart their timers on a `Jump`, a
@@ -470,7 +470,7 @@
 //! so the first landing rolls them afresh.
 //!
 //! The events wait on the session, in the order raised, for its next
-//! [`Session::settle_script`](crate::Session::settle_script), which
+//! `nova_sim::Session::settle_script`, which
 //! dispatches them (see "Dispatch").
 //!
 //! A new trigger kind adds an event variant and its one source, plus
@@ -491,7 +491,7 @@
 //!   [`Checks`](crate::rules::Checks) list that the subscription's
 //!   consumer runs, never the dispatcher;
 //! - its set expression, a [`Script`], run as
-//!   [`Session::run_set`](crate::Session::run_set) runs one, its operators
+//!   `nova_sim::Session::run_set` runs one, its operators
 //!   applied through `Session::apply_op`;
 //! - its once-only flag;
 //! - its stable [`SubscriptionId`]: consumer, record and hook. The record
@@ -503,11 +503,11 @@
 //!   ([`DuplicateSubscription`]).
 //!
 //! **Registering and unregistering.** A consumer registers through
-//! [`Session::register_story`](crate::Session::register_story) and
+//! `nova_sim::Session::register_story` and
 //! unregisters through
-//! [`Session::unregister_story`](crate::Session::unregister_story), which
+//! `nova_sim::Session::unregister_story`, which
 //! clears the once-fired entry too. The stock consumers register at
-//! [`Session::fly`](crate::Session::fly) from their catalog data: so far
+//! `nova_sim::Session::fly` from their catalog data: so far
 //! the missions' offer roll (missions phase 1) and re-offer, and each
 //! active slot's hooks (missions phase 2). A mission's subscriptions, and
 //! its ships', are registered when it becomes active, keyed by its slot. When it ends (success,
@@ -563,11 +563,11 @@
 //! - `M` and `N` in flight enter the system, redraw its stellars and run
 //!   the enter-system subscriptions there (@0x159a3, @0x159a8).
 //!
-//! **Where it nests.** [`Session::run_set`](crate::Session::run_set)
+//! **Where it nests.** `nova_sim::Session::run_set`
 //! stays catalog-free: `apply_op` only queues a move or a `Q`, since a
 //! script has no catalog to read the new system from (see
 //! `script_effects`). The one place that dispatches is
-//! [`Session::settle_script`](crate::Session::settle_script), which holds
+//! `nova_sim::Session::settle_script`, which holds
 //! the catalog and which the program calls after every input and tick.
 //! The landing, the take-off, the daily step, combat and boarding have no
 //! catalog, so the events they raise wait there. It settles in a loop:
@@ -576,10 +576,10 @@
 //! and once none is left a `Q`'s leave in flight, whose events dispatch
 //! in the same settling. A `Q` run while landed is held instead, as the
 //! original holds `_absquatulateStr`
-//! ([`Session::leave_due`](crate::Session::leave_due)), and
-//! [`Session::leave_if_due`](crate::Session::leave_if_due) carries it
+//! (`nova_sim::Session::leave_due`), and
+//! `nova_sim::Session::leave_if_due` carries it
 //! out as the port's Leave
-//! ([`Session::leave_port`](crate::Session::leave_port)) does: it takes
+//! (`nova_sim::Session::leave_port`) does: it takes
 //! off and settles again at once itself, so the take-off's events
 //! dispatch before its save and its first frame. The
 //! subscriptions' scripts run through the dispatcher's
@@ -592,17 +592,17 @@
 //!
 //! A script run through `run_set` in the middle of something else defers
 //! instead. Those are the record hooks
-//! [`Session::run_script`](crate::Session::run_script) runs (see the
+//! `nova_sim::Session::run_script` runs (see the
 //! `hooks` module):
 //!
-//! - `chär` `OnStart`, in [`Session::begin`](crate::Session::begin);
+//! - `chär` `OnStart`, in `nova_sim::Session::begin`;
 //! - `oütf` `OnPurchase` and `OnSell`, in
-//!   [`Session::outfit`](crate::Session::outfit);
+//!   `nova_sim::Session::outfit`;
 //! - `shïp` `OnRetire` and `OnPurchase`, in
-//!   [`Session::buy_ship`](crate::Session::buy_ship);
+//!   `nova_sim::Session::buy_ship`;
 //! - `shïp` `OnCapture`, and `OnRetire` on Use As My Ship, in
-//!   [`Session::plunder`](crate::Session::plunder) and
-//!   [`Session::assign`](crate::Session::assign).
+//!   `nova_sim::Session::plunder` and
+//!   `nova_sim::Session::assign`.
 //!
 //! `C`, `E` and `H` change ships and run no hook. The deferred effects
 //! queue. At the caller's next safe point, its `settle_script`, they
@@ -628,7 +628,7 @@
 //! subscriptions all hold back costs nothing, and a load's sweep that
 //! raises `Explored` for every explored system cannot drop events
 //! (crons-news-ranks phase 16). The rest are dropped, and the settling tells how many as one
-//! [`ScriptNote::EventsDropped`](crate::ScriptNote::EventsDropped). The
+//! [`ScriptNote::EventsDropped`](crate::control::ScriptNote::EventsDropped). The
 //! next settling starts a fresh count.
 //!
 //! A consumer's own effects, which are not set expressions (a mission's
@@ -684,8 +684,8 @@
 //! Days pass through the step on every path the original passes them on:
 //!
 //! - a jump's arrival, its days (`pass_jump_days`), and a gate's under
-//!   [`GateArrivalRule::LikeJump`](crate::GateArrivalRule::LikeJump);
-//! - leaving the spaceport ([`Session::take_off`](crate::Session::take_off)),
+//!   [`GateArrivalRule::LikeJump`](crate::gate::GateArrivalRule::LikeJump);
+//! - leaving the spaceport (`nova_sim::Session::take_off`),
 //!   as `day::Stay`, the stay's tally, counts: half as many days as
 //!   escorts sold or upgraded, rounded down; then a day if an outfit was
 //!   bought or sold, four if a ship was bought, and every take-off's own
@@ -789,7 +789,7 @@
 //! so landing, the market and the outfitter see a stellar's government
 //! override. With no overrides the galaxy is exactly the static catalog.
 //!
-//! [`Session::change_galaxy`](crate::Session::change_galaxy) is the one
+//! `nova_sim::Session::change_galaxy` is the one
 //! writer (with phase 5's catalog-free entry for a stellar's destroyed
 //! state; see "Built by phase 5"). A change applies the moment it
 //! returns; when it is called is
@@ -826,7 +826,7 @@
 //! place when it is used, as `_CueNextHyperRouteDest` resolves it; each
 //! rebuild point rewrites it as
 //! [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see the
-//! [`course`](crate::course) module).
+//! `nova_sim::course` module).
 //!
 //! The player is always in a visible system. Every arrival (a jump, a
 //! gate's exit, `M` and `N`, and the developer tools' relocation) resolves
@@ -861,7 +861,7 @@
 //!
 //! **One writer, two entries.** The writer has one core, which writes the
 //! pilot's overlay and the galaxy's and makes a save due, and two entries:
-//! [`Session::change_galaxy`](crate::Session::change_galaxy), which takes
+//! `nova_sim::Session::change_galaxy`, which takes
 //! a catalog for its follow-ups (a hidden system, a government, the
 //! spawn table), and `Session::set_stellar_state`, catalog-free, which
 //! can change a stellar's destroyed state alone, so it never needs them.
@@ -877,7 +877,7 @@
 //! - `Y` destroys a stellar with its `DeadTime` as the countdown, or 1
 //!   when that is negative, destroyed already or not; `U` regenerates it
 //!   and runs no `OnRegen`. Each reads the stellar's
-//!   [`StellarLife`](crate::StellarLife), which the session reads from
+//!   [`StellarLife`](crate::catalog::StellarLife), which the session reads from
 //!   the catalog as it starts. An ID outside 128 to 2175, or with no
 //!   record, does nothing.
 //! - The daily step's sixth participant counts each destroyed stellar
@@ -888,16 +888,16 @@
 //!   effect, not a story subscription: it runs inside the day, before the
 //!   ranks and `DayPassed`. Its `M`, `N`, `Q` and `S` defer to the next
 //!   settling, as any hook's do.
-//! - A new pilot ([`Session::begin`](crate::Session::begin)) starts with
+//! - A new pilot (`nova_sim::Session::begin`) starts with
 //!   every stellar whose `Flags2` has 0x0040 destroyed, as `Y` destroys
 //!   it, before its `OnStart`. A load keeps the stellars as saved. No
 //!   stock stellar starts destroyed, so a save from before version 18
 //!   needs no seeding.
 //!
 //! **Its readers.** [`OverlaidGalaxy::site`] stamps a stellar's
-//! [`LandingSite::destroyed`](crate::LandingSite::destroyed) from the
+//! [`LandingSite::destroyed`](crate::catalog::LandingSite::destroyed) from the
 //! overlay, as it stamps the government, and
-//! [`is_landable`](crate::is_landable) reads it as the original's
+//! [`is_landable`](crate::landing::is_landable) reads it as the original's
 //! `_StellarIsLandable` does: a stellar can be landed on when it has the
 //! can-land flag and is destroyed exactly when it can be landed on only
 //! once destroyed. Docking (gates and the developer tools' relocation),
@@ -1268,7 +1268,7 @@
 //! and destroy each other, would run without end. So an `OnDestroy` never
 //! runs inside itself, whether a shot or a `Y` started it: the `Y` still
 //! destroys the stellar, and the skipped run is reported as
-//! [`ScriptNote::OnDestroyReentered`](crate::ScriptNote::OnDestroyReentered). No key for
+//! [`ScriptNote::OnDestroyReentered`](crate::control::ScriptNote::OnDestroyReentered). No key for
 //! the ten killings, the daily repair, `Y`'s explosion on an invincible
 //! stellar or shots passing through one, which the Bible's `Strength`
 //! ("0 or -1 for an invincible stellar") agrees with, nor for the
@@ -1662,13 +1662,13 @@
 //! saved on `Pilot` (save version 20), until it succeeds, fails or is
 //! aborted. What moves it:
 //!
-//! - the player, through [`Session`](crate::Session):
-//!   [`accept_mission`](crate::Session::accept_mission) runs the accept
+//! - the player, through `nova_sim::Session`:
+//!   `nova_sim::Session::accept_mission` runs the accept
 //!   checks, then fills the lowest free slot from the offer, registers
 //!   its hooks and runs `OnAccept`, and ends an auto-aborted mission at
 //!   once, its `DatePostInc` days passed through the daily step;
-//!   [`refuse_mission`](crate::Session::refuse_mission) runs `OnRefuse`
-//!   and drops the offer; [`abort_mission`](crate::Session::abort_mission)
+//!   `nova_sim::Session::refuse_mission` runs `OnRefuse`
+//!   and drops the offer; `nova_sim::Session::abort_mission`
 //!   runs the abort checks (`CanAbort`), then `OnAbort`;
 //! - `Landed`: each slot's four landing subscriptions,
 //!   `{Missions, slot, 0..=3}`, after the offer roll, in
@@ -1699,7 +1699,7 @@
 //!   disable or escort goal marks the mission failed, nothing run, to
 //!   fail at its return. A mission ship's loss that fails its mission
 //!   fails it at once, at the loss, through the quick failure; cargo
-//!   jettisoned ([`Session::jettison_cargo`](crate::Session::jettison_cargo))
+//!   jettisoned (`nova_sim::Session::jettison_cargo`)
 //!   or found by an interceptor's scan does the same, through the one
 //!   quick failure the deadline uses; cargo plundered waits for NPC
 //!   boarding;
@@ -1710,7 +1710,7 @@
 //!   failed, and it fails at the next landing at its return.
 //!
 //! The scripts a transition runs (`OnAccept`, `OnAbort`, `OnSuccess`,
-//! `OnFailure`) run inline, as [`Session::run_set`](crate::Session::run_set)
+//! `OnFailure`) run inline, as `nova_sim::Session::run_set`
 //! runs one, and the events they raise (an auto-abort's or a success's
 //! `DayPassed`) wait for the nearest nesting point: the dispatcher's right
 //! after the hook's effect, or the one after an `S` or `A` operator. So
@@ -1736,9 +1736,9 @@
 //! from [`expand_tags`](crate::person::expand_tags), is the one
 //! substitution path, as `_MungeBriefing` is the original's: a text is
 //! filled for an offer, an active slot or no mission
-//! ([`Session::offer_text`](crate::Session::offer_text),
-//! [`Session::mission_text`](crate::Session::mission_text),
-//! [`Session::plain_text`](crate::Session::plain_text)). Its users:
+//! (`nova_sim::Session::offer_text`,
+//! `nova_sim::Session::mission_text`,
+//! `nova_sim::Session::plain_text`). Its users:
 //!
 //! - mission text;
 //! - a `Q` message run from a mission's script;
@@ -1864,7 +1864,7 @@
 //! - **The course** keeps system IDs between rebuild points, and each
 //!   rebuild point rewrites it as
 //!   [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see
-//!   the [`course`](crate::course) module). `_CueNextHyperRouteDest` resolves
+//!   the `nova_sim::course` module). `_CueNextHyperRouteDest` resolves
 //!   the next hop by place (`_FindActiveCoLocatedSystem` @0xe2fa) and
 //!   matches it against the current system's Con slots, each resolved the
 //!   same way (@0xe32f): a hidden hop with a visible system at its place
@@ -1947,10 +1947,10 @@ pub enum Fate {
     Boarded,
     /// First seen by the player: visible to it, which the original polls
     /// each frame (`_ShipVisibleToShip` @0x9ea5c) and the flight tick
-    /// raises here ([`Session::sees`](crate::Session::sees): not
+    /// raises here (`nova_sim::Session::sees`: not
     /// emerging from a gate, and uncloaked or within a cloak scanner's
     /// sight). Only a ship that can cloak must also be on screen
-    /// (@0x9ea74-0x9eb09, [`Session::on_screen`](crate::Session::on_screen)).
+    /// (@0x9ea74-0x9eb09, `nova_sim::Session::on_screen`).
     Observed,
     /// Brought into the player's system, a mission's special ship set up
     /// with the system or come in on its timer: what the original's

@@ -128,9 +128,9 @@
 //! [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach) rule's
 //! other reading counts only a rank of the stellar's own government. The
 //! block plays no sound. Only the shipyard reads the slots, through
-//! `_ApplyPriceAndTechnologyFlux` ([`price_flux`](crate::hire::price_flux)):
+//! `_ApplyPriceAndTechnologyFlux` (`nova_sim::hire::price_flux`):
 //! a ship's price and the hire fee with `[1]`, the trade-in with `[0]`
-//! then `[1]` (see [`shipyard`](crate::shipyard)).
+//! then `[1]` (see `nova_sim::shipyard`).
 //!
 //! **Crimes** ([`lose_to_crime`], `_SlapWithPenalty` @0x9c47-0x9caf).
 //! After the penalty walk (see [`legal`](crate::legal)), a crime the
@@ -689,7 +689,7 @@ fn sweep(
 mod tests {
     use super::*;
     use crate::catalog::GovtRecord;
-    use crate::testkit;
+    use nova_sim_catalog::fixture;
 
     /// Rank `id` of government `govt` (`None` unaffiliated), `weight`
     /// and `flags`.
@@ -698,7 +698,7 @@ mod tests {
             affil_govt: govt.map(GovtId),
             weight,
             flags,
-            ..testkit::rank(id)
+            ..fixture::rank(id)
         }
     }
 
@@ -1002,7 +1002,7 @@ mod tests {
         RankRecord {
             salary,
             salary_cap: cap,
-            ..testkit::rank(id)
+            ..fixture::rank(id)
         }
     }
 
@@ -1431,15 +1431,15 @@ mod tests {
             GovtRecord {
                 classes: [1, -1, -1, -1],
                 allies: [2, -1, -1, -1],
-                ..testkit::govt(140)
+                ..fixture::govt(140)
             },
             GovtRecord {
                 classes: [2, -1, -1, -1],
-                ..testkit::govt(141)
+                ..fixture::govt(141)
             },
             GovtRecord {
                 classes: [3, -1, -1, -1],
-                ..testkit::govt(142)
+                ..fixture::govt(142)
             },
         ])
     }
@@ -1581,11 +1581,11 @@ mod tests {
         let records = [
             RankRecord {
                 contribute: 0x5,
-                ..testkit::rank(200)
+                ..fixture::rank(200)
             },
             RankRecord {
                 contribute: 0x6,
-                ..testkit::rank(201)
+                ..fixture::rank(201)
             },
         ];
         assert_eq!(contributed(&records, &ids(&[200, 201])), 0x7);
@@ -1754,19 +1754,19 @@ mod tests {
             GovtRecord {
                 classes: [1, -1, -1, -1],
                 allies: [2, -1, -1, -1],
-                ..testkit::govt(140)
+                ..fixture::govt(140)
             },
             GovtRecord {
                 classes: [2, -1, -1, -1],
-                ..testkit::govt(141)
+                ..fixture::govt(141)
             },
             GovtRecord {
                 classes: [3, -1, -1, -1],
-                ..testkit::govt(142)
+                ..fixture::govt(142)
             },
             GovtRecord {
                 flags: crate::govt::DERELICT,
-                ..testkit::govt(143)
+                ..fixture::govt(143)
             },
         ])
     }
@@ -2145,12 +2145,12 @@ mod tests {
             GovtRecord {
                 classes: [1, -1, -1, -1],
                 allies: [5, -1, -1, -1],
-                ..testkit::govt(140)
+                ..fixture::govt(140)
             },
             GovtRecord {
                 flags: crate::govt::DERELICT,
                 classes: [5, -1, -1, -1],
-                ..testkit::govt(143)
+                ..fixture::govt(143)
             },
         ]);
         let of_140 = [rank(130, Some(140), 0, BLESSES_LANDING)];
@@ -2180,7 +2180,7 @@ mod tests {
 
     #[test]
     fn a_government_outside_128_to_383_is_never_blessed() {
-        let govts = Governments::new([127, 128, 383, 384].map(testkit::govt));
+        let govts = Governments::new([127, 128, 383, 384].map(fixture::govt));
         let records: Vec<RankRecord> = [127, 128, 383, 384]
             .into_iter()
             .map(|govt| rank(govt, Some(govt), 0, BLESSES_PEACE | BLESSES_LANDING))

@@ -605,7 +605,8 @@ mod tests {
     use crate::govt::DERELICT;
     use crate::hyperspace::CoLocated;
     use crate::story::{Countdown, GalaxyOverlay};
-    use crate::testkit::{Draws, govt, star};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::{govt, star};
 
     const FED: GovtId = GovtId(128);
     const CIVVIES: GovtId = GovtId(129);

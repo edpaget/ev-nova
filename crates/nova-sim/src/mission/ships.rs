@@ -470,7 +470,8 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtRecord, StarSystem};
     use crate::hyperspace::CoLocated;
-    use crate::testkit::{Draws, govt};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::govt;
 
     #[test]
     fn with_flags_0x0800_a_swapped_ship_flies_the_persons_type_when_the_dude_lists_it() {
@@ -531,7 +532,7 @@ mod tests {
     fn system(id: i16, at: (f32, f32), links: &[i16], govt: Option<GovtId>) -> StarSystem {
         StarSystem {
             govt,
-            ..crate::testkit::star(id, at, links)
+            ..nova_sim_catalog::fixture::star(id, at, links)
         }
     }
 

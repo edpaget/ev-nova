@@ -12,7 +12,7 @@
 //! **Where a person may appear** (`_SpawnPerson` @0x40990-0x40ba4), in a
 //! system S, all of these holding:
 //!
-//! 1. it is alive: not gone for good ([`Pilot::gone`](crate::Pilot::gone));
+//! 1. it is alive: not gone for good ([`Pilot::gone`](crate::pilot::Pilot::gone));
 //! 2. its `AIType` is above 0;
 //! 3. its `ActiveOn` holds for the player, through the [`ControlBits`](crate::control::ControlBits)
 //!    port ([`PersonWorld::allows`]); one that did not parse never holds;
@@ -351,8 +351,9 @@ mod tests {
     use crate::reserves::Reserves;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST, govt, person, weapon};
     use crate::traffic::table::ShipKind;
+    use nova_sim_base::fixture::{Draws, FAST};
+    use nova_sim_catalog::fixture::{govt, person, weapon};
 
     /// Governments 128 and 129 are allies (class 1 and its ally); 130 is
     /// at war with 128 (class 3, listing class 1).
@@ -999,7 +1000,7 @@ mod tests {
             conv_name: "Cmdr".to_owned(),
             short_name: "Cdr".to_owned(),
             affil_govt: Some(GovtId(128)),
-            ..crate::testkit::rank(200)
+            ..nova_sim_catalog::fixture::rank(200)
         }];
         let active = BTreeSet::from([RankId(200)]);
         let text = "<PRK>, <SRK>, <RRK>, <PRK128>.";
@@ -1056,7 +1057,7 @@ mod tests {
         Npc {
             goal,
             condition,
-            ..crate::testkit::npc(1, crate::stats::ShipStats::new(FAST, &[]))
+            ..crate::traffic::fixture::npc(1, crate::stats::ShipStats::new(FAST, &[]))
         }
     }
 
@@ -1115,7 +1116,7 @@ mod tests {
                 formation: crate::escort::FormationSlot::default(),
                 order: None,
             }),
-            ..crate::testkit::npc(5, crate::stats::ShipStats::new(FAST, &[]))
+            ..crate::traffic::fixture::npc(5, crate::stats::ShipStats::new(FAST, &[]))
         };
         assert_eq!(
             quote_eligible(&raider, &on_attack, &VIEW, std::slice::from_ref(&escort)),

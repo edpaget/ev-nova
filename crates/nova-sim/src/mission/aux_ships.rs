@@ -231,7 +231,8 @@ mod tests {
     use crate::catalog::{GovtRecord, StarSystem};
     use crate::govt::{DERELICT, XENOPHOBIC};
     use crate::hyperspace::CoLocated;
-    use crate::testkit::{Draws, govt, star};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::{govt, star};
     use std::collections::BTreeSet;
 
     fn aux(count: i16, dude: i16) -> AuxShip {

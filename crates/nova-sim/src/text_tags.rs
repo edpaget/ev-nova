@@ -1202,7 +1202,7 @@ mod tests {
             short_name: short.to_owned(),
             affil_govt: Some(GovtId(govt)),
             weight,
-            ..crate::testkit::rank(id)
+            ..nova_sim_catalog::fixture::rank(id)
         };
         vec![
             rank(200, 128, 1, ["Commander", "Cmdr", "Cdr"]),
@@ -1605,7 +1605,7 @@ mod tests {
 
     #[test]
     fn load_leet_replaces_a_letter_on_2_draws_in_3() {
-        let mut chance = crate::testkit::Draws::of(&[0, 2, 1, 2, 1, 0, 2, 2]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[0, 2, 1, 2, 1, 0, 2, 2]);
         assert_eq!(
             load_leet("aeioAEIO", &mut chance),
             "4e1o43IO",
@@ -1616,14 +1616,14 @@ mod tests {
 
     #[test]
     fn load_leet_draws_nothing_for_other_letters() {
-        let mut chance = crate::testkit::Draws::of(&[]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[]);
         assert_eq!(load_leet("thrysm ", &mut chance), "thrysm ");
         assert_eq!(chance.asked, Vec::<u32>::new());
     }
 
     #[test]
     fn load_leet_turns_you_into_j00() {
-        let mut chance = crate::testkit::Draws::of(&[]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[]);
         assert_eq!(load_leet("Your hymn", &mut chance), "j00r hymn");
         assert_eq!(load_leet("you!!", &mut chance), "j00!!");
         assert_eq!(
@@ -1640,7 +1640,7 @@ mod tests {
 
     #[test]
     fn load_leet_leaves_a_you_too_near_the_end() {
-        let mut chance = crate::testkit::Draws::of(&[]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[]);
         assert_eq!(load_leet("you!", &mut chance), "you!", "i < strlen - 4");
         assert_eq!(load_leet("Thank you", &mut chance), "Thank you");
         assert_eq!(chance.asked, [3, 3, 3], "its o drawn for, kept");
@@ -1682,7 +1682,7 @@ mod tests {
 
     #[test]
     fn an_active_missions_ship_name_is_the_one_drawn_at_accept() {
-        let record = crate::testkit::mission(130);
+        let record = nova_sim_catalog::fixture::mission(130);
         let mut active = ActiveMission::accepted(&record, &offer(), today());
         active.ships.name = "Rover".to_owned();
         assert_eq!(
@@ -1693,7 +1693,7 @@ mod tests {
 
     #[test]
     fn an_active_missions_values_are_its_own_with_an_empty_ship_name() {
-        let record = crate::testkit::mission(130);
+        let record = nova_sim_catalog::fixture::mission(130);
         let mut active = ActiveMission::accepted(&record, &offer(), today());
         active.deadline = GameDate::new(1177, 7, 2);
         assert_eq!(
@@ -1710,13 +1710,13 @@ mod tests {
     // Before any pilot.
 
     /// A catalog of `ships`, each named as given.
-    fn ships_named(ships: &[(i16, &str)]) -> crate::testkit::FakePilotCatalog {
-        let mut catalog = crate::testkit::catalog();
+    fn ships_named(ships: &[(i16, &str)]) -> nova_sim_catalog::fixture::FakePilotCatalog {
+        let mut catalog = nova_sim_catalog::fixture::catalog();
         catalog.ship_records = ships
             .iter()
             .map(|&(id, name)| crate::catalog::ShipRecord {
                 name: name.to_owned(),
-                ..crate::testkit::ship(id, crate::testkit::FAST)
+                ..nova_sim_catalog::fixture::ship(id, nova_sim_base::fixture::FAST)
             })
             .collect();
         catalog

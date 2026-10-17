@@ -315,7 +315,7 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::mission;
+    use nova_sim_catalog::fixture::mission;
 
     fn picking_up(pickup_mode: i16, cargo_type: i16) -> MissionRecord {
         MissionRecord {
@@ -352,7 +352,7 @@ mod tests {
         };
         let active = ActiveMission {
             aboard,
-            ..crate::testkit::carrying(140, 5)
+            ..crate::mission::fixture::carrying(140, 5)
         };
         (record, active)
     }
@@ -477,16 +477,16 @@ mod tests {
     /// 0x0400) with 3.
     fn four_missions() -> (ActiveMissions, impl Fn(MissionId) -> MissionRecord) {
         let mut missions = ActiveMissions::default();
-        missions.put(0, crate::testkit::carrying(140, 4));
-        missions.put(2, crate::testkit::carrying(141, 6));
+        missions.put(0, crate::mission::fixture::carrying(140, 4));
+        missions.put(2, crate::mission::fixture::carrying(141, 6));
         missions.put(
             3,
             ActiveMission {
                 aboard: false,
-                ..crate::testkit::carrying(142, 7)
+                ..crate::mission::fixture::carrying(142, 7)
             },
         );
-        missions.put(5, crate::testkit::carrying(143, 3));
+        missions.put(5, crate::mission::fixture::carrying(143, 3));
         let record_of = |id: MissionId| MissionRecord {
             can_abort: i16::from(id.0 != 141),
             flags: if id.0 == 143 { HIDDEN } else { 0 },
@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn a_hidden_missions_cargo_fails_it_silently() {
         let mut missions = ActiveMissions::default();
-        missions.put(1, crate::testkit::carrying(143, 3));
+        missions.put(1, crate::mission::fixture::carrying(143, 3));
         let hidden = |id: MissionId| MissionRecord {
             flags: HIDDEN | 0x0001,
             ..mission(id.0)
@@ -566,8 +566,8 @@ mod tests {
     #[test]
     fn a_mission_of_no_tons_makes_a_total_of_none_one() {
         let mut missions = ActiveMissions::default();
-        missions.put(0, crate::testkit::carrying(140, 0));
-        missions.put(1, crate::testkit::carrying(141, 0));
+        missions.put(0, crate::mission::fixture::carrying(140, 0));
+        missions.put(1, crate::mission::fixture::carrying(141, 0));
         let hidden = |id: MissionId| MissionRecord {
             flags: HIDDEN,
             ..mission(id.0)
@@ -591,10 +591,10 @@ mod tests {
             0,
             ActiveMission {
                 cargo_type: None,
-                ..crate::testkit::carrying(140, 4)
+                ..crate::mission::fixture::carrying(140, 4)
             },
         );
-        missions.put(1, crate::testkit::carrying(141, -1));
+        missions.put(1, crate::mission::fixture::carrying(141, -1));
         assert_eq!(
             jettison(&missions, |id| mission(id.0), true, 0),
             Jettisoned::default()
@@ -604,7 +604,7 @@ mod tests {
     // The scan.
 
     use crate::catalog::{GovtRecord, Penalties};
-    use crate::testkit::govt;
+    use nova_sim_catalog::fixture::govt;
 
     /// A government scanning for bit 0x0004, with a `SmugPenalty` of 5
     /// and a `ScanFine` of `fine`.
@@ -625,7 +625,7 @@ mod tests {
     /// aboard in slot `slot`.
     fn smuggled(slot: u8, mask: u16, flags: u16) -> (ActiveMissions, MissionRecord) {
         let mut missions = ActiveMissions::default();
-        missions.put(slot, crate::testkit::carrying(140, 4));
+        missions.put(slot, crate::mission::fixture::carrying(140, 4));
         let record = MissionRecord {
             scan_mask: mask,
             flags,
@@ -736,9 +736,9 @@ mod tests {
     #[test]
     fn only_the_first_masked_slot_is_acted_on() {
         let mut missions = ActiveMissions::default();
-        missions.put(1, crate::testkit::carrying(141, 2));
-        missions.put(4, crate::testkit::carrying(140, 4));
-        missions.put(6, crate::testkit::carrying(142, 4));
+        missions.put(1, crate::mission::fixture::carrying(141, 2));
+        missions.put(4, crate::mission::fixture::carrying(140, 4));
+        missions.put(6, crate::mission::fixture::carrying(142, 4));
         let record_of = |id: MissionId| MissionRecord {
             scan_mask: if id.0 == 141 { 0x0001 } else { 0x0004 },
             flags: if id.0 == 140 { 0 } else { 0x0020 },

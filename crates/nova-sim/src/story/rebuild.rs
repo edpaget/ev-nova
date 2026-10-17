@@ -153,7 +153,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::testkit::planet;
+    use nova_sim_catalog::fixture::planet;
 
     /// Planets `ids`, each of its own graphic type, its ID less 100, with
     /// none to show while destroyed.

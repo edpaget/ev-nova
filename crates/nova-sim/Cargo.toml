@@ -61,7 +61,7 @@ nova-sim = { workspace = true, features = ["fixture"] }
 [features]
 # Exposes the test support in `fixture` (the in-memory pilot store and the
 # storyline walker) to other crates' tests and this crate's `tests/`.
-fixture = []
+fixture = ["nova-sim-catalog/fixture"]
 
 [lints]
 workspace = true

@@ -270,7 +270,7 @@ pub enum AcceptRefusal {
     NoSpace,
 }
 
-/// Why [`Session::accept_mission`](crate::Session::accept_mission) accepted nothing.
+/// Why `nova_sim::Session::accept_mission` accepted nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AcceptError {
     /// It is not offered here.
@@ -618,7 +618,7 @@ mod tests {
     use crate::catalog::{GovtRecord, MissionShip, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::rules::Verdict;
-    use crate::testkit::{govt, mission};
+    use nova_sim_catalog::fixture::{govt, mission};
 
     fn today() -> GameDate {
         GameDate::new(1177, 6, 24).expect("a date")

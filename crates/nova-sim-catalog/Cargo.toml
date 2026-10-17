@@ -30,7 +30,7 @@ nova-sim-base = { workspace = true, features = ["fixture"] }
 [features]
 # Exposes the test support in `fixture` (the catalog record builders and
 # the control-bit mocks) to the tests of the nova-sim crates above.
-fixture = []
+fixture = ["nova-sim-base/fixture"]
 
 [lints]
 workspace = true

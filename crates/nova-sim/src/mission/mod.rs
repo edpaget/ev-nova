@@ -48,10 +48,10 @@
 //!    sharing a class with g, 31000-31999 sharing none; the ally, enemy
 //!    and no-shared-class ranges refuse an independent stellar. Any other
 //!    value refuses;
-//! 7. `AvailBits`, through [`ControlBits`](crate::ControlBits): one that
+//! 7. `AvailBits`, through [`ControlBits`](crate::control::ControlBits): one that
 //!    did not parse never holds;
 //! 8. `Require`: every bit the ship and its outfits contribute
-//!    ([`wares::requirement_met`]);
+//!    ([`requirement_met`]);
 //! 9. `AvailRecord` (@0x9b519-0x9b5ce): 0 passes, above 0 needs the
 //!    legal record that high (@0x9b592-0x9b5a6), below 0 needs it that
 //!    low (@0x9b5b4-0x9b5c8); -32000 needs the docked stellar dominated
@@ -356,7 +356,7 @@
 //! view draws it. Each mission's name, offer text (`dësc` 4000 + its
 //! index), `BriefText`, `QuickBrief`, `CompText`, `FailText`,
 //! `RefuseText` and button labels are read once, as the session starts
-//! ([`MissionTexts`](crate::MissionTexts)); a missing `dësc` is no text.
+//! ([`MissionTexts`](crate::catalog::MissionTexts)); a missing `dësc` is no text.
 //!
 //! Once both venues' offers are resolved, each list is put in the order
 //! it shows ([`display_order`], `_RandomizeMissionData`
@@ -403,6 +403,8 @@
 pub mod active;
 pub mod aux_ships;
 pub mod cargo;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 pub mod goals;
 pub mod identity;
 pub mod offer;
@@ -412,10 +414,10 @@ pub mod ships;
 
 use crate::catalog::{GovtId, LandingSite, MissionId, MissionRecord, ShipId, StellarId, SystemId};
 use crate::control::Gate;
+use crate::cron::requirement_met;
 use crate::date::GameDate;
 use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
-use crate::wares;
 
 pub use self::active::{
     AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
@@ -765,7 +767,7 @@ fn avail_bits(facts: &AvailFacts) -> Result<(), Refusal> {
 
 fn require(facts: &AvailFacts) -> Result<(), Refusal> {
     pass(
-        wares::requirement_met(facts.mission.require, facts.visit.player.contributed),
+        requirement_met(facts.mission.require, facts.visit.player.contributed),
         Refusal::Require,
     )
 }

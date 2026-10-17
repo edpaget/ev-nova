@@ -6,7 +6,7 @@
 //! story, drawn once as the bar opens (`_DoBarDialog` 0x48ef5 calls
 //! `_RandomizeNewsDialog` @0x48f15) and shown unchanged by the News
 //! button (`_DoNewsDialog` 0x47f0a) until the bar closes. The session
-//! makes the draws ([`Session::open_bar`](crate::session::Session::open_bar));
+//! makes the draws (`nova_sim::Session::open_bar`);
 //! this module holds the rules it draws among.
 //!
 //! # A cron's news fields
@@ -62,7 +62,7 @@
 //!
 //! # The draws
 //!
-//! What the session draws, in order (see [`Session::open_bar`](crate::session::Session::open_bar)):
+//! What the session draws, in order (see `nova_sim::Session::open_bar`):
 //! the commercial, a string of `STR#` [`COMMERCIALS`] (@0x4826a), else
 //! `STR#` [`MISC_STRINGS`] #[`TOP_NEWS`] (@0x48294); the `öops` story
 //! (below); then, with any government candidates, one
@@ -449,7 +449,7 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtRecord, SystemId};
     use crate::rulebook::RuleSource;
-    use crate::testkit::{cron, govt};
+    use nova_sim_catalog::fixture::{cron, govt};
 
     const RUNNING: CronState = CronState {
         days: 5,

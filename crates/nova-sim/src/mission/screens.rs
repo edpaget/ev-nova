@@ -146,7 +146,7 @@ pub struct OfferPrompt {
     /// opens (`_OfferOneMission` @0xa2273-0xa22ab); one played
     /// [`after`](DescMovie::after) the session queues after the texts the
     /// answer shows (@0xa3580-0xa35b8; see
-    /// [`Session::take_mission_texts`](crate::Session::take_mission_texts)).
+    /// `nova_sim::Session::take_mission_texts`).
     pub movie: Option<DescMovie>,
 }
 
@@ -159,7 +159,7 @@ impl OfferPrompt {
 }
 
 /// What a venue's next offer comes to
-/// ([`Session::next_offer`](crate::Session::next_offer)).
+/// (`nova_sim::Session::next_offer`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VenueOffer {
     /// The offer dialog asks.
@@ -167,7 +167,7 @@ pub enum VenueOffer {
     /// A mission that cannot be refused, with no offer text, was accepted
     /// at once, with no dialog (@0xa22ec-0xa231c): how the accept went.
     /// Its offer's before-movie is queued ahead of the accept's texts
-    /// ([`Session::take_mission_texts`](crate::Session::take_mission_texts)).
+    /// (`nova_sim::Session::take_mission_texts`).
     Accepted {
         /// The mission.
         mission: MissionId,
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn the_gap_between_offers_is_30_ticks_and_a_draw_below_30() {
-        let mut chance = crate::testkit::Draws::of(&[7, 29]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[7, 29]);
         assert_eq!(offer_gap(&mut chance), 37);
         assert_eq!(offer_gap(&mut chance), 59);
         assert_eq!(chance.asked, [30, 30]);

@@ -54,7 +54,7 @@
 //! to others:
 //!
 //! - the course rewrite and cut (@0x32ab3-0x32b0f): the
-//!   [`course`](crate::course) module, at the session's rebuild points;
+//!   `nova_sim::course` module, at the session's rebuild points;
 //! - the explored level shared to the chain head (@0x32b0f-0x32b8f):
 //!   crons-news-ranks phase 14 models it, as one explored set, in the
 //!   session's rebuild points (the session's `explored` module);
@@ -833,7 +833,7 @@ mod tests {
     use crate::control::{Bit, NovaBits, PilotFacts, Test};
     use crate::hyperspace::CoLocated;
     use crate::pilot::Gender;
-    use crate::testkit::{planet, star};
+    use nova_sim_catalog::fixture::{planet, star};
 
     fn ids(list: &[i16]) -> Vec<SystemId> {
         list.iter().copied().map(SystemId).collect()
@@ -1837,7 +1837,7 @@ mod tests {
 
     #[test]
     fn inactive_by_gives_the_zero_size_and_failing_nebulae() {
-        use crate::testkit::nebula;
+        use nova_sim_catalog::fixture::nebula;
         let pilot = Bits([10].into_iter().collect());
         let gate = Gate {
             control_bits: &NovaBits,

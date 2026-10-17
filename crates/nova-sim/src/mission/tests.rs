@@ -11,7 +11,8 @@ use crate::market::DOMINATED;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
 use crate::story::Whereabouts;
-use crate::testkit::{Draws, Scripted, govt, mission, planet, star};
+use nova_sim_base::fixture::{Draws, Scripted};
+use nova_sim_catalog::fixture::{govt, mission, planet, star};
 
 const FED: GovtId = GovtId(128);
 const CIVVIES: GovtId = GovtId(129);

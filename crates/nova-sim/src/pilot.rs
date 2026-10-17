@@ -15,10 +15,10 @@
 //!
 //! The fleet is a list of [`Escort`] records, each a ship class with its
 //! reserves and its standing order, in the order the ships joined; a ship
-//! captured joins it ([`Session::assign`](crate::Session::assign)), and
+//! captured joins it (`nova_sim::Session::assign`), and
 //! so does each fighter launched from the player's bays, marked
 //! `carried`, until it docks again, and each ship hired in the bar
-//! ([`Session::hire`](crate::Session::hire)), with the daily `wage` it
+//! (`nova_sim::Session::hire`), with the daily `wage` it
 //! was hired at, and each person who joins the player, linked to its
 //! `person`. In flight the session flies each as
 //! an NPC beside the player. The carried fighters do not count towards
@@ -69,7 +69,7 @@
 //! It keeps its active ranks, by `ränk` ID: none on a new pilot, as every
 //! rank loads inactive (@0x7da5e, @0x190f0; see [`rank`](crate::rank)).
 //!
-//! A [`Session`](crate::Session) flies a pilot and changes it as the rules
+//! A `nova_sim::Session` flies a pilot and changes it as the rules
 //! say.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -125,7 +125,7 @@ pub struct Pilot {
     /// when the pilot first flies: a new pilot, or a save from before
     /// records were kept per system.
     pub(crate) system_legal: Option<BTreeMap<SystemId, i16>>,
-    /// The combat rating (see [`rating`](crate::rating)).
+    /// The combat rating (see `nova_sim::rating`).
     pub(crate) combat_rating: i64,
     /// The tons held of each good the ship carries; none of a good not
     /// listed.
@@ -157,7 +157,7 @@ pub struct Pilot {
     pub(crate) gender: Gender,
     /// Whether the pilot plays Strict Play, the new-pilot dialog's check
     /// box (the original's flag at 0x3b5158). A pilot that does not flies
-    /// half as fast again (see [`top_speed`](crate::top_speed)).
+    /// half as fast again (see `nova_sim::top_speed`).
     pub(crate) strict_play: bool,
     /// The system the player last jumped from (the original's player
     /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
@@ -339,7 +339,7 @@ impl Pilot {
     }
 
     /// The ship's name; `None` for a ship never named (see
-    /// [`Session::fly`](crate::Session::fly)).
+    /// `nova_sim::Session::fly`).
     #[must_use]
     pub fn ship_name(&self) -> Option<&str> {
         self.ship_name.as_deref()
@@ -451,7 +451,7 @@ impl Pilot {
     }
 
     /// The combat rating: the `chär`'s `Kills` to start, raised by each
-    /// kill that counts (see [`rating`](crate::rating)).
+    /// kill that counts (see `nova_sim::rating`).
     #[must_use]
     pub fn combat_rating(&self) -> i64 {
         self.combat_rating
@@ -611,7 +611,8 @@ mod tests {
     use crate::date::GameDate;
     use crate::escort::EscortOrder;
     use crate::reserves::Gauge;
-    use crate::testkit::{FAST, FakePilotCatalog, START, catalog, starting};
+    use nova_sim_base::fixture::FAST;
+    use nova_sim_catalog::fixture::{FakePilotCatalog, START, catalog, starting};
 
     #[test]
     fn a_new_pilot_flies_the_first_chärs_ship_from_its_first_system_that_exists() {
@@ -628,7 +629,7 @@ mod tests {
     #[test]
     fn a_new_pilots_ship_is_named_after_its_class() {
         let named = FakePilotCatalog {
-            ship_records: vec![crate::testkit::ship(128, FAST)],
+            ship_records: vec![nova_sim_catalog::fixture::ship(128, FAST)],
             ..catalog()
         };
         let pilot = Pilot::new(&named, "Ada").expect("starts");
@@ -668,7 +669,7 @@ mod tests {
     fn a_new_pilot_owns_its_ships_default_items_with_repeats_adding_up() {
         use crate::catalog::OutfitId;
         use crate::stats::MORE_FUEL;
-        use crate::testkit::outfit;
+        use nova_sim_catalog::fixture::outfit;
         let catalog = FakePilotCatalog {
             defaults: vec![(
                 ShipId(128),
@@ -704,7 +705,7 @@ mod tests {
     fn a_new_pilot_owns_its_ships_stock_weapons_and_rounds_then_its_default_items() {
         use crate::catalog::{HullRecord, OutfitId, StockWeapon, WeaponId, WeaponRecord};
         use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
-        use crate::testkit::{hull, outfit, weapon};
+        use nova_sim_catalog::fixture::{hull, outfit, weapon};
         let stock = |id, count, ammo| StockWeapon {
             weapon: WeaponId(id),
             count,
@@ -829,7 +830,9 @@ mod tests {
         let mut pilot = Pilot::new(&catalog(), "").expect("starts");
         assert_eq!((pilot.goods_held(), pilot.total_cargo()), (0, 0));
         pilot.cargo = BTreeMap::from([(Good::Junk(JunkId(146)), 2), (Good::Commodity(3), 7)]);
-        pilot.missions.put(4, crate::testkit::carrying(140, 5));
+        pilot
+            .missions
+            .put(4, crate::mission::fixture::carrying(140, 5));
         assert_eq!(pilot.goods_held(), 9, "the mission's food is no good held");
         assert_eq!(pilot.total_cargo(), 14);
         pilot.cargo.insert(Good::Commodity(0), u32::MAX);
