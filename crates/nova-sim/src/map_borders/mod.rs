@@ -20,7 +20,7 @@
 //!
 //! A system adds to the cells within a radius of trunc(30.72 / zoom)
 //! cells, or trunc(15.36 / zoom) when its government has `Flags2`
-//! [`SMALL_INFLUENCE`](crate::govt::SMALL_INFLUENCE) ([`grid::radius`]),
+//! [`SMALL_INFLUENCE`] ([`grid::radius`]),
 //! each the value trunc(((r² − d²) × 0.2) × zoom), or × 0.4 with that
 //! bit, clamped to 1..=255 ([`grid::value`]). A cell's slots take it as
 //! [`grid::merge`] says: the first slot an allied government holds
@@ -69,7 +69,7 @@ pub struct BorderSource {
     /// Its government.
     pub govt: GovtId,
     /// Whether the government has `Flags2`
-    /// [`SMALL_INFLUENCE`](crate::govt::SMALL_INFLUENCE): half the radius,
+    /// [`SMALL_INFLUENCE`]: half the radius,
     /// twice the value.
     pub small: bool,
 }
