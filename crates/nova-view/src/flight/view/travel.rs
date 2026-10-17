@@ -161,6 +161,9 @@ impl<
     pub(super) fn open_map(&mut self) {
         self.held.clear();
         self.map_open = true;
+        if let Ok(session) = &self.session {
+            self.map.show_border_sources(session.map_border_sources());
+        }
         self.map.opened();
         if let Ok(session) = &self.session {
             self.map.preselect(session.map_preselection());
@@ -193,6 +196,7 @@ impl<
         if offered.is_some() {
             session.mark_known(drawing.gate_arrows.iter().copied());
         }
+        self.map.show_border_sources(session.map_border_sources());
         self.map_seen = Some(MapSeen::of(session));
         self.retake_map_panel();
     }
@@ -1285,6 +1289,15 @@ impl<
     /// opened from the other port screens, filed with them in
     /// rdm:phase/hud-fidelity-followups/phase-1-map-key-from-the-other-port-screens.
     pub fn close_map(&mut self) {
+        // `_SaveMapBordersState` for a change, whatever the map's mode,
+        // unless docked (@0x13c21-0x13c3f).
+        let docked = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_some());
+        if !docked && self.map.borders_changed_since_open() {
+            self.map_borders_save = Some(self.map.borders_shown());
+        }
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map.close_find();

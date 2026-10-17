@@ -165,6 +165,16 @@ fn closing_the_hypergate_map_on_a_tab_pick_enters_the_gate() {
 }
 
 #[test]
+fn closing_the_hypergate_map_saves_a_borders_change_too() {
+    let mut view = at_a_shadowed_gate();
+    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+    tap(&mut view, Key::Char('b'));
+    tap(&mut view, Key::Enter);
+    assert!(!view.map_open());
+    assert_eq!(view.take_map_borders_save(), Some(false));
+}
+
+#[test]
 fn tab_on_the_bars_map_changes_nothing() {
     let mut view = in_the_bar(None);
     view.open_bar_map();

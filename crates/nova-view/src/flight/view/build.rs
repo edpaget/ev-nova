@@ -131,6 +131,12 @@ impl<
         let mut map = GalaxyMap::course(&catalog);
         if let Ok(session) = &session {
             map.set_nebula_pick(session.rules().source_for(nova_sim::RuleKey::NebulaPicture));
+            map.set_border_rules(
+                session.rules().source_for(nova_sim::RuleKey::MapBorderPace),
+                session
+                    .rules()
+                    .source_for(nova_sim::RuleKey::MapFindBorders),
+            );
             map.show_galaxy(session.galaxy());
             map.show_course(session.system(), &session.course_shown());
             // Entering the game draws the floating map, and a new or
@@ -162,6 +168,7 @@ impl<
             map_key_held: false,
             bar_map: false,
             map_missions: Vec::new(),
+            map_borders_save: None,
             map_seen: None,
             floating_picture: None,
             jump: None,
@@ -237,15 +244,21 @@ impl<
     /// drawn again by the new rules, which say how a destroyed stellar
     /// with no `DeadType` sheet draws, but not laid out again; the course
     /// map's nebulae take their picture by the new
-    /// [`RuleKey::NebulaPicture`](nova_sim::RuleKey::NebulaPicture).
+    /// [`RuleKey::NebulaPicture`](nova_sim::RuleKey::NebulaPicture), and
+    /// its borders their pace and Find's pass by
+    /// [`RuleKey::MapBorderPace`](nova_sim::RuleKey::MapBorderPace) and
+    /// [`RuleKey::MapFindBorders`](nova_sim::RuleKey::MapFindBorders).
     #[must_use]
     pub fn with_rules(self, rules: Rulebook) -> Self {
         let pick = rules.source_for(nova_sim::RuleKey::NebulaPicture);
+        let pace = rules.source_for(nova_sim::RuleKey::MapBorderPace);
+        let find = rules.source_for(nova_sim::RuleKey::MapFindBorders);
         let mut view = Self {
             session: self.session.map(|session| session.with_rules(rules)),
             ..self
         };
         view.map.set_nebula_pick(pick);
+        view.map.set_border_rules(pace, find);
         view.show_destroyed();
         view
     }
@@ -343,6 +356,15 @@ impl<
             map: self.map.with_zoom(zoom),
             ..self
         }
+    }
+
+    /// The flight with the course map's borders shown or not, as the
+    /// player's `ShowMapBorders` setting says
+    /// ([`GalaxyMap::show_borders_setting`]).
+    #[must_use]
+    pub fn with_map_borders(mut self, shown: bool) -> Self {
+        self.map.show_borders_setting(shown);
+        self
     }
 
     /// The flight with the course map's Find laid out from `template`

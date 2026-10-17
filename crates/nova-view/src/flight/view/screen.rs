@@ -207,6 +207,8 @@ impl<
             }
         }
         if self.map_open {
+            // The map's own frame: its borders' null events.
+            self.map.tick(dt);
             return;
         }
         if self.hold_expired() {

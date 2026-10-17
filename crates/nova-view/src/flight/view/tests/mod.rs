@@ -66,6 +66,7 @@ mod escorts;
 mod flying;
 mod hyperspace;
 mod landing;
+mod map_borders;
 mod map_find;
 mod maps;
 mod missions;
@@ -201,6 +202,12 @@ struct FakeCatalog {
     place_names: nova_sim::catalog::PlaceNames,
     /// The `crön`s: none, by default.
     crons: Vec<nova_sim::catalog::CronRecord>,
+    /// Each system's government, in the session's map and the course
+    /// map's catalog: none, by default.
+    governed: Vec<(i16, i16)>,
+    /// The systems besides Sol with a lived-in `NavDefs` slot on the
+    /// map: none, by default.
+    lived: Vec<i16>,
 }
 
 /// No strings unless a test sets them.
@@ -214,6 +221,14 @@ impl nova_sim::CommCatalog for FakeCatalog {
 }
 
 impl FakeCatalog {
+    /// System `id`'s government, as [`FakeCatalog::governed`] says.
+    fn govt_of(&self, id: i16) -> Option<GovtId> {
+        self.governed
+            .iter()
+            .find(|&&(system, _)| system == id)
+            .map(|&(_, govt)| GovtId(govt))
+    }
+
     /// Sol's links: Alpha Centauri, then Barnard with `fan`, then
     /// Proxima Near with `near`.
     fn sol_links(&self) -> Vec<i16> {
@@ -332,6 +347,8 @@ fn catalog() -> FakeCatalog {
         visibility: Vec::new(),
         place_names: nova_sim::catalog::PlaceNames::default(),
         crons: Vec::new(),
+        governed: Vec::new(),
+        lived: Vec::new(),
     }
 }
 
@@ -470,6 +487,12 @@ impl PilotCatalog for FakeCatalog {
         }
         if self.near {
             systems.push(star(134, (40.0, 30.0), &[130]));
+        }
+        for system in &mut systems {
+            system.govt = self.govt_of(system.id.0);
+            if self.lived.contains(&system.id.0) {
+                system.stellars = vec![Some((StellarFlags::CAN_LAND, 0))];
+            }
         }
         systems
     }
@@ -758,6 +781,9 @@ impl GalaxyCatalog for FakeCatalog {
         } else {
             Vec::new()
         };
+        for system in &mut systems {
+            system.govt = self.govt_of(system.id.0);
+        }
         Galaxy {
             systems,
             nebulae,

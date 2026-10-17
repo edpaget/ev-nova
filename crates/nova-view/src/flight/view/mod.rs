@@ -975,6 +975,9 @@ pub struct FlightView<C> {
     /// whose close puts back the nav the bar opened with; cleared as the
     /// map closes ([`FlightView::close_map`]).
     bar_map: bool,
+    /// The borders setting the course map's last undocked close changed
+    /// to, not yet taken ([`FlightView::take_map_borders_save`]).
+    map_borders_save: Option<bool>,
     /// The mission systems the course map's red arrows mark, taken as it
     /// opens, as `_DoSystemMap` runs `_RecalcMissionSystsForMap` then
     /// (@0x124a0; [`Session::map_mission_systems`]).

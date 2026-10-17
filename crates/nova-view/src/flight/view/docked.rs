@@ -55,6 +55,21 @@ impl<C> FlightView<C> {
         &self.map
     }
 
+    /// Whether the course map shows the borders: the player's
+    /// `ShowMapBorders`, which a run keeps for its next flight.
+    #[must_use]
+    pub fn map_borders_shown(&self) -> bool {
+        self.map.borders_shown()
+    }
+
+    /// The borders setting to save, once, after an undocked close of the
+    /// course or hypergate map that changed it, as `_SaveMapBordersState`
+    /// writes `ShowMapBorders` then (@0x13c21-0x13c3f, @0xcf110); taking
+    /// it clears it. A change made docked lasts for the run, unsaved.
+    pub fn take_map_borders_save(&mut self) -> Option<bool> {
+        self.map_borders_save.take()
+    }
+
     /// The course map's zoom, which the run keeps for the next flight
     /// ([`FlightView::with_course_map_zoom`]).
     #[must_use]
