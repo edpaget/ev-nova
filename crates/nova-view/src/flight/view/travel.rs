@@ -8,7 +8,7 @@ use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
     Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Condition, Departure,
-    FighterNote, GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, MapMarks, MapPress,
+    FighterNote, GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, MapPress,
     OutfitOrder, OutfitRefusal, OutfitRun, PilotCatalog, RuleKey, RuleSource, Rules, Session,
     Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage, StellarId, SystemId, TrafficCatalog,
 };
@@ -24,6 +24,7 @@ use crate::galaxy::{GalaxyCatalog, MapCycle, MapMode, PendingPress, PressAnswer}
 use crate::system::catalog::SystemCatalog;
 use crate::{DrawList, Input, Key, Screen, UiSound};
 
+use super::dialog_map::{MapOpened, MapOpening};
 use super::{
     EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HAIL_QUOTE_TICKS,
     HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
@@ -159,6 +160,17 @@ impl<
     /// Clear Route is enabled off the hypergate map with a course
     /// (`showClearRouteButton`, @0x12396-0x123c3), and never on it.
     pub(super) fn open_map(&mut self) {
+        self.open_map_as(MapOpening::Plain);
+    }
+
+    /// [`FlightView::open_map`], opened `by` whoever opens it, which
+    /// gives the map its marks ([`FlightView::open_dialog_map`]), and the
+    /// nav noted as it opens (`_DoSystemMap` @0x12349).
+    pub(super) fn open_map_as(&mut self, by: MapOpening) {
+        self.map_opened = Some(MapOpened {
+            by,
+            nav: self.opening_nav(),
+        });
         self.held.clear();
         self.map_open = true;
         if let Ok(session) = &self.session {
@@ -191,7 +203,8 @@ impl<
             return;
         };
         let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
-        let drawing = session.map_drawing(offered.as_deref(), &self.map_missions, MapMarks::NONE);
+        let marks = MapOpened::marks(self.map_opened.as_ref());
+        let drawing = session.map_drawing(offered.as_deref(), &self.map_missions, marks);
         self.map.show_drawing(&drawing);
         if offered.is_some() {
             session.mark_known(drawing.gate_arrows.iter().copied());
@@ -231,12 +244,13 @@ impl<
     /// takes its pick ([`GalaxyMap::take_gate_choice`](crate::galaxy::GalaxyMap::take_gate_choice)). Its close is
     /// [`FlightView::close_map`]'s in port.
     pub fn open_bar_map(&mut self) {
-        self.open_map();
-        self.bar_map = true;
+        self.open_map_as(MapOpening::Bar);
     }
 
-    /// The input to the map opened in port ([`FlightView::open_bar_map`]):
-    /// a press of [`MAP_KEY`] closes it ([`FlightView::close_map`]), unless
+    /// The input to the map opened over a screen: in port
+    /// ([`FlightView::open_bar_map`]), or by a mission dialog docked or in
+    /// flight ([`FlightView::open_dialog_map`]): a press of [`MAP_KEY`]
+    /// closes it ([`FlightView::close_map`]), unless
     /// Find is open, where it types, and anything else goes to the map, so
     /// flight's own keys and cursor stay out of the port.
     pub fn port_map_input(&mut self, input: &Input) {
@@ -355,7 +369,7 @@ impl<
             shift: press.shift,
             hypergate: offered.as_deref(),
             missions: &self.map_missions,
-            green: None,
+            green: MapOpened::marks(self.map_opened.as_ref()).green,
         });
         self.map.answer_press(clicked.map(|clicked| PressAnswer {
             selected: clicked.selected,
@@ -1273,22 +1287,22 @@ impl<
     /// Docked, its close is `_DoSystemMap`'s in port: the whole bar is
     /// redrawn (`_RefreshSAT` @0x13bc9), showing the nav as the map left
     /// it, and the course is not cued (@0x13be2-0x13c0a skips
-    /// `_CueNextHyperRouteDest` in port). It beeps nothing: the
+    /// `_CueNextHyperRouteDest` in port). Then the selection the map
+    /// opened with is put back, the mode kept, with no redraw
+    /// ([`Session::restore_map_selection`], `_DoSystemMap` @0x12349,
+    /// @0x13bee-0x13c06), undoing a Clear Route. It beeps nothing: the
     /// [`UiSound::MapClosed`] beep is `_HandlePlayer`'s, around the map M
-    /// opens in flight. When the bar opened it
-    /// ([`FlightView::open_bar_map`]), the bar's close of it follows: the
-    /// nav the bar opened with is put back ([`Session::restore_bar_nav`],
-    /// `_DoBarDialog` @0x492b7-0x492d3) with no redraw, as
-    /// `_UpdateAllPortDialogs` (@0x492d7) draws no status. The nav area
-    /// shows the map's selection until the port's next nav redraw, such
-    /// as the bar's close. A map opened in port any other way puts back
-    /// nothing of the bar's.
+    /// opens in flight. A mission dialog's map beeps in flight neither.
     ///
-    /// `_DoSystemMap`'s own put-back of +0x6c in port (@0x13bee-0x13c06)
-    /// is left out: under the bar, the bar's restore overwrites it before
-    /// anything is drawn, so it can't be seen. It matters for the map
-    /// opened from the other port screens, filed with them in
-    /// rdm:phase/hud-fidelity-followups/phase-1-map-key-from-the-other-port-screens.
+    /// Then whoever opened it puts back what it saved: when the bar opened
+    /// it ([`FlightView::open_bar_map`]), the nav the bar opened with
+    /// ([`Session::restore_bar_nav`], `_DoBarDialog` @0x492b7-0x492d3),
+    /// with no redraw, as `_UpdateAllPortDialogs` (@0x492d7) draws no
+    /// status, so the nav area shows the map's selection until the port's
+    /// next nav redraw, such as the bar's close; a mission dialog its own
+    /// ([`FlightView::open_dialog_map`]): the offer's, the computer's and
+    /// the briefing's the nav as the map opened, docked or in flight, the
+    /// computer's then redrawing the nav area, and mission info's nothing.
     pub fn close_map(&mut self) {
         // `_SaveMapBordersState` for a change, whatever the map's mode,
         // unless docked (@0x13c21-0x13c3f).
@@ -1304,22 +1318,30 @@ impl<
         self.map.close_find();
         self.map_open = false;
         self.map_key_held = false;
-        let bar_map = std::mem::take(&mut self.bar_map);
+        let opened = self.map_opened.take();
         if self.map.mode() != MapMode::Hypergate {
             if let Ok(session) = &mut self.session
                 && session.landed().is_some()
             {
                 self.redraw_status();
-                if bar_map && let Ok(session) = &mut self.session {
-                    session.restore_bar_nav();
+                if let (Ok(session), Some(nav)) =
+                    (&mut self.session, opened.and_then(|opened| opened.nav))
+                {
+                    session.restore_map_selection(nav);
                 }
+                self.restore_opener_nav(opened);
                 return;
             }
-            self.ui_sounds.push(UiSound::MapClosed);
+            let by_dialog =
+                opened.is_some_and(|opened| matches!(opened.by, MapOpening::Dialog(..)));
+            if !by_dialog {
+                self.ui_sounds.push(UiSound::MapClosed);
+            }
             if let Ok(session) = &mut self.session {
                 session.cue_course();
             }
             self.redraw_status();
+            self.restore_opener_nav(opened);
             return;
         }
         self.redraw_status();

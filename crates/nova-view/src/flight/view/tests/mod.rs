@@ -61,6 +61,7 @@ use nova_sim::{RuleKey, RuleSource};
 mod boarding;
 mod combat;
 mod controls;
+mod dialog_map;
 mod docked;
 mod escorts;
 mod flying;

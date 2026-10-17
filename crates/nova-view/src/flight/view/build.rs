@@ -166,7 +166,7 @@ impl<
             map,
             map_open: false,
             map_key_held: false,
-            bar_map: false,
+            map_opened: None,
             map_missions: Vec::new(),
             map_borders_save: None,
             map_seen: None,

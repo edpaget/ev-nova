@@ -261,7 +261,12 @@
 //!   original's `_DoSystemSearch` does ([`Session::find_map_system`]),
 //!   and the map selects and centres on a system found
 //!   ([`UiSound::MapSystemFound`], or [`UiSound::MapSystemNotFound`]).
-//!   Closing the map drops an open Find.
+//!   Closing the map drops an open Find. A mission dialog opens the same
+//!   map on its map key, docked or in flight
+//!   ([`FlightView::open_dialog_map`]): marked with the green mission
+//!   system and the arrow flag the dialog gives it, opening and closing
+//!   in silence, its close followed by the dialog's own restore of the
+//!   nav (see [`MapOpener`]'s module).
 //! - The HUD's nav area shows the session's nav mode and its selection
 //!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original
@@ -573,9 +578,11 @@ use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
+use dialog_map::MapOpened;
 
 mod build;
 mod cockpit;
+mod dialog_map;
 mod docked;
 mod interface;
 mod messages;
@@ -583,6 +590,7 @@ mod readouts;
 mod screen;
 mod travel;
 
+pub use dialog_map::MapOpener;
 pub use messages::*;
 
 /// The developer overlays: the system's title and the help line.
@@ -971,10 +979,10 @@ pub struct FlightView<C> {
     /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
     /// its release, and again from any later press of it on the map.
     map_key_held: bool,
-    /// Whether the map shown is the bar's ([`FlightView::open_bar_map`]),
-    /// whose close puts back the nav the bar opened with; cleared as the
-    /// map closes ([`FlightView::close_map`]).
-    bar_map: bool,
+    /// How the map shown was opened (by M, the bar or a mission dialog,
+    /// with its marks) and the nav as it opened: taken as each map opens,
+    /// dropped as it closes ([`FlightView::close_map`]).
+    map_opened: Option<MapOpened>,
     /// The borders setting the course map's last undocked close changed
     /// to, not yet taken ([`FlightView::take_map_borders_save`]).
     map_borders_save: Option<bool>,

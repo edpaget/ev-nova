@@ -407,6 +407,20 @@ impl Session {
         self.nav_slot = saved.slot;
     }
 
+    /// Puts back the selection saved as a map opened ([`Session::map_nav`]),
+    /// keeping the mode, as `_DoSystemMap`'s close in port writes back the
+    /// +0x6c it saved as it opened, and +0x6a not (@0x12349,
+    /// @0x13bee-0x13c06): while the mode is the one saved, the nav as saved,
+    /// its noted slot with it. Docked, the map writes the mode only by
+    /// [`RuleKey::MapPlotting`]'s other reading, which has no original;
+    /// there the selection saved belongs to another mode and nothing
+    /// changes.
+    pub fn restore_map_selection(&mut self, saved: SavedNav) {
+        if std::mem::discriminant(&self.nav) == std::mem::discriminant(&saved.nav) {
+            self.restore_map_nav(saved);
+        }
+    }
+
     /// Puts back the nav saved as the bar opened ([`Session::open_bar`]),
     /// mode and selection exactly as saved, as a map opened from the bar
     /// closes (see the module's **Setters**). The save is kept, as the
@@ -1460,6 +1474,24 @@ mod tests {
             assert_eq!(session.nav, before, "{before:?}");
             assert_eq!(session.nav_slot, None, "{before:?}: none noted");
         }
+    }
+
+    #[test]
+    fn the_maps_put_back_of_its_selection_keeps_the_mode() {
+        // Clear Route docked lets go of the selection, keeping the mode:
+        // the put-back gives it back.
+        let (_, mut session) = landed();
+        let saved = session.map_nav();
+        session.clear_route();
+        assert_eq!(session.nav_mode(), NavMode::Stellar(None));
+        session.restore_map_selection(saved);
+        assert_eq!(session.nav_mode(), stellar(128));
+        // In another mode now, which only the planner's plotting gives
+        // docked, the selection saved names nothing of it.
+        let saved = session.map_nav();
+        session.set_nav(hyperspace(131));
+        session.restore_map_selection(saved);
+        assert_eq!(session.nav_mode(), hyperspace(131), "left as it is");
     }
 
     // The map.
