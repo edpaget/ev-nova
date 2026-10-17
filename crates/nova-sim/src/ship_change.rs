@@ -272,7 +272,7 @@ mod tests {
     use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
     use crate::outfitter::{MORE_GUNS, MORE_TURRETS, RAISES_MAX};
     use crate::stats::MORE_SHIELD;
-    use crate::testkit::outfit;
+    use nova_sim_catalog::fixture::outfit;
 
     /// 400: a licence (0x0004 and can't be sold, 0x000c); 401: an ability
     /// (0x0020 only); 402: both (0x0024); 403: plain; 404: up to 2; 405:

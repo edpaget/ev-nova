@@ -1,6 +1,6 @@
 //! What the player info screen shows, as `_DoPlayerInfoDialog`
 //! (0x5a00a in the `EV Nova` executable) and its helpers decide it. The
-//! session gathers the facts ([`Session::player_info`](crate::Session::player_info));
+//! session gathers the facts (`nova_sim::Session::player_info`);
 //! `nova_view::ui::player_info` lays the dialog out and draws it.
 //!
 //! **The General tab** (`_PlayerInfoDialogUpdate` @0x527b0-0x53731).
@@ -1119,7 +1119,7 @@ pub struct PlayerInfo {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::testkit::{outfit, planet};
+    use nova_sim_catalog::fixture::{outfit, planet};
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|&name| name.to_owned()).collect()

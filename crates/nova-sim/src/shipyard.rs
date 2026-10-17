@@ -50,7 +50,7 @@
 //! so a roll drawn again after a purchase or a decline is drawn the next
 //! time the list is built, or after a landing with no day passing, and
 //! until then the class can be bought as listed
-//! ([`Session::shipyard`](crate::Session::shipyard)); a day's draw
+//! (`nova_sim::Session::shipyard`); a day's draw
 //! settles it as it draws every class. A roll is
 //! never saved, as the original rolls again on load. A
 //! class off today is not listed and takes no higher one off sale.
@@ -59,7 +59,7 @@
 //! `Contribute` of the ship flown and of the outfits the player owns (a
 //! `shïp` has no `RequireGovt`, so `Require` applies everywhere), and its
 //! `Availability` holds. `Availability` is tested through the
-//! [`ControlBits`](crate::ControlBits) port for the player's pilot (a
+//! [`ControlBits`](crate::control::ControlBits) port for the player's pilot (a
 //! [`Gate`]), as `_SetupPortAvailableShipTypes` (@0xbd52) and
 //! `_CalcShipCanBuy` (@0x4f901) do; one that did not parse never holds.
 //!
@@ -218,7 +218,7 @@
 //! `LongName` and ": " (@0x5ea1c-0x5eac6), so the Long Name is part of the
 //! question, and no message follows the purchase. Its default is the
 //! class's name, a space and three digits, each `_Rand(9) + 1`, drawn left
-//! to right (@0x5eacb-0x5eb4c): "Shuttle 482" ([`ShipNaming`], [`Session::ship_naming`](crate::Session::ship_naming)). The name
+//! to right (@0x5eacb-0x5eb4c): "Shuttle 482" ([`ShipNaming`], `nova_sim::Session::ship_naming`). The name
 //! confirmed is kept on the pilot through `_CullNameString`, which drops a
 //! leading "the " and nothing else ([`cull_name`], @0x5ed5a-0x5ed74).
 //! Cancelling buys nothing, but still draws the class's roll again
@@ -1802,19 +1802,18 @@ mod tests {
     use crate::market::MORE_CARGO;
     use crate::rules::Descriptor;
     use crate::stats::{MORE_FUEL, MORE_SHIELD};
-    use crate::testkit::{
-        AllowAll, FAST, RefuseBits, Scripted, catalog, hull, outfit, planet, weapon,
-    };
     use crate::wares::TonUnit;
+    use nova_sim_base::fixture::{FAST, Scripted};
+    use nova_sim_catalog::fixture::{AllowAll, RefuseBits, catalog, hull, outfit, planet, weapon};
 
-    /// Ship `id` of `fields`, as [`testkit::ship`](crate::testkit::ship)
+    /// Ship `id` of `fields`, as [`fixture::ship`](nova_sim_catalog::fixture::ship)
     /// gives it but of tech level 4, the [`port`]'s, so the flux takes no
     /// low-tech discount from its prices: only the tests of the flux set
     /// another.
     fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         ShipRecord {
             tech_level: 4,
-            ..crate::testkit::ship(id, fields)
+            ..nova_sim_catalog::fixture::ship(id, fields)
         }
     }
 

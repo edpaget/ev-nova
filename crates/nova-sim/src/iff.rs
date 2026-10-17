@@ -392,8 +392,9 @@ mod tests {
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::market::DOMINATED;
     use crate::stats::ShipStats;
-    use crate::testkit::{npc, outfit, planet};
+    use crate::traffic::fixture::npc;
     use crate::traffic::npc::{MissionMark, NpcId};
+    use nova_sim_catalog::fixture::{outfit, planet};
 
     // The outfits.
 

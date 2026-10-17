@@ -2,10 +2,10 @@
 //! player, of its `përs` `GrantClass`.
 //!
 //! The rules are the original's (`_DoPlunderDialog` @0x9302b in the `EV
-//! Nova` executable); [`NovaBoarding`](crate::NovaBoarding) applies them
-//! ([`BoardingRule::grant`](crate::BoardingRule::grant)) and the session
-//! grants on boarding ([`Session::board`](crate::Session::board),
-//! [`Session::take_grant`](crate::Session::take_grant)).
+//! Nova` executable); [`NovaBoarding`](crate::board::NovaBoarding) applies them
+//! ([`BoardingRule::grant`](crate::board::BoardingRule::grant)) and the session
+//! grants on boarding (`nova_sim::Session::board`,
+//! `nova_sim::Session::take_grant`).
 //!
 //! **When.** Boarding a person grants when the plunder dialog opens, after
 //! its plunder and capture odds are rolled; boarders repelled are granted
@@ -181,7 +181,7 @@ pub fn fit_count(count: u16, mass: i64, free_mass: i64) -> u16 {
 /// How many of `count` of `outfit` a grant may add with `free_mass` free,
 /// as [`RuleKey::GrantMax`](crate::RuleKey::GrantMax) (`rule`) says: the
 /// one check a boarding grant ([`roll`]) and `G`
-/// ([`OutfitRules`](crate::OutfitRules)) both hold a grant to.
+/// ([`OutfitRules`](crate::outfit_effects::OutfitRules)) both hold a grant to.
 ///
 /// By the engine, none: `GrantMax` holds no grant, and each path keeps
 /// the original's own rule (boarding fits its count to the raw `Mass`,
@@ -248,7 +248,8 @@ mod tests {
     use super::*;
     use crate::catalog::{OutfitId, PersonRecord};
     use crate::rulebook::RuleSource;
-    use crate::testkit::{Draws, person};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::person;
 
     /// A person granting `class` with odds `prob` and count `count`.
     fn granting(class: i16, prob: i16, count: i16) -> PersonRecord {

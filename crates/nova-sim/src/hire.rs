@@ -6,7 +6,7 @@
 //! Nova`), as defaults, not a contract. The fee and the wage sit behind
 //! the [`HireTerms`] port, with Nova's [`NovaHire`] as the default, and the
 //! control-bit test behind the [`ControlBits`] port, with Nova's
-//! [`NovaBits`](crate::NovaBits) reading the pilot, so a plug-in's rules
+//! [`NovaBits`](crate::control::NovaBits) reading the pilot, so a plug-in's rules
 //! replace them at the edge. A ship whose `Availability` did not parse is
 //! never available.
 //!
@@ -62,12 +62,12 @@
 //! so by the engine reading of
 //! [`RuleKey::HireNoSlot`] a hire with none
 //! goes on, taking the fee with no escort joining
-//! ([`Session::hire`](crate::Session::hire)); by the other reading it is
+//! (`nova_sim::Session::hire`); by the other reading it is
 //! refused ([`HireRefusal::NoSlot`]), after the fleet's room and before
 //! the cash. The hire branch never checks `Require`,
 //! whereas buying does: the rulebook's
 //! [`RuleKey::HireRequire`](crate::RuleKey::HireRequire) chooses
-//! ([`Session::with_rules`](crate::Session::with_rules)).
+//! (`nova_sim::Session::with_rules`).
 //! One that cannot be hired shows greyed and is refused
 //! ([`HireRefusal`]).
 //!
@@ -99,7 +99,7 @@
 //! A hired escort's daily wage is a hundredth ([`WAGE_SHARE`], @0xdd098)
 //! of its ship's `Cost`, cut down to whole credits, and none for a `Cost`
 //! of 0 or less. The escort keeps the wage it was hired at
-//! ([`Escort::wage`](crate::Escort)), which marks it hired and is saved;
+//! ([`Escort::wage`](crate::fleet::Escort::wage)), which marks it hired and is saved;
 //! the wage it is paid each day follows the rulebook's
 //! [`RuleKey::EscortWage`](crate::RuleKey::EscortWage): by the engine,
 //! worked out again from its ship type's record, as the original does
@@ -115,7 +115,7 @@
 //! (`_HandlePlayer` @0x6c616), and one day at each take-off by the engine
 //! (`_DoEscortLand` @0x40853, which in the original pays for its landing
 //! day), as the rulebook's [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay)
-//! chooses ([`Session::with_rules`](crate::Session::with_rules)).
+//! chooses (`nova_sim::Session::with_rules`).
 //!
 //! A freighter that defects first destroys its share of the fleet's
 //! cargo, its own holds still among the fleet's, and the session resets
@@ -130,11 +130,11 @@
 //!
 //! # Why the session keeps these ports
 //!
-//! Unlike [`BoardingRule`](crate::BoardingRule) or
-//! [`Behaviour`](crate::Behaviour), which each call is given, the session
+//! Unlike [`BoardingRule`](crate::board::BoardingRule) or
+//! [`Behaviour`](crate::ai::Behaviour), which each call is given, the session
 //! keeps its [`HireTerms`] and [`ControlBits`]
-//! ([`Session::with_hire_terms`](crate::Session::with_hire_terms),
-//! [`Session::with_control_bits`](crate::Session::with_control_bits)):
+//! (`nova_sim::Session::with_hire_terms`,
+//! `nova_sim::Session::with_control_bits`):
 //! wages are paid inside every arrival and take-off, so passing them in
 //! would add a parameter to every jump and landing path and their many
 //! callers. This is a deliberate departure.
@@ -492,7 +492,8 @@ mod tests {
     use crate::combat::armament::{Arsenal, MOD_WEAPON};
     use crate::handling::ShipFields;
     use crate::shipyard::StockLine;
-    use crate::testkit::{FAST, hull, outfit, planet, ship};
+    use nova_sim_base::fixture::FAST;
+    use nova_sim_catalog::fixture::{hull, outfit, planet, ship};
 
     /// A site of tech level `tech`.
     fn site(tech: i16) -> LandingSite {

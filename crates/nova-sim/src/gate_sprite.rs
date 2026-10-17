@@ -342,7 +342,7 @@ mod tests {
     use super::*;
     use crate::catalog::StellarId;
     use crate::chance::NeverFires;
-    use crate::testkit::Draws;
+    use nova_sim_base::fixture::Draws;
 
     fn gate(frames: u16, delay: i16) -> GateAnimation {
         GateAnimation {
@@ -398,7 +398,7 @@ mod tests {
                 type_frames: 42,
                 dead_frames: 8,
             },
-            ..crate::testkit::planet(128, 0.0, 0.0)
+            ..nova_sim_catalog::fixture::planet(128, 0.0, 0.0)
         };
         let anim = GateAnimation {
             delay: 3,
@@ -675,7 +675,7 @@ mod tests {
     fn gate_site(id: i16) -> LandingSite {
         LandingSite {
             flags2: crate::gate::HYPERGATE,
-            ..crate::testkit::planet(id, 100.0, -50.0)
+            ..nova_sim_catalog::fixture::planet(id, 100.0, -50.0)
         }
     }
 
@@ -712,11 +712,11 @@ mod tests {
         use crate::stats::ShipStats;
         use crate::traffic::npc::Mode;
         let gate_id = StellarId(130);
-        let flying = crate::testkit::npc(1, ShipStats::default());
+        let flying = crate::traffic::fixture::npc(1, ShipStats::default());
         let emerging = Npc {
             mode: Mode::Emerging { ticks_left: 9 },
             emerges_from: Some(gate_id),
-            ..crate::testkit::npc(2, ShipStats::default())
+            ..crate::traffic::fixture::npc(2, ShipStats::default())
         };
         let (gate, other) = (gate_site(130), gate_site(131));
         assert!(!held_open(&gate, 0.0, None, &[]));
@@ -743,7 +743,7 @@ mod tests {
                 position: Vec2::new(gate.position.x + x, gate.position.y + y),
                 ..crate::flight::ShipState::default()
             },
-            ..crate::testkit::npc(1, ShipStats::default())
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         let held = |npc: Npc| held_open(&gate, 200.0, None, &[npc]);
         for goal in [Goal::Land(gate.id), Goal::EnterGate(gate.id)] {

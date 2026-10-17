@@ -34,7 +34,7 @@
 //! but that government's and independent ones. Alliances are not modelled
 //! until governments' relations are, so "this government or its allies"
 //! is this government alone. `Availability` is tested through the
-//! [`ControlBits`](crate::ControlBits) port for the player's pilot (a
+//! [`ControlBits`](crate::control::ControlBits) port for the player's pilot (a
 //! [`Gate`]), as `_CanBuyOutfitItem` does (@0x4eb51); one that did not
 //! parse never holds. An outfit whose `Availability` does not hold is
 //! listed but cannot be bought, and can still be sold.
@@ -238,7 +238,7 @@
 //! [`Outfitter::count_max`] works out (none when that is 1 or less, and
 //! the click moves one), and the count is bought or sold one at a time
 //! through the order loop ([`order_loop`](crate::order_loop),
-//! [`Session::outfit_counted`](crate::Session::outfit_counted)), a plain
+//! `nova_sim::Session::outfit_counted`), a plain
 //! click being the loop with a count of 1, when the
 //! [`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount) rule asks
 //! ([`Outfitter::count_asked`]). The buy loop (@0x5c1bd-0x5c2ff) re-runs
@@ -2778,8 +2778,9 @@ mod tests {
     use crate::order_loop::Pass;
     use crate::rules::Descriptor;
     use crate::stats::{MORE_FUEL, MORE_SPEED};
-    use crate::testkit::{AllowAll, FAST, RefuseBits, Scripted, catalog, outfit, planet};
     use crate::wares::TonUnit;
+    use nova_sim_base::fixture::{FAST, Scripted};
+    use nova_sim_catalog::fixture::{AllowAll, RefuseBits, catalog, outfit, planet};
 
     /// An outfitter of tech level 4 with special tech 6 and 55, of
     /// government 128.

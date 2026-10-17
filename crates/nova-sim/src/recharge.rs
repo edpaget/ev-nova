@@ -67,7 +67,7 @@ pub(crate) fn settle(pilot: &mut Pilot, price: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::catalog;
+    use nova_sim_catalog::fixture::catalog;
 
     fn tank(now: f32, max: f32) -> Gauge {
         Gauge { now, max }

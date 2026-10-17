@@ -186,7 +186,7 @@ mod tests {
     use crate::bay::FIGHTER_BAY;
     use crate::catalog::WeaponRecord;
     use crate::handling::ShipFields;
-    use crate::testkit::{outfit, ship, weapon};
+    use nova_sim_catalog::fixture::{outfit, ship, weapon};
 
     fn owning(outfits: &[(i16, u16)]) -> BTreeMap<OutfitId, u16> {
         outfits.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
@@ -414,7 +414,7 @@ mod tests {
         use crate::landing::{ANY_RECORD, NEVER_BY_RECORD, StellarFlags};
         let yard = LandingSite {
             flags: StellarFlags::CAN_LAND | StellarFlags::SHIPYARD,
-            ..crate::testkit::planet(128, 0.0, 0.0)
+            ..nova_sim_catalog::fixture::planet(128, 0.0, 0.0)
         };
         let record = 10;
         assert!(qualifies(&yard, true, record), "the control");

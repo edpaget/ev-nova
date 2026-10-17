@@ -321,7 +321,8 @@ mod tests {
     use crate::catalog::{CronId, RankId, RankRecord};
     use crate::chance::NeverFires;
     use crate::cron::CronState;
-    use crate::testkit::{Scripted, catalog, cron, outfit, planet, rank};
+    use nova_sim_base::fixture::Scripted;
+    use nova_sim_catalog::fixture::{catalog, cron, outfit, planet, rank};
 
     #[test]
     fn a_ton_count_takes_the_singular_unit_at_exactly_one() {

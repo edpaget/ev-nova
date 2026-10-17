@@ -6,9 +6,9 @@
 //! `_SetPlunderValues` @0x92219, `_DoPlunderDialog` @0x9302b,
 //! `_DoCapturedShipAssignmentDialog` @0x5b508 and `_DoShipCapture`
 //! @0x41120 in the `EV Nova` executable); the session applies them
-//! ([`Session::board`](crate::Session::board),
-//! [`Session::plunder`](crate::Session::plunder) and
-//! [`Session::assign`](crate::Session::assign)).
+//! (`nova_sim::Session::board`,
+//! `nova_sim::Session::plunder` and
+//! `nova_sim::Session::assign`).
 //!
 //! **Boarding** ([`check_board`]): with no target nothing happens. The
 //! first refusal that applies, in this order, is said: the player cannot
@@ -107,7 +107,7 @@
 //! (the Bible) or odds held at 1 or more (the engine); and for a grant,
 //! [`RuleKey::GrantCount`] (see [`grant`](crate::grant)). Whether a grant
 //! is held to the outfit's `Max`, [`RuleKey::GrantMax`], is the
-//! session's [`OutfitRules::grant_max`](crate::OutfitRules::grant_max),
+//! session's [`OutfitRules::grant_max`](crate::outfit_effects::OutfitRules::grant_max),
 //! which holds `G` too: the session passes it to
 //! [`BoardingRule::grant`].
 
@@ -445,7 +445,7 @@ pub enum Taken {
     /// The self-destruct went off: the ship is breaking up, and the
     /// boarding is over.
     Tripped,
-    /// The capture succeeded; [`Session::assign`](crate::Session::assign)
+    /// The capture succeeded; `nova_sim::Session::assign`
     /// says what becomes of the ship.
     Captured,
     /// The capture succeeded, and with no crew to trade places with, the
@@ -636,7 +636,7 @@ pub trait BoardingRule: Debug {
     /// What boarding a person of `grant` gives the player from `stock`,
     /// every outfit as the grant sees it, with `free_mass` free and held
     /// to the outfit's `Max` as `grant_max` (the session's
-    /// [`OutfitRules::grant_max`](crate::OutfitRules::grant_max)) says,
+    /// [`OutfitRules::grant_max`](crate::outfit_effects::OutfitRules::grant_max)) says,
     /// drawn on `chance`; none when nothing is granted (see
     /// [`grant`](crate::grant)).
     fn grant(
@@ -814,7 +814,7 @@ mod tests {
     use super::*;
     use crate::geometry::Vec2;
     use crate::grant::{COUNT_FLOOR_PERCENT, COUNT_PERCENT, COUNT_SPREAD, GRANT_ROLL};
-    use crate::testkit::Draws;
+    use nova_sim_base::fixture::Draws;
 
     /// A disabled ship of crew 3 at the centre, at rest, facing up, never
     /// boarded, with a reach of 20.
@@ -1247,7 +1247,7 @@ mod tests {
         WeaponSpec::new(&crate::catalog::WeaponRecord {
             guidance,
             ammo_type,
-            ..crate::testkit::weapon(id)
+            ..nova_sim_catalog::fixture::weapon(id)
         })
     }
 
