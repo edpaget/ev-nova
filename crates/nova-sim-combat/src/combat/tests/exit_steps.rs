@@ -64,6 +64,38 @@ fn a_beam_of_exit_type_minus_1_steps_the_fold_set_and_starts_at_the_centre() {
 }
 
 #[test]
+fn a_beam_of_an_exit_type_out_of_range_but_minus_1_steps_nothing_by_the_engine() {
+    for exit_type in [-2, 4] {
+        for (hull, what) in [
+            (beam_exits(), "beam exits"),
+            (HullSpec::default(), "no exits"),
+        ] {
+            let mut combat = Combat::default();
+            combat.set_stray_beam_exit(RuleSource::Engine);
+            let record = WeaponRecord {
+                exit_type,
+                ..exit_beam(0)
+            };
+            let ship = Ship::at(1, 0.0, 0.0)
+                .armed(record)
+                .facing(0.0)
+                .targeting(B)
+                .of(hull);
+            let (beam, ship) = fired(&mut combat, ship);
+            let what = format!("ExitType {exit_type}, {what}");
+            assert!(close_to(beam.start, Vec2::ZERO), "{what}: {beam:?}");
+            assert_eq!((beam.kind, beam.exit), (None, None), "{what}");
+            assert_eq!(ship.armament.fold_set(), 0, "{what}");
+            assert_eq!(
+                *ship.armament.exit_cursors(),
+                ExitCursors::default(),
+                "{what}: no cursor moved"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_fold_set_steps_round_from_3_to_0_beam_by_beam() {
     let mut combat = Combat::default();
     let mut ships = [Ship::at(1, 0.0, 0.0)
