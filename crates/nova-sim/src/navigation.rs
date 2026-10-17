@@ -180,7 +180,7 @@ pub(crate) fn half_box(frame_size: Option<(u32, u32)>) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::planet;
+    use nova_sim_catalog::fixture::planet;
 
     #[test]
     fn the_nav_mode_starts_off() {

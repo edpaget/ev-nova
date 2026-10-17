@@ -203,6 +203,10 @@ use crate::govt::Governments;
 use crate::legal::Crime;
 use crate::rulebook::RuleSource;
 
+pub use crate::ai::{Blessed, Blessing, Favour, HELPS_FREE, HELPS_IN_BATTLE, favour};
+
+use crate::ai::reaches;
+
 /// The index (1-based) in `STR#` 2002 of what a rank tag reads with no
 /// rank to name: stock "captain" (0x155 @0x9d0d6).
 pub const NO_RANK_STRING: usize = 341;
@@ -237,22 +241,6 @@ pub const BLESSES_PEACE: u16 = 0x0100;
 /// `Flags` 0x0200: stellars of the governments the rank reaches clear the
 /// player to land (which 1; see [`Blessed::Landing`]).
 pub const BLESSES_LANDING: u16 = 0x0200;
-/// `Flags` 0x0400: ships the rank reaches fight a threat to the player
-/// when hailed, for nothing (`_DoCommDialog` @0x95ddb).
-pub const HELPS_IN_BATTLE: u16 = 0x0400;
-/// `Flags` 0x0800: ships the rank reaches refuel or repair the player
-/// for nothing (`_DoCommDialog` @0x95de1).
-pub const HELPS_FREE: u16 = 0x0800;
-
-/// What the pilot's ranks grant a hailed ship's help (see the module
-/// docs' **Hails**).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Favour {
-    /// Some rank that reaches the ship has [`HELPS_IN_BATTLE`].
-    pub battle_help: bool,
-    /// Some rank that reaches the ship has [`HELPS_FREE`].
-    pub free_help: bool,
-}
 
 /// The rank state `K` and `L` change: the active ranks, and the recent
 /// rank `<RRK>` reads.
@@ -421,44 +409,6 @@ pub fn contributed(records: &[RankRecord], active: &BTreeSet<RankId>) -> u64 {
         .fold(0, |bits, rank| bits | rank.contribute)
 }
 
-/// What the ranks of `records` in `active` grant a ship of `govt` (see
-/// the module docs' **Hails**): each one that reaches `govt` by `reach`'s
-/// reading of [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach)
-/// adds its [`HELPS_IN_BATTLE`] and [`HELPS_FREE`].
-#[must_use]
-pub fn favour(
-    records: &[RankRecord],
-    active: &BTreeSet<RankId>,
-    govt: Option<GovtId>,
-    govts: &Governments,
-    reach: RuleSource,
-) -> Favour {
-    let flags = records
-        .iter()
-        .filter(|rank| active.contains(&rank.id) && reaches(rank, govt, govts, reach))
-        .fold(0, |flags, rank| flags | rank.flags);
-    Favour {
-        battle_help: flags & HELPS_IN_BATTLE != 0,
-        free_help: flags & HELPS_FREE != 0,
-    }
-}
-
-/// Whether `rank` reaches `govt` by `reach`'s reading of
-/// [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach): by the
-/// engine, when `_GovtAllies` finds them allied; by the other reading,
-/// only a rank of `govt` itself.
-fn reaches(
-    rank: &RankRecord,
-    govt: Option<GovtId>,
-    govts: &Governments,
-    reach: RuleSource,
-) -> bool {
-    match reach {
-        RuleSource::Engine => govts.allies(govt, rank.affil_govt),
-        RuleSource::Bible => rank.affil_govt.is_some() && rank.affil_govt == govt,
-    }
-}
-
 /// The two price multipliers the shipyard reads, `_priceFluxMult[0]` and
 /// `[1]` (see the module docs' **Prices**).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -528,80 +478,6 @@ pub fn scaled(price: i64, mult: f32) -> i64 {
         return 0;
     }
     ((price as f32 * mult) as i64).max(1)
-}
-
-/// Which of the two blessings a rank's `Flags` give (see the module docs'
-/// **Blessing**): `_PlayerBlessedByGovt`'s `which`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Blessed {
-    /// [`BLESSES_PEACE`], `which` 0: the government's ships won't attack
-    /// the player.
-    Peace,
-    /// [`BLESSES_LANDING`], `which` 1: the government's stellars clear the
-    /// player to land.
-    Landing,
-}
-
-/// The lowest government ID the blessing table holds: the original's
-/// slot 0.
-const FIRST_BLESSED: i32 = 128;
-
-/// How many governments the blessing table holds, as the original's 256
-/// slots.
-const BLESSED_SLOTS: usize = 256;
-
-/// The blessing table `_ResetPlayerPrecalcedValues` builds (see the
-/// module docs' **Blessing**): for each government 128-383, whether it
-/// blesses [`Blessed::Peace`] and whether [`Blessed::Landing`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Blessing {
-    /// Bit n: government 128 + n blesses peace.
-    peace: [u64; 4],
-    /// Bit n: government 128 + n blesses landing.
-    landing: [u64; 4],
-}
-
-impl Blessing {
-    /// No government blesses anything.
-    pub const NONE: Self = Self {
-        peace: [0; 4],
-        landing: [0; 4],
-    };
-
-    /// Whether `govt` blesses `which` (`_PlayerBlessedByGovt`
-    /// @0x2732-0x276b): never for an independent, or an ID outside
-    /// 128-383, as the original's `> 0xff` test gives 0.
-    #[must_use]
-    pub fn blesses(&self, govt: Option<GovtId>, which: Blessed) -> bool {
-        govt.and_then(blessed_slot)
-            .is_some_and(|slot| self.set(which)[slot / 64] & (1 << (slot % 64)) != 0)
-    }
-
-    /// The set of `which`.
-    fn set(&self, which: Blessed) -> &[u64; 4] {
-        match which {
-            Blessed::Peace => &self.peace,
-            Blessed::Landing => &self.landing,
-        }
-    }
-
-    /// Makes `govt` bless `which`; nothing for an ID outside 128-383.
-    pub(crate) fn bless(&mut self, govt: GovtId, which: Blessed) {
-        if let Some(slot) = blessed_slot(govt) {
-            let set = match which {
-                Blessed::Peace => &mut self.peace,
-                Blessed::Landing => &mut self.landing,
-            };
-            set[slot / 64] |= 1 << (slot % 64);
-        }
-    }
-}
-
-/// `govt`'s slot in the blessing table, if it has one.
-fn blessed_slot(govt: GovtId) -> Option<usize> {
-    usize::try_from(i32::from(govt.0) - FIRST_BLESSED)
-        .ok()
-        .filter(|&slot| slot < BLESSED_SLOTS)
 }
 
 /// `_ResetPlayerPrecalcedValues`' blessing pass (see the module docs'

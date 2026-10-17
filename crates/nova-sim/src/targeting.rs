@@ -150,7 +150,7 @@ fn escort_class(npc: &Npc, npcs: &[Npc]) -> bool {
 /// distance, a tie going to the earlier; none when none qualifies. Cloaked
 /// ships are candidates when `scanner` targets them, and ships of an
 /// untargetable type when it targets those. Every ship the player leads
-/// ([`Npc::escorts_player`], [`Session::player_led`](crate::Session::player_led))
+/// ([`Npc::escorts_player`], `nova_sim::Session::player_led`)
 /// is skipped, mission escorts too (`_FindNearestShipToPlayer` @0x92a6,
 /// `_FindNearestThreatToPlayer` @0x94db), so [`targetable`]'s exception
 /// for a cloaked escort never applies here: the original skips the
@@ -277,7 +277,7 @@ mod tests {
     use super::*;
     use crate::cloak::{CloakGear, UNTARGETABLE};
     use crate::stats::ShipStats;
-    use crate::testkit::npc;
+    use crate::traffic::fixture::npc;
 
     /// A player with no cloak scanner.
     const BLIND: Scanner = Scanner::NONE;
@@ -538,7 +538,7 @@ mod tests {
         npc.mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 0,
-            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            behav: crate::traffic::ShipBehav::EscortPlayer,
             formation: Some(crate::escort::FormationSlot::default()),
         });
         npc
@@ -674,7 +674,7 @@ mod tests {
         aboard.mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 0,
-            behav: crate::mission::ships::ShipBehav::Own,
+            behav: crate::traffic::ShipBehav::Own,
             formation: None,
         });
         let npcs = [ours, fighter_of(2, 2, 1), berthed_escort(3, 3), aboard];

@@ -3,8 +3,11 @@
 
 use std::cell::RefCell;
 
-/// The [`Chance`] mocks, from the foundation crate's test support.
-pub(crate) use nova_sim_base::fixture::{Draws, Ranged, Scripted};
+/// The default NPC, from the traffic's test support.
+pub(crate) use crate::traffic::fixture::npc;
+/// The [`Chance`] mocks and the fast ship class, from the foundation
+/// crate's test support.
+pub(crate) use nova_sim_base::fixture::{Draws, FAST, Ranged, Scripted};
 /// The catalog's record builders and control-bit mocks, from the catalog
 /// crate's test support.
 pub(crate) use nova_sim_catalog::fixture::{
@@ -12,7 +15,6 @@ pub(crate) use nova_sim_catalog::fixture::{
     star, weapon,
 };
 
-use crate::ai::Goal;
 use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, CharacterStart,
     CombatCatalog, CommCatalog, CommodityStrings, CronRecord, DateAffixes, DisasterRecord, DudeId,
@@ -23,11 +25,7 @@ use crate::catalog::{
     SystemVisibility, TrafficCatalog, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
-use crate::combat::armament::{Armament, Trigger};
-use crate::combat::hull::{Condition, HullSpec};
-use crate::combat::ion::Ion;
 use crate::control::Test;
-use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -35,8 +33,7 @@ use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
 use crate::landing::{LandOutcome, LandingRefusal};
 use crate::session::LandPress;
 use crate::session::Session;
-use crate::stats::ShipStats;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
+use crate::traffic::npc::NpcId;
 use crate::warp::SoundLength;
 
 /// A canned first `chär`, ships and systems; records the ships asked
@@ -171,23 +168,6 @@ impl FakePilotCatalog {
     }
 }
 
-pub(crate) const FAST: ShipFields = ShipFields {
-    speed: 600,
-    accel: 900,
-    maneuver: 30,
-    shield: 30,
-    armor: 45,
-    fuel: 300,
-    fuel_regen: 0,
-    holds: 20,
-    mass: 40,
-    free_mass: 30,
-    contribute: 0x1,
-    shield_rech: 0,
-    armor_rech: 0,
-    flags2: 0,
-};
-
 /// Mission `id` active, going nowhere, with `tons` of cargo 0 (food)
 /// aboard.
 pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
@@ -206,55 +186,6 @@ pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
         failed: None,
         ships: crate::mission::SpecialShips::default(),
         aux: crate::mission::aux_ships::AuxShips::default(),
-    }
-}
-
-/// NPC `id`, a wimpy trader of ship type 128 performing as `stats`, its
-/// reserves full, at rest at the centre facing up, flying and idle,
-/// intact and unarmed.
-pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
-    Npc {
-        id: NpcId(id),
-        berth: 0,
-        ship: ShipId(128),
-        govt: None,
-        ai_type: AiType::WimpyTrader,
-        leader: None,
-        class: crate::escort::EscortClass::Freighter,
-        escort: None,
-        stats,
-        reserves: stats.full(),
-        state: ShipState::default(),
-        mode: Mode::Flying,
-        goal: Goal::Idle,
-        condition: Condition::Intact,
-        hull: HullSpec::default(),
-        armament: Armament::default(),
-        rounds: crate::combat::armament::LauncherRounds::default(),
-        trigger: Trigger::default(),
-        pick: None,
-        target: None,
-        provoked: 0.0,
-        aggression: 0,
-        inspected: None,
-        booty: None,
-        boarded: false,
-        info_types: 0,
-        cargo: NpcHold::default(),
-        spared: false,
-        assisting: 0,
-        carrier: None,
-        person: None,
-        mission: None,
-        aux: None,
-        cloak: crate::cloak::Cloak::default(),
-        cloak_gear: crate::cloak::CloakGear::default(),
-        led_out: false,
-        emerges_from: None,
-        self_repair: false,
-        former: None,
-        tractor: None,
-        ion: Ion::default(),
     }
 }
 

@@ -13,7 +13,7 @@
 //! (@0x444f0), whatever the player's state.
 //!
 //! - **The shares** (@0x3e1f5-0x3e27e). The player always drops, its
-//!   share the whole total jettisoned ([`Jettisoned::total`]); each
+//!   share the whole total jettisoned (`nova_sim::mission::cargo::Jettisoned::total`); each
 //!   escort `_TotalFleetHolds` would count (parent the player, AI type 6,
 //!   not a launched fighter, `InherentAI` 2 or less) drops the goods
 //!   jettisoned times its `Holds` over the fleet's ([`escort_share`]).
@@ -53,8 +53,6 @@
 //! out: the AI that steers for them
 //! (rdm:phase/asteroids/phase-5-ai-mining); the player's wrap shift; and
 //! the sprite murk.
-//!
-//! [`Jettisoned::total`]: crate::mission::cargo::Jettisoned::total
 
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
@@ -335,7 +333,7 @@ pub(crate) fn accel(angle: i32, magnitude: f32) -> Vec2 {
 mod tests {
     use super::*;
     use crate::scoop::BoxFrames;
-    use crate::testkit::Scripted;
+    use nova_sim_base::fixture::Scripted;
 
     fn close(a: Vec2, b: Vec2) -> bool {
         (a - b).length() < 1e-4

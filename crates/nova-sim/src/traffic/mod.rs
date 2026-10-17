@@ -4,7 +4,7 @@
 //!   `DudeTypes` and `LinkSyst`s decoded and its ship types' stats
 //!   resolved when the system is entered.
 //! - [`spawn`]: the rolls: the initial population, the arrivals over time,
-//!   the fleets and the persons (see [`person`](crate::person)), and
+//!   the fleets and the persons (see `nova_sim::person`), and
 //!   where each ship starts.
 //! - [`destination`]: the stellars an NPC picks a destination among,
 //!   for the idle pick and the emerge pick.
@@ -106,8 +106,11 @@
 pub mod autopilot;
 pub mod destination;
 pub mod emerge;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 pub mod gate_entry;
 pub mod npc;
+pub mod persons;
 pub mod quote;
 pub mod spawn;
 pub mod strength;
@@ -129,11 +132,10 @@ use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::landing::TypeWidth;
-use crate::mission::ships::ShipBehav;
-use crate::person::{self, GateView, PersonWorld, derelict_armor};
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
+use persons::{GateView, PersonWorld, derelict_armor};
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
 use table::{SpawnPerson, SpawnTable};
@@ -155,9 +157,144 @@ pub const SPAWN_RESERVE: u32 = 8;
 /// 1-62. See [`Traffic::free_berth`].
 pub const CAPTURE_RESERVE: u32 = 1;
 
+/// The most ships in a system, the player's among them (the Bible's "Max
+/// Ships In System"), slot 0 the player's. Each spawn leaves some of the
+/// slots free, as
+/// [`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve) reads: by the
+/// engine, the system's traffic and the fighters 8, so they stop at 55
+/// NPCs, and the old ship kept as an escort after "Use As My Ship" 1.
+pub const MAX_SHIPS_IN_SYSTEM: usize = 64;
+
 /// How many ticks apart an NPC's decisions are: every tick, as the
 /// original at full speed.
 pub const DECISION_INTERVAL: u32 = 1;
+
+/// `Flags`: it holds a grudge once the player hits it.
+pub const GRUDGE: u16 = 0x0001;
+/// `Flags`: its hail quote when it begins to attack the player.
+pub const QUOTE_ON_ATTACK: u16 = 0x0010;
+/// The comm quotes, `STR#` 7100 (0x1bbc @0x91b2c).
+pub const COMM_QUOTES: i16 = 7100;
+
+/// A mission's `ShipStart`, read: where and when its ships appear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShipStart {
+    /// -1 to -16: at the stellar of nav slot `-ShipStart - 1` as the
+    /// system is set up, or at random when that slot is empty
+    /// (@0x4300a-0x43091).
+    Nav(u8),
+    /// 0, or a code below -16 that no `NavDefs` slot answers: placed at
+    /// random.
+    Random,
+    /// 1: they come in later, on the appear timer, as many as have not
+    /// arrived since it last restarted.
+    ComesLater,
+    /// 2: they first come in on the appear timer, then are set up
+    /// cloaked (`_DoShipCloak` @0x43114-0x43121).
+    Cloaked,
+    /// Any code above 2, which no stock mission uses: on the appear timer
+    /// as 2, never cloaked.
+    Timed,
+}
+
+impl ShipStart {
+    /// The `ShipStart` `code` names.
+    #[must_use]
+    pub const fn from_code(code: i16) -> Self {
+        match code {
+            // -1 to -16: 0 to 15, which fits.
+            -16..=-1 => Self::Nav((-code - 1) as u8),
+            1 => Self::ComesLater,
+            2 => Self::Cloaked,
+            3.. => Self::Timed,
+            _ => Self::Random,
+        }
+    }
+
+    /// Whether the appear timer runs from accept: any `ShipStart` above 0
+    /// (@0xa0ed4-0xa0f09).
+    #[must_use]
+    pub const fn timed(self) -> bool {
+        matches!(self, Self::ComesLater | Self::Cloaked | Self::Timed)
+    }
+}
+
+/// A mission's `ShipBehav`, read: how its ships behave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShipBehav {
+    /// -1, or any code it does not read: as their `düde`'s AI decides.
+    Own,
+    /// 0: they attack the player (`_AIMakeShipAttackPlayer`
+    /// @0x3d099-0x3d0bb, `_HighLevelAIHandler` @0x8d628-0x8d6ea).
+    AttackPlayer,
+    /// 1: they escort the player. Each joins the player's formation as a
+    /// mission escort while it is intact (`_AIDispatch` @0x8fc03-0x8fc22
+    /// gives it AI type 6 and leader 0 on every think) and flies as the
+    /// player's escorts do, never one of the hired escorts; it leaves as
+    /// its mission ends (see the session's `mission_ships` module).
+    EscortPlayer,
+    /// 2: they attack stellars (`_DeathStarAI`). Until
+    /// rdm:phase/mission-ships/phase-12-stellar-attackers, as
+    /// [`Self::Own`].
+    AttackStellars,
+}
+
+impl ShipBehav {
+    /// The `ShipBehav` `code` names.
+    #[must_use]
+    pub const fn from_code(code: i16) -> Self {
+        match code {
+            0 => Self::AttackPlayer,
+            1 => Self::EscortPlayer,
+            2 => Self::AttackStellars,
+            _ => Self::Own,
+        }
+    }
+}
+
+/// A mission's `ShipGoal`, read: what the player must do to its special
+/// ships.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShipGoal {
+    /// -1: none.
+    None,
+    /// 0: destroy them all.
+    Destroy,
+    /// 1: disable them all, destroying none.
+    Disable,
+    /// 2: board them all.
+    Board,
+    /// 3: escort them: met while one is with the player, failed once one
+    /// is destroyed or disabled. A person's hail reads it to offer to join
+    /// the player (`_HandlePlayerCommunication` @0x624f6).
+    Escort,
+    /// 4: observe one.
+    Observe,
+    /// 5: rescue them all, by boarding them.
+    Rescue,
+    /// 6: chase them off: make them leave the system, or destroy them.
+    ChaseOff,
+    /// Any other code: nothing to do, and nothing checked.
+    Other,
+}
+
+impl ShipGoal {
+    /// The `ShipGoal` `code` names.
+    #[must_use]
+    pub const fn from_code(code: i16) -> Self {
+        match code {
+            -1 => Self::None,
+            0 => Self::Destroy,
+            1 => Self::Disable,
+            2 => Self::Board,
+            3 => Self::Escort,
+            4 => Self::Observe,
+            5 => Self::Rescue,
+            6 => Self::ChaseOff,
+            _ => Self::Other,
+        }
+    }
+}
 
 /// Whether an NPC numbered `id` decides on tick `tick` with decisions
 /// `interval` ticks apart (none apart counts as one).
@@ -201,7 +338,7 @@ pub struct World<'a> {
     pub escort_tons: i64,
     /// The factor on the top speed of the player and of every ship it
     /// leads: 1.5 for a pilot without Strict Play by the engine (see
-    /// [`top_speed`](crate::top_speed)).
+    /// `nova_sim::top_speed`).
     pub led_speed: f32,
     /// The damage the shots in flight aim at each ship
     /// ([`Surroundings::targeted`]).
@@ -840,7 +977,7 @@ impl Traffic {
 
     /// Each NPC's top speeds this tick, in ship-table order, as
     /// `_ShipMaxSpeed` gives them
-    /// (see [`top_speed`](crate::top_speed)): its own
+    /// (see `nova_sim::top_speed`): its own
     /// ([`Npc::top_speed`]), and its lead's. A ship the player leads has
     /// the player's ([`PlayerSide::handling`] × [`World::led_speed`]);
     /// a fleet escort its lead's; one whose lead is not in the system, as
@@ -934,7 +1071,7 @@ impl Traffic {
 
     /// Each intact NPC answers each of `strikes` in `world` that was a
     /// direct hit, as `behaviour` says, now, as [`Traffic::tick_in`]'s step 2 does: the
-    /// hit's own step (see [`Session::answer_strikes`](crate::Session::answer_strikes)).
+    /// hit's own step (see `nova_sim::Session::answer_strikes`).
     pub fn answer(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -988,7 +1125,7 @@ impl Traffic {
     ///
     /// A flight answers the fight's strikes in the hit's own step
     /// ([`Traffic::answer`], from
-    /// [`Session::answer_strikes`](crate::Session::answer_strikes)), so a
+    /// `nova_sim::Session::answer_strikes`), so a
     /// ship the player hit in its gate is held, and seen, on the frame of
     /// the hit, as the original answers inside `_HandleShot` (@0x44385);
     /// [`Traffic::tick_in`] answers those its caller leaves.
@@ -1061,7 +1198,7 @@ impl Traffic {
 
     /// NPC `id` turns on the player: its person's hail quote is queued
     /// ([`Traffic::take_attack_quotes`]) when `_AIMakeShipAttackPlayer`'s
-    /// gate lets it through (@0x89c50-0x89c9b, [`person::turns_with_quote`],
+    /// gate lets it through (@0x89c50-0x89c9b, [`persons::turns_with_quote`],
     /// the player dying or not as `view` says), as the NPCs are now: it did
     /// not already threaten the player ([`Npc::threatens_player_extended`],
     /// seen or not by `view`'s observer through [`cloak::visible`]). The
@@ -1118,7 +1255,7 @@ impl Traffic {
         };
         let seen = cloak::visible(npc.cloak, npc.state.position, npc.emerging(), view.observer);
         let threatened = npc.threatens_player_extended(&self.npcs, seen);
-        if person::turns_with_quote(npc, threatened, view.player_dying) {
+        if persons::turns_with_quote(npc, threatened, view.player_dying) {
             self.attack_quotes.push(id);
         }
     }
@@ -1263,7 +1400,7 @@ impl Traffic {
 
     /// The berth a spawn that leaves `reserve` slots free takes: the first
     /// free one (no NPC, ship left behind or reservation holds it), when it is below
-    /// [`MAX_SHIPS_IN_SYSTEM`](crate::board::MAX_SHIPS_IN_SYSTEM) less
+    /// [`MAX_SHIPS_IN_SYSTEM`] less
     /// `reserve`; otherwise `None`. `_GenericRandomShipSpawn` searches
     /// slots 1..(63 - `reserve`) for one whose active flag is clear
     /// (@0x3c8b1-0x3c8e9) and gives -1 when none is (@0x3c8eb-0x3c8f0), so
@@ -1280,7 +1417,7 @@ impl Traffic {
     /// yet, whose slots the original's table already holds.
     #[must_use]
     pub fn free_berth_skipping(&self, reserve: u32, skip: &BTreeSet<u32>) -> Option<u32> {
-        let bound = u32::try_from(crate::board::MAX_SHIPS_IN_SYSTEM)
+        let bound = u32::try_from(MAX_SHIPS_IN_SYSTEM)
             .unwrap_or(u32::MAX)
             .saturating_sub(reserve);
         Some(self.next_berth_skipping(skip)).filter(|&berth| berth < bound)
@@ -1549,12 +1686,13 @@ mod tests {
     use crate::escort::EscortClass;
     use crate::geometry::Vec2;
     use crate::hail::Help;
-    use crate::person::PersonWorld;
     use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST, planet, weapon};
     use crate::traffic::npc::{AiType, NpcPerson};
+    use crate::traffic::persons::PersonWorld;
     use crate::traffic::table::{ShipKind, SpawnDude, SpawnPerson};
+    use nova_sim_base::fixture::{Draws, FAST};
+    use nova_sim_catalog::fixture::{planet, weapon};
 
     /// Decides `goal`, `trigger` and `target` for everyone, recording who
     /// decided.
@@ -2326,7 +2464,7 @@ mod tests {
         traffic.enter(table(1), &mut Draws::of(&[0]));
         traffic.add_npc(Npc {
             escort: Some(duty(2)),
-            ..crate::testkit::npc(0, ShipStats::default())
+            ..crate::traffic::fixture::npc(0, ShipStats::default())
         });
         let asked = tick_arrival(&mut traffic);
         assert_eq!(asked.first(), Some(&spawn::ARRIVAL_ODDS), "rolled");
@@ -2346,7 +2484,7 @@ mod tests {
                 behav: ShipBehav::EscortPlayer,
                 formation: Some(duty(2).formation),
             }),
-            ..crate::testkit::npc(0, ShipStats::default())
+            ..crate::traffic::fixture::npc(0, ShipStats::default())
         });
         let asked = tick_arrival(&mut traffic);
         assert_eq!(asked.first(), Some(&spawn::ARRIVAL_ODDS), "rolled");
@@ -2360,7 +2498,7 @@ mod tests {
         for slot in [2, 3] {
             traffic.add_npc(Npc {
                 escort: Some(duty(slot)),
-                ..crate::testkit::npc(0, ShipStats::default())
+                ..crate::traffic::fixture::npc(0, ShipStats::default())
             });
         }
         for _ in 0..2 {
@@ -2393,7 +2531,7 @@ mod tests {
         traffic.add_npc(Npc {
             escort: Some(duty(2)),
             carrier: Some(launched_from(ShipRef::Player)),
-            ..crate::testkit::npc(0, ShipStats::default())
+            ..crate::traffic::fixture::npc(0, ShipStats::default())
         });
         assert_eq!(tick_arrival(&mut traffic).first(), Some(&500), "rolled");
         assert_eq!(strangers(&traffic), 1);
@@ -2408,11 +2546,11 @@ mod tests {
     fn an_npc_carriers_fighters_count_toward_avg_ships() {
         let mut traffic = Traffic::new();
         traffic.enter(table(2), &mut Draws::of(&[0, 0]));
-        let carrier = traffic.add_npc(crate::testkit::npc(0, ShipStats::default()));
+        let carrier = traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
         let fighter = traffic.add_npc(Npc {
             leader: Some(carrier),
             carrier: Some(launched_from(ShipRef::Npc(carrier))),
-            ..crate::testkit::npc(0, ShipStats::default())
+            ..crate::traffic::fixture::npc(0, ShipStats::default())
         });
         assert!(
             tick_arrival(&mut traffic).is_empty(),
@@ -2436,7 +2574,7 @@ mod tests {
     #[test]
     fn the_player_leads_its_escorts_fighters_and_joined_mission_escorts_in_ship_table_order() {
         let mut traffic = Traffic::new();
-        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let ship = |id| crate::traffic::fixture::npc(id, ShipStats::default());
         traffic.add_npc(ship(0));
         let mission = traffic.add_npc(Npc {
             mission: Some(escorting(true)),
@@ -2474,20 +2612,20 @@ mod tests {
         let person = NpcPerson::of(&ace, false);
         let first = traffic.add_npc(Npc {
             person: Some(person),
-            ..crate::testkit::npc(0, ShipStats::default())
+            ..crate::traffic::fixture::npc(0, ShipStats::default())
         });
         assert_eq!(traffic.berth_person(1), Some("Ace"));
         assert_eq!(traffic.berth_person(2), None, "never held");
         traffic.remove(first);
         assert_eq!(traffic.berth_person(1), Some("Ace"), "kept once it left");
-        let second = traffic.add_npc(crate::testkit::npc(0, ShipStats::default()));
+        let second = traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
         assert_eq!(traffic.npcs()[0].berth, 1, "reused");
         assert_eq!(traffic.berth_person(1), None, "a ship with no person");
         traffic.remove(second);
         assert_eq!(traffic.berth_person(1), None, "the last ship's, not Ace's");
         traffic.add_npc(Npc {
             person: Some(person),
-            ..crate::testkit::npc(0, ShipStats::default())
+            ..crate::traffic::fixture::npc(0, ShipStats::default())
         });
         traffic.forget_berth_person(1);
         assert_eq!(traffic.berth_person(1), None, "a capture clears it");
@@ -2501,7 +2639,7 @@ mod tests {
     #[test]
     fn each_npc_takes_the_first_free_berth_from_1() {
         let mut traffic = Traffic::new();
-        let ship = || crate::testkit::npc(0, ShipStats::default());
+        let ship = || crate::traffic::fixture::npc(0, ShipStats::default());
         traffic.add_npc(ship());
         let second = traffic.add_npc(ship());
         traffic.add_npc(ship());
@@ -2522,7 +2660,7 @@ mod tests {
     #[test]
     fn a_systems_ships_take_berths_from_1_as_they_are_set_up() {
         let mut traffic = Traffic::new();
-        traffic.add_npc(crate::testkit::npc(0, ShipStats::default()));
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
         traffic.enter_with(
             table(1),
             World::new(&[]),
@@ -2535,7 +2673,7 @@ mod tests {
     #[test]
     fn a_reserved_berth_is_skipped_until_an_npc_is_placed_at_it() {
         let mut traffic = Traffic::new();
-        let ship = || crate::testkit::npc(0, ShipStats::default());
+        let ship = || crate::traffic::fixture::npc(0, ShipStats::default());
         traffic.reserve(BTreeSet::from([1, 3]));
         traffic.add_npc(ship());
         traffic.add_npc(ship());
@@ -2566,7 +2704,7 @@ mod tests {
     #[test]
     fn player_led_follows_berth_order() {
         let mut traffic = Traffic::new();
-        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let ship = |id| crate::traffic::fixture::npc(id, ShipStats::default());
         traffic.reserve(BTreeSet::from([1]));
         let hired = traffic.add_npc(Npc {
             escort: Some(duty(2)),
@@ -2586,7 +2724,7 @@ mod tests {
     #[test]
     fn ships_led_at_one_berth_keep_the_order_they_appeared_in() {
         let mut traffic = Traffic::new();
-        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let ship = |id| crate::traffic::fixture::npc(id, ShipStats::default());
         let first = traffic.add_npc_at(
             Npc {
                 escort: Some(duty(2)),
@@ -2822,7 +2960,7 @@ mod tests {
             rating: 0,
             yardstick: 0,
             untargetable: false,
-            blessing: crate::rank::Blessing::NONE,
+            blessing: crate::ai::Blessing::NONE,
         };
         let world = World {
             player: Some(player),
@@ -2841,13 +2979,13 @@ mod tests {
     #[test]
     fn an_npc_added_is_numbered_after_every_other() {
         let mut traffic = populated(2, 1);
-        let added = traffic.add_npc(crate::testkit::npc(77, ShipStats::default()));
+        let added = traffic.add_npc(crate::traffic::fixture::npc(77, ShipStats::default()));
         assert_eq!(added, NpcId(2));
         assert_eq!(traffic.npcs()[2].id, NpcId(2));
         traffic.enter(table(1), &mut Draws::of(&placed(0, 0)));
         assert_eq!(traffic.npcs()[0].id, NpcId(3), "never reused");
         assert_eq!(
-            traffic.add_npc(crate::testkit::npc(0, ShipStats::default())),
+            traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default())),
             NpcId(4)
         );
     }
@@ -3100,7 +3238,7 @@ mod tests {
         traffic.ticks = 1;
         traffic.npcs[0].person = Some(NpcPerson {
             id: PersonId(151),
-            flags: crate::person::QUOTE_ON_ATTACK,
+            flags: crate::traffic::QUOTE_ON_ATTACK,
             coward: 0,
             comm_quote: -1,
             hail_quote: 8,
@@ -3311,7 +3449,7 @@ mod tests {
             npc.goal = Goal::Attack(ShipRef::Player);
             npc.target = Some(ShipRef::Player);
             if let Some(person) = npc.person.as_mut() {
-                person.flags |= crate::person::GRUDGE;
+                person.flags |= crate::traffic::GRUDGE;
                 person.grudge = grudge;
             }
             traffic
@@ -4041,7 +4179,7 @@ mod tests {
             rating: 0,
             yardstick: 0,
             untargetable: false,
-            blessing: crate::rank::Blessing::NONE,
+            blessing: crate::ai::Blessing::NONE,
         }
     }
 
@@ -4052,7 +4190,7 @@ mod tests {
             speed: (speed * 100.0) as i16,
             ..FAST
         };
-        crate::testkit::npc(id, ShipStats::new(fields, &[]))
+        crate::traffic::fixture::npc(id, ShipStats::new(fields, &[]))
     }
 
     /// `npc` bursting out of a gate along +x, from its first tick.
@@ -4289,7 +4427,7 @@ mod tests {
                     link_mission: Some(400),
                     flags: 0x0003,
                     shield_mod: -1,
-                    ..crate::testkit::person(510, 200)
+                    ..nova_sim_catalog::fixture::person(510, 200)
                 },
                 linked: true,
                 kind,
@@ -4885,7 +5023,7 @@ mod tests {
         // Now at its AvgShips: no arrival roll, and the timer still runs.
         let mut traffic = armed(0, 0);
         traffic.retarget(strong(1), &BTreeSet::new(), Leave::Dropped);
-        traffic.add_npc(crate::testkit::npc(0, ShipStats::new(FAST, &[])));
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::new(FAST, &[])));
         ticked(&mut traffic, &escorted(60), 30);
         let mut chance = Draws::of(&[]);
         traffic.tick_in(&Keep, escorted(60), &[], &mut chance);
@@ -4909,7 +5047,7 @@ mod tests {
         traffic.arm_strength_timer(&mut Draws::of(&[0]));
         let refusing = World {
             persons: PersonWorld {
-                control_bits: &crate::testkit::RefuseBits(&[7]),
+                control_bits: &nova_sim_catalog::fixture::RefuseBits(&[7]),
                 ..PersonWorld::NONE
             },
             ..escorted(60)
@@ -5116,7 +5254,7 @@ mod tests {
 
     /// A ship to add.
     fn ship() -> Npc {
-        crate::testkit::npc(0, ShipStats::new(FAST, &[]))
+        crate::traffic::fixture::npc(0, ShipStats::new(FAST, &[]))
     }
 
     /// Traffic in `OLD` of [`table`] of 0, holding three NPCs at berths

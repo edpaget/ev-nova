@@ -1,6 +1,6 @@
 //! Ships and governments the AI types' tests share.
 
-use crate::ai::{PlayerSide, Surroundings};
+use crate::ai::{Blessed, Blessing, PlayerSide, Surroundings};
 use crate::catalog::{GovtId, GovtRecord, LandingSite};
 use crate::combat::ShipRef;
 use crate::combat::armament::Armament;
@@ -9,11 +9,11 @@ use crate::combat::weapon::WeaponSpec;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
-use crate::rank::{Blessed, Blessing};
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
-use crate::testkit::{FAST, govt, planet, weapon};
 use crate::traffic::npc::{AiType, Npc, NpcId};
+use nova_sim_base::fixture::FAST;
+use nova_sim_catalog::fixture::{govt, planet, weapon};
 
 /// Traders: class 1, `CrimeTol` 6.
 pub(crate) const TRADERS: GovtId = GovtId(140);
@@ -55,7 +55,7 @@ pub(crate) fn govts(flags: u16, police_flags: u16) -> Governments {
 /// with a harmless gun of unlimited ammunition (so it is not out of
 /// ammunition, and holds no destroying weapon).
 pub(crate) fn ship(id: u32, govt: GovtId, ai_type: AiType, x: f32, y: f32) -> Npc {
-    let mut npc = crate::testkit::npc(id, ShipStats::new(FAST, &[]));
+    let mut npc = crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]));
     npc.armament = Armament::new([(WeaponSpec::new(&weapon(127)), 1)]);
     npc.govt = Some(govt);
     npc.ai_type = ai_type;

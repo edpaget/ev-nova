@@ -253,8 +253,9 @@ mod tests {
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
     use crate::escort::{EscortClass, EscortDuty};
-    use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::{AiType, Mode};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::weapon;
 
     /// A turret reaching 300 pixels (332 with the margin), and a gun, as
     /// its class's stock weapons reach ([`HullSpec::stock_reach`]).
@@ -423,7 +424,7 @@ mod tests {
         npc.mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 0,
-            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            behav: crate::traffic::ShipBehav::EscortPlayer,
             formation: Some(crate::escort::FormationSlot {
                 slot: 2,
                 ships: 2,

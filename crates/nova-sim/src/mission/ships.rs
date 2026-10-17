@@ -15,6 +15,8 @@ use crate::hyperspace::{Places, StarMap};
 use super::goals::ShipGoal;
 use super::select::GovtCode;
 
+pub use crate::traffic::{ShipBehav, ShipStart};
+
 /// Where an active mission's special ships are: its `ShipSyst` as
 /// `_LoadCurrentMissionData` resolves it into the slot (+0x10) at accept
 /// (@0xa0f67-0xa1142).
@@ -110,82 +112,6 @@ impl Default for SpecialShips {
             chased_off: 0,
             uniform_type: None,
             ship_done: false,
-        }
-    }
-}
-
-/// A mission's `ShipStart`, read: where and when its ships appear.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ShipStart {
-    /// -1 to -16: at the stellar of nav slot `-ShipStart - 1` as the
-    /// system is set up, or at random when that slot is empty
-    /// (@0x4300a-0x43091).
-    Nav(u8),
-    /// 0, or a code below -16 that no `NavDefs` slot answers: placed at
-    /// random.
-    Random,
-    /// 1: they come in later, on the appear timer, as many as have not
-    /// arrived since it last restarted.
-    ComesLater,
-    /// 2: they first come in on the appear timer, then are set up
-    /// cloaked (`_DoShipCloak` @0x43114-0x43121).
-    Cloaked,
-    /// Any code above 2, which no stock mission uses: on the appear timer
-    /// as 2, never cloaked.
-    Timed,
-}
-
-impl ShipStart {
-    /// The `ShipStart` `code` names.
-    #[must_use]
-    pub const fn from_code(code: i16) -> Self {
-        match code {
-            // -1 to -16: 0 to 15, which fits.
-            -16..=-1 => Self::Nav((-code - 1) as u8),
-            1 => Self::ComesLater,
-            2 => Self::Cloaked,
-            3.. => Self::Timed,
-            _ => Self::Random,
-        }
-    }
-
-    /// Whether the appear timer runs from accept: any `ShipStart` above 0
-    /// (@0xa0ed4-0xa0f09).
-    #[must_use]
-    pub const fn timed(self) -> bool {
-        matches!(self, Self::ComesLater | Self::Cloaked | Self::Timed)
-    }
-}
-
-/// A mission's `ShipBehav`, read: how its ships behave.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ShipBehav {
-    /// -1, or any code it does not read: as their `düde`'s AI decides.
-    Own,
-    /// 0: they attack the player (`_AIMakeShipAttackPlayer`
-    /// @0x3d099-0x3d0bb, `_HighLevelAIHandler` @0x8d628-0x8d6ea).
-    AttackPlayer,
-    /// 1: they escort the player. Each joins the player's formation as a
-    /// mission escort while it is intact (`_AIDispatch` @0x8fc03-0x8fc22
-    /// gives it AI type 6 and leader 0 on every think) and flies as the
-    /// player's escorts do, never one of the hired escorts; it leaves as
-    /// its mission ends (see the session's `mission_ships` module).
-    EscortPlayer,
-    /// 2: they attack stellars (`_DeathStarAI`). Until
-    /// rdm:phase/mission-ships/phase-12-stellar-attackers, as
-    /// [`Self::Own`].
-    AttackStellars,
-}
-
-impl ShipBehav {
-    /// The `ShipBehav` `code` names.
-    #[must_use]
-    pub const fn from_code(code: i16) -> Self {
-        match code {
-            0 => Self::AttackPlayer,
-            1 => Self::EscortPlayer,
-            2 => Self::AttackStellars,
-            _ => Self::Own,
         }
     }
 }

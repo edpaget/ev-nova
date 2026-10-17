@@ -231,6 +231,7 @@ mod tests {
     use crate::combat::armament::LauncherRounds;
 
     use super::*;
+    use crate::ai::Blessing;
     use crate::ai::fixture::blessing_of;
     use crate::ai::{Goal, PlayerSide};
     use crate::catalog::{GovtId, GovtRecord, WeaponId, WeaponRecord};
@@ -240,11 +241,11 @@ mod tests {
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::govt::Governments;
-    use crate::rank::Blessing;
     use crate::reserves::Gauge;
     use crate::stats::ShipStats;
-    use crate::testkit::{FAST, govt, weapon};
     use crate::traffic::npc::NpcId;
+    use nova_sim_base::fixture::FAST;
+    use nova_sim_catalog::fixture::{govt, weapon};
 
     /// Government 140 (class 1), its ally 141, its enemy 142 and a
     /// neutral, 143.
@@ -269,7 +270,7 @@ mod tests {
     /// NPC `id` of `govt`, of `strength`, its shields full (30), at rest
     /// at the centre.
     fn ship(id: u32, govt: i16, strength: f32) -> Npc {
-        let mut npc = crate::testkit::npc(id, ShipStats::new(FAST, &[]));
+        let mut npc = crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]));
         npc.govt = Some(GovtId(govt));
         npc.hull.strength = strength;
         npc

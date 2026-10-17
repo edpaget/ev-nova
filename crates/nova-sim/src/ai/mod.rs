@@ -37,10 +37,10 @@ pub mod target;
 pub mod warship;
 pub mod wimpy;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-use crate::catalog::{GovtId, LandingSite, StellarId};
+use crate::catalog::{GovtId, LandingSite, RankId, RankRecord, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::Strike;
@@ -52,8 +52,8 @@ use crate::govt::Governments;
 use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::is_landable as landable;
-use crate::rank::{Blessed, Blessing};
 use crate::reserves::Reserves;
+use crate::rulebook::RuleSource;
 use crate::traffic::destination;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -66,6 +66,135 @@ pub use interceptor::Interceptor;
 pub use nova::NovaAi;
 pub use warship::Warship;
 pub use wimpy::WimpyTrader;
+
+/// `Flags` 0x0400: ships the rank reaches fight a threat to the player
+/// when hailed, for nothing (`_DoCommDialog` @0x95ddb).
+pub const HELPS_IN_BATTLE: u16 = 0x0400;
+/// `Flags` 0x0800: ships the rank reaches refuel or repair the player
+/// for nothing (`_DoCommDialog` @0x95de1).
+pub const HELPS_FREE: u16 = 0x0800;
+
+/// What the pilot's ranks grant a hailed ship's help (see
+/// `nova_sim::rank`'s module docs' **Hails**).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Favour {
+    /// Some rank that reaches the ship has [`HELPS_IN_BATTLE`].
+    pub battle_help: bool,
+    /// Some rank that reaches the ship has [`HELPS_FREE`].
+    pub free_help: bool,
+}
+
+/// What the ranks of `records` in `active` grant a ship of `govt` (see
+/// `nova_sim::rank`'s module docs' **Hails**): each one that reaches `govt` by `reach`'s
+/// reading of [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach)
+/// adds its [`HELPS_IN_BATTLE`] and [`HELPS_FREE`].
+#[must_use]
+pub fn favour(
+    records: &[RankRecord],
+    active: &BTreeSet<RankId>,
+    govt: Option<GovtId>,
+    govts: &Governments,
+    reach: RuleSource,
+) -> Favour {
+    let flags = records
+        .iter()
+        .filter(|rank| active.contains(&rank.id) && reaches(rank, govt, govts, reach))
+        .fold(0, |flags, rank| flags | rank.flags);
+    Favour {
+        battle_help: flags & HELPS_IN_BATTLE != 0,
+        free_help: flags & HELPS_FREE != 0,
+    }
+}
+
+/// Whether `rank` reaches `govt` by `reach`'s reading of
+/// [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach): by the
+/// engine, when `_GovtAllies` finds them allied; by the other reading,
+/// only a rank of `govt` itself.
+pub(crate) fn reaches(
+    rank: &RankRecord,
+    govt: Option<GovtId>,
+    govts: &Governments,
+    reach: RuleSource,
+) -> bool {
+    match reach {
+        RuleSource::Engine => govts.allies(govt, rank.affil_govt),
+        RuleSource::Bible => rank.affil_govt.is_some() && rank.affil_govt == govt,
+    }
+}
+
+/// Which of the two blessings a rank's `Flags` give (see
+/// `nova_sim::rank`'s module docs' **Blessing**): `_PlayerBlessedByGovt`'s `which`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blessed {
+    /// `nova_sim::rank::BLESSES_PEACE`, `which` 0: the government's ships won't attack
+    /// the player.
+    Peace,
+    /// `nova_sim::rank::BLESSES_LANDING`, `which` 1: the government's stellars clear the
+    /// player to land.
+    Landing,
+}
+
+/// The lowest government ID the blessing table holds: the original's
+/// slot 0.
+const FIRST_BLESSED: i32 = 128;
+
+/// How many governments the blessing table holds, as the original's 256
+/// slots.
+const BLESSED_SLOTS: usize = 256;
+
+/// The blessing table `_ResetPlayerPrecalcedValues` builds (see
+/// `nova_sim::rank`'s module docs' **Blessing**): for each government 128-383, whether it
+/// blesses [`Blessed::Peace`] and whether [`Blessed::Landing`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Blessing {
+    /// Bit n: government 128 + n blesses peace.
+    peace: [u64; 4],
+    /// Bit n: government 128 + n blesses landing.
+    landing: [u64; 4],
+}
+
+impl Blessing {
+    /// No government blesses anything.
+    pub const NONE: Self = Self {
+        peace: [0; 4],
+        landing: [0; 4],
+    };
+
+    /// Whether `govt` blesses `which` (`_PlayerBlessedByGovt`
+    /// @0x2732-0x276b): never for an independent, or an ID outside
+    /// 128-383, as the original's `> 0xff` test gives 0.
+    #[must_use]
+    pub fn blesses(&self, govt: Option<GovtId>, which: Blessed) -> bool {
+        govt.and_then(blessed_slot)
+            .is_some_and(|slot| self.set(which)[slot / 64] & (1 << (slot % 64)) != 0)
+    }
+
+    /// The set of `which`.
+    fn set(&self, which: Blessed) -> &[u64; 4] {
+        match which {
+            Blessed::Peace => &self.peace,
+            Blessed::Landing => &self.landing,
+        }
+    }
+
+    /// Makes `govt` bless `which`; nothing for an ID outside 128-383.
+    pub(crate) fn bless(&mut self, govt: GovtId, which: Blessed) {
+        if let Some(slot) = blessed_slot(govt) {
+            let set = match which {
+                Blessed::Peace => &mut self.peace,
+                Blessed::Landing => &mut self.landing,
+            };
+            set[slot / 64] |= 1 << (slot % 64);
+        }
+    }
+}
+
+/// `govt`'s slot in the blessing table, if it has one.
+fn blessed_slot(govt: GovtId) -> Option<usize> {
+    usize::try_from(i32::from(govt.0) - FIRST_BLESSED)
+        .ok()
+        .filter(|&slot| slot < BLESSED_SLOTS)
+}
 
 /// What an NPC sets out to do.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -231,7 +360,7 @@ pub struct PlayerSide {
     pub hull: HullSpec,
     /// How it handles.
     pub handling: Handling,
-    /// The pilot's combat rating (see [`rating`](crate::rating)).
+    /// The pilot's combat rating (see `nova_sim::rating`).
     pub rating: i64,
     /// The raw `Strength` of `shïp` 128, the yardstick the odds measure
     /// the rating by ([`odds`](crate::ai::odds)).
@@ -242,7 +371,7 @@ pub struct PlayerSide {
     /// [`fire`]).
     pub untargetable: bool,
     /// The governments that bless the player, as the session's last
-    /// refresh took them ([`Session::blessing`](crate::Session::blessing)):
+    /// refresh took them (`nova_sim::Session::blessing`):
     /// [`Surroundings::blessed`] reads it.
     pub blessing: Blessing,
 }
@@ -292,7 +421,7 @@ impl<'a> Surroundings<'a> {
     }
 
     /// Whether `govt` blesses the player with peace, rank `Flags` 0x0100
-    /// (`_PlayerBlessedByGovt(govt, 0)`, see [`rank`](crate::rank)): never
+    /// (`_PlayerBlessedByGovt(govt, 0)`, see `nova_sim::rank`): never
     /// for an independent, and never with no player in the system. Its
     /// readers are the AI's: liking in hails, the odds, whom a warship
     /// targets, the government's word and the Good Samaritan.
@@ -563,13 +692,14 @@ mod tests {
     use crate::catalog::GovtRecord;
     use crate::landing::StellarFlags;
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST, planet};
     use crate::traffic::npc::{AiType, Mode};
+    use nova_sim_base::fixture::{Draws, FAST};
+    use nova_sim_catalog::fixture::planet;
 
     fn npc(id: u32, ai_type: AiType) -> Npc {
         Npc {
             ai_type,
-            ..crate::testkit::npc(id, ShipStats::new(FAST, &[]))
+            ..crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]))
         }
     }
 
@@ -680,15 +810,15 @@ mod tests {
         let govts = Governments::new([
             GovtRecord {
                 classes: [1, -1, -1, -1],
-                ..crate::testkit::govt(140)
+                ..nova_sim_catalog::fixture::govt(140)
             },
             GovtRecord {
                 enemies: [1, -1, -1, -1],
-                ..crate::testkit::govt(141)
+                ..nova_sim_catalog::fixture::govt(141)
             },
             GovtRecord {
                 allies: [1, -1, -1, -1],
-                ..crate::testkit::govt(142)
+                ..nova_sim_catalog::fixture::govt(142)
             },
         ]);
         let mut sites = sites();
@@ -720,11 +850,11 @@ mod tests {
         let govts = Governments::new([
             GovtRecord {
                 classes: [1, -1, -1, -1],
-                ..crate::testkit::govt(140)
+                ..nova_sim_catalog::fixture::govt(140)
             },
             GovtRecord {
                 enemies: [1, -1, -1, -1],
-                ..crate::testkit::govt(141)
+                ..nova_sim_catalog::fixture::govt(141)
             },
         ]);
         let far = planet(128, 1000.0, 0.0);
@@ -755,7 +885,7 @@ mod tests {
     fn an_independent_ships_idle_pick_counts_a_stellar_of_any_government() {
         let govts = Governments::new([GovtRecord {
             flags: crate::govt::XENOPHOBIC,
-            ..crate::testkit::govt(141)
+            ..nova_sim_catalog::fixture::govt(141)
         }]);
         let sites = [LandingSite {
             govt: Some(GovtId(141)),
@@ -806,7 +936,7 @@ mod tests {
         };
         let govts = Governments::new([GovtRecord {
             flags2: crate::govt::PREFERS_WORMHOLES,
-            ..crate::testkit::govt(141)
+            ..nova_sim_catalog::fixture::govt(141)
         }]);
         let sites = [planet(128, 0.0, 0.0), wormhole];
         let around = Surroundings {

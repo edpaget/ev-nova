@@ -178,7 +178,7 @@ pub const SLOW_MISSILE_TURN: f32 = 2.0;
 pub const SUFFICIENT_DAMAGE: f64 = 1.05;
 
 /// The rulebook's entries an NPC's weapon pick follows, held by the
-/// behaviours that fire ([`NovaAi::from_rulebook`](crate::NovaAi::from_rulebook)
+/// behaviours that fire ([`NovaAi::from_rulebook`](crate::ai::nova::NovaAi::from_rulebook)
 /// reads them).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FireRules {
@@ -831,8 +831,9 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::reserves::Reserves;
     use crate::stats::ShipStats;
-    use crate::testkit::{FAST, weapon};
     use crate::traffic::npc::NpcId;
+    use nova_sim_base::fixture::FAST;
+    use nova_sim_catalog::fixture::weapon;
 
     /// A gun of `id`, 10 pixels a tick for 20 ticks (200 pixels), doing
     /// `energy` and `mass` damage.
@@ -873,7 +874,7 @@ mod tests {
         let mut npc = Npc {
             armament: Armament::new(weapons.iter().map(|record| (WeaponSpec::new(record), 1))),
             goal,
-            ..crate::testkit::npc(1, ShipStats::new(FAST, &[]))
+            ..crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]))
         };
         npc.state.position = SHOOTER;
         npc
@@ -899,7 +900,7 @@ mod tests {
             rating: 0,
             yardstick: 0,
             untargetable: false,
-            blessing: crate::rank::Blessing::NONE,
+            blessing: crate::ai::Blessing::NONE,
         }
     }
 
@@ -941,7 +942,7 @@ mod tests {
     fn trigger_at_npc(npc: &Npc, x: f32, y: f32, target: impl Fn(&mut Npc)) -> Trigger {
         let mut npc = npc.clone();
         npc.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
-        let mut other = crate::testkit::npc(2, ShipStats::new(FAST, &[]));
+        let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
         other.state.position = SHOOTER + Vec2::new(x, y);
         target(&mut other);
         let npcs = [npc.clone(), other];
@@ -1270,7 +1271,7 @@ mod tests {
     fn in_reach_counts_only_the_classs_stock_weapons_of_guidance_8_or_less() {
         // The class's stock turret reaching 300 pixels, and 332 with the
         // margin.
-        let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
+        let mut npc = crate::traffic::fixture::npc(1, crate::stats::ShipStats::default());
         npc.state.position = crate::geometry::Vec2::new(100.0, 50.0);
         let at = |x: f32, y: f32| ShipState {
             position: crate::geometry::Vec2::new(x, y),
@@ -1282,7 +1283,7 @@ mod tests {
                 guidance: 4,
                 speed: 1000,
                 count: 300,
-                ..crate::testkit::weapon(140)
+                ..nova_sim_catalog::fixture::weapon(140)
             }),
             1,
         )]);
@@ -1886,7 +1887,7 @@ mod tests {
     #[test]
     fn a_ship_attacking_or_sniping_at_a_ship_there_launches_its_fighters() {
         let all = [gun(128, 1, 1)];
-        let mut quarry = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
+        let mut quarry = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
         quarry.state.position = SHOOTER + Vec2::new(5000.0, 0.0);
         let at = ShipRef::Npc(NpcId(7));
         for goal in [ATTACK, Goal::Snipe(ShipRef::Player), Goal::Attack(at)] {
@@ -1915,10 +1916,10 @@ mod tests {
         }
         let at = ShipRef::Npc(NpcId(7));
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[]), "gone");
-        let mut arriving = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
+        let mut arriving = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
         arriving.mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[arriving]));
-        let mut wreck = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
+        let mut wreck = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
         wreck.condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
@@ -2203,7 +2204,7 @@ mod tests {
         let npcs = {
             let mut shooter = npc.clone();
             shooter.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
-            let mut target = crate::testkit::npc(2, ShipStats::new(FAST, &[]));
+            let mut target = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
             target.state.position = SHOOTER + Vec2::new(0.0, -300.0);
             other(&mut target);
             [shooter, target]

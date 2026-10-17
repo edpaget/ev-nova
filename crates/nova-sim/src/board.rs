@@ -358,13 +358,7 @@ fn cargo(prize: &Prize, chance: &mut dyn Chance) -> Option<(Good, u32)> {
 /// The most escorts the player's fleet holds (`_CanHireEscorts`, counting
 /// those that are not fighters).
 pub const MAX_ESCORTS: usize = 6;
-/// The most ships in a system, the player's among them (the Bible's "Max
-/// Ships In System"), slot 0 the player's. Each spawn leaves some of the
-/// slots free, as
-/// [`RuleKey::SpawnReserve`] reads: by the
-/// engine, the system's traffic and the fighters 8, so they stop at 55
-/// NPCs, and the old ship kept as an escort after "Use As My Ship" 1.
-pub const MAX_SHIPS_IN_SYSTEM: usize = 64;
+pub use crate::traffic::MAX_SHIPS_IN_SYSTEM;
 /// How much each take multiplies the self-destruct threshold by, per
 /// item: cargo and ammo double it, credits (the double @0xdd5c8) and
 /// energy (@0xdd640) less.

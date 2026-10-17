@@ -74,6 +74,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::catalog::outfit_mods;
 pub(crate) use crate::catalog::tally;
 use crate::catalog::{
     CombatCatalog, CronId, DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, RankId, ShipId,
@@ -89,7 +90,6 @@ use crate::legal::LegalRecords;
 use crate::market::{ActiveEvent, Good, Trader};
 use crate::mission::ActiveMissions;
 use crate::outfit_effects::Rgb15;
-use crate::outfitter::outfit_mods;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};

@@ -3,7 +3,7 @@
 
 use crate::ai::Goal;
 use crate::bay::Carrier;
-use crate::catalog::{GovtId, PersonId, ShipId, StellarId, WeaponId};
+use crate::catalog::{GovtId, PersonId, PersonRecord, ShipId, StellarId, WeaponId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
@@ -14,10 +14,10 @@ use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::market::Good;
-use crate::mission::ships::ShipBehav;
 use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
+use crate::traffic::ShipBehav;
 
 pub use crate::combat::NpcId;
 
@@ -152,7 +152,7 @@ pub enum Mode {
 }
 
 /// What an NPC flown by a person (`përs`) carries of it (see
-/// [`person`](crate::person)).
+/// `nova_sim::person`).
 // Each flag is its own, read on its own.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,6 +181,27 @@ pub struct NpcPerson {
     pub quoted: bool,
     /// The quote tick it last said its hail quote, if it has.
     pub quoted_at: Option<u64>,
+}
+
+impl NpcPerson {
+    /// What an NPC flown by `record`'s person carries of it, holding a
+    /// grudge when `grudge`, having said no hail quote yet.
+    #[must_use]
+    pub fn of(record: &PersonRecord, grudge: bool) -> Self {
+        Self {
+            id: record.id,
+            flags: record.flags,
+            coward: record.coward,
+            comm_quote: record.comm_quote,
+            hail_quote: record.hail_quote,
+            mission: record.link_mission.is_some(),
+            portrait: record.hail_pict,
+            invincible: record.shield_mod < 0,
+            grudge,
+            quoted: false,
+            quoted_at: None,
+        }
+    }
 }
 
 /// An NPC ship in the player's system.
@@ -284,7 +305,7 @@ pub struct Npc {
     pub mission: Option<MissionMark>,
     /// The slot of the mission whose auxiliary ship it is (the original's
     /// ship +0x8a): ordinary traffic, given back to its slot as the
-    /// system's ships are dropped (see the [`mission::aux_ships`](crate::mission::aux_ships)
+    /// system's ships are dropped (see the `nova_sim::mission::aux_ships`
     /// module); none for any other ship.
     pub aux: Option<u8>,
     /// Its cloak: how far it has faded, and which way (see
@@ -462,7 +483,7 @@ impl Npc {
 
     /// Its top speed in flight, its `_ShipMaxSpeed`: its own handling's
     /// × `led_speed`, the factor for the player and the ships it leads
-    /// (see [`top_speed`](crate::top_speed)), while it
+    /// (see `nova_sim::top_speed`), while it
     /// [escorts the player](Npc::escorts_player), whose leader (+0x9a) is
     /// then the player; otherwise its own.
     #[must_use]
@@ -841,11 +862,11 @@ mod tests {
 
     #[test]
     fn an_npcs_fleet_is_its_lead_or_itself_and_the_players_escorts_the_players() {
-        let lead = crate::testkit::npc(3, ShipStats::default());
+        let lead = crate::traffic::fixture::npc(3, ShipStats::default());
         assert_eq!(lead.fleet(), ShipRef::Npc(NpcId(3)));
         let escort = Npc {
             leader: Some(NpcId(3)),
-            ..crate::testkit::npc(5, ShipStats::default())
+            ..crate::traffic::fixture::npc(5, ShipStats::default())
         };
         assert_eq!(escort.fleet(), ShipRef::Npc(NpcId(3)));
         let players = Npc {
@@ -857,7 +878,7 @@ mod tests {
                 },
                 order: None,
             }),
-            ..crate::testkit::npc(6, ShipStats::default())
+            ..crate::traffic::fixture::npc(6, ShipStats::default())
         };
         assert_eq!(players.fleet(), ShipRef::Player);
     }
@@ -866,9 +887,9 @@ mod tests {
     fn a_ship_the_player_leads_has_its_top_speed_times_the_led_speed_and_any_other_its_own() {
         let fields = crate::handling::ShipFields {
             speed: 300,
-            ..crate::testkit::FAST
+            ..nova_sim_base::fixture::FAST
         };
-        let ship = |id| crate::testkit::npc(id, ShipStats::new(fields, &[]));
+        let ship = |id| crate::traffic::fixture::npc(id, ShipStats::new(fields, &[]));
         assert_eq!(ship(1).stats.handling.max_speed, 3.0);
         let hired = Npc {
             escort: Some(crate::escort::EscortDuty {
@@ -919,7 +940,7 @@ mod tests {
         };
         let joined = Npc {
             mission: Some(ordered(Some(slot))),
-            ..crate::testkit::npc(7, ShipStats::default())
+            ..crate::traffic::fixture::npc(7, ShipStats::default())
         };
         assert_eq!(joined.escort_order(), Some(EscortOrder::Hold));
         let unjoined = Npc {
@@ -951,7 +972,7 @@ mod tests {
         };
         let joined = Npc {
             mission: Some(mark(ShipBehav::EscortPlayer, Some(slot))),
-            ..crate::testkit::npc(7, ShipStats::default())
+            ..crate::traffic::fixture::npc(7, ShipStats::default())
         };
         assert!(joined.mission_escort());
         assert_eq!(joined.fleet(), ShipRef::Player);
@@ -983,7 +1004,7 @@ mod tests {
                 },
                 order: None,
             }),
-            ..crate::testkit::npc(6, ShipStats::default())
+            ..crate::traffic::fixture::npc(6, ShipStats::default())
         };
         assert_eq!(
             hired.formation(),
@@ -1006,7 +1027,7 @@ mod tests {
         ] {
             let npc = Npc {
                 goal,
-                ..crate::testkit::npc(1, ShipStats::default())
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
             };
             assert!(npc.threatens_player(), "{goal:?}");
             assert!(!npc.threatens(other), "{goal:?}");
@@ -1043,13 +1064,13 @@ mod tests {
         ] {
             let npc = Npc {
                 goal,
-                ..crate::testkit::npc(1, ShipStats::default())
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
             };
             assert!(!npc.threatens_player(), "{goal:?}");
         }
         let hunter = Npc {
             goal: Goal::Attack(other),
-            ..crate::testkit::npc(1, ShipStats::default())
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         assert!(hunter.threatens(other));
     }
@@ -1061,7 +1082,7 @@ mod tests {
         let stranger = ShipRef::Npc(NpcId(8));
         let with = |goal| Npc {
             goal,
-            ..crate::testkit::npc(1, ShipStats::default())
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         for quarry in [escort, ShipRef::Player] {
             for goal in [
@@ -1111,7 +1132,7 @@ mod tests {
 
     #[test]
     fn threatens_player_among_counts_the_player_and_any_ship_the_player_leads() {
-        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let ship = |id| crate::traffic::fixture::npc(id, ShipStats::default());
         let hired = Npc {
             escort: Some(EscortDuty {
                 formation: FormationSlot::default(),
@@ -1176,7 +1197,7 @@ mod tests {
     #[test]
     fn threatens_npc_among_counts_a_ship_attacking_the_asker_or_one_it_leads() {
         let asker = NpcId(1);
-        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let ship = |id| crate::traffic::fixture::npc(id, ShipStats::default());
         let led = Npc {
             leader: Some(asker),
             ..ship(2)
@@ -1258,7 +1279,7 @@ mod tests {
 
     #[test]
     fn only_a_ship_coming_out_of_a_gate_is_emerging() {
-        let mut npc = crate::testkit::npc(1, ShipStats::default());
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
         npc.goal = Goal::Attack(ShipRef::Player);
         assert!(!npc.emerging());
         npc.mode = Mode::JumpingIn { tick: 0 };
@@ -1270,7 +1291,7 @@ mod tests {
 
     #[test]
     fn an_npc_can_cloak_with_a_cloak_and_fuel_while_not_disabled() {
-        let mut npc = crate::testkit::npc(1, ShipStats::default());
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
         npc.cloak_gear.device = true;
         npc.reserves.fuel.now = 1.0;
         assert!(npc.can_cloak());
@@ -1286,7 +1307,7 @@ mod tests {
 
     #[test]
     fn only_the_players_escorts_and_fighters_are_the_players() {
-        let traffic = crate::testkit::npc(3, ShipStats::default());
+        let traffic = crate::traffic::fixture::npc(3, ShipStats::default());
         assert!(!traffic.is_players());
         let carrier = crate::bay::Carrier {
             ship: ShipRef::Npc(NpcId(3)),
@@ -1296,7 +1317,7 @@ mod tests {
         let npc_fighter = Npc {
             leader: Some(NpcId(3)),
             carrier: Some(carrier),
-            ..crate::testkit::npc(4, ShipStats::default())
+            ..crate::traffic::fixture::npc(4, ShipStats::default())
         };
         assert!(!npc_fighter.is_players());
         let players = Npc {
@@ -1312,7 +1333,7 @@ mod tests {
                 ship: ShipRef::Player,
                 ..carrier
             }),
-            ..crate::testkit::npc(5, ShipStats::default())
+            ..crate::traffic::fixture::npc(5, ShipStats::default())
         };
         assert!(players.is_players());
     }
@@ -1325,7 +1346,7 @@ mod tests {
             mode,
             condition,
             emerges_from: Some(gate),
-            ..crate::testkit::npc(1, ShipStats::default())
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         // Waiting, or its wait just run out (goal still 0x15).
         for mode in [
@@ -1392,7 +1413,7 @@ mod tests {
             },
             target: Some(ShipRef::Player),
             led_out: true,
-            ..crate::testkit::npc(1, ShipStats::default())
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         npc.emerge_from_gate(StellarId(310), 40);
         assert_eq!(npc.mode, Mode::Emerging { ticks_left: 40 });
@@ -1414,7 +1435,7 @@ mod tests {
             mode: Mode::HeldAtGate { ticks_left: 12 },
             goal: Goal::Attack(ShipRef::Player),
             emerges_from: Some(gate),
-            ..crate::testkit::npc(1, ShipStats::default())
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         assert!(held.arrived());
         assert!(!held.emerging());
@@ -1430,7 +1451,7 @@ mod tests {
             emerges_from: Some(StellarId(310)),
             target: Some(ShipRef::Player),
             provoked: 4.0,
-            ..crate::testkit::npc(1, ShipStats::default())
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         npc.hold_at_gate();
         assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 17 });
@@ -1441,7 +1462,7 @@ mod tests {
         let mut flying = Npc {
             mode: Mode::LeavingGate { tick: 3 },
             emerges_from: Some(StellarId(310)),
-            ..crate::testkit::npc(2, ShipStats::default())
+            ..crate::traffic::fixture::npc(2, ShipStats::default())
         };
         let before = flying.clone();
         flying.hold_at_gate();
@@ -1460,7 +1481,7 @@ mod tests {
 
     /// NPC `id` at rest, flying, intact and idle.
     fn plain(id: u32) -> Npc {
-        crate::testkit::npc(id, ShipStats::default())
+        crate::traffic::fixture::npc(id, ShipStats::default())
     }
 
     /// The player's hired escort, NPC `id`.

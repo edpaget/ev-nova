@@ -65,8 +65,9 @@ mod tests {
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
-    use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::AiType;
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::weapon;
 
     /// A provoked brave trader at (200, 100) and its attacker (`x`, `y`)
     /// from it.

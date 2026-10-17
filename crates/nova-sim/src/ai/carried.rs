@@ -70,8 +70,9 @@ mod tests {
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
-    use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::{AiType, NpcId};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::weapon;
 
     /// The carrier, NPC 1, a pirate warship at the centre with `goal`.
     fn carrier(goal: Goal) -> Npc {

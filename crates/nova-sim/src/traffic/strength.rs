@@ -144,7 +144,9 @@ mod tests {
     use crate::escort::EscortDuty;
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST, npc, ship};
+    use crate::traffic::fixture::npc;
+    use nova_sim_base::fixture::{Draws, FAST};
+    use nova_sim_catalog::fixture::ship;
 
     #[test]
     fn the_named_values() {

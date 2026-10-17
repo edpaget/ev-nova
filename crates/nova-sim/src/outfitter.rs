@@ -352,7 +352,6 @@ use crate::catalog::{
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::MOD_AMMO;
 use crate::control::Gate;
-use crate::fuel::OutfitMod;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{Direction, MORE_CARGO};
@@ -361,6 +360,8 @@ use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
 use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll, ShownTons};
+
+pub(crate) use crate::catalog::outfit_mods;
 
 /// The `oütf` `Flags` bits the outfitter reads (the Bible).
 #[derive(Clone, Copy, Debug)]
@@ -2067,26 +2068,6 @@ pub fn refund(price: i64, paid: i64, owned: u16, opened_with: u16, source: RuleS
     }
 }
 
-/// Every mod of the outfits `owned`, each record's four `ModType`s and
-/// `ModVal`s with how many are owned. An outfit with no record has none.
-#[must_use]
-pub(crate) fn outfit_mods(
-    owned: &BTreeMap<OutfitId, u16>,
-    records: &[OutfitRecord],
-) -> Vec<OutfitMod> {
-    records
-        .iter()
-        .filter_map(|record| Some((record, *owned.get(&record.id)?)))
-        .flat_map(|(record, count)| {
-            record.mods.map(|(mod_type, mod_val)| OutfitMod {
-                mod_type,
-                mod_val,
-                count,
-            })
-        })
-        .collect()
-}
-
 /// The total mass of `outfits` on a ship of `ship_mass`, each weighed by
 /// [`unit_mass`] as `rules` says.
 fn mass_of(
@@ -2793,6 +2774,7 @@ mod tests {
     use super::*;
     use crate::chance::NeverFires;
     use crate::control::Test;
+    use crate::fuel::OutfitMod;
     use crate::order_loop::Pass;
     use crate::rules::Descriptor;
     use crate::stats::{MORE_FUEL, MORE_SPEED};

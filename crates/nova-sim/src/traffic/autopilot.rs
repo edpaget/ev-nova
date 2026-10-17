@@ -88,7 +88,7 @@
 //!   `_AIMakeShipStopJumping` sets it to -1 again as the burst ends
 //!   (@0x82eaa); a ship not intact drifts out still carrying it, cleared
 //!   as it flies. While it waits it holds the gate's sprite open
-//!   ([`gate_sprite`](crate::gate_sprite)). Hit while it waits and
+//!   (`nova_sim::gate_sprite`). Hit while it waits and
 //!   answering the hit, its wait is cut to at most [`HIT_WAIT`] ticks; its
 //!   trigger, which may hold its point defence through the wait, is
 //!   released as it bursts out.
@@ -840,11 +840,12 @@ mod tests {
     use crate::hail::{Help, assist};
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST, planet};
     use crate::traffic::emerge::EMERGE_TICKS;
     use crate::traffic::gate_entry::ENTRY_TICKS;
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
+    use nova_sim_base::fixture::{Draws, FAST};
+    use nova_sim_catalog::fixture::planet;
     use std::collections::BTreeMap;
 
     /// Flies `npc` at its own top speed, with no lead: the autopilot as
@@ -883,7 +884,7 @@ mod tests {
         Npc {
             state: start,
             goal,
-            ..crate::testkit::npc(1, ShipStats::new(fields, &[]))
+            ..crate::traffic::fixture::npc(1, ShipStats::new(fields, &[]))
         }
     }
 
@@ -1044,7 +1045,7 @@ mod tests {
         crate::traffic::npc::MissionMark {
             order: None,
             slot: 0,
-            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            behav: crate::traffic::ShipBehav::EscortPlayer,
             formation,
         }
     }
@@ -2065,7 +2066,7 @@ mod tests {
 
     #[test]
     fn a_jump_in_glides_from_about_2098_out_without_steering_until_its_cap() {
-        let start = hyperspace_entry(&mut crate::testkit::Draws::of(&[60]));
+        let start = hyperspace_entry(&mut nova_sim_base::fixture::Draws::of(&[60]));
         assert!((start.position.length() - jump_in_distance()).abs() < 1e-2);
         let mut ship = npc(FAST, Goal::Land(StellarId(140)), start);
         ship.mode = Mode::JumpingIn { tick: 0 };
@@ -2483,7 +2484,7 @@ mod tests {
             WeaponSpec::new(&WeaponRecord {
                 speed: 1000,
                 count: 50,
-                ..crate::testkit::weapon(128)
+                ..nova_sim_catalog::fixture::weapon(128)
             }),
             1,
         )]);

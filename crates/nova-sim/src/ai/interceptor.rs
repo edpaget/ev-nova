@@ -26,7 +26,7 @@
 //!   ([`Traffic::take_scans`](crate::traffic::Traffic::take_scans)): the
 //!   session checks the player's mission cargo against the interceptor's
 //!   government (`_ScanPlayer` @0x7e46e; see the
-//!   [`mission`](crate::mission) module's "Cargo"), failing a mission
+//!   `nova_sim::mission` module's "Cargo"), failing a mission
 //!   flagged 0x0020 or fining the smuggler, then its illegal `jünk` and
 //!   outfits (see [`scan`](crate::scan)), convicting the smuggler; any
 //!   find sets the interceptor attacking the player.
@@ -169,7 +169,8 @@ mod tests {
     use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
     use crate::govt::{Governments, WARSHIPS_RETREAT};
-    use crate::testkit::{Draws, weapon};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::weapon;
 
     const P: ShipRef = ShipRef::Player;
 
@@ -372,9 +373,9 @@ mod tests {
     fn its_patrol_never_picks_a_gate() {
         let gate = crate::catalog::LandingSite {
             flags2: crate::gate::HYPERGATE,
-            ..crate::testkit::planet(129, 0.0, 0.0)
+            ..nova_sim_catalog::fixture::planet(129, 0.0, 0.0)
         };
-        let sites = [gate, crate::testkit::planet(128, 0.0, 0.0)];
+        let sites = [gate, nova_sim_catalog::fixture::planet(128, 0.0, 0.0)];
         for rule in RuleSource::ALL {
             assert_eq!(
                 patrols(&sites, rule, 0),
@@ -389,9 +390,9 @@ mod tests {
         let empty = crate::catalog::LandingSite {
             flags: crate::landing::StellarFlags::CAN_LAND
                 | crate::landing::StellarFlags::UNINHABITED,
-            ..crate::testkit::planet(129, 0.0, 0.0)
+            ..nova_sim_catalog::fixture::planet(129, 0.0, 0.0)
         };
-        let sites = [empty, crate::testkit::planet(128, 0.0, 0.0)];
+        let sites = [empty, nova_sim_catalog::fixture::planet(128, 0.0, 0.0)];
         assert_eq!(
             Interceptor::default().patrol_uninhabited,
             RuleSource::Engine
@@ -559,7 +560,7 @@ mod tests {
         let mut grudger = hunting;
         grudger.person = Some(crate::traffic::npc::NpcPerson {
             id: crate::catalog::PersonId(600),
-            flags: crate::person::GRUDGE,
+            flags: crate::traffic::GRUDGE,
             coward: 0,
             comm_quote: -1,
             hail_quote: -1,

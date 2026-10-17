@@ -231,11 +231,11 @@ mod tests {
     use crate::ai::fire;
     use crate::catalog::WeaponId;
     use crate::combat::hull::Condition;
-    use crate::mission::ships::ShipBehav;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST};
+    use crate::traffic::ShipBehav;
     use crate::traffic::npc::NpcId;
+    use nova_sim_base::fixture::{Draws, FAST};
 
     /// Answers with its own `mark`, recording the NPCs it was asked of.
     #[derive(Debug)]
@@ -306,7 +306,7 @@ mod tests {
     fn of(id: u32, ai_type: AiType) -> Npc {
         Npc {
             ai_type,
-            ..crate::testkit::npc(id, ShipStats::new(FAST, &[]))
+            ..crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]))
         }
     }
 
@@ -613,7 +613,7 @@ mod tests {
                 guidance: 7,
                 speed: 1000,
                 count: 20,
-                ..crate::testkit::weapon(130)
+                ..nova_sim_catalog::fixture::weapon(130)
             }),
             1,
         )]);
@@ -892,7 +892,7 @@ mod tests {
             armament: crate::combat::armament::Armament::new([(
                 crate::combat::weapon::WeaponSpec::new(&crate::catalog::WeaponRecord {
                     mass_dmg: 5,
-                    ..crate::testkit::weapon(128)
+                    ..nova_sim_catalog::fixture::weapon(128)
                 }),
                 1,
             )]),
@@ -1034,9 +1034,9 @@ mod tests {
         let sites = [
             LandingSite {
                 flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
-                ..crate::testkit::planet(129, 0.0, 0.0)
+                ..nova_sim_catalog::fixture::planet(129, 0.0, 0.0)
             },
-            crate::testkit::planet(128, 0.0, 0.0),
+            nova_sim_catalog::fixture::planet(128, 0.0, 0.0),
         ];
         let npcs = [ship(1, POLICE, AiType::Interceptor, 0.0, 0.0)];
         let seen = crate::ai::Surroundings {

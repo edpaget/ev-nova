@@ -16,10 +16,10 @@
 //! - without a sprite (+0x00 null, @0x38171), which the engine never has:
 //!   [`DrawnShips`] giving `None`. It tests the sprite pointer, not
 //!   whether the sprite is shown, so a hidden ship
-//!   ([`Session::is_hidden`](crate::Session::is_hidden)), whose sprite
+//!   (`nova_sim::Session::is_hidden`), whose sprite
 //!   `_HandleShipDisplay` still positions (@0x2cd17), is hovered where it
 //!   would be drawn, in the box of the frames its slot last cloned
-//!   ([`Session::framed_by`](crate::Session::framed_by)).
+//!   (`nova_sim::Session::framed_by`).
 //!
 //! Unlike [`targetable`](crate::targeting::targetable) it has no check for
 //! a ship emerging from a gate. Its hit box is the sprite's rect (+0x1a),
@@ -33,7 +33,7 @@
 //!
 //! With no ship under the pointer the stellars are tried, unless a jump is
 //! under way (+0x50 > 0, @0x381f2-0x3828d), with the click's box
-//! ([`Session::hover`](crate::Session::hover)). The test makes no sound and
+//! (`nova_sim::Session::hover`). The test makes no sound and
 //! targets nothing.
 
 use crate::catalog::StellarId;
@@ -122,7 +122,7 @@ mod tests {
     use super::*;
     use crate::cloak::{Cloak, CloakGear, FADE_FULL, UNTARGETABLE};
     use crate::stats::ShipStats;
-    use crate::testkit::npc;
+    use crate::traffic::fixture::npc;
     use crate::traffic::npc::Mode;
     use std::collections::BTreeMap;
 

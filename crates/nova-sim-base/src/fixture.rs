@@ -1,10 +1,33 @@
 //! Test support for the nova-sim crates' tests, behind the `fixture`
-//! feature: [`Chance`] mocks. [`Scripted`] follows a script, [`Draws`]
-//! draws from a queue, and [`Ranged`] draws by the range asked.
+//! feature: [`Chance`] mocks and a ship class's fields. [`Scripted`]
+//! follows a script, [`Draws`] draws from a queue, and [`Ranged`] draws by
+//! the range asked. [`FAST`] is a fast, light ship class.
 
 use std::collections::VecDeque;
 
 use crate::chance::{Chance, NeverFires};
+use crate::handling::ShipFields;
+
+/// A fast, light ship class: `Speed` 600, `Accel` 900, `Maneuver` 30,
+/// shield 30, armour 45, fuel 300 (no regeneration), 20 tons of hold,
+/// mass 40 with 30 free, `Contribute` bit 0x1 and no recharge or
+/// `Flags2`.
+pub const FAST: ShipFields = ShipFields {
+    speed: 600,
+    accel: 900,
+    maneuver: 30,
+    shield: 30,
+    armor: 45,
+    fuel: 300,
+    fuel_regen: 0,
+    holds: 20,
+    mass: 40,
+    free_mass: 30,
+    contribute: 0x1,
+    shield_rech: 0,
+    armor_rech: 0,
+    flags2: 0,
+};
 
 /// A [`Chance`] that answers and rolls from a script (no, and 0, once it
 /// runs out) and records each percent and each number of sides it is

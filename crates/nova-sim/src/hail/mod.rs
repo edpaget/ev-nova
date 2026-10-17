@@ -1,7 +1,7 @@
 //! Hailing a ship: the comm dialog's conversation, its options, and what
 //! they make the ship say and do.
 //!
-//! The player hails its target (see [`Session::hail`](crate::Session::hail));
+//! The player hails its target (see `nova_sim::Session::hail`);
 //! the ship answers with a ship comm string ([`reply`]) chosen by its
 //! [`Attitude`] ([`like`]), and a [`Conversation`] rolls its variant,
 //! mood, price and advice once ([`deal`]). The dialog lists the
@@ -36,7 +36,7 @@
 //! - *free help* ("Roadside Assistance"): `Flags2` 0x0010, or a rank of
 //!   the pilot's with `Flags` 0x0800 that reaches the ship's government;
 //! - *battle help*: a rank of the pilot's with `Flags` 0x0400 that
-//!   reaches the ship's government (see [`rank::favour`](crate::rank::favour),
+//!   reaches the ship's government (see [`favour`](crate::ai::favour),
 //!   by [`RuleKey::RankGovtReach`](crate::RuleKey::RankGovtReach));
 //! - *plunderer*: a warship or interceptor of `Flags` 0x1000;
 //! - *xenophobe*: `Flags` 0x0001.
@@ -54,12 +54,11 @@ pub mod reply;
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use crate::ai::{Goal, Surroundings};
+use crate::ai::{Favour, Goal, Surroundings};
 use crate::catalog::{GovtId, ShipId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::govt::{Governments, XENOPHOBIC};
-use crate::rank::Favour;
 use crate::rulebook::Rulebook;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -104,10 +103,10 @@ pub struct Dispositions {
     /// Its government is quiet.
     pub quiet: bool,
     /// It helps for free: its government's `Flags2` 0x0010, or a rank's
-    /// [`HELPS_FREE`](crate::rank::HELPS_FREE).
+    /// [`HELPS_FREE`](crate::ai::HELPS_FREE).
     pub free_help: bool,
     /// It fights a threat to the player for free: a rank's
-    /// [`HELPS_IN_BATTLE`](crate::rank::HELPS_IN_BATTLE).
+    /// [`HELPS_IN_BATTLE`](crate::ai::HELPS_IN_BATTLE).
     pub battle_help: bool,
     /// It is a warship or interceptor that plunders.
     pub plunderer: bool,
@@ -193,7 +192,7 @@ pub struct Hail<'a> {
     pub quote: Option<u16>,
     /// Whether the ship hailed is a person who may join the player's
     /// fleet: its record allows it
-    /// ([`offers_to_join`](crate::person::offers_to_join)), its
+    /// (`nova_sim::person::offers_to_join`), its
     /// `LinkMission` is available from a ship, and the fleet has room. The
     /// session sets it; none otherwise.
     pub joins: bool,
@@ -444,7 +443,7 @@ pub struct HailView {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortStatus {
     /// The wage a hired escort is paid a day, as
-    /// [`Session::with_rules`](crate::Session::with_rules)
+    /// `nova_sim::Session::with_rules`
     /// says; none for one not hired.
     pub wage: Option<i64>,
 }
@@ -555,12 +554,12 @@ impl HailOptions {
 pub(crate) mod fixture {
     use super::*;
     use crate::stats::ShipStats;
-    use crate::testkit::FAST;
     use crate::traffic::npc::AiType;
+    use nova_sim_base::fixture::FAST;
 
     /// NPC 1, a warship of no government, idle.
     pub(crate) fn ship() -> Npc {
-        let mut npc = crate::testkit::npc(1, ShipStats::new(FAST, &[]));
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
         npc.ai_type = AiType::Warship;
         npc
     }
@@ -593,11 +592,11 @@ pub(crate) mod fixture {
 mod tests {
     use super::fixture::{hail, ship};
     use super::*;
+    use crate::ai::{self, Favour, HELPS_FREE, HELPS_IN_BATTLE};
     use crate::catalog::{GovtRecord, RankId, RankRecord};
-    use crate::rank::{self, Favour, HELPS_FREE, HELPS_IN_BATTLE};
     use crate::rulebook::{RuleKey, RuleSource};
-    use crate::testkit::govt;
     use crate::traffic::npc::{AiType, NpcId};
+    use nova_sim_catalog::fixture::govt;
     use std::collections::BTreeSet;
 
     const G: GovtId = GovtId(140);
@@ -763,14 +762,14 @@ mod tests {
         let rank_of = |id, govt| RankRecord {
             affil_govt: Some(GovtId(govt)),
             flags: HELPS_IN_BATTLE | HELPS_FREE,
-            ..crate::testkit::rank(id)
+            ..nova_sim_catalog::fixture::rank(id)
         };
         let records = [rank_of(130, 141), rank_of(131, 140)];
         let made = |active: &[i16], ship_govt: i16, reach| {
             let mut npc = ship();
             npc.govt = Some(GovtId(ship_govt));
             let active: BTreeSet<RankId> = active.iter().copied().map(RankId).collect();
-            let favour = rank::favour(&records, &active, npc.govt, &govts, reach);
+            let favour = ai::favour(&records, &active, npc.govt, &govts, reach);
             let made = Dispositions::of(&npc, None, &govts, favour);
             (made.battle_help, made.free_help)
         };
@@ -788,7 +787,7 @@ mod tests {
         let govts = govts(0, FREE_HELP, (0, 0));
         let mut npc = ship();
         npc.govt = Some(G);
-        let favour = rank::favour(&[], &BTreeSet::new(), npc.govt, &govts, RuleSource::Engine);
+        let favour = ai::favour(&[], &BTreeSet::new(), npc.govt, &govts, RuleSource::Engine);
         let dispositions = Dispositions::of(&npc, None, &govts, favour);
         let needy = Hail {
             dispositions,
@@ -804,7 +803,7 @@ mod tests {
 
     /// NPC `id` of government 140, flying `goal`.
     fn flying(id: u32, goal: Goal) -> Npc {
-        let mut npc = crate::testkit::npc(id, crate::stats::ShipStats::default());
+        let mut npc = crate::traffic::fixture::npc(id, crate::stats::ShipStats::default());
         npc.govt = Some(G);
         npc.goal = goal;
         npc
@@ -840,7 +839,7 @@ mod tests {
     }
 
     fn talk() -> Conversation {
-        let mut chance = crate::testkit::Draws::of(&[3, 40, 1, 1, 0, 1]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[3, 40, 1, 1, 0, 1]);
         Conversation::open(100_000, false, 0xC000, &mut chance)
     }
 

@@ -16,7 +16,7 @@
 //!    peace (rank `Flags` 0x0100, `_PlayerBlessedByGovt(G, 0)` @0x821b9,
 //!    [`Surroundings::blessed`]), before the mission and legal tests
 //!    below: under either reading of `rank_govt_reach` and
-//!    `blessing_refresh`, as [`Session::blessing`](crate::Session::blessing)
+//!    `blessing_refresh`, as `nova_sim::Session::blessing`
 //!    takes them. Rule 1 still comes first, so a blessing excuses no ship
 //!    that threatens the player.
 //! 3. Any other mission's special ship (@0x821c6-0x8221e) likes it when
@@ -39,7 +39,7 @@
 //!
 //! The government byte +0x83 the original falls back to is the IFF
 //! byte, which the engine never sets. It is not the blessing, which is the
-//! government's byte +0x84 (see [`rank`](crate::rank)), read in rule 2.
+//! government's byte +0x84 (see `nova_sim::rank`), read in rule 2.
 //!
 //! The [`Attitude`] (the comm status, `_CommDialogUpdate` @0x90625) is
 //! hostile while the ship threatens the player as in rule 1,
@@ -48,8 +48,8 @@
 use crate::ai::Surroundings;
 use crate::govt::NOSY;
 use crate::hail::MissionHail;
-use crate::mission::goals::ShipGoal;
-use crate::mission::ships::ShipBehav;
+use crate::traffic::ShipBehav;
+use crate::traffic::ShipGoal;
 use crate::traffic::npc::Npc;
 
 /// How a hailed ship feels about the player.
@@ -126,11 +126,12 @@ mod tests {
     use crate::combat::ShipRef;
     use crate::escort::FormationSlot;
     use crate::govt::{Governments, XENOPHOBIC};
-    use crate::mission::goals::ShipGoal;
-    use crate::mission::ships::ShipBehav;
     use crate::stats::ShipStats;
-    use crate::testkit::{FAST, govt};
+    use crate::traffic::ShipBehav;
+    use crate::traffic::ShipGoal;
     use crate::traffic::npc::MissionMark;
+    use nova_sim_base::fixture::FAST;
+    use nova_sim_catalog::fixture::govt;
 
     const ME: GovtId = GovtId(140);
     const ALLY: GovtId = GovtId(141);
@@ -177,7 +178,7 @@ mod tests {
 
     /// A ship of `govt`, idle.
     fn ship(govt: Option<GovtId>) -> Npc {
-        let mut npc = crate::testkit::npc(1, ShipStats::new(FAST, &[]));
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
         npc.govt = govt;
         npc
     }
@@ -318,7 +319,7 @@ mod tests {
                 formation: FormationSlot::default(),
                 order: None,
             }),
-            ..crate::testkit::npc(5, ShipStats::new(FAST, &[]))
+            ..crate::traffic::fixture::npc(5, ShipStats::new(FAST, &[]))
         };
         let npcs = [escort];
         let led = Surroundings {
@@ -448,7 +449,7 @@ mod tests {
         Surroundings {
             player: Some(crate::ai::PlayerSide {
                 blessing: blessed
-                    .map_or(crate::rank::Blessing::NONE, crate::ai::fixture::blessing_of),
+                    .map_or(crate::ai::Blessing::NONE, crate::ai::fixture::blessing_of),
                 ..crate::ai::fixture::player(0.0, 0.0)
             }),
             ..*around

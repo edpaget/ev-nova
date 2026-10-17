@@ -46,8 +46,9 @@ mod tests {
     use crate::catalog::{StellarId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
-    use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::AiType;
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::weapon;
 
     #[test]
     fn a_wimpy_trader_goes_about_its_business() {

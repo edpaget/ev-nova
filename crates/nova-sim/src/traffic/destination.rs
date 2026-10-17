@@ -154,7 +154,7 @@ mod tests {
     use super::*;
     use crate::catalog::GovtRecord;
     use crate::gate::{HYPERGATE, WORMHOLE};
-    use crate::testkit::{govt, planet};
+    use nova_sim_catalog::fixture::{govt, planet};
 
     const SHIP: Option<GovtId> = Some(GovtId(128));
     const FOE: Option<GovtId> = Some(GovtId(129));

@@ -655,7 +655,7 @@ mod tests {
     /// NPC `id` of `class` at (`x`, `y`), attacking the player when
     /// `threat`.
     fn ship(id: u32, class: EscortClass, x: f32, y: f32, threat: bool) -> Npc {
-        let mut npc = crate::testkit::npc(id, crate::stats::ShipStats::default());
+        let mut npc = crate::traffic::fixture::npc(id, crate::stats::ShipStats::default());
         npc.class = class;
         npc.state.position = Vec2::new(x, y);
         if threat {
@@ -832,7 +832,7 @@ mod tests {
         mission_escort.mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 0,
-            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            behav: crate::traffic::ShipBehav::EscortPlayer,
             formation: Some(FormationSlot::default()),
         });
         for candidate in [&escort, &fellow, &calm, &mission_escort] {

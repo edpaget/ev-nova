@@ -128,9 +128,9 @@ use super::reply::{
 use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
 use crate::catalog::GovtId;
 use crate::chance::Chance;
-use crate::mission::ships::ShipBehav;
-use crate::person::COMM_QUOTES;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::traffic::COMM_QUOTES;
+use crate::traffic::ShipBehav;
 
 /// Greetings' label, `STR#` 150 #22.
 pub const GREETINGS: &str = "Greetings";
@@ -515,7 +515,7 @@ mod tests {
     use super::*;
     use crate::ai::Goal;
     use crate::combat::ShipRef;
-    use crate::mission::goals::ShipGoal;
+    use crate::traffic::ShipGoal;
     use crate::traffic::npc::{AiType, Npc, NpcId};
 
     /// A chance that a test never expects drawn on.
@@ -969,7 +969,7 @@ mod tests {
 
     /// NPC `id`, attacking the player when `threat`, else idle.
     fn other(id: u32, threat: bool) -> Npc {
-        let mut npc = crate::testkit::npc(id, crate::stats::ShipStats::default());
+        let mut npc = crate::traffic::fixture::npc(id, crate::stats::ShipStats::default());
         if threat {
             npc.goal = Goal::Attack(ShipRef::Player);
         }
@@ -995,7 +995,7 @@ mod tests {
     /// How Request Assistance answers `hail`, drawing `draws`, and the
     /// draws asked.
     fn press_drawing(hail: &Hail, draws: &[u32]) -> (Answer, Vec<u32>) {
-        let mut chance = crate::testkit::Draws::of(draws);
+        let mut chance = nova_sim_base::fixture::Draws::of(draws);
         let answer = RequestAssistance::default().press(hail, &mut chance);
         (answer, chance.asked)
     }

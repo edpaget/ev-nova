@@ -122,7 +122,7 @@ pub enum Standing {
 /// How `npc`, led by `leader` (the ship its [`leader`](Npc::leader)
 /// names, if it is in the system), among `npcs`, stands for its
 /// brackets, in `_HandleWeapTargetSprites`'s order (@0x2ffac-0x30021):
-/// disabled (`_IsDisabled`, as [`iff::ship_iff`](crate::iff::ship_iff)
+/// disabled (`_IsDisabled`, as `nova_sim::iff::ship_iff`
 /// reads it); else the player's escort or a ship one leads, the
 /// parent/grandparent rule of `_ColorCodeShip` (@0x4b46-0x4b8f); else a
 /// threat to the player or a ship the player leads (`_IsThreatToPlayer`
@@ -180,7 +180,7 @@ mod tests {
     use crate::combat::ShipRef;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::stats::ShipStats;
-    use crate::testkit::npc;
+    use crate::traffic::fixture::npc;
 
     /// The expand drawn after each of `steps` steps.
     fn steps(fly_in: &mut FlyIn, steps: usize) -> Vec<f32> {

@@ -43,10 +43,10 @@
 //!   lead's (`_HandleShip` @0x34c68-0x34ce6;
 //!   [`TopSpeeds::burst_cap`](crate::traffic::autopilot::TopSpeeds::burst_cap)).
 //!   The lead of a ship the player leads is the player, at its
-//!   `_ShipMaxSpeed` (see [`top_speed`](crate::top_speed)); a fleet
+//!   `_ShipMaxSpeed` (see `nova_sim::top_speed`); a fleet
 //!   escort's is its fleet lead. A ship the
 //!   player leads, made to come out of the exit gate after the player
-//!   (see [`session::gate_escorts`](crate::session)), starts at
+//!   (see the session's `gate_escorts` module), starts at
 //!   [`LED_EXIT_SPEED`] instead: `_AIMakeShipEmergeFromHyperGate` sets
 //!   -15.0 for leader 0 and -30.0 otherwise (@0x895aa-0x895bd), and the
 //!   burst slows from there at the same rate.
@@ -187,7 +187,8 @@ mod tests {
     use crate::gate::{HYPERGATE, WORMHOLE};
     use crate::govt::{AVOIDS_HYPERGATES, PREFERS_HYPERGATES, PREFERS_WORMHOLES};
     use crate::landing::StellarFlags;
-    use crate::testkit::{Draws, govt, planet};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::{govt, planet};
 
     #[test]
     fn a_led_burst_starts_at_15_and_slows_by_the_same_rate() {

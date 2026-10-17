@@ -44,7 +44,7 @@ pub fn fill_digits(line: &str, chance: &mut (impl Chance + ?Sized)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::Draws;
+    use nova_sim_base::fixture::Draws;
 
     #[test]
     fn a_line_without_a_hash_is_kept_and_draws_nothing() {

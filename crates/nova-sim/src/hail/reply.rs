@@ -49,9 +49,9 @@
 
 use super::like::Attitude;
 use crate::catalog::CommCatalog;
-use crate::mission::goals::ShipGoal;
-use crate::mission::ships::ShipBehav;
 use crate::rulebook::RuleSource;
+use crate::traffic::ShipBehav;
+use crate::traffic::ShipGoal;
 
 /// How many variants each group of ship comm strings has.
 pub const VARIANTS: u8 = 5;
@@ -297,8 +297,8 @@ pub fn advice_fallback(line: &str, long_advice: RuleSource) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mission::goals::ShipGoal;
-    use crate::mission::ships::ShipBehav;
+    use crate::traffic::ShipBehav;
+    use crate::traffic::ShipGoal;
 
     /// `STR#` 3000 is "c<n>" for each string n up to 200, and 3001 "d<n>"
     /// up to 20; 2002 #175 is "Greetings."; 7000 holds `line` as #1, a

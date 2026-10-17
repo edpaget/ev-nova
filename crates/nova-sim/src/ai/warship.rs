@@ -401,8 +401,9 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::govt::Governments;
     use crate::rulebook::RuleSource;
-    use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::{AiType, NpcId};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::weapon;
 
     const P: ShipRef = ShipRef::Player;
 
@@ -1385,7 +1386,7 @@ mod tests {
 
     #[test]
     fn a_0x0040_ship_holding_a_grudge_turns_on_the_player_again_after_its_word_drops_it() {
-        let grudge = crate::person::GRUDGE;
+        let grudge = crate::traffic::GRUDGE;
         let mut grudger = attacking(P);
         grudger.person = Some(crate::traffic::npc::NpcPerson {
             flags: grudge,

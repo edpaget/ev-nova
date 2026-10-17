@@ -8,7 +8,7 @@
 //!
 //! - **Setup** ([`initial`]) makes `AvgShips` passes. Each first rolls
 //!   for a person ([`PersonRules::roll`],
-//!   see [`person`](crate::person)): a person who may appear is placed as
+//!   see `nova_sim::person`): a person who may appear is placed as
 //!   a `düde` ship is, an empty roll brings nothing that pass, and no
 //!   person goes on to a `LinkSyst` fleet (`Rand(7) == 0`, [`link_fleet`]),
 //!   else one `düde` ship, placed in the system already: x and y each
@@ -111,9 +111,9 @@
 //!
 //! # Mission ships
 //!
-//! An active mission's special ships ([`SpecialShips`](crate::mission::SpecialShips))
+//! An active mission's special ships (`nova_sim::mission::SpecialShips`)
 //! are resolved as it is accepted: their system from `ShipSyst`
-//! ([`select_ship_system`](crate::mission::ships::select_ship_system)),
+//! (`nova_sim::mission::ships::select_ship_system`),
 //! their name and subtitle, and, for a `ShipStart` above 0, their appear
 //! timer. Each ship carries its mission's mark ([`MissionMark`], the
 //! original's ship +0xc8d2: the slot and its `ShipBehav`). They come in
@@ -153,7 +153,7 @@
 //!   `ShipStart` 1 and 2 start the timer at accept, so they come this way
 //!   first; once it has run out, a later setup brings them in place.
 //!   The enter-system hook restarts the timer for `ShipStart` 1 (see the
-//!   session's `mission_ships` module and the [`story`](crate::story)
+//!   session's `mission_ships` module and the `nova_sim::story`
 //!   module's "One arrival").
 //! - **In a person's place** (`_HandlePlayerCommunication`
 //!   @0x62421-0x6252f): a person of `Flags` 0x0040 whose mission is
@@ -182,7 +182,7 @@
 //! # Auxiliary ships
 //!
 //! A mission's auxiliary ships (`AuxShipCount` of its `AuxShipDude`, see
-//! [`mission::aux_ships`](crate::mission::aux_ships)) are ordinary traffic: each
+//! `nova_sim::mission::aux_ships`) are ordinary traffic: each
 //! comes through `_SpecificDudeSpawn` (@0x3d0eb, [`arriving_aux_ships`]),
 //! not `_MissionDudeSpawn`, with no mission mark, so it counts toward no
 //! goal and gets none of a special ship's handling. It carries only its
@@ -229,6 +229,7 @@
 
 use std::collections::BTreeSet;
 
+use super::persons::{PersonRoll, PersonRules, PersonWorld, aggression_of};
 use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::control::Gate;
@@ -237,10 +238,8 @@ use crate::gate::exit_heading;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::market::Good;
-use crate::mission::ShipGoal;
-use crate::mission::ships::{ShipBehav, ShipStart};
-use crate::person::{PersonRoll, PersonRules, PersonWorld, aggression_of};
 use crate::rulebook::RuleSource;
+use crate::traffic::ShipGoal;
 use crate::traffic::emerge::{
     EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, emerge_stellar,
 };
@@ -248,9 +247,10 @@ use crate::traffic::npc::{AiType, MissionMark};
 use crate::traffic::table::{
     ShipKind, SpawnDude, SpawnPerson, SpawnTable, appearing_ship_types, dude_ship_type, pick,
 };
+use crate::traffic::{ShipBehav, ShipStart};
 
 /// `Rand(7) == 0`: a person, rather than anything else, by the engine
-/// (see [`person`](crate::person)).
+/// (see `nova_sim::person`).
 pub const PERSON_ODDS: u32 = 7;
 /// `Rand(7) == 0`: a `LinkSyst` fleet, rather than a `düde` ship.
 pub const FLEET_ODDS: u32 = 7;
@@ -440,7 +440,7 @@ impl<'a> PersonDraw<'a> {
     }
 
     /// The persons of `table` who may appear, `arriving` by hyperspace or
-    /// not, in ascending ID (see [`person`](crate::person)).
+    /// not, in ascending ID (see `nova_sim::person`).
     #[must_use]
     pub fn eligible(&self, table: &SpawnTable, arriving: bool) -> Vec<PersonId> {
         table
@@ -753,7 +753,7 @@ pub struct MissionSpawn<'a> {
     /// position, none for an empty slot.
     pub nav: &'a [Option<Vec2>],
     /// The one ship type every ship flies (the slot's +0x56, its
-    /// [`uniform_type`](crate::mission::SpecialShips::uniform_type)),
+    /// `nova_sim::mission::SpecialShips::uniform_type`),
     /// drawing none; none to draw one for each.
     pub preset: Option<ShipId>,
     /// Whether its time has run out: its days left 0 (the slot's +0x48 in
@@ -1025,7 +1025,7 @@ pub fn arriving_aux_ships(
 /// `spawn`'s one ship swapped in for a person whose mission was just
 /// accepted on its hail (`_HandlePlayerCommunication` @0x6244b-0x624e5):
 /// brought in as `mission_dude_ship` brings it, its type `preset` when
-/// given ([`swapped_ship_type`](crate::mission::ships::swapped_ship_type)),
+/// given (`nova_sim::mission::ships::swapped_ship_type`),
 /// then given the person's `state` (position +0x18, velocity +0x20,
 /// heading +0x44), not gliding in and never cloaked. `spawn`'s count and
 /// start are not read. For a `ShipGoal` 3 it is [`held`](NewShip::held):
@@ -1111,7 +1111,7 @@ pub fn link_fleet(
 /// The whole fleet is rolled, even the ships that will find no ship-table
 /// slot: the cap (`_GenericRandomShipSpawn` giving -1 for the lead
 /// @0x41d02 or an escort @0x421b9) is applied as the traffic places them
-/// ([`Traffic`](crate::Traffic)'s `add`), in the same call and before any
+/// ([`Traffic`](crate::traffic::Traffic)'s `add`), in the same call and before any
 /// frame, so the draws it makes for them change nothing the player sees.
 pub fn fleet(
     table: &SpawnTable,
@@ -1396,11 +1396,12 @@ mod tests {
     use crate::control::{Test, TestExpr};
     use crate::handling::ShipFields;
     use crate::market::Good;
-    use crate::person::{NovaPersons, PersonWorld};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
-    use crate::testkit::{AllowAll, Draws, FAST, RefuseBits, person};
+    use crate::traffic::persons::{NovaPersons, PersonWorld};
     use crate::traffic::table::SpawnPerson;
+    use nova_sim_base::fixture::{Draws, FAST};
+    use nova_sim_catalog::fixture::{AllowAll, RefuseBits, person};
 
     /// The person draw of a world without persons gone or grudging, by
     /// the engine.
@@ -3301,9 +3302,9 @@ mod tests {
     }
 
     /// The player's escorts that are persons `ids`.
-    fn fleet_of(ids: &[i16]) -> Vec<crate::pilot::Escort> {
+    fn fleet_of(ids: &[i16]) -> Vec<crate::fleet::Escort> {
         ids.iter()
-            .map(|&id| crate::pilot::Escort {
+            .map(|&id| crate::fleet::Escort {
                 ship: ShipId(201),
                 reserves: kind(3, FAST).stats.full(),
                 order: None,
@@ -4201,11 +4202,11 @@ mod tests {
     /// ships out on `exit_angle`.
     fn gated(exit_angle: i16) -> [LandingSite; 2] {
         [
-            crate::testkit::planet(128, 0.0, 0.0),
+            nova_sim_catalog::fixture::planet(128, 0.0, 0.0),
             LandingSite {
                 flags2: crate::gate::HYPERGATE,
                 exit_angle,
-                ..crate::testkit::planet(129, 300.0, -400.0)
+                ..nova_sim_catalog::fixture::planet(129, 300.0, -400.0)
             },
         ]
     }
@@ -4270,14 +4271,14 @@ mod tests {
     fn a_ship_of_a_government_preferring_wormholes_comes_out_of_one() {
         let govts = Governments::new([crate::catalog::GovtRecord {
             flags2: crate::govt::PREFERS_WORMHOLES,
-            ..crate::testkit::govt(130)
+            ..nova_sim_catalog::fixture::govt(130)
         }]);
         let sites = [
-            crate::testkit::planet(128, 0.0, 0.0),
+            nova_sim_catalog::fixture::planet(128, 0.0, 0.0),
             LandingSite {
                 flags2: crate::gate::WORMHOLE,
                 exit_angle: 180,
-                ..crate::testkit::planet(129, 300.0, -400.0)
+                ..nova_sim_catalog::fixture::planet(129, 300.0, -400.0)
             },
         ];
         let stellars = Stellars {
@@ -4496,16 +4497,16 @@ mod tests {
             crate::catalog::GovtRecord {
                 classes: [1, -1, -1, -1],
                 enemies: [2, -1, -1, -1],
-                ..crate::testkit::govt(130)
+                ..nova_sim_catalog::fixture::govt(130)
             },
             crate::catalog::GovtRecord {
                 classes: [2, -1, -1, -1],
-                ..crate::testkit::govt(129)
+                ..nova_sim_catalog::fixture::govt(129)
             },
         ]);
         let planets = [
-            crate::testkit::planet(128, 0.0, 0.0),
-            crate::testkit::planet(130, 500.0, 0.0),
+            nova_sim_catalog::fixture::planet(128, 0.0, 0.0),
+            nova_sim_catalog::fixture::planet(130, 500.0, 0.0),
         ];
         for (index, (scenario, draws)) in scenarios().into_iter().enumerate() {
             let before = run(scenario, Stellars::NONE, draws);

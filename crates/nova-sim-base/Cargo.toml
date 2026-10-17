@@ -12,7 +12,8 @@ publish.workspace = true
 
 [features]
 # Exposes the test support in `fixture` (the `Chance` mocks: `Scripted`,
-# `Draws` and `Ranged`) to the tests of the nova-sim crates above.
+# `Draws` and `Ranged`; and the `FAST` ship class) to the tests of the
+# nova-sim crates above.
 fixture = []
 
 [lints]

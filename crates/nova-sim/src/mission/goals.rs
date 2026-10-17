@@ -16,49 +16,7 @@ use super::screens::HIDDEN;
 use super::ships::ShipStart;
 use crate::rulebook::RuleSource;
 
-/// A mission's `ShipGoal`, read: what the player must do to its special
-/// ships.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ShipGoal {
-    /// -1: none.
-    None,
-    /// 0: destroy them all.
-    Destroy,
-    /// 1: disable them all, destroying none.
-    Disable,
-    /// 2: board them all.
-    Board,
-    /// 3: escort them: met while one is with the player, failed once one
-    /// is destroyed or disabled. A person's hail reads it to offer to join
-    /// the player (`_HandlePlayerCommunication` @0x624f6).
-    Escort,
-    /// 4: observe one.
-    Observe,
-    /// 5: rescue them all, by boarding them.
-    Rescue,
-    /// 6: chase them off: make them leave the system, or destroy them.
-    ChaseOff,
-    /// Any other code: nothing to do, and nothing checked.
-    Other,
-}
-
-impl ShipGoal {
-    /// The `ShipGoal` `code` names.
-    #[must_use]
-    pub const fn from_code(code: i16) -> Self {
-        match code {
-            -1 => Self::None,
-            0 => Self::Destroy,
-            1 => Self::Disable,
-            2 => Self::Board,
-            3 => Self::Escort,
-            4 => Self::Observe,
-            5 => Self::Rescue,
-            6 => Self::ChaseOff,
-            _ => Self::Other,
-        }
-    }
-}
+pub use crate::traffic::ShipGoal;
 
 /// What one check of a mission's ship goals reads: its `mïsn`'s
 /// `ShipGoal`, `ShipCount`, `ShipStart` and `Flags`, the counts its slot keeps, where

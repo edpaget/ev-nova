@@ -44,7 +44,7 @@
 //!   when the player boards a ship, after the crime
 //!   (`_HandlePlayerBoardAttempt`), so the session queues a strike of no
 //!   damage, direct and intended, for a boarding
-//!   ([`Session::board`](crate::Session::board)), which the blessing
+//!   (`nova_sim::Session::board`), which the blessing
 //!   holds back alike.
 //!   The Bible's "piracy police" are the interceptors alone: "acts as
 //!   'piracy police' by attacking any ship that fires on or attempts to
@@ -193,8 +193,9 @@ mod tests {
     use crate::govt::{DERELICT, Governments, IGNORED_WHEN_ATTACKED, NOSY, XENOPHOBIC};
     use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
-    use crate::testkit::{FAST, govt};
     use crate::traffic::npc::{AiType, Mode, NpcId};
+    use nova_sim_base::fixture::FAST;
+    use nova_sim_catalog::fixture::govt;
 
     const TRADERS: GovtId = GovtId(140);
     const POLICE: GovtId = GovtId(141);
@@ -235,7 +236,7 @@ mod tests {
 
     /// NPC `id` of `govt` and `ai_type` at (`x`, 0), facing up.
     fn ship(id: u32, govt: Option<GovtId>, ai_type: AiType, x: f32) -> Npc {
-        let mut npc = crate::testkit::npc(id, ShipStats::new(FAST, &[]));
+        let mut npc = crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]));
         npc.govt = govt;
         npc.ai_type = ai_type;
         npc.state.position = Vec2::new(x, 0.0);
@@ -693,7 +694,7 @@ mod tests {
         govts: &Governments,
         w: Option<GovtId>,
         victim: Option<GovtId>,
-        blessing: crate::rank::Blessing,
+        blessing: crate::ai::Blessing,
         damage: f32,
     ) -> Reaction {
         let npcs = [
@@ -719,7 +720,7 @@ mod tests {
     fn a_blessing_government_is_no_good_samaritan() {
         let govts = relations(0, 0);
         let blessed = crate::ai::fixture::blessing_of(POLICE);
-        let unblessed = crate::rank::Blessing::NONE;
+        let unblessed = crate::ai::Blessing::NONE;
         for (damage, case) in [(12.0, "a shot"), (0.0, "a boarding")] {
             assert_eq!(
                 samaritan_blessed(&govts, Some(POLICE), Some(TRADERS), unblessed, damage),

@@ -54,9 +54,9 @@
 use std::collections::BTreeMap;
 
 use crate::cargo_box::CargoBoxes;
+use crate::catalog::outfit_mods;
 use crate::catalog::{BOX_GRAPHICS, JunkId, OutfitId, OutfitRecord};
 use crate::geometry::Vec2;
-use crate::outfitter::outfit_mods;
 use crate::ship_layer::{ShipLayer, disabled};
 use crate::traffic::npc::{Npc, NpcHold};
 
@@ -166,7 +166,7 @@ impl BoxFrames {
 /// farther than `radius` from the frame's rectangle. This is the engine's
 /// approximation of `_SWRLECollision` (@0x3710c), which tests the two
 /// sprites pixel by pixel; the engine has no pixel masks, as
-/// [`story`](crate::story) approximates it for stellars.
+/// `nova_sim::story` approximates it for stellars.
 #[must_use]
 pub fn touches(ship_at: Vec2, radius: f32, box_at: Vec2, half: Vec2) -> bool {
     let off = ship_at - box_at;
@@ -215,10 +215,11 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::market::Good;
-    use crate::mission::ships::ShipBehav;
     use crate::stats::ShipStats;
-    use crate::testkit::{npc, outfit};
+    use crate::traffic::ShipBehav;
+    use crate::traffic::fixture::npc;
     use crate::traffic::npc::{MissionMark, NpcHold, NpcId};
+    use nova_sim_catalog::fixture::outfit;
 
     fn owning(outfits: &[(i16, u16)]) -> BTreeMap<OutfitId, u16> {
         outfits.iter().map(|&(id, n)| (OutfitId(id), n)).collect()

@@ -31,7 +31,7 @@
 //!   | neutral, or none | only with `Flags` 0x0002: L < -2 T |
 //!
 //! The blessing is the deciding ship's own government's, as
-//! [`Session::blessing`](crate::Session::blessing) takes it under either
+//! `nova_sim::Session::blessing` takes it under either
 //! reading of `rank_govt_reach` and `blessing_refresh`; another
 //! government's blessing changes nothing here. The player carries no IFF
 //! scrambler (+0x83, @0x8aa13), and its ship has no combat government, so
@@ -47,7 +47,7 @@
 //! 1. **Keep** the live ship it attacks or flees from.
 //! 2. **A grudge** (`_SelectWarshipTarget` @0x89ebc-0x89f20): a person
 //!    whose `Flags` has 0x0001 and who holds a grudge against the player
-//!    (see [`person`](crate::person)) picks the player, while it is in
+//!    (see `nova_sim::person`) picks the player, while it is in
 //!    the system and not breaking up, unless it spares it. It reads no
 //!    blessing: a blessing government's person with a grudge still takes
 //!    the player. It turns on the player through `_AIMakeShipAttackPlayer`
@@ -127,10 +127,10 @@ use crate::ai::{Surroundings, fire};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, NOSY};
-use crate::mission::ships::ShipBehav;
-use crate::person::GRUDGE;
 #[cfg(doc)]
 use crate::rulebook::RuleKey;
+use crate::traffic::GRUDGE;
+use crate::traffic::ShipBehav;
 use crate::traffic::npc::Npc;
 
 /// How far, in pixels on either axis per point of aggression, a warship
@@ -415,6 +415,7 @@ pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::Blessing;
     use crate::ai::fixture::blessing_of;
     use crate::ai::{Goal, PlayerSide};
     use crate::catalog::{GovtId, GovtRecord, WeaponRecord};
@@ -424,11 +425,11 @@ mod tests {
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::govt::{Governments, XENOPHOBIC};
-    use crate::rank::Blessing;
     use crate::reserves::Reserves;
     use crate::stats::ShipStats;
-    use crate::testkit::{FAST, govt, weapon};
     use crate::traffic::npc::{Mode, NpcId};
+    use nova_sim_base::fixture::FAST;
+    use nova_sim_catalog::fixture::{govt, weapon};
 
     const ME: GovtId = GovtId(140);
     const ALLY: GovtId = GovtId(141);
@@ -480,7 +481,7 @@ mod tests {
     /// armed with a harmless gun of unlimited ammunition (so it is not
     /// dry, and holds no destroying weapon).
     fn ship(id: u32, govt: GovtId, x: f32, y: f32) -> Npc {
-        let mut npc = crate::testkit::npc(id, ShipStats::new(FAST, &[]));
+        let mut npc = crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]));
         npc.armament = Armament::new([(WeaponSpec::new(&weapon(127)), 1)]);
         npc.govt = Some(govt);
         npc.state.position = Vec2::new(x, y);
@@ -1279,7 +1280,7 @@ mod tests {
 
     #[test]
     fn a_person_holding_a_grudge_picks_the_player_before_any_other() {
-        let grudge = crate::person::GRUDGE;
+        let grudge = crate::traffic::GRUDGE;
         assert_eq!(grudge_target(grudge, true, false, None, true), Some(P));
         assert_eq!(
             grudge_target(grudge, false, false, None, true),
@@ -1338,7 +1339,7 @@ mod tests {
         let mut grudger = dry();
         grudger.person = Some(crate::traffic::npc::NpcPerson {
             id: crate::catalog::PersonId(510),
-            flags: crate::person::GRUDGE,
+            flags: crate::traffic::GRUDGE,
             coward: 0,
             comm_quote: -1,
             hail_quote: -1,
@@ -1398,7 +1399,7 @@ mod tests {
         hunter.spared = spared;
         hunter.mission = Some(crate::traffic::npc::MissionMark {
             slot: 0,
-            behav: crate::mission::ships::ShipBehav::AttackPlayer,
+            behav: crate::traffic::ShipBehav::AttackPlayer,
             formation: None,
             order: None,
         });
@@ -1478,7 +1479,7 @@ mod tests {
         let mut hunter = dry();
         hunter.mission = Some(crate::traffic::npc::MissionMark {
             slot: 0,
-            behav: crate::mission::ships::ShipBehav::AttackPlayer,
+            behav: crate::traffic::ShipBehav::AttackPlayer,
             formation: None,
             order: None,
         });
@@ -1625,7 +1626,7 @@ mod tests {
     fn a_grudge_or_a_shipbehav_0_hunter_takes_a_blessed_player() {
         let blessed = blessing_of(ME);
         assert_eq!(
-            grudge_target_blessed(crate::person::GRUDGE, true, false, None, true, blessed),
+            grudge_target_blessed(crate::traffic::GRUDGE, true, false, None, true, blessed),
             Some(P)
         );
         assert_eq!(
@@ -1660,7 +1661,7 @@ mod tests {
             })
         };
         let none = Blessing::NONE;
-        let grudge = crate::person::GRUDGE;
+        let grudge = crate::traffic::GRUDGE;
         assert_eq!(
             grudge_pick(grudge, true, false, None, true, none),
             turns(P),

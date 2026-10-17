@@ -2,7 +2,7 @@
 //! @0x7e46e in the `EV Nova` executable): whether it goes on
 //! ([`goes_on`]), and the contraband it finds after the mission cargo
 //! ([`contraband`]). The mission cargo's own part is
-//! [`mission::cargo::scan`](crate::mission::cargo::scan); the session
+//! `nova_sim::mission::cargo::scan`; the session
 //! runs the three in order (its `mission_cargo` module).
 //!
 //! # The gates
@@ -257,7 +257,8 @@ pub fn contraband(
 mod tests {
     use super::*;
     use crate::catalog::Penalties;
-    use crate::testkit::{Draws, govt, outfit};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::{govt, outfit};
 
     /// A government with a `SmugPenalty` of 5, scanning for bit 0x0004,
     /// fining `fine`.

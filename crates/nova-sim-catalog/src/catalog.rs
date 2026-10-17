@@ -18,6 +18,7 @@ use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::warp::SoundLength;
+use nova_sim_base::fuel::OutfitMod;
 
 /// A new pilot's start, from the first `chär`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -2185,6 +2186,23 @@ pub fn tally(items: impl IntoIterator<Item = (OutfitId, u16)>) -> BTreeMap<Outfi
     }
     outfits.retain(|_, count| *count > 0);
     outfits
+}
+
+/// Every mod of the outfits `owned`, each record's four `ModType`s and
+/// `ModVal`s with how many are owned. An outfit with no record has none.
+#[must_use]
+pub fn outfit_mods(owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> Vec<OutfitMod> {
+    records
+        .iter()
+        .filter_map(|record| Some((record, *owned.get(&record.id)?)))
+        .flat_map(|(record, count)| {
+            record.mods.map(|(mod_type, mod_val)| OutfitMod {
+                mod_type,
+                mod_val,
+                count,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

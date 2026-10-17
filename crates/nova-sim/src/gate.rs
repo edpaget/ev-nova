@@ -49,7 +49,7 @@
 //! - A hypergate's link resolves owner-first: its owner when it has one,
 //!   the player's system holding one it lists that no system owns, else
 //!   `_FindSystemFromStellar`
-//!   ([`OverlaidGalaxy::system_of`](crate::story::OverlaidGalaxy::system_of)),
+//!   (`nova_sim::story::OverlaidGalaxy::system_of`),
 //!   then the visible system standing for it (`_FindActiveCoLocatedSystem`,
 //!   -1 for -1, @0x4be8). `_DrawMap` (@0xf1f8-0xf21a), `_DoSystemMap`
 //!   (@0x12ff2-0x13011) and `_PlayerEnterHypergate` (@0x638cd-0x638ff)
@@ -60,11 +60,11 @@
 //!   ([`hypergate_cycle`], [`next_gate_pick`]), calls
 //!   `_FindSystemFromStellar` directly, unresolved by place.
 //! - A wormhole reads the owner alone, never `_FindSystemFromStellar`
-//!   ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)),
+//!   (`nova_sim::story::OverlaidGalaxy::holder`),
 //!   and the ship comes out in the exit's owner (@0x642a7).
 //!
 //! The exit is then entered as every arrival is (see the
-//! [`story`](crate::story) module's "Galaxy overlay").
+//! `nova_sim::story` module's "Galaxy overlay").
 //!
 //! A mission's special ships following the player (`ShipSyst` -6) come
 //! out of the exit gate after it, or are lost, as the `gövt` `Flags2`
@@ -179,7 +179,7 @@ fn exits<'a>(links: &[Option<StellarId>; 8], sites: &'a [GateSite]) -> Vec<&'a G
 
 /// The systems a hypergate with `links` offers on the overlaid `map`: each
 /// linked gate's system, as `system_of` resolves it owner-first
-/// ([`OverlaidGalaxy::system_of`](crate::story::OverlaidGalaxy::system_of)),
+/// (`nova_sim::story::OverlaidGalaxy::system_of`),
 /// then as the visible system standing for it
 /// ([`Places::stand_in`](crate::hyperspace::Places::stand_in)), in slot
 /// order, each once. A link to a stellar no system lists, one that
@@ -227,7 +227,7 @@ pub fn hypergate_exit<'a>(
 /// hypergate with `links`, as `_MapFilter` lists them (@0x13d58-0x13daa):
 /// each link that counts, in slot order, as `find` gives its system,
 /// `_FindSystemFromStellar` unresolved by place
-/// ([`OverlaidGalaxy::find_system_from_stellar`](crate::story::OverlaidGalaxy::find_system_from_stellar));
+/// (`nova_sim::story::OverlaidGalaxy::find_system_from_stellar`);
 /// a link no system lists gives `None`, and stays in the list.
 #[must_use]
 pub fn hypergate_cycle(
@@ -280,7 +280,7 @@ pub struct WormholeExit<'a> {
 /// on `chance`; `None` when it leads nowhere (see the module docs).
 /// `owner_of` gives a stellar's owner, the player's system holding one it
 /// lists that no system owns
-/// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
+/// (`nova_sim::story::OverlaidGalaxy::holder`):
 /// `_PlayerEnterWormhole` reads only the owner (@0x64005-0x642a7).
 ///
 /// With links, `chance` rolls over the slots whose stellar some system
@@ -382,7 +382,8 @@ mod tests {
     use super::*;
     use crate::geometry::Vec2;
     use crate::hyperspace::CoLocated;
-    use crate::testkit::{Scripted, star};
+    use nova_sim_base::fixture::Scripted;
+    use nova_sim_catalog::fixture::star;
 
     #[test]
     fn the_next_gate_pick_steps_on_and_shift_steps_back_each_wrapping() {

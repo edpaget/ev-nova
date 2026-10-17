@@ -18,10 +18,12 @@
 //! - The persons ([`SpawnPerson`]) kept are those whose `LinkSyst`
 //!   allows the system ([`PersonLink`]), whom one of its Person slots
 //!   names, or who escorts the player, and whose ship type has a record,
-//!   each flying its ship as [`person::fit`] fits it.
+//!   each flying its ship as [`persons::fit`] fits it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::persons::{self, PersonLink, PersonRules};
+use crate::catalog::outfit_mods;
 use crate::catalog::{
     DudeId, DudeRecord, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId,
     ShipRecord, SystemId, TrafficCatalog, tally,
@@ -33,8 +35,6 @@ use crate::combat::hull::{Condition, HullSpec};
 use crate::control::{Gate, Test};
 use crate::escort::EscortClass;
 use crate::govt::Governments;
-use crate::outfitter::outfit_mods;
-use crate::person::{self, PersonLink, PersonRules};
 use crate::reserves::Reserves;
 use crate::self_repair;
 use crate::stats::ShipStats;
@@ -267,14 +267,14 @@ pub struct ShipKind {
     /// [`spawn::fleet`](crate::traffic::spawn::fleet)).
     pub holds: u16,
     /// The `shïp`'s own `Armor` (+0x60), before its default items: what a
-    /// derelict's armour is cut from ([`derelict_armor`](crate::person::derelict_armor)).
+    /// derelict's armour is cut from ([`derelict_armor`](crate::traffic::persons::derelict_armor)).
     /// A person's fitted ship keeps its ship type's, unscaled by its
     /// `ShieldMod` (+0x76 → +0x60).
     pub base_armor: f32,
 }
 
 /// A person as the traffic spawns it: its record, whether its `LinkSyst`
-/// allows the system, the ship it flies, fitted (see [`person::fit`]),
+/// allows the system, the ship it flies, fitted (see [`persons::fit`]),
 /// the reserves and condition it starts in, and whether its government
 /// is derelict.
 #[derive(Clone, Debug, PartialEq)]
@@ -518,7 +518,7 @@ fn persons(
             }
             let ship = ships.iter().find(|ship| Some(ship.id) == record.ship)?;
             let derelict = govts.derelict(record.govt);
-            let (kind, reserves, condition) = person::fit(
+            let (kind, reserves, condition) = persons::fit(
                 &kind(ship, outfits, arsenal),
                 &record,
                 arsenal,
@@ -575,10 +575,11 @@ mod tests {
     };
     use crate::escort::EscortClass;
     use crate::handling::ShipFields;
-    use crate::person::NovaPersons;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::MORE_SPEED;
-    use crate::testkit::{Draws, FAST, govt, hull, outfit, person, ship, weapon};
+    use crate::traffic::persons::NovaPersons;
+    use nova_sim_base::fixture::{Draws, FAST};
+    use nova_sim_catalog::fixture::{govt, hull, outfit, person, ship, weapon};
 
     const UNUSED: (i16, i16) = (-1, 0);
 

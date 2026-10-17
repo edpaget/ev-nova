@@ -279,7 +279,7 @@ fn lowered(price: i64) -> i64 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::testkit::Draws;
+    use nova_sim_base::fixture::Draws;
 
     /// The draws of a conversation's opening: variant 0, a mood of 1.0
     /// with no shift, and `price` (each of the price's draws), and no

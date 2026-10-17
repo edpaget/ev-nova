@@ -3,7 +3,7 @@
 //!
 //! - The [`StarMap`] is every visible system's map position and
 //!   hyperlinks: every system unless the galaxy overlay hides some
-//!   ([`StarMap::with_hidden`]; see the [`story`](crate::story) module's
+//!   ([`StarMap::with_hidden`]; see the `nova_sim::story` module's
 //!   "Galaxy overlay"), a link to a hidden system reaching the visible
 //!   system at its place. Its [`Places`] are the one resolver of which
 //!   visible system stands for a system: the links, the course's hops and
@@ -58,7 +58,7 @@
 //!   @0x4a242-0x4a2cd).
 //!   Hypergates and wormholes never ask it: they use no fuel and work
 //!   anywhere the ship can land on them (see [`gate`](crate::gate)).
-//!   [`Session::jump_readiness`](crate::Session::jump_readiness) asks the
+//!   `nova_sim::Session::jump_readiness` asks the
 //!   same rule, through the same helper as J, for the nav area's colours:
 //!   a [`JumpReadiness`] of blocked, clear, or under way once J is
 //!   accepted (`_DrawStatusNav` @0x49f43-0x4a451).
@@ -245,11 +245,11 @@ pub enum JumpReadiness {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JumpRefusal {
     /// The ship has landed: it must take off first. The
-    /// [`Session`](crate::Session) gives this before [`check_jump`] is
+    /// `nova_sim::Session` gives this before [`check_jump`] is
     /// asked.
     Landed,
     /// The ship is disabled, breaking up or destroyed. The
-    /// [`Session`](crate::Session) gives this before [`check_jump`] is
+    /// `nova_sim::Session` gives this before [`check_jump`] is
     /// asked. The player is never told of it: the original's J skips the
     /// jump block for a disabled ship (`_HandlePlayer` @0x6b0f5 →
     /// 0x6bada), with no message and no beep.
@@ -304,7 +304,7 @@ impl Node {
 
 /// Which visible system stands for a place two visible systems share, as
 /// [`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)
-/// reads (see the [`story`](crate::story) module's "Visibility and
+/// reads (see the `nova_sim::story` module's "Visibility and
 /// governments"). A hidden system stands for the lowest-ID visible system
 /// at its place under both.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -476,7 +476,7 @@ impl StarMap {
     }
 
     /// The map of `systems` with those in `hidden` hidden, as the galaxy
-    /// overlay hides them (see the [`story`](crate::story) module's
+    /// overlay hides them (see the `nova_sim::story` module's
     /// "Galaxy overlay"), a place two visible systems share resolved as
     /// `colocated` says: only the visible systems are on it, every one of
     /// them. A link names a
@@ -861,8 +861,8 @@ mod tests {
     use super::*;
     use crate::gate::{HYPERGATE, WORMHOLE};
     use crate::rulebook::RuleSource;
-    use crate::testkit::planet;
     use HyperlinkRule::{BothWays, Engine};
+    use nova_sim_catalog::fixture::planet;
 
     #[test]
     fn hops_per_jump_reads_the_rule() {
