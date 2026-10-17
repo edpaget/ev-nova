@@ -19,6 +19,7 @@ local crates = List(
     "nova-render",
     "nova-rsrc",
     "nova-sim",
+    "nova-sim-base",
     "nova-view",
 )
 

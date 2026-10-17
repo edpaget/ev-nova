@@ -17,11 +17,16 @@ nova-rsrc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The foundation of the layered nova-sim crates, re-exported at its old
+# paths (`nova_sim::rulebook`, `nova_sim::Vec2`, ...).
+nova-sim-base.workspace = true
 
 [dev-dependencies]
 # Synthetic resource forks for the GameData adapter tests.
 nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# The scripted `Chance` (`Scripted`) the unit tests draw on.
+nova-sim-base = { workspace = true, features = ["fixture"] }
 # This crate's own `fixture` module, for its integration tests under
 # `tests/`, which build the library without `cfg(test)`: the storyline
 # walker the stock tests drive.

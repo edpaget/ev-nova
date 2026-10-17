@@ -1532,10 +1532,15 @@ dependencies = [
  "nova-data",
  "nova-rsrc",
  "nova-sim",
+ "nova-sim-base",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "nova-sim-base"
+version = "0.1.0"
 
 [[package]]
 name = "nova-view"

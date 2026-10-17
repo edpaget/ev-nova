@@ -28,9 +28,9 @@ pub struct ShipFields {
     /// `FuelRegen`: ticks per unit of fuel regenerated; 0 or below is
     /// none (see [`crate::fuel`]).
     pub fuel_regen: i16,
-    /// `Holds`: cargo space, in tons (see [`crate::market`]); a negative
+    /// `Holds`: cargo space, in tons (see `nova_sim::market`); a negative
     /// one is as many tons as its size and forbids buying mass expansions
-    /// (see [`crate::outfitter`]), as `_LoadObjectData` negates it and
+    /// (see `nova_sim::outfitter`), as `_LoadObjectData` negates it and
     /// flags the class (@0x7a6a5-0x7a6d3).
     pub holds: i16,
     /// `Mass`: the ship's mass, in tons, which some outfits' price and
@@ -42,11 +42,11 @@ pub struct ShipFields {
     /// `Contribute`: the bits the ship meets an outfit's `Require` with.
     pub contribute: u64,
     /// `ShieldRech`: shield points x1000 regenerated a tick (see
-    /// [`crate::stats`]).
+    /// `nova_sim::stats`).
     pub shield_rech: i16,
     /// `ArmorRech`: armour points x1000 regenerated a tick.
     pub armor_rech: i16,
-    /// `Flags2`: the raw flag word, decoded in [`crate::stats::ShipStats`].
+    /// `Flags2`: the raw flag word, decoded in `nova_sim::stats::ShipStats`.
     pub flags2: u16,
 }
 
@@ -91,7 +91,7 @@ impl Handling {
     /// ship cannot move that way. `nova_sim::stats::ShipStats`
     /// gives a ship's handling.
     #[must_use]
-    pub(crate) fn from_totals(speed: i64, accel: i64, maneuver: f32) -> Self {
+    pub fn from_totals(speed: i64, accel: i64, maneuver: f32) -> Self {
         let positive = |total: i64| total.max(0) as f32;
         Self {
             max_speed: positive(speed) / SPEED_PER_PIXEL_PER_TICK,

@@ -14,4 +14,14 @@ deny = [
     { crate = "egui", reason = "only nova's dev-tools feature may pull in egui" },
     { crate = "egui-wgpu", reason = "only nova's dev-tools feature may pull in egui" },
     { crate = "egui-winit", reason = "only nova's dev-tools feature may pull in egui" },
+    # The layered nova-sim crates (roadmap nova-sim-layered-crates). Each
+    # entry's `wrappers` lists the only crates allowed to depend on it
+    # directly: the nova-sim crates above it (and, for the nova-sim facade,
+    # its downstream crates and its own `fixture` dev-dependency). A lower
+    # crate is never in a higher crate's list, so it can't depend on it,
+    # not even as a dev-dependency, which Cargo itself allows. A new
+    # layered crate gets its own entry and is added to the `wrappers` of
+    # every crate below it.
+    { crate = "nova-sim", wrappers = ["nova", "nova-sim", "nova-view"], reason = "a layered nova-sim crate must never depend on the facade above it" },
+    { crate = "nova-sim-base", wrappers = ["nova-sim"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
 ]

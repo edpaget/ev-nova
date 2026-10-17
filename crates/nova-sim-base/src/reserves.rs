@@ -1,5 +1,5 @@
 //! A ship's reserves: its shield, armour and fuel, each a gauge that
-//! starts full at what the ship can hold ([`crate::stats`]).
+//! starts full at what the ship can hold (`nova_sim::stats`).
 //!
 //! The Bible's rules for the record's numbers: a negative `Shield` means
 //! five times its absolute value, and a negative `Armor` or `Fuel` means
@@ -61,7 +61,7 @@ pub const NEGATIVE_SHIELD_FACTOR: i64 = 5;
 /// The shield points a `shïp`'s `Shield` gives: a negative one is
 /// [`NEGATIVE_SHIELD_FACTOR`] times its absolute value.
 #[must_use]
-pub(crate) fn shield_points(shield: i16) -> i64 {
+pub fn shield_points(shield: i16) -> i64 {
     let shield = i64::from(shield);
     if shield.is_negative() {
         -shield * NEGATIVE_SHIELD_FACTOR
@@ -93,7 +93,7 @@ impl Reserves {
     }
 
     /// The gauge of `reserve`, to change.
-    pub(crate) fn get_mut(&mut self, reserve: Reserve) -> &mut Gauge {
+    pub fn get_mut(&mut self, reserve: Reserve) -> &mut Gauge {
         match reserve {
             Reserve::Shield => &mut self.shield,
             Reserve::Armor => &mut self.armor,

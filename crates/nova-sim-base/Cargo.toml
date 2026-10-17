@@ -1,0 +1,19 @@
+[package]
+name = "nova-sim-base"
+description = "The bottom of nova-sim's layered crates: geometry, flight physics, chance, reserves, the rulebook and the rules core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No dependencies: everything above it in the nova-sim stack depends on
+# it, so it reaches nothing (`deny.toml` bans the way back up).
+
+[features]
+# Exposes the test support in `fixture` (the scripted `Chance`) to the
+# tests of the nova-sim crates above.
+fixture = []
+
+[lints]
+workspace = true

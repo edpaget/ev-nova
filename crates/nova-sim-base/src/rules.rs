@@ -288,8 +288,8 @@ impl<C: Context, R> Check<C, R> {
 /// show?" is a [`Value`], which no list takes. A list builds from checks:
 ///
 /// ```
-/// use nova_sim::rulebook::Rulebook;
-/// use nova_sim::rules::{Check, Checks, Context};
+/// use nova_sim_base::rulebook::Rulebook;
+/// use nova_sim_base::rules::{Check, Checks, Context};
 ///
 /// struct Facts(Rulebook);
 /// impl Context for Facts {
@@ -305,8 +305,8 @@ impl<C: Context, R> Check<C, R> {
 /// and not from a value:
 ///
 /// ```compile_fail
-/// use nova_sim::rulebook::Rulebook;
-/// use nova_sim::rules::{Checks, Context, Value};
+/// use nova_sim_base::rulebook::Rulebook;
+/// use nova_sim_base::rules::{Checks, Context, Value};
 ///
 /// struct Facts(Rulebook);
 /// impl Context for Facts {
@@ -451,7 +451,7 @@ mod tests {
     use std::cell::RefCell;
 
     use crate::chance::NeverFires;
-    use crate::testkit::Scripted;
+    use crate::fixture::Scripted;
 
     /// The outfitter's Sell flag's local copy of `OutfitFlags::CANNOT_SELL`,
     /// so this module depends on no shop.
