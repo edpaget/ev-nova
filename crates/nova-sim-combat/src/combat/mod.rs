@@ -1562,7 +1562,7 @@ impl Combat {
     /// `_SpawnShot` (@0x3e5d0) and `_SpawnBeam` (@0x452e2) return before
     /// they place it or step its exit: its firing is still heard, and
     /// nothing flies. So does a shot of a weapon index or `Graphic` above
-    /// 255, capped or not ([`WeaponSpec::spawns_shot`], @0x3e56b-0x3e5a1). Whether a shot was put in flight, which an `AmmoType`
+    /// 255, capped or not ([`WeaponSpec::spawns_shot`](weapon::WeaponSpec::spawns_shot), @0x3e56b-0x3e5a1). Whether a shot was put in flight, which an `AmmoType`
     /// of [`SELF_DESTRUCT`] reads; never for a beam or a fighter.
     #[allow(clippy::too_many_arguments)]
     fn launch(
@@ -2721,7 +2721,7 @@ impl Combat {
     /// (`_SpawnShotSubmunitions` @0x3f32d-0x3f331): those already placed
     /// fly, and the release is heard all the same, its sound coming before
     /// its loop. A sub-munition whose weapon places no shot
-    /// ([`WeaponSpec::spawns_shot`]) ends it at the first, so none fly.
+    /// ([`WeaponSpec::spawns_shot`](weapon::WeaponSpec::spawns_shot)) ends it at the first, so none fly.
     fn release(
         &mut self,
         parent: &Shot,
