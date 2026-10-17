@@ -58,7 +58,7 @@ impl Behaviour for CarriedAi {
     /// The escorts' [`fire_unprovoked`](escort::fire_unprovoked): the
     /// original flies a carried fighter as an escort (AI type above 4).
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
-        escort::fire_unprovoked(npc, around)
+        escort::fire_unprovoked(npc, around, self.fire)
     }
 }
 
@@ -200,7 +200,7 @@ mod tests {
             let around = Surroundings::new(&[], &npcs);
             assert_eq!(
                 CarriedAi::default().gate_wait(&waiting, &around),
-                crate::ai::escort::fire_unprovoked(&waiting, &around)
+                crate::ai::escort::fire_unprovoked(&waiting, &around, FireRules::default())
             );
         }
         let npcs = [carrier(Goal::Idle), waiting.clone(), trader()];

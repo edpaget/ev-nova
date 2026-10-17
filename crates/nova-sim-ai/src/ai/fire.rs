@@ -511,8 +511,8 @@ fn pick(
     if launches && let Some(bay) = npc.armament.bay_to_launch(&npc.rounds) {
         passes.pick = Some(bay);
     }
-    if let Some(sight) = sight(npc, around, rules) {
-        passes.run(&sight);
+    if let Some((sight, manoeuvre)) = sight(npc, around, rules) {
+        passes.run(&sight, manoeuvre);
     }
     (passes.pick.filter(|_| passes.flag), passes.pick)
 }
@@ -524,11 +524,11 @@ struct Passes {
 }
 
 impl Passes {
-    /// The passes `sight`'s manoeuvre runs, in the original's order, each
-    /// gate outside its call (see the module docs).
-    fn run(&mut self, sight: &Sight) {
+    /// The passes `manoeuvre` runs on `sight`, in the original's order,
+    /// each gate outside its call (see the module docs).
+    fn run(&mut self, sight: &Sight, manoeuvre: Manoeuvre) {
         let facing = |turns: f32| facing(sight.npc, &sight.at, turns);
-        match sight.manoeuvre {
+        match manoeuvre {
             Manoeuvre::Approach => {
                 if facing(GUN_FACING) {
                     self.gun(sight);
@@ -594,11 +594,45 @@ impl Passes {
     }
 }
 
-/// How `npc` sizes up the ship its goal is about, by `rules`; none for a
-/// goal that is no fight, or a ship not live or gone from the system,
-/// where every pass stops at its preamble.
-fn sight<'a>(npc: &'a Npc, around: &Surroundings, rules: FireRules) -> Option<Sight<'a>> {
+/// How `npc` sizes up the ship its goal is about, by `rules`, and how it
+/// flies its fight; none for a goal that is no fight, or a ship not live
+/// or gone from the system, where every pass stops at its preamble.
+fn sight<'a>(
+    npc: &'a Npc,
+    around: &Surroundings,
+    rules: FireRules,
+) -> Option<(Sight<'a>, Manoeuvre)> {
     let ship = npc.goal.quarry()?;
+    let sight = sight_of(npc, ship, around, rules)?;
+    let manoeuvre = manoeuvre(npc.goal, &npc.state, &sight.at)?;
+    Some((sight, manoeuvre))
+}
+
+/// The turret `npc`, intact, finds to fire at `ship` among `around` by
+/// `rules`, if any: `_AIFireTurret`'s search on its target +0x70
+/// (@0x80b15-0x80e3c), whatever its goal. A disabled shooter searches
+/// nothing (@0x80afa-0x80b01).
+#[must_use]
+pub fn turret_find(
+    npc: &Npc,
+    ship: ShipRef,
+    around: &Surroundings,
+    rules: FireRules,
+) -> Option<WeaponId> {
+    if npc.condition != crate::combat::hull::Condition::Intact {
+        return None;
+    }
+    sight_of(npc, ship, around, rules)?.turret()
+}
+
+/// How `npc` sizes up `ship`, by `rules`; none for a ship not live or
+/// gone from the system.
+fn sight_of<'a>(
+    npc: &'a Npc,
+    ship: ShipRef,
+    around: &Surroundings,
+    rules: FireRules,
+) -> Option<Sight<'a>> {
     if !around.live(ship) {
         return None;
     }
@@ -653,11 +687,9 @@ fn sight<'a>(npc: &'a Npc, around: &Surroundings, rules: FireRules) -> Option<Si
             .map(|other| (other.stats.handling.turn_rate, other.hull.planet_type)),
     }
     .unwrap_or_default();
-    let manoeuvre = manoeuvre(npc.goal, &npc.state, &at)?;
     Some(Sight {
         npc,
         at,
-        manoeuvre,
         shields_up,
         untargetable,
         cloaked,
@@ -675,8 +707,6 @@ fn sight<'a>(npc: &'a Npc, around: &Surroundings, rules: FireRules) -> Option<Si
 struct Sight<'a> {
     npc: &'a Npc,
     at: ShipState,
-    /// How it flies its fight.
-    manoeuvre: Manoeuvre,
     shields_up: bool,
     /// Whether the target's ship type is untargetable.
     untargetable: bool,

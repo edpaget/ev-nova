@@ -163,7 +163,7 @@ impl Behaviour for EscortAi {
 
     /// [`fire_unprovoked`], whatever its standing order.
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
-        fire_unprovoked(npc, around)
+        fire_unprovoked(npc, around, self.fire)
     }
 }
 
@@ -173,12 +173,14 @@ impl Behaviour for EscortAi {
 /// (@0x80e63) it tail-calls `_AIFireTurret` while the target is active and
 /// intact (+0xb8, `_IsDisabled`, @0x80e98), and drops the target otherwise
 /// (+0x70 = -1, @0x80e9d). `_AIFireTurret` runs the point defence first
-/// unless the shooter is disabled (@0x80afa-0x80b0d); its turret fire flag
-/// (+0xba, @0x80e40) is never read, as `_HandleShip` skips the fire step
-/// while the wait runs (@0x34a54-0x34a72). With no target it fires
-/// nothing.
+/// unless the shooter is disabled (@0x80afa-0x80b0d), then searches by
+/// `rules` ([`fire::turret_find`]): a find becomes its pick
+/// ([`Trigger::keep`], +0x72 @0x80e3c), but its fire flag (+0xba,
+/// @0x80e40) is never read, as `_HandleShip` skips the fire step while the
+/// wait runs (@0x34a54-0x34a72), so it fires nothing and the pick stays.
+/// With no target it fires nothing.
 #[must_use]
-pub fn fire_unprovoked(npc: &Npc, around: &Surroundings) -> GateWait {
+pub fn fire_unprovoked(npc: &Npc, around: &Surroundings, rules: FireRules) -> GateWait {
     let Some(target) = npc.target else {
         return GateWait::default();
     };
@@ -191,6 +193,7 @@ pub fn fire_unprovoked(npc: &Npc, around: &Surroundings) -> GateWait {
     GateWait {
         trigger: Trigger {
             point_defence: npc.condition == Condition::Intact,
+            keep: fire::turret_find(npc, target, around, rules),
             ..Trigger::default()
         },
         drops_target: false,
@@ -855,8 +858,36 @@ mod tests {
             assert_eq!(waiting(&ENGINE, &npcs), POINT_DEFENCE);
             assert_eq!(waiting(&BIBLE, &npcs), POINT_DEFENCE);
         }
-        let on_player = [having(escort(None), Goal::Idle, Some(ShipRef::Player))];
-        assert_eq!(waiting(&ENGINE, &on_player), POINT_DEFENCE);
+        let mut on_player = having(escort(None), Goal::Idle, Some(ShipRef::Player));
+        on_player.state.position = crate::geometry::Vec2::new(900.0, 0.0);
+        assert_eq!(waiting(&ENGINE, &[on_player]), POINT_DEFENCE);
+    }
+
+    #[test]
+    fn a_waiting_escorts_turret_find_becomes_its_pick_and_fires_nothing() {
+        // `_AIFireTurret`'s find writes +0x72 and raises +0xba
+        // (@0x80e3c-0x80e40); `_HandleShip` skips the fire block while
+        // the wait runs (@0x34a54-0x34a72), so it fires nothing and the
+        // pick stays.
+        let npcs = [
+            having(escort(None), Goal::Idle, Some(n(2))),
+            pirate(2, 0.0, -100.0),
+        ];
+        let found = GateWait {
+            trigger: Trigger {
+                keep: Some(WeaponId(140)),
+                ..POINT_DEFENCE.trigger
+            },
+            drops_target: false,
+        };
+        assert_eq!(waiting(&ENGINE, &npcs), found, "its turret, in reach");
+        let mut held = npcs[0].clone();
+        held.mode = Mode::Emerging { ticks_left: 30 };
+        held.trigger = found.trigger;
+        assert_eq!(fire::gated(&held).only, None, "fires nothing");
+        // Out of its turret's reach, it finds nothing.
+        let far = [npcs[0].clone(), pirate(2, 0.0, -900.0)];
+        assert_eq!(waiting(&ENGINE, &far), POINT_DEFENCE);
     }
 
     #[test]
@@ -985,5 +1016,37 @@ mod tests {
         assert_eq!(target, Some(n(2)));
         assert!(!trigger.bays, "{trigger:?}");
         assert!(trigger.only.is_some(), "it still fires: {trigger:?}");
+    }
+
+    #[test]
+    fn an_escort_attacking_with_a_ready_bay_neither_keeps_nor_fires_its_bay() {
+        // Review 2026-10-15-1835-a4d7: `trigger_holding_fighters` writes
+        // no bay as the pick, so a gun pass that finds nothing fires none.
+        let bay = WeaponSpec::new(&crate::catalog::WeaponRecord {
+            guidance: 99,
+            ammo_type: 200,
+            reload: 60,
+            flags: crate::combat::weapon::SECONDARY,
+            ..weapon(150)
+        });
+        let mut carrier = having(
+            escort(Some(EscortOrder::Attack)),
+            Goal::Attack(n(2)),
+            Some(n(2)),
+        );
+        let mut mounts: Vec<(WeaponSpec, u32)> = carrier
+            .armament
+            .mounts()
+            .iter()
+            .map(|mount| (mount.spec, mount.count))
+            .collect();
+        mounts.push((bay, 1));
+        carrier.armament = Armament::new(mounts);
+        carrier.rounds = crate::combat::armament::LauncherRounds::from([(WeaponId(150), 2)]);
+        // The pirate 600 ahead: beyond its gun and its turret.
+        let npcs = [carrier, pirate(2, 0.0, -600.0)];
+        let (trigger, _) = command(ENGINE, &npcs);
+        assert_ne!(trigger.keep, Some(WeaponId(150)), "{trigger:?}");
+        assert_ne!(trigger.only, Some(WeaponId(150)), "{trigger:?}");
     }
 }

@@ -798,6 +798,11 @@ impl Traffic {
             .collect();
         for (npc, wait) in self.npcs.iter_mut().zip(waits) {
             if let Some(wait) = wait {
+                // A turret find under the wait is its pick (+0x72,
+                // `_AIFireTurret` @0x80e3c); none leaves it.
+                if wait.trigger.keep.is_some() {
+                    npc.pick = wait.trigger.keep;
+                }
                 npc.trigger = wait.trigger;
                 if wait.drops_target {
                     npc.target = None;
@@ -4022,6 +4027,32 @@ mod tests {
             assert_eq!(target, Some(ShipRef::Player), "{mode:?}");
         }
         assert_eq!(out.0, Mode::Flying);
+    }
+
+    #[test]
+    fn a_waiting_ships_turret_find_becomes_its_pick() {
+        let finding = Firing {
+            waits: GateWait {
+                trigger: Trigger {
+                    keep: Some(WeaponId(140)),
+                    ..POINT_DEFENCE
+                },
+                drops_target: false,
+            },
+            ..Firing::default()
+        };
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30 };
+        traffic.npcs[0].pick = Some(WeaponId(128));
+        traffic.tick_in(&finding, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(140)));
+        // A wait that finds nothing leaves the pick.
+        let defending = Firing {
+            waits: DEFENDING,
+            ..Firing::default()
+        };
+        traffic.tick_in(&defending, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(140)));
     }
 
     #[test]
