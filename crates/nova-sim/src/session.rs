@@ -379,6 +379,7 @@ mod hooks;
 mod hover;
 mod jump_collapse;
 mod map;
+mod map_borders;
 mod map_click;
 mod map_panel;
 mod map_search;
