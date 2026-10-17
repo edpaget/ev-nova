@@ -272,6 +272,35 @@ mod tests {
     }
 
     #[test]
+    fn a_dot_over_the_right_edge_keeps_its_left_part() {
+        let drawn = clipped(|map| {
+            map.dot(at(678.0, 300.0), 4.0, Color::WHITE);
+        });
+        assert_eq!(
+            drawn,
+            filled(rect(676.0, 298.0, 679.0, 302.0), Color::WHITE)
+        );
+    }
+
+    #[test]
+    fn a_line_along_an_edge_is_kept_as_the_edges_are_in() {
+        let drawn = clipped(|map| {
+            map.line(at(221.0, 200.0), at(221.0, 300.0), 1.0, Color::WHITE);
+            map.line(at(400.0, 600.0), at(400.0, 556.0), 1.0, Color::WHITE);
+        });
+        assert_eq!(
+            drawn,
+            [DrawCommand::Line {
+                from: at(221.0, 200.0),
+                to: at(221.0, 300.0),
+                width: 1.0,
+                color: Color::WHITE,
+            }],
+            "the second only touches the bottom edge at a point"
+        );
+    }
+
+    #[test]
     fn commands_inside_pass_unchanged() {
         let mut map = DrawList::new();
         fill_rect(&mut map, rect(300.0, 300.0, 310.0, 302.0), Color::WHITE);

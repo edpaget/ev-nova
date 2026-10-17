@@ -377,6 +377,7 @@ mod tests {
         assert_eq!(dialog.state(true), ALL);
         dialog.place_mut().zoom_in();
         dialog.set_borders_shown(false);
+        assert!(!dialog.borders_shown());
         assert_eq!(
             dialog.state(false),
             ButtonState {
