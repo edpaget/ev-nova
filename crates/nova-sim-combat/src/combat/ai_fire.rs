@@ -26,7 +26,10 @@
 //! [`RuleKey::AiSpendWithoutShot`](crate::RuleKey::AiSpendWithoutShot)).
 //! Nothing spawned, nothing else happens: no sound, reload, burst,
 //! recoil, exclusive hold or last gun. The weapon's sound plays once a
-//! call, at priority 4 ([`AI_FIRE_PRIORITY`](super::AI_FIRE_PRIORITY)).
+//! call, at priority 4 ([`AI_FIRE_PRIORITY`](super::AI_FIRE_PRIORITY)),
+//! a looped one (`Flags` 0x0010) skipped while its sound plays anywhere
+//! (@0x88e00-0x88e1d), which the view or the audio side applies
+//! ([`FireSound::unless_playing`](super::FireSound::unless_playing)).
 //!
 //! # Not modelled
 //!
@@ -43,9 +46,6 @@
 //!   and the burst in `Armament::fire_pick`.
 //! - The weapon glow (`Flags2` 0x0200, +0xc8e8 = 32.0, @0x88ddd): rdm
 //!   phase weapons-fidelity/phase-14, from the `Fired` it raises.
-//! - Playing the sound by its priority, and a looped weapon (`Flags`
-//!   0x0010) skipped while its sound plays anywhere (@0x88e00): rdm phase
-//!   audio-fidelity/phase-15-weapon-sounds-by-priority.
 //! - `_SpawnShot`'s exit points and its turret miss and launch speed:
 //!   weapons-fidelity phases 6 and 10.
 //! - The whole degrees and pixels: the box's reach (@0x888bf, @0x88a24),

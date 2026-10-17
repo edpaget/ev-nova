@@ -17,7 +17,7 @@ use nova_sim::{PlayerCommand, PlayerFate};
 use crate::devtools::SessionDesk;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
-use crate::flight::effects::Scene;
+use crate::flight::effects::{LoopedSounds, Scene};
 use crate::flight::escorts::{EscortMenuLooks, fighters_abandoned_message};
 use crate::flight::jump::JumpEffect;
 use crate::galaxy::{GalaxyCatalog, MapCycle, MapMode};
@@ -483,10 +483,15 @@ impl<
                     let chance = &mut self.effects_chance;
                     let debris = session.rules().source_for(RuleKey::ShipDebris);
                     let caps = session.rules().source_for(RuleKey::CombatCaps);
+                    let looped = match session.rules().source_for(RuleKey::LoopedSoundWait) {
+                        RuleSource::Engine => LoopedSounds::Anywhere,
+                        RuleSource::Bible => LoopedSounds::PerFirer,
+                    };
                     let scene = Scene {
                         player,
                         debris: debris == RuleSource::Bible,
                         caps: caps == RuleSource::Engine,
+                        looped,
                     };
                     self.effects.step(&dying, &scene, &self.looks, chance);
                     let shown = (&mut self.effects, &mut self.flashes);

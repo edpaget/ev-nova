@@ -1737,11 +1737,12 @@ mod tests {
         }
     }
 
-    /// `id` played at the default effects volume.
-    fn play(id: i16) -> AudioCommand {
+    /// `id` played at the default effects volume and `priority`.
+    fn play(id: i16, priority: nova_audio::Priority) -> AudioCommand {
         AudioCommand::Play {
             sound: nova_data::SoundId(id),
             volume: AudioSettings::default().effects_volume,
+            priority,
         }
     }
 
@@ -1768,7 +1769,10 @@ mod tests {
     fn attaching_audio_takes_in_the_screen_and_its_sounds_at_once() {
         let window = FakeWindow::new((1024, 768), 1.0);
         let (app, log) = sounding(&window);
-        assert_eq!(*log.borrow(), [music(), play(128)]);
+        assert_eq!(
+            *log.borrow(),
+            [music(), play(128, nova_audio::priority::JUMP)]
+        );
         assert_eq!(app.screen().sounds, [], "taken");
     }
 
@@ -1779,7 +1783,7 @@ mod tests {
         log.borrow_mut().clear();
         let mut gpu = RecordingGpu::new();
         app.handle(key(Key::Up, true), &mut window, &mut gpu);
-        assert_eq!(*log.borrow(), [play(600)]);
+        assert_eq!(*log.borrow(), [play(600, nova_audio::priority::BUTTON)]);
         app.handle(
             WindowEvent::Redraw {
                 elapsed: Duration::from_millis(16),
@@ -1787,7 +1791,13 @@ mod tests {
             &mut window,
             &mut gpu,
         );
-        assert_eq!(*log.borrow(), [play(600), play(601)]);
+        assert_eq!(
+            *log.borrow(),
+            [
+                play(600, nova_audio::priority::BUTTON),
+                play(601, nova_audio::priority::BUTTON)
+            ]
+        );
         app.handle(
             WindowEvent::PointerMoved { px: (5.0, 5.0) },
             &mut window,
@@ -1801,7 +1811,7 @@ mod tests {
                 AudioCommand::FadeOutMusic(nova_audio::music_fade(
                     AudioSettings::default().music_volume
                 )),
-                play(600)
+                play(600, nova_audio::priority::BUTTON)
             ],
             "the screen shown, then its sounds"
         );
@@ -1894,7 +1904,7 @@ mod tests {
         let mut gpu = RecordingGpu::new();
         audio.set_playing(nova_data::SoundId(600), true);
         app.handle(key(Key::Up, true), &mut window, &mut gpu);
-        assert_eq!(*log.borrow(), [play(600)]);
+        assert_eq!(*log.borrow(), [play(600, nova_audio::priority::BUTTON)]);
         assert_eq!(app.screen().ran, 0, "600 playing");
         let redraw = |ms| WindowEvent::Redraw {
             elapsed: Duration::from_millis(ms),
@@ -1907,12 +1917,19 @@ mod tests {
         assert_eq!(app.screen().ran, 1, "600 has stopped");
         assert_eq!(
             app.screen().logged_when_run,
-            [play(600), play(601)],
+            [
+                play(600, nova_audio::priority::BUTTON),
+                play(601, nova_audio::priority::BUTTON)
+            ],
             "after 601 has started"
         );
         assert_eq!(
             *log.borrow(),
-            [play(600), play(601), play(128)],
+            [
+                play(600, nova_audio::priority::BUTTON),
+                play(601, nova_audio::priority::BUTTON),
+                play(128, nova_audio::priority::JUMP)
+            ],
             "what it ran sounded in the same pass"
         );
         app.handle(redraw(48), &mut window, &mut gpu);
@@ -2140,6 +2157,7 @@ mod tests {
                 AudioCommand::Play {
                     sound: nova_data::SoundId(600),
                     volume: nova_audio::settings::effects_level_volume(7),
+                    priority: nova_audio::priority::BUTTON,
                 },
             ],
             "the change, then the sounds"
@@ -2181,6 +2199,7 @@ mod tests {
                 AudioCommand::Play {
                     sound: nova_data::SoundId(600),
                     volume: between,
+                    priority: nova_audio::priority::BUTTON,
                 },
             ],
             "effects level 4 already: the effects volume is kept"

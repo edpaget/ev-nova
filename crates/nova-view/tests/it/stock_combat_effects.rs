@@ -10,7 +10,7 @@ use nova_sim::combat::weapon::WeaponSpec;
 use nova_sim::{BoomId, CombatCatalog, CombatEvent, NeverFires, Vec2, WeaponId};
 use nova_view::Point;
 use nova_view::flight::Looks;
-use nova_view::flight::effects::{Effects, Scene};
+use nova_view::flight::effects::{Effects, LoopedSounds, Scene};
 
 #[test]
 fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
@@ -31,6 +31,7 @@ fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
         player: Point::new(0.0, 0.0),
         debris: true,
         caps: false,
+        looped: LoopedSounds::Anywhere,
     };
     let event = CombatEvent::Exploded {
         at: Vec2::new(100.0, 50.0),

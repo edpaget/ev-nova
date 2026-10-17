@@ -1117,6 +1117,8 @@ fn every_steps_fight_reaches_the_effects() {
     let fired = CombatSound {
         sound: nova_sim::SoundId(208),
         offset: (0, 0),
+        priority: u16::from(nova_sim::combat::PLAYER_FIRE_PRIORITY),
+        until_stopped: false,
     };
     assert_eq!(combat_sounds(&mut view), [fired; 3]);
     assert_eq!(combat_sounds(&mut view), [], "taken");
@@ -1135,6 +1137,8 @@ fn the_sounds_are_the_sessions_then_the_fights() {
             Sound::Combat(CombatSound {
                 sound: nova_sim::SoundId(208),
                 offset: (0, 0),
+                priority: u16::from(nova_sim::combat::PLAYER_FIRE_PRIORITY),
+                until_stopped: false,
             })
         ]
     );
@@ -2037,6 +2041,8 @@ fn a_destroyed_npc_explodes_and_scatters_debris_on_the_frames_after() {
             (boom.x - player.x).round() as i32,
             (boom.y - player.y).round() as i32,
         ),
+        priority: crate::flight::effects::EXPLOSION_PRIORITY,
+        until_stopped: false,
     };
     assert!(
         combat_sounds(&mut view).contains(&heard),
@@ -2585,8 +2591,9 @@ fn the_effects_roll_on_their_own_chance() {
     );
 }
 
-#[test]
-fn a_looped_weapon_is_heard_again_only_once_its_sound_has_played_out() {
+/// A view firing the player's looped beam, of a 3-tick sound, each step,
+/// by `rules`.
+fn firing_a_looped_beam(rules: Rulebook) -> View {
     let mut catalog = armed(0, &[UNDER]);
     catalog.weapons[4].reload = 0;
     catalog.weapons[4].count = 5;
@@ -2596,15 +2603,33 @@ fn a_looped_weapon_is_heard_again_only_once_its_sound_has_played_out() {
         sound_ticks: Some(3),
         ..WeaponLook::default()
     });
-    let mut view = fighting(catalog, &[]);
+    let mut view = fighting(catalog, &[]).with_rules(rules);
     view.input(&key(FIRE_KEY, true));
+    view
+}
+
+#[test]
+fn by_default_a_looped_weapon_is_heard_every_shot_waiting_on_any_voice() {
+    let mut view = firing_a_looped_beam(Rulebook::default());
     ticks(&mut view, 4);
     assert_eq!(
         view.session().expect("flying").beams().len(),
         4,
         "a beam fired each step"
     );
-    assert_eq!(combat_sounds(&mut view).len(), 2, "on the first and fourth");
+    let heard = combat_sounds(&mut view);
+    assert_eq!(heard.len(), 4, "the audio side decides: {heard:?}");
+    assert!(heard.iter().all(|sound| sound.until_stopped), "{heard:?}");
+}
+
+#[test]
+fn by_the_other_reading_a_looped_weapon_is_heard_again_once_its_sound_has_played_out() {
+    let rules = Rulebook::default().with_override(RuleKey::LoopedSoundWait, RuleSource::Bible);
+    let mut view = firing_a_looped_beam(rules);
+    ticks(&mut view, 4);
+    let heard = combat_sounds(&mut view);
+    assert_eq!(heard.len(), 2, "on the first and fourth");
+    assert!(heard.iter().all(|sound| !sound.until_stopped), "{heard:?}");
     view.input(&key(FIRE_KEY, false));
     ticks(&mut view, 1);
     view.input(&key(FIRE_KEY, true));

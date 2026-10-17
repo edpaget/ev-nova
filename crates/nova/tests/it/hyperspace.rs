@@ -941,6 +941,11 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     let play = |id| AudioCommand::Play {
         sound: nova_data::SoundId(id),
         volume: AudioSettings::default().effects_volume,
+        priority: if id == 128 {
+            nova_audio::priority::JUMP
+        } else {
+            nova_audio::priority::ARRIVAL
+        },
     };
     assert_eq!(plays, [play(128), play(130)]);
 }
@@ -979,6 +984,11 @@ fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
     let play = |id| AudioCommand::Play {
         sound: nova_data::SoundId(id),
         volume: AudioSettings::default().effects_volume,
+        priority: if id == 128 {
+            nova_audio::priority::JUMP
+        } else {
+            nova_audio::priority::ARRIVAL
+        },
     };
     let halt = |id| AudioCommand::Halt {
         sound: nova_data::SoundId(id),

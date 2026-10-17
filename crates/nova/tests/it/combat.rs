@@ -522,6 +522,8 @@ struct Harness {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
     log: AudioLog,
+    /// The recording port, to say what still plays.
+    port: RecordingAudio,
     effects: Rc<RefCell<Script>>,
     /// Frames sent, at 60 a second.
     frames: u64,
@@ -555,12 +557,14 @@ impl Harness {
         let screen = router(screen);
         let audio = RecordingAudio::new();
         let log = audio.log();
+        let port = audio.clone();
         let app = App::new(&FakeWindow, data, screen)
             .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
         let mut harness = Self {
             app,
             gpu: RecordingGpu::new(),
             log,
+            port,
             effects,
             frames: 0,
         };
@@ -687,6 +691,7 @@ fn space_fires_the_blaster_whose_shots_are_drawn_and_heard() {
         harness.log.borrow().contains(&AudioCommand::Play {
             sound: SoundId(208),
             volume: nova_audio::AudioSettings::default().effects_volume,
+            priority: nova_audio::Priority::new(5),
         }),
         "{:?}",
         harness.log.borrow()
@@ -731,6 +736,7 @@ fn a_trader_shot_down_explodes_scatters_debris_and_is_no_longer_targeted() {
         harness.log.borrow().contains(&AudioCommand::Play {
             sound: SoundId(300),
             volume: nova_audio::AudioSettings::default().effects_volume,
+            priority: nova_audio::Priority::new(6),
         }),
         "the explosion, within 200 pixels: {:?}",
         harness.log.borrow()
@@ -758,13 +764,23 @@ fn chaingun_shots(harness: &Harness) -> Vec<u32> {
         .collect()
 }
 
-#[test]
-fn a_chaingun_held_on_is_heard_once_a_burst_not_once_a_shot() {
-    let mut harness = Harness::flying_over(
+/// The app in flight with the player carrying the Chaingun, its trader
+/// idling, the router as `router` makes it.
+fn chaingun_armed(router: impl FnOnce(AppScreen) -> AppScreen) -> Harness {
+    Harness::flying_over(
         data_arming(&[155], &[]),
         &[6, 6, 0, 0, 750, 650, 180],
-        |screen| screen.with_behaviour(Rc::new(Still)),
+        |screen| router(screen.with_behaviour(Rc::new(Still))),
+    )
+}
+
+#[test]
+fn by_the_other_reading_a_chaingun_held_on_is_heard_once_a_burst_not_once_a_shot() {
+    let per_firer = nova_sim::Rulebook::default().with_override(
+        nova_sim::RuleKey::LoopedSoundWait,
+        nova_sim::RuleSource::Bible,
     );
+    let mut harness = chaingun_armed(|screen| screen.with_rules(per_firer));
     let mut fired = std::collections::BTreeMap::new();
     harness.key(Key::Space, true);
     // 60 ticks, at two frames a tick.
@@ -784,6 +800,48 @@ fn a_chaingun_held_on_is_heard_once_a_burst_not_once_a_shot() {
         .collect();
     assert_eq!(ticks, bursts, "three bursts of ten");
     assert_eq!(plays(&harness.log, 205), 3, "once a burst");
+}
+
+#[test]
+fn a_chaingun_is_unheard_while_its_sound_plays_from_another_ship() {
+    let mut harness = chaingun_armed(|screen| screen);
+    harness.port.set_playing(SoundId(205), true);
+    harness.key(Key::Space, true);
+    harness.until(|harness| chaingun_shots(harness).len() >= 3);
+    assert_eq!(plays(&harness.log, 205), 0, "205 still plays elsewhere");
+    harness.port.set_playing(SoundId(205), false);
+    let fired = chaingun_shots(&harness).len();
+    harness.until(|harness| chaingun_shots(harness).len() > fired);
+    harness.key(Key::Space, false);
+    assert!(plays(&harness.log, 205) > 0, "heard once it has played out");
+}
+
+#[test]
+fn an_npcs_weapon_is_heard_at_its_pick_priority_4() {
+    let mut harness = Harness::flying_over(
+        data_arming(&[], &[155]),
+        &[6, 6, 0, 0, 750, 650, 180],
+        |screen| screen.with_behaviour(Rc::new(Attacking)),
+    );
+    harness.until(|harness| plays(&harness.log, 205) > 0);
+    let priorities: Vec<nova_audio::Priority> = harness
+        .log
+        .borrow()
+        .iter()
+        .filter_map(|command| match *command {
+            AudioCommand::Play {
+                sound: SoundId(205),
+                priority,
+                ..
+            } => Some(priority),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        priorities[0],
+        nova_audio::Priority::new(4),
+        "{priorities:?}"
+    );
 }
 
 #[test]

@@ -429,11 +429,13 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
             // Traffic control's greeting, then the landing's beep.
             AudioCommand::Play {
                 sound: SoundId(LANDING_BEEP),
-                volume: five
+                volume: five,
+                priority: nova_audio::priority::TRAFFIC_CONTROL,
             },
             AudioCommand::Play {
                 sound: SoundId(LANDING_BEEP),
-                volume: five
+                volume: five,
+                priority: nova_audio::priority::LANDING,
             },
         ]
     );
@@ -499,6 +501,7 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     let click = |id| AudioCommand::Play {
         sound: SoundId(id),
         volume: effects_level_volume(4),
+        priority: nova_audio::priority::BUTTON,
     };
     assert_eq!(
         harness.played(),
